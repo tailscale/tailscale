@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tstime"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/version/distro"
@@ -586,12 +587,14 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 }
 
 type incomingFile struct {
-	name        string // "foo.jpg"
-	started     time.Time
-	size        int64     // or -1 if unknown; never 0
-	w           io.Writer // underlying writer
-	ph          *peerAPIHandler
-	partialPath string // non-empty in direct mode
+	clock tstime.Clock
+
+	name           string // "foo.jpg"
+	started        time.Time
+	size           int64     // or -1 if unknown; never 0
+	w              io.Writer // underlying writer
+	sendFileNotify func()    // called when done
+	partialPath    string    // non-empty in direct mode
 
 	mu         sync.Mutex
 	copied     int64
@@ -603,25 +606,23 @@ func (f *incomingFile) markAndNotifyDone() {
 	f.mu.Lock()
 	f.done = true
 	f.mu.Unlock()
-	b := f.ph.ps.b
-	b.sendFileNotify()
+	f.sendFileNotify()
 }
 
 func (f *incomingFile) Write(p []byte) (n int, err error) {
 	n, err = f.w.Write(p)
 
-	b := f.ph.ps.b
 	var needNotify bool
 	defer func() {
 		if needNotify {
-			b.sendFileNotify()
+			f.sendFileNotify()
 		}
 	}()
 	if n > 0 {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.copied += int64(n)
-		now := b.clock.Now()
+		now := f.clock.Now()
 		if f.lastNotify.IsZero() || now.Sub(f.lastNotify) > time.Second {
 			f.lastNotify = now
 			needNotify = true
@@ -760,11 +761,12 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	var inFile *incomingFile
 	if r.ContentLength != 0 {
 		inFile = &incomingFile{
-			name:    baseName,
-			started: h.ps.b.clock.Now(),
-			size:    r.ContentLength,
-			w:       f,
-			ph:      h,
+			clock:          h.ps.b.clock,
+			name:           baseName,
+			started:        h.ps.b.clock.Now(),
+			size:           r.ContentLength,
+			w:              f,
+			sendFileNotify: h.ps.b.sendFileNotify,
 		}
 		if h.ps.taildrop.DirectFileMode {
 			inFile.partialPath = partialFile
