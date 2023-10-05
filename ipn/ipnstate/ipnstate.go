@@ -299,6 +299,11 @@ func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
 	return ps.CapMap.Contains(cap) || slices.Contains(ps.Capabilities, cap)
 }
 
+// IsTagged reports whether ps is tagged.
+func (ps *PeerStatus) IsTagged() bool {
+	return ps.Tags != nil && ps.Tags.Len() > 0
+}
+
 // StatusBuilder is a request to construct a Status. A new StatusBuilder is
 // passed to various subsystems which then call methods on it to populate state.
 // Call its Status method to return the final constructed Status.
