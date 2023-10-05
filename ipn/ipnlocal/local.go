@@ -62,6 +62,7 @@ import (
 	"tailscale.com/portlist"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrop"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -2176,7 +2177,7 @@ func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Lock()
 	notifyFunc := b.notify
 	apiSrv := b.peerAPIServer
-	if apiSrv.hasFilesWaiting() {
+	if mayDeref(apiSrv).taildrop.HasFilesWaiting() {
 		n.FilesWaiting = &empty.Message{}
 	}
 
@@ -3546,10 +3547,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 
 	ps := &peerAPIServer{
-		b:                       b,
-		rootDir:                 fileRoot,
-		directFileMode:          b.directFileRoot != "",
-		directFileDoFinalRename: b.directFileDoFinalRename,
+		b: b,
+		taildrop: &taildrop.Handler{
+			Logf:                    b.logf,
+			Clock:                   b.clock,
+			RootDir:                 fileRoot,
+			DirectFileMode:          b.directFileRoot != "",
+			DirectFileDoFinalRename: b.directFileDoFinalRename,
+		},
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -4433,7 +4438,7 @@ func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	return apiSrv.WaitingFiles()
+	return mayDeref(apiSrv).taildrop.WaitingFiles()
 }
 
 // AwaitWaitingFiles is like WaitingFiles but blocks while ctx is not done,
@@ -4475,14 +4480,14 @@ func (b *LocalBackend) DeleteFile(name string) error {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	return apiSrv.DeleteFile(name)
+	return mayDeref(apiSrv).taildrop.DeleteFile(name)
 }
 
 func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	return apiSrv.OpenFile(name)
+	return mayDeref(apiSrv).taildrop.OpenFile(name)
 }
 
 // hasCapFileSharing reports whether the current node has the file
@@ -5296,4 +5301,12 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.magicConn().DebugBreakDERPConns()
+}
+
+// mayDeref dereferences p if non-nil, otherwise it returns the zero value.
+func mayDeref[T any](p *T) (v T) {
+	if p == nil {
+		return v
+	}
+	return *p
 }

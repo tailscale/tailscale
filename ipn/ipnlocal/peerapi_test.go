@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrop"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -67,7 +68,7 @@ func bodyNotContains(sub string) check {
 
 func fileHasSize(name string, size int) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
-		root := e.ph.ps.rootDir
+		root := e.ph.ps.taildrop.RootDir
 		if root == "" {
 			t.Errorf("no rootdir; can't check whether %q has size %v", name, size)
 			return
@@ -83,7 +84,7 @@ func fileHasSize(name string, size int) check {
 
 func fileHasContents(name string, want string) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
-		root := e.ph.ps.rootDir
+		root := e.ph.ps.taildrop.RootDir
 		if root == "" {
 			t.Errorf("no rootdir; can't check contents of %q", name)
 			return
@@ -492,7 +493,10 @@ func TestHandlePeerAPI(t *testing.T) {
 			var rootDir string
 			if !tt.omitRoot {
 				rootDir = t.TempDir()
-				e.ph.ps.rootDir = rootDir
+				if e.ph.ps.taildrop == nil {
+					e.ph.ps.taildrop = &taildrop.Handler{}
+				}
+				e.ph.ps.taildrop.RootDir = rootDir
 			}
 			for _, req := range tt.reqs {
 				e.rr = httptest.NewRecorder()
@@ -531,7 +535,11 @@ func TestFileDeleteRace(t *testing.T) {
 			capFileSharing: true,
 			clock:          &tstest.Clock{},
 		},
-		rootDir: dir,
+		taildrop: &taildrop.Handler{
+			Logf:    t.Logf,
+			Clock:   &tstest.Clock{},
+			RootDir: dir,
+		},
 	}
 	ph := &peerAPIHandler{
 		isSelf: true,
@@ -550,7 +558,7 @@ func TestFileDeleteRace(t *testing.T) {
 		if res := rr.Result(); res.StatusCode != 200 {
 			t.Fatal(res.Status)
 		}
-		wfs, err := ps.WaitingFiles()
+		wfs, err := ps.taildrop.WaitingFiles()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -558,10 +566,10 @@ func TestFileDeleteRace(t *testing.T) {
 			t.Fatalf("waiting files = %d; want 1", len(wfs))
 		}
 
-		if err := ps.DeleteFile("foo.txt"); err != nil {
+		if err := ps.taildrop.DeleteFile("foo.txt"); err != nil {
 			t.Fatal(err)
 		}
-		wfs, err = ps.WaitingFiles()
+		wfs, err = ps.taildrop.WaitingFiles()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -579,19 +587,21 @@ func TestDeletedMarkers(t *testing.T) {
 			logf:           t.Logf,
 			capFileSharing: true,
 		},
-		rootDir: dir,
+		taildrop: &taildrop.Handler{
+			RootDir: dir,
+		},
 	}
 
 	nothingWaiting := func() {
 		t.Helper()
-		ps.knownEmpty.Store(false)
-		if ps.hasFilesWaiting() {
+		ps.taildrop.KnownEmpty.Store(false)
+		if ps.taildrop.HasFilesWaiting() {
 			t.Fatal("unexpected files waiting")
 		}
 	}
 	touch := func(base string) {
 		t.Helper()
-		if err := touchFile(filepath.Join(dir, base)); err != nil {
+		if err := taildrop.TouchFile(filepath.Join(dir, base)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -620,7 +630,7 @@ func TestDeletedMarkers(t *testing.T) {
 
 	touch("foo.jpg.deleted")
 	touch("foo.jpg")
-	wf, err := ps.WaitingFiles()
+	wf, err := ps.taildrop.WaitingFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +641,7 @@ func TestDeletedMarkers(t *testing.T) {
 
 	touch("foo.jpg.deleted")
 	touch("foo.jpg")
-	if rc, _, err := ps.OpenFile("foo.jpg"); err == nil {
+	if rc, _, err := ps.taildrop.OpenFile("foo.jpg"); err == nil {
 		rc.Close()
 		t.Fatal("unexpected foo.jpg open")
 	}
@@ -640,14 +650,14 @@ func TestDeletedMarkers(t *testing.T) {
 	// And verify basics still work in non-deleted cases.
 	touch("foo.jpg")
 	touch("bar.jpg.deleted")
-	if wf, err := ps.WaitingFiles(); err != nil {
+	if wf, err := ps.taildrop.WaitingFiles(); err != nil {
 		t.Error(err)
 	} else if len(wf) != 1 {
 		t.Errorf("WaitingFiles = %d; want 1", len(wf))
 	} else if wf[0].Name != "foo.jpg" {
 		t.Errorf("unexpected waiting file %+v", wf[0])
 	}
-	if rc, _, err := ps.OpenFile("foo.jpg"); err != nil {
+	if rc, _, err := ps.taildrop.OpenFile("foo.jpg"); err != nil {
 		t.Fatal(err)
 	} else {
 		rc.Close()
@@ -756,7 +766,7 @@ func TestRedactErr(t *testing.T) {
 			}
 
 			t.Run("Root", func(t *testing.T) {
-				got := redactErr(tc.err()).Error()
+				got := taildrop.RedactErr(tc.err()).Error()
 				if got != tc.want {
 					t.Errorf("err = %q; want %q", got, tc.want)
 				}
@@ -765,7 +775,7 @@ func TestRedactErr(t *testing.T) {
 				wrapped := fmt.Errorf("wrapped error: %w", tc.err())
 				want := "wrapped error: " + tc.want
 
-				got := redactErr(wrapped).Error()
+				got := taildrop.RedactErr(wrapped).Error()
 				if got != want {
 					t.Errorf("err = %q; want %q", got, want)
 				}
