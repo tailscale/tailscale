@@ -20,6 +20,7 @@ require (
 	github.com/creack/pty v1.1.18
 	github.com/dave/jennifer v1.7.0
 	github.com/dblohm7/wingoes v0.0.0-20230929194252-e994401fc077
+	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
 	github.com/dsnet/try v0.0.3
 	github.com/evanw/esbuild v0.19.4
 	github.com/frankban/quicktest v1.14.5
