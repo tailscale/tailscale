@@ -2936,7 +2936,7 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 		},
 		{
 			desc:            "ping_size_too_big_for_trusted_UDP_addr_should_start_discovery_and_send_to_DERP",
-			size:            pktLenToPingSize(1501, validUdpAddr.Addr()),
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr().Is6()),
 			mtu:             1500,
 			bestAddr:        true,
 			bestAddrTrusted: true,
@@ -2945,7 +2945,7 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 		},
 		{
 			desc:            "ping_size_too_big_for_untrusted_UDP_addr_should_start_discovery_and_send_to_DERP",
-			size:            pktLenToPingSize(1501, validUdpAddr.Addr()),
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr().Is6()),
 			mtu:             1500,
 			bestAddr:        true,
 			bestAddrTrusted: false,
@@ -2954,7 +2954,7 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 		},
 		{
 			desc:            "ping_size_small_enough_for_trusted_UDP_addr_should_send_to_UDP_and_not_DERP",
-			size:            pktLenToPingSize(1500, validUdpAddr.Addr()),
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr().Is6()),
 			mtu:             1500,
 			bestAddr:        true,
 			bestAddrTrusted: true,
@@ -2963,7 +2963,7 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 		},
 		{
 			desc:            "ping_size_small_enough_for_untrusted_UDP_addr_should_send_to_UDP_and_DERP",
-			size:            pktLenToPingSize(1500, validUdpAddr.Addr()),
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr().Is6()),
 			mtu:             1500,
 			bestAddr:        true,
 			bestAddrTrusted: false,
