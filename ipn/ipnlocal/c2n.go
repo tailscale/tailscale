@@ -232,7 +232,7 @@ func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *htt
 	// TODO(kradalby): Use syspolicy + envknob to allow Win registry,
 	// macOS defaults and env to override this setting.
 	if b.Prefs().PostureChecking() {
-		sns, err := posture.GetSerialNumbers()
+		sns, err := posture.GetSerialNumbers(b.logf)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
