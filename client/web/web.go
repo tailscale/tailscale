@@ -474,7 +474,7 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routes, err := netutil.CalcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
+	routes, err := netutil.CalcAdvertiseRoutes(st.TailscaleIPs[0], postData.AdvertiseRoutes, postData.AdvertiseExitNode)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(mi{"error": err.Error()})

@@ -41,12 +41,25 @@ func validateViaPrefix(ipp netip.Prefix) error {
 // CalcAdvertiseRoutes calculates the requested routes to be advertised by a node.
 // advertiseRoutes is the user-provided, comma-separated list of routes (IP addresses or CIDR prefixes) to advertise.
 // advertiseDefaultRoute indicates whether the node should act as an exit node and advertise default routes.
-func CalcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netip.Prefix, error) {
+func CalcAdvertiseRoutes(selfIPv4 netip.Addr, advertiseRoutes string, advertiseDefaultRoute bool) ([]netip.Prefix, error) {
 	routeMap := map[netip.Prefix]bool{}
 	if advertiseRoutes != "" {
 		var default4, default6 bool
 		advroutes := strings.Split(advertiseRoutes, ",")
 		for _, s := range advroutes {
+			if s == "lan-via6" {
+				if !selfIPv4.IsValid() {
+					return nil, fmt.Errorf("cannot advertise lan-via6 route until you're connected to Tailscale")
+				}
+				a4 := selfIPv4.As4()
+				selfSiteID := binary.BigEndian.Uint32(a4[:])
+				for _, pfxStr := range []string{"10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"} {
+					pfx := netip.MustParsePrefix(pfxStr)
+					pfx6, _ := tsaddr.MapVia(selfSiteID, pfx)
+					routeMap[pfx6] = true
+				}
+				continue
+			}
 			ipp, err := netip.ParsePrefix(s)
 			if err != nil {
 				return nil, fmt.Errorf("%q is not a valid IP address or CIDR prefix", s)

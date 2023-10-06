@@ -140,7 +140,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		return err
 	}
 	if maskedPrefs.AdvertiseRoutesSet {
-		maskedPrefs.AdvertiseRoutes, err = calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet, curPrefs, setArgs)
+		maskedPrefs.AdvertiseRoutes, err = calcAdvertiseRoutesForSet(st.TailscaleIPs[0], advertiseExitNodeSet, advertiseRoutesSet, curPrefs, setArgs)
 		if err != nil {
 			return err
 		}
@@ -174,13 +174,13 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 // advertiseRoutesSet is whether the --advertise-routes flag was set.
 // curPrefs is the current Prefs.
 // setArgs is the parsed command-line arguments.
-func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, curPrefs *ipn.Prefs, setArgs setArgsT) (routes []netip.Prefix, err error) {
+func calcAdvertiseRoutesForSet(addrV4 netip.Addr, advertiseExitNodeSet, advertiseRoutesSet bool, curPrefs *ipn.Prefs, setArgs setArgsT) (routes []netip.Prefix, err error) {
 	if advertiseExitNodeSet && advertiseRoutesSet {
-		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
+		return netutil.CalcAdvertiseRoutes(addrV4, setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
 
 	}
 	if advertiseRoutesSet {
-		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes, curPrefs.AdvertisesExitNode())
+		return netutil.CalcAdvertiseRoutes(addrV4, setArgs.advertiseRoutes, curPrefs.AdvertisesExitNode())
 	}
 	if advertiseExitNodeSet {
 		alreadyAdvertisesExitNode := curPrefs.AdvertisesExitNode()

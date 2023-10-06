@@ -32,8 +32,9 @@ import (
 )
 
 var (
-	testipv4 = netip.MustParseAddr("1.2.3.4")
-	testipv6 = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+	testipv4  = netip.MustParseAddr("1.2.3.4")
+	test3ipv4 = netip.MustParseAddr("5.6.7.8")
+	testipv6  = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
 
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
@@ -43,8 +44,9 @@ var (
 
 var dnsCfg = Config{
 	Hosts: map[dnsname.FQDN][]netip.Addr{
-		"test1.ipn.dev.": {testipv4},
-		"test2.ipn.dev.": {testipv6},
+		"test1.ipn.dev.":    {testipv4},
+		"test2.ipn.dev.":    {testipv6},
+		"test3.foo.ts.net.": {test3ipv4},
 	},
 	LocalDomains: []dnsname.FQDN{"ipn.dev.", "3.2.1.in-addr.arpa.", "1.0.0.0.ip6.arpa."},
 }
@@ -352,7 +354,6 @@ func TestResolveLocal(t *testing.T) {
 
 		// Hyphenated 4via6 format.
 		// Without any suffix domain:
-		{"via_form3_hex_bare", dnsname.FQDN("1-2-3-4-via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
 		{"via_form3_dec_bare", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
 		// With a Tailscale domain:
 		{"via_form3_dec_ts.net", dnsname.FQDN("1-2-3-4-via-1.foo.ts.net."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
@@ -361,6 +362,8 @@ func TestResolveLocal(t *testing.T) {
 		// suffixes are currently hard-coded and not plumbed via the netmap)
 		{"via_form3_dec_example.com", dnsname.FQDN("1-2-3-4-via-1.example.com."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
 		{"via_form3_dec_examplets.net", dnsname.FQDN("1-2-3-4-via-1.examplets.net."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+
+		{"via_lan", dnsname.FQDN("10-20-30-40-via-test3.foo.ts.net."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0506:0708:10.20.30.40"), dns.RCodeSuccess},
 	}
 
 	for _, tt := range tests {

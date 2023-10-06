@@ -228,7 +228,7 @@ func warnf(format string, args ...any) {
 // function exists for testing and should have no side effects or
 // outside interactions (e.g. no making Tailscale LocalAPI calls).
 func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
-	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
+	routes, err := netutil.CalcAdvertiseRoutes(netip.Addr{}, upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
 	if err != nil {
 		return nil, err
 	}

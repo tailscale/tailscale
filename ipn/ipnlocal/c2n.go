@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -283,7 +284,9 @@ func (b *LocalBackend) handleC2NWoL(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad method", http.StatusMethodNotAllowed)
 		return
 	}
-	r.ParseForm()
+	err := r.ParseForm()
+	log.Printf("ParseForm=%v: Form=%q, PostForm=%q", err, r.Form, r.PostForm)
+
 	var macs []net.HardwareAddr
 	for _, macStr := range r.Form["mac"] {
 		mac, err := net.ParseMAC(macStr)

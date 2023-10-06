@@ -8,6 +8,7 @@ package resolver
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
@@ -680,17 +682,21 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 // (2022-06-02) to work around an issue in Chrome where it would treat
 // "http://via-1.1.2.3.4" as a search string instead of a URL. We should rip out
 // the old format in early 2023.
-func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr, bool) {
-	fqdn := string(domain.WithoutTrailingDot())
+func (r *Resolver) parseViaDomain(domainFQDN dnsname.FQDN, typ dns.Type) (netip.Addr, bool) {
+	fqdn := string(domainFQDN.WithoutTrailingDot())
 	if typ != dns.TypeAAAA {
 		return netip.Addr{}, false
 	}
 	if len(fqdn) < len("via-X.0.0.0.0") {
 		return netip.Addr{}, false // too short to be valid
 	}
+	r.mu.Lock()
+	hosts := r.hostToIP
+	r.mu.Unlock()
 
 	var siteID string
 	var ip4Str string
+	var prefix uint32
 	switch {
 	case strings.Contains(fqdn, "-via-"):
 		// Format number 3: "192-168-1-2-via-7" or "192-168-1-2-via-7.foo.ts.net."
@@ -703,8 +709,24 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr
 		if !ok {
 			return netip.Addr{}, false
 		}
-		siteID = suffix
 		ip4Str = strings.ReplaceAll(v4hyphens, "-", ".")
+		if strings.ContainsFunc(suffix, unicode.IsLetter) {
+			// Advertising a whole LAN case. IPv4 address via a specific named node
+			// ("10-0-0-1-via-appletv.foo.ts.net.") where suffix here is
+			// "appletv" and not a numeric site ID.
+			_, node, _ := strings.Cut(domainFQDN.WithTrailingDot(), "-via-")
+			for _, addr := range hosts[dnsname.FQDN(node)] {
+				if addr.Is4() {
+					a4 := addr.As4()
+					prefix = binary.BigEndian.Uint32(a4[:])
+				}
+			}
+			if prefix == 0 {
+				return netip.Addr{}, false
+			}
+		} else {
+			siteID = suffix
+		}
 	case strings.HasPrefix(fqdn, "via-"):
 		firstDot := strings.Index(fqdn, ".")
 		if firstDot < 0 {
@@ -730,13 +752,16 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr
 		return netip.Addr{}, false // badly formed, don't respond
 	}
 
-	prefix, err := strconv.ParseUint(siteID, 0, 32)
-	if err != nil {
-		return netip.Addr{}, false // badly formed, don't respond
+	if prefix == 0 {
+		prefix64, err := strconv.ParseUint(siteID, 0, 32)
+		if err != nil {
+			return netip.Addr{}, false // badly formed, don't respond
+		}
+		prefix = uint32(prefix64)
 	}
 
 	// MapVia will never error when given an IPv4 netip.Prefix.
-	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
+	out, _ := tsaddr.MapVia(prefix, netip.PrefixFrom(ip4, ip4.BitLen()))
 	return out.Addr(), true
 }
 
