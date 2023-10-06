@@ -3545,11 +3545,11 @@ func (b *LocalBackend) initPeerAPIListener() {
 	ps := &peerAPIServer{
 		b: b,
 		taildrop: &taildrop.Handler{
-			Logf:                    b.logf,
-			Clock:                   b.clock,
-			RootDir:                 fileRoot,
-			DirectFileMode:          b.directFileRoot != "",
-			DirectFileDoFinalRename: b.directFileDoFinalRename,
+			Logf:             b.logf,
+			Clock:            b.clock,
+			Dir:              fileRoot,
+			DirectFileMode:   b.directFileRoot != "",
+			AvoidFinalRename: !b.directFileDoFinalRename,
 		},
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {

@@ -19,10 +19,10 @@ import (
 	"tailscale.com/logtail/backoff"
 )
 
-// HasFilesWaiting reports whether any files are buffered in the
-// tailscaled daemon storage.
+// HasFilesWaiting reports whether any files are buffered in [Handler.Dir].
+// This always returns false when [Handler.DirectFileMode] is false.
 func (s *Handler) HasFilesWaiting() bool {
-	if s == nil || s.RootDir == "" || s.DirectFileMode {
+	if s == nil || s.Dir == "" || s.DirectFileMode {
 		return false
 	}
 	if s.knownEmpty.Load() {
@@ -33,7 +33,7 @@ func (s *Handler) HasFilesWaiting() bool {
 		// keep this negative cache.
 		return false
 	}
-	f, err := os.Open(s.RootDir)
+	f, err := os.Open(s.Dir)
 	if err != nil {
 		return false
 	}
@@ -42,7 +42,7 @@ func (s *Handler) HasFilesWaiting() bool {
 		des, err := f.ReadDir(10)
 		for _, de := range des {
 			name := de.Name()
-			if strings.HasSuffix(name, PartialSuffix) {
+			if strings.HasSuffix(name, partialSuffix) {
 				continue
 			}
 			if name, ok := strings.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
@@ -51,16 +51,16 @@ func (s *Handler) HasFilesWaiting() bool {
 				// as the OS may return "foo.jpg.deleted" before "foo.jpg"
 				// and we don't want to delete the ".deleted" file before
 				// enumerating to the "foo.jpg" file.
-				defer tryDeleteAgain(filepath.Join(s.RootDir, name))
+				defer tryDeleteAgain(filepath.Join(s.Dir, name))
 				continue
 			}
 			if de.Type().IsRegular() {
-				_, err := os.Stat(filepath.Join(s.RootDir, name+deletedSuffix))
+				_, err := os.Stat(filepath.Join(s.Dir, name+deletedSuffix))
 				if os.IsNotExist(err) {
 					return true
 				}
 				if err == nil {
-					tryDeleteAgain(filepath.Join(s.RootDir, name))
+					tryDeleteAgain(filepath.Join(s.Dir, name))
 					continue
 				}
 			}
@@ -76,22 +76,19 @@ func (s *Handler) HasFilesWaiting() bool {
 }
 
 // WaitingFiles returns the list of files that have been sent by a
-// peer that are waiting in the buffered "pick up" directory owned by
-// the Tailscale daemon.
-//
-// As a side effect, it also does any lazy deletion of files as
-// required by Windows.
+// peer that are waiting in [Handler.Dir].
+// This always returns nil when [Handler.DirectFileMode] is false.
 func (s *Handler) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 	if s == nil {
 		return nil, errNilHandler
 	}
-	if s.RootDir == "" {
-		return nil, ErrNoTaildrop
+	if s.Dir == "" {
+		return nil, errNoTaildrop
 	}
 	if s.DirectFileMode {
 		return nil, nil
 	}
-	f, err := os.Open(s.RootDir)
+	f, err := os.Open(s.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +98,7 @@ func (s *Handler) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 		des, err := f.ReadDir(10)
 		for _, de := range des {
 			name := de.Name()
-			if strings.HasSuffix(name, PartialSuffix) {
+			if strings.HasSuffix(name, partialSuffix) {
 				continue
 			}
 			if name, ok := strings.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
@@ -143,7 +140,7 @@ func (s *Handler) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 		// Maybe Windows is done virus scanning the file we tried
 		// to delete a long time ago and will let us delete it now.
 		for name := range deleted {
-			tryDeleteAgain(filepath.Join(s.RootDir, name))
+			tryDeleteAgain(filepath.Join(s.Dir, name))
 		}
 	}
 	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
@@ -164,17 +161,19 @@ func tryDeleteAgain(fullPath string) {
 	}
 }
 
+// DeleteFile deletes a file of the given baseName from [Handler.Dir].
+// This method is only allowed when [Handler.DirectFileMode] is false.
 func (s *Handler) DeleteFile(baseName string) error {
 	if s == nil {
 		return errNilHandler
 	}
-	if s.RootDir == "" {
-		return ErrNoTaildrop
+	if s.Dir == "" {
+		return errNoTaildrop
 	}
 	if s.DirectFileMode {
 		return errors.New("deletes not allowed in direct mode")
 	}
-	path, ok := s.DiskPath(baseName)
+	path, ok := s.diskPath(baseName)
 	if !ok {
 		return errors.New("bad filename")
 	}
@@ -184,7 +183,7 @@ func (s *Handler) DeleteFile(baseName string) error {
 	for {
 		err := os.Remove(path)
 		if err != nil && !os.IsNotExist(err) {
-			err = RedactErr(err)
+			err = redactErr(err)
 			// Put a retry loop around deletes on Windows. Windows
 			// file descriptor closes are effectively asynchronous,
 			// as a bunch of hooks run on/after close, and we can't
@@ -203,7 +202,7 @@ func (s *Handler) DeleteFile(baseName string) error {
 					bo.BackOff(context.Background(), err)
 					continue
 				}
-				if err := TouchFile(path + deletedSuffix); err != nil {
+				if err := touchFile(path + deletedSuffix); err != nil {
 					logf("peerapi: failed to leave deleted marker: %v", err)
 				}
 			}
@@ -214,25 +213,27 @@ func (s *Handler) DeleteFile(baseName string) error {
 	}
 }
 
-func TouchFile(path string) error {
+func touchFile(path string) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		return RedactErr(err)
+		return redactErr(err)
 	}
 	return f.Close()
 }
 
+// OpenFile opens a file of the given baseName from [Handler.Dir].
+// This method is only allowed when [Handler.DirectFileMode] is false.
 func (s *Handler) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
 	if s == nil {
 		return nil, 0, errNilHandler
 	}
-	if s.RootDir == "" {
-		return nil, 0, ErrNoTaildrop
+	if s.Dir == "" {
+		return nil, 0, errNoTaildrop
 	}
 	if s.DirectFileMode {
 		return nil, 0, errors.New("opens not allowed in direct mode")
 	}
-	path, ok := s.DiskPath(baseName)
+	path, ok := s.diskPath(baseName)
 	if !ok {
 		return nil, 0, errors.New("bad filename")
 	}
@@ -242,12 +243,12 @@ func (s *Handler) OpenFile(baseName string) (rc io.ReadCloser, size int64, err e
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, 0, RedactErr(err)
+		return nil, 0, redactErr(err)
 	}
 	fi, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, 0, RedactErr(err)
+		return nil, 0, redactErr(err)
 	}
 	return f, fi.Size(), nil
 }
