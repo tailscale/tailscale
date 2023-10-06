@@ -192,6 +192,26 @@ func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 	return actual, loaded
 }
 
+// LoadOrInit returns the value for the given key if it exists
+// otherwise f is called to construct the value to be set.
+// The lock is held for the duration to prevent duplicate initialization.
+func (m *Map[K, V]) LoadOrInit(key K, f func() V) (actual V, loaded bool) {
+	if actual, loaded := m.Load(key); loaded {
+		return actual, loaded
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if actual, loaded = m.m[key]; loaded {
+		return actual, loaded
+	}
+
+	loaded = false
+	actual = f()
+	mak.Set(&m.m, key, actual)
+	return actual, loaded
+}
+
 func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
