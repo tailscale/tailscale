@@ -239,7 +239,6 @@ type LocalBackend struct {
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
-	incomingFiles    map[*incomingFile]bool
 	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
 	notifyWatchers   set.HandleSet[*watchSession]
 	lastStatusTime   time.Time // status.AsOf value of the last processed status update
@@ -2213,10 +2212,7 @@ func (b *LocalBackend) sendFileNotify() {
 	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
 	// in JSON to clients. They distinguish between empty and non-nil
 	// to know whether a Notify should be able about files.
-	n.IncomingFiles = make([]ipn.PartialFile, 0)
-	for f := range b.incomingFiles {
-		n.IncomingFiles = append(n.IncomingFiles, f.PartialFile())
-	}
+	n.IncomingFiles = apiSrv.taildrop.IncomingFiles()
 	b.mu.Unlock()
 
 	sort.Slice(n.IncomingFiles, func(i, j int) bool {
@@ -4588,19 +4584,6 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 		return errors.New("missing 'value'")
 	}
 	return cc.SetDNS(ctx, req)
-}
-
-func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.incomingFiles == nil {
-		b.incomingFiles = make(map[*incomingFile]bool)
-	}
-	if active {
-		b.incomingFiles[inf] = true
-	} else {
-		delete(b.incomingFiles, inf)
-	}
 }
 
 func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
