@@ -209,10 +209,6 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
       "192.68.0.21:59128"
     ],
 
-    // derp (string) is the IP:port of the DERP server currently being used.
-    // Learn about DERP servers at https://tailscale.com/kb/1232/.
-    "derp":"",
-
     // mappingVariesByDestIP (boolean) is 'true' if the host's NAT mappings
     // vary based on the destination IP.
     "mappingVariesByDestIP":false,
