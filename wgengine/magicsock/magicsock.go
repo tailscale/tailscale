@@ -2185,7 +2185,7 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 		if debugReSTUNStopOnIdle() {
 			c.logf("magicsock: periodicReSTUN: idle for %v", idleFor.Round(time.Second))
 		}
-		if idleFor > sessionActiveTimeout {
+		if idleFor > c.sessionActiveTimeout() {
 			if c.controlKnobs != nil && c.controlKnobs.ForceBackgroundSTUN.Load() {
 				// Overridden by control.
 				return true
@@ -2657,11 +2657,11 @@ func (c *Conn) SetStatistics(stats *connstats.Statistics) {
 }
 
 const (
-	// sessionActiveTimeout is how long since the last activity we
+	// sessionActiveTimeoutDefault is how long since the last activity we
 	// try to keep an established endpoint peering alive.
 	// It's also the idle time at which we stop doing STUN queries to
 	// keep NAT mappings alive.
-	sessionActiveTimeout = 45 * time.Second
+	sessionActiveTimeoutDefault = 45 * time.Second
 
 	// upgradeInterval is how often we try to upgrade to a better path
 	// even if we have some non-DERP route that works.
@@ -2727,6 +2727,15 @@ func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 			logf("magicsock: failed to set UDP write buffer size to %d: %v", socketBufferSize, err)
 		}
 	}
+}
+
+func (c *Conn) sessionActiveTimeout() time.Duration {
+	if ck := c.controlKnobs; ck != nil {
+		if v := ck.MagicsockSessionActiveTimeout.Load(); v != 0 {
+			return v
+		}
+	}
+	return sessionActiveTimeoutDefault
 }
 
 // derpStr replaces DERP IPs in s with "derp-".

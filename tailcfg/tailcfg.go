@@ -2123,6 +2123,11 @@ const (
 	// NodeAttrDNSForwarderDisableTCPRetries disables retrying truncated
 	// DNS queries over TCP if the response is truncated.
 	NodeAttrDNSForwarderDisableTCPRetries NodeCapability = "dns-forwarder-disable-tcp-retries"
+
+	// NodeAttrMagicsockSessionTimeout sets the magicsock session timeout.
+	// It must have an associated string value, formatted by time.Duration.String
+	// and parsable by time.ParseDuration. If invalid or unset, the default is used.
+	NodeAttrMagicsockSessionTimeout NodeCapability = "magicsock-session-timeout"
 )
 
 // SetDNSRequest is a request to add a DNS record.

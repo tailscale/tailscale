@@ -7,7 +7,9 @@ package controlknobs
 
 import (
 	"slices"
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -52,6 +54,10 @@ type Knobs struct {
 	// DisableDNSForwarderTCPRetries is whether the DNS forwarder should
 	// skip retrying truncated queries over TCP.
 	DisableDNSForwarderTCPRetries atomic.Bool
+
+	// MagicsockSessionActiveTimeout is an alternate magicsock session timeout
+	// duration to use. If zero or unset, the default is used.
+	MagicsockSessionActiveTimeout syncs.AtomicValue[time.Duration]
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -91,6 +97,17 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 	k.PeerMTUEnable.Store(peerMTUEnable)
 	k.DisableDNSForwarderTCPRetries.Store(dnsForwarderDisableTCPRetries)
+
+	var timeout time.Duration
+	if vv := capMap[tailcfg.NodeAttrMagicsockSessionTimeout]; len(vv) > 0 {
+		if v, _ := strconv.Unquote(string(vv[0])); v != "" {
+			timeout, _ = time.ParseDuration(v)
+			timeout = max(timeout, 0)
+		}
+	}
+	if was := k.MagicsockSessionActiveTimeout.Load(); was != timeout {
+		k.MagicsockSessionActiveTimeout.Store(timeout)
+	}
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -109,5 +126,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"DisableDeltaUpdates":           k.DisableDeltaUpdates.Load(),
 		"PeerMTUEnable":                 k.PeerMTUEnable.Load(),
 		"DisableDNSForwarderTCPRetries": k.DisableDNSForwarderTCPRetries.Load(),
+		"MagicsockSessionActiveTimeout": k.MagicsockSessionActiveTimeout.Load().String(),
 	}
 }

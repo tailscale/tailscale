@@ -83,6 +83,13 @@ type endpoint struct {
 	isWireguardOnly bool // whether the endpoint is WireGuard only
 }
 
+func (ep *endpoint) sessionActiveTimeout() time.Duration {
+	if ep == nil {
+		return sessionActiveTimeoutDefault
+	}
+	return ep.c.sessionActiveTimeout()
+}
+
 // endpointDisco is the current disco key and short string for an endpoint. This
 // structure is immutable.
 type endpointDisco struct {
@@ -104,6 +111,8 @@ type sentPing struct {
 // a endpoint. (The subject is the endpoint.endpointState
 // map key)
 type endpointState struct {
+	ep *endpoint
+
 	// all fields guarded by endpoint.mu
 
 	// lastPing is the last (outgoing) ping time.
@@ -169,7 +178,7 @@ func (st *endpointState) shouldDeleteLocked() bool {
 		return st.index == indexSentinelDeleted
 	default:
 		// This was an endpoint discovered at runtime.
-		return time.Since(st.lastGotPing) > sessionActiveTimeout
+		return time.Since(st.lastGotPing) > st.ep.sessionActiveTimeout()
 	}
 }
 
@@ -411,7 +420,7 @@ func (de *endpoint) heartbeat() {
 		return
 	}
 
-	if mono.Since(de.lastSend) > sessionActiveTimeout {
+	if mono.Since(de.lastSend) > de.c.sessionActiveTimeout() {
 		// Session's idle. Stop heartbeating.
 		de.c.dlogf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort())
 		return
@@ -876,7 +885,7 @@ func (de *endpoint) setEndpointsLocked(eps interface {
 		if st, ok := de.endpointState[ipp]; ok {
 			st.index = int16(i)
 		} else {
-			de.endpointState[ipp] = &endpointState{index: int16(i)}
+			de.endpointState[ipp] = &endpointState{ep: de, index: int16(i)}
 			newIpps = append(newIpps, ipp)
 		}
 	}
@@ -924,6 +933,7 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 	// Newly discovered endpoint. Exciting!
 	de.c.dlogf("[v1] magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort(), de.publicKey.ShortString())
 	de.endpointState[ep] = &endpointState{
+		ep:              de,
 		lastGotPing:     time.Now(),
 		lastGotPingTxID: forRxPingTxID,
 	}
@@ -1261,7 +1271,7 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 
 	now := mono.Now()
 	ps.LastWrite = de.lastSend.WallTime()
-	ps.Active = now.Sub(de.lastSend) < sessionActiveTimeout
+	ps.Active = now.Sub(de.lastSend) < de.c.sessionActiveTimeout()
 
 	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.IsValid() && !derpAddr.IsValid() {
 		ps.CurAddr = udpAddr.String()

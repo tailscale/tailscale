@@ -2851,7 +2851,7 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			}
 
 			for _, epd := range test.ep {
-				endpoint.endpointState[epd.addrPort] = &endpointState{}
+				endpoint.endpointState[epd.addrPort] = &endpointState{ep: endpoint}
 			}
 			udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime)
 			if udpAddr.IsValid() != test.validAddr {
