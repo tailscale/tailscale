@@ -15,6 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"tailscale.com/ipn"
+	"tailscale.com/syncs"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/multierr"
@@ -41,7 +43,14 @@ type Handler struct {
 	// it's received.
 	DirectFileDoFinalRename bool
 
-	KnownEmpty atomic.Bool
+	// SendFileNotify is called periodically while a file is actively
+	// receiving the contents for the file. There is a final call
+	// to the function when reception completes.
+	SendFileNotify func()
+
+	knownEmpty atomic.Bool
+
+	incomingFiles syncs.Map[*incomingFile, struct{}]
 }
 
 var (
@@ -111,6 +120,27 @@ func (s *Handler) DiskPath(baseName string) (fullPath string, ok bool) {
 		return "", false
 	}
 	return filepath.Join(s.RootDir, baseName), true
+}
+
+func (s *Handler) IncomingFiles() []ipn.PartialFile {
+	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
+	// in JSON to clients. They distinguish between empty and non-nil
+	// to know whether a Notify should be able about files.
+	files := make([]ipn.PartialFile, 0)
+	s.incomingFiles.Range(func(f *incomingFile, _ struct{}) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		files = append(files, ipn.PartialFile{
+			Name:         f.name,
+			Started:      f.started,
+			DeclaredSize: f.size,
+			Received:     f.copied,
+			PartialPath:  f.partialPath,
+			Done:         f.done,
+		})
+		return true
+	})
+	return files
 }
 
 type redactedErr struct {

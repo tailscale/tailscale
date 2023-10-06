@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"runtime"
 	"slices"
@@ -39,10 +38,8 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
-	"tailscale.com/tstime"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -586,64 +583,6 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "</pre>")
 }
 
-type incomingFile struct {
-	clock tstime.Clock
-
-	name           string // "foo.jpg"
-	started        time.Time
-	size           int64     // or -1 if unknown; never 0
-	w              io.Writer // underlying writer
-	sendFileNotify func()    // called when done
-	partialPath    string    // non-empty in direct mode
-
-	mu         sync.Mutex
-	copied     int64
-	done       bool
-	lastNotify time.Time
-}
-
-func (f *incomingFile) markAndNotifyDone() {
-	f.mu.Lock()
-	f.done = true
-	f.mu.Unlock()
-	f.sendFileNotify()
-}
-
-func (f *incomingFile) Write(p []byte) (n int, err error) {
-	n, err = f.w.Write(p)
-
-	var needNotify bool
-	defer func() {
-		if needNotify {
-			f.sendFileNotify()
-		}
-	}()
-	if n > 0 {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.copied += int64(n)
-		now := f.clock.Now()
-		if f.lastNotify.IsZero() || now.Sub(f.lastNotify) > time.Second {
-			f.lastNotify = now
-			needNotify = true
-		}
-	}
-	return n, err
-}
-
-func (f *incomingFile) PartialFile() ipn.PartialFile {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return ipn.PartialFile{
-		Name:         f.name,
-		Started:      f.started,
-		DeclaredSize: f.size,
-		Received:     f.copied,
-		PartialPath:  f.partialPath,
-		Done:         f.done,
-	}
-}
-
 // canPutFile reports whether h can put a file ("Taildrop") to this node.
 func (h *peerAPIHandler) canPutFile() bool {
 	if h.peerNode.UnsignedPeerAPIOnly() {
@@ -687,10 +626,6 @@ func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
 }
 
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
-	if !envknob.CanTaildrop() {
-		http.Error(w, "Taildrop disabled on device", http.StatusForbidden)
-		return
-	}
 	if !h.canPutFile() {
 		http.Error(w, "Taildrop access denied", http.StatusForbidden)
 		return
@@ -699,117 +634,12 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file sharing not enabled by Tailscale admin", http.StatusForbidden)
 		return
 	}
-	if r.Method != "PUT" {
-		http.Error(w, "expected method PUT", http.StatusMethodNotAllowed)
-		return
-	}
-	if mayDeref(h.ps.taildrop).RootDir == "" {
-		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusInternalServerError)
-		return
-	}
-	if distro.Get() == distro.Unraid && !h.ps.taildrop.DirectFileMode {
-		http.Error(w, "Taildrop folder not configured or accessible", http.StatusInternalServerError)
-		return
-	}
-	rawPath := r.URL.EscapedPath()
-	suffix, ok := strings.CutPrefix(rawPath, "/v0/put/")
-	if !ok {
-		http.Error(w, "misconfigured internals", 500)
-		return
-	}
-	if suffix == "" {
-		http.Error(w, "empty filename", 400)
-		return
-	}
-	if strings.Contains(suffix, "/") {
-		http.Error(w, "directories not supported", 400)
-		return
-	}
-	baseName, err := url.PathUnescape(suffix)
-	if err != nil {
-		http.Error(w, "bad path encoding", 400)
-		return
-	}
-	dstFile, ok := h.ps.taildrop.DiskPath(baseName)
-	if !ok {
-		http.Error(w, "bad filename", 400)
-		return
-	}
 	t0 := h.ps.b.clock.Now()
-	// TODO(bradfitz): prevent same filename being sent by two peers at once
-
-	// prevent same filename being sent twice
-	if _, err := os.Stat(dstFile); err == nil {
-		http.Error(w, "file exists", http.StatusConflict)
-		return
+	n, ok := h.ps.taildrop.HandlePut(w, r)
+	if ok {
+		d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
+		h.logf("got put of %s in %v from %v/%v", approxSize(n), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
 	}
-
-	partialFile := dstFile + taildrop.PartialSuffix
-	f, err := os.Create(partialFile)
-	if err != nil {
-		h.logf("put Create error: %v", taildrop.RedactErr(err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var success bool
-	defer func() {
-		if !success {
-			os.Remove(partialFile)
-		}
-	}()
-	var finalSize int64
-	var inFile *incomingFile
-	if r.ContentLength != 0 {
-		inFile = &incomingFile{
-			clock:          h.ps.b.clock,
-			name:           baseName,
-			started:        h.ps.b.clock.Now(),
-			size:           r.ContentLength,
-			w:              f,
-			sendFileNotify: h.ps.b.sendFileNotify,
-		}
-		if h.ps.taildrop.DirectFileMode {
-			inFile.partialPath = partialFile
-		}
-		h.ps.b.registerIncomingFile(inFile, true)
-		defer h.ps.b.registerIncomingFile(inFile, false)
-		n, err := io.Copy(inFile, r.Body)
-		if err != nil {
-			err = taildrop.RedactErr(err)
-			f.Close()
-			h.logf("put Copy error: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		finalSize = n
-	}
-	if err := taildrop.RedactErr(f.Close()); err != nil {
-		h.logf("put Close error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if h.ps.taildrop.DirectFileMode && !h.ps.taildrop.DirectFileDoFinalRename {
-		if inFile != nil { // non-zero length; TODO: notify even for zero length
-			inFile.markAndNotifyDone()
-		}
-	} else {
-		if err := os.Rename(partialFile, dstFile); err != nil {
-			err = taildrop.RedactErr(err)
-			h.logf("put final rename: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
-	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
-
-	// TODO: set modtime
-	// TODO: some real response
-	success = true
-	io.WriteString(w, "{}\n")
-	h.ps.taildrop.KnownEmpty.Store(false)
-	h.ps.b.sendFileNotify()
 }
 
 func approxSize(n int64) string {

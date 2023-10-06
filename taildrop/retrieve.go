@@ -25,7 +25,7 @@ func (s *Handler) HasFilesWaiting() bool {
 	if s == nil || s.RootDir == "" || s.DirectFileMode {
 		return false
 	}
-	if s.KnownEmpty.Load() {
+	if s.knownEmpty.Load() {
 		// Optimization: this is usually empty, so avoid opening
 		// the directory and checking. We can't cache the actual
 		// has-files-or-not values as the macOS/iOS client might
@@ -66,7 +66,7 @@ func (s *Handler) HasFilesWaiting() bool {
 			}
 		}
 		if err == io.EOF {
-			s.KnownEmpty.Store(true)
+			s.knownEmpty.Store(true)
 		}
 		if err != nil {
 			break
