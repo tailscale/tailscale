@@ -13,6 +13,11 @@ import (
 	"tailscale.com/util/vizerror"
 )
 
+var (
+	errEmptyProtocol = errors.New("empty protocol")
+	errEmptyString   = errors.New("empty string")
+)
+
 // ProtoPortRange is used to encode "proto:port" format.
 // The following formats are supported:
 //
@@ -30,6 +35,28 @@ type ProtoPortRange struct {
 	Ports PortRange
 }
 
+// UnmarshalText implements the encoding.TextUnmarshaler interface. See
+// ProtoPortRange for the format.
+func (ppr *ProtoPortRange) UnmarshalText(text []byte) error {
+	ppr2, err := parseProtoPortRange(string(text))
+	if err != nil {
+		return err
+	}
+	*ppr = *ppr2
+	return nil
+}
+
+// MarshalText implements the encoding.TextMarshaler interface. See
+// ProtoPortRange for the format.
+func (ppr *ProtoPortRange) MarshalText() ([]byte, error) {
+	if ppr.Proto == 0 && ppr.Ports == (PortRange{}) {
+		return []byte{}, nil
+	}
+	return []byte(ppr.String()), nil
+}
+
+// String implements the stringer interface. See ProtoPortRange for the
+// format.
 func (ppr ProtoPortRange) String() string {
 	if ppr.Proto == 0 {
 		if ppr.Ports == PortRangeAny {
@@ -69,7 +96,7 @@ func ParseProtoPortRanges(ips []string) ([]ProtoPortRange, error) {
 
 func parseProtoPortRange(ipProtoPort string) (*ProtoPortRange, error) {
 	if ipProtoPort == "" {
-		return nil, errors.New("empty string")
+		return nil, errEmptyString
 	}
 	if ipProtoPort == "*" {
 		return &ProtoPortRange{Ports: PortRangeAny}, nil
@@ -82,7 +109,7 @@ func parseProtoPortRange(ipProtoPort string) (*ProtoPortRange, error) {
 		return nil, err
 	}
 	if protoStr == "" {
-		return nil, errors.New("empty protocol")
+		return nil, errEmptyProtocol
 	}
 
 	ppr := &ProtoPortRange{
