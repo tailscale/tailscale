@@ -63,6 +63,8 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 }
 
 // HandlePut receives a file.
+// It handles an HTTP PUT request to the "/v0/put/{filename}" endpoint,
+// where {filename} is a base filename.
 // It returns the number of bytes received and whether it was received successfully.
 func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize int64, success bool) {
 	if !envknob.CanTaildrop() {
@@ -73,8 +75,8 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize i
 		http.Error(w, "expected method PUT", http.StatusMethodNotAllowed)
 		return finalSize, success
 	}
-	if h == nil || h.RootDir == "" {
-		http.Error(w, ErrNoTaildrop.Error(), http.StatusInternalServerError)
+	if h == nil || h.Dir == "" {
+		http.Error(w, errNoTaildrop.Error(), http.StatusInternalServerError)
 		return finalSize, success
 	}
 	if distro.Get() == distro.Unraid && !h.DirectFileMode {
@@ -100,9 +102,9 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize i
 		http.Error(w, "bad path encoding", http.StatusBadRequest)
 		return finalSize, success
 	}
-	dstFile, ok := h.DiskPath(baseName)
+	dstFile, ok := h.diskPath(baseName)
 	if !ok {
-		http.Error(w, "bad filename", 400)
+		http.Error(w, "bad filename", http.StatusBadRequest)
 		return finalSize, success
 	}
 	// TODO(bradfitz): prevent same filename being sent by two peers at once
@@ -113,10 +115,10 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize i
 		return finalSize, success
 	}
 
-	partialFile := dstFile + PartialSuffix
+	partialFile := dstFile + partialSuffix
 	f, err := os.Create(partialFile)
 	if err != nil {
-		h.Logf("put Create error: %v", RedactErr(err))
+		h.Logf("put Create error: %v", redactErr(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return finalSize, success
 	}
@@ -146,7 +148,7 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize i
 		defer h.incomingFiles.Delete(inFile)
 		n, err := io.Copy(inFile, r.Body)
 		if err != nil {
-			err = RedactErr(err)
+			err = redactErr(err)
 			f.Close()
 			h.Logf("put Copy error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -154,18 +156,18 @@ func (h *Handler) HandlePut(w http.ResponseWriter, r *http.Request) (finalSize i
 		}
 		finalSize = n
 	}
-	if err := RedactErr(f.Close()); err != nil {
+	if err := redactErr(f.Close()); err != nil {
 		h.Logf("put Close error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return finalSize, success
 	}
-	if h.DirectFileMode && !h.DirectFileDoFinalRename {
+	if h.DirectFileMode && h.AvoidFinalRename {
 		if inFile != nil { // non-zero length; TODO: notify even for zero length
 			inFile.markAndNotifyDone()
 		}
 	} else {
 		if err := os.Rename(partialFile, dstFile); err != nil {
-			err = RedactErr(err)
+			err = redactErr(err)
 			h.Logf("put final rename: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return finalSize, success

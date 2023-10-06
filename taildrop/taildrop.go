@@ -1,6 +1,12 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package taildrop contains the implementation of the Taildrop
+// functionality including sending and retrieving files.
+// This package does not validate permissions, the caller should
+// be responsible for ensuring correct authorization.
+//
+// For related documentation see: http://go/taildrop-how-does-it-work
 package taildrop
 
 import (
@@ -22,30 +28,38 @@ import (
 	"tailscale.com/util/multierr"
 )
 
+// Handler manages the state for receiving and managing taildropped files.
 type Handler struct {
 	Logf  logger.Logf
 	Clock tstime.Clock
 
-	RootDir string // empty means file receiving unavailable
+	// Dir is the directory to store received files.
+	// This main either be the final location for the files
+	// or just a temporary staging directory (see DirectFileMode).
+	Dir string
 
-	// DirectFileMode is whether we're writing files directly to a
-	// download directory (as *.partial files), rather than making
-	// the frontend retrieve it over localapi HTTP and write it
-	// somewhere itself. This is used on the GUI macOS versions
-	// and on Synology.
-	// In DirectFileMode, the peerapi doesn't do the final rename
-	// from "foo.jpg.partial" to "foo.jpg" unless
-	// directFileDoFinalRename is set.
+	// DirectFileMode reports whether we are writing files
+	// directly to a download directory, rather than writing them to
+	// a temporary staging directory.
+	//
+	// The following methods:
+	//	- HasFilesWaiting
+	//	- WaitingFiles
+	//	- DeleteFile
+	//	- OpenFile
+	// have no purpose in DirectFileMode.
+	// They are only used to check whether files are in the staging directory,
+	// copy them out, and then delete them.
 	DirectFileMode bool
 
-	// DirectFileDoFinalRename is whether in directFileMode we
-	// additionally move the *.direct file to its final name after
-	// it's received.
-	DirectFileDoFinalRename bool
+	// AvoidFinalRename specifies whether in DirectFileMode
+	// we should avoid renaming "foo.jpg.partial" to "foo.jpg" after reception.
+	AvoidFinalRename bool
 
 	// SendFileNotify is called periodically while a file is actively
 	// receiving the contents for the file. There is a final call
 	// to the function when reception completes.
+	// It is not called if nil.
 	SendFileNotify func()
 
 	knownEmpty atomic.Bool
@@ -55,13 +69,13 @@ type Handler struct {
 
 var (
 	errNilHandler = errors.New("handler unavailable; not listening")
-	ErrNoTaildrop = errors.New("Taildrop disabled; no storage directory")
+	errNoTaildrop = errors.New("Taildrop disabled; no storage directory")
 )
 
 const (
-	// PartialSuffix is the suffix appended to files while they're
+	// partialSuffix is the suffix appended to files while they're
 	// still in the process of being transferred.
-	PartialSuffix = ".partial"
+	partialSuffix = ".partial"
 
 	// deletedSuffix is the suffix for a deleted marker file
 	// that's placed next to a file (without the suffix) that we
@@ -93,7 +107,7 @@ func validFilenameRune(r rune) bool {
 	return unicode.IsPrint(r)
 }
 
-func (s *Handler) DiskPath(baseName string) (fullPath string, ok bool) {
+func (s *Handler) diskPath(baseName string) (fullPath string, ok bool) {
 	if !utf8.ValidString(baseName) {
 		return "", false
 	}
@@ -108,7 +122,7 @@ func (s *Handler) DiskPath(baseName string) (fullPath string, ok bool) {
 	if clean != baseName ||
 		clean == "." || clean == ".." ||
 		strings.HasSuffix(clean, deletedSuffix) ||
-		strings.HasSuffix(clean, PartialSuffix) {
+		strings.HasSuffix(clean, partialSuffix) {
 		return "", false
 	}
 	for _, r := range baseName {
@@ -119,7 +133,7 @@ func (s *Handler) DiskPath(baseName string) (fullPath string, ok bool) {
 	if !filepath.IsLocal(baseName) {
 		return "", false
 	}
-	return filepath.Join(s.RootDir, baseName), true
+	return filepath.Join(s.Dir, baseName), true
 }
 
 func (s *Handler) IncomingFiles() []ipn.PartialFile {
@@ -166,7 +180,7 @@ func redactString(s string) string {
 	return string(b)
 }
 
-func RedactErr(root error) error {
+func redactErr(root error) error {
 	// redactStrings is a list of sensitive strings that were redacted.
 	// It is not sufficient to just snub out sensitive fields in Go errors
 	// since some wrapper errors like fmt.Errorf pre-cache the error string,
