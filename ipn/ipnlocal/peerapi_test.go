@@ -15,7 +15,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -494,7 +493,10 @@ func TestHandlePeerAPI(t *testing.T) {
 			if !tt.omitRoot {
 				rootDir = t.TempDir()
 				if e.ph.ps.taildrop == nil {
-					e.ph.ps.taildrop = &taildrop.Handler{}
+					e.ph.ps.taildrop = &taildrop.Handler{
+						Logf:  e.logBuf.Logf,
+						Clock: &tstest.Clock{},
+					}
 				}
 				e.ph.ps.taildrop.RootDir = rootDir
 			}
@@ -577,92 +579,6 @@ func TestFileDeleteRace(t *testing.T) {
 			t.Fatalf("waiting files = %d; want 0", len(wfs))
 		}
 	}
-}
-
-// Tests "foo.jpg.deleted" marks (for Windows).
-func TestDeletedMarkers(t *testing.T) {
-	dir := t.TempDir()
-	ps := &peerAPIServer{
-		b: &LocalBackend{
-			logf:           t.Logf,
-			capFileSharing: true,
-		},
-		taildrop: &taildrop.Handler{
-			RootDir: dir,
-		},
-	}
-
-	nothingWaiting := func() {
-		t.Helper()
-		ps.taildrop.KnownEmpty.Store(false)
-		if ps.taildrop.HasFilesWaiting() {
-			t.Fatal("unexpected files waiting")
-		}
-	}
-	touch := func(base string) {
-		t.Helper()
-		if err := taildrop.TouchFile(filepath.Join(dir, base)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	wantEmptyTempDir := func() {
-		t.Helper()
-		if fis, err := os.ReadDir(dir); err != nil {
-			t.Fatal(err)
-		} else if len(fis) > 0 && runtime.GOOS != "windows" {
-			for _, fi := range fis {
-				t.Errorf("unexpected file in tempdir: %q", fi.Name())
-			}
-		}
-	}
-
-	nothingWaiting()
-	wantEmptyTempDir()
-
-	touch("foo.jpg.deleted")
-	nothingWaiting()
-	wantEmptyTempDir()
-
-	touch("foo.jpg.deleted")
-	touch("foo.jpg")
-	nothingWaiting()
-	wantEmptyTempDir()
-
-	touch("foo.jpg.deleted")
-	touch("foo.jpg")
-	wf, err := ps.taildrop.WaitingFiles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(wf) != 0 {
-		t.Fatalf("WaitingFiles = %d; want 0", len(wf))
-	}
-	wantEmptyTempDir()
-
-	touch("foo.jpg.deleted")
-	touch("foo.jpg")
-	if rc, _, err := ps.taildrop.OpenFile("foo.jpg"); err == nil {
-		rc.Close()
-		t.Fatal("unexpected foo.jpg open")
-	}
-	wantEmptyTempDir()
-
-	// And verify basics still work in non-deleted cases.
-	touch("foo.jpg")
-	touch("bar.jpg.deleted")
-	if wf, err := ps.taildrop.WaitingFiles(); err != nil {
-		t.Error(err)
-	} else if len(wf) != 1 {
-		t.Errorf("WaitingFiles = %d; want 1", len(wf))
-	} else if wf[0].Name != "foo.jpg" {
-		t.Errorf("unexpected waiting file %+v", wf[0])
-	}
-	if rc, _, err := ps.taildrop.OpenFile("foo.jpg"); err != nil {
-		t.Fatal(err)
-	} else {
-		rc.Close()
-	}
-
 }
 
 func TestPeerAPIReplyToDNSQueries(t *testing.T) {
