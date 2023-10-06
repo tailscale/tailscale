@@ -77,6 +77,10 @@ type Arguments struct {
 	AppStore bool
 	// Logf is a logger for update progress messages.
 	Logf logger.Logf
+	// Stdout and Stderr should be used for output instead of os.Stdout and
+	// os.Stderr.
+	Stdout io.Writer
+	Stderr io.Writer
 	// Confirm is called when a new version is available and should return true
 	// if this new version should be installed. When Confirm returns false, the
 	// update is aborted.
@@ -107,6 +111,12 @@ type Updater struct {
 func NewUpdater(args Arguments) (*Updater, error) {
 	up := Updater{
 		Arguments: args,
+	}
+	if up.Stdout == nil {
+		up.Stdout = os.Stdout
+	}
+	if up.Stderr == nil {
+		up.Stderr = os.Stderr
 	}
 	up.Update = up.getUpdateFunction()
 	if up.Update == nil {
@@ -256,9 +266,9 @@ func (up *Updater) updateSynology() error {
 	// connected over tailscale ssh and this parent process dies. Otherwise, if
 	// you abort synopkg install mid-way, tailscaled is not restarted.
 	cmd := exec.Command("nohup", "synopkg", "install", spkPath)
-	// Don't attach cmd.Stdout to os.Stdout because nohup will redirect that
-	// into nohup.out file. synopkg doesn't have any progress output anyway, it
-	// just spits out a JSON result when done.
+	// Don't attach cmd.Stdout to Stdout because nohup will redirect that into
+	// nohup.out file. synopkg doesn't have any progress output anyway, it just
+	// spits out a JSON result when done.
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if dsmVersion == 6 && bytes.Contains(out, []byte("error = [290]")) {
@@ -369,15 +379,15 @@ func (up *Updater) updateDebLike() error {
 		// we're not updating them:
 		"-o", "APT::Get::List-Cleanup=0",
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 
 	cmd = exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
@@ -491,8 +501,8 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 		}
 
 		cmd := exec.Command(packageManager, "install", "--assumeyes", fmt.Sprintf("tailscale-%s-1", ver))
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = up.Stdout
+		cmd.Stderr = up.Stderr
 		if err := cmd.Run(); err != nil {
 			return err
 		}
@@ -577,8 +587,8 @@ func (up *Updater) updateAlpineLike() (err error) {
 	}
 
 	cmd := exec.Command("apk", "upgrade", "tailscale")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed tailscale update using apk: %w", err)
 	}
@@ -634,8 +644,8 @@ func (up *Updater) updateMacAppStore() error {
 	}
 
 	cmd := exec.Command("sudo", "softwareupdate", "--install", newTailscale)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("can't install App Store update for Tailscale: %w", err)
 	}
@@ -726,8 +736,8 @@ func (up *Updater) updateWindows() error {
 
 	cmd := exec.Command(selfCopy, "update")
 	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = up.Stderr
+	cmd.Stderr = up.Stderr
 	cmd.Stdin = os.Stdin
 	if err := cmd.Start(); err != nil {
 		return err
@@ -743,8 +753,8 @@ func (up *Updater) installMSI(msi string) error {
 	for tries := 0; tries < 2; tries++ {
 		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
 		cmd.Dir = filepath.Dir(msi)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = up.Stdout
+		cmd.Stderr = up.Stderr
 		cmd.Stdin = os.Stdin
 		err = cmd.Run()
 		if err == nil {
@@ -757,8 +767,8 @@ func (up *Updater) installMSI(msi string) error {
 		// Assume it's a downgrade, which msiexec won't permit. Uninstall our current version first.
 		up.Logf("Uninstalling current version %q for downgrade...", uninstallVersion)
 		cmd = exec.Command("msiexec.exe", "/x", msiUUIDForVersion(uninstallVersion), "/norestart", "/qn")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = up.Stdout
+		cmd.Stderr = up.Stderr
 		cmd.Stdin = os.Stdin
 		err = cmd.Run()
 		up.Logf("msiexec uninstall: %v", err)
@@ -846,8 +856,8 @@ func (up *Updater) updateFreeBSD() (err error) {
 	}
 
 	cmd := exec.Command("pkg", "upgrade", "tailscale")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed tailscale update using pkg: %w", err)
 	}
