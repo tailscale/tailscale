@@ -633,6 +633,12 @@ func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, t
 	}, logLevel)
 	if !sent {
 		de.forgetDiscoPing(txid)
+		return
+	}
+
+	if size != 0 {
+		metricSentDiscoPeerMTUProbes.Add(1)
+		metricSentDiscoPeerMTUProbeBytes.Add(int64(pingSizeToPktLen(size, ep.Addr().Is6())))
 	}
 }
 
@@ -1062,6 +1068,15 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	knownTxID = true // for naked returns below
 	de.removeSentDiscoPingLocked(m.TxID, sp)
 
+	pktLen := int(pingSizeToPktLen(sp.size, sp.to.Addr().Is6()))
+	if sp.size != 0 {
+		m := getPeerMTUsProbedMetric(tstun.WireMTU(pktLen))
+		m.Add(1)
+		if metricMaxPeerMTUProbed.Value() < int64(pktLen) {
+			metricMaxPeerMTUProbed.Set(int64(pktLen))
+		}
+	}
+
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
@@ -1083,7 +1098,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToPktLen(sp.size, sp.to.Addr().Is6()), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pktLen, m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
