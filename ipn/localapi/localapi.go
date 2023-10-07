@@ -566,6 +566,8 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			return
 		}
+	case "pick-new-derp":
+		err = h.b.DebugPickNewDERP()
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
