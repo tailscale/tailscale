@@ -1,0 +1,63 @@
+#!/bin/sh
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
+
+### BEGIN INIT INFO
+# Provides:             tailscaled
+# Required-Start:
+# Required-Stop:
+# Default-Start:
+# Default-Stop:
+# Short-Description:    Tailscale Mesh Wireguard VPN
+### END INIT INFO
+
+set -e
+
+# /etc/init.d/tailscale: start and stop the Tailscale VPN service
+
+test -x /usr/sbin/tailscaled || exit 0
+
+umask 022
+
+. /lib/lsb/init-functions
+
+# Are we running from init?
+run_by_init() {
+    ([ "$previous" ] && [ "$runlevel" ]) || [ "$runlevel" = S ]
+}
+
+export PATH="${PATH:+$PATH:}/usr/sbin:/sbin"
+
+case "$1" in
+  start)
+        log_daemon_msg "Starting Tailscale VPN" "tailscaled" || true
+        if start-stop-daemon --start --oknodo --name tailscaled -m --pidfile /run/tailscaled.pid --background \
+                --exec /usr/sbin/tailscaled -- \
+                --state=/var/lib/tailscale/tailscaled.state \
+                --socket=/run/tailscale/tailscaled.sock \
+                --port 41641;
+        then
+            log_end_msg 0 || true
+        else
+            log_end_msg 1 || true
+        fi
+        ;;
+  stop)
+        log_daemon_msg "Stopping Tailscale VPN" "tailscaled" || true
+        if start-stop-daemon --stop --remove-pidfile --pidfile /run/tailscaled.pid --exec /usr/sbin/tailscaled; then
+            log_end_msg 0 || true
+        else
+            log_end_msg 1 || true
+        fi
+        ;;
+
+  status)
+        status_of_proc -p /run/tailscaled.pid /usr/sbin/tailscaled tailscaled && exit 0 || exit $?
+        ;;
+
+  *)
+        log_action_msg "Usage: /etc/init.d/tailscaled {start|stop|status}" || true
+        exit 1
+esac
+
+exit 0
