@@ -705,6 +705,8 @@ func TestDiscokeyChange(t *testing.T) {
 }
 
 func TestActiveDiscovery(t *testing.T) {
+	tstest.ResourceCheck(t)
+
 	t.Run("simple_internet", func(t *testing.T) {
 		t.Parallel()
 		mstun := &natlab.Machine{Name: "stun"}
@@ -900,7 +902,6 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 // get exercised.
 func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
 
 	tlogf, setT := makeNestable(t)
 	setT(t)
