@@ -2156,6 +2156,12 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	b.setNetMapLocked(nm)
 }
 
+// DebugPickNewDERP forwards to magicsock.Conn.DebugPickNewDERP.
+// See its docs.
+func (b *LocalBackend) DebugPickNewDERP() error {
+	return b.sys.MagicSock.Get().DebugPickNewDERP()
+}
+
 // send delivers n to the connected frontend and any API watchers from
 // LocalBackend.WatchNotifications (via the LocalAPI).
 //

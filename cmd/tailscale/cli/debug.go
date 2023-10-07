@@ -140,6 +140,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "break any open DERP connections from the daemon",
 		},
 		{
+			Name:      "pick-new-derp",
+			Exec:      localAPIAction("pick-new-derp"),
+			ShortHelp: "switch to some other random DERP home region for a short time",
+		},
+		{
 			Name:      "force-netmap-update",
 			Exec:      localAPIAction("force-netmap-update"),
 			ShortHelp: "force a full no-op netmap update (for load testing)",
