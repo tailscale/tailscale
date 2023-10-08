@@ -75,6 +75,7 @@ func main() {
 		wgPort       = fs.Int("wg-listen-port", 0, "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 		promoteHTTPS = fs.Bool("promote-https", true, "promote HTTP to HTTPS")
 		debugPort    = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
+		hostname     = fs.String("hostname", "", "Hostname to register the service under")
 	)
 
 	err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_APPC"))
@@ -89,6 +90,7 @@ func main() {
 
 	var s server
 	s.ts.Port = uint16(*wgPort)
+	s.ts.Hostname = *hostname
 	defer s.ts.Close()
 
 	lc, err := s.ts.LocalClient()
