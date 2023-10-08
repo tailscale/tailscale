@@ -124,7 +124,7 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMod
 }
 
 // newNetfilterRunner creates a netfilterRunner using either nftables or iptables.
-// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
+// As nftables is still experimental, iptables will be used unless TS_DEBUG_FIREWALL_MODE=nftables is set.
 func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
 	tableDetector := &linuxFWDetector{}
 	var mode linuxfw.FirewallMode
