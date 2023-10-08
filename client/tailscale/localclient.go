@@ -262,7 +262,7 @@ func (lc *LocalClient) get200(ctx context.Context, path string) ([]byte, error) 
 	return lc.send(ctx, "GET", path, 200, nil)
 }
 
-// WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
+// WhoIs returns the owner of the remoteAddr, which must be an IP:port.
 //
 // Deprecated: use LocalClient.WhoIs.
 func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
@@ -277,7 +277,7 @@ func decodeJSON[T any](b []byte) (ret T, err error) {
 	return ret, nil
 }
 
-// WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
+// WhoIs returns the owner of the remoteAddr, which must be an IP:port.
 func (lc *LocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
