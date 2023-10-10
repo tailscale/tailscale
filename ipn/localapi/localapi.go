@@ -408,18 +408,32 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
+	h.serveWhoIsWithBackend(w, r, h.b)
+}
+
+// localBackendWhoIsMethods is the subset of ipn.LocalBackend as needed
+// by the localapi WhoIs method.
+type localBackendWhoIsMethods interface {
+	WhoIs(netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	PeerCaps(netip.Addr) tailcfg.PeerCapMap
+}
+
+func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, b localBackendWhoIsMethods) {
 	if !h.PermitRead {
 		http.Error(w, "whois access denied", http.StatusForbidden)
 		return
 	}
-	b := h.b
 	var ipp netip.AddrPort
 	if v := r.FormValue("addr"); v != "" {
-		var err error
-		ipp, err = netip.ParseAddrPort(v)
-		if err != nil {
-			http.Error(w, "invalid 'addr' parameter", 400)
-			return
+		if ip, err := netip.ParseAddr(v); err == nil {
+			ipp = netip.AddrPortFrom(ip, 0)
+		} else {
+			var err error
+			ipp, err = netip.ParseAddrPort(v)
+			if err != nil {
+				http.Error(w, "invalid 'addr' parameter", 400)
+				return
+			}
 		}
 	} else {
 		http.Error(w, "missing 'addr' parameter", 400)
@@ -433,7 +447,9 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	res := &apitype.WhoIsResponse{
 		Node:        n.AsStruct(), // always non-nil per WhoIsResponse contract
 		UserProfile: &u,           // always non-nil per WhoIsResponse contract
-		CapMap:      b.PeerCaps(ipp.Addr()),
+	}
+	if n.Addresses().Len() > 0 {
+		res.CapMap = b.PeerCaps(n.Addresses().At(0).Addr())
 	}
 	j, err := json.MarshalIndent(res, "", "\t")
 	if err != nil {
