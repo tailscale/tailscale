@@ -14,6 +14,8 @@ import (
 	"tailscale.com/types/logger"
 )
 
+var retryInterval = 5 * time.Second
+
 // RunWatchConnectionLoop loops until ctx is done, sending WatchConnectionChanges and subscribing to
 // connection changes.
 //
@@ -32,7 +34,6 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		infoLogf = logger.Discard
 	}
 	logf := c.logf
-	const retryInterval = 5 * time.Second
 	const statusInterval = 10 * time.Second
 	var (
 		mu              sync.Mutex
@@ -42,10 +43,10 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	clear := func() {
 		mu.Lock()
 		defer mu.Unlock()
+		logf("reconnected; clearing %d forwarding mappings", len(present))
 		if len(present) == 0 {
 			return
 		}
-		logf("reconnected; clearing %d forwarding mappings", len(present))
 		for k := range present {
 			remove(k)
 		}
@@ -100,15 +101,18 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		}
 	}
 
+	// On first connecting, check for self-connection. After that
+	// reconnection happens automatically on each RecvDetail().
+	var err error
 	for ctx.Err() == nil {
-		err := c.WatchConnectionChanges()
+		_, lastConnGen, err = c.connect(c.newContext(), "derphttp.mesh_client.RunWatchConnectionLoop")
 		if err != nil {
-			clear()
-			logf("WatchConnectionChanges: %v", err)
+			logf("RunWatchConnectionLoop: initial connect() failed, retrying: %s", err)
 			sleep(retryInterval)
 			continue
 		}
 
+		logf("RunWatchConnectionChanges: connected")
 		if c.ServerPublicKey() == ignoreServerKey {
 			logf("detected self-connect; ignoring host")
 			return
@@ -117,11 +121,12 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 			m, connGen, err := c.RecvDetail()
 			if err != nil {
 				clear()
-				logf("Recv: %v", err)
+				logf("RunWatchConnectionChanges: %v", err)
 				sleep(retryInterval)
 				break
 			}
 			if connGen != lastConnGen {
+				logf("RunWatchConnectionChanges: connection change detected, resetting")
 				lastConnGen = connGen
 				clear()
 			}
@@ -133,15 +138,15 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 				case derp.PeerGoneReasonDisconnected:
 					// Normal case, log nothing
 				case derp.PeerGoneReasonNotHere:
-					logf("Recv: peer %s not connected to %s",
+					logf("RunWatchConnectionChanges: peer %s not connected to %s",
 						key.NodePublic(m.Peer).ShortString(), c.ServerPublicKey().ShortString())
 				default:
-					logf("Recv: peer %s not at server %s for unknown reason %v",
+					logf("RunWatchConnectionChanges: peer %s not at server %s for unknown reason %v",
 						key.NodePublic(m.Peer).ShortString(), c.ServerPublicKey().ShortString(), m.Reason)
 				}
 				updatePeer(key.NodePublic(m.Peer), netip.AddrPort{}, false)
 			default:
-				continue
+				// Do nothing
 			}
 			if now := c.clock.Now(); now.Sub(lastStatus) > statusInterval {
 				lastStatus = now

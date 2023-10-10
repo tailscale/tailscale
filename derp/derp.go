@@ -87,12 +87,7 @@ const (
 	// members of the DERP region when they're meshed up together.
 	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected + optional 18B ip:port (16 byte IP + 2 byte BE uint16 port)
 
-	// frameWatchConns is how one DERP node in a regional mesh
-	// subscribes to the others in the region.
-	// There's no payload. If the sender doesn't have permission, the connection
-	// is closed. Otherwise, the client is initially flooded with
-	// framePeerPresent for all connected nodes, and then a stream of
-	// framePeerPresent & framePeerGone has peers connect and disconnect.
+	// frameWatchConns is obsolete and has been replaced by the IsWatcher client opt.
 	frameWatchConns = frameType(0x10)
 
 	// frameClosePeer is a privileged frame type (requires the

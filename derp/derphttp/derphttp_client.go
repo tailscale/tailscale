@@ -54,6 +54,7 @@ type Client struct {
 	TLSConfig *tls.Config        // optional; nil means default
 	DNSCache  *dnscache.Resolver // optional; nil means no caching
 	MeshKey   string             // optional; for trusted clients
+	IsWatcher bool               // optional; for requesting peer updates from mesh peer
 	IsProber  bool               // optional; for probers to optional declare themselves as such
 
 	// BaseContext, if non-nil, returns the base context to use for dialing a
@@ -352,6 +353,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			derp.MeshKey(c.MeshKey),
 			derp.CanAckPings(c.canAckPings),
 			derp.IsProber(c.IsProber),
+			derp.IsWatcher(c.IsWatcher),
 		)
 		if err != nil {
 			return nil, 0, err
@@ -484,6 +486,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		derp.ServerPublicKey(serverPub),
 		derp.CanAckPings(c.canAckPings),
 		derp.IsProber(c.IsProber),
+		derp.IsWatcher(c.IsWatcher),
 	)
 	if err != nil {
 		return nil, 0, err
@@ -954,22 +957,6 @@ func (c *Client) NotePreferred(v bool) {
 			c.closeForReconnect(client)
 		}
 	}
-}
-
-// WatchConnectionChanges sends a request to subscribe to
-// notifications about clients connecting & disconnecting.
-//
-// Only trusted connections (using MeshKey) are allowed to use this.
-func (c *Client) WatchConnectionChanges() error {
-	client, _, err := c.connect(c.newContext(), "derphttp.Client.WatchConnectionChanges")
-	if err != nil {
-		return err
-	}
-	err = client.WatchConnectionChanges()
-	if err != nil {
-		c.closeForReconnect(client)
-	}
-	return err
 }
 
 // ClosePeer asks the server to close target's TCP connection.

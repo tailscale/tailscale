@@ -362,6 +362,15 @@ func (s *Server) HasMeshKey() bool { return s.meshKey != "" }
 // MeshKey returns the configured mesh key, if any.
 func (s *Server) MeshKey() string { return s.meshKey }
 
+// upgradeToWatcher upgrades the connection to watch peer updates
+func (c *sclient) upgradeToWatcher() error {
+	if !c.canMesh {
+		return errors.New("insufficient permissions")
+	}
+	c.s.addWatcher(c)
+	return nil
+}
+
 // PrivateKey returns the server's private key.
 func (s *Server) PrivateKey() key.NodePrivate { return s.privateKey }
 
@@ -731,6 +740,11 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		if envknob.Bool("DERP_PROBER_DEBUG_LOGS") && clientInfo.IsProber {
 			c.debug = true
 		}
+		if c.info.IsWatcher {
+			if err := c.upgradeToWatcher(); err != nil {
+				return err
+			}
+		}
 	}
 	if s.debug {
 		c.debug = true
@@ -800,12 +814,13 @@ func (c *sclient) run(ctx context.Context) error {
 			err = c.handleFrameSendPacket(ft, fl)
 		case frameForwardPacket:
 			err = c.handleFrameForwardPacket(ft, fl)
-		case frameWatchConns:
-			err = c.handleFrameWatchConns(ft, fl)
 		case frameClosePeer:
 			err = c.handleFrameClosePeer(ft, fl)
 		case framePing:
 			err = c.handleFramePing(ft, fl)
+		case frameWatchConns:
+			// TODO(val): remove after all meshed derpers have been upgraded.
+			err = errors.New("remote mesh peer used obsolete watch connections frame; please upgrade it")
 		default:
 			err = c.handleUnknownFrame(ft, fl)
 		}
@@ -829,17 +844,6 @@ func (c *sclient) handleFrameNotePreferred(ft frameType, fl uint32) error {
 		return fmt.Errorf("frameNotePreferred ReadByte: %v", err)
 	}
 	c.setPreferred(v != 0)
-	return nil
-}
-
-func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
-	if fl != 0 {
-		return fmt.Errorf("handleFrameWatchConns wrong size")
-	}
-	if !c.canMesh {
-		return fmt.Errorf("insufficient permissions")
-	}
-	c.s.addWatcher(c)
 	return nil
 }
 
@@ -1204,12 +1208,13 @@ func (s *Server) noteClientActivity(c *sclient) {
 type serverInfo struct {
 	Version int `json:"version,omitempty"`
 
-	TokenBucketBytesPerSecond int `json:",omitempty"`
-	TokenBucketBytesBurst     int `json:",omitempty"`
+	TokenBucketBytesPerSecond int  `json:",omitempty"`
+	TokenBucketBytesBurst     int  `json:",omitempty"`
+	SupportsAtomicWatcher     bool `json:",omitempty"`
 }
 
 func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) error {
-	msg, err := json.Marshal(serverInfo{Version: ProtocolVersion})
+	msg, err := json.Marshal(serverInfo{Version: ProtocolVersion, SupportsAtomicWatcher: true})
 	if err != nil {
 		return err
 	}

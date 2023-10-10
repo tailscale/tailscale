@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -204,5 +205,184 @@ func TestPing(t *testing.T) {
 	err = c.Ping(context.Background())
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
+	}
+}
+
+func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.Server) {
+	s = derp.NewServer(k, t.Logf)
+	httpsrv := &http.Server{
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		Handler:      Handler(s),
+	}
+
+	ln, err := net.Listen("tcp4", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverURL = "http://" + ln.Addr().String()
+	s.SetMeshKey("1234")
+
+	go func() {
+		if err := httpsrv.Serve(ln); err != nil {
+			if err == http.ErrServerClosed {
+				t.Logf("server closed")
+				return
+			}
+			panic(err)
+		}
+	}()
+	return
+}
+
+func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToWatchURL string) (c *Client) {
+	c, err := NewClient(watcherPrivateKey, serverToWatchURL, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.MeshKey = "1234"
+	c.IsWatcher = true
+	return
+}
+
+// Simulate a broken connection
+func (c *Client) breakConnection(brokenClient *derp.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != brokenClient {
+		return
+	}
+	if c.netConn != nil {
+		c.netConn.Close()
+		c.netConn = nil
+	}
+	c.client = nil
+}
+
+// Test that a watcher connection successfully reconnects and processes peer
+// updates after a different thread breaks and reconnects the connection, while
+// the watcher is waiting on recv().
+func TestBreakWatcherConnRecv(t *testing.T) {
+	// Make the watcher server
+	serverPrivateKey1 := key.NewNode()
+	_, s1 := newTestServer(t, serverPrivateKey1)
+	defer s1.Close()
+
+	// Make the watched server
+	serverPrivateKey2 := key.NewNode()
+	serverURL2, s2 := newTestServer(t, serverPrivateKey2)
+	defer s2.Close()
+
+	// Make the watcher (but it is not connected yet)
+	watcher1 := newWatcherClient(t, serverPrivateKey1, serverURL2)
+	defer watcher1.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watcherChan := make(chan any, 1)
+
+	var peers int
+	add := func(k key.NodePublic, _ netip.AddrPort) {
+		t.Logf("add: %v", k.ShortString())
+		peers++
+		// Signal that the watcher has run
+		watcherChan <- 0
+	}
+	remove := func(k key.NodePublic) { t.Logf("remove: %v", k.ShortString()); peers-- }
+
+	// Set the wait time after a connection fails to much lower
+	retryInterval = 50 * time.Millisecond
+
+	// Start the watcher thread (which connects to the watched server)
+	go watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
+
+	timer := time.NewTimer(5 * time.Second)
+
+	// Wait for the watcher to run, then break the connection and check if it
+	// reconnected and received peer updates.
+	for i := 0; i < 10; i++ {
+		select {
+		case <-watcherChan:
+			if peers != 1 {
+				t.Fatal("wrong number of peers added during watcher connection")
+			}
+		case <-timer.C:
+			t.Fatalf("watcher did not process the peer update")
+		}
+		watcher1.breakConnection(watcher1.client)
+		// re-establish connection by sending a packet
+		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+
+		if !timer.Stop() {
+			<-timer.C
+		}
+		timer.Reset(5 * time.Second)
+	}
+}
+
+// Test that a watcher connection successfully reconnects and processes peer
+// updates after a different thread breaks and reconnects the connection, while
+// the watcher is not waiting on recv().
+func TestBreakWatcherConn(t *testing.T) {
+	// Make the watcher server
+	serverPrivateKey1 := key.NewNode()
+	_, s1 := newTestServer(t, serverPrivateKey1)
+	defer s1.Close()
+
+	// Make the watched server
+	serverPrivateKey2 := key.NewNode()
+	serverURL2, s2 := newTestServer(t, serverPrivateKey2)
+	defer s2.Close()
+
+	// Make the watcher (but it is not connected yet)
+	watcher1 := newWatcherClient(t, serverPrivateKey1, serverURL2)
+	defer watcher1.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watcherChan := make(chan any, 1)
+	breakerChan := make(chan any, 1)
+
+	var peers int
+	add := func(k key.NodePublic, _ netip.AddrPort) {
+		t.Logf("add: %v", k.ShortString())
+		peers++
+		// Signal that the watcher has run
+		watcherChan <- 0
+		// Wait for breaker to run
+		<-breakerChan
+	}
+	remove := func(k key.NodePublic) { t.Logf("remove: %v", k.ShortString()); peers-- }
+
+	// Set the wait time after a connection fails to much lower
+	retryInterval = 50 * time.Millisecond
+
+	// Start the watcher thread (which connects to the watched server)
+	go watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
+
+	timer := time.NewTimer(5 * time.Second)
+
+	// Wait for the watcher to run, then break the connection and check if it
+	// reconnected and received peer updates.
+	for i := 0; i < 10; i++ {
+		select {
+		case <-watcherChan:
+			if peers != 1 {
+				t.Fatal("wrong number of peers added during watcher connection")
+			}
+		case <-timer.C:
+			t.Fatalf("watcher did not process the peer update")
+		}
+		watcher1.breakConnection(watcher1.client)
+		// re-establish connection by sending a packet
+		watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+		// signal that the breaker is done
+		breakerChan <- 0
+
+		if !timer.Stop() {
+			<-timer.C
+		}
+		timer.Reset(5 * time.Second)
 	}
 }

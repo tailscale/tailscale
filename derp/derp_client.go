@@ -33,6 +33,7 @@ type Client struct {
 	meshKey     string
 	canAckPings bool
 	isProber    bool
+	isWatcher   bool
 
 	wmu  sync.Mutex // hold while writing to bw
 	bw   *bufio.Writer
@@ -60,6 +61,7 @@ type clientOpt struct {
 	ServerPub   key.NodePublic
 	CanAckPings bool
 	IsProber    bool
+	IsWatcher   bool
 }
 
 // MeshKey returns a ClientOpt to pass to the DERP server during connect to get
@@ -69,8 +71,15 @@ type clientOpt struct {
 func MeshKey(key string) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = key }) }
 
 // IsProber returns a ClientOpt to pass to the DERP server during connect to
-// declare that this client is a a prober.
+// declare that this client is a prober.
 func IsProber(v bool) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.IsProber = v }) }
+
+// IsWatcher returns a ClientOpt to pass to the DERP server during connect to
+// declare that this client is a mesh peer update watcher. If this is set, the
+// client is initially flooded with framePeerPresent for all connected nodes,
+// and then a stream of framePeerPresent & framePeerGone as peers connect and
+// disconnect.
+func IsWatcher(v bool) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.IsWatcher = v }) }
 
 // ServerPublicKey returns a ClientOpt to declare that the server's DERP public key is known.
 // If key is the zero value, the returned ClientOpt is a no-op.
@@ -106,6 +115,7 @@ func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 		meshKey:     opt.MeshKey,
 		canAckPings: opt.CanAckPings,
 		isProber:    opt.IsProber,
+		isWatcher:   opt.IsWatcher,
 		clock:       tstime.StdClock{},
 	}
 	if opt.ServerPub.IsZero() {
@@ -175,6 +185,10 @@ type clientInfo struct {
 
 	// IsProber is whether this client is a prober.
 	IsProber bool `json:",omitempty"`
+
+	// IsWatcher is whether the server should send mesh peer updates to this
+	// connection.
+	IsWatcher bool `json:",omitempty"`
 }
 
 func (c *Client) sendClientKey() error {
@@ -183,6 +197,7 @@ func (c *Client) sendClientKey() error {
 		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,
 		IsProber:    c.isProber,
+		IsWatcher:   c.isWatcher,
 	})
 	if err != nil {
 		return err
@@ -388,6 +403,10 @@ type ServerInfoMessage struct {
 	// Zero means unspecified. There might be a limit, but the
 	// client need not try to respect it.
 	TokenBucketBytesBurst int
+
+	// AtomicWatchConn is whether this server can do an atomic upgrade of a
+	// connection to become a mesh peer watcher.
+	AtomicWatchConn bool
 }
 
 func (ServerInfoMessage) msg() {}
@@ -510,15 +529,17 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 		default:
 			continue
 		case frameServerInfo:
-			// Server sends this at start-up. Currently unused.
-			// Just has a JSON message saying "version: 2",
-			// but the protocol seems extensible enough as-is without
-			// needing to wait an RTT to discover the version at startup.
-			// We'd prefer to give the connection to the client (magicsock)
-			// to start writing as soon as possible.
+			// Server sends this at start-up. The protocol seems
+			// extensible enough as-is without needing to wait an
+			// RTT to discover the version at startup, so we'd prefer
+			// to give the connection to the client (magicsock) to
+			// start writing as soon as possible.
 			si, err := c.parseServerInfo(b)
 			if err != nil {
 				return nil, fmt.Errorf("invalid server info frame: %v", err)
+			}
+			if c.isWatcher && si.SupportsAtomicWatcher != true {
+				return nil, errors.New("incompatible mesh peer does not support new watch connections format; please upgrade the peer")
 			}
 			sm := ServerInfoMessage{
 				TokenBucketBytesPerSecond: si.TokenBucketBytesPerSecond,
