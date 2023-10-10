@@ -2436,6 +2436,22 @@ type QueryFeatureResponse struct {
 	ShouldWait bool `json:",omitempty"`
 }
 
+// WebClientAuthResponse is the response to a web client authentication request
+// sent to "/machine/webclient/action" or "/machine/webclient/wait".
+// See client/web for usage.
+type WebClientAuthResponse struct {
+	// Message, if non-empty, provides a message for the user.
+	Message string `json:",omitempty"`
+
+	// Complete is true when the session authentication has been completed.
+	Complete bool `json:",omitempty"`
+
+	// URL is the link for the user to visit to authenticate the session.
+	//
+	// When empty, there is no action for the user to take.
+	URL string `json:",omitempty"`
+}
+
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
 // over HTTPS (regular TLS) to the Tailscale control plane server,
 // where the 'v' argument is the client's current capability version
