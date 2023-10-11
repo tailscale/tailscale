@@ -291,6 +291,26 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 	return nil
 }
 
+func (i *iptablesRunner) AddDNATRule(origDst, dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	return table.Insert("nat", "PREROUTING", 1, "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dst.String())
+}
+
+func (i *iptablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	return table.Insert("nat", "POSTROUTING", 1, "--destination", dst.String(), "-j", "SNAT", "--to-source", src.String())
+}
+
+func (i *iptablesRunner) DNATNonTailscaleTraffic(tun string, dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	return table.Insert("nat", "PREROUTING", 1, "!", "-i", tun, "-j", "DNAT", "--to-destination", dst.String())
+}
+
+func (i *iptablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
+	table := i.getIPTByAddr(addr)
+	return table.Append("mangle", "FORWARD", "-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
+}
+
 // addBase6 adds some basic IPv4 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase6(tunname string) error {
