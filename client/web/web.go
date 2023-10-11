@@ -32,12 +32,14 @@ import (
 	"tailscale.com/licenses"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
 	"tailscale.com/version/distro"
 )
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
+	logf    logger.Logf
 	lc      *tailscale.LocalClient
 	timeNow func() time.Time
 
@@ -136,6 +138,8 @@ type ServerOpts struct {
 	// TimeNow optionally provides a time function.
 	// time.Now is used as default.
 	TimeNow func() time.Time
+
+	Logf logger.Logf
 }
 
 // NewServer constructs a new Tailscale web client server.
@@ -144,6 +148,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
 	s = &Server{
+		logf:       opts.Logf,
 		devMode:    opts.DevMode,
 		lc:         opts.LocalClient,
 		cgiMode:    opts.CGIMode,
@@ -153,8 +158,13 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 	if s.timeNow == nil {
 		s.timeNow = time.Now
 	}
+	if s.logf == nil {
+		s.logf = log.Printf
+	}
 	s.tsDebugMode = s.debugMode()
 	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
+
+	var metric string // clientmetric to report on startup
 
 	// Create handler for "/api" requests with CSRF protection.
 	// We don't require secure cookies, since the web client is regularly used
@@ -166,11 +176,18 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		// For the login client, we don't serve the full web client API,
 		// only the login endpoints.
 		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
-		s.lc.IncrementCounter(context.Background(), "web_login_client_initialization", 1)
+		metric = "web_login_client_initialization"
 	} else {
 		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
-		s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
+		metric = "web_client_initialization"
 	}
+
+	// Report metric in separate go routine with 5 second timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	go func() {
+		defer cancel()
+		s.lc.IncrementCounter(ctx, metric, 1)
+	}()
 
 	return s, cleanup
 }
@@ -645,7 +662,7 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	mp.Prefs.WantRunning = true
 	mp.Prefs.AdvertiseRoutes = routes
-	log.Printf("Doing edit: %v", mp.Pretty())
+	s.logf("Doing edit: %v", mp.Pretty())
 
 	if _, err := s.lc.EditPrefs(r.Context(), mp); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -661,9 +678,9 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	if postData.ForceLogout {
 		logout = true
 	}
-	log.Printf("tailscaleUp(reauth=%v, logout=%v) ...", reauth, logout)
+	s.logf("tailscaleUp(reauth=%v, logout=%v) ...", reauth, logout)
 	url, err := s.tailscaleUp(r.Context(), st, postData)
-	log.Printf("tailscaleUp = (URL %v, %v)", url != "", err)
+	s.logf("tailscaleUp = (URL %v, %v)", url != "", err)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(mi{"error": err.Error()})
