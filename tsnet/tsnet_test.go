@@ -630,3 +630,45 @@ type bufferedConn struct {
 func (c *bufferedConn) Read(b []byte) (int, error) {
 	return c.reader.Read(b)
 }
+
+func TestFallbackTCPHandler(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL := startControl(t)
+	s1, s1ip := startServer(t, ctx, controlURL, "s1")
+	s2, _ := startServer(t, ctx, controlURL, "s2")
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	s1TcpConnCount := 0
+	deregister := s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		s1TcpConnCount++
+		return nil, false
+	})
+
+	if _, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip)); err == nil {
+		t.Fatal("Expected dial error because fallback handler did not intercept")
+	}
+	if s1TcpConnCount != 1 {
+		t.Errorf("s1TcpConnCount = %d, want %d", s1TcpConnCount, 1)
+	}
+	deregister()
+	if _, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip)); err == nil {
+		t.Fatal("Expected dial error because nothing would intercept")
+	}
+	if s1TcpConnCount != 1 {
+		t.Errorf("s1TcpConnCount = %d, want %d", s1TcpConnCount, 1)
+	}
+}
