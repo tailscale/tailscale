@@ -23,13 +23,13 @@ func DebugIptables(logf logger.Logf) error {
 	return nil
 }
 
-// DetectIptables returns the number of iptables rules that are present in the
+// detectIptables returns the number of iptables rules that are present in the
 // system, ignoring the default "ACCEPT" rule present in the standard iptables
 // chains.
 //
 // It only returns an error when there is no iptables binary, or when iptables -S
 // fails. In all other cases, it returns the number of non-default rules.
-func DetectIptables() (int, error) {
+func detectIptables() (int, error) {
 	// run "iptables -S" to get the list of rules using iptables
 	// exec.Command returns an error if the binary is not found
 	cmd := exec.Command("iptables", "-S")

@@ -103,8 +103,8 @@ func DebugNetfilter(logf logger.Logf) error {
 	return nil
 }
 
-// DetectNetfilter returns the number of nftables rules present in the system.
-func DetectNetfilter() (int, error) {
+// detectNetfilter returns the number of nftables rules present in the system.
+func detectNetfilter() (int, error) {
 	conn, err := nftables.New()
 	if err != nil {
 		return 0, FWModeNotSupportedError{
