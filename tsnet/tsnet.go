@@ -53,6 +53,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
@@ -133,11 +134,25 @@ type Server struct {
 	logtail          *logtail.Logger
 	logid            logid.PublicID
 
-	mu        sync.Mutex
-	listeners map[listenKey]*listener
-	dialer    *tsdial.Dialer
-	closed    bool
+	mu                  sync.Mutex
+	listeners           map[listenKey]*listener
+	fallbackTCPHandlers set.HandleSet[FallbackTCPHandler]
+	dialer              *tsdial.Dialer
+	closed              bool
 }
+
+// FallbackTCPHandler describes the callback which
+// conditionally handles an incoming TCP flow for the
+// provided (src/port, dst/port) 4-tuple. These are registered
+// as handlers of last resort, and are called only if no
+// listener could handle the incoming flow.
+//
+// If the callback returns intercept=false, the flow is rejected.
+//
+// When intercept=true, the behavior depends on whether the returned handler
+// is non-nil: if nil, the connection is rejected. If non-nil, handler takes
+// over the TCP conn.
+type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
 
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
@@ -755,6 +770,14 @@ func (s *Server) getTCPHandlerForFunnelFlow(src netip.AddrPort, dstPort uint16) 
 func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	ln, ok := s.listenerForDstAddr("tcp", dst, false)
 	if !ok {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, handler := range s.fallbackTCPHandlers {
+			connHandler, intercept := handler(src, dst)
+			if intercept {
+				return connHandler, intercept
+			}
+		}
 		return nil, true // don't handle, don't forward to localhost
 	}
 	return ln.handle, true
@@ -856,6 +879,24 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 	return tls.NewListener(ln, &tls.Config{
 		GetCertificate: s.getCert,
 	}), nil
+}
+
+// RegisterFallbackTCPHandler registers a callback which will be called
+// to handle a TCP flow to this tsnet node, for which no listeners will handle.
+//
+// If multiple fallback handlers are registered, they will be called in an
+// undefined order. See FallbackTCPHandler for details on handling a flow.
+//
+// The returned function can be used to deregister this callback.
+func (s *Server) RegisterFallbackTCPHandler(cb FallbackTCPHandler) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hnd := s.fallbackTCPHandlers.Add(cb)
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.fallbackTCPHandlers, hnd)
+	}
 }
 
 // getCert is the GetCertificate function used by ListenTLS.
