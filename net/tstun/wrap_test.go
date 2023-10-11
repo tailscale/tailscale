@@ -617,7 +617,7 @@ func TestNATCfg(t *testing.T) {
 		p.AllowedIPs = append(p.AllowedIPs, otherAllowedIPs...)
 		return p
 	}
-	test := func(addrFam ipproto.IPProtoVersion) {
+	test := func(addrFam ipproto.Version) {
 		var (
 			noIP netip.Addr
 
@@ -635,7 +635,7 @@ func TestNATCfg(t *testing.T) {
 			exitRoute = netip.MustParsePrefix("0.0.0.0/0")
 			publicIP  = netip.MustParseAddr("8.8.8.8")
 		)
-		if addrFam == ipproto.IPProtoVersion6 {
+		if addrFam == ipproto.Version6 {
 			selfNativeIP = netip.MustParseAddr("fd7a:115c:a1e0::a")
 			selfEIP1 = netip.MustParseAddr("fd7a:115c:a1e0::1a")
 			selfEIP2 = netip.MustParseAddr("fd7a:115c:a1e0::1b")
@@ -817,8 +817,8 @@ func TestNATCfg(t *testing.T) {
 			})
 		}
 	}
-	test(ipproto.IPProtoVersion4)
-	test(ipproto.IPProtoVersion6)
+	test(ipproto.Version4)
+	test(ipproto.Version6)
 }
 
 // TestCaptureHook verifies that the Wrapper.captureHook callback is called
