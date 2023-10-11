@@ -709,7 +709,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		conf.DNS = d
 		conf.Router = r
 		if handleSubnetsInNetstack() {
-			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 			netstackSubnetRouter = true
 		}
 		sys.Set(conf.Router)
