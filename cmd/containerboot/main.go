@@ -401,19 +401,20 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		panic("cd must not be nil")
 	}
 	var tickChan <-chan time.Time
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
+	var eventChan <-chan fsnotify.Event
+	if w, err := fsnotify.NewWatcher(); err != nil {
 		log.Printf("failed to create fsnotify watcher, timer-only mode: %v", err)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		tickChan = ticker.C
 	} else {
 		defer w.Close()
+		if err := w.Add(filepath.Dir(path)); err != nil {
+			log.Fatalf("failed to add fsnotify watch: %v", err)
+		}
+		eventChan = w.Events
 	}
 
-	if err := w.Add(filepath.Dir(path)); err != nil {
-		log.Fatalf("failed to add fsnotify watch: %v", err)
-	}
 	var certDomain string
 	var prevServeConfig *ipn.ServeConfig
 	for {
@@ -423,7 +424,7 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		case <-cdChanged:
 			certDomain = *certDomainAtomic.Load()
 		case <-tickChan:
-		case <-w.Events:
+		case <-eventChan:
 			// We can't do any reasonable filtering on the event because of how
 			// k8s handles these mounts. So just re-read the file and apply it
 			// if it's changed.
