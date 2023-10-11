@@ -673,16 +673,16 @@ func (c *natFamilyConfig) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 // natConfigFromWGConfig generates a natFamilyConfig from nm,
 // for the indicated address family.
 // If NAT is not required for that address family, it returns nil.
-func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *natFamilyConfig {
+func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.Version) *natFamilyConfig {
 	if wcfg == nil {
 		return nil
 	}
 
 	var nativeAddr netip.Addr
 	switch addrFam {
-	case ipproto.IPProtoVersion4:
+	case ipproto.Version4:
 		nativeAddr = findV4(wcfg.Addresses)
-	case ipproto.IPProtoVersion6:
+	case ipproto.Version6:
 		nativeAddr = findV6(wcfg.Addresses)
 	}
 	if !nativeAddr.IsValid() {
@@ -703,8 +703,8 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *
 		isExitNode := slices.Contains(p.AllowedIPs, tsaddr.AllIPv4()) || slices.Contains(p.AllowedIPs, tsaddr.AllIPv6())
 		if isExitNode {
 			hasMasqAddrsForFamily := false ||
-				(addrFam == ipproto.IPProtoVersion4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid()) ||
-				(addrFam == ipproto.IPProtoVersion6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid())
+				(addrFam == ipproto.Version4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid()) ||
+				(addrFam == ipproto.Version6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid())
 			if hasMasqAddrsForFamily {
 				exitNodeRequiresMasq = true
 			}
@@ -714,10 +714,10 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *
 	for i := range wcfg.Peers {
 		p := &wcfg.Peers[i]
 		var addrToUse netip.Addr
-		if addrFam == ipproto.IPProtoVersion4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
+		if addrFam == ipproto.Version4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
 			addrToUse = *p.V4MasqAddr
 			mak.Set(&listenAddrs, addrToUse, struct{}{})
-		} else if addrFam == ipproto.IPProtoVersion6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
+		} else if addrFam == ipproto.Version6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
 			addrToUse = *p.V6MasqAddr
 			mak.Set(&listenAddrs, addrToUse, struct{}{})
 		} else if exitNodeRequiresMasq {
@@ -741,7 +741,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *
 
 // SetNetMap is called when a new NetworkMap is received.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
-	v4, v6 := natConfigFromWGConfig(wcfg, ipproto.IPProtoVersion4), natConfigFromWGConfig(wcfg, ipproto.IPProtoVersion6)
+	v4, v6 := natConfigFromWGConfig(wcfg, ipproto.Version4), natConfigFromWGConfig(wcfg, ipproto.Version6)
 	var cfg *natConfig
 	if v4 != nil || v6 != nil {
 		cfg = &natConfig{v4: v4, v6: v6}

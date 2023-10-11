@@ -6,23 +6,23 @@ package ipproto
 
 import "fmt"
 
-// IPProtoVersion describes the IP address version.
-type IPProtoVersion uint8
+// Version describes the IP address version.
+type Version uint8
 
-// Valid IPProtoVersion values.
+// Valid Version values.
 const (
-	IPProtoVersion4 = 4
-	IPProtoVersion6 = 6
+	Version4 = 4
+	Version6 = 6
 )
 
-func (p IPProtoVersion) String() string {
+func (p Version) String() string {
 	switch p {
-	case IPProtoVersion4:
+	case Version4:
 		return "IPv4"
-	case IPProtoVersion6:
+	case Version6:
 		return "IPv6"
 	default:
-		return fmt.Sprintf("IPProtoVersion-%d", int(p))
+		return fmt.Sprintf("Version-%d", int(p))
 	}
 }
 
