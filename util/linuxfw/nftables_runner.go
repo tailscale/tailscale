@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"golang.org/x/sys/unix"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
@@ -67,6 +68,252 @@ type nftablesRunner struct {
 
 	v6Available    bool
 	v6NATAvailable bool
+}
+
+func (n *nftablesRunner) ensurePreroutingChain(dst netip.Addr) (*nftables.Table, *nftables.Chain, error) {
+	polAccept := nftables.ChainPolicyAccept
+	table := n.getNFTByAddr(dst)
+	nat, err := createTableIfNotExist(n.conn, table.Proto, "nat")
+	if err != nil {
+		return nil, nil, fmt.Errorf("error ensuring nat table: %w", err)
+	}
+
+	// ensure prerouting chain exists
+	preroutingCh, err := getOrCreateChain(n.conn, chainInfo{
+		table:         nat,
+		name:          "PREROUTING",
+		chainType:     nftables.ChainTypeNAT,
+		chainHook:     nftables.ChainHookPrerouting,
+		chainPriority: nftables.ChainPriorityNATDest,
+		chainPolicy:   &polAccept,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error ensuring prerouting chain: %w", err)
+	}
+	return nat, preroutingCh, nil
+}
+
+func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
+	nat, preroutingCh, err := n.ensurePreroutingChain(dst)
+	if err != nil {
+		return err
+	}
+	var daddrOffset, fam, dadderLen uint32
+	if origDst.Is4() {
+		daddrOffset = 16
+		dadderLen = 4
+		fam = unix.NFPROTO_IPV4
+	} else {
+		daddrOffset = 24
+		dadderLen = 16
+		fam = unix.NFPROTO_IPV6
+	}
+
+	dnatRule := &nftables.Rule{
+		Table: nat,
+		Chain: preroutingCh,
+		Exprs: []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       daddrOffset,
+				Len:          dadderLen,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     origDst.AsSlice(),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeDestNAT,
+				Family:     fam,
+				RegAddrMin: 1,
+			},
+		},
+	}
+	n.conn.InsertRule(dnatRule)
+	return n.conn.Flush()
+}
+
+func (n *nftablesRunner) DNATNonTailscaleTraffic(tunname string, dst netip.Addr) error {
+	nat, preroutingCh, err := n.ensurePreroutingChain(dst)
+	if err != nil {
+		return err
+	}
+	var famConst uint32
+	if dst.Is4() {
+		famConst = unix.NFPROTO_IPV4
+	} else {
+		famConst = unix.NFPROTO_IPV6
+	}
+
+	dnatRule := &nftables.Rule{
+		Table: nat,
+		Chain: preroutingCh,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     []byte(tunname),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeDestNAT,
+				Family:     famConst,
+				RegAddrMin: 1,
+			},
+		},
+	}
+	n.conn.AddRule(dnatRule)
+	return n.conn.Flush()
+}
+
+func (n *nftablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
+	polAccept := nftables.ChainPolicyAccept
+	table := n.getNFTByAddr(dst)
+	nat, err := createTableIfNotExist(n.conn, table.Proto, "nat")
+	if err != nil {
+		return fmt.Errorf("error ensuring nat table exists: %w", err)
+	}
+
+	// ensure postrouting chain exists
+	postRoutingCh, err := getOrCreateChain(n.conn, chainInfo{
+		table:         nat,
+		name:          "POSTROUTING",
+		chainType:     nftables.ChainTypeNAT,
+		chainHook:     nftables.ChainHookPostrouting,
+		chainPriority: nftables.ChainPriorityNATSource,
+		chainPolicy:   &polAccept,
+	})
+	if err != nil {
+		return fmt.Errorf("error ensuring postrouting chain: %w", err)
+	}
+	var daddrOffset, fam, daddrLen uint32
+	if dst.Is4() {
+		daddrOffset = 16
+		daddrLen = 4
+		fam = unix.NFPROTO_IPV4
+	} else {
+		daddrOffset = 24
+		daddrLen = 16
+		fam = unix.NFPROTO_IPV6
+	}
+
+	snatRule := &nftables.Rule{
+		Table: nat,
+		Chain: postRoutingCh,
+		Exprs: []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       daddrOffset,
+				Len:          daddrLen,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     src.AsSlice(),
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeSourceNAT,
+				Family:     fam,
+				RegAddrMin: 1,
+			},
+		},
+	}
+	n.conn.AddRule(snatRule)
+	return n.conn.Flush()
+}
+
+func (n *nftablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
+	polAccept := nftables.ChainPolicyAccept
+	table := n.getNFTByAddr(addr)
+	filterTable, err := createTableIfNotExist(n.conn, table.Proto, "filter")
+	if err != nil {
+		return fmt.Errorf("error ensuring filter table: %w", err)
+	}
+
+	// ensure forwarding chain exists
+	fwChain, err := getOrCreateChain(n.conn, chainInfo{
+		table:         filterTable,
+		name:          "FORWARD",
+		chainType:     nftables.ChainTypeFilter,
+		chainHook:     nftables.ChainHookForward,
+		chainPriority: nftables.ChainPriorityFilter,
+		chainPolicy:   &polAccept,
+	})
+	if err != nil {
+		return fmt.Errorf("error ensuring forward chain: %w", err)
+	}
+
+	clampRule := &nftables.Rule{
+		Table: filterTable,
+		Chain: fwChain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte(tun),
+			},
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{unix.IPPROTO_TCP},
+			},
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       13,
+				Len:          1,
+			},
+			&expr.Bitwise{
+				DestRegister:   1,
+				SourceRegister: 1,
+				Len:            1,
+				Mask:           []byte{0x02},
+				Xor:            []byte{0x00},
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     []byte{0x00},
+			},
+			&expr.Rt{
+				Register: 1,
+				Key:      expr.RtTCPMSS,
+			},
+			&expr.Byteorder{
+				DestRegister:   1,
+				SourceRegister: 1,
+				Op:             expr.ByteorderHton,
+				Len:            2,
+				Size:           2,
+			},
+			&expr.Exthdr{
+				SourceRegister: 1,
+				Type:           2,
+				Offset:         2,
+				Len:            2,
+				Op:             expr.ExthdrOpTcpopt,
+			},
+		},
+	}
+	n.conn.AddRule(clampRule)
+	return n.conn.Flush()
 }
 
 // createTableIfNotExist creates a nftables table via connection c if it does not exist within the given family.
@@ -145,18 +392,23 @@ func isTSChain(name string) bool {
 // createChainIfNotExist creates a chain with the given name in the given table
 // if it does not exist.
 func createChainIfNotExist(c *nftables.Conn, cinfo chainInfo) error {
+	_, err := getOrCreateChain(c, cinfo)
+	return err
+}
+
+func getOrCreateChain(c *nftables.Conn, cinfo chainInfo) (*nftables.Chain, error) {
 	chain, err := getChainFromTable(c, cinfo.table, cinfo.name)
 	if err != nil && !errors.Is(err, errorChainNotFound{cinfo.table.Name, cinfo.name}) {
-		return fmt.Errorf("get chain: %w", err)
+		return nil, fmt.Errorf("get chain: %w", err)
 	} else if err == nil {
 		// The chain already exists. If it is a TS chain, check the
 		// type/hook/priority, but for "conventional chains" assume they're what
 		// we expect (in case iptables-nft/ufw make minor behavior changes in
 		// the future).
 		if isTSChain(chain.Name) && (chain.Type != cinfo.chainType || chain.Hooknum != cinfo.chainHook || chain.Priority != cinfo.chainPriority) {
-			return fmt.Errorf("chain %s already exists with different type/hook/priority", cinfo.name)
+			return nil, fmt.Errorf("chain %s already exists with different type/hook/priority", cinfo.name)
 		}
-		return nil
+		return chain, nil
 	}
 
 	_ = c.AddChain(&nftables.Chain{
@@ -169,10 +421,10 @@ func createChainIfNotExist(c *nftables.Conn, cinfo chainInfo) error {
 	})
 
 	if err := c.Flush(); err != nil {
-		return fmt.Errorf("add chain: %w", err)
+		return nil, fmt.Errorf("add chain: %w", err)
 	}
 
-	return nil
+	return chain, nil
 }
 
 // NetfilterRunner abstracts helpers to run netfilter commands. It is
@@ -217,6 +469,28 @@ type NetfilterRunner interface {
 
 	// HasIPV6NAT reports true if the system supports IPv6 NAT.
 	HasIPV6NAT() bool
+
+	// AddDNATRule adds a rule to the nat/PREROUTING chain to DNAT traffic
+	// destined for the given original destination to the given new destination.
+	// This is used to forward all traffic destined for the Tailscale interface
+	// to the provided destination, as used in the Kubernetes ingress proxies.
+	AddDNATRule(origDst, dst netip.Addr) error
+
+	// AddSNATRuleForDst adds a rule to the nat/POSTROUTING chain to SNAT
+	// traffic destined for dst to src.
+	// This is used to forward traffic destined for the local machine over
+	// the Tailscale interface, as used in the Kubernetes egress proxies.
+	AddSNATRuleForDst(src, dst netip.Addr) error
+
+	// DNATNonTailscaleTraffic adds a rule to the nat/PREROUTING chain to DNAT
+	// all traffic inbound from any interface except exemptInterface to dst.
+	// This is used to forward traffic destined for the local machine over
+	// the Tailscale interface, as used in the Kubernetes egress proxies.//
+	DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error
+
+	// ClampMSSToPMTU adds a rule to the mangle/FORWARD chain to clamp MSS for
+	// traffic destined for the provided tun interface.
+	ClampMSSToPMTU(tun string, addr netip.Addr) error
 }
 
 // New creates a NetfilterRunner using either nftables or iptables.
