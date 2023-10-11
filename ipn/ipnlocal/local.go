@@ -205,6 +205,7 @@ type LocalBackend struct {
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	ccGen          clientGen    // function for producing controlclient; lazily populated
 	sshServer      SSHServer    // or nil, initialized lazily.
+	web            webServer
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
@@ -635,6 +636,7 @@ func (b *LocalBackend) Shutdown() {
 		b.sshServer.Shutdown()
 		b.sshServer = nil
 	}
+	b.webShutdownLocked()
 	b.closePeerAPIListenersLocked()
 	if b.debugSink != nil {
 		b.e.InstallCaptureHook(nil)
