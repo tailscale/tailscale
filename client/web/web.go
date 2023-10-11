@@ -49,8 +49,9 @@ type Server struct {
 	cgiMode    bool
 	pathPrefix string
 
-	assetsHandler http.Handler // serves frontend assets
 	apiHandler    http.Handler // serves api endpoints; csrf-protected
+	assetsHandler http.Handler // serves frontend assets
+	assetsCleanup func()       // called from Server.Shutdown
 
 	// browserSessions is an in-memory cache of browser sessions for the
 	// full management web client, which is only accessible over Tailscale.
@@ -143,7 +144,10 @@ type ServerOpts struct {
 }
 
 // NewServer constructs a new Tailscale web client server.
-func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
+// If err is empty, s is always non-nil.
+// ctx is only required to live the duration of the NewServer call,
+// and not the lifespan of the web server.
+func NewServer(opts ServerOpts) (s *Server, err error) {
 	if opts.LocalClient == nil {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
@@ -162,7 +166,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		s.logf = log.Printf
 	}
 	s.tsDebugMode = s.debugMode()
-	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
+	s.assetsHandler, s.assetsCleanup = assetsHandler(opts.DevMode)
 
 	var metric string // clientmetric to report on startup
 
@@ -182,14 +186,21 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		metric = "web_client_initialization"
 	}
 
-	// Report metric in separate go routine with 5 second timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Don't block startup on reporting metric.
+	// Report in separate go routine with 5 second timeout.
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.lc.IncrementCounter(ctx, metric, 1)
 	}()
 
-	return s, cleanup
+	return s, nil
+}
+
+func (s *Server) Shutdown() {
+	if s.assetsCleanup != nil {
+		s.assetsCleanup()
+	}
 }
 
 // debugMode returns the debug mode the web client is being run in.
