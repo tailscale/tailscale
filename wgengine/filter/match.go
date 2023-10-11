@@ -6,6 +6,7 @@ package filter
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"tailscale.com/net/packet"
@@ -100,7 +101,7 @@ type matches []Match
 
 func (ms matches) match(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !protoInList(q.IPProto, m.IPProto) {
+		if !slices.Contains(m.IPProto, q.IPProto) {
 			continue
 		}
 		if !ipInList(q.Src.Addr(), m.Srcs) {
@@ -138,7 +139,7 @@ func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 // ignored, as long as the match is for the entire uint16 port range.
 func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !protoInList(q.IPProto, m.IPProto) {
+		if !slices.Contains(m.IPProto, q.IPProto) {
 			continue
 		}
 		if !ipInList(q.Src.Addr(), m.Srcs) {
@@ -159,15 +160,6 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 func ipInList(ip netip.Addr, netlist []netip.Prefix) bool {
 	for _, net := range netlist {
 		if net.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func protoInList(proto ipproto.Proto, valid []ipproto.Proto) bool {
-	for _, v := range valid {
-		if proto == v {
 			return true
 		}
 	}
