@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cmpver"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -211,8 +212,12 @@ func Update(args Arguments) error {
 }
 
 func (up *Updater) confirm(ver string) bool {
-	if version.Short() == ver {
+	switch cmpver.Compare(version.Short(), ver) {
+	case 0:
 		up.Logf("already running %v; no update needed", ver)
+		return false
+	case 1:
+		up.Logf("installed version %v is newer than the latest available version %v; no update needed", version.Short(), ver)
 		return false
 	}
 	if up.Confirm != nil {
