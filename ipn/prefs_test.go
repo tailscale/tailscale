@@ -57,6 +57,7 @@ func TestPrefsEqual(t *testing.T) {
 		"OperatorUser",
 		"ProfileName",
 		"AutoUpdate",
+		"PostureChecking",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
@@ -303,6 +304,16 @@ func TestPrefsEqual(t *testing.T) {
 			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false}},
 			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false}},
 			true,
+		},
+		{
+			&Prefs{PostureChecking: true},
+			&Prefs{PostureChecking: true},
+			true,
+		},
+		{
+			&Prefs{PostureChecking: true},
+			&Prefs{PostureChecking: false},
+			false,
 		},
 	}
 	for i, tt := range tests {

@@ -91,10 +91,10 @@ func TestMutationsFromMapResponse(t *testing.T) {
 			name: "patch-ep",
 			mr: fromChanges(&tailcfg.PeerChange{
 				NodeID:    1,
-				Endpoints: []string{"1.2.3.4:567"},
+				Endpoints: eps("1.2.3.4:567"),
 			}, &tailcfg.PeerChange{
 				NodeID:    2,
-				Endpoints: []string{"8.9.10.11:1234"},
+				Endpoints: eps("8.9.10.11:1234"),
 			}),
 			want: muts(
 				NodeMutationEndpoints{1, []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:567")}},

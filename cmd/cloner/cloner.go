@@ -128,7 +128,9 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				if ptr, isPtr := ft.Elem().(*types.Pointer); isPtr {
 					if _, isBasic := ptr.Elem().Underlying().(*types.Basic); isBasic {
 						it.Import("tailscale.com/types/ptr")
+						writef("if src.%s[i] == nil { dst.%s[i] = nil } else {", fname, fname)
 						writef("\tdst.%s[i] = ptr.To(*src.%s[i])", fname, fname)
+						writef("}")
 					} else {
 						writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
 					}

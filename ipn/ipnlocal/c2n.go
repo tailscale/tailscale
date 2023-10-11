@@ -9,31 +9,38 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/kortschak/wol"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
+	"tailscale.com/util/httpm"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
 )
 
 var c2nLogHeap func(http.ResponseWriter, *http.Request) // non-nil on most platforms (c2n_pprof.go)
 
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
 func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
-	writeJSON := func(v any) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(v)
-	}
 	switch r.URL.Path {
 	case "/echo":
 		// Test handler.
@@ -41,14 +48,17 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		w.Write(body)
 	case "/update":
 		switch r.Method {
-		case http.MethodGet:
+		case httpm.GET:
 			b.handleC2NUpdateGet(w, r)
-		case http.MethodPost:
+		case httpm.POST:
 			b.handleC2NUpdatePost(w, r)
 		default:
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
 			return
 		}
+	case "/wol":
+		b.handleC2NWoL(w, r)
+		return
 	case "/logtail/flush":
 		if r.Method != "POST" {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
@@ -59,11 +69,19 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
 		}
+	case "/posture/identity":
+		switch r.Method {
+		case httpm.GET:
+			b.handleC2NPostureIdentityGet(w, r)
+		default:
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			return
+		}
 	case "/debug/goroutines":
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write(goroutines.ScrubbedGoroutineDump(true))
 	case "/debug/prefs":
-		writeJSON(b.Prefs())
+		writeJSON(w, b.Prefs())
 	case "/debug/metrics":
 		w.Header().Set("Content-Type", "text/plain")
 		clientmetric.WritePrometheusExpositionFormat(w)
@@ -81,7 +99,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			res.Error = err.Error()
 		}
-		writeJSON(res)
+		writeJSON(w, res)
 	case "/debug/logheap":
 		if c2nLogHeap != nil {
 			c2nLogHeap(w, r)
@@ -102,7 +120,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		writeJSON(res)
+		writeJSON(w, res)
 	case "/sockstats":
 		if r.Method != "POST" {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
@@ -207,6 +225,37 @@ func (b *LocalBackend) handleC2NUpdatePost(w http.ResponseWriter, r *http.Reques
 	}()
 }
 
+func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *http.Request) {
+	b.logf("c2n: GET /posture/identity received")
+
+	res := tailcfg.C2NPostureIdentityResponse{}
+
+	// Only collect serial numbers if enabled on the client,
+	// this will first check syspolicy, MDM settings like Registry
+	// on Windows or defaults on macOS. If they are not set, it falls
+	// back to the cli-flag, `--posture-checking`.
+	enabled, err := syspolicy.GetBoolean(syspolicy.PostureChecking, b.Prefs().PostureChecking())
+	if err != nil {
+		enabled = b.Prefs().PostureChecking()
+		b.logf("c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s", enabled, err)
+	}
+
+	if enabled {
+		sns, err := posture.GetSerialNumbers(b.logf)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		res.SerialNumbers = sns
+	} else {
+		res.PostureDisabled = true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
 func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	// If NewUpdater does not return an error, we can update the installation.
 	// Exception: When version.IsMacSysExt returns true, we don't support that
@@ -268,4 +317,57 @@ func findCmdTailscale() (string, error) {
 		return "", errors.New("tailscale.exe not found in expected place")
 	}
 	return "", fmt.Errorf("unsupported OS %v", runtime.GOOS)
+}
+
+func (b *LocalBackend) handleC2NWoL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "bad method", http.StatusMethodNotAllowed)
+		return
+	}
+	r.ParseForm()
+	var macs []net.HardwareAddr
+	for _, macStr := range r.Form["mac"] {
+		mac, err := net.ParseMAC(macStr)
+		if err != nil {
+			http.Error(w, "bad 'mac' param", http.StatusBadRequest)
+			return
+		}
+		macs = append(macs, mac)
+	}
+	var res struct {
+		SentTo []string
+		Errors []string
+	}
+	st := b.sys.NetMon.Get().InterfaceState()
+	if st == nil {
+		res.Errors = append(res.Errors, "no interface state")
+		writeJSON(w, &res)
+		return
+	}
+	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
+	for _, mac := range macs {
+		for ifName, ips := range st.InterfaceIPs {
+			for _, ip := range ips {
+				if ip.Addr().IsLoopback() || ip.Addr().Is6() {
+					continue
+				}
+				local := &net.UDPAddr{
+					IP:   ip.Addr().AsSlice(),
+					Port: 0,
+				}
+				remote := &net.UDPAddr{
+					IP:   net.IPv4bcast,
+					Port: 0,
+				}
+				if err := wol.Wake(mac, password, local, remote); err != nil {
+					res.Errors = append(res.Errors, err.Error())
+				} else {
+					res.SentTo = append(res.SentTo, ifName)
+				}
+				break // one per interface is enough
+			}
+		}
+	}
+	sort.Strings(res.SentTo)
+	writeJSON(w, &res)
 }

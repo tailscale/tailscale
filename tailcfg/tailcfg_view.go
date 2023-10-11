@@ -142,7 +142,7 @@ func (v NodeView) Machine() key.MachinePublic               { return v.ж.Machin
 func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoKey }
 func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
 func (v NodeView) AllowedIPs() views.Slice[netip.Prefix]    { return views.SliceOf(v.ж.AllowedIPs) }
-func (v NodeView) Endpoints() views.Slice[string]           { return views.SliceOf(v.ж.Endpoints) }
+func (v NodeView) Endpoints() views.Slice[netip.AddrPort]   { return views.SliceOf(v.ж.Endpoints) }
 func (v NodeView) DERP() string                             { return v.ж.DERP }
 func (v NodeView) Hostinfo() HostinfoView                   { return v.ж.Hostinfo }
 func (v NodeView) Created() time.Time                       { return v.ж.Created }
@@ -214,7 +214,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	DiscoKey                      key.DiscoPublic
 	Addresses                     []netip.Prefix
 	AllowedIPs                    []netip.Prefix
-	Endpoints                     []string
+	Endpoints                     []netip.AddrPort
 	DERP                          string
 	Hostinfo                      HostinfoView
 	Created                       time.Time
@@ -310,6 +310,7 @@ func (v HostinfoView) GoArchVar() string                      { return v.ж.GoAr
 func (v HostinfoView) GoVersion() string                      { return v.ж.GoVersion }
 func (v HostinfoView) RoutableIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.RoutableIPs) }
 func (v HostinfoView) RequestTags() views.Slice[string]       { return views.SliceOf(v.ж.RequestTags) }
+func (v HostinfoView) WoLMACs() views.Slice[string]           { return views.SliceOf(v.ж.WoLMACs) }
 func (v HostinfoView) Services() views.Slice[Service]         { return views.SliceOf(v.ж.Services) }
 func (v HostinfoView) NetInfo() NetInfoView                   { return v.ж.NetInfo.View() }
 func (v HostinfoView) SSH_HostKeys() views.Slice[string]      { return views.SliceOf(v.ж.SSH_HostKeys) }
@@ -355,6 +356,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	GoVersion       string
 	RoutableIPs     []netip.Prefix
 	RequestTags     []string
+	WoLMACs         []string
 	Services        []Service
 	NetInfo         *NetInfo
 	SSH_HostKeys    []string

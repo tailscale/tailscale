@@ -57,6 +57,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"GoVersion",
 		"RoutableIPs",
 		"RequestTags",
+		"WoLMACs",
 		"Services",
 		"NetInfo",
 		"SSH_HostKeys",
@@ -466,13 +467,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{Endpoints: []string{}},
+			&Node{Endpoints: []netip.AddrPort{}},
 			&Node{Endpoints: nil},
 			false,
 		},
 		{
-			&Node{Endpoints: []string{}},
-			&Node{Endpoints: []string{}},
+			&Node{Endpoints: []netip.AddrPort{}},
+			&Node{Endpoints: []netip.AddrPort{}},
 			true,
 		},
 		{
@@ -677,7 +678,7 @@ func TestCloneNode(t *testing.T) {
 		{"zero_fields", &Node{
 			Addresses:  make([]netip.Prefix, 0),
 			AllowedIPs: make([]netip.Prefix, 0),
-			Endpoints:  make([]string, 0),
+			Endpoints:  make([]netip.AddrPort, 0),
 		}},
 	}
 	for _, tt := range tests {

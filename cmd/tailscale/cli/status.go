@@ -25,6 +25,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 )
 
 var statusCmd = &ffcli.Command{
@@ -237,7 +238,7 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	printFunnelStatus(ctx)
 	if cv := st.ClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-		printf("# New Tailscale version is available: %q, run `tailscale update` to update.\n", cv.LatestVersion)
+		printf("# Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update.\n", version.Short(), cv.LatestVersion)
 	}
 	return nil
 }

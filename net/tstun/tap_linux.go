@@ -296,9 +296,9 @@ func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst net
 	payloadStart := len(buf) - len(payload)
 	copy(buf[payloadStart:], payload)
 	srcB := src.Addr().As4()
-	srcIP := tcpip.Address(srcB[:])
+	srcIP := tcpip.AddrFromSlice(srcB[:])
 	dstB := dst.Addr().As4()
-	dstIP := tcpip.Address(dstB[:])
+	dstIP := tcpip.AddrFromSlice(dstB[:])
 	// Ethernet header
 	eth := header.Ethernet(buf)
 	eth.Encode(&header.EthernetFields{

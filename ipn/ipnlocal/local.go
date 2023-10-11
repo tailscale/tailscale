@@ -62,6 +62,7 @@ import (
 	"tailscale.com/portlist"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrop"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -238,7 +239,6 @@ type LocalBackend struct {
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
-	incomingFiles    map[*incomingFile]bool
 	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
 	notifyWatchers   set.HandleSet[*watchSession]
 	lastStatusTime   time.Time // status.AsOf value of the last processed status update
@@ -308,7 +308,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	dialer := sys.Dialer.Get()
 	_ = sys.MagicSock.Get() // or panic
 
-	pm, err := newProfileManager(store, logf)
+	goos := envknob.GOOS()
+	if loginFlags&controlclient.LocalBackendStartKeyOSNeutral != 0 {
+		goos = ""
+	}
+	pm, err := newProfileManagerWithGOOS(store, logf, goos)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +386,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		b.logf("[unexpected] failed to wire up PeerAPI port for engine %T", e)
 	}
 
-	for _, component := range debuggableComponents {
+	for _, component := range ipn.DebuggableComponents {
 		key := componentStateKey(component)
 		if ut, err := ipn.ReadStoreInt(pm.Store(), key); err == nil {
 			if until := time.Unix(ut, 0); until.After(b.clock.Now()) {
@@ -398,11 +402,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 type componentLogState struct {
 	until time.Time
 	timer tstime.TimerController // if non-nil, the AfterFunc to disable it
-}
-
-var debuggableComponents = []string{
-	"magicsock",
-	"sockstats",
 }
 
 func componentStateKey(component string) ipn.StateKey {
@@ -436,7 +435,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 			}
 		}
 	}
-	if setEnabled == nil || !slices.Contains(debuggableComponents, component) {
+	if setEnabled == nil || !slices.Contains(ipn.DebuggableComponents, component) {
 		return fmt.Errorf("unknown component %q", component)
 	}
 	timeUnixOrZero := func(t time.Time) int64 {
@@ -2157,6 +2156,12 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	b.setNetMapLocked(nm)
 }
 
+// DebugPickNewDERP forwards to magicsock.Conn.DebugPickNewDERP.
+// See its docs.
+func (b *LocalBackend) DebugPickNewDERP() error {
+	return b.sys.MagicSock.Get().DebugPickNewDERP()
+}
+
 // send delivers n to the connected frontend and any API watchers from
 // LocalBackend.WatchNotifications (via the LocalAPI).
 //
@@ -2177,7 +2182,7 @@ func (b *LocalBackend) send(n ipn.Notify) {
 	b.mu.Lock()
 	notifyFunc := b.notify
 	apiSrv := b.peerAPIServer
-	if apiSrv.hasFilesWaiting() {
+	if mayDeref(apiSrv).taildrop.HasFilesWaiting() {
 		n.FilesWaiting = &empty.Message{}
 	}
 
@@ -2213,10 +2218,7 @@ func (b *LocalBackend) sendFileNotify() {
 	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
 	// in JSON to clients. They distinguish between empty and non-nil
 	// to know whether a Notify should be able about files.
-	n.IncomingFiles = make([]ipn.PartialFile, 0)
-	for f := range b.incomingFiles {
-		n.IncomingFiles = append(n.IncomingFiles, f.PartialFile())
-	}
+	n.IncomingFiles = apiSrv.taildrop.IncomingFiles()
 	b.mu.Unlock()
 
 	sort.Slice(n.IncomingFiles, func(i, j int) bool {
@@ -3061,7 +3063,7 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 		})
 	}
 	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd", "illumos", "darwin", "windows":
+	case "linux", "freebsd", "openbsd", "illumos", "darwin", "windows", "android", "ios":
 		// These are the platforms currently supported by
 		// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
 		ret = append(ret, tailcfg.Service{
@@ -3339,9 +3341,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	addDefault := func(resolvers []*dnstype.Resolver) {
-		for _, r := range resolvers {
-			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, r)
-		}
+		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
 	}
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
@@ -3351,7 +3351,17 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		return dcfg
 	}
 
-	addDefault(nm.DNS.Resolvers)
+	// If the user has set default resolvers ("override local DNS"), prefer to
+	// use those resolvers as the default, otherwise if there are WireGuard exit
+	// node resolvers, use those as the default.
+	if len(nm.DNS.Resolvers) > 0 {
+		addDefault(nm.DNS.Resolvers)
+	} else {
+		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
+			addDefault(resolvers)
+		}
+	}
+
 	for suffix, resolvers := range nm.DNS.Routes {
 		fqdn, err := dnsname.ToFQDN(suffix)
 		if err != nil {
@@ -3366,11 +3376,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		//
 		// While we're already populating it, might as well size the
 		// slice appropriately.
+		// Per #9498 the exact requirements of nil vs empty slice remain
+		// unclear, this is a haunted graveyard to be resolved.
 		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-
-		for _, r := range resolvers {
-			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], r)
-		}
+		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
 	}
 
 	// Set FallbackResolvers as the default resolvers in the
@@ -3540,10 +3549,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 	}
 
 	ps := &peerAPIServer{
-		b:                       b,
-		rootDir:                 fileRoot,
-		directFileMode:          b.directFileRoot != "",
-		directFileDoFinalRename: b.directFileDoFinalRename,
+		b: b,
+		taildrop: &taildrop.Handler{
+			Logf:             b.logf,
+			Clock:            b.clock,
+			Dir:              fileRoot,
+			DirectFileMode:   b.directFileRoot != "",
+			AvoidFinalRename: !b.directFileDoFinalRename,
+		},
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -4427,7 +4440,7 @@ func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	return apiSrv.WaitingFiles()
+	return mayDeref(apiSrv).taildrop.WaitingFiles()
 }
 
 // AwaitWaitingFiles is like WaitingFiles but blocks while ctx is not done,
@@ -4469,14 +4482,14 @@ func (b *LocalBackend) DeleteFile(name string) error {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	return apiSrv.DeleteFile(name)
+	return mayDeref(apiSrv).taildrop.DeleteFile(name)
 }
 
 func (b *LocalBackend) OpenFile(name string) (rc io.ReadCloser, size int64, err error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
-	return apiSrv.OpenFile(name)
+	return mayDeref(apiSrv).taildrop.OpenFile(name)
 }
 
 // hasCapFileSharing reports whether the current node has the file
@@ -4577,19 +4590,6 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 		return errors.New("missing 'value'")
 	}
 	return cc.SetDNS(ctx, req)
-}
-
-func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.incomingFiles == nil {
-		b.incomingFiles = make(map[*incomingFile]bool)
-	}
-	if active {
-		b.incomingFiles[inf] = true
-	} else {
-		delete(b.incomingFiles, inf)
-	}
 }
 
 func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
@@ -4766,6 +4766,32 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg
 		}
 	}
 	return "", false
+}
+
+// wireguardExitNodeDNSResolvers returns the DNS resolvers to use for a
+// WireGuard-only exit node, if it has resolver addresses.
+func wireguardExitNodeDNSResolvers(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, exitNodeID tailcfg.StableNodeID) ([]*dnstype.Resolver, bool) {
+	if exitNodeID.IsZero() {
+		return nil, false
+	}
+
+	for _, p := range peers {
+		if p.StableID() == exitNodeID {
+			if p.IsWireGuardOnly() {
+				resolvers := p.ExitNodeDNSResolvers()
+				if !resolvers.IsNil() && resolvers.Len() > 0 {
+					copies := make([]*dnstype.Resolver, resolvers.Len())
+					for i := range resolvers.LenIter() {
+						copies[i] = resolvers.At(i).AsStruct()
+					}
+					return copies, true
+				}
+			}
+			return nil, false
+		}
+	}
+
+	return nil, false
 }
 
 func peerCanProxyDNS(p tailcfg.NodeView) bool {
@@ -5264,4 +5290,12 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.magicConn().DebugBreakDERPConns()
+}
+
+// mayDeref dereferences p if non-nil, otherwise it returns the zero value.
+func mayDeref[T any](p *T) (v T) {
+	if p == nil {
+		return v
+	}
+	return *p
 }

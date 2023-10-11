@@ -10,13 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 
-	"golang.org/x/exp/maps"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -24,6 +24,7 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/slicesx"
 )
 
 // CapabilityVersion represents the client's capability level. That
@@ -115,7 +116,10 @@ type CapabilityVersion int
 //   - 73: 2023-09-01: Non-Windows clients expect to receive ClientVersion
 //   - 74: 2023-09-18: Client understands NodeCapMap
 //   - 75: 2023-09-12: Client understands NodeAttrDNSForwarderDisableTCPRetries
-const CurrentCapabilityVersion CapabilityVersion = 75
+//   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
+//   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
+//   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
+const CurrentCapabilityVersion CapabilityVersion = 78
 
 type StableID string
 
@@ -267,9 +271,9 @@ type Node struct {
 	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
 	Machine      key.MachinePublic
 	DiscoKey     key.DiscoPublic
-	Addresses    []netip.Prefix // IP addresses of this Node directly
-	AllowedIPs   []netip.Prefix // range of IP addresses to route to this node
-	Endpoints    []string       `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	Addresses    []netip.Prefix   // IP addresses of this Node directly
+	AllowedIPs   []netip.Prefix   // range of IP addresses to route to this node
+	Endpoints    []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
 
 	// DERP is this node's home DERP region ID integer, but shoved into an
 	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
@@ -732,6 +736,7 @@ type Hostinfo struct {
 	GoVersion       string         `json:",omitempty"` // Go version binary was built with
 	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags     []string       `json:",omitempty"` // set of ACL tags this node wants to claim
+	WoLMACs         []string       `json:",omitempty"` // MAC address(es) to send Wake-on-LAN packets to wake this node (lowercase hex w/ colons)
 	Services        []Service      `json:",omitempty"` // services advertised by this machine
 	NetInfo         *NetInfo       `json:",omitempty"`
 	SSH_HostKeys    []string       `json:"sshHostKeys,omitempty"` // if advertised
@@ -1209,7 +1214,7 @@ type MapRequest struct {
 
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
 	// These can be ignored if Stream is true and Version >= 68.
-	Endpoints []string
+	Endpoints []netip.AddrPort `json:",omitempty"`
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
 	EndpointTypes []EndpointType `json:",omitempty"`
 
@@ -1938,10 +1943,10 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
 		eqPtr(n.Online, n2.Online) &&
-		eqCIDRs(n.Addresses, n2.Addresses) &&
-		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
-		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
-		eqStrings(n.Endpoints, n2.Endpoints) &&
+		slicesx.EqualSameNil(n.Addresses, n2.Addresses) &&
+		slicesx.EqualSameNil(n.AllowedIPs, n2.AllowedIPs) &&
+		slicesx.EqualSameNil(n.PrimaryRoutes, n2.PrimaryRoutes) &&
+		slicesx.EqualSameNil(n.Endpoints, n2.Endpoints) &&
 		n.DERP == n2.DERP &&
 		n.Cap == n2.Cap &&
 		n.Hostinfo.Equal(n2.Hostinfo) &&
@@ -1953,7 +1958,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
-		eqStrings(n.Tags, n2.Tags) &&
+		slicesx.EqualSameNil(n.Tags, n2.Tags) &&
 		n.Expired == n2.Expired &&
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
@@ -1968,30 +1973,6 @@ func eqPtr[T comparable](a, b *T) bool {
 		return false
 	}
 	return *a == *b
-}
-
-func eqStrings(a, b []string) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func eqCIDRs(a, b []netip.Prefix) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func eqTimePtr(a, b *time.Time) bool {
@@ -2455,6 +2436,22 @@ type QueryFeatureResponse struct {
 	ShouldWait bool `json:",omitempty"`
 }
 
+// WebClientAuthResponse is the response to a web client authentication request
+// sent to "/machine/webclient/action" or "/machine/webclient/wait".
+// See client/web for usage.
+type WebClientAuthResponse struct {
+	// Message, if non-empty, provides a message for the user.
+	Message string `json:",omitempty"`
+
+	// Complete is true when the session authentication has been completed.
+	Complete bool `json:",omitempty"`
+
+	// URL is the link for the user to visit to authenticate the session.
+	//
+	// When empty, there is no action for the user to take.
+	URL string `json:",omitempty"`
+}
+
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
 // over HTTPS (regular TLS) to the Tailscale control plane server,
 // where the 'v' argument is the client's current capability version
@@ -2538,7 +2535,7 @@ type PeerChange struct {
 
 	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
 	// have changed to these.
-	Endpoints []string `json:",omitempty"`
+	Endpoints []netip.AddrPort `json:",omitempty"`
 
 	// Key, if non-nil, means that the NodeID's wireguard public key changed.
 	Key *key.NodePublic `json:",omitempty"`

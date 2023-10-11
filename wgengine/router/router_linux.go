@@ -22,7 +22,6 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
-	"tailscale.com/hostinfo"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
@@ -36,145 +35,6 @@ const (
 	netfilterNoDivert = preftype.NetfilterNoDivert
 	netfilterOn       = preftype.NetfilterOn
 )
-
-// netfilterRunner abstracts helpers to run netfilter commands. It is
-// implemented by linuxfw.IPTablesRunner and linuxfw.NfTablesRunner.
-type netfilterRunner interface {
-	AddLoopbackRule(addr netip.Addr) error
-	DelLoopbackRule(addr netip.Addr) error
-	AddHooks() error
-	DelHooks(logf logger.Logf) error
-	AddChains() error
-	DelChains() error
-	AddBase(tunname string) error
-	DelBase() error
-	AddSNATRule() error
-	DelSNATRule() error
-
-	HasIPV6() bool
-	HasIPV6NAT() bool
-}
-
-// tableDetector abstracts helpers to detect the firewall mode.
-// It is implemented for testing purposes.
-type tableDetector interface {
-	iptDetect() (int, error)
-	nftDetect() (int, error)
-}
-
-type linuxFWDetector struct{}
-
-// iptDetect returns the number of iptables rules in the current namespace.
-func (l *linuxFWDetector) iptDetect() (int, error) {
-	return linuxfw.DetectIptables()
-}
-
-// nftDetect returns the number of nftables rules in the current namespace.
-func (l *linuxFWDetector) nftDetect() (int, error) {
-	return linuxfw.DetectNetfilter()
-}
-
-// chooseFireWallMode returns the firewall mode to use based on the
-// environment and the system's capabilities.
-func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMode {
-	if distro.Get() == distro.Gokrazy {
-		// Reduce startup logging on gokrazy. There's no way to do iptables on
-		// gokrazy anyway.
-		return linuxfw.FirewallModeNfTables
-	}
-	iptAva, nftAva := true, true
-	iptRuleCount, err := det.iptDetect()
-	if err != nil {
-		logf("detect iptables rule: %v", err)
-		iptAva = false
-	}
-	nftRuleCount, err := det.nftDetect()
-	if err != nil {
-		logf("detect nftables rule: %v", err)
-		nftAva = false
-	}
-	logf("nftables rule count: %d, iptables rule count: %d", nftRuleCount, iptRuleCount)
-	switch {
-	case nftRuleCount > 0 && iptRuleCount == 0:
-		logf("nftables is currently in use")
-		hostinfo.SetFirewallMode("nft-inuse")
-		return linuxfw.FirewallModeNfTables
-	case iptRuleCount > 0 && nftRuleCount == 0:
-		logf("iptables is currently in use")
-		hostinfo.SetFirewallMode("ipt-inuse")
-		return linuxfw.FirewallModeIPTables
-	case nftAva:
-		// if both iptables and nftables are available but
-		// neither/both are currently used, use nftables.
-		logf("nftables is available")
-		hostinfo.SetFirewallMode("nft")
-		return linuxfw.FirewallModeNfTables
-	case iptAva:
-		logf("iptables is available")
-		hostinfo.SetFirewallMode("ipt")
-		return linuxfw.FirewallModeIPTables
-	default:
-		// if neither iptables nor nftables are available, use iptablesRunner as a dummy
-		// runner which exists but won't do anything. Creating iptablesRunner errors only
-		// if the iptables command is missing or doesn’t support "--version", as long as it
-		// can determine a version then it’ll carry on.
-		hostinfo.SetFirewallMode("ipt-fb")
-		return linuxfw.FirewallModeIPTables
-	}
-}
-
-// newNetfilterRunner creates a netfilterRunner using either nftables or iptables.
-// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
-func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
-	tableDetector := &linuxFWDetector{}
-	var mode linuxfw.FirewallMode
-
-	// We now use iptables as default and have "auto" and "nftables" as
-	// options for people to test further.
-	switch {
-	case distro.Get() == distro.Gokrazy:
-		// Reduce startup logging on gokrazy. There's no way to do iptables on
-		// gokrazy anyway.
-		logf("GoKrazy should use nftables.")
-		hostinfo.SetFirewallMode("nft-gokrazy")
-		mode = linuxfw.FirewallModeNfTables
-	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "nftables":
-		logf("envknob TS_DEBUG_FIREWALL_MODE=nftables set")
-		hostinfo.SetFirewallMode("nft-forced")
-		mode = linuxfw.FirewallModeNfTables
-	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "auto":
-		mode = chooseFireWallMode(logf, tableDetector)
-	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
-		logf("envknob TS_DEBUG_FIREWALL_MODE=iptables set")
-		hostinfo.SetFirewallMode("ipt-forced")
-		mode = linuxfw.FirewallModeIPTables
-	default:
-		logf("default choosing iptables")
-		hostinfo.SetFirewallMode("ipt-default")
-		mode = linuxfw.FirewallModeIPTables
-	}
-
-	var nfr netfilterRunner
-	var err error
-	switch mode {
-	case linuxfw.FirewallModeIPTables:
-		logf("using iptables")
-		nfr, err = linuxfw.NewIPTablesRunner(logf)
-		if err != nil {
-			return nil, err
-		}
-	case linuxfw.FirewallModeNfTables:
-		logf("using nftables")
-		nfr, err = linuxfw.NewNfTablesRunner(logf)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unknown firewall mode: %v", mode)
-	}
-
-	return nfr, nil
-}
 
 type linuxRouter struct {
 	closed           atomic.Bool
@@ -200,7 +60,7 @@ type linuxRouter struct {
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
 
-	nfr netfilterRunner
+	nfr linuxfw.NetfilterRunner
 	cmd commandRunner
 }
 
@@ -210,7 +70,7 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 		return nil, err
 	}
 
-	nfr, err := newNetfilterRunner(logf)
+	nfr, err := linuxfw.New(logf)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +82,7 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 	return newUserspaceRouterAdvanced(logf, tunname, netMon, nfr, cmd)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, nfr netfilterRunner, cmd commandRunner) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, nfr linuxfw.NetfilterRunner, cmd commandRunner) (Router, error) {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,

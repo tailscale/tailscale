@@ -52,6 +52,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	OperatorUser           string
 	ProfileName            string
 	AutoUpdate             AutoUpdatePrefs
+	PostureChecking        bool
 	Persist                *persist.Persist
 }{})
 

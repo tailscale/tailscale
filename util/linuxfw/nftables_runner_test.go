@@ -7,6 +7,7 @@ package linuxfw
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -370,6 +371,38 @@ func TestAddAcceptOutgoingPacketRule(t *testing.T) {
 		Priority: nftables.ChainPriorityFilter,
 	})
 	err := addAcceptOutgoingPacketRule(testConn, table, chain, "testTunn")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddAcceptIncomingPacketRule(t *testing.T) {
+	proto := nftables.TableFamilyIPv4
+	want := [][]byte{
+		// batch begin
+		[]byte("\x00\x00\x00\x0a"),
+		// nft add table ip ts-filter-test
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x08\x00\x02\x00\x00\x00\x00\x00"),
+		// nft add chain ip ts-filter-test ts-input-test { type filter hook input priority 0\; }
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x12\x00\x03\x00\x74\x73\x2d\x69\x6e\x70\x75\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x14\x00\x04\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x00\x0b\x00\x07\x00\x66\x69\x6c\x74\x65\x72\x00\x00"),
+		// nft add rule ip ts-filter-test ts-input-test iifname "testTunn" counter accept
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x12\x00\x02\x00\x74\x73\x2d\x69\x6e\x70\x75\x74\x2d\x74\x65\x73\x74\x00\x00\x00\xb4\x00\x04\x80\x24\x00\x01\x80\x09\x00\x01\x00\x6d\x65\x74\x61\x00\x00\x00\x00\x14\x00\x02\x80\x08\x00\x02\x00\x00\x00\x00\x06\x08\x00\x01\x00\x00\x00\x00\x01\x30\x00\x01\x80\x08\x00\x01\x00\x63\x6d\x70\x00\x24\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x00\x10\x00\x03\x80\x0c\x00\x01\x00\x74\x65\x73\x74\x54\x75\x6e\x6e\x2c\x00\x01\x80\x0c\x00\x01\x00\x63\x6f\x75\x6e\x74\x65\x72\x00\x1c\x00\x02\x80\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0c\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x30\x00\x01\x80\x0e\x00\x01\x00\x69\x6d\x6d\x65\x64\x69\x61\x74\x65\x00\x00\x00\x1c\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x00\x10\x00\x02\x80\x0c\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x01"),
+		// batch end
+		[]byte("\x00\x00\x00\x0a"),
+	}
+	testConn := newTestConn(t, want)
+	table := testConn.AddTable(&nftables.Table{
+		Family: proto,
+		Name:   "ts-filter-test",
+	})
+	chain := testConn.AddChain(&nftables.Chain{
+		Name:     "ts-input-test",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookInput,
+		Priority: nftables.ChainPriorityFilter,
+	})
+	err := addAcceptIncomingPacketRule(testConn, table, chain, "testTunn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,5 +945,65 @@ func TestNFTAddAndDelHookRule(t *testing.T) {
 
 	if len(postroutingChainRules) != 0 {
 		t.Fatalf("expected 0 rule in POSTROUTING chain, got %v", len(postroutingChainRules))
+	}
+}
+
+type testFWDetector struct {
+	iptRuleCount, nftRuleCount int
+	iptErr, nftErr             error
+}
+
+func (t *testFWDetector) iptDetect() (int, error) {
+	return t.iptRuleCount, t.iptErr
+}
+
+func (t *testFWDetector) nftDetect() (int, error) {
+	return t.nftRuleCount, t.nftErr
+}
+
+func TestPickFirewallModeFromInstalledRules(t *testing.T) {
+	tests := []struct {
+		name string
+		det  *testFWDetector
+		want FirewallMode
+	}{
+		{
+			name: "using iptables legacy",
+			det:  &testFWDetector{iptRuleCount: 1},
+			want: FirewallModeIPTables,
+		},
+		{
+			name: "using nftables",
+			det:  &testFWDetector{nftRuleCount: 1},
+			want: FirewallModeNfTables,
+		},
+		{
+			name: "using both iptables and nftables",
+			det:  &testFWDetector{iptRuleCount: 2, nftRuleCount: 2},
+			want: FirewallModeNfTables,
+		},
+		{
+			name: "not using any firewall, both available",
+			det:  &testFWDetector{},
+			want: FirewallModeNfTables,
+		},
+		{
+			name: "not using any firewall, iptables available only",
+			det:  &testFWDetector{iptRuleCount: 1, nftErr: errors.New("nft error")},
+			want: FirewallModeIPTables,
+		},
+		{
+			name: "not using any firewall, nftables available only",
+			det:  &testFWDetector{iptErr: errors.New("iptables error"), nftRuleCount: 1},
+			want: FirewallModeNfTables,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pickFirewallModeFromInstalledRules(t.Logf, tt.det)
+			if got != tt.want {
+				t.Errorf("chooseFireWallMode() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

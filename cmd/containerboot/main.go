@@ -36,9 +36,15 @@
 //   - TS_SOCKET: the path where the tailscaled LocalAPI socket should
 //     be created.
 //   - TS_AUTH_ONCE: if true, only attempt to log in if not already
-//     logged in. If false (the default, for backwards
-//     compatibility), forcibly log in every time the
-//     container starts.
+//     logged in. If false, forcibly log in every time the container starts.
+//     The default until 1.50.0 was false, but that was misleading: until
+//     1.50, containerboot used `tailscale up` which would ignore an authkey
+//     argument if there was already a node key. Effectively, this behaved
+//     as though TS_AUTH_ONCE were always true.
+//     In 1.50.0 the change was made to use `tailscale login` instead of `up`,
+//     and login will reauthenticate every time it is given an authkey.
+//     In 1.50.1 we set the TS_AUTH_ONCE to true, to match the previously
+//     observed behavior.
 //   - TS_SERVE_CONFIG: if specified, is the file path where the ipn.ServeConfig is located.
 //     It will be applied once tailscaled is up and running. If the file contains
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
@@ -103,7 +109,7 @@ func main() {
 		SOCKSProxyAddr:  defaultEnv("TS_SOCKS5_SERVER", ""),
 		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
+		AuthOnce:        defaultBool("TS_AUTH_ONCE", true),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
@@ -252,10 +258,13 @@ authLoop:
 	if err := tailscaleSet(ctx, cfg); err != nil {
 		log.Fatalf("failed to auth tailscale: %v", err)
 	}
-	// Remove any serve config that may have been set by a previous
-	// run of containerboot.
-	if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
-		log.Fatalf("failed to unset serve config: %v", err)
+
+	if cfg.ServeConfigPath != "" {
+		// Remove any serve config that may have been set by a previous run of
+		// containerboot, but only if we're providing a new one.
+		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+			log.Fatalf("failed to unset serve config: %v", err)
+		}
 	}
 
 	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && cfg.AuthOnce {

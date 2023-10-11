@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,18 +35,25 @@ type testAttempt struct {
 	testName      string // "TestFoo"
 	outcome       string // "pass", "fail", "skip"
 	logs          bytes.Buffer
-	isMarkedFlaky bool // set if the test is marked as flaky
+	isMarkedFlaky bool   // set if the test is marked as flaky
+	issueURL      string // set if the test is marked as flaky
 
 	pkgFinished bool
 }
 
+// packageTests describes what to run.
+// It's also JSON-marshalled to output for analysys tools to parse
+// so the fields are all exported.
+// TODO(bradfitz): move this type to its own types package?
 type packageTests struct {
-	// pattern is the package pattern to run.
-	// Must be a single pattern, not a list of patterns.
-	pattern string // "./...", "./types/key"
-	// tests is a list of tests to run. If empty, all tests in the package are
+	// Pattern is the package Pattern to run.
+	// Must be a single Pattern, not a list of patterns.
+	Pattern string // "./...", "./types/key"
+	// Tests is a list of Tests to run. If empty, all Tests in the package are
 	// run.
-	tests []string // ["TestFoo", "TestBar"]
+	Tests []string // ["TestFoo", "TestBar"]
+	// IssueURLs maps from a test name to a URL tracking its flake.
+	IssueURLs map[string]string // "TestFoo" => "https://github.com/foo/bar/issue/123"
 }
 
 type goTestOutput struct {
@@ -65,10 +73,10 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 // It calls close(ch) when it's done.
 func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
-	args := []string{"test", "-json", pt.pattern}
+	args := []string{"test", "-json", pt.Pattern}
 	args = append(args, otherArgs...)
-	if len(pt.tests) > 0 {
-		runArg := strings.Join(pt.tests, "|")
+	if len(pt.Tests) > 0 {
+		runArg := strings.Join(pt.Tests, "|")
 		args = append(args, "-run", runArg)
 	}
 	if debug {
@@ -152,8 +160,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			pkgTests[testName].outcome = goOutput.Action
 			ch <- pkgTests[testName]
 		case "output":
-			if strings.TrimSpace(goOutput.Output) == flakytest.FlakyTestLogMessage {
+			if suffix, ok := strings.CutPrefix(strings.TrimSpace(goOutput.Output), flakytest.FlakyTestLogMessage); ok {
 				pkgTests[testName].isMarkedFlaky = true
+				pkgTests[testName].issueURL = strings.TrimPrefix(suffix, ": ")
 			} else {
 				pkgTests[testName].logs.WriteString(goOutput.Output)
 			}
@@ -208,12 +217,12 @@ func main() {
 
 	type nextRun struct {
 		tests   []*packageTests
-		attempt int
+		attempt int // starting at 1
 	}
 
 	toRun := []*nextRun{
 		{
-			tests:   []*packageTests{{pattern: pattern}},
+			tests:   []*packageTests{{Pattern: pattern}},
 			attempt: 1,
 		},
 	}
@@ -244,10 +253,11 @@ func main() {
 			os.Exit(1)
 		}
 		if thisRun.attempt > 1 {
-			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\n", thisRun.attempt)
+			j, _ := json.Marshal(thisRun.tests)
+			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\nflakytest failures JSON: %s\n\n", thisRun.attempt, j)
 		}
 
-		toRetry := make(map[string][]string) // pkg -> tests to retry
+		toRetry := make(map[string][]*testAttempt) // pkg -> tests to retry
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
 			runErr := make(chan error, 1)
@@ -282,7 +292,7 @@ func main() {
 					continue
 				}
 				if tr.isMarkedFlaky {
-					toRetry[tr.pkg] = append(toRetry[tr.pkg], tr.testName)
+					toRetry[tr.pkg] = append(toRetry[tr.pkg], tr)
 				} else {
 					failed = true
 				}
@@ -315,10 +325,17 @@ func main() {
 		}
 		for _, pkg := range pkgs {
 			tests := toRetry[pkg]
-			sort.Strings(tests)
+			slices.SortFunc(tests, func(a, b *testAttempt) int { return strings.Compare(a.testName, b.testName) })
+			issueURLs := map[string]string{} // test name => URL
+			var testNames []string
+			for _, ta := range tests {
+				issueURLs[ta.testName] = ta.issueURL
+				testNames = append(testNames, ta.testName)
+			}
 			nextRun.tests = append(nextRun.tests, &packageTests{
-				pattern: pkg,
-				tests:   tests,
+				Pattern:   pkg,
+				Tests:     testNames,
+				IssueURLs: issueURLs,
 			})
 		}
 		toRun = append(toRun, nextRun)

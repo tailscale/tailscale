@@ -175,9 +175,67 @@ func createChainIfNotExist(c *nftables.Conn, cinfo chainInfo) error {
 	return nil
 }
 
-// NewNfTablesRunner creates a new nftablesRunner without guaranteeing
+// NetfilterRunner abstracts helpers to run netfilter commands. It is
+// implemented by linuxfw.IPTablesRunner and linuxfw.NfTablesRunner.
+type NetfilterRunner interface {
+	// AddLoopbackRule adds a rule to permit loopback traffic to addr. This rule
+	// is added only if it does not already exist.
+	AddLoopbackRule(addr netip.Addr) error
+
+	// DelLoopbackRule removes the rule added by AddLoopbackRule.
+	DelLoopbackRule(addr netip.Addr) error
+
+	// AddHooks adds rules to conventional chains like "FORWARD", "INPUT" and
+	// "POSTROUTING" to jump from those chains to tailscale chains.
+	AddHooks() error
+
+	// DelHooks deletes rules added by AddHooks.
+	DelHooks(logf logger.Logf) error
+
+	// AddChains creates custom Tailscale chains.
+	AddChains() error
+
+	// DelChains removes chains added by AddChains.
+	DelChains() error
+
+	// AddBase adds rules reused by different other rules.
+	AddBase(tunname string) error
+
+	// DelBase removes rules added by AddBase.
+	DelBase() error
+
+	// AddSNATRule adds the netfilter rule to SNAT incoming traffic over
+	// the Tailscale interface destined for local subnets. An error is
+	// returned if the rule already exists.
+	AddSNATRule() error
+
+	// DelSNATRule removes the rule added by AddSNATRule.
+	DelSNATRule() error
+
+	// HasIPV6 reports true if the system supports IPv6.
+	HasIPV6() bool
+
+	// HasIPV6NAT reports true if the system supports IPv6 NAT.
+	HasIPV6NAT() bool
+}
+
+// New creates a NetfilterRunner using either nftables or iptables.
+// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
+func New(logf logger.Logf) (NetfilterRunner, error) {
+	mode := detectFirewallMode(logf)
+	switch mode {
+	case FirewallModeIPTables:
+		return newIPTablesRunner(logf)
+	case FirewallModeNfTables:
+		return newNfTablesRunner(logf)
+	default:
+		return nil, fmt.Errorf("unknown firewall mode %v", mode)
+	}
+}
+
+// newNfTablesRunner creates a new nftablesRunner without guaranteeing
 // the existence of the tables and chains.
-func NewNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
+func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 	conn, err := nftables.New()
 	if err != nil {
 		return nil, fmt.Errorf("nftables connection: %w", err)
@@ -231,7 +289,7 @@ func newLoadSaddrExpr(proto nftables.TableFamily, destReg uint32) (expr.Any, err
 	}
 }
 
-// HasIPV6 returns true if the system supports IPv6.
+// HasIPV6 reports true if the system supports IPv6.
 func (n *nftablesRunner) HasIPV6() bool {
 	return n.v6Available
 }
@@ -877,6 +935,38 @@ func addAcceptOutgoingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 	return nil
 }
 
+// createAcceptIncomingPacketRule creates a rule to accept incoming packets to
+// the given interface.
+func createAcceptIncomingPacketRule(table *nftables.Table, chain *nftables.Chain, tunname string) *nftables.Rule {
+	return &nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte(tunname),
+			},
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind: expr.VerdictAccept,
+			},
+		},
+	}
+}
+
+func addAcceptIncomingPacketRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule := createAcceptIncomingPacketRule(table, chain, tunname)
+	_ = conn.AddRule(rule)
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush add rule: %w", err)
+	}
+
+	return nil
+}
+
 // AddBase adds some basic processing rules.
 func (n *nftablesRunner) AddBase(tunname string) error {
 	if err := n.addBase4(tunname); err != nil {
@@ -903,6 +993,9 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 	}
 	if err = addDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 		return fmt.Errorf("add drop cgnat range rule v4: %w", err)
+	}
+	if err = addAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+		return fmt.Errorf("add accept incoming packet rule v4: %w", err)
 	}
 
 	forwardChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameForward)
@@ -936,6 +1029,14 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 // addBase6 adds some basic IPv6 processing rules.
 func (n *nftablesRunner) addBase6(tunname string) error {
 	conn := n.conn
+
+	inputChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain v4: %v", err)
+	}
+	if err = addAcceptIncomingPacketRule(conn, n.nft6.Filter, inputChain, tunname); err != nil {
+		return fmt.Errorf("add accept incoming packet rule v6: %w", err)
+	}
 
 	forwardChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameForward)
 	if err != nil {
@@ -1109,7 +1210,9 @@ func (n *nftablesRunner) DelSNATRule() error {
 			return fmt.Errorf("find SNAT rule v4: %w", err)
 		}
 
-		_ = conn.DelRule(SNATRule)
+		if SNATRule != nil {
+			_ = conn.DelRule(SNATRule)
+		}
 	}
 
 	if err := conn.Flush(); err != nil {

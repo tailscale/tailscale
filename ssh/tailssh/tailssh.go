@@ -43,6 +43,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 )
@@ -1752,7 +1753,7 @@ func (ss *sshSession) notifyControl(ctx context.Context, nodeKey key.NodePublic,
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, httpm.POST, url, bytes.NewReader(body))
 	if err != nil {
 		ss.logf("notifyControl: unable to create request:", err)
 		return

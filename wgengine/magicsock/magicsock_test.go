@@ -290,7 +290,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				DiscoKey:   peer.conn.DiscoPublicKey(),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
-				Endpoints:  epStrings(eps[i]),
+				Endpoints:  epFromTyped(eps[i]),
 				DERP:       "127.3.3.40:1",
 			}
 			nm.Peers = append(nm.Peers, peer.View())
@@ -705,6 +705,8 @@ func TestDiscokeyChange(t *testing.T) {
 }
 
 func TestActiveDiscovery(t *testing.T) {
+	tstest.ResourceCheck(t)
+
 	t.Run("simple_internet", func(t *testing.T) {
 		t.Parallel()
 		mstun := &natlab.Machine{Name: "stun"}
@@ -900,7 +902,6 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 // get exercised.
 func testActiveDiscovery(t *testing.T, d *devices) {
 	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
 
 	tlogf, setT := makeNestable(t)
 	setT(t)
@@ -1265,7 +1266,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 				ID:        1,
 				Key:       nodeKey,
 				DiscoKey:  discoKey,
-				Endpoints: []string{sendConn.LocalAddr().String()},
+				Endpoints: eps(sendConn.LocalAddr().String()),
 			},
 		}),
 	})
@@ -1470,7 +1471,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 				ID:        1,
 				Key:       nodeKey1,
 				DiscoKey:  discoKey,
-				Endpoints: []string{"192.168.1.2:345"},
+				Endpoints: eps("192.168.1.2:345"),
 			},
 		}),
 	})
@@ -1486,7 +1487,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 					ID:        2,
 					Key:       nodeKey2,
 					DiscoKey:  discoKey,
-					Endpoints: []string{"192.168.1.2:345"},
+					Endpoints: eps("192.168.1.2:345"),
 				},
 			}),
 		})
@@ -1648,10 +1649,13 @@ func TestEndpointSetsEqual(t *testing.T) {
 
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
-	al := func(ipps string, d time.Duration) addrLatency {
-		return addrLatency{netip.MustParseAddrPort(ipps), d}
+	al := func(ipps string, d time.Duration) addrQuality {
+		return addrQuality{AddrPort: netip.MustParseAddrPort(ipps), latency: d}
 	}
-	zero := addrLatency{}
+	almtu := func(ipps string, d time.Duration, mtu tstun.WireMTU) addrQuality {
+		return addrQuality{AddrPort: netip.MustParseAddrPort(ipps), latency: d, wireMTU: mtu}
+	}
+	zero := addrQuality{}
 
 	const (
 		publicV4   = "1.2.3.4:555"
@@ -1662,7 +1666,7 @@ func TestBetterAddr(t *testing.T) {
 	)
 
 	tests := []struct {
-		a, b addrLatency
+		a, b addrQuality
 		want bool // whether a is better than b
 	}{
 		{a: zero, b: zero, want: false},
@@ -1724,7 +1728,12 @@ func TestBetterAddr(t *testing.T) {
 			b:    al(publicV6, 100*ms),
 			want: true,
 		},
-
+		// If addresses are equal, prefer larger MTU
+		{
+			a:    almtu(publicV4, 30*ms, 1500),
+			b:    almtu(publicV4, 30*ms, 0),
+			want: true,
+		},
 		// Private IPs are preferred over public IPs even if the public
 		// IP is IPv6.
 		{
@@ -1752,11 +1761,19 @@ func TestBetterAddr(t *testing.T) {
 
 }
 
-func epStrings(eps []tailcfg.Endpoint) (ret []string) {
+func epFromTyped(eps []tailcfg.Endpoint) (ret []netip.AddrPort) {
 	for _, ep := range eps {
-		ret = append(ret, ep.Addr.String())
+		ret = append(ret, ep.Addr)
 	}
 	return
+}
+
+func eps(s ...string) []netip.AddrPort {
+	var eps []netip.AddrPort
+	for _, ep := range s {
+		eps = append(eps, netip.MustParseAddrPort(ep))
+	}
+	return eps
 }
 
 func TestStressSetNetworkMap(t *testing.T) {
@@ -1778,7 +1795,7 @@ func TestStressSetNetworkMap(t *testing.T) {
 			ID:        tailcfg.NodeID(i) + 1,
 			DiscoKey:  randDiscoKey(),
 			Key:       randNodeKey(),
-			Endpoints: []string{fmt.Sprintf("192.168.1.2:%d", i)},
+			Endpoints: eps(fmt.Sprintf("192.168.1.2:%d", i)),
 		}
 	}
 
@@ -2276,7 +2293,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 			{
 				ID:              1,
 				Key:             wgkey.Public(),
-				Endpoints:       []string{wgEp.String()},
+				Endpoints:       []netip.AddrPort{wgEp},
 				IsWireGuardOnly: true,
 				Addresses:       []netip.Prefix{wgaip},
 				AllowedIPs:      []netip.Prefix{wgaip},
@@ -2337,7 +2354,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 			{
 				ID:                            1,
 				Key:                           wgkey.Public(),
-				Endpoints:                     []string{wgEp.String()},
+				Endpoints:                     []netip.AddrPort{wgEp},
 				IsWireGuardOnly:               true,
 				Addresses:                     []netip.Prefix{wgaip},
 				AllowedIPs:                    []netip.Prefix{wgaip},
@@ -2465,7 +2482,7 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:             wgkey.Public(),
-				Endpoints:       []string{wgEp.String(), wgEp2.String(), wgEpV6.String()},
+				Endpoints:       []netip.AddrPort{wgEp, wgEp2, wgEpV6},
 				IsWireGuardOnly: true,
 				Addresses:       []netip.Prefix{wgaip},
 				AllowedIPs:      []netip.Prefix{wgaip},
@@ -2873,6 +2890,115 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			}
 			if endpoint.bestAddr.AddrPort != test.want {
 				t.Errorf("bestAddr.AddrPort is not as expected: got %v, want %v", endpoint.bestAddr.AddrPort, test.want)
+			}
+		})
+	}
+}
+
+func TestAddrForPingSizeLocked(t *testing.T) {
+	testTime := mono.Now()
+
+	validUdpAddr := netip.MustParseAddrPort("1.1.1.1:111")
+	validDerpAddr := netip.MustParseAddrPort("2.2.2.2:222")
+
+	pingTests := []struct {
+		desc            string
+		size            int           // size of ping payload
+		mtu             tstun.WireMTU // The MTU of the path to bestAddr, if any
+		bestAddr        bool          // If the endpoint should have a valid bestAddr
+		bestAddrTrusted bool          // If the bestAddr has not yet expired
+		wantUDP         bool          // Non-zero UDP addr means send to UDP; zero means start discovery
+		wantDERP        bool          // Non-zero DERP addr means send to DERP
+	}{
+		{
+			desc:            "ping_size_0_and_invalid_UDP_addr_should_start_discovery_and_send_to_DERP",
+			size:            0,
+			bestAddr:        false,
+			bestAddrTrusted: false,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_0_and_valid_trusted_UDP_addr_should_send_to_UDP_and_not_send_to_DERP",
+			size:            0,
+			bestAddr:        true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        false,
+		},
+		{
+			desc:            "ping_size_0_and_valid_but_expired_UDP_addr_should_send_to_both_UDP_and_DERP",
+			size:            0,
+			bestAddr:        true,
+			bestAddrTrusted: false,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_too_big_for_trusted_UDP_addr_should_start_discovery_and_send_to_DERP",
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr().Is6()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: true,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_too_big_for_untrusted_UDP_addr_should_start_discovery_and_send_to_DERP",
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr().Is6()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: false,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_small_enough_for_trusted_UDP_addr_should_send_to_UDP_and_not_DERP",
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr().Is6()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        false,
+		},
+		{
+			desc:            "ping_size_small_enough_for_untrusted_UDP_addr_should_send_to_UDP_and_DERP",
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr().Is6()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: false,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+	}
+
+	for _, test := range pingTests {
+		t.Run(test.desc, func(t *testing.T) {
+			bestAddr := addrQuality{wireMTU: test.mtu}
+			if test.bestAddr {
+				bestAddr.AddrPort = validUdpAddr
+			}
+			ep := &endpoint{
+				derpAddr: validDerpAddr,
+				bestAddr: bestAddr,
+			}
+			if test.bestAddrTrusted {
+				ep.trustBestAddrUntil = testTime.Add(1 * time.Second)
+			}
+
+			udpAddr, derpAddr := ep.addrForPingSizeLocked(testTime, test.size)
+
+			if test.wantUDP && !udpAddr.IsValid() {
+				t.Errorf("%s: udpAddr returned is not valid, won't be sent to UDP address", test.desc)
+			}
+			if !test.wantUDP && udpAddr.IsValid() {
+				t.Errorf("%s: udpAddr returned is valid, discovery will not start", test.desc)
+			}
+			if test.wantDERP && !derpAddr.IsValid() {
+				t.Errorf("%s: derpAddr returned is not valid, won't be sent to DERP", test.desc)
+			}
+			if !test.wantDERP && derpAddr.IsValid() {
+				t.Errorf("%s: derpAddr returned is valid, will be sent to DERP", test.desc)
 			}
 		})
 	}

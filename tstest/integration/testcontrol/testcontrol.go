@@ -900,8 +900,13 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		peerAddress := s.masquerades[p.Key][node.Key]
 		s.mu.Unlock()
 		if peerAddress.IsValid() {
-			p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-			p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			if peerAddress.Is6() {
+				p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+				p.AllowedIPs[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			} else {
+				p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+				p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			}
 		}
 		res.Peers = append(res.Peers, p)
 	}
@@ -1035,7 +1040,7 @@ func (s *Server) encode(mkey key.MachinePublic, compress bool, v any) (b []byte,
 //
 // Two types of IPv6 endpoints are considered invalid: link-local
 // addresses, and anything with a zone.
-func filterInvalidIPv6Endpoints(eps []string) []string {
+func filterInvalidIPv6Endpoints(eps []netip.AddrPort) []netip.AddrPort {
 	clean := eps[:0]
 	for _, ep := range eps {
 		if keepClientEndpoint(ep) {
@@ -1045,13 +1050,7 @@ func filterInvalidIPv6Endpoints(eps []string) []string {
 	return clean
 }
 
-func keepClientEndpoint(ep string) bool {
-	ipp, err := netip.ParseAddrPort(ep)
-	if err != nil {
-		// Shouldn't have made it this far if we unmarshalled
-		// the incoming JSON response.
-		return false
-	}
+func keepClientEndpoint(ipp netip.AddrPort) bool {
 	ip := ipp.Addr()
 	if ip.Zone() != "" {
 		return false
