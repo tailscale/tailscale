@@ -66,6 +66,7 @@ var handler = map[string]localAPIHandler{
 	"file-put/": (*Handler).serveFilePut,
 	"files/":    (*Handler).serveFiles,
 	"profiles/": (*Handler).serveProfiles,
+	"web/":      (*Handler).serveWeb,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
@@ -2231,6 +2232,33 @@ func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write(body)
 	w.Header().Set("Content-Type", "application/json")
+}
+
+func (h *Handler) serveWeb(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	switch r.URL.Path {
+	case "/localapi/v0/web/start":
+		if err := h.b.WebInit(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	case "/localapi/v0/web/stop":
+		h.b.WebShutdown()
+		w.WriteHeader(http.StatusOK)
+		return
+	default:
+		http.Error(w, "invalid action", http.StatusBadRequest)
+		return
+	}
 }
 
 func defBool(a string, def bool) bool {
