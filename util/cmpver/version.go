@@ -22,15 +22,20 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 )
+
+func isnum(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+func notnum(r rune) bool {
+	return !isnum(r)
+}
 
 // Compare returns an integer comparing two strings as version
 // numbers. The result will be 0 if v1==v2, -1 if v1 < v2, and +1 if
 // v1 > v2.
 func Compare(v1, v2 string) int {
-	notNumber := func(r rune) bool { return !unicode.IsNumber(r) }
-
 	var (
 		f1, f2 string
 		n1, n2 uint64
@@ -38,16 +43,16 @@ func Compare(v1, v2 string) int {
 	)
 	for v1 != "" || v2 != "" {
 		// Compare the non-numeric character run lexicographically.
-		f1, v1 = splitPrefixFunc(v1, notNumber)
-		f2, v2 = splitPrefixFunc(v2, notNumber)
+		f1, v1 = splitPrefixFunc(v1, notnum)
+		f2, v2 = splitPrefixFunc(v2, notnum)
 
 		if res := strings.Compare(f1, f2); res != 0 {
 			return res
 		}
 
 		// Compare the numeric character run numerically.
-		f1, v1 = splitPrefixFunc(v1, unicode.IsNumber)
-		f2, v2 = splitPrefixFunc(v2, unicode.IsNumber)
+		f1, v1 = splitPrefixFunc(v1, isnum)
+		f2, v2 = splitPrefixFunc(v2, isnum)
 
 		// ParseUint refuses to parse empty strings, which would only
 		// happen if we reached end-of-string. We follow the Debian
