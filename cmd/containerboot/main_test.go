@@ -340,8 +340,6 @@ func TestContainerBoot(t *testing.T) {
 					Notify: runningNotify,
 					WantCmds: []string{
 						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
-						"/usr/bin/iptables -t nat -I PREROUTING 1 -d 100.64.0.1 -j DNAT --to-destination 1.2.3.4",
-						"/usr/bin/iptables -t mangle -A FORWARD -o tailscale0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
 					},
 				},
 			},
@@ -365,9 +363,6 @@ func TestContainerBoot(t *testing.T) {
 					Notify: runningNotify,
 					WantCmds: []string{
 						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
-						"/usr/bin/iptables -t nat -I PREROUTING 1 ! -i tailscale0 -j DNAT --to-destination 100.99.99.99",
-						"/usr/bin/iptables -t nat -I POSTROUTING 1 --destination 100.99.99.99 -j SNAT --to-source 100.64.0.1",
-						"/usr/bin/iptables -t mangle -A FORWARD -o tailscale0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
 					},
 				},
 			},
@@ -694,6 +689,7 @@ func TestContainerBoot(t *testing.T) {
 				fmt.Sprintf("TS_TEST_SOCKET=%s", lapi.Path),
 				fmt.Sprintf("TS_SOCKET=%s", runningSockPath),
 				fmt.Sprintf("TS_TEST_ONLY_ROOT=%s", d),
+				fmt.Sprint("TS_TEST_FAKE_NETFILTER=true"),
 			}
 			for k, v := range test.Env {
 				cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
