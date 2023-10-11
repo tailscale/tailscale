@@ -577,3 +577,8 @@ raven
 corvus
 mellori
 bat
+sapsucker
+woodpecker
+nuthatch
+flicker
+junco
