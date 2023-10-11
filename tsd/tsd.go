@@ -23,6 +23,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -46,6 +47,12 @@ type System struct {
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
+
+	// InitialConfig is initial server config, if any.
+	// It is nil if the node is not in declarative mode.
+	// This value is never updated after startup.
+	// LocalBackend tracks the current config after any reloads.
+	InitialConfig *conffile.Config
 
 	// onlyNetstack is whether the Tun value is a fake TUN device
 	// and we're using netstack for everything.

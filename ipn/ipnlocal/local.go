@@ -44,6 +44,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
@@ -198,7 +199,8 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
-	pm             *profileManager // mu guards access
+	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
+	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	ccGen          clientGen    // function for producing controlclient; lazily populated
@@ -340,6 +342,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                 sys,
+		conf:                sys.InitialConfig,
 		e:                   e,
 		dialer:              dialer,
 		store:               store,
@@ -516,6 +519,25 @@ func (b *LocalBackend) SetDirectFileDoFinalRename(v bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.directFileDoFinalRename = v
+}
+
+// ReloadCOnfig reloads the backend's config from disk.
+//
+// It returns (false, nil) if not running in declarative mode, (true, nil) on
+// success, or (false, error) on failure.
+func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.conf == nil {
+		return false, nil
+	}
+	conf, err := conffile.Load(b.conf.Path)
+	if err != nil {
+		return false, err
+	}
+	b.conf = conf
+	// TODO(bradfitz): apply things
+	return true, nil
 }
 
 // pauseOrResumeControlClientLocked pauses b.cc if there is no network available
