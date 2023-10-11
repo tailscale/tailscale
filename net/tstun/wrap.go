@@ -25,6 +25,7 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun/table"
 	"tailscale.com/syncs"
@@ -487,7 +488,7 @@ func (t *Wrapper) snat(p *packet.Parsed) {
 	oldSrc := p.Src.Addr()
 	newSrc := nc.selectSrcIP(oldSrc, p.Dst.Addr())
 	if oldSrc != newSrc {
-		p.UpdateSrcAddr(newSrc)
+		checksum.UpdateSrcAddr(p, newSrc)
 	}
 }
 
@@ -497,7 +498,7 @@ func (t *Wrapper) dnat(p *packet.Parsed) {
 	oldDst := p.Dst.Addr()
 	newDst := nc.mapDstIP(oldDst)
 	if newDst != oldDst {
-		p.UpdateDstAddr(newDst)
+		checksum.UpdateDstAddr(p, newDst)
 	}
 }
 
