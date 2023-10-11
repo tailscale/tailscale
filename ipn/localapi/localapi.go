@@ -96,6 +96,7 @@ var handler = map[string]localAPIHandler{
 	"ping":                        (*Handler).servePing,
 	"prefs":                       (*Handler).servePrefs,
 	"pprof":                       (*Handler).servePprof,
+	"reload-config":               (*Handler).reloadConfig,
 	"reset-auth":                  (*Handler).serveResetAuth,
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
@@ -836,6 +837,26 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	servePprofFunc(w, r)
+}
+
+func (h *Handler) reloadConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	ok, err := h.b.ReloadConfig()
+	var res apitype.ReloadConfigResponse
+	res.Reloaded = ok
+	if err != nil {
+		res.Err = err.Error()
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(&res)
 }
 
 func (h *Handler) serveResetAuth(w http.ResponseWriter, r *http.Request) {

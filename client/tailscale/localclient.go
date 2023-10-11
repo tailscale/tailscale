@@ -1244,6 +1244,25 @@ func (lc *LocalClient) ProfileStatus(ctx context.Context) (current ipn.LoginProf
 	return current, all, err
 }
 
+// ReloadConfig reloads the config file, if possible.
+func (lc *LocalClient) ReloadConfig(ctx context.Context) (ok bool, err error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/reload-config", 200, nil)
+	if err != nil {
+		return
+	}
+	res, err := decodeJSON[apitype.ReloadConfigResponse](body)
+	if err != nil {
+		return
+	}
+	if err != nil {
+		return false, err
+	}
+	if res.Err != "" {
+		return false, errors.New(res.Err)
+	}
+	return res.Reloaded, nil
+}
+
 // SwitchToEmptyProfile creates and switches to a new unnamed profile. The new
 // profile is not assigned an ID until it is persisted after a successful login.
 // In order to login to the new profile, the user must call LoginInteractive.

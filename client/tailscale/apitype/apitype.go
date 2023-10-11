@@ -40,3 +40,12 @@ type SetPushDeviceTokenRequest struct {
 	// PushDeviceToken is the iOS/macOS APNs device token (and any future Android equivalent).
 	PushDeviceToken string
 }
+
+// ReloadConfigResponse is the response to a LocalAPI reload-config request.
+//
+// There are three possible outcomes: (false, "") if no config mode in use,
+// (true, "") on success, or (false, "error message") on failure.
+type ReloadConfigResponse struct {
+	Reloaded bool   // whether the config was reloaded
+	Err      string // any error message
+}

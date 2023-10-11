@@ -5,6 +5,8 @@
 // preferences.
 package preftype
 
+import "fmt"
+
 // NetfilterMode is the firewall management mode to use when
 // programming the Linux network stack.
 type NetfilterMode int
@@ -16,6 +18,19 @@ const (
 	NetfilterNoDivert NetfilterMode = 1 // manage tailscale chains, but don't call them
 	NetfilterOn       NetfilterMode = 2 // manage tailscale chains and call them from main chains
 )
+
+func ParseNetfilterMode(s string) (NetfilterMode, error) {
+	switch s {
+	case "off":
+		return NetfilterOff, nil
+	case "nodivert":
+		return NetfilterNoDivert, nil
+	case "on":
+		return NetfilterOn, nil
+	default:
+		return NetfilterOff, fmt.Errorf("unknown netfilter mode %q", s)
+	}
+}
 
 func (m NetfilterMode) String() string {
 	switch m {

@@ -32,6 +32,7 @@ import (
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
@@ -127,6 +128,7 @@ var args struct {
 	tunname string
 
 	cleanup        bool
+	confFile       string
 	debug          string
 	port           uint16
 	statepath      string
@@ -172,6 +174,7 @@ func main() {
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
+	flag.StringVar(&args.confFile, "config", "", "path to config file")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -338,6 +341,17 @@ func run() error {
 	var logf logger.Logf = log.Printf
 
 	sys := new(tsd.System)
+
+	// Parse config, if specified, to fail early if it's invalid.
+	var conf *conffile.Config
+	if args.confFile != "" {
+		var err error
+		conf, err = conffile.Load(args.confFile)
+		if err != nil {
+			return fmt.Errorf("error reading config file: %w", err)
+		}
+		sys.InitialConfig = conf
+	}
 
 	netMon, err := netmon.New(func(format string, args ...any) {
 		logf(format, args...)

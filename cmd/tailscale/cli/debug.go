@@ -150,6 +150,12 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "force a full no-op netmap update (for load testing)",
 		},
 		{
+			// TODO(bradfitz,maisem): eventually promote this out of debug
+			Name:      "reload-config",
+			Exec:      reloadConfig,
+			ShortHelp: "reload config",
+		},
+		{
 			Name:      "control-knobs",
 			Exec:      debugControlKnobs,
 			ShortHelp: "see current control knobs",
@@ -449,6 +455,20 @@ func localAPIAction(action string) func(context.Context, []string) error {
 		}
 		return localClient.DebugAction(ctx, action)
 	}
+}
+
+func reloadConfig(ctx context.Context, args []string) error {
+	ok, err := localClient.ReloadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
+		printf("config reloaded\n")
+		return nil
+	}
+	printf("config mode not in use\n")
+	os.Exit(1)
+	panic("unreachable")
 }
 
 func runEnv(ctx context.Context, args []string) error {
