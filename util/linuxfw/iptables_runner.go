@@ -45,11 +45,11 @@ func checkIP6TablesExists() error {
 	return nil
 }
 
-// NewIPTablesRunner constructs a NetfilterRunner that programs iptables rules.
+// newIPTablesRunner constructs a NetfilterRunner that programs iptables rules.
 // If the underlying iptables library fails to initialize, that error is
 // returned. The runner probes for IPv6 support once at initialization time and
 // if not found, no IPv6 rules will be modified for the lifetime of the runner.
-func NewIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
+func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err != nil {
 		return nil, err
@@ -79,12 +79,12 @@ func NewIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 	return &iptablesRunner{ipt4, ipt6, supportsV6, supportsV6NAT}, nil
 }
 
-// HasIPV6 returns true if the system supports IPv6.
+// HasIPV6 reports true if the system supports IPv6.
 func (i *iptablesRunner) HasIPV6() bool {
 	return i.v6Available
 }
 
-// HasIPV6NAT returns true if the system supports IPv6 NAT.
+// HasIPV6NAT reports true if the system supports IPv6 NAT.
 func (i *iptablesRunner) HasIPV6NAT() bool {
 	return i.v6NATAvailable
 }

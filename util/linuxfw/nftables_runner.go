@@ -175,9 +175,67 @@ func createChainIfNotExist(c *nftables.Conn, cinfo chainInfo) error {
 	return nil
 }
 
-// NewNfTablesRunner creates a new nftablesRunner without guaranteeing
+// NetfilterRunner abstracts helpers to run netfilter commands. It is
+// implemented by linuxfw.IPTablesRunner and linuxfw.NfTablesRunner.
+type NetfilterRunner interface {
+	// AddLoopbackRule adds a rule to permit loopback traffic to addr. This rule
+	// is added only if it does not already exist.
+	AddLoopbackRule(addr netip.Addr) error
+
+	// DelLoopbackRule removes the rule added by AddLoopbackRule.
+	DelLoopbackRule(addr netip.Addr) error
+
+	// AddHooks adds rules to conventional chains like "FORWARD", "INPUT" and
+	// "POSTROUTING" to jump from those chains to tailscale chains.
+	AddHooks() error
+
+	// DelHooks deletes rules added by AddHooks.
+	DelHooks(logf logger.Logf) error
+
+	// AddChains creates custom Tailscale chains.
+	AddChains() error
+
+	// DelChains removes chains added by AddChains.
+	DelChains() error
+
+	// AddBase adds rules reused by different other rules.
+	AddBase(tunname string) error
+
+	// DelBase removes rules added by AddBase.
+	DelBase() error
+
+	// AddSNATRule adds the netfilter rule to SNAT incoming traffic over
+	// the Tailscale interface destined for local subnets. An error is
+	// returned if the rule already exists.
+	AddSNATRule() error
+
+	// DelSNATRule removes the rule added by AddSNATRule.
+	DelSNATRule() error
+
+	// HasIPV6 reports true if the system supports IPv6.
+	HasIPV6() bool
+
+	// HasIPV6NAT reports true if the system supports IPv6 NAT.
+	HasIPV6NAT() bool
+}
+
+// New creates a NetfilterRunner using either nftables or iptables.
+// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
+func New(logf logger.Logf) (NetfilterRunner, error) {
+	mode := detectFirewallMode(logf)
+	switch mode {
+	case FirewallModeIPTables:
+		return newIPTablesRunner(logf)
+	case FirewallModeNfTables:
+		return newNfTablesRunner(logf)
+	default:
+		return nil, fmt.Errorf("unknown firewall mode %v", mode)
+	}
+}
+
+// newNfTablesRunner creates a new nftablesRunner without guaranteeing
 // the existence of the tables and chains.
-func NewNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
+func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 	conn, err := nftables.New()
 	if err != nil {
 		return nil, fmt.Errorf("nftables connection: %w", err)
@@ -231,7 +289,7 @@ func newLoadSaddrExpr(proto nftables.TableFamily, destReg uint32) (expr.Any, err
 	}
 }
 
-// HasIPV6 returns true if the system supports IPv6.
+// HasIPV6 reports true if the system supports IPv6.
 func (n *nftablesRunner) HasIPV6() bool {
 	return n.v6Available
 }
