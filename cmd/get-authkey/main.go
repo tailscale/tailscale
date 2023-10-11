@@ -28,6 +28,7 @@ func main() {
 	ephemeral := flag.Bool("ephemeral", false, "allocate an ephemeral authkey")
 	preauth := flag.Bool("preauth", true, "set the authkey as pre-authorized")
 	tags := flag.String("tags", "", "comma-separated list of tags to apply to the authkey")
+	expiry := flag.Duration("expiry", 0, "amount of time until authkey expires, for example 24h.")
 	flag.Parse()
 
 	clientID := os.Getenv("TS_API_CLIENT_ID")
@@ -65,7 +66,7 @@ func main() {
 		},
 	}
 
-	authkey, _, err := tsClient.CreateKey(ctx, caps)
+	authkey, _, err := tsClient.CreateKeyWithExpiry(ctx, caps, *expiry)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
