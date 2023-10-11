@@ -125,8 +125,7 @@ type ServerOpts struct {
 }
 
 // NewServer constructs a new Tailscale web client server.
-// The provided context should live for the duration of the Server's lifetime.
-func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func()) {
+func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 	if opts.LocalClient == nil {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
