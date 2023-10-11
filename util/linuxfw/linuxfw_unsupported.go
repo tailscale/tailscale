@@ -25,16 +25,16 @@ func DebugNetfilter(logf logger.Logf) error {
 }
 
 // DetectNetfilter is not supported on non-Linux platforms.
-func DetectNetfilter() (int, error) {
+func detectNetfilter() (int, error) {
 	return 0, ErrUnsupported
 }
 
 // DebugIptables is not supported on non-Linux platforms.
-func DebugIptables(logf logger.Logf) error {
+func debugIptables(logf logger.Logf) error {
 	return ErrUnsupported
 }
 
 // DetectIptables is not supported on non-Linux platforms.
-func DetectIptables() (int, error) {
+func detectIptables() (int, error) {
 	return 0, ErrUnsupported
 }
