@@ -17,7 +17,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go4.org/netipx"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -191,7 +193,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			capSharing: true,
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil)},
 			checks: checks(
-				httpStatus(http.StatusInternalServerError),
+				httpStatus(http.StatusForbidden),
 				bodyContains("Taildrop disabled; no storage directory"),
 			),
 		},
@@ -248,7 +250,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo.partial", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -258,7 +260,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo.deleted", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -268,7 +270,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/.", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -298,7 +300,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll("."), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -308,7 +310,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll("/"), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -318,7 +320,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll("\\"), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -328,7 +330,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll(".."), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -338,7 +340,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll("foo/../../../../../etc/passwd"), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -370,7 +372,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+(hexAll("😜")[:3]), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -380,7 +382,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/%00", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -390,7 +392,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/%01", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -400,7 +402,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll("nul:"), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -410,7 +412,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/"+hexAll(" foo "), nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("bad filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -441,23 +443,69 @@ func TestHandlePeerAPI(t *testing.T) {
 			),
 		},
 		{
-			name:       "bad_duplicate_zero_length",
+			name:       "duplicate_zero_length",
 			isSelf:     true,
 			capSharing: true,
-			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil), httptest.NewRequest("PUT", "/v0/put/foo", nil)},
+			reqs: []*http.Request{
+				httptest.NewRequest("PUT", "/v0/put/foo", nil),
+				httptest.NewRequest("PUT", "/v0/put/foo", nil),
+			},
 			checks: checks(
-				httpStatus(409),
-				bodyContains("file exists"),
+				httpStatus(200),
+				func(t *testing.T, env *peerAPITestEnv) {
+					got, err := env.ph.ps.taildrop.WaitingFiles()
+					if err != nil {
+						t.Fatalf("WaitingFiles error: %v", err)
+					}
+					want := []apitype.WaitingFile{{Name: "foo", Size: 0}}
+					if diff := cmp.Diff(got, want); diff != "" {
+						t.Fatalf("WaitingFile mismatch (-got +want):\n%s", diff)
+					}
+				},
 			),
 		},
 		{
-			name:       "bad_duplicate_non_zero_length_content_length",
+			name:       "duplicate_non_zero_length_content_length",
 			isSelf:     true,
 			capSharing: true,
-			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("contents")), httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("contents"))},
+			reqs: []*http.Request{
+				httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("contents")),
+				httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("contents")),
+			},
 			checks: checks(
-				httpStatus(409),
-				bodyContains("file exists"),
+				httpStatus(200),
+				func(t *testing.T, env *peerAPITestEnv) {
+					got, err := env.ph.ps.taildrop.WaitingFiles()
+					if err != nil {
+						t.Fatalf("WaitingFiles error: %v", err)
+					}
+					want := []apitype.WaitingFile{{Name: "foo", Size: 8}}
+					if diff := cmp.Diff(got, want); diff != "" {
+						t.Fatalf("WaitingFile mismatch (-got +want):\n%s", diff)
+					}
+				},
+			),
+		},
+		{
+			name:       "duplicate_different_files",
+			isSelf:     true,
+			capSharing: true,
+			reqs: []*http.Request{
+				httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("fizz")),
+				httptest.NewRequest("PUT", "/v0/put/foo", strings.NewReader("buzz")),
+			},
+			checks: checks(
+				httpStatus(200),
+				func(t *testing.T, env *peerAPITestEnv) {
+					got, err := env.ph.ps.taildrop.WaitingFiles()
+					if err != nil {
+						t.Fatalf("WaitingFiles error: %v", err)
+					}
+					want := []apitype.WaitingFile{{Name: "foo", Size: 4}, {Name: "foo (1)", Size: 4}}
+					if diff := cmp.Diff(got, want); diff != "" {
+						t.Fatalf("WaitingFile mismatch (-got +want):\n%s", diff)
+					}
+				},
 			),
 		},
 	}
@@ -492,7 +540,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			if !tt.omitRoot {
 				rootDir = t.TempDir()
 				if e.ph.ps.taildrop == nil {
-					e.ph.ps.taildrop = &taildrop.Handler{
+					e.ph.ps.taildrop = &taildrop.Manager{
 						Logf:  e.logBuf.Logf,
 						Clock: &tstest.Clock{},
 					}
@@ -536,7 +584,7 @@ func TestFileDeleteRace(t *testing.T) {
 			capFileSharing: true,
 			clock:          &tstest.Clock{},
 		},
-		taildrop: &taildrop.Handler{
+		taildrop: &taildrop.Manager{
 			Logf:  t.Logf,
 			Clock: &tstest.Clock{},
 			Dir:   dir,
