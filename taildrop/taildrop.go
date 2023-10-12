@@ -45,7 +45,7 @@ func (id ClientID) partialSuffix() string {
 // Manager manages the state for receiving and managing taildropped files.
 type Manager struct {
 	Logf  logger.Logf
-	Clock tstime.Clock
+	Clock tstime.DefaultClock
 
 	// Dir is the directory to store received files.
 	// This main either be the final location for the files
@@ -131,15 +131,15 @@ func validFilenameRune(r rune) bool {
 	return unicode.IsPrint(r)
 }
 
-func (m *Manager) joinDir(baseName string) (fullPath string, ok bool) {
+func (m *Manager) joinDir(baseName string) (fullPath string, err error) {
 	if !utf8.ValidString(baseName) {
-		return "", false
+		return "", ErrInvalidFileName
 	}
 	if strings.TrimSpace(baseName) != baseName {
-		return "", false
+		return "", ErrInvalidFileName
 	}
 	if len(baseName) > 255 {
-		return "", false
+		return "", ErrInvalidFileName
 	}
 	// TODO: validate unicode normalization form too? Varies by platform.
 	clean := path.Clean(baseName)
@@ -147,17 +147,17 @@ func (m *Manager) joinDir(baseName string) (fullPath string, ok bool) {
 		clean == "." || clean == ".." ||
 		strings.HasSuffix(clean, deletedSuffix) ||
 		strings.HasSuffix(clean, partialSuffix) {
-		return "", false
+		return "", ErrInvalidFileName
 	}
 	for _, r := range baseName {
 		if !validFilenameRune(r) {
-			return "", false
+			return "", ErrInvalidFileName
 		}
 	}
 	if !filepath.IsLocal(baseName) {
-		return "", false
+		return "", ErrInvalidFileName
 	}
-	return filepath.Join(m.Dir, baseName), true
+	return filepath.Join(m.Dir, baseName), nil
 }
 
 // IncomingFiles returns a list of active incoming files.

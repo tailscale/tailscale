@@ -541,8 +541,7 @@ func TestHandlePeerAPI(t *testing.T) {
 				rootDir = t.TempDir()
 				if e.ph.ps.taildrop == nil {
 					e.ph.ps.taildrop = &taildrop.Manager{
-						Logf:  e.logBuf.Logf,
-						Clock: &tstest.Clock{},
+						Logf: e.logBuf.Logf,
 					}
 				}
 				e.ph.ps.taildrop.Dir = rootDir
@@ -585,9 +584,8 @@ func TestFileDeleteRace(t *testing.T) {
 			clock:          &tstest.Clock{},
 		},
 		taildrop: &taildrop.Manager{
-			Logf:  t.Logf,
-			Clock: &tstest.Clock{},
-			Dir:   dir,
+			Logf: t.Logf,
+			Dir:  dir,
 		},
 	}
 	ph := &peerAPIHandler{
