@@ -20,14 +20,12 @@ const (
 // A FQDN is a fully-qualified DNS name or name suffix.
 type FQDN string
 
-func ToFQDN(s string) (FQDN, error) {
+// NewFQDN converts a string to a FQDN that retains any leading '.' in the case of wildcards.
+func NewFQDN(s string) (FQDN, error) {
 	if len(s) == 0 || s == "." {
 		return FQDN("."), nil
 	}
 
-	if s[0] == '.' {
-		s = s[1:]
-	}
 	raw := s
 	totalLen := len(s)
 	if s[len(s)-1] == '.' {
@@ -41,6 +39,11 @@ func ToFQDN(s string) (FQDN, error) {
 
 	st := 0
 	for i := 0; i < len(s); i++ {
+		// Ignore leading '.' from wildcards for label processing
+		if i == 0 && s[i] == '.' {
+			st = i + 1
+			continue
+		}
 		if s[i] != '.' {
 			continue
 		}
@@ -63,6 +66,30 @@ func ToFQDN(s string) (FQDN, error) {
 		raw = raw + "."
 	}
 	return FQDN(raw), nil
+}
+
+// ToFQDN strips a leading '.' on a string before converting to a FQDN.
+func ToFQDN(s string) (FQDN, error) {
+	if len(s) == 0 || s == "." {
+		return FQDN("."), nil
+	}
+
+	if s[0] == '.' {
+		s = s[1:]
+	}
+	return NewFQDN(s)
+}
+
+// ToFQDNSuffix returns an FQDN with a leading '.'.
+func ToFQDNSuffix(s string) (FQDN, error) {
+	if len(s) == 0 || s == "." {
+		return FQDN("."), nil
+	}
+
+	if s[0] != '.' {
+		s = "." + s
+	}
+	return NewFQDN(s)
 }
 
 // WithTrailingDot returns f as a string, with a trailing dot.
