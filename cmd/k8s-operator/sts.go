@@ -79,6 +79,7 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	tsFirewallMode         string
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -359,6 +360,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 				},
 			},
 		})
+	}
+	if a.tsFirewallMode != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEBUG_FIREWALL_MODE",
+			Value: a.tsFirewallMode,
+		},
+		)
 	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
