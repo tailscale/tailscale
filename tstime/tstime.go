@@ -60,6 +60,46 @@ func Sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// DefaultClock is a wrapper around a Clock.
+// It uses StdClock by default if Clock is nil.
+type DefaultClock struct{ Clock }
+
+// TODO: We should make the methods of DefaultClock inlineable
+// so that we can optimize for the common case where c.Clock == nil.
+
+func (c DefaultClock) Now() time.Time {
+	if c.Clock == nil {
+		return time.Now()
+	}
+	return c.Clock.Now()
+}
+func (c DefaultClock) NewTimer(d time.Duration) (TimerController, <-chan time.Time) {
+	if c.Clock == nil {
+		t := time.NewTimer(d)
+		return t, t.C
+	}
+	return c.Clock.NewTimer(d)
+}
+func (c DefaultClock) NewTicker(d time.Duration) (TickerController, <-chan time.Time) {
+	if c.Clock == nil {
+		t := time.NewTicker(d)
+		return t, t.C
+	}
+	return c.Clock.NewTicker(d)
+}
+func (c DefaultClock) AfterFunc(d time.Duration, f func()) TimerController {
+	if c.Clock == nil {
+		return time.AfterFunc(d, f)
+	}
+	return c.Clock.AfterFunc(d, f)
+}
+func (c DefaultClock) Since(t time.Time) time.Duration {
+	if c.Clock == nil {
+		return time.Since(t)
+	}
+	return c.Clock.Since(t)
+}
+
 // Clock offers a subset of the functionality from the std/time package.
 // Normally, applications will use the StdClock implementation that calls the
 // appropriate std/time exported funcs. The advantage of using Clock is that
