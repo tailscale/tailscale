@@ -22,7 +22,7 @@ type incomingFileKey struct {
 }
 
 type incomingFile struct {
-	clock tstime.Clock
+	clock tstime.DefaultClock
 
 	started        time.Time
 	size           int64     // or -1 if unknown; never 0
@@ -62,6 +62,7 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 // The baseName must be a base filename without any slashes.
 // The length is the expected length of content to read from r,
 // it may be negative to indicate that it is unknown.
+// It returns the length of the entire file.
 //
 // If there is a failure reading from r, then the partial file is not deleted
 // for some period of time. The [Manager.PartialFiles] and [Manager.HashPartialFile]
@@ -78,9 +79,9 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	case distro.Get() == distro.Unraid && !m.DirectFileMode:
 		return 0, ErrNotAccessible
 	}
-	dstPath, ok := m.joinDir(baseName)
-	if !ok {
-		return 0, ErrInvalidFileName
+	dstPath, err := m.joinDir(baseName)
+	if err != nil {
+		return 0, err
 	}
 
 	redactAndLogError := func(action string, err error) error {

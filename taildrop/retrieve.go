@@ -167,9 +167,9 @@ func (m *Manager) DeleteFile(baseName string) error {
 	if m.DirectFileMode {
 		return errors.New("deletes not allowed in direct mode")
 	}
-	path, ok := m.joinDir(baseName)
-	if !ok {
-		return errors.New("bad filename")
+	path, err := m.joinDir(baseName)
+	if err != nil {
+		return err
 	}
 	var bo *backoff.Backoff
 	logf := m.Logf
@@ -224,9 +224,9 @@ func (m *Manager) OpenFile(baseName string) (rc io.ReadCloser, size int64, err e
 	if m.DirectFileMode {
 		return nil, 0, errors.New("opens not allowed in direct mode")
 	}
-	path, ok := m.joinDir(baseName)
-	if !ok {
-		return nil, 0, errors.New("bad filename")
+	path, err := m.joinDir(baseName)
+	if err != nil {
+		return nil, 0, err
 	}
 	if fi, err := os.Stat(path + deletedSuffix); err == nil && fi.Mode().IsRegular() {
 		tryDeleteAgain(path)
