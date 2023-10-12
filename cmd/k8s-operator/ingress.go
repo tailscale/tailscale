@@ -192,8 +192,15 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
+
+	var tlsHost string // hostname or FQDN or empty
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+		tlsHost = ing.Spec.TLS[0].Hosts[0]
+	}
 	for _, rule := range ing.Spec.Rules {
-		if rule.Host != "" {
+		// Host is optional, but if it's present it must match the TLS host
+		// otherwise we ignore the rule.
+		if rule.Host != "" && rule.Host != tlsHost {
 			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "rule with host %q ignored, unsupported", rule.Host)
 			continue
 		}
@@ -208,8 +215,8 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		tags = strings.Split(tstr, ",")
 	}
 	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
-		hostname, _, _ = strings.Cut(ing.Spec.TLS[0].Hosts[0], ".")
+	if tlsHost != "" {
+		hostname, _, _ = strings.Cut(tlsHost, ".")
 	}
 
 	sts := &tailscaleSTSConfig{
