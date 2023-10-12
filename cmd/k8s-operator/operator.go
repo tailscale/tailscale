@@ -230,6 +230,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			Client:                mgr.GetClient(),
 			logger:                zlog.Named("service-reconciler"),
 			isDefaultLoadBalancer: isDefaultLoadBalancer,
+			recorder:              eventRecorder,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)

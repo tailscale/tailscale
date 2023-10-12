@@ -82,6 +82,13 @@ type tailscaleSTSReconciler struct {
 	tsFirewallMode         string
 }
 
+func (sts tailscaleSTSReconciler) validate() error {
+	if sts.tsFirewallMode != "" && !isValidFirewallMode(sts.tsFirewallMode) {
+		return fmt.Errorf("invalid proxy firewall mode %s, valid modes are iptables, nftables or unset", sts.tsFirewallMode)
+	}
+	return nil
+}
+
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
 func (a *tailscaleSTSReconciler) IsHTTPSEnabledOnTailnet() bool {
 	return len(a.tsnetServer.CertDomains()) > 0
@@ -506,4 +513,8 @@ func nameForService(svc *corev1.Service) (string, error) {
 		return h, nil
 	}
 	return svc.Namespace + "-" + svc.Name, nil
+}
+
+func isValidFirewallMode(m string) bool {
+	return m == "auto" || m == "nftables" || m == "iptables"
 }
