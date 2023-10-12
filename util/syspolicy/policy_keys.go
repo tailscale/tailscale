@@ -9,6 +9,7 @@ const (
 	// Keys with a string value
 	ControlURL Key = "LoginURL"  // default ""; if blank, ipn uses ipn.DefaultControlURL.
 	LogTarget  Key = "LogTarget" // default ""; if blank logging uses logtail.DefaultHost.
+	Tailnet    Key = "Tailnet"   // default ""; if blank, no tailnet name is sent to the server.
 
 	// Keys with a string value that specifies an option: "always", "never", "user-decides".
 	// The default is "user-decides" unless otherwise stated.
@@ -32,7 +33,6 @@ const (
 	// The default is 0 unless otherwise stated.
 	LogSCMInteractions      Key = "LogSCMInteractions"
 	FlushDNSOnSessionUnlock Key = "FlushDNSOnSessionUnlock"
-
 	// Boolean key that indicates if posture checking is enabled and the client shall gather
 	// posture data.
 	PostureChecking Key = "PostureChecking"

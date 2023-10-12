@@ -1100,6 +1100,17 @@ type RegisterRequest struct {
 	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
 	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
 	Signature     []byte        `json:",omitempty"` // as described by SignatureType
+
+	// Tailnet is an optional identifier specifying the name of the recommended or required
+	// network that the node should join. Its exact form should not be depended on; new
+	// forms are coming later. The identifier is generally a domain name (for an organization)
+	// or e-mail address (for a personal account on a shared e-mail provider). It is the same name
+	// used by the API, as described in /api.md#tailnet.
+	// If Tailnet begins with the prefix "required:" then the server should prevent logging in to a different
+	// network than the one specified. Otherwise, the server should recommend the specified network
+	// but still permit logging in to other networks.
+	// If empty, no recommendation is offered to the server and the login page should show all options.
+	Tailnet string `json:",omitempty"`
 }
 
 // RegisterResponse is returned by the server in response to a RegisterRequest.
