@@ -194,7 +194,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.devMode {
-		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
+		s.lc.IncrementCounter(r.Context(), "web_client_page_load", 1)
 	}
 	s.assetsHandler.ServeHTTP(w, r)
 }
