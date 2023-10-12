@@ -451,7 +451,7 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 						defer cancel()
-						pair, err := b.GetCertPEM(ctx, sni, false)
+						pair, err := b.GetCertPEM(ctx, sni)
 						if err != nil {
 							return nil, err
 						}
@@ -757,7 +757,7 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHe
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		pair, err := b.GetCertPEM(ctx, hi.ServerName, false)
+		pair, err := b.GetCertPEM(ctx, hi.ServerName)
 		if err != nil {
 			return nil, err
 		}
