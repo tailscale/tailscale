@@ -21,11 +21,11 @@ import (
 
 // HasFilesWaiting reports whether any files are buffered in [Handler.Dir].
 // This always returns false when [Handler.DirectFileMode] is false.
-func (s *Handler) HasFilesWaiting() bool {
-	if s == nil || s.Dir == "" || s.DirectFileMode {
+func (m *Manager) HasFilesWaiting() bool {
+	if m == nil || m.Dir == "" || m.DirectFileMode {
 		return false
 	}
-	if s.knownEmpty.Load() {
+	if m.knownEmpty.Load() {
 		// Optimization: this is usually empty, so avoid opening
 		// the directory and checking. We can't cache the actual
 		// has-files-or-not values as the macOS/iOS client might
@@ -33,7 +33,7 @@ func (s *Handler) HasFilesWaiting() bool {
 		// keep this negative cache.
 		return false
 	}
-	f, err := os.Open(s.Dir)
+	f, err := os.Open(m.Dir)
 	if err != nil {
 		return false
 	}
@@ -51,22 +51,22 @@ func (s *Handler) HasFilesWaiting() bool {
 				// as the OS may return "foo.jpg.deleted" before "foo.jpg"
 				// and we don't want to delete the ".deleted" file before
 				// enumerating to the "foo.jpg" file.
-				defer tryDeleteAgain(filepath.Join(s.Dir, name))
+				defer tryDeleteAgain(filepath.Join(m.Dir, name))
 				continue
 			}
 			if de.Type().IsRegular() {
-				_, err := os.Stat(filepath.Join(s.Dir, name+deletedSuffix))
+				_, err := os.Stat(filepath.Join(m.Dir, name+deletedSuffix))
 				if os.IsNotExist(err) {
 					return true
 				}
 				if err == nil {
-					tryDeleteAgain(filepath.Join(s.Dir, name))
+					tryDeleteAgain(filepath.Join(m.Dir, name))
 					continue
 				}
 			}
 		}
 		if err == io.EOF {
-			s.knownEmpty.Store(true)
+			m.knownEmpty.Store(true)
 		}
 		if err != nil {
 			break
@@ -78,17 +78,14 @@ func (s *Handler) HasFilesWaiting() bool {
 // WaitingFiles returns the list of files that have been sent by a
 // peer that are waiting in [Handler.Dir].
 // This always returns nil when [Handler.DirectFileMode] is false.
-func (s *Handler) WaitingFiles() (ret []apitype.WaitingFile, err error) {
-	if s == nil {
-		return nil, errNilHandler
+func (m *Manager) WaitingFiles() (ret []apitype.WaitingFile, err error) {
+	if m == nil || m.Dir == "" {
+		return nil, ErrNoTaildrop
 	}
-	if s.Dir == "" {
-		return nil, errNoTaildrop
-	}
-	if s.DirectFileMode {
+	if m.DirectFileMode {
 		return nil, nil
 	}
-	f, err := os.Open(s.Dir)
+	f, err := os.Open(m.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +137,7 @@ func (s *Handler) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 		// Maybe Windows is done virus scanning the file we tried
 		// to delete a long time ago and will let us delete it now.
 		for name := range deleted {
-			tryDeleteAgain(filepath.Join(s.Dir, name))
+			tryDeleteAgain(filepath.Join(m.Dir, name))
 		}
 	}
 	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
@@ -163,23 +160,20 @@ func tryDeleteAgain(fullPath string) {
 
 // DeleteFile deletes a file of the given baseName from [Handler.Dir].
 // This method is only allowed when [Handler.DirectFileMode] is false.
-func (s *Handler) DeleteFile(baseName string) error {
-	if s == nil {
-		return errNilHandler
+func (m *Manager) DeleteFile(baseName string) error {
+	if m == nil || m.Dir == "" {
+		return ErrNoTaildrop
 	}
-	if s.Dir == "" {
-		return errNoTaildrop
-	}
-	if s.DirectFileMode {
+	if m.DirectFileMode {
 		return errors.New("deletes not allowed in direct mode")
 	}
-	path, ok := s.diskPath(baseName)
+	path, ok := m.joinDir(baseName)
 	if !ok {
 		return errors.New("bad filename")
 	}
 	var bo *backoff.Backoff
-	logf := s.Logf
-	t0 := s.Clock.Now()
+	logf := m.Logf
+	t0 := m.Clock.Now()
 	for {
 		err := os.Remove(path)
 		if err != nil && !os.IsNotExist(err) {
@@ -198,7 +192,7 @@ func (s *Handler) DeleteFile(baseName string) error {
 				if bo == nil {
 					bo = backoff.NewBackoff("delete-retry", logf, 1*time.Second)
 				}
-				if s.Clock.Since(t0) < 5*time.Second {
+				if m.Clock.Since(t0) < 5*time.Second {
 					bo.BackOff(context.Background(), err)
 					continue
 				}
@@ -223,17 +217,14 @@ func touchFile(path string) error {
 
 // OpenFile opens a file of the given baseName from [Handler.Dir].
 // This method is only allowed when [Handler.DirectFileMode] is false.
-func (s *Handler) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
-	if s == nil {
-		return nil, 0, errNilHandler
+func (m *Manager) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
+	if m == nil || m.Dir == "" {
+		return nil, 0, ErrNoTaildrop
 	}
-	if s.Dir == "" {
-		return nil, 0, errNoTaildrop
-	}
-	if s.DirectFileMode {
+	if m.DirectFileMode {
 		return nil, 0, errors.New("opens not allowed in direct mode")
 	}
-	path, ok := s.diskPath(baseName)
+	path, ok := m.joinDir(baseName)
 	if !ok {
 		return nil, 0, errors.New("bad filename")
 	}
