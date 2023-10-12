@@ -16,7 +16,7 @@ import (
 // Tests "foo.jpg.deleted" marks (for Windows).
 func TestDeletedMarkers(t *testing.T) {
 	dir := t.TempDir()
-	h := &Handler{Dir: dir}
+	h := &Manager{Dir: dir}
 
 	nothingWaiting := func() {
 		t.Helper()
@@ -151,5 +151,34 @@ func TestRedactErr(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestNextFilename(t *testing.T) {
+	tests := []struct {
+		in    string
+		want  string
+		want2 string
+	}{
+		{"foo", "foo (1)", "foo (2)"},
+		{"foo(1)", "foo(1) (1)", "foo(1) (2)"},
+		{"foo.tar", "foo (1).tar", "foo (2).tar"},
+		{"foo.tar.gz", "foo (1).tar.gz", "foo (2).tar.gz"},
+		{".bashrc", ".bashrc (1)", ".bashrc (2)"},
+		{"fizz buzz.torrent", "fizz buzz (1).torrent", "fizz buzz (2).torrent"},
+		{"rawr 2023.12.15.txt", "rawr 2023.12.15 (1).txt", "rawr 2023.12.15 (2).txt"},
+		{"IMG_7934.JPEG", "IMG_7934 (1).JPEG", "IMG_7934 (2).JPEG"},
+		{"my song.mp3", "my song (1).mp3", "my song (2).mp3"},
+		{"archive.7z", "archive (1).7z", "archive (2).7z"},
+		{"foo/bar/fizz", "foo/bar/fizz (1)", "foo/bar/fizz (2)"},
+	}
+
+	for _, tt := range tests {
+		if got := NextFilename(tt.in); got != tt.want {
+			t.Errorf("NextFilename(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if got2 := NextFilename(tt.want); got2 != tt.want2 {
+			t.Errorf("NextFilename(%q) = %q, want %q", tt.want, got2, tt.want2)
+		}
 	}
 }

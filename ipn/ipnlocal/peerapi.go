@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime"
 	"slices"
@@ -53,7 +54,7 @@ type peerAPIServer struct {
 	b        *LocalBackend
 	resolver *resolver.Resolver
 
-	taildrop *taildrop.Handler
+	taildrop *taildrop.Manager
 }
 
 var (
@@ -634,11 +635,45 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file sharing not enabled by Tailscale admin", http.StatusForbidden)
 		return
 	}
+	if r.Method != "PUT" {
+		http.Error(w, "expected method PUT", http.StatusMethodNotAllowed)
+		return
+	}
+	rawPath := r.URL.EscapedPath()
+	suffix, ok := strings.CutPrefix(rawPath, "/v0/put/")
+	if !ok {
+		http.Error(w, "misconfigured internals", http.StatusInternalServerError)
+		return
+	}
+	if suffix == "" {
+		http.Error(w, "empty filename", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(suffix, "/") {
+		http.Error(w, "directories not supported", http.StatusBadRequest)
+		return
+	}
+	baseName, err := url.PathUnescape(suffix)
+	if err != nil {
+		http.Error(w, "bad path encoding", http.StatusBadRequest)
+		return
+	}
 	t0 := h.ps.b.clock.Now()
-	n, ok := h.ps.taildrop.HandlePut(w, r)
-	if ok {
+	// TODO(rhea,joetsai): Set the client ID and starting offset.
+	n, err := h.ps.taildrop.PutFile("", baseName, r.Body, 0, r.ContentLength)
+	switch err {
+	case nil:
 		d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
 		h.logf("got put of %s in %v from %v/%v", approxSize(n), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
+		io.WriteString(w, "{}\n")
+	case taildrop.ErrNoTaildrop:
+		http.Error(w, err.Error(), http.StatusForbidden)
+	case taildrop.ErrInvalidFileName:
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case taildrop.ErrFileExists:
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 

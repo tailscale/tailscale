@@ -15,8 +15,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
@@ -28,8 +30,20 @@ import (
 	"tailscale.com/util/multierr"
 )
 
-// Handler manages the state for receiving and managing taildropped files.
-type Handler struct {
+// ClientID is an opaque identifier for file resumption.
+// A client can only list and resume partial files for its own ID.
+// It must contain any filesystem specific characters (e.g., slashes).
+type ClientID string // e.g., "n12345CNTRL"
+
+func (id ClientID) partialSuffix() string {
+	if id == "" {
+		return partialSuffix
+	}
+	return "." + string(id) + partialSuffix // e.g., ".n12345CNTRL.partial"
+}
+
+// Manager manages the state for receiving and managing taildropped files.
+type Manager struct {
 	Logf  logger.Logf
 	Clock tstime.Clock
 
@@ -54,6 +68,11 @@ type Handler struct {
 
 	// AvoidFinalRename specifies whether in DirectFileMode
 	// we should avoid renaming "foo.jpg.partial" to "foo.jpg" after reception.
+	//
+	// TODO(joetsai,rhea): Delete this. This is currently depended upon
+	// in the Apple platforms since it violates the abstraction layer
+	// and directly assumes how taildrop represents partial files.
+	// Right now, file resumption does not work on Apple.
 	AvoidFinalRename bool
 
 	// SendFileNotify is called periodically while a file is actively
@@ -64,12 +83,17 @@ type Handler struct {
 
 	knownEmpty atomic.Bool
 
-	incomingFiles syncs.Map[*incomingFile, struct{}]
+	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
+
+	// renameMu is used to protect os.Rename calls so that they are atomic.
+	renameMu sync.Mutex
 }
 
 var (
-	errNilHandler = errors.New("handler unavailable; not listening")
-	errNoTaildrop = errors.New("Taildrop disabled; no storage directory")
+	ErrNoTaildrop      = errors.New("Taildrop disabled; no storage directory")
+	ErrInvalidFileName = errors.New("invalid filename")
+	ErrFileExists      = errors.New("file already exists")
+	ErrNotAccessible   = errors.New("Taildrop folder not configured or accessible")
 )
 
 const (
@@ -107,7 +131,7 @@ func validFilenameRune(r rune) bool {
 	return unicode.IsPrint(r)
 }
 
-func (s *Handler) diskPath(baseName string) (fullPath string, ok bool) {
+func (m *Manager) joinDir(baseName string) (fullPath string, ok bool) {
 	if !utf8.ValidString(baseName) {
 		return "", false
 	}
@@ -133,19 +157,20 @@ func (s *Handler) diskPath(baseName string) (fullPath string, ok bool) {
 	if !filepath.IsLocal(baseName) {
 		return "", false
 	}
-	return filepath.Join(s.Dir, baseName), true
+	return filepath.Join(m.Dir, baseName), true
 }
 
-func (s *Handler) IncomingFiles() []ipn.PartialFile {
+// IncomingFiles returns a list of active incoming files.
+func (m *Manager) IncomingFiles() []ipn.PartialFile {
 	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
 	// in JSON to clients. They distinguish between empty and non-nil
 	// to know whether a Notify should be able about files.
 	files := make([]ipn.PartialFile, 0)
-	s.incomingFiles.Range(func(f *incomingFile, _ struct{}) bool {
+	m.incomingFiles.Range(func(k incomingFileKey, f *incomingFile) bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		files = append(files, ipn.PartialFile{
-			Name:         f.name,
+			Name:         k.name,
 			Started:      f.started,
 			DeclaredSize: f.size,
 			Received:     f.copied,
@@ -219,4 +244,27 @@ func redactErr(root error) error {
 		s = strings.ReplaceAll(s, toRedact, redactString(toRedact))
 	}
 	return &redactedErr{msg: s, inner: root}
+}
+
+var (
+	rxExtensionSuffix = regexp.MustCompile(`(\.[a-zA-Z0-9]{0,3}[a-zA-Z][a-zA-Z0-9]{0,3})*$`)
+	rxNumberSuffix    = regexp.MustCompile(` \([0-9]+\)`)
+)
+
+// NextFilename returns the next filename in a sequence.
+// It is used for construction a new filename if there is a conflict.
+//
+// For example, "Foo.jpg" becomes "Foo (1).jpg" and
+// "Foo (1).jpg" becomes "Foo (2).jpg".
+func NextFilename(name string) string {
+	ext := rxExtensionSuffix.FindString(strings.TrimPrefix(name, "."))
+	name = strings.TrimSuffix(name, ext)
+	var n uint64
+	if rxNumberSuffix.MatchString(name) {
+		i := strings.LastIndex(name, " (")
+		if n, _ = strconv.ParseUint(name[i+len("( "):len(name)-len(")")], 10, 64); n > 0 {
+			name = name[:i]
+		}
+	}
+	return name + " (" + strconv.FormatUint(n+1, 10) + ")" + ext
 }
