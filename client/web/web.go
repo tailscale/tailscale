@@ -66,6 +66,11 @@ const (
 	sessionCookieExpiry = time.Hour * 24 * 30 // 30 days
 )
 
+var (
+	exitNodeRouteV4 = netip.MustParsePrefix("0.0.0.0/0")
+	exitNodeRouteV6 = netip.MustParsePrefix("::/0")
+)
+
 // browserSession holds data about a user's browser session
 // on the full management web client.
 type browserSession struct {
@@ -189,7 +194,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.devMode {
-		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
+		s.lc.IncrementCounter(r.Context(), "web_client_page_load", 1)
 	}
 	s.assetsHandler.ServeHTTP(w, r)
 }
@@ -427,8 +432,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		IPNVersion:  versionShort,
 		DebugMode:   s.tsDebugMode,
 	}
-	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
-	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
 			data.AdvertiseExitNode = true
@@ -471,6 +474,22 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		json.NewEncoder(w).Encode(mi{"error": err.Error()})
 		return
+	}
+
+	prefs, err := s.lc.GetPrefs(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	isCurrentlyExitNode := slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV4) || slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV6)
+
+	if postData.AdvertiseExitNode != isCurrentlyExitNode {
+		if postData.AdvertiseExitNode {
+			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_enable", 1)
+		} else {
+			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_disable", 1)
+		}
 	}
 
 	routes, err := netutil.CalcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
