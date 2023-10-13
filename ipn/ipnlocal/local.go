@@ -3771,6 +3771,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
+	hi.AllowsUpdate = hi.AllowsUpdate || prefs.AutoUpdate().Apply
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
