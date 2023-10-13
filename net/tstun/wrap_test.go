@@ -178,6 +178,7 @@ func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *Wrapper
 	} else {
 		tun.disableFilter = true
 	}
+	tun.Start()
 	return chtun, tun
 }
 
