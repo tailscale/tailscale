@@ -72,8 +72,8 @@ func hexAppendEncode(dst, src []byte) []byte {
 // PartialFiles returns a list of partial files in [Handler.Dir]
 // that were sent (or is actively being sent) by the provided id.
 func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
-	if m.Dir == "" {
-		return ret, ErrNoTaildrop
+	if m == nil || m.Dir == "" {
+		return nil, ErrNoTaildrop
 	}
 	if m.DirectFileMode && m.AvoidFinalRename {
 		return nil, nil // resuming is not supported for users that peek at our file structure
@@ -109,7 +109,7 @@ func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
 // If [FileHashes.Length] is less than length and no error occurred,
 // then it implies that all remaining content in the file has been hashed.
 func (m *Manager) HashPartialFile(id ClientID, baseName string, offset, length int64) (FileChecksums, error) {
-	if m.Dir == "" {
+	if m == nil || m.Dir == "" {
 		return FileChecksums{}, ErrNoTaildrop
 	}
 	if m.DirectFileMode && m.AvoidFinalRename {
@@ -138,7 +138,10 @@ func (m *Manager) HashPartialFile(id ClientID, baseName string, offset, length i
 		BlockSize: blockSize,
 	}
 	b := make([]byte, blockSize) // TODO: Pool this?
-	r := io.LimitReader(f, length)
+	r := io.Reader(f)
+	if length >= 0 {
+		r = io.LimitReader(f, length)
+	}
 	for {
 		switch n, err := io.ReadFull(r, b); {
 		case err != nil && err != io.EOF && err != io.ErrUnexpectedEOF:
