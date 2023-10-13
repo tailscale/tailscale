@@ -142,6 +142,16 @@ func findGo() (string, error) {
 	// 2. Look for a go binary in runtime.GOROOT()/bin if runtime.GOROOT() is non-empty.
 	// 3. Look for a go binary in $PATH.
 
+	// For tests we want to run as root on GitHub actions, we run with -exec=sudo,
+	// but that results in this test running with a different PATH and picking the
+	// wrong Go. So hard code the GitHub Actions case.
+	if os.Getuid() == 0 && os.Getenv("GITHUB_ACTIONS") == "true" {
+		const sudoGithubGo = "/home/runner/.cache/tailscale-go/bin/go"
+		if _, err := os.Stat(sudoGithubGo); err == nil {
+			return sudoGithubGo, nil
+		}
+	}
+
 	paths := strings.FieldsFunc(os.Getenv("PATH"), func(r rune) bool { return os.IsPathSeparator(uint8(r)) })
 	if len(paths) > 0 {
 		candidate := filepath.Join(paths[0], "go"+exe())

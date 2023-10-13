@@ -73,11 +73,15 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 // It calls close(ch) when it's done.
 func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
-	args := []string{"test", "-json", pt.Pattern}
+	args := []string{"test", "--json"}
+	if *flagSudo {
+		args = append(args, "--exec", "sudo -E")
+	}
+	args = append(args, pt.Pattern)
 	args = append(args, otherArgs...)
 	if len(pt.Tests) > 0 {
 		runArg := strings.Join(pt.Tests, "|")
-		args = append(args, "-run", runArg)
+		args = append(args, "--run", runArg)
 	}
 	if debug {
 		fmt.Println("running", strings.Join(args, " "))
@@ -177,6 +181,11 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 	return nil
 }
 
+var (
+	flagVerbose = flag.Bool("v", false, "verbose")
+	flagSudo    = flag.Bool("sudo", false, "run tests with -exec=sudo")
+)
+
 func main() {
 	ctx := context.Background()
 
@@ -187,7 +196,6 @@ func main() {
 	// We run `go test -json` which returns the same information as `go test -v`,
 	// but in a machine-readable format. So this flag is only for testwrapper's
 	// output.
-	v := flag.Bool("v", false, "verbose")
 
 	flag.Usage = func() {
 		fmt.Println("usage: testwrapper [testwrapper-flags] [pattern] [build/test flags & test binary flags]")
@@ -285,7 +293,7 @@ func main() {
 					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt)
 					continue
 				}
-				if *v || tr.outcome == "fail" {
+				if *flagVerbose || tr.outcome == "fail" {
 					io.Copy(os.Stdout, &tr.logs)
 				}
 				if tr.outcome != "fail" {

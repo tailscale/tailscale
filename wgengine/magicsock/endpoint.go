@@ -484,9 +484,9 @@ func (p *pingResultAndCallback) reply() bool {
 	return p != nil && p.taken.CompareAndSwap(false, true)
 }
 
-// discoPing starts a disc-level ping for the "tailscale ping" command (or other
+// discoPing starts a disco-level ping for the "tailscale ping" command (or other
 // callers, such as c2n). res is value to call cb with, already partially
-// filled. cb must be called at most once. Once called, ownership of res passes to db.
+// filled. cb must be called at most once. Once called, ownership of res passes to cb.
 func (de *endpoint) discoPing(res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
