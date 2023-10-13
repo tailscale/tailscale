@@ -68,6 +68,27 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+// Tests that tailscaled starts up in TUN mode, and also without data races:
+// https://github.com/tailscale/tailscale/issues/7894
+func TestTUNMode(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("skipping when not root")
+	}
+	t.Parallel()
+	env := newTestEnv(t)
+	env.tunMode = true
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
+
+	d1.MustCleanShutdown(t)
+}
+
 func TestOneNodeUpNoAuth(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
@@ -808,9 +829,10 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
-	t      testing.TB
-	cli    string
-	daemon string
+	t       testing.TB
+	tunMode bool
+	cli     string
+	daemon  string
 
 	LogCatcher       *LogCatcher
 	LogCatcherServer *httptest.Server
@@ -899,12 +921,25 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 		sockFile = filepath.Join(os.TempDir(), rands.HexString(8)+".sock")
 		t.Cleanup(func() { os.Remove(sockFile) })
 	}
-	return &testNode{
+	n := &testNode{
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
 		stateFile: filepath.Join(dir, "tailscale.state"),
 	}
+
+	// Look for a data race. Once we see the start marker, start logging the rest.
+	var sawRace bool
+	n.addLogLineHook(func(line []byte) {
+		if mem.Contains(mem.B(line), mem.S("WARNING: DATA RACE")) {
+			sawRace = true
+		}
+		if sawRace {
+			t.Logf("%s", line)
+		}
+	})
+
+	return n
 }
 
 func (n *testNode) diskPrefs() *ipn.Prefs {
@@ -963,7 +998,7 @@ func (n *testNode) socks5AddrChan() <-chan string {
 		if i == -1 {
 			return
 		}
-		addr := string(line)[i+len(sub):]
+		addr := strings.TrimSpace(string(line)[i+len(sub):])
 		select {
 		case ch <- addr:
 		default:
@@ -1010,11 +1045,10 @@ func (op *nodeOutputParser) parseLines() {
 		}
 		line := buf[:nl+1]
 		buf = buf[nl+1:]
-		lineTrim := bytes.TrimSpace(line)
 
 		n.mu.Lock()
 		for _, f := range n.onLogLine {
-			f(lineTrim)
+			f(line)
 		}
 		n.mu.Unlock()
 	}
@@ -1048,14 +1082,19 @@ func (n *testNode) StartDaemon() *Daemon {
 
 func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	t := n.env.t
-	cmd := exec.Command(n.env.daemon,
-		"--tun=userspace-networking",
+	cmd := exec.Command(n.env.daemon)
+	cmd.Args = append(cmd.Args,
 		"--state="+n.stateFile,
 		"--socket="+n.sockFile,
 		"--socks5-server=localhost:0",
 	)
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
+	}
+	if !n.env.tunMode {
+		cmd.Args = append(cmd.Args,
+			"--tun=userspace-networking",
+		)
 	}
 	cmd.Env = append(os.Environ(),
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
@@ -1067,10 +1106,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
 	)
 	if version.IsRace() {
-		const knownBroken = true // TODO(bradfitz,maisem): enable this once we fix all the races :(
-		if !knownBroken {
-			cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
-		}
+		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
 	}
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
@@ -1143,11 +1179,10 @@ func (n *testNode) AwaitListening() {
 	s := safesocket.DefaultConnectionStrategy(n.sockFile)
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
 		c, err := safesocket.Connect(s)
-		if err != nil {
-			return err
+		if err == nil {
+			c.Close()
 		}
-		c.Close()
-		return nil
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1276,8 @@ func (n *testNode) AwaitNeedsLogin() {
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
 func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
-	cmd := exec.Command(n.env.cli, "--socket="+n.sockFile)
+	cmd := exec.Command(n.env.cli)
+	cmd.Args = append(cmd.Args, "--socket="+n.sockFile)
 	cmd.Args = append(cmd.Args, arg...)
 	cmd.Dir = n.dir
 	cmd.Env = append(os.Environ(),
