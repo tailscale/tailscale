@@ -279,23 +279,23 @@ func (h *Handler) serveIDToken(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := json.Marshal(req)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	httpReq, err := http.NewRequest("POST", "https://unused/machine/id-token", bytes.NewReader(b))
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	resp, err := h.b.DoNoiseRequest(httpReq)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -431,17 +431,17 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 			var err error
 			ipp, err = netip.ParseAddrPort(v)
 			if err != nil {
-				http.Error(w, "invalid 'addr' parameter", 400)
+				http.Error(w, "invalid 'addr' parameter", http.StatusBadRequest)
 				return
 			}
 		}
 	} else {
-		http.Error(w, "missing 'addr' parameter", 400)
+		http.Error(w, "missing 'addr' parameter", http.StatusBadRequest)
 		return
 	}
 	n, u, ok := b.WhoIs(ipp)
 	if !ok {
-		http.Error(w, "no match for IP:port", 404)
+		http.Error(w, "no match for IP:port", http.StatusNotFound)
 		return
 	}
 	res := &apitype.WhoIsResponse{
@@ -453,7 +453,7 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 	}
 	j, err := json.MarshalIndent(res, "", "\t")
 	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -590,7 +590,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("unknown action %q", action)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
@@ -607,7 +607,7 @@ func (h *Handler) serveDevSetStateStore(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.b.SetDevStateStore(r.FormValue("key"), r.FormValue("value")); err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
@@ -937,18 +937,18 @@ func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.R
 
 	ipStr := r.FormValue("ip")
 	if ipStr == "" {
-		http.Error(w, "missing 'ip' parameter", 400)
+		http.Error(w, "missing 'ip' parameter", http.StatusBadRequest)
 		return
 	}
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		http.Error(w, "invalid IP", 400)
+		http.Error(w, "invalid IP", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	chs, err := h.b.GetPeerEndpointChanges(r.Context(), ip)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -1025,7 +1025,7 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if r.Method != "POST" {
-		http.Error(w, "want POST", 400)
+		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
 	h.b.StartLoginInteractive()
@@ -1039,7 +1039,7 @@ func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != "POST" {
-		http.Error(w, "want POST", 400)
+		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
 	var o ipn.Options
@@ -1062,7 +1062,7 @@ func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != "POST" {
-		http.Error(w, "want POST", 400)
+		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
 	err := h.b.Logout(r.Context())
@@ -1070,7 +1070,7 @@ func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	http.Error(w, err.Error(), 500)
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
@@ -1087,7 +1087,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		}
 		mp := new(ipn.MaskedPrefs)
 		if err := json.NewDecoder(r.Body).Decode(mp); err != nil {
-			http.Error(w, err.Error(), 400)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		var err error
@@ -1125,7 +1125,7 @@ func (h *Handler) serveCheckPrefs(w http.ResponseWriter, r *http.Request) {
 	}
 	p := new(ipn.Prefs)
 	if err := json.NewDecoder(r.Body).Decode(p); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	err := h.b.CheckPrefs(p)
@@ -1149,7 +1149,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if suffix == "" {
 		if r.Method != "GET" {
-			http.Error(w, "want GET to list files", 400)
+			http.Error(w, "want GET to list files", http.StatusBadRequest)
 			return
 		}
 		ctx := r.Context()
@@ -1166,7 +1166,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		wfs, err := h.b.AwaitWaitingFiles(ctx)
 		if err != nil && ctx.Err() == nil {
-			http.Error(w, err.Error(), 500)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1175,12 +1175,12 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	name, err := url.PathUnescape(suffix)
 	if err != nil {
-		http.Error(w, "bad filename", 400)
+		http.Error(w, "bad filename", http.StatusBadRequest)
 		return
 	}
 	if r.Method == "DELETE" {
 		if err := h.b.DeleteFile(name); err != nil {
-			http.Error(w, err.Error(), 500)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -1188,7 +1188,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	rc, size, err := h.b.OpenFile(name)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rc.Close()
@@ -1202,7 +1202,7 @@ func writeErrorJSON(w http.ResponseWriter, err error) {
 		err = errors.New("unexpected nil error")
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
+	w.WriteHeader(http.StatusInternalServerError)
 	type E struct {
 		Error string `json:"error"`
 	}
@@ -1215,7 +1215,7 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != "GET" {
-		http.Error(w, "want GET to list targets", 400)
+		http.Error(w, "want GET to list targets", http.StatusBadRequest)
 		return
 	}
 	fts, err := h.b.FileTargets()
@@ -1255,12 +1255,12 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != "PUT" {
-		http.Error(w, "want PUT to put file", 400)
+		http.Error(w, "want PUT to put file", http.StatusBadRequest)
 		return
 	}
 	fts, err := h.b.FileTargets()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -1271,7 +1271,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	}
 	stableIDStr, filenameEscaped, ok := strings.Cut(upath, "/")
 	if !ok {
-		http.Error(w, "bogus URL", 400)
+		http.Error(w, "bogus URL", http.StatusBadRequest)
 		return
 	}
 	stableID := tailcfg.StableNodeID(stableIDStr)
@@ -1284,17 +1284,17 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ft == nil {
-		http.Error(w, "node not found", 404)
+		http.Error(w, "node not found", http.StatusNotFound)
 		return
 	}
 	dstURL, err := url.Parse(ft.PeerAPIURL)
 	if err != nil {
-		http.Error(w, "bogus peer URL", 500)
+		http.Error(w, "bogus peer URL", http.StatusInternalServerError)
 		return
 	}
 	outReq, err := http.NewRequestWithContext(r.Context(), "PUT", "http://peer/v0/put/"+filenameEscaped, r.Body)
 	if err != nil {
-		http.Error(w, "bogus outreq", 500)
+		http.Error(w, "bogus outreq", http.StatusInternalServerError)
 		return
 	}
 	outReq.ContentLength = r.ContentLength
@@ -1310,7 +1310,7 @@ func (h *Handler) serveSetDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != "POST" {
-		http.Error(w, "want POST", 400)
+		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -1325,7 +1325,7 @@ func (h *Handler) serveSetDNS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
-		http.Error(w, "want GET", 400)
+		http.Error(w, "want GET", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1370,22 +1370,22 @@ func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if r.Method != "POST" {
-		http.Error(w, "want POST", 400)
+		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
 	ipStr := r.FormValue("ip")
 	if ipStr == "" {
-		http.Error(w, "missing 'ip' parameter", 400)
+		http.Error(w, "missing 'ip' parameter", http.StatusBadRequest)
 		return
 	}
 	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		http.Error(w, "invalid IP", 400)
+		http.Error(w, "invalid IP", http.StatusBadRequest)
 		return
 	}
 	pingTypeStr := r.FormValue("type")
 	if pingTypeStr == "" {
-		http.Error(w, "missing 'type' parameter", 400)
+		http.Error(w, "missing 'type' parameter", http.StatusBadRequest)
 		return
 	}
 	size := 0
@@ -1393,15 +1393,15 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 	if sizeStr != "" {
 		size, err = strconv.Atoi(sizeStr)
 		if err != nil {
-			http.Error(w, "invalid 'size' parameter", 400)
+			http.Error(w, "invalid 'size' parameter", http.StatusBadRequest)
 			return
 		}
 		if size != 0 && tailcfg.PingType(pingTypeStr) != tailcfg.PingDisco {
-			http.Error(w, "'size' parameter is only supported with disco pings", 400)
+			http.Error(w, "'size' parameter is only supported with disco pings", http.StatusBadRequest)
 			return
 		}
 		if size > magicsock.MaxDiscoPingSize {
-			http.Error(w, fmt.Sprintf("maximum value for 'size' is %v", magicsock.MaxDiscoPingSize), 400)
+			http.Error(w, fmt.Sprintf("maximum value for 'size' is %v", magicsock.MaxDiscoPingSize), http.StatusBadRequest)
 			return
 		}
 	}
@@ -1482,7 +1482,7 @@ func (h *Handler) serveSetPushDeviceToken(w http.ResponseWriter, r *http.Request
 	}
 	var params apitype.SetPushDeviceTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	hostinfo.SetPushDeviceToken(params.PushDeviceToken)
@@ -1503,7 +1503,7 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 
 	var clientMetrics []clientMetricJSON
 	if err := json.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -1515,7 +1515,7 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 			metric.Add(int64(m.Value))
 		} else {
 			if clientmetric.HasPublished(m.Name) {
-				http.Error(w, "Already have a metric named "+m.Name, 400)
+				http.Error(w, "Already have a metric named "+m.Name, http.StatusBadRequest)
 				return
 			}
 			var metric *clientmetric.Metric
@@ -1525,7 +1525,7 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 			case "gauge":
 				metric = clientmetric.NewGauge(m.Name)
 			default:
-				http.Error(w, "Unknown metric type "+m.Type, 400)
+				http.Error(w, "Unknown metric type "+m.Type, http.StatusBadRequest)
 				return
 			}
 			metrics[m.Name] = metric
@@ -1549,7 +1549,7 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 
 	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
 	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1601,7 +1601,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 	}
 	var req initRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -1612,7 +1612,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 
 	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
 	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1635,7 +1635,7 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	}
 	var req modifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -1695,14 +1695,14 @@ func (h *Handler) serveTKAVerifySigningDeeplink(w http.ResponseWriter, r *http.R
 	}
 	var req verifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON for verifyRequest body", 400)
+		http.Error(w, "invalid JSON for verifyRequest body", http.StatusBadRequest)
 		return
 	}
 
 	res := h.b.NetworkLockVerifySigningDeeplink(req.URL)
 	j, err := json.MarshalIndent(res, "", "\t")
 	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1722,7 +1722,7 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 	body := io.LimitReader(r.Body, 1024*1024)
 	secret, err := io.ReadAll(body)
 	if err != nil {
-		http.Error(w, "reading secret", 400)
+		http.Error(w, "reading secret", http.StatusBadRequest)
 		return
 	}
 
@@ -1746,7 +1746,7 @@ func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
 	// Require a JSON stanza for the body as an additional CSRF protection.
 	var req struct{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -1781,7 +1781,7 @@ func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
 
 	j, err := json.MarshalIndent(updates, "", "\t")
 	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1844,7 +1844,7 @@ func (h *Handler) serveTKAGenerateRecoveryAUM(w http.ResponseWriter, r *http.Req
 
 	res, err := h.b.NetworkLockGenerateRecoveryAUM(req.Keys, forkFrom)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -2099,7 +2099,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 
 	var logRequest logRequestJSON
 	if err := json.NewDecoder(r.Body).Decode(&logRequest); err != nil {
-		http.Error(w, "invalid JSON body", 400)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 

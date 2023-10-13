@@ -747,7 +747,7 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 	}
 	dh := health.DebugHandler("dnsfwd")
 	if dh == nil {
-		http.Error(w, "not wired up", 500)
+		http.Error(w, "not wired up", http.StatusInternalServerError)
 		return
 	}
 	dh.ServeHTTP(w, r)
@@ -885,9 +885,9 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		h.logf("handleDNS fwd error: %v", err)
 		if err := ctx.Err(); err != nil {
-			http.Error(w, err.Error(), 500)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		} else {
-			http.Error(w, "DNS forwarding error", 500)
+			http.Error(w, "DNS forwarding error", http.StatusInternalServerError)
 		}
 		return
 	}
