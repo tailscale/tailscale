@@ -41,6 +41,7 @@ import (
 	"tailscale.com/taildrop"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/httphdr"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -303,6 +304,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'; style-src 'unsafe-inline'`)
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+	}
+	if strings.HasPrefix(r.URL.Path, "/v0/partial-files/") {
+		h.handlePartialFileGet(w, r)
+		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
 		metricPutCalls.Add(1)
@@ -626,9 +631,71 @@ func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
 	return h.ps.b.PeerCaps(h.remoteAddr.Addr()).HasCapability(wantCap)
 }
 
+var errMisconfiguredInternals = errors.New("misconfigured internals")
+
+func (h *peerAPIHandler) extractBaseName(rawPath, prefix string) (ret string, err error) {
+	prefix, ok := strings.CutPrefix(rawPath, prefix)
+	if !ok {
+		return "", errMisconfiguredInternals
+	}
+	if prefix == "" {
+		return "", taildrop.ErrInvalidFileName
+	}
+	if strings.Contains(prefix, "/") {
+		return "", taildrop.ErrInvalidFileName
+	}
+	baseName, err := url.PathUnescape(prefix)
+	if err == errMisconfiguredInternals {
+		return "", errMisconfiguredInternals
+	} else if err != nil {
+		return "", taildrop.ErrInvalidFileName
+	}
+	return baseName, nil
+}
+
+func (h *peerAPIHandler) handlePartialFileGet(w http.ResponseWriter, r *http.Request) {
+	if !h.ps.b.hasCapFileSharing() {
+		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "expected method GET", http.StatusMethodNotAllowed)
+		return
+	}
+	var resp any
+	var err error
+	id := taildrop.ClientID(h.peerNode.StableID())
+
+	if r.URL.Path == "/v0/partial-files/" {
+		resp, err = h.ps.taildrop.PartialFiles(id)
+	} else {
+		baseName, _ := h.extractBaseName(r.URL.EscapedPath(), "/v0/partial-files/")
+		ranges, ok := httphdr.ParseRange(r.Header.Get("Range"))
+		if !ok || len(ranges) != 1 || ranges[0].Length < 0 {
+			http.Error(w, "invalid Range header", http.StatusBadRequest)
+			return
+		}
+		offset := ranges[0].Start
+		length := ranges[0].Length
+		if length == 0 {
+			length = -1 // httphdr.Range.Length == 0 implies reading the rest of file
+		}
+		resp, err = h.ps.taildrop.HashPartialFile(id, baseName, offset, length)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+}
+
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	if !h.canPutFile() {
-		http.Error(w, "Taildrop access denied", http.StatusForbidden)
+		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
 	if !h.ps.b.hasCapFileSharing() {
@@ -639,28 +706,24 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected method PUT", http.StatusMethodNotAllowed)
 		return
 	}
-	rawPath := r.URL.EscapedPath()
-	suffix, ok := strings.CutPrefix(rawPath, "/v0/put/")
-	if !ok {
-		http.Error(w, "misconfigured internals", http.StatusInternalServerError)
-		return
-	}
-	if suffix == "" {
-		http.Error(w, "empty filename", http.StatusBadRequest)
-		return
-	}
-	if strings.Contains(suffix, "/") {
-		http.Error(w, "directories not supported", http.StatusBadRequest)
-		return
-	}
-	baseName, err := url.PathUnescape(suffix)
+	baseName, err := h.extractBaseName(r.URL.EscapedPath(), "/v0/put/")
 	if err != nil {
-		http.Error(w, "bad path encoding", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	t0 := h.ps.b.clock.Now()
-	// TODO(rhea,joetsai): Set the client ID and starting offset.
-	n, err := h.ps.taildrop.PutFile("", baseName, r.Body, 0, r.ContentLength)
+	id := taildrop.ClientID(h.peerNode.StableID())
+
+	var offset int64
+	if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
+		ranges, ok := httphdr.ParseRange(rangeHdr)
+		if !ok || len(ranges) != 1 || ranges[0].Length != 0 {
+			http.Error(w, "invalid Range header", http.StatusBadRequest)
+			return
+		}
+		offset = ranges[0].Start
+	}
+	n, err := h.ps.taildrop.PutFile(taildrop.ClientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
 	switch err {
 	case nil:
 		d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
