@@ -184,6 +184,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	tun := tuntest.NewChannelTUN()
 	tsTun := tstun.Wrap(logf, tun.TUN())
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
+	tsTun.Start()
 
 	wgLogger := wglog.NewLogger(logf)
 	dev := wgcfg.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger)

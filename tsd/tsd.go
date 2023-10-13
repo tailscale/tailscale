@@ -47,6 +47,10 @@ type System struct {
 	StateStore     SubSystem[ipn.StateStore]
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
 
+	// onlyNetstack is whether the Tun value is a fake TUN device
+	// and we're using netstack for everything.
+	onlyNetstack bool
+
 	controlKnobs controlknobs.Knobs
 	proxyMap     proxymap.Mapper
 }
@@ -74,6 +78,12 @@ func (s *System) Set(v any) {
 	case router.Router:
 		s.Router.Set(v)
 	case *tstun.Wrapper:
+		type ft interface {
+			IsFakeTun() bool
+		}
+		if _, ok := v.Unwrap().(ft); ok {
+			s.onlyNetstack = true
+		}
 		s.Tun.Set(v)
 	case *magicsock.Conn:
 		s.MagicSock.Set(v)
@@ -97,8 +107,7 @@ func (s *System) IsNetstackRouter() bool {
 
 // IsNetstack reports whether Tailscale is running as a netstack-based TUN-free engine.
 func (s *System) IsNetstack() bool {
-	name, _ := s.Tun.Get().Name()
-	return name == tstun.FakeTUNName
+	return s.onlyNetstack
 }
 
 // ControlKnobs returns the control knobs for this node.

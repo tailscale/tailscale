@@ -55,3 +55,4 @@ func (t *fakeTUN) MTU() (int, error)        { return 1500, nil }
 func (t *fakeTUN) Name() (string, error)    { return FakeTUNName, nil }
 func (t *fakeTUN) Events() <-chan tun.Event { return t.evchan }
 func (t *fakeTUN) BatchSize() int           { return 1 }
+func (t *fakeTUN) IsFakeTun() bool          { return true }

@@ -540,6 +540,10 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	}
 	sys.Set(store)
 
+	if w, ok := sys.Tun.GetOK(); ok {
+		w.Start()
+	}
+
 	lb, err := ipnlocal.NewLocalBackend(logf, logID, sys, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
