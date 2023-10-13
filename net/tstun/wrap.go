@@ -78,12 +78,18 @@ var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 
 // Wrapper augments a tun.Device with packet filtering and injection.
+//
+// A Wrapper starts in a "corked" mode where Read calls are blocked
+// until the Wrapper's Start method is called.
 type Wrapper struct {
 	logf        logger.Logf
 	limitedLogf logger.Logf // aggressively rate-limited logf used for potentially high volume errors
 	// tdev is the underlying Wrapper device.
 	tdev  tun.Device
 	isTAP bool // whether tdev is a TAP device
+
+	started atomic.Bool   // whether Start has been called
+	startCh chan struct{} // closed in Start
 
 	closeOnce sync.Once
 
@@ -219,6 +225,16 @@ type setWrapperer interface {
 	setWrapper(*Wrapper)
 }
 
+// Start unblocks any Wrapper.Read calls that have already started
+// and makes the Wrapper functional.
+//
+// Start must be called exactly once after the various Tailscale
+// subsystems have been wired up to each other.
+func (w *Wrapper) Start() {
+	w.started.Store(true)
+	close(w.startCh)
+}
+
 func WrapTAP(logf logger.Logf, tdev tun.Device) *Wrapper {
 	return wrap(logf, tdev, true)
 }
@@ -244,6 +260,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 		eventsOther:    make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
+		startCh:     make(chan struct{}),
 	}
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
@@ -309,6 +326,9 @@ func (t *Wrapper) isSelfDisco(p *packet.Parsed) bool {
 func (t *Wrapper) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
+		if t.started.CompareAndSwap(false, true) {
+			close(t.startCh)
+		}
 		close(t.closed)
 		t.bufferConsumedMu.Lock()
 		t.bufferConsumedClosed = true
@@ -836,6 +856,9 @@ func (t *Wrapper) IdleDuration() time.Duration {
 }
 
 func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
+	if !t.started.Load() {
+		<-t.startCh
+	}
 	// packet from OS read and sent to WG
 	res, ok := <-t.vectorOutbound
 	if !ok {
