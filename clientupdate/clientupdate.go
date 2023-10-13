@@ -185,7 +185,9 @@ func (up *Updater) getUpdateFunction() updateFunction {
 		case !up.Arguments.AppStore && !version.IsSandboxedMacOS():
 			return nil
 		case !up.Arguments.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
-			return up.updateMacSys
+			// TODO(noncombatant): return up.updateMacSys when we figure out why
+			// Sparkle update doesn't work when running "tailscale update".
+			return nil
 		default:
 			return up.updateMacAppStore
 		}
