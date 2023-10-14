@@ -117,7 +117,11 @@ func build(outDir string, targets ...string) error {
 		// Fallback slow path for cross-compiled binaries.
 		for _, target := range targets {
 			outFile := filepath.Join(outDir, path.Base(target)+exe())
-			cmd := exec.Command(goBin, "build", "-o", outFile, target)
+			cmd := exec.Command(goBin, "build", "-o", outFile)
+			if version.IsRace() {
+				cmd.Args = append(cmd.Args, "-race")
+			}
+			cmd.Args = append(cmd.Args, target)
 			cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH)
 			if errOut, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to build %v with %v: %v, %s", target, goBin, err, errOut)
