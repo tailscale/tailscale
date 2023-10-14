@@ -757,7 +757,7 @@ func (c *Conn) Ping(peer tailcfg.NodeView, res *ipnstate.PingResult, size int, c
 		cb(res)
 		return
 	}
-	ep.cliPing(res, size, cb)
+	ep.discoPing(res, size, cb)
 }
 
 // c.mu must be held
