@@ -47,7 +47,7 @@ jobs:
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: integration tests as root
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper --sudo ./tstest/integration/ -race
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
 
   test:
     strategy:
