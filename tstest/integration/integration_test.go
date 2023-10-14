@@ -42,6 +42,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/rands"
+	"tailscale.com/version"
 )
 
 var (
@@ -1065,6 +1066,12 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_LOGS_DIR="+t.TempDir(),
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
 	)
+	if version.IsRace() {
+		const knownBroken = true // TODO(bradfitz,maisem): enable this once we fix all the races :(
+		if !knownBroken {
+			cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
+		}
+	}
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
 		cmd.Stdout = os.Stdout
