@@ -265,6 +265,13 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			dbg("nm-safe", "yes")
 			return "network-manager", nil
 		}
+		if err := env.nmIsUsingResolved(); err != nil {
+			// If systemd-resolved is not running at all, then we don't have any
+			// other choice: we take direct control of DNS.
+			dbg("nm-resolved", "no")
+			return "direct", nil
+		}
+
 		health.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
 		dbg("nm-safe", "no")
 		return "systemd-resolved", nil
