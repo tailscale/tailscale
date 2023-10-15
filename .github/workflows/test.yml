@@ -80,6 +80,7 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
     - name: build all
+      if: matrix.buildflags == '' # skip on race builder
       run: ./tool/go build ${{matrix.buildflags}} ./...
       env:
         GOARCH: ${{ matrix.goarch }}
@@ -172,7 +173,17 @@ jobs:
         HOME: "/tmp"
         TMPDIR: "/tmp"
         XDB_CACHE_HOME: "/var/lib/ghrunner/cache"
-  
+
+  race-build:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: build all
+      run: ./tool/go install -race ./cmd/...
+    - name: build tests
+      run: ./tool/go test -race -exec=true ./...
+
   cross: # cross-compile checks, build only.
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
