@@ -19,8 +19,10 @@
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//   - TS_EXTRA_ARGS: extra arguments to 'tailscale login', these are not
-//     reset on restart.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale login', which will only be
+//     applied when attempting to authenticate.
+//   - TS_SET_EXTRA_ARGS: extra arguments to 'tailscale set', which will be
+//     applied each time the container reboots.
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
@@ -110,6 +112,7 @@ func main() {
 		TailnetTargetIP: defaultEnv("TS_TAILNET_TARGET_IP", ""),
 		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
 		ExtraArgs:       defaultEnv("TS_EXTRA_ARGS", ""),
+		SetExtraArgs:    defaultEnv("TS_SET_EXTRA_ARGS", ""),
 		InKubernetes:    os.Getenv("KUBERNETES_SERVICE_HOST") != "",
 		UserspaceMode:   defaultBool("TS_USERSPACE", true),
 		StateDir:        defaultEnv("TS_STATE_DIR", ""),
@@ -581,6 +584,9 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
+	if cfg.SetExtraArgs != "" {
+		args = append(args, strings.Fields(cfg.SetExtraArgs)...)
+	}
 	log.Printf("Running 'tailscale set'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
@@ -754,6 +760,7 @@ type settings struct {
 	ServeConfigPath    string
 	DaemonExtraArgs    string
 	ExtraArgs          string
+	SetExtraArgs       string
 	InKubernetes       bool
 	UserspaceMode      bool
 	StateDir           string
