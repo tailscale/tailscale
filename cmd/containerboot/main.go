@@ -19,8 +19,7 @@
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//   - TS_EXTRA_ARGS: extra arguments to 'tailscale login', these are not
-//     reset on restart.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
@@ -36,15 +35,9 @@
 //   - TS_SOCKET: the path where the tailscaled LocalAPI socket should
 //     be created.
 //   - TS_AUTH_ONCE: if true, only attempt to log in if not already
-//     logged in. If false, forcibly log in every time the container starts.
-//     The default until 1.50.0 was false, but that was misleading: until
-//     1.50, containerboot used `tailscale up` which would ignore an authkey
-//     argument if there was already a node key. Effectively, this behaved
-//     as though TS_AUTH_ONCE were always true.
-//     In 1.50.0 the change was made to use `tailscale login` instead of `up`,
-//     and login will reauthenticate every time it is given an authkey.
-//     In 1.50.1 we set the TS_AUTH_ONCE to true, to match the previously
-//     observed behavior.
+//     logged in. If false (the default, for backwards
+//     compatibility), forcibly log in every time the
+//     container starts.
 //   - TS_SERVE_CONFIG: if specified, is the file path where the ipn.ServeConfig is located.
 //     It will be applied once tailscaled is up and running. If the file contains
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
@@ -118,7 +111,7 @@ func main() {
 		SOCKSProxyAddr:  defaultEnv("TS_SOCKS5_SERVER", ""),
 		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:        defaultBool("TS_AUTH_ONCE", true),
+		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
@@ -212,7 +205,7 @@ func main() {
 		}
 		didLogin = true
 		w.Close()
-		if err := tailscaleLogin(bootCtx, cfg); err != nil {
+		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %v", err)
 		}
 		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
@@ -262,10 +255,12 @@ authLoop:
 	ctx, cancel := context.WithCancel(context.Background()) // no deadline now that we're in steady state
 	defer cancel()
 
-	// Now that we are authenticated, we can set/reset any of the
-	// settings that we need to.
-	if err := tailscaleSet(ctx, cfg); err != nil {
-		log.Fatalf("failed to auth tailscale: %v", err)
+	if cfg.AuthOnce {
+		// Now that we are authenticated, we can set/reset any of the
+		// settings that we need to.
+		if err := tailscaleSet(ctx, cfg); err != nil {
+			log.Fatalf("failed to auth tailscale: %v", err)
+		}
 	}
 
 	if cfg.ServeConfigPath != "" {
@@ -545,29 +540,40 @@ func tailscaledArgs(cfg *settings) []string {
 	return args
 }
 
-// tailscaleLogin uses cfg to run 'tailscale login' everytime containerboot
-// starts, or if TS_AUTH_ONCE is set, only the first time containerboot starts.
-func tailscaleLogin(ctx context.Context, cfg *settings) error {
-	args := []string{"--socket=" + cfg.Socket, "login"}
+// tailscaleUp uses cfg to run 'tailscale up' everytime containerboot starts, or
+// if TS_AUTH_ONCE is set, only the first time containerboot starts.
+func tailscaleUp(ctx context.Context, cfg *settings) error {
+	args := []string{"--socket=" + cfg.Socket, "up"}
+	if cfg.AcceptDNS {
+		args = append(args, "--accept-dns=true")
+	} else {
+		args = append(args, "--accept-dns=false")
+	}
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
+	}
+	if cfg.Routes != "" {
+		args = append(args, "--advertise-routes="+cfg.Routes)
+	}
+	if cfg.Hostname != "" {
+		args = append(args, "--hostname="+cfg.Hostname)
 	}
 	if cfg.ExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.ExtraArgs)...)
 	}
-	log.Printf("Running 'tailscale login'")
+	log.Printf("Running 'tailscale up'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tailscale login failed: %v", err)
+		return fmt.Errorf("tailscale up failed: %v", err)
 	}
 	return nil
 }
 
 // tailscaleSet uses cfg to run 'tailscale set' to set any known configuration
 // options that are passed in via environment variables. This is run after the
-// node is in Running state.
+// node is in Running state and only if TS_AUTH_ONCE is set.
 func tailscaleSet(ctx context.Context, cfg *settings) error {
 	args := []string{"--socket=" + cfg.Socket, "set"}
 	if cfg.AcceptDNS {
