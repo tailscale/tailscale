@@ -390,7 +390,7 @@ func (a *Dialer) resolver() *dnscache.Resolver {
 
 	return &dnscache.Resolver{
 		Forward:          dnscache.Get().Forward,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(a.logf, a.NetMon),
+		LookupIPFallback: dnsfallback.MakeLookupFunc(a.logf, a.NetMon, func() bool { return false }),
 		UseLastGood:      true,
 		Logf:             a.Logf, // not a.logf method; we want to propagate nil-ness
 		NetMon:           a.NetMon,

@@ -235,7 +235,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	dnsCache := &dnscache.Resolver{
 		Forward:          dnscache.Get().Forward, // use default cache's forwarder
 		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, opts.NetMon),
+		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, opts.NetMon, opts.ControlKnobs.EnableRecursiveResolver),
 		Logf:             opts.Logf,
 		NetMon:           opts.NetMon,
 	}

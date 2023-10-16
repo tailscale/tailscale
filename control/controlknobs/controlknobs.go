@@ -52,6 +52,10 @@ type Knobs struct {
 	// DisableDNSForwarderTCPRetries is whether the DNS forwarder should
 	// skip retrying truncated queries over TCP.
 	DisableDNSForwarderTCPRetries atomic.Bool
+
+	// DisableRecursiveResolver is whether the node should disable the
+	// dnsfallback recursive resolver.
+	DisableRecursiveResolver atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -74,6 +78,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		forceBackgroundSTUN           = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
 		peerMTUEnable                 = has(tailcfg.NodeAttrPeerMTUEnable)
 		dnsForwarderDisableTCPRetries = has(tailcfg.NodeAttrDNSForwarderDisableTCPRetries)
+		dnsDisableRecursiveResolver   = has(tailcfg.NodeAttrDisableRecursiveResolver)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -91,6 +96,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 	k.PeerMTUEnable.Store(peerMTUEnable)
 	k.DisableDNSForwarderTCPRetries.Store(dnsForwarderDisableTCPRetries)
+	k.DisableRecursiveResolver.Store(dnsDisableRecursiveResolver)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -110,4 +116,13 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"PeerMTUEnable":                 k.PeerMTUEnable.Load(),
 		"DisableDNSForwarderTCPRetries": k.DisableDNSForwarderTCPRetries.Load(),
 	}
+}
+
+// EnableRecursiveResolver is whether the node should use its DNS recursive resolver
+// as a fallback. It defaults to enabled unless disabled by the control plane.
+func (k *Knobs) EnableRecursiveResolver() bool {
+	if k == nil {
+		return true
+	}
+	return !k.DisableRecursiveResolver.Load()
 }

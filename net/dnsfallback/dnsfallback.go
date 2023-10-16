@@ -44,9 +44,9 @@ var disableRecursiveResolver = envknob.RegisterBool("TS_DNSFALLBACK_DISABLE_RECU
 // MakeLookupFunc creates a function that can be used to resolve hostnames
 // (e.g. as a LookupIPFallback from dnscache.Resolver).
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func MakeLookupFunc(logf logger.Logf, netMon *netmon.Monitor) func(ctx context.Context, host string) ([]netip.Addr, error) {
+func MakeLookupFunc(logf logger.Logf, netMon *netmon.Monitor, enableRecursive func() bool) func(ctx context.Context, host string) ([]netip.Addr, error) {
 	return func(ctx context.Context, host string) ([]netip.Addr, error) {
-		if disableRecursiveResolver() {
+		if disableRecursiveResolver() || !enableRecursive() {
 			return lookup(ctx, host, logf, netMon)
 		}
 

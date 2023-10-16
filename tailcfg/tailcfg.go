@@ -2096,6 +2096,9 @@ const (
 	// See Issue 150.
 	NodeAttrDebugDisableDRPO NodeCapability = "debug-disable-drpo"
 
+	// NodeAttrDisableRecursiveResolver disables the recursive resolver.
+	NodeAttrDisableRecursiveResolver NodeCapability = "disable-recursive-resolver"
+
 	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
