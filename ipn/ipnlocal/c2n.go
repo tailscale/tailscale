@@ -234,13 +234,16 @@ func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *htt
 	// this will first check syspolicy, MDM settings like Registry
 	// on Windows or defaults on macOS. If they are not set, it falls
 	// back to the cli-flag, `--posture-checking`.
-	enabled, err := syspolicy.GetBoolean(syspolicy.PostureChecking, b.Prefs().PostureChecking())
+	choice, err := syspolicy.GetPreferenceOption(syspolicy.PostureChecking)
 	if err != nil {
-		enabled = b.Prefs().PostureChecking()
-		b.logf("c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s", enabled, err)
+		b.logf(
+			"c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s",
+			b.Prefs().PostureChecking(),
+			err,
+		)
 	}
 
-	if enabled {
+	if choice.ShouldEnable(b.Prefs().PostureChecking()) {
 		sns, err := posture.GetSerialNumbers(b.logf)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
