@@ -50,6 +50,7 @@ func main() {
 		tsNamespace       = defaultEnv("OPERATOR_NAMESPACE", "")
 		tslogging         = defaultEnv("OPERATOR_LOGGING", "info")
 		image             = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		initBusyboxImage  = defaultEnv("PROXY_INIT_BUSYBOX_IMAGE", "busybox")
 		priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
 	)
@@ -70,7 +71,7 @@ func main() {
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s)
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
+	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, initBusyboxImage, priorityClassName, tags)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -179,7 +180,7 @@ waitOnline:
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, initBusyboxImage, priorityClassName, tags string) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -215,6 +216,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		defaultTags:            strings.Split(tags, ","),
 		operatorNamespace:      tsNamespace,
 		proxyImage:             image,
+		proxyInitbusyboxContainerImage: initBusyboxContainerImage,
 		proxyPriorityClassName: priorityClassName,
 	}
 	err = builder.

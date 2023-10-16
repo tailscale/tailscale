@@ -37,11 +37,12 @@ func TestLoadBalancerClass(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger: zl.Sugar(),
 	}
@@ -165,11 +166,12 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger: zl.Sugar(),
 	}
@@ -270,11 +272,12 @@ func TestAnnotations(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger: zl.Sugar(),
 	}
@@ -370,11 +373,12 @@ func TestAnnotationIntoLB(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger: zl.Sugar(),
 	}
@@ -495,11 +499,12 @@ func TestLBIntoAnnotation(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger: zl.Sugar(),
 	}
@@ -625,11 +630,12 @@ func TestCustomHostname(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger: zl.Sugar(),
 	}
@@ -735,6 +741,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 			defaultTags:            []string{"tag:k8s"},
 			operatorNamespace:      "operator-ns",
 			proxyImage:             "tailscale/tailscale",
+			proxyInitBusyboxImage:  "busybox",
 			proxyPriorityClassName: "tailscale-critical",
 		},
 		logger: zl.Sugar(),
@@ -778,11 +785,12 @@ func TestDefaultLoadBalancer(t *testing.T) {
 	sr := &ServiceReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
-			Client:            fc,
-			tsClient:          ft,
-			defaultTags:       []string{"tag:k8s"},
-			operatorNamespace: "operator-ns",
-			proxyImage:        "tailscale/tailscale",
+			Client:                fc,
+			tsClient:              ft,
+			defaultTags:           []string{"tag:k8s"},
+			operatorNamespace:     "operator-ns",
+			proxyImage:            "tailscale/tailscale",
+			proxyInitBusyboxImage: "busybox",
 		},
 		logger:                zl.Sugar(),
 		isDefaultLoadBalancer: true,

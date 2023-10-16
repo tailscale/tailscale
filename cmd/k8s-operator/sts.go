@@ -73,12 +73,13 @@ type tailscaleSTSConfig struct {
 
 type tailscaleSTSReconciler struct {
 	client.Client
-	tsnetServer            *tsnet.Server
-	tsClient               tsClient
-	defaultTags            []string
-	operatorNamespace      string
-	proxyImage             string
-	proxyPriorityClassName string
+	tsnetServer                    *tsnet.Server
+	tsClient                       tsClient
+	defaultTags                    []string
+	operatorNamespace              string
+	proxyImage                     string
+	proxyInitBusyboxContainerImage string
+	proxyPriorityClassName         string
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -308,6 +309,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
 		}
 	}
+
+	initContainer := &ss.Spec.Template.Spec.initContainers[0]
+	initContainer.Image = a.proxyInitBusyboxContainerImage 
+
 	container := &ss.Spec.Template.Spec.Containers[0]
 	container.Image = a.proxyImage
 	container.Env = append(container.Env,
