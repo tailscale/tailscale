@@ -24,7 +24,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -34,17 +33,14 @@ import (
 
 var serveCmd = func() *ffcli.Command {
 	se := &serveEnv{lc: &localClient}
-	// This flag is used to switch to an in-development
-	// implementation of the tailscale funnel command.
-	// See https://github.com/tailscale/tailscale/issues/7844
-	if envknob.UseWIPCode() {
-		return newServeDevCommand(se, serve)
-	}
-	return newServeCommand(se)
+	// previously used to serve legacy newFunnelCommand unless useWIPCode is true
+	// change is limited to make a revert easier and full cleanup to come after the relase.
+	// TODO(tylersmalley): cleanup and removal of newServeLegacyCommand as of 2023-10-16
+	return newServeV2Command(se, serve)
 }
 
-// newServeCommand returns a new "serve" subcommand using e as its environment.
-func newServeCommand(e *serveEnv) *ffcli.Command {
+// newServeLegacyCommand returns a new "serve" subcommand using e as its environment.
+func newServeLegacyCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers",
