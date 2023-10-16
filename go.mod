@@ -6,7 +6,7 @@ require (
 	filippo.io/mkcert v1.4.4
 	github.com/Microsoft/go-winio v0.6.1
 	github.com/akutz/memconn v0.1.0
-	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
+	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.0.5
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/aws/aws-sdk-go-v2 v1.21.0
