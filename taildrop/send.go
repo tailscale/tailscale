@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -72,25 +73,25 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 // offset to specify where to resume receiving data at.
 func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, length int64) (int64, error) {
 	switch {
-	case m == nil || m.Dir == "":
+	case m == nil || m.opts.Dir == "":
 		return 0, ErrNoTaildrop
 	case !envknob.CanTaildrop():
 		return 0, ErrNoTaildrop
-	case distro.Get() == distro.Unraid && !m.DirectFileMode:
+	case distro.Get() == distro.Unraid && !m.opts.DirectFileMode:
 		return 0, ErrNotAccessible
 	}
-	dstPath, err := m.joinDir(baseName)
+	dstPath, err := joinDir(m.opts.Dir, baseName)
 	if err != nil {
 		return 0, err
 	}
 
 	redactAndLogError := func(action string, err error) error {
-		err = redactErr(err)
-		m.Logf("put %v error: %v", action, err)
+		err = redactError(err)
+		m.opts.Logf("put %v error: %v", action, err)
 		return err
 	}
 
-	avoidPartialRename := m.DirectFileMode && m.AvoidFinalRename
+	avoidPartialRename := m.opts.DirectFileMode && m.opts.AvoidFinalRename
 	if avoidPartialRename {
 		// Users using AvoidFinalRename are depending on the exact filename
 		// of the partial files. So avoid injecting the id into it.
@@ -98,20 +99,16 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	}
 
 	// Check whether there is an in-progress transfer for the file.
-	sendFileNotify := m.SendFileNotify
-	if sendFileNotify == nil {
-		sendFileNotify = func() {} // avoid nil panics below
-	}
 	partialPath := dstPath + id.partialSuffix()
 	inFileKey := incomingFileKey{id, baseName}
 	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
 		inFile := &incomingFile{
-			clock:          m.Clock,
-			started:        m.Clock.Now(),
+			clock:          m.opts.Clock,
+			started:        m.opts.Clock.Now(),
 			size:           length,
-			sendFileNotify: sendFileNotify,
+			sendFileNotify: m.opts.SendFileNotify,
 		}
-		if m.DirectFileMode {
+		if m.opts.DirectFileMode {
 			inFile.partialPath = partialPath
 		}
 		return inFile
@@ -120,6 +117,7 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		return 0, ErrFileExists
 	}
 	defer m.incomingFiles.Delete(inFileKey)
+	m.deleter.Remove(filepath.Base(partialPath)) // avoid deleting the partial file while receiving
 
 	// Create (if not already) the partial file with read-write permissions.
 	f, err := os.OpenFile(partialPath, os.O_CREATE|os.O_RDWR, 0666)
@@ -133,9 +131,7 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 				os.Remove(partialPath) // best-effort
 				return
 			}
-
-			// TODO: We need to delete partialPath eventually.
-			// However, this must be done after some period of time.
+			m.deleter.Insert(filepath.Base(partialPath)) // mark partial file for eventual deletion
 		}
 	}()
 	inFile.w = f
@@ -177,8 +173,8 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		inFile.mu.Lock()
 		inFile.done = true
 		inFile.mu.Unlock()
-		m.knownEmpty.Store(false)
-		sendFileNotify()
+		m.totalReceived.Add(1)
+		m.opts.SendFileNotify()
 		return fileLength, nil
 	}
 
@@ -236,8 +232,8 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	if maxRetries <= 0 {
 		return 0, errors.New("too many retries trying to rename partial file")
 	}
-	m.knownEmpty.Store(false)
-	sendFileNotify()
+	m.totalReceived.Add(1)
+	m.opts.SendFileNotify()
 	return fileLength, nil
 }
 
