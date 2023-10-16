@@ -322,8 +322,18 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		sds.SetDialer(dialer.SystemDial)
 	}
 
-	hi := hostinfo.New()
-	logf.JSON(1, "Hostinfo", hi)
+	if sys.InitialConfig != nil {
+		p := pm.CurrentPrefs().AsStruct()
+		mp, err := sys.InitialConfig.Parsed.ToPrefs()
+		if err != nil {
+			return nil, err
+		}
+		p.ApplyEdits(&mp)
+		if err := pm.SetPrefs(p.View(), ""); err != nil {
+			return nil, err
+		}
+	}
+
 	envknob.LogCurrent(logf)
 	if dialer == nil {
 		dialer = &tsdial.Dialer{Logf: logf}
@@ -1473,6 +1483,17 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		}
 	}
 	profileID := b.pm.CurrentProfile().ID
+	if b.state != ipn.Running && b.conf != nil && b.conf.Parsed.AuthKey != nil && opts.AuthKey == "" {
+		v := *b.conf.Parsed.AuthKey
+		if filename, ok := strings.CutPrefix(v, "file:"); ok {
+			b, err := os.ReadFile(filename)
+			if err != nil {
+				return fmt.Errorf("error reading config file authKey: %w", err)
+			}
+			v = strings.TrimSpace(string(b))
+		}
+		opts.AuthKey = v
+	}
 
 	// The iOS client sends a "Start" whenever its UI screen comes
 	// up, just because it wants a netmap. That should be fixed,
@@ -1495,10 +1516,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	hostinfo := hostinfo.New()
+	applyConfigToHostinfo(hostinfo, b.conf)
 	hostinfo.BackendLogID = b.backendLogID.String()
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
+	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
 	// This will trigger a full relogin/reconfigure cycle every
@@ -1648,6 +1671,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		}
 		tkaHead = string(head)
 	}
+	confWantRunning := b.conf != nil && wantRunning
 	b.mu.Unlock()
 
 	if endpoints != nil {
@@ -1662,7 +1686,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: &prefs})
 
-	if !loggedOut && b.hasNodeKey() {
+	if !loggedOut && (b.hasNodeKey() || confWantRunning) {
 		// Even if !WantRunning, we should verify our key, if there
 		// is one. If you want tailscaled to be completely idle,
 		// use logout instead.
@@ -2013,9 +2037,12 @@ func (b *LocalBackend) readPoller() {
 // ResendHostinfoIfNeeded is called to recompute the Hostinfo and send
 // the new version to the control server.
 func (b *LocalBackend) ResendHostinfoIfNeeded() {
+	// TODO(maisem,bradfitz): this is all wrong. hostinfo has been modified
+	// a dozen ways elsewhere that this omits. This method should be rethought.
 	hi := hostinfo.New()
 
 	b.mu.Lock()
+	applyConfigToHostinfo(hi, b.conf)
 	if b.hostinfo != nil {
 		hi.Services = b.hostinfo.Services
 	}
@@ -2023,6 +2050,15 @@ func (b *LocalBackend) ResendHostinfoIfNeeded() {
 	b.mu.Unlock()
 
 	b.doSetHostinfoFilterServices(hi)
+}
+
+func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
+	if c == nil {
+		return
+	}
+	if c.Parsed.Hostname != nil {
+		hi.Hostname = *c.Parsed.Hostname
+	}
 }
 
 // WatchNotifications subscribes to the ipn.Notify message bus notification
@@ -2732,6 +2768,12 @@ func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
+	if b.conf != nil && !b.conf.Parsed.Locked.EqualBool(false) {
+		// TODO(bradfitz,maisem): make this more fine-grained, permit changing
+		// some things if they're not explicitly set in the config. But for now
+		// (2023-10-16), just blanket disable everything.
+		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
+	}
 	var errs []error
 	if p.Hostname == "badhostname.tailscale." {
 		// Keep this one just for testing.
