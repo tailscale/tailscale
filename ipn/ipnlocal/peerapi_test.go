@@ -183,7 +183,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil)},
 			checks: checks(
 				httpStatus(http.StatusForbidden),
-				bodyContains("file sharing not enabled by Tailscale admin"),
+				bodyContains("Taildrop disabled"),
 			),
 		},
 		{
@@ -204,7 +204,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("POST", "/v0/put/foo", nil)},
 			checks: checks(
 				httpStatus(405),
-				bodyContains("expected method PUT"),
+				bodyContains("expected method GET or PUT"),
 			),
 		},
 		{
