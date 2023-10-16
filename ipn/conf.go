@@ -13,10 +13,11 @@ import (
 
 // ConfigVAlpha is the config file format for the "alpha0" version.
 type ConfigVAlpha struct {
-	Locked opt.Bool `json:",omitempty"` // whether the config is locked from being changed by 'tailscale set'; it defaults to true
+	Version string   // "alpha0" for now
+	Locked  opt.Bool `json:",omitempty"` // whether the config is locked from being changed by 'tailscale set'; it defaults to true
 
 	ServerURL *string  `json:",omitempty"` // defaults to https://controlplane.tailscale.com
-	AuthKey   *string  `json:",omitempty"` // as needed if NeedsLogin. either key or path to a file (if it contains a slash)
+	AuthKey   *string  `json:",omitempty"` // as needed if NeedsLogin. either key or path to a file (if prefixed with "file:")
 	Enabled   opt.Bool `json:",omitempty"` // wantRunning; empty string defaults to true
 
 	OperatorUser *string `json:",omitempty"` // local user name who is allowed to operate tailscaled without being root or using sudo
@@ -48,13 +49,15 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c == nil {
 		return mp, nil
 	}
+	mp.WantRunning = !c.Enabled.EqualBool(false)
+	mp.WantRunningSet = mp.WantRunning || c.Enabled != ""
 	if c.ServerURL != nil {
 		mp.ControlURL = *c.ServerURL
 		mp.ControlURLSet = true
 	}
-	if c.Enabled != "" {
-		mp.WantRunning = c.Enabled.EqualBool(true)
-		mp.WantRunningSet = true
+	if c.AuthKey != nil && *c.AuthKey != "" {
+		mp.LoggedOut = false
+		mp.LoggedOutSet = true
 	}
 	if c.OperatorUser != nil {
 		mp.OperatorUser = *c.OperatorUser

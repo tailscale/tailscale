@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
 )
@@ -45,6 +46,7 @@ type Server struct {
 	Logf           logger.Logf      // nil means to use the log package
 	DERPMap        *tailcfg.DERPMap // nil means to use prod DERP map
 	RequireAuth    bool
+	RequireAuthKey string // required authkey for all nodes
 	Verbose        bool
 	DNSConfig      *tailcfg.DNSConfig // nil means no DNS config
 	MagicDNSDomain string
@@ -537,6 +539,14 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	if s.Verbose {
 		j, _ := json.MarshalIndent(req, "", "\t")
 		log.Printf("Got %T: %s", req, j)
+	}
+	if s.RequireAuthKey != "" && req.Auth.AuthKey != s.RequireAuthKey {
+		res := must.Get(s.encode(mkey, false, tailcfg.RegisterResponse{
+			Error: "invalid authkey",
+		}))
+		w.WriteHeader(200)
+		w.Write(res)
+		return
 	}
 
 	// If this is a followup request, wait until interactive followup URL visit complete.

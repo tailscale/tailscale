@@ -41,6 +41,8 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/ptr"
+	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
 )
@@ -308,6 +310,33 @@ func TestOneNodeUpAuth(t *testing.T) {
 	if n := atomic.LoadInt32(&authCountAtomic); n != 1 {
 		t.Errorf("Auth URLs completed = %d; want 1", n)
 	}
+
+	d1.MustCleanShutdown(t)
+}
+
+func TestConfigFileAuthKey(t *testing.T) {
+	tstest.SkipOnUnshardedCI(t)
+	tstest.Shard(t)
+	t.Parallel()
+	const authKey = "opensesame"
+	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
+		control.RequireAuthKey = authKey
+	}))
+
+	n1 := newTestNode(t, env)
+	n1.configFile = filepath.Join(n1.dir, "config.json")
+	authKeyFile := filepath.Join(n1.dir, "my-auth-key")
+	must.Do(os.WriteFile(authKeyFile, fmt.Appendf(nil, "%s\n", authKey), 0666))
+	must.Do(os.WriteFile(n1.configFile, must.Get(json.Marshal(ipn.ConfigVAlpha{
+		Version:   "alpha0",
+		AuthKey:   ptr.To("file:" + authKeyFile),
+		ServerURL: ptr.To(n1.env.ControlServer.URL),
+	})), 0644))
+	d1 := n1.StartDaemon()
+
+	n1.AwaitListening()
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
 }
@@ -920,6 +949,7 @@ type testNode struct {
 	env *testEnv
 
 	dir        string // temp dir for sock & state
+	configFile string // or empty for none
 	sockFile   string
 	stateFile  string
 	upFlagGOOS string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
@@ -1112,6 +1142,9 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Args = append(cmd.Args,
 			"--tun=userspace-networking",
 		)
+	}
+	if n.configFile != "" {
+		cmd.Args = append(cmd.Args, "--config="+n.configFile)
 	}
 	cmd.Env = append(os.Environ(),
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",

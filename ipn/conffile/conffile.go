@@ -6,6 +6,7 @@
 package conffile
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,7 +15,7 @@ import (
 	"tailscale.com/ipn"
 )
 
-// Config describes a config file
+// Config describes a config file.
 type Config struct {
 	Path    string // disk path of HuJSON
 	Raw     []byte // raw bytes from disk, in HuJSON form
@@ -27,6 +28,11 @@ type Config struct {
 	// As of 2023-10-15 there is exactly one format ("alpha0") so this is both
 	// the on-disk format and the in-memory upgraded format.
 	Parsed ipn.ConfigVAlpha
+}
+
+// WantRunning reports whether c is non-nil and it's configured to be running.
+func (c *Config) WantRunning() bool {
+	return c != nil && !c.Parsed.Enabled.EqualBool(false)
 }
 
 // Load reads and parses the config file at the provided path on disk.
@@ -58,9 +64,14 @@ func Load(path string) (*Config, error) {
 	}
 	c.Version = ver.Version
 
-	err = json.Unmarshal(c.Std, &c.Parsed)
+	jd := json.NewDecoder(bytes.NewReader(c.Std))
+	jd.DisallowUnknownFields()
+	err = jd.Decode(&c.Parsed)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing config file %s: %w", path, err)
+	}
+	if jd.More() {
+		return nil, fmt.Errorf("error parsing config file %s: trailing data after JSON object", path)
 	}
 	return &c, nil
 }
