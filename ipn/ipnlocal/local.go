@@ -614,6 +614,9 @@ func (b *LocalBackend) Shutdown() {
 	if b.sockstatLogger != nil {
 		b.sockstatLogger.Shutdown()
 	}
+	if b.peerAPIServer != nil {
+		b.peerAPIServer.taildrop.Shutdown()
+	}
 
 	b.unregisterNetMon()
 	b.unregisterHealthWatch()
@@ -3550,14 +3553,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	ps := &peerAPIServer{
 		b: b,
-		taildrop: &taildrop.Manager{
+		taildrop: taildrop.ManagerOptions{
 			Logf:             b.logf,
-			Clock:            tstime.DefaultClock{b.clock},
+			Clock:            tstime.DefaultClock{Clock: b.clock},
 			Dir:              fileRoot,
 			DirectFileMode:   b.directFileRoot != "",
 			AvoidFinalRename: !b.directFileDoFinalRename,
 			SendFileNotify:   b.sendFileNotify,
-		},
+		}.New(),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()

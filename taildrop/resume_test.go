@@ -19,7 +19,8 @@ func TestResume(t *testing.T) {
 	defer func() { blockSize = oldBlockSize }()
 	blockSize = 256
 
-	m := Manager{Logf: t.Logf, Dir: t.TempDir()}
+	m := ManagerOptions{Logf: t.Logf, Dir: t.TempDir()}.New()
+	defer m.Shutdown()
 
 	rn := rand.New(rand.NewSource(0))
 	want := make([]byte, 12345)
@@ -32,7 +33,7 @@ func TestResume(t *testing.T) {
 		})
 		must.Do(err)
 		must.Get(m.PutFile("", "foo", r, offset, -1))
-		got := must.Get(os.ReadFile(must.Get(m.joinDir("foo"))))
+		got := must.Get(os.ReadFile(must.Get(joinDir(m.opts.Dir, "foo"))))
 		if !bytes.Equal(got, want) {
 			t.Errorf("content mismatches")
 		}
@@ -54,7 +55,7 @@ func TestResume(t *testing.T) {
 				break
 			}
 		}
-		got := must.Get(os.ReadFile(must.Get(m.joinDir("foo"))))
+		got := must.Get(os.ReadFile(must.Get(joinDir(m.opts.Dir, "foo"))))
 		if !bytes.Equal(got, want) {
 			t.Errorf("content mismatches")
 		}
