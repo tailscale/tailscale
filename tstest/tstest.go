@@ -16,6 +16,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cibuild"
 )
 
 // Replace replaces the value of target with val.
@@ -73,6 +74,14 @@ func Shard(t testing.TB) {
 	shard := ((testNum.Add(1) - 1) % int32(shards)) + 1
 	if shard != int32(wantShard) {
 		t.Skipf("skipping shard %d/%d (process has TS_TEST_SHARD=%q)", shard, shards, e)
+	}
+}
+
+// SkipOnUnshardedCI skips t if we're in CI and the TS_TEST_SHARD
+// environment variable isn't set.
+func SkipOnUnshardedCI(t testing.TB) {
+	if cibuild.On() && os.Getenv("TS_TEST_SHARD") == "" {
+		t.Skip("skipping on CI without TS_TEST_SHARD")
 	}
 }
 
