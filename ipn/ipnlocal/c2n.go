@@ -261,8 +261,6 @@ func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *htt
 
 func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	// If NewUpdater does not return an error, we can update the installation.
-	// Exception: When version.IsMacSysExt returns true, we don't support that
-	// yet. TODO(cpalmer, #6995): Implement it.
 	//
 	// Note that we create the Updater solely to check for errors; we do not
 	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
@@ -270,7 +268,7 @@ func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
 	return tailcfg.C2NUpdateResponse{
 		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply,
-		Supported: err == nil && !version.IsMacSysExt(),
+		Supported: err == nil,
 	}
 }
 
