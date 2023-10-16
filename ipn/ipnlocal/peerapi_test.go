@@ -173,7 +173,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil)},
 			checks: checks(
 				httpStatus(http.StatusForbidden),
-				bodyContains("Taildrop access denied"),
+				bodyContains("Taildrop disabled"),
 			),
 		},
 		{
@@ -280,7 +280,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("empty filename"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
@@ -290,7 +290,7 @@ func TestHandlePeerAPI(t *testing.T) {
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo/bar", nil)},
 			checks: checks(
 				httpStatus(400),
-				bodyContains("directories not supported"),
+				bodyContains("invalid filename"),
 			),
 		},
 		{
