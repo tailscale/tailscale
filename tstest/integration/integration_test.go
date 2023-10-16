@@ -68,15 +68,22 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+// parallel marks t as a parallel test if not root.
+// In root mode, the tun devices conflict.
+func parallel(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Parallel()
+	}
+}
+
 // Tests that tailscaled starts up in TUN mode, and also without data races:
 // https://github.com/tailscale/tailscale/issues/7894
 func TestTUNMode(t *testing.T) {
 	if os.Getuid() != 0 {
-		t.Skip("skipping when not root")
+		t.Skip("skipping when not root; redundant with other tests")
 	}
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
-	env.tunMode = true
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon()
 
@@ -90,7 +97,7 @@ func TestTUNMode(t *testing.T) {
 }
 
 func TestOneNodeUpNoAuth(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -107,7 +114,7 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 }
 
 func TestOneNodeExpiredKey(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -143,7 +150,7 @@ func TestOneNodeExpiredKey(t *testing.T) {
 }
 
 func TestControlKnobs(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -173,7 +180,7 @@ func TestControlKnobs(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n := newTestNode(t, env)
 
@@ -203,7 +210,7 @@ func TestCollectPanic(t *testing.T) {
 }
 
 func TestControlTimeLogLine(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
 	n := newTestNode(t, env)
@@ -226,7 +233,7 @@ func TestControlTimeLogLine(t *testing.T) {
 
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -262,7 +269,7 @@ func TestStateSavedOnStart(t *testing.T) {
 }
 
 func TestOneNodeUpAuth(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
 		control.RequireAuth = true
 	}))
@@ -306,7 +313,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 
 func TestTwoNodes(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 
 	// Create two nodes:
@@ -355,7 +362,7 @@ func TestTwoNodes(t *testing.T) {
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 
 	// Create one node:
@@ -439,7 +446,7 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 
 func TestNodeAddressIPFields(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon()
@@ -465,7 +472,7 @@ func TestNodeAddressIPFields(t *testing.T) {
 }
 
 func TestAddPingRequest(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.StartDaemon()
@@ -517,7 +524,7 @@ func TestAddPingRequest(t *testing.T) {
 }
 
 func TestC2NPingRequest(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.StartDaemon()
@@ -587,7 +594,7 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -628,7 +635,7 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.upFlagGOOS = "windows"
@@ -646,7 +653,7 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	for _, v6 := range []bool{false, true} {
 		env := newTestEnv(t)
 		registerNode := func() (*testNode, key.NodePublic) {
@@ -773,7 +780,7 @@ func TestNATPing(t *testing.T) {
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
-	t.Parallel()
+	parallel(t)
 	env := newTestEnv(t)
 	// Spin up some nodes.
 	nodes := make([]*testNode, 2)
@@ -829,10 +836,10 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
-	t       testing.TB
-	tunMode bool
-	cli     string
-	daemon  string
+	t      testing.TB
+	cli    string
+	daemon string
+	didTun atomic.Bool // made a TUN node
 
 	LogCatcher       *LogCatcher
 	LogCatcherServer *httptest.Server
@@ -900,7 +907,8 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 // Currently, the test is simplistic and user==node==machine.
 // That may grow complexity later to test more.
 type testNode struct {
-	env *testEnv
+	env     *testEnv
+	tunMode bool
 
 	dir        string // temp dir for sock & state
 	sockFile   string
@@ -926,6 +934,10 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 		dir:       dir,
 		sockFile:  sockFile,
 		stateFile: filepath.Join(dir, "tailscale.state"),
+
+		// The first node per test gets to be in TUN mode when run
+		// as root.
+		tunMode: os.Getuid() == 0 && env.didTun.CompareAndSwap(false, true),
 	}
 
 	// Look for a data race. Once we see the start marker, start logging the rest.
@@ -1091,7 +1103,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
 	}
-	if !n.env.tunMode {
+	if !n.tunMode {
 		cmd.Args = append(cmd.Args,
 			"--tun=userspace-networking",
 		)
