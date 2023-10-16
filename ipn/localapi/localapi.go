@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrop"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -45,6 +46,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/httphdr"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osdiag"
@@ -1293,12 +1295,52 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bogus peer URL", http.StatusInternalServerError)
 		return
 	}
-	outReq, err := http.NewRequestWithContext(r.Context(), "PUT", "http://peer/v0/put/"+filenameEscaped, r.Body)
+
+	// Before we PUT a file we check to see if there are any existing partial file and if so,
+	// we resume the upload from where we left off by sending the remaining file instead of
+	// the full file.
+	offset, remainingBody, err := taildrop.ResumeReader(r.Body, func(offset, length int64) (taildrop.FileChecksums, error) {
+		client := &http.Client{
+			Transport: h.b.Dialer().PeerAPITransport(),
+			Timeout:   10 * time.Second,
+		}
+		req, err := http.NewRequestWithContext(r.Context(), "GET", "http://peer/v0/partial-files/"+filenameEscaped, nil)
+		if err != nil {
+			return taildrop.FileChecksums{}, err
+		}
+
+		rangeHdr, ok := httphdr.FormatRange([]httphdr.Range{{Start: offset, Length: length}})
+		if !ok {
+			return taildrop.FileChecksums{}, fmt.Errorf("invalid offset and length")
+		}
+		req.Header.Set("Range", rangeHdr)
+		resp, err := client.Do(req)
+		if err != nil {
+			return taildrop.FileChecksums{}, err
+		}
+
+		var checksums taildrop.FileChecksums
+		err = json.NewDecoder(resp.Body).Decode(&checksums)
+		return checksums, err
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	outReq, err := http.NewRequestWithContext(r.Context(), "PUT", "http://peer/v0/put/"+filenameEscaped, remainingBody)
 	if err != nil {
 		http.Error(w, "bogus outreq", http.StatusInternalServerError)
 		return
 	}
 	outReq.ContentLength = r.ContentLength
+	if offset > 0 {
+		rangeHdr, _ := httphdr.FormatRange([]httphdr.Range{{offset, 0}})
+		outReq.Header.Set("Range", rangeHdr)
+		if outReq.ContentLength >= 0 {
+			outReq.ContentLength -= offset
+		}
+	}
 
 	rp := httputil.NewSingleHostReverseProxy(dstURL)
 	rp.Transport = h.b.Dialer().PeerAPITransport()
