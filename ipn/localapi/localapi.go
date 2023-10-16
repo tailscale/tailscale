@@ -1325,7 +1325,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 			Transport: h.b.Dialer().PeerAPITransport(),
 			Timeout:   10 * time.Second,
 		}
-		req, err := http.NewRequestWithContext(r.Context(), "GET", "http://peer/v0/partial-files/"+filenameEscaped, nil)
+		req, err := http.NewRequestWithContext(r.Context(), "GET", "http://peer/v0/put/"+filenameEscaped, nil)
 		if err != nil {
 			return taildrop.FileChecksums{}, err
 		}
