@@ -12,6 +12,8 @@ package taildrop
 import (
 	"errors"
 	"hash/adler32"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -30,6 +32,27 @@ import (
 	"tailscale.com/util/multierr"
 )
 
+var (
+	ErrNoTaildrop      = errors.New("Taildrop disabled; no storage directory")
+	ErrInvalidFileName = errors.New("invalid filename")
+	ErrFileExists      = errors.New("file already exists")
+	ErrNotAccessible   = errors.New("Taildrop folder not configured or accessible")
+)
+
+const (
+	// partialSuffix is the suffix appended to files while they're
+	// still in the process of being transferred.
+	partialSuffix = ".partial"
+
+	// deletedSuffix is the suffix for a deleted marker file
+	// that's placed next to a file (without the suffix) that we
+	// tried to delete, but Windows wouldn't let us. These are
+	// only written on Windows (and in tests), but they're not
+	// permitted to be uploaded directly on any platform, like
+	// partial files.
+	deletedSuffix = ".deleted"
+)
+
 // ClientID is an opaque identifier for file resumption.
 // A client can only list and resume partial files for its own ID.
 // It must contain any filesystem specific characters (e.g., slashes).
@@ -42,8 +65,8 @@ func (id ClientID) partialSuffix() string {
 	return "." + string(id) + partialSuffix // e.g., ".n12345CNTRL.partial"
 }
 
-// Manager manages the state for receiving and managing taildropped files.
-type Manager struct {
+// ManagerOptions are options to configure the [Manager].
+type ManagerOptions struct {
 	Logf  logger.Logf
 	Clock tstime.DefaultClock
 
@@ -80,39 +103,56 @@ type Manager struct {
 	// to the function when reception completes.
 	// It is not called if nil.
 	SendFileNotify func()
+}
 
-	knownEmpty atomic.Bool
+// Manager manages the state for receiving and managing taildropped files.
+type Manager struct {
+	opts ManagerOptions
 
+	// incomingFiles is a map of files actively being received.
 	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
+	// deleter managers asynchronous deletion of files.
+	deleter fileDeleter
 
 	// renameMu is used to protect os.Rename calls so that they are atomic.
 	renameMu sync.Mutex
+
+	// totalReceived counts the cumulative total of received files.
+	totalReceived atomic.Int64
+	// emptySince specifies that there were no waiting files
+	// since this value of totalReceived.
+	emptySince atomic.Int64
 }
 
-var (
-	ErrNoTaildrop      = errors.New("Taildrop disabled; no storage directory")
-	ErrInvalidFileName = errors.New("invalid filename")
-	ErrFileExists      = errors.New("file already exists")
-	ErrNotAccessible   = errors.New("Taildrop folder not configured or accessible")
-)
+// New initializes a new taildrop manager.
+// It may spawn asynchronous goroutines to delete files,
+// so the Shutdown method must be called for resource cleanup.
+func (opts ManagerOptions) New() *Manager {
+	if opts.Logf == nil {
+		opts.Logf = logger.Discard
+	}
+	if opts.SendFileNotify == nil {
+		opts.SendFileNotify = func() {}
+	}
+	m := &Manager{opts: opts}
+	m.deleter.Init(opts.Logf, opts.Clock, func(string) {}, opts.Dir)
+	m.emptySince.Store(-1) // invalidate this cache
+	return m
+}
 
-const (
-	// partialSuffix is the suffix appended to files while they're
-	// still in the process of being transferred.
-	partialSuffix = ".partial"
+// Dir returns the directory.
+func (m *Manager) Dir() string {
+	return m.opts.Dir
+}
 
-	// deletedSuffix is the suffix for a deleted marker file
-	// that's placed next to a file (without the suffix) that we
-	// tried to delete, but Windows wouldn't let us. These are
-	// only written on Windows (and in tests), but they're not
-	// permitted to be uploaded directly on any platform, like
-	// partial files.
-	deletedSuffix = ".deleted"
-)
-
-// redacted is a fake path name we use in errors, to avoid
-// accidentally logging actual filenames anywhere.
-const redacted = "redacted"
+// Shutdown shuts down the Manager.
+// It blocks until all spawned goroutines have stopped running.
+func (m *Manager) Shutdown() {
+	if m != nil {
+		m.deleter.shutdown()
+		m.deleter.group.Wait()
+	}
+}
 
 func validFilenameRune(r rune) bool {
 	switch r {
@@ -131,7 +171,11 @@ func validFilenameRune(r rune) bool {
 	return unicode.IsPrint(r)
 }
 
-func (m *Manager) joinDir(baseName string) (fullPath string, err error) {
+func isPartialOrDeleted(s string) bool {
+	return strings.HasSuffix(s, deletedSuffix) || strings.HasSuffix(s, partialSuffix)
+}
+
+func joinDir(dir, baseName string) (fullPath string, err error) {
 	if !utf8.ValidString(baseName) {
 		return "", ErrInvalidFileName
 	}
@@ -145,8 +189,7 @@ func (m *Manager) joinDir(baseName string) (fullPath string, err error) {
 	clean := path.Clean(baseName)
 	if clean != baseName ||
 		clean == "." || clean == ".." ||
-		strings.HasSuffix(clean, deletedSuffix) ||
-		strings.HasSuffix(clean, partialSuffix) {
+		isPartialOrDeleted(clean) {
 		return "", ErrInvalidFileName
 	}
 	for _, r := range baseName {
@@ -157,7 +200,32 @@ func (m *Manager) joinDir(baseName string) (fullPath string, err error) {
 	if !filepath.IsLocal(baseName) {
 		return "", ErrInvalidFileName
 	}
-	return filepath.Join(m.Dir, baseName), nil
+	return filepath.Join(dir, baseName), nil
+}
+
+// rangeDir iterates over the contents of a directory, calling fn for each entry.
+// It continues iterating while fn returns true.
+// It reports the number of entries seen.
+func rangeDir(dir string, fn func(fs.DirEntry) bool) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for {
+		des, err := f.ReadDir(10)
+		for _, de := range des {
+			if !fn(de) {
+				return nil
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 // IncomingFiles returns a list of active incoming files.
@@ -182,16 +250,20 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 	return files
 }
 
-type redactedErr struct {
+// redacted is a fake path name we use in errors, to avoid
+// accidentally logging actual filenames anywhere.
+const redacted = "redacted"
+
+type redactedError struct {
 	msg   string
 	inner error
 }
 
-func (re *redactedErr) Error() string {
+func (re *redactedError) Error() string {
 	return re.msg
 }
 
-func (re *redactedErr) Unwrap() error {
+func (re *redactedError) Unwrap() error {
 	return re.inner
 }
 
@@ -205,7 +277,7 @@ func redactString(s string) string {
 	return string(b)
 }
 
-func redactErr(root error) error {
+func redactError(root error) error {
 	// redactStrings is a list of sensitive strings that were redacted.
 	// It is not sufficient to just snub out sensitive fields in Go errors
 	// since some wrapper errors like fmt.Errorf pre-cache the error string,
@@ -243,7 +315,7 @@ func redactErr(root error) error {
 	for _, toRedact := range redactStrings {
 		s = strings.ReplaceAll(s, toRedact, redactString(toRedact))
 	}
-	return &redactedErr{msg: s, inner: root}
+	return &redactedError{msg: s, inner: root}
 }
 
 var (
