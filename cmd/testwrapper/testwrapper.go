@@ -85,6 +85,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 		fmt.Println("running", strings.Join(args, " "))
 	}
 	cmd := exec.CommandContext(ctx, "go", args...)
+	if len(pt.Tests) > 0 {
+		cmd.Env = append(os.Environ(), "TS_TEST_SHARD=") // clear test shard; run all tests we say to run
+	}
 	r, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("error creating stdout pipe: %v", err)

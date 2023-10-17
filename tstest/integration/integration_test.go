@@ -71,6 +71,7 @@ func TestMain(m *testing.M) {
 // Tests that tailscaled starts up in TUN mode, and also without data races:
 // https://github.com/tailscale/tailscale/issues/7894
 func TestTUNMode(t *testing.T) {
+	tstest.Shard(t)
 	if os.Getuid() != 0 {
 		t.Skip("skipping when not root")
 	}
@@ -90,6 +91,7 @@ func TestTUNMode(t *testing.T) {
 }
 
 func TestOneNodeUpNoAuth(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -107,6 +109,7 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 }
 
 func TestOneNodeExpiredKey(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -143,6 +146,7 @@ func TestOneNodeExpiredKey(t *testing.T) {
 }
 
 func TestControlKnobs(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -173,6 +177,7 @@ func TestControlKnobs(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n := newTestNode(t, env)
@@ -203,6 +208,7 @@ func TestCollectPanic(t *testing.T) {
 }
 
 func TestControlTimeLogLine(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
@@ -226,6 +232,7 @@ func TestControlTimeLogLine(t *testing.T) {
 
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -262,6 +269,7 @@ func TestStateSavedOnStart(t *testing.T) {
 }
 
 func TestOneNodeUpAuth(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
 		control.RequireAuth = true
@@ -305,6 +313,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 }
 
 func TestTwoNodes(t *testing.T) {
+	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
 	t.Parallel()
 	env := newTestEnv(t)
@@ -354,6 +363,7 @@ func TestTwoNodes(t *testing.T) {
 // tests two nodes where the first gets a incremental MapResponse (with only
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
+	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
 	t.Parallel()
 	env := newTestEnv(t)
@@ -438,6 +448,7 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 }
 
 func TestNodeAddressIPFields(t *testing.T) {
+	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
 	t.Parallel()
 	env := newTestEnv(t)
@@ -465,6 +476,7 @@ func TestNodeAddressIPFields(t *testing.T) {
 }
 
 func TestAddPingRequest(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -517,6 +529,7 @@ func TestAddPingRequest(t *testing.T) {
 }
 
 func TestC2NPingRequest(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -587,6 +600,7 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -628,6 +642,7 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
@@ -646,6 +661,7 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	for _, v6 := range []bool{false, true} {
 		env := newTestEnv(t)
@@ -773,6 +789,7 @@ func TestNATPing(t *testing.T) {
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
+	tstest.Shard(t)
 	t.Parallel()
 	env := newTestEnv(t)
 	// Spin up some nodes.
