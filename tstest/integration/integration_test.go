@@ -75,7 +75,7 @@ func TestTUNMode(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("skipping when not root")
 	}
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	env.tunMode = true
 	n1 := newTestNode(t, env)
@@ -92,7 +92,7 @@ func TestTUNMode(t *testing.T) {
 
 func TestOneNodeUpNoAuth(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -110,7 +110,7 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 
 func TestOneNodeExpiredKey(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -147,7 +147,7 @@ func TestOneNodeExpiredKey(t *testing.T) {
 
 func TestControlKnobs(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -178,7 +178,7 @@ func TestControlKnobs(t *testing.T) {
 
 func TestCollectPanic(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n := newTestNode(t, env)
 
@@ -209,7 +209,7 @@ func TestCollectPanic(t *testing.T) {
 
 func TestControlTimeLogLine(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
 	n := newTestNode(t, env)
@@ -233,7 +233,7 @@ func TestControlTimeLogLine(t *testing.T) {
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -270,7 +270,7 @@ func TestStateSavedOnStart(t *testing.T) {
 
 func TestOneNodeUpAuth(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
 		control.RequireAuth = true
 	}))
@@ -315,7 +315,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 func TestTwoNodes(t *testing.T) {
 	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 
 	// Create two nodes:
@@ -365,7 +365,7 @@ func TestTwoNodes(t *testing.T) {
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 
 	// Create one node:
@@ -450,7 +450,7 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 func TestNodeAddressIPFields(t *testing.T) {
 	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon()
@@ -477,7 +477,7 @@ func TestNodeAddressIPFields(t *testing.T) {
 
 func TestAddPingRequest(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.StartDaemon()
@@ -530,7 +530,7 @@ func TestAddPingRequest(t *testing.T) {
 
 func TestC2NPingRequest(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.StartDaemon()
@@ -601,7 +601,7 @@ func TestC2NPingRequest(t *testing.T) {
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -643,7 +643,7 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.upFlagGOOS = "windows"
@@ -662,7 +662,7 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
 		env := newTestEnv(t)
 		registerNode := func() (*testNode, key.NodePublic) {
@@ -790,7 +790,7 @@ func TestNATPing(t *testing.T) {
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
 	tstest.Shard(t)
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	// Spin up some nodes.
 	nodes := make([]*testNode, 2)
