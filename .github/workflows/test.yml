@@ -41,6 +41,14 @@ concurrency:
 jobs:
   race-root-integration:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          - shard: '1/4'
+          - shard: '2/4'
+          - shard: '3/4'
+          - shard: '4/4'
     steps:
     - name: checkout
       uses: actions/checkout@v4
@@ -48,6 +56,8 @@ jobs:
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: integration tests as root
       run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
+      env:
+        TS_TEST_SHARD: ${{ matrix.shard }}
 
   test:
     strategy:

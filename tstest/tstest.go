@@ -6,6 +6,10 @@ package tstest
 
 import (
 	"context"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,4 +49,28 @@ func WaitFor(maxWait time.Duration, try func() error) error {
 		bo.BackOff(context.Background(), err)
 	}
 	return err
+}
+
+var testNum atomic.Int32
+
+// Shard skips t if it's not running if the TS_TEST_SHARD test shard is set to
+// "n/m" and this test execution number in the process mod m is not equal to n-1.
+// That is, to run with 4 shards, set TS_TEST_SHARD=1/4, ..., TS_TEST_SHARD=4/4
+// for the four jobs.
+func Shard(t testing.TB) {
+	e := os.Getenv("TS_TEST_SHARD")
+	a, b, ok := strings.Cut(e, "/")
+	if !ok {
+		return
+	}
+	wantShard, _ := strconv.ParseInt(a, 10, 32)
+	shards, _ := strconv.ParseInt(b, 10, 32)
+	if wantShard == 0 || shards == 0 {
+		return
+	}
+
+	shard := ((testNum.Add(1) - 1) % int32(shards)) + 1
+	if shard != int32(wantShard) {
+		t.Skipf("skipping shard %d/%d (process has TS_TEST_SHARD=%q)", shard, shards, e)
+	}
 }
