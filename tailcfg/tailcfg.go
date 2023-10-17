@@ -119,7 +119,8 @@ type CapabilityVersion int
 //   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
 //   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
 //   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
-const CurrentCapabilityVersion CapabilityVersion = 78
+//   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
+const CurrentCapabilityVersion CapabilityVersion = 79
 
 type StableID string
 
@@ -1859,9 +1860,12 @@ type ClientVersion struct {
 	// LatestVersion is the latest version.Short ("1.34.2") version available
 	// for download for the client's platform and packaging type.
 	// It won't be populated if RunningLatest is true.
-	// The primary purpose of the LatestVersion value is to invalidate the client's
-	// cache update check value, if any. This primarily applies to Windows.
 	LatestVersion string `json:",omitempty"`
+
+	// UrgentSecurityUpdate is set when the client is missing an important
+	// security update. That update may be in LatestVersion or earlier.
+	// UrgentSecurityUpdate should not be set if RunningLatest is false.
+	UrgentSecurityUpdate bool `json:",omitempty"`
 
 	// Notify is whether the client should do an OS-specific notification about
 	// a new version being available. This should not be populated if
