@@ -655,7 +655,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		var err error
 		id := taildrop.ClientID(h.peerNode.StableID())
 
-		if r.URL.Path == "/v0/put/"+baseName {
+		if prefix == "" {
 			resp, err = h.ps.taildrop.PartialFiles(id)
 		} else {
 			ranges, ok := httphdr.ParseRange(r.Header.Get("Range"))
