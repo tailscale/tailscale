@@ -533,7 +533,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						// Only need to print an update if we printed the "please click" message earlier.
 						fmt.Fprintf(Stderr, "Success.\n")
 						if cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-							fmt.Fprintf(Stderr, "\nUpdate available: %v -> %v\n", version.Short(), cv.LatestVersion)
+							if cv.UrgentSecurityUpdate {
+								fmt.Fprintf(Stderr, "\nSecurity update available: %v -> %v\n", version.Short(), cv.LatestVersion)
+							} else {
+								fmt.Fprintf(Stderr, "\nUpdate available: %v -> %v\n", version.Short(), cv.LatestVersion)
+							}
 							fmt.Fprintln(Stderr, "Changelog: https://tailscale.com/changelog/#client")
 							fmt.Fprintln(Stderr, "Run `tailscale update` or `tailscale set --auto-update` to update")
 						}
