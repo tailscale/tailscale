@@ -188,6 +188,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if ok := s.authorizeRequest(w, r); !ok {
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		// Pass API requests through to the API handler.
 		s.apiHandler.ServeHTTP(w, r)
@@ -199,31 +202,57 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.assetsHandler.ServeHTTP(w, r)
 }
 
-// authorizePlatformRequest reports whether the request from the web client
-// is authorized to access the client for those platforms that support it.
+// authorizeRequest reports whether the request from the web client
+// is authorized to be completed.
 // It reports true if the request is authorized, and false otherwise.
-// authorizePlatformRequest manages writing out any relevant authorization
+// authorizeRequest manages writing out any relevant authorization
 // errors to the ResponseWriter itself.
-func authorizePlatformRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
-	switch distro.Get() {
-	case distro.Synology:
-		return authorizeSynology(w, r)
-	case distro.QNAP:
-		return authorizeQNAP(w, r)
+func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
+	if s.tsDebugMode == "full" { // client using tailscale auth
+		_, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+		switch {
+		case err != nil:
+			// All requests must be made over tailscale.
+			http.Error(w, "must access over tailscale", http.StatusUnauthorized)
+			return false
+		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
+			// Readonly endpoint allowed without browser session.
+			return true
+		case r.URL.Path == "/api/auth":
+			// Endpoint for browser to request auth allowed without browser session.
+			return true
+		case strings.HasPrefix(r.URL.Path, "/api/"):
+			// All other /api/ endpoints require a valid browser session.
+			session, err := s.getTailscaleBrowserSession(r)
+			if err != nil || !session.isAuthorized() {
+				http.Error(w, "no valid session", http.StatusUnauthorized)
+				return false
+			}
+			return true
+		default:
+			// No additional auth on non-api (assets, index.html, etc).
+			return true
+		}
 	}
-	return true
+	// Client using system-specific auth.
+	d := distro.Get()
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/assets/"):
+		// Don't require authorization for static assets.
+		return true
+	case d == distro.Synology:
+		return authorizeSynology(w, r)
+	case d == distro.QNAP:
+		return authorizeQNAP(w, r)
+	default:
+		return true // no additional auth for this distro
+	}
 }
 
 // serveLoginAPI serves requests for the web login client.
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
 // which protects the handler using gorilla csrf.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
-	// The login client is run directly from client plugins,
-	// so first authenticate and authorize the request for the host platform.
-	if ok := authorizePlatformRequest(w, r); !ok {
-		return
-	}
-
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
 		http.Error(w, "invalid endpoint", http.StatusNotFound)
@@ -346,31 +375,14 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
 // which protects the handler using gorilla csrf.
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
-	if s.tsDebugMode == "full" {
-		// tailscale/corp#14335: Only restrict to tailscale auth in debug "full" web client mode.
-		// TODO(sonia,will): Switch serveAPI over to always require TS auth when we're ready
-		// to remove the debug flags.
-		// For now, existing client uses platform auth (else case below).
-
-		if r.URL.Path == "/api/auth" {
-			// Serve auth, which creates a new session for the user to authenticate,
-			// in the case that the request doesn't already have one.
-			s.serveTailscaleAuth(w, r)
-			return
-		}
-		// For all other endpoints, require a valid session to proceed.
-		session, err := s.getTailscaleBrowserSession(r)
-		if err != nil || !session.isAuthorized() {
-			http.Error(w, "no valid session", http.StatusUnauthorized)
-			return
-		}
-	} else if ok := authorizePlatformRequest(w, r); !ok {
-		return
-	}
-
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
+	case path == "/auth":
+		if s.tsDebugMode == "full" { // behind debug flag
+			s.serveTailscaleAuth(w, r)
+			return
+		}
 	case path == "/data":
 		switch r.Method {
 		case httpm.GET:
