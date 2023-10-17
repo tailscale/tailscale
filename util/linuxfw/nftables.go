@@ -105,6 +105,29 @@ func DebugNetfilter(logf logger.Logf) error {
 
 // detectNetfilter returns the number of nftables rules present in the system.
 func detectNetfilter() (int, error) {
+	// Frist try creating a dummy postrouting chain. Emperically, we have
+	// noticed that on some devices there is partial nftables support and the
+	// kernel rejects some chains that are valid on other devices. This is a
+	// workaround to detect that case.
+	//
+	// This specifically allows us to run in on GKE nodes using COS images which
+	// have partial nftables support (as of 2023-10-18). When we try to create a
+	// dummy postrouting chain, we get an error like:
+	//  add chain: conn.Receive: netlink receive: no such file or directory
+	nft, err := newNfTablesRunner(logger.Discard)
+	if err != nil {
+		return 0, FWModeNotSupportedError{
+			Mode: FirewallModeNfTables,
+			Err:  fmt.Errorf("cannot create nftables runner: %w", err),
+		}
+	}
+	if err := nft.createDummyPostroutingChains(); err != nil {
+		return 0, FWModeNotSupportedError{
+			Mode: FirewallModeNfTables,
+			Err:  err,
+		}
+	}
+
 	conn, err := nftables.New()
 	if err != nil {
 		return 0, FWModeNotSupportedError{
@@ -129,6 +152,7 @@ func detectNetfilter() (int, error) {
 		}
 		validRules += len(rules)
 	}
+
 	return validRules, nil
 }
 
