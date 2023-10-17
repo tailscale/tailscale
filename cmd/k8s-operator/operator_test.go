@@ -899,7 +899,7 @@ func expectedSTS(stsName, secretName, hostname, priorityClassName string) *appsv
 					InitContainers: []corev1.Container{
 						{
 							Name:    "sysctler",
-							Image:   "busybox",
+							Image:   "tailscale/tailscale",
 							Command: []string{"/bin/sh"},
 							Args:    []string{"-c", "sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1"},
 							SecurityContext: &corev1.SecurityContext{
@@ -968,7 +968,7 @@ func expectedEgressSTS(stsName, secretName, tailnetTargetIP, hostname, priorityC
 					InitContainers: []corev1.Container{
 						{
 							Name:    "sysctler",
-							Image:   "busybox",
+							Image:   "tailscale/tailscale",
 							Command: []string{"/bin/sh"},
 							Args:    []string{"-c", "sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1"},
 							SecurityContext: &corev1.SecurityContext{

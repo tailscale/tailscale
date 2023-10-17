@@ -12,7 +12,6 @@ spec:
       serviceAccountName: proxies
       initContainers:
         - name: sysctler
-          image: busybox
           securityContext:
             privileged: true
           command: ["/bin/sh"]
