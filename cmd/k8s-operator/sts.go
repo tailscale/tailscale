@@ -307,6 +307,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
 		}
+		for i := range ss.Spec.Template.Spec.InitContainers {
+			c := &ss.Spec.Template.Spec.InitContainers[i]
+			if c.Name == "sysctler" {
+				c.Image = a.proxyImage
+				break
+			}
+		}
 	}
 	container := &ss.Spec.Template.Spec.Containers[0]
 	container.Image = a.proxyImage
