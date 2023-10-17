@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -22,13 +21,10 @@ import (
 
 var funnelCmd = func() *ffcli.Command {
 	se := &serveEnv{lc: &localClient}
-	// This flag is used to switch to an in-development
-	// implementation of the tailscale funnel command.
-	// See https://github.com/tailscale/tailscale/issues/7844
-	if envknob.UseWIPCode() {
-		return newServeDevCommand(se, funnel)
-	}
-	return newFunnelCommand(se)
+	// previously used to serve legacy newFunnelCommand unless useWIPCode is true
+	// change is limited to make a revert easier and full cleanup to come after the relase.
+	// TODO(tylersmalley): cleanup and removal of newFunnelCommand as of 2023-10-16
+	return newServeV2Command(se, funnel)
 }
 
 // newFunnelCommand returns a new "funnel" subcommand using e as its environment.

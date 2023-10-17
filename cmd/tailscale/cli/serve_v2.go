@@ -94,8 +94,8 @@ func buildShortUsage(subcmd string) string {
 	}, "\n  ")
 }
 
-// newServeDevCommand returns a new "serve" subcommand using e as its environment.
-func newServeDevCommand(e *serveEnv, subcmd serveMode) *ffcli.Command {
+// newServeV2Command returns a new "serve" subcommand using e as its environment.
+func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	if subcmd != serve && subcmd != funnel {
 		log.Fatalf("newServeDevCommand called with unknown subcmd %q", subcmd)
 	}
