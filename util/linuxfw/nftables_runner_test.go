@@ -851,6 +851,26 @@ func (t *testFWDetector) nftDetect() (int, error) {
 	return t.nftRuleCount, t.nftErr
 }
 
+// TestCreateDummyPostroutingChains tests that on a system with nftables
+// available, the function does not return an error and that the dummy
+// postrouting chains are cleaned up.
+func TestCreateDummyPostroutingChains(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunner(t, conn)
+	if err := runner.createDummyPostroutingChains(); err != nil {
+		t.Fatalf("createDummyPostroutingChains() failed: %v", err)
+	}
+	for _, table := range runner.getNATTables() {
+		nt, err := getTableIfExists(conn, table.Proto, tsDummyTableName)
+		if err != nil {
+			t.Fatalf("getTableIfExists() failed: %v", err)
+		}
+		if nt != nil {
+			t.Fatalf("expected table to be nil, got %v", nt)
+		}
+	}
+}
+
 func TestPickFirewallModeFromInstalledRules(t *testing.T) {
 	tests := []struct {
 		name string
