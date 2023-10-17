@@ -911,7 +911,7 @@ func (up *Updater) updateLinuxBinary() error {
 func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
 	dlDir, err := os.UserCacheDir()
 	if err != nil {
-		return "", err
+		dlDir = os.TempDir()
 	}
 	dlDir = filepath.Join(dlDir, "tailscale-update")
 	if err := os.MkdirAll(dlDir, 0700); err != nil {
