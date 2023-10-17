@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
 )
@@ -72,5 +73,14 @@ func Shard(t testing.TB) {
 	shard := ((testNum.Add(1) - 1) % int32(shards)) + 1
 	if shard != int32(wantShard) {
 		t.Skipf("skipping shard %d/%d (process has TS_TEST_SHARD=%q)", shard, shards, e)
+	}
+}
+
+var serializeParallel = envknob.RegisterBool("TS_SERIAL_TESTS")
+
+// Parallel calls t.Parallel, unless TS_SERIAL_TESTS is set true.
+func Parallel(t *testing.T) {
+	if !serializeParallel() {
+		t.Parallel()
 	}
 }
