@@ -26,11 +26,12 @@ func TestResume(t *testing.T) {
 	want := make([]byte, 12345)
 	must.Get(io.ReadFull(rn, want))
 
-	t.Run("resume-noop", func(t *testing.T) {
+	t.Run("resume-noexist", func(t *testing.T) {
 		r := io.Reader(bytes.NewReader(want))
-		offset, r, err := ResumeReader(r, func(offset, length int64) (FileChecksums, error) {
-			return m.HashPartialFile("", "foo", offset, length)
-		})
+		next, close, err := m.HashPartialFile("", "foo")
+		must.Do(err)
+		defer close()
+		offset, r, err := ResumeReader(r, next)
 		must.Do(err)
 		must.Get(m.PutFile("", "foo", r, offset, -1))
 		got := must.Get(os.ReadFile(must.Get(joinDir(m.opts.Dir, "foo"))))
@@ -43,9 +44,10 @@ func TestResume(t *testing.T) {
 		rn := rand.New(rand.NewSource(0))
 		for {
 			r := io.Reader(bytes.NewReader(want))
-			offset, r, err := ResumeReader(r, func(offset, length int64) (FileChecksums, error) {
-				return m.HashPartialFile("", "foo", offset, length)
-			})
+			next, close, err := m.HashPartialFile("", "foo")
+			must.Do(err)
+			defer close()
+			offset, r, err := ResumeReader(r, next)
 			must.Do(err)
 			numWant := rn.Int63n(min(int64(len(want))-offset, 1000) + 1)
 			if offset < int64(len(want)) {
