@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/util/clientmetric"
@@ -37,6 +38,8 @@ type ServiceReconciler struct {
 	// managedEgressProxies is a set of all egress proxies that we're currently
 	// managing. This is only used for metrics.
 	managedEgressProxies set.Slice[types.UID]
+
+	recorder record.EventRecorder
 }
 
 var (
@@ -136,6 +139,15 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+	// run for proxy config related validations here as opposed to running
+	// them earlier. This is to prevent cleanup etc being blocked on a
+	// misconfigured proxy param
+	if err := a.ssr.validate(); err != nil {
+		msg := fmt.Sprintf("unable to provision proxy resources: invalid config: %v", err)
+		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDCONFIG", msg)
+		a.logger.Error(msg)
+		return nil
+	}
 	hostname, err := nameForService(svc)
 	if err != nil {
 		return err

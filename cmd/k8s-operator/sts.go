@@ -79,6 +79,14 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	tsFirewallMode         string
+}
+
+func (sts tailscaleSTSReconciler) validate() error {
+	if sts.tsFirewallMode != "" && !isValidFirewallMode(sts.tsFirewallMode) {
+		return fmt.Errorf("invalid proxy firewall mode %s, valid modes are iptables, nftables or unset", sts.tsFirewallMode)
+	}
+	return nil
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -360,6 +368,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			},
 		})
 	}
+	if a.tsFirewallMode != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEBUG_FIREWALL_MODE",
+			Value: a.tsFirewallMode,
+		},
+		)
+	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
@@ -498,4 +513,8 @@ func nameForService(svc *corev1.Service) (string, error) {
 		return h, nil
 	}
 	return svc.Namespace + "-" + svc.Name, nil
+}
+
+func isValidFirewallMode(m string) bool {
+	return m == "auto" || m == "nftables" || m == "iptables"
 }
