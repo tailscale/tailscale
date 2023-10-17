@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"slices"
 	"strings"
@@ -72,34 +73,23 @@ func hexAppendEncode(dst, src []byte) []byte {
 // PartialFiles returns a list of partial files in [Handler.Dir]
 // that were sent (or is actively being sent) by the provided id.
 func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
-	if m == nil || m.Dir == "" {
+	if m == nil || m.opts.Dir == "" {
 		return nil, ErrNoTaildrop
 	}
-	if m.DirectFileMode && m.AvoidFinalRename {
+	if m.opts.DirectFileMode && m.opts.AvoidFinalRename {
 		return nil, nil // resuming is not supported for users that peek at our file structure
 	}
 
-	f, err := os.Open(m.Dir)
-	if err != nil {
-		return ret, err
-	}
-	defer f.Close()
-
 	suffix := id.partialSuffix()
-	for {
-		des, err := f.ReadDir(10)
-		if err != nil {
-			return ret, err
+	if err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
+		if name := de.Name(); strings.HasSuffix(name, suffix) {
+			ret = append(ret, name)
 		}
-		for _, de := range des {
-			if name := de.Name(); strings.HasSuffix(name, suffix) {
-				ret = append(ret, name)
-			}
-		}
-		if err == io.EOF {
-			return ret, nil
-		}
+		return true
+	}); err != nil {
+		return ret, redactError(err)
 	}
+	return ret, nil
 }
 
 // HashPartialFile hashes the contents of a partial file sent by id,
@@ -109,14 +99,14 @@ func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
 // If [FileHashes.Length] is less than length and no error occurred,
 // then it implies that all remaining content in the file has been hashed.
 func (m *Manager) HashPartialFile(id ClientID, baseName string, offset, length int64) (FileChecksums, error) {
-	if m == nil || m.Dir == "" {
+	if m == nil || m.opts.Dir == "" {
 		return FileChecksums{}, ErrNoTaildrop
 	}
-	if m.DirectFileMode && m.AvoidFinalRename {
+	if m.opts.DirectFileMode && m.opts.AvoidFinalRename {
 		return FileChecksums{}, nil // resuming is not supported for users that peek at our file structure
 	}
 
-	dstFile, err := m.joinDir(baseName)
+	dstFile, err := joinDir(m.opts.Dir, baseName)
 	if err != nil {
 		return FileChecksums{}, err
 	}
@@ -125,12 +115,12 @@ func (m *Manager) HashPartialFile(id ClientID, baseName string, offset, length i
 		if os.IsNotExist(err) {
 			return FileChecksums{}, nil
 		}
-		return FileChecksums{}, err
+		return FileChecksums{}, redactError(err)
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return FileChecksums{}, err
+		return FileChecksums{}, redactError(err)
 	}
 	checksums := FileChecksums{
 		Offset:    offset,
@@ -145,7 +135,7 @@ func (m *Manager) HashPartialFile(id ClientID, baseName string, offset, length i
 	for {
 		switch n, err := io.ReadFull(r, b); {
 		case err != nil && err != io.EOF && err != io.ErrUnexpectedEOF:
-			return checksums, err
+			return checksums, redactError(err)
 		case n == 0:
 			return checksums, nil
 		default:

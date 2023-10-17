@@ -68,7 +68,7 @@ func bodyNotContains(sub string) check {
 
 func fileHasSize(name string, size int) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
-		root := e.ph.ps.taildrop.Dir
+		root := e.ph.ps.taildrop.Dir()
 		if root == "" {
 			t.Errorf("no rootdir; can't check whether %q has size %v", name, size)
 			return
@@ -84,7 +84,7 @@ func fileHasSize(name string, size int) check {
 
 func fileHasContents(name string, want string) check {
 	return func(t *testing.T, e *peerAPITestEnv) {
-		root := e.ph.ps.taildrop.Dir
+		root := e.ph.ps.taildrop.Dir()
 		if root == "" {
 			t.Errorf("no rootdir; can't check contents of %q", name)
 			return
@@ -540,11 +540,11 @@ func TestHandlePeerAPI(t *testing.T) {
 			if !tt.omitRoot {
 				rootDir = t.TempDir()
 				if e.ph.ps.taildrop == nil {
-					e.ph.ps.taildrop = &taildrop.Manager{
+					e.ph.ps.taildrop = taildrop.ManagerOptions{
 						Logf: e.logBuf.Logf,
-					}
+						Dir:  rootDir,
+					}.New()
 				}
-				e.ph.ps.taildrop.Dir = rootDir
 			}
 			for _, req := range tt.reqs {
 				e.rr = httptest.NewRecorder()
@@ -583,10 +583,10 @@ func TestFileDeleteRace(t *testing.T) {
 			capFileSharing: true,
 			clock:          &tstest.Clock{},
 		},
-		taildrop: &taildrop.Manager{
+		taildrop: taildrop.ManagerOptions{
 			Logf: t.Logf,
 			Dir:  dir,
-		},
+		}.New(),
 	}
 	ph := &peerAPIHandler{
 		isSelf: true,
