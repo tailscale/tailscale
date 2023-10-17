@@ -1325,7 +1325,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 			Transport: h.b.Dialer().PeerAPITransport(),
 			Timeout:   10 * time.Second,
 		}
-		req, err := http.NewRequestWithContext(r.Context(), "GET", "http://peer/v0/put/"+filenameEscaped, nil)
+		req, err := http.NewRequestWithContext(r.Context(), "GET", dstURL.String()+"/v0/put/"+filenameEscaped, nil)
 		if err != nil {
 			return taildrop.FileChecksums{}, err
 		}
@@ -1335,18 +1335,23 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 			return taildrop.FileChecksums{}, fmt.Errorf("invalid offset and length")
 		}
 		req.Header.Set("Range", rangeHdr)
-		resp, err := client.Do(req)
-		if err != nil {
+		switch resp, err := client.Do(req); {
+		case err != nil:
 			return taildrop.FileChecksums{}, err
+		case resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotFound:
+			return taildrop.FileChecksums{}, nil // implies remote peer on older version
+		case resp.StatusCode != http.StatusOK:
+			return taildrop.FileChecksums{}, fmt.Errorf("unexpected status code %d", resp.StatusCode)
+		default:
+			var checksums taildrop.FileChecksums
+			err = json.NewDecoder(resp.Body).Decode(&checksums)
+			return checksums, err
 		}
-
-		var checksums taildrop.FileChecksums
-		err = json.NewDecoder(resp.Body).Decode(&checksums)
-		return checksums, err
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		// ResumeReader ensures that the returned offset and reader are consistent
+		// even if an error is encountered. Thus, we can still proceed.
+		h.logf("reader could not be fully resumed: %v", err)
 	}
 
 	outReq, err := http.NewRequestWithContext(r.Context(), "PUT", "http://peer/v0/put/"+filenameEscaped, remainingBody)
