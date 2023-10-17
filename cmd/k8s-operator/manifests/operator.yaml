@@ -153,6 +153,8 @@ spec:
               value: tag:k8s
             - name: APISERVER_PROXY
               value: "false"
+            - name: PROXY_FIREWALL_MODE
+              value: auto
           volumeMounts:
           - name: oauth
             mountPath: /oauth

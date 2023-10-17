@@ -52,6 +52,7 @@ func main() {
 		image             = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
 		priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
+		tsFirewallMode    = defaultEnv("PROXY_FIREWALL_MODE", "")
 	)
 
 	var opts []kzap.Opts
@@ -70,7 +71,7 @@ func main() {
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s)
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
+	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -179,7 +180,7 @@ waitOnline:
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -216,6 +217,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		operatorNamespace:      tsNamespace,
 		proxyImage:             image,
 		proxyPriorityClassName: priorityClassName,
+		tsFirewallMode:         tsFirewallMode,
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -228,6 +230,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			Client:                mgr.GetClient(),
 			logger:                zlog.Named("service-reconciler"),
 			isDefaultLoadBalancer: isDefaultLoadBalancer,
+			recorder:              eventRecorder,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)
