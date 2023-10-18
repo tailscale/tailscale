@@ -5,8 +5,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/csrf"
@@ -58,7 +61,8 @@ type Server struct {
 	//
 	// The map provides a lookup of the session by cookie value
 	// (browserSession.ID => browserSession).
-	browserSessions sync.Map
+	browserSessions  sync.Map
+	controlServerURL atomic.Value // access through getControlServerURL
 }
 
 const (
@@ -77,25 +81,26 @@ type browserSession struct {
 	// ID is the unique identifier for the session.
 	// It is passed in the user's "TS-Web-Session" browser cookie.
 	ID            string
-	SrcNode       tailcfg.StableNodeID
+	SrcNode       tailcfg.NodeID
 	SrcUser       tailcfg.UserID
-	AuthURL       string    // control server URL for user to authenticate the session
-	Authenticated time.Time // when zero, authentication not complete
+	AuthURL       string // control server URL for user to authenticate the session
+	Created       time.Time
+	Authenticated bool
 }
 
 // isAuthorized reports true if the given session is authorized
 // to be used by its associated user to access the full management
 // web client.
 //
-// isAuthorized is true only when s.Authenticated is non-zero
-// (i.e. the user has authenticated the session) and the session
-// is not expired.
-// 2023-10-05: Sessions expire by default after 30 days.
+// isAuthorized is true only when s.Authenticated is true (i.e.
+// the user has authenticated the session) and the session is not
+// expired.
+// 2023-10-05: Sessions expire by default 30 days after creation.
 func (s *browserSession) isAuthorized() bool {
 	switch {
 	case s == nil:
 		return false
-	case s.Authenticated.IsZero():
+	case !s.Authenticated:
 		return false // awaiting auth
 	case s.isExpired(): // TODO: add time field to server?
 		return false // expired
@@ -104,19 +109,19 @@ func (s *browserSession) isAuthorized() bool {
 }
 
 // isExpired reports true if s is expired.
-// 2023-10-05: Sessions expire by default after 30 days.
-// If s.Authenticated is zero, isExpired reports false.
+// 2023-10-05: Sessions expire by default 30 days after creation.
 func (s *browserSession) isExpired() bool {
-	return !s.Authenticated.IsZero() && s.Authenticated.Before(time.Now().Add(-sessionCookieExpiry)) // TODO: add time field to server?
+	return !s.Created.IsZero() && time.Now().After(s.expires()) // TODO: add time field to server?
+}
+
+// expires reports when the given session expires.
+func (s *browserSession) expires() time.Time {
+	return s.Created.Add(sessionCookieExpiry)
 }
 
 // ServerOpts contains options for constructing a new Server.
 type ServerOpts struct {
 	DevMode bool
-
-	// LoginOnly indicates that the server should only serve the minimal
-	// login client and not the full web client.
-	LoginOnly bool
 
 	// CGIMode indicates if the server is running as a CGI script.
 	CGIMode bool
@@ -223,7 +228,11 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 			return true
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
-			session, err := s.getTailscaleBrowserSession(r)
+			//
+			// TODO(sonia): s.getTailscaleBrowserSession calls whois again,
+			// should try and use the above call instead of running another
+			// localapi request.
+			session, _, err := s.getTailscaleBrowserSession(r)
 			if err != nil || !session.isAuthorized() {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
@@ -275,6 +284,7 @@ var (
 	errNotUsingTailscale = errors.New("not-using-tailscale")
 	errTaggedSource      = errors.New("tagged-source")
 	errNotOwner          = errors.New("not-owner")
+	errFailedAuth        = errors.New("failed-auth")
 )
 
 // getTailscaleBrowserSession retrieves the browser session associated with
@@ -296,70 +306,122 @@ var (
 // If no error is returned, the browserSession is always non-nil.
 // getTailscaleBrowserSession does not check whether the session has been
 // authorized by the user. Callers can use browserSession.isAuthorized.
-func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, error) {
+//
+// The WhoIsResponse is always populated, with a non-nil Node and UserProfile,
+// unless getTailscaleBrowserSession reports errNotUsingTailscale.
+func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, error) {
 	whoIs, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
 	switch {
 	case err != nil:
-		return nil, errNotUsingTailscale
+		return nil, nil, errNotUsingTailscale
 	case whoIs.Node.IsTagged():
-		return nil, errTaggedSource
+		return nil, whoIs, errTaggedSource
 	}
-	srcNode := whoIs.Node.StableID
+	srcNode := whoIs.Node.ID
 	srcUser := whoIs.UserProfile.ID
 
 	status, err := s.lc.StatusWithoutPeers(r.Context())
 	switch {
 	case err != nil:
-		return nil, err
+		return nil, whoIs, err
 	case status.Self == nil:
-		return nil, errors.New("missing self node in tailscale status")
+		return nil, whoIs, errors.New("missing self node in tailscale status")
 	case !status.Self.IsTagged() && status.Self.UserID != srcUser:
-		return nil, errNotOwner
+		return nil, whoIs, errNotOwner
 	}
 
 	cookie, err := r.Cookie(sessionCookieName)
 	if errors.Is(err, http.ErrNoCookie) {
-		return nil, errNoSession
+		return nil, whoIs, errNoSession
 	} else if err != nil {
-		return nil, err
+		return nil, whoIs, err
 	}
 	v, ok := s.browserSessions.Load(cookie.Value)
 	if !ok {
-		return nil, errNoSession
+		return nil, whoIs, errNoSession
 	}
 	session := v.(*browserSession)
 	if session.SrcNode != srcNode || session.SrcUser != srcUser {
 		// In this case the browser cookie is associated with another tailscale node.
 		// Maybe the source browser's machine was logged out and then back in as a different node.
 		// Return errNoSession because there is no session for this user.
-		return nil, errNoSession
+		return nil, whoIs, errNoSession
 	} else if session.isExpired() {
 		// Session expired, remove from session map and return errNoSession.
 		s.browserSessions.Delete(session.ID)
-		return nil, errNoSession
+		return nil, whoIs, errNoSession
 	}
-	return session, nil
+	return session, whoIs, nil
 }
 
 type authResponse struct {
 	OK      bool   `json:"ok"`                // true when user has valid auth session
 	AuthURL string `json:"authUrl,omitempty"` // filled when user has control auth action to take
-	Error   string `json:"error,omitempty"`   // filled when Ok is false
 }
 
 func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.GET {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var resp authResponse
 
-	session, err := s.getTailscaleBrowserSession(r)
+	session, whois, err := s.getTailscaleBrowserSession(r)
 	switch {
 	case err != nil && !errors.Is(err, errNoSession):
-		resp = authResponse{OK: false, Error: err.Error()}
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
 	case session == nil:
-		// TODO(tailscale/corp#14335): Create a new auth path from control,
-		// and store back to s.browserSessions and request cookie.
+		// Create a new session.
+		d, err := s.getOrAwaitAuthURL(r.Context(), "", whois.Node.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sid, err := s.newSessionID()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		session := &browserSession{
+			ID:      sid,
+			SrcNode: whois.Node.ID,
+			SrcUser: whois.UserProfile.ID,
+			AuthURL: d.URL,
+			Created: time.Now(),
+		}
+		s.browserSessions.Store(sid, session)
+		// Set the cookie on browser.
+		http.SetCookie(w, &http.Cookie{
+			Name:    sessionCookieName,
+			Value:   sid,
+			Raw:     sid,
+			Path:    "/",
+			Expires: session.expires(),
+		})
+		resp = authResponse{OK: false, AuthURL: d.URL}
 	case !session.isAuthorized():
-		// TODO(tailscale/corp#14335): Check on the session auth path status from control,
-		// and store back to s.browserSessions.
+		if r.URL.Query().Get("wait") == "true" {
+			// Client requested we block until user completes auth.
+			d, err := s.getOrAwaitAuthURL(r.Context(), session.AuthURL, whois.Node.ID)
+			if errors.Is(err, errFailedAuth) {
+				http.Error(w, "user is unauthorized", http.StatusUnauthorized)
+				s.browserSessions.Delete(session.ID) // clean up the failed session
+				return
+			} else if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if d.Complete {
+				session.Authenticated = d.Complete
+				s.browserSessions.Store(session.ID, session)
+			}
+		}
+		if session.isAuthorized() {
+			resp = authResponse{OK: true}
+		} else {
+			resp = authResponse{OK: false, AuthURL: session.AuthURL}
+		}
 	default:
 		resp = authResponse{OK: true}
 	}
@@ -369,6 +431,84 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+}
+
+func (s *Server) newSessionID() (string, error) {
+	raw := make([]byte, 16)
+	for i := 0; i < 5; i++ {
+		if _, err := rand.Read(raw); err != nil {
+			return "", err
+		}
+		cookie := "ts-web-" + base64.RawURLEncoding.EncodeToString(raw)
+		if _, ok := s.browserSessions.Load(cookie); !ok {
+			return cookie, nil
+		}
+	}
+	return "", errors.New("too many collisions generating new session; please refresh page")
+}
+
+func (s *Server) getControlServerURL(ctx context.Context) (string, error) {
+	if v := s.controlServerURL.Load(); v != nil {
+		v, _ := v.(string)
+		return v, nil
+	}
+	prefs, err := s.lc.GetPrefs(ctx)
+	if err != nil {
+		return "", err
+	}
+	url := prefs.ControlURLOrDefault()
+	s.controlServerURL.Store(url)
+	return url, nil
+}
+
+// getOrAwaitAuthURL connects to the control server for user auth,
+// with the following behavior:
+//
+//  1. If authURL is provided empty, a new auth URL is created on the
+//     control server and reported back here, which can then be used
+//     to redirect the user on the frontend.
+//  2. If authURL is provided non-empty, the connection to control
+//     blocks until the user has completed the URL. getOrAwaitAuthURL
+//     terminates when either the URL is completed, or ctx is canceled.
+func (s *Server) getOrAwaitAuthURL(ctx context.Context, authURL string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
+	serverURL, err := s.getControlServerURL(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type data struct {
+		ID  string
+		Src tailcfg.NodeID
+	}
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(data{
+		ID:  strings.TrimPrefix(authURL, serverURL),
+		Src: src,
+	}); err != nil {
+		return nil, err
+	}
+	url := "http://" + apitype.LocalAPIHost + "/localapi/v0/debug-web-client"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &b)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.lc.DoLocalRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		// User completed auth, but control server reported
+		// them unauthorized to manage this node.
+		return nil, errFailedAuth
+	} else if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed request: %s", body)
+	}
+	var authResp *tailcfg.WebClientAuthResponse
+	if err := json.Unmarshal(body, &authResp); err != nil {
+		return nil, err
+	}
+	return authResp, nil
 }
 
 // serveAPI serves requests for the web client api.

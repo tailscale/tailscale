@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
@@ -151,15 +153,15 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 	tags := views.SliceOf([]string{"tag:server"})
 	tailnetNodes := map[string]*apitype.WhoIsResponse{
 		userANodeIP: {
-			Node:        &tailcfg.Node{StableID: "Node1"},
+			Node:        &tailcfg.Node{ID: 1},
 			UserProfile: userA,
 		},
 		userBNodeIP: {
-			Node:        &tailcfg.Node{StableID: "Node2"},
+			Node:        &tailcfg.Node{ID: 2},
 			UserProfile: userB,
 		},
 		taggedNodeIP: {
-			Node: &tailcfg.Node{StableID: "Node3", Tags: tags.AsSlice()},
+			Node: &tailcfg.Node{ID: 3, Tags: tags.AsSlice()},
 		},
 	}
 
@@ -174,21 +176,24 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 	// Add some browser sessions to cache state.
 	userASession := &browserSession{
 		ID:            "cookie1",
-		SrcNode:       "Node1",
+		SrcNode:       1,
 		SrcUser:       userA.ID,
-		Authenticated: time.Time{}, // not yet authenticated
+		Created:       time.Now(),
+		Authenticated: false, // not yet authenticated
 	}
 	userBSession := &browserSession{
 		ID:            "cookie2",
-		SrcNode:       "Node2",
+		SrcNode:       2,
 		SrcUser:       userB.ID,
-		Authenticated: time.Now().Add(-2 * sessionCookieExpiry), // expired
+		Created:       time.Now().Add(-2 * sessionCookieExpiry),
+		Authenticated: true, // expired
 	}
 	userASessionAuthorized := &browserSession{
 		ID:            "cookie3",
-		SrcNode:       "Node1",
+		SrcNode:       1,
 		SrcUser:       userA.ID,
-		Authenticated: time.Now(), // authenticated and not expired
+		Created:       time.Now(),
+		Authenticated: true, // authenticated and not expired
 	}
 	s.browserSessions.Store(userASession.ID, userASession)
 	s.browserSessions.Store(userBSession.ID, userBSession)
@@ -281,7 +286,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 			if tt.cookie != "" {
 				r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
 			}
-			session, err := s.getTailscaleBrowserSession(r)
+			session, _, err := s.getTailscaleBrowserSession(r)
 			if !errors.Is(err, tt.wantError) {
 				t.Errorf("wrong error; want=%v, got=%v", tt.wantError, err)
 			}
@@ -322,9 +327,10 @@ func TestAuthorizeRequest(t *testing.T) {
 	validCookie := "ts-cookie"
 	s.browserSessions.Store(validCookie, &browserSession{
 		ID:            validCookie,
-		SrcNode:       remoteNode.Node.StableID,
+		SrcNode:       remoteNode.Node.ID,
 		SrcUser:       user.ID,
-		Authenticated: time.Now(),
+		Created:       time.Now(),
+		Authenticated: true,
 	})
 
 	tests := []struct {
@@ -391,6 +397,149 @@ func TestAuthorizeRequest(t *testing.T) {
 	}
 }
 
+func TestServeTailscaleAuth(t *testing.T) {
+	user := &tailcfg.UserProfile{ID: tailcfg.UserID(1)}
+	self := &ipnstate.PeerStatus{ID: "self", UserID: user.ID}
+	remoteNode := &apitype.WhoIsResponse{Node: &tailcfg.Node{ID: 1}, UserProfile: user}
+	remoteIP := "100.100.100.101"
+
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+	localapi := mockLocalAPI(t,
+		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
+		func() *ipnstate.PeerStatus { return self },
+	)
+	defer localapi.Close()
+	go localapi.Serve(lal)
+
+	s := &Server{
+		lc:          &tailscale.LocalClient{Dial: lal.Dial},
+		tsDebugMode: "full",
+	}
+
+	successCookie := "ts-cookie-success"
+	s.browserSessions.Store(successCookie, &browserSession{
+		ID:      successCookie,
+		SrcNode: remoteNode.Node.ID,
+		SrcUser: user.ID,
+		Created: time.Now(),
+		AuthURL: testControlURL + testAuthPathSuccess,
+	})
+	failureCookie := "ts-cookie-failure"
+	s.browserSessions.Store(failureCookie, &browserSession{
+		ID:      failureCookie,
+		SrcNode: remoteNode.Node.ID,
+		SrcUser: user.ID,
+		Created: time.Now(),
+		AuthURL: testControlURL + testAuthPathError,
+	})
+	expiredCookie := "ts-cookie-expired"
+	s.browserSessions.Store(expiredCookie, &browserSession{
+		ID:      expiredCookie,
+		SrcNode: remoteNode.Node.ID,
+		SrcUser: user.ID,
+		Created: time.Now().Add(-sessionCookieExpiry * 2),
+		AuthURL: testControlURL + "/a/old-auth-url",
+	})
+
+	tests := []struct {
+		name          string
+		cookie        string
+		query         string
+		wantStatus    int
+		wantResp      *authResponse
+		wantNewCookie bool // new cookie generated
+	}{
+		{
+			name:          "new-session-created",
+			wantStatus:    http.StatusOK,
+			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
+			wantNewCookie: true,
+		}, {
+			name:       "query-existing-incomplete-session",
+			cookie:     successCookie,
+			wantStatus: http.StatusOK,
+			wantResp:   &authResponse{OK: false, AuthURL: testControlURL + testAuthPathSuccess},
+		}, {
+			name:   "transition-to-successful-session",
+			cookie: successCookie,
+			// query "wait" indicates the FE wants to make
+			// local api call to wait until session completed.
+			query:      "wait=true",
+			wantStatus: http.StatusOK,
+			wantResp:   &authResponse{OK: true},
+		}, {
+			name:       "query-existing-complete-session",
+			cookie:     successCookie,
+			wantStatus: http.StatusOK,
+			wantResp:   &authResponse{OK: true},
+		}, {
+			name:       "transition-to-failed-session",
+			cookie:     failureCookie,
+			query:      "wait=true",
+			wantStatus: http.StatusUnauthorized,
+			wantResp:   nil,
+		}, {
+			name:          "failed-session-cleaned-up",
+			cookie:        failureCookie,
+			wantStatus:    http.StatusOK,
+			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
+			wantNewCookie: true,
+		}, {
+			name:          "expired-cookie-gets-new-session",
+			cookie:        expiredCookie,
+			wantStatus:    http.StatusOK,
+			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
+			wantNewCookie: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/api/auth", nil)
+			r.URL.RawQuery = tt.query
+			r.RemoteAddr = remoteIP
+			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
+			w := httptest.NewRecorder()
+			s.serveTailscaleAuth(w, r)
+			res := w.Result()
+			defer res.Body.Close()
+			if gotStatus := res.StatusCode; tt.wantStatus != gotStatus {
+				t.Errorf("wrong status; want=%v, got=%v", tt.wantStatus, gotStatus)
+			}
+			var gotResp *authResponse
+			if res.StatusCode == http.StatusOK {
+				body, err := io.ReadAll(res.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(body, &gotResp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !reflect.DeepEqual(gotResp, tt.wantResp) {
+				t.Errorf("wrong response; want=%v, got=%v", tt.wantResp, gotResp)
+			}
+			var gotCookie bool
+			for _, c := range w.Result().Cookies() {
+				if c.Name == sessionCookieName {
+					gotCookie = true
+					break
+				}
+			}
+			if gotCookie != tt.wantNewCookie {
+				t.Errorf("wantNewCookie wrong; want=%v, got=%v", tt.wantNewCookie, gotCookie)
+			}
+		})
+	}
+}
+
+var (
+	testControlURL      = "http://localhost:8080"
+	testAuthPath        = "/a/12345"
+	testAuthPathSuccess = "/a/will-succeed"
+	testAuthPathError   = "/a/will-error"
+)
+
 // mockLocalAPI constructs a test localapi handler that can be used
 // to simulate localapi responses without a functioning tailnet.
 //
@@ -418,6 +567,43 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 		case "/localapi/v0/status":
 			status := ipnstate.Status{Self: self()}
 			if err := json.NewEncoder(w).Encode(status); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			return
+		case "/localapi/v0/prefs":
+			prefs := ipn.Prefs{ControlURL: testControlURL}
+			if err := json.NewEncoder(w).Encode(prefs); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			return
+		case "/localapi/v0/debug-web-client": // used by TestServeTailscaleAuth
+			type reqData struct {
+				ID  string
+				Src tailcfg.NodeID
+			}
+			var data reqData
+			if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			if data.Src == 0 {
+				http.Error(w, "missing Src node", http.StatusBadRequest)
+				return
+			}
+			var resp *tailcfg.WebClientAuthResponse
+			if data.ID == "" {
+				resp = &tailcfg.WebClientAuthResponse{URL: testControlURL + testAuthPath}
+			} else if data.ID == testAuthPathSuccess {
+				resp = &tailcfg.WebClientAuthResponse{Complete: true}
+			} else if data.ID == testAuthPathError {
+				http.Error(w, "authenticated as wrong user", http.StatusUnauthorized)
+				return
+			}
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
