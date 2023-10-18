@@ -22,6 +22,7 @@ import (
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/views"
+	"tailscale.com/util/httpm"
 )
 
 func TestQnapAuthnURL(t *testing.T) {
@@ -124,7 +125,7 @@ func TestServeAPI(t *testing.T) {
 			res := w.Result()
 			defer res.Body.Close()
 			if gotStatus := res.StatusCode; tt.wantStatus != gotStatus {
-				t.Errorf("wrong status; want=%q, got=%q", tt.wantStatus, gotStatus)
+				t.Errorf("wrong status; want=%v, got=%v", tt.wantStatus, gotStatus)
 			}
 			body, err := io.ReadAll(res.Body)
 			if err != nil {
@@ -164,39 +165,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	// Serve a testing localapi handler so we can simulate
-	// whois responses without a functioning tailnet.
-	localapi := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/localapi/v0/whois":
-			addr := r.URL.Query().Get("addr")
-			if addr == "" {
-				t.Fatalf("/whois call missing \"addr\" query")
-			}
-			if node := tailnetNodes[addr]; node != nil {
-				if err := json.NewEncoder(w).Encode(&node); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				return
-			}
-			http.Error(w, "not a node", http.StatusUnauthorized)
-			return
-		case "/localapi/v0/status":
-			status := ipnstate.Status{Self: selfNode}
-			if err := json.NewEncoder(w).Encode(status); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			return
-		default:
-			// Only the above two endpoints get triggered from getTailscaleBrowserSession.
-			// No need to mock any of the other localapi endpoint.
-			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)
-		}
-	})}
+	localapi := mockLocalAPI(t, tailnetNodes, func() *ipnstate.PeerStatus { return selfNode })
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -324,4 +293,138 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAuthorizeRequest tests the s.authorizeRequest function.
+// 2023-10-18: These tests currently cover tailscale auth mode (not platform auth).
+func TestAuthorizeRequest(t *testing.T) {
+	// Create self and remoteNode owned by same user.
+	// See TestGetTailscaleBrowserSession for tests of
+	// browser sessions w/ different users.
+	user := &tailcfg.UserProfile{ID: tailcfg.UserID(1)}
+	self := &ipnstate.PeerStatus{ID: "self", UserID: user.ID}
+	remoteNode := &apitype.WhoIsResponse{Node: &tailcfg.Node{StableID: "node"}, UserProfile: user}
+	remoteIP := "100.100.100.101"
+
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+	localapi := mockLocalAPI(t,
+		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
+		func() *ipnstate.PeerStatus { return self },
+	)
+	defer localapi.Close()
+	go localapi.Serve(lal)
+
+	s := &Server{
+		lc:          &tailscale.LocalClient{Dial: lal.Dial},
+		tsDebugMode: "full",
+	}
+	validCookie := "ts-cookie"
+	s.browserSessions.Store(validCookie, &browserSession{
+		ID:            validCookie,
+		SrcNode:       remoteNode.Node.StableID,
+		SrcUser:       user.ID,
+		Authenticated: time.Now(),
+	})
+
+	tests := []struct {
+		reqPath   string
+		reqMethod string
+
+		wantOkNotOverTailscale bool // simulates req over public internet
+		wantOkWithoutSession   bool // simulates req over TS without valid browser session
+		wantOkWithSession      bool // simulates req over TS with valid browser session
+	}{{
+		reqPath:                "/api/data",
+		reqMethod:              httpm.GET,
+		wantOkNotOverTailscale: false,
+		wantOkWithoutSession:   true,
+		wantOkWithSession:      true,
+	}, {
+		reqPath:                "/api/data",
+		reqMethod:              httpm.POST,
+		wantOkNotOverTailscale: false,
+		wantOkWithoutSession:   false,
+		wantOkWithSession:      true,
+	}, {
+		reqPath:                "/api/auth",
+		reqMethod:              httpm.GET,
+		wantOkNotOverTailscale: false,
+		wantOkWithoutSession:   true,
+		wantOkWithSession:      true,
+	}, {
+		reqPath:                "/api/somethingelse",
+		reqMethod:              httpm.GET,
+		wantOkNotOverTailscale: false,
+		wantOkWithoutSession:   false,
+		wantOkWithSession:      true,
+	}, {
+		reqPath:                "/assets/styles.css",
+		wantOkNotOverTailscale: false,
+		wantOkWithoutSession:   true,
+		wantOkWithSession:      true,
+	}}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s-%s", tt.reqMethod, tt.reqPath), func(t *testing.T) {
+			doAuthorize := func(remoteAddr string, cookie string) bool {
+				r := httptest.NewRequest(tt.reqMethod, tt.reqPath, nil)
+				r.RemoteAddr = remoteAddr
+				if cookie != "" {
+					r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookie})
+				}
+				w := httptest.NewRecorder()
+				return s.authorizeRequest(w, r)
+			}
+			// Do request from non-Tailscale IP.
+			if gotOk := doAuthorize("123.456.789.999", ""); gotOk != tt.wantOkNotOverTailscale {
+				t.Errorf("wantOkNotOverTailscale; want=%v, got=%v", tt.wantOkNotOverTailscale, gotOk)
+			}
+			// Do request from Tailscale IP w/o associated session.
+			if gotOk := doAuthorize(remoteIP, ""); gotOk != tt.wantOkWithoutSession {
+				t.Errorf("wantOkWithoutSession; want=%v, got=%v", tt.wantOkWithoutSession, gotOk)
+			}
+			// Do request from Tailscale IP w/ associated session.
+			if gotOk := doAuthorize(remoteIP, validCookie); gotOk != tt.wantOkWithSession {
+				t.Errorf("wantOkWithSession; want=%v, got=%v", tt.wantOkWithSession, gotOk)
+			}
+		})
+	}
+}
+
+// mockLocalAPI constructs a test localapi handler that can be used
+// to simulate localapi responses without a functioning tailnet.
+//
+// self accepts a function that resolves to a self node status,
+// so that tests may swap out the /localapi/v0/status response
+// as desired.
+func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self func() *ipnstate.PeerStatus) *http.Server {
+	return &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/localapi/v0/whois":
+			addr := r.URL.Query().Get("addr")
+			if addr == "" {
+				t.Fatalf("/whois call missing \"addr\" query")
+			}
+			if node := whoIs[addr]; node != nil {
+				if err := json.NewEncoder(w).Encode(&node); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				return
+			}
+			http.Error(w, "not a node", http.StatusUnauthorized)
+			return
+		case "/localapi/v0/status":
+			status := ipnstate.Status{Self: self()}
+			if err := json.NewEncoder(w).Encode(status); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			return
+		default:
+			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)
+		}
+	})}
 }
