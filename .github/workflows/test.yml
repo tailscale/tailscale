@@ -183,6 +183,19 @@ jobs:
       # the equals signs cause great confusion.
       run: go test ./... -bench . -benchtime 1x -run "^$"
 
+  privileged:
+    runs-on: ubuntu-22.04
+    container:
+      image: golang:latest
+      options: --privileged
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: chown
+      run: chown -R $(id -u):$(id -g) $PWD
+    - name: privileged tests
+      run: ./tool/go test ./util/linuxfw
+
   vm:
     runs-on: ["self-hosted", "linux", "vm"]
     # VM tests run with some privileges, don't let them run on 3p PRs.
