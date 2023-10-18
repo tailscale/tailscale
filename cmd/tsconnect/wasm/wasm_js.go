@@ -125,6 +125,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		return ns.DialContextTCP(ctx, dst)
 	}
 	sys.NetstackRouter.Set(true)
+	sys.Tun.Get().Start()
 
 	logid := lpc.PublicID
 	srv := ipnserver.New(logf, logid, sys.NetMon.Get())
