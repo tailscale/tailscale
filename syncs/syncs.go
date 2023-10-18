@@ -164,19 +164,33 @@ type Map[K comparable, V any] struct {
 	m  map[K]V
 }
 
-func (m *Map[K, V]) Load(key K) (value V, ok bool) {
+// Load loads the value for the provided key and whether it was found.
+func (m *Map[K, V]) Load(key K) (value V, loaded bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	value, ok = m.m[key]
-	return value, ok
+	value, loaded = m.m[key]
+	return value, loaded
 }
 
+// LoadFunc calls f with the value for the provided key
+// regardless of whether the entry exists or not.
+// The lock is held for the duration of the call to f.
+func (m *Map[K, V]) LoadFunc(key K, f func(value V, loaded bool)) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	value, loaded := m.m[key]
+	f(value, loaded)
+}
+
+// Store stores the value for the provided key.
 func (m *Map[K, V]) Store(key K, value V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mak.Set(&m.m, key, value)
 }
 
+// LoadOrStore returns the value for the given key if it exists
+// otherwise it stores value.
 func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 	if actual, loaded = m.Load(key); loaded {
 		return actual, loaded
@@ -212,6 +226,8 @@ func (m *Map[K, V]) LoadOrInit(key K, f func() V) (actual V, loaded bool) {
 	return actual, loaded
 }
 
+// LoadAndDelete returns the value for the given key if it exists.
+// It ensures that the map is cleared of any entry for the key.
 func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -222,6 +238,7 @@ func (m *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	return value, loaded
 }
 
+// Delete deletes the entry identified by key.
 func (m *Map[K, V]) Delete(key K) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
