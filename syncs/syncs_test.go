@@ -81,6 +81,11 @@ func TestMap(t *testing.T) {
 	if v, ok := m.Load("noexist"); v != 0 || ok {
 		t.Errorf(`Load("noexist") = (%v, %v), want (0, false)`, v, ok)
 	}
+	m.LoadFunc("noexist", func(v int, ok bool) {
+		if v != 0 || ok {
+			t.Errorf(`LoadFunc("noexist") = (%v, %v), want (0, false)`, v, ok)
+		}
+	})
 	m.Store("one", 1)
 	if v, ok := m.LoadOrStore("one", -1); v != 1 || !ok {
 		t.Errorf(`LoadOrStore("one", 1) = (%v, %v), want (1, true)`, v, ok)
@@ -88,6 +93,11 @@ func TestMap(t *testing.T) {
 	if v, ok := m.Load("one"); v != 1 || !ok {
 		t.Errorf(`Load("one") = (%v, %v), want (1, true)`, v, ok)
 	}
+	m.LoadFunc("one", func(v int, ok bool) {
+		if v != 1 || !ok {
+			t.Errorf(`LoadFunc("one") = (%v, %v), want (1, true)`, v, ok)
+		}
+	})
 	if v, ok := m.LoadOrStore("two", 2); v != 2 || ok {
 		t.Errorf(`LoadOrStore("two", 2) = (%v, %v), want (2, false)`, v, ok)
 	}
