@@ -20,23 +20,11 @@ var (
 	hashAlgorithm = "sha256"
 )
 
-// FileChecksums represents checksums into partially received file.
-type FileChecksums struct {
-	// Offset is the offset into the file.
-	Offset int64 `json:"offset"`
-	// Length is the length of content being hashed in the file.
-	Length int64 `json:"length"`
-	// Checksums is a list of checksums of BlockSize-sized blocks
-	// starting from Offset. The number of checksums is the Length
-	// divided by BlockSize rounded up to the nearest integer.
-	// All blocks except for the last one are guaranteed to be checksums
-	// over BlockSize-sized blocks.
-	Checksums []Checksum `json:"checksums"`
-	// Algorithm is the hashing algorithm used to compute checksums.
-	Algorithm string `json:"algorithm"` // always "sha256" for now
-	// BlockSize is the size of each block.
-	// The last block may be smaller than this, but never zero.
-	BlockSize int64 `json:"blockSize"` // always (64<<10) for now
+// BlockChecksum represents the checksum for a single block.
+type BlockChecksum struct {
+	Checksum  Checksum `json:"checksum"`
+	Algorithm string   `json:"algo"` // always "sha256" for now
+	Size      int64    `json:"size"` // always (64<<10) for now
 }
 
 // Checksum is an opaque checksum that is comparable.
@@ -92,113 +80,89 @@ func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
 	return ret, nil
 }
 
-// HashPartialFile hashes the contents of a partial file sent by id,
-// starting at the specified offset and for the specified length.
-// If length is negative, it hashes the entire file.
-// If the length exceeds the remaining file length, then it hashes until EOF.
-// If [FileHashes.Length] is less than length and no error occurred,
-// then it implies that all remaining content in the file has been hashed.
-func (m *Manager) HashPartialFile(id ClientID, baseName string, offset, length int64) (FileChecksums, error) {
+// HashPartialFile returns a function that hashes the next block in the file,
+// starting from the beginning of the file.
+// It returns (BlockChecksum{}, io.EOF) when the stream is complete.
+// It is the caller's responsibility to call close.
+func (m *Manager) HashPartialFile(id ClientID, baseName string) (next func() (BlockChecksum, error), close func() error, err error) {
 	if m == nil || m.opts.Dir == "" {
-		return FileChecksums{}, ErrNoTaildrop
+		return nil, nil, ErrNoTaildrop
 	}
+	noopNext := func() (BlockChecksum, error) { return BlockChecksum{}, io.EOF }
+	noopClose := func() error { return nil }
 	if m.opts.DirectFileMode && m.opts.AvoidFinalRename {
-		return FileChecksums{}, nil // resuming is not supported for users that peek at our file structure
+		return noopNext, noopClose, nil // resuming is not supported for users that peek at our file structure
 	}
 
 	dstFile, err := joinDir(m.opts.Dir, baseName)
 	if err != nil {
-		return FileChecksums{}, err
+		return nil, nil, err
 	}
 	f, err := os.Open(dstFile + id.partialSuffix())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return FileChecksums{}, nil
+			return noopNext, noopClose, nil
 		}
-		return FileChecksums{}, redactError(err)
+		return nil, nil, redactError(err)
 	}
-	defer f.Close()
 
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return FileChecksums{}, redactError(err)
-	}
-	checksums := FileChecksums{
-		Offset:    offset,
-		Algorithm: hashAlgorithm,
-		BlockSize: blockSize,
-	}
 	b := make([]byte, blockSize) // TODO: Pool this?
-	r := io.Reader(f)
-	if length >= 0 {
-		r = io.LimitReader(f, length)
-	}
-	for {
-		switch n, err := io.ReadFull(r, b); {
+	next = func() (BlockChecksum, error) {
+		switch n, err := io.ReadFull(f, b); {
 		case err != nil && err != io.EOF && err != io.ErrUnexpectedEOF:
-			return checksums, redactError(err)
+			return BlockChecksum{}, redactError(err)
 		case n == 0:
-			return checksums, nil
+			return BlockChecksum{}, io.EOF
 		default:
-			checksums.Checksums = append(checksums.Checksums, hash(b[:n]))
-			checksums.Length += int64(n)
+			return BlockChecksum{hash(b[:n]), hashAlgorithm, int64(n)}, nil
 		}
 	}
+	close = f.Close
+	return next, close, nil
 }
 
 // ResumeReader reads and discards the leading content of r
 // that matches the content based on the checksums that exist.
 // It returns the number of bytes consumed,
 // and returns an [io.Reader] representing the remaining content.
-func ResumeReader(r io.Reader, hashFile func(offset, length int64) (FileChecksums, error)) (int64, io.Reader, error) {
-	if hashFile == nil {
+func ResumeReader(r io.Reader, hashNext func() (BlockChecksum, error)) (int64, io.Reader, error) {
+	if hashNext == nil {
 		return 0, r, nil
 	}
-
-	// Ask for checksums of a particular content length,
-	// where the amount of memory needed to represent the checksums themselves
-	// is exactly equal to the blockSize.
-	numBlocks := blockSize / sha256.Size
-	hashLength := blockSize * numBlocks
 
 	var offset int64
 	b := make([]byte, 0, blockSize)
 	for {
-		// Request a list of checksums for the partial file starting at offset.
-		checksums, err := hashFile(offset, hashLength)
-		if len(checksums.Checksums) == 0 || err != nil {
+		// Obtain the next block checksum from the remote peer.
+		cs, err := hashNext()
+		switch {
+		case err == io.EOF:
+			return offset, io.MultiReader(bytes.NewReader(b), r), nil
+		case err != nil:
 			return offset, io.MultiReader(bytes.NewReader(b), r), err
-		} else if checksums.BlockSize != blockSize || checksums.Algorithm != hashAlgorithm {
+		case cs.Algorithm != hashAlgorithm || cs.Size < 0 || cs.Size > blockSize:
 			return offset, io.MultiReader(bytes.NewReader(b), r), fmt.Errorf("invalid block size or hashing algorithm")
 		}
 
-		// Read from r, comparing each block with the provided checksums.
-		for _, want := range checksums.Checksums {
-			// Read a block from r.
-			n, err := io.ReadFull(r, b[:blockSize])
-			b = b[:n]
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				err = nil
-			}
-			if len(b) == 0 || err != nil {
-				// This should not occur in practice.
-				// It implies that an error occurred reading r,
-				// or that the partial file on the remote side is fully complete.
-				return offset, io.MultiReader(bytes.NewReader(b), r), err
-			}
-
-			// Compare the local and remote block checksums.
-			// If it mismatches, then resume from this point.
-			got := hash(b)
-			if got != want {
-				return offset, io.MultiReader(bytes.NewReader(b), r), nil
-			}
-			offset += int64(len(b))
-			b = b[:0]
+		// Read the contents of the next block.
+		n, err := io.ReadFull(r, b[:blockSize])
+		b = b[:n]
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			err = nil
+		}
+		if len(b) == 0 || err != nil {
+			// This should not occur in practice.
+			// It implies that an error occurred reading r,
+			// or that the partial file on the remote side is fully complete.
+			return offset, io.MultiReader(bytes.NewReader(b), r), err
 		}
 
-		// We hashed the remainder of the partial file, so stop.
-		if checksums.Length < hashLength {
+		// Compare the local and remote block checksums.
+		// If it mismatches, then resume from this point.
+		if cs.Checksum != hash(b) {
 			return offset, io.MultiReader(bytes.NewReader(b), r), nil
 		}
+		offset += int64(len(b))
+		b = b[:0]
 	}
 }
