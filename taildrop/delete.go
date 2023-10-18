@@ -94,7 +94,7 @@ func (d *fileDeleter) Insert(baseName string) {
 		return // already queued for deletion
 	}
 	d.byName[baseName] = d.queue.PushBack(&deleteFile{baseName, d.clock.Now()})
-	if d.queue.Len() == 1 {
+	if d.queue.Len() == 1 && d.shutdownCtx.Err() == nil {
 		d.group.Go(func() { d.waitAndDelete(deleteDelay) })
 	}
 }
@@ -147,7 +147,7 @@ func (d *fileDeleter) waitAndDelete(wait time.Duration) {
 		}
 
 		// If there are still some files to delete, retry again later.
-		if d.queue.Len() > 0 {
+		if d.queue.Len() > 0 && d.shutdownCtx.Err() == nil {
 			file := d.queue.Front().Value.(*deleteFile)
 			retryAfter := deleteDelay - now.Sub(file.inserted)
 			d.group.Go(func() { d.waitAndDelete(retryAfter) })
