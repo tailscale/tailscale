@@ -328,11 +328,7 @@ func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
 		}
 		err = rc.Control(func(fd uintptr) {
 			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
-			if errSyscall != nil {
-				// no point in checking RX, TX support was added first.
-				return
-			}
-			hasTX = true
+			hasTX = errSyscall == nil
 			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
 			hasRX = errSyscall == nil
 		})
