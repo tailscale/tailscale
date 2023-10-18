@@ -237,7 +237,7 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 	// Client using system-specific auth.
 	d := distro.Get()
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/assets/"):
+	case strings.HasPrefix(r.URL.Path, "/assets/") && r.Method == httpm.GET:
 		// Don't require authorization for static assets.
 		return true
 	case d == distro.Synology:
