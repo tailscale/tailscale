@@ -649,34 +649,46 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, taildrop.ErrInvalidFileName.Error(), http.StatusBadRequest)
 		return
 	}
+	enc := json.NewEncoder(w)
 	switch r.Method {
 	case "GET":
-		var resp any
-		var err error
 		id := taildrop.ClientID(h.peerNode.StableID())
-
 		if prefix == "" {
-			resp, err = h.ps.taildrop.PartialFiles(id)
-		} else {
-			ranges, ok := httphdr.ParseRange(r.Header.Get("Range"))
-			if !ok || len(ranges) != 1 || ranges[0].Length < 0 {
-				http.Error(w, "invalid Range header", http.StatusBadRequest)
+			// List all the partial files.
+			files, err := h.ps.taildrop.PartialFiles(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			offset := ranges[0].Start
-			length := ranges[0].Length
-			if length == 0 {
-				length = -1 // httphdr.Range.Length == 0 implies reading the rest of file
+			if err := enc.Encode(files); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				h.logf("json.Encoder.Encode error: %v", err)
+				return
 			}
-			resp, err = h.ps.taildrop.HashPartialFile(id, baseName, offset, length)
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		} else {
+			// Stream all the block hashes for the specified file.
+			next, close, err := h.ps.taildrop.HashPartialFile(id, baseName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer close()
+			for {
+				switch cs, err := next(); {
+				case err == io.EOF:
+					return
+				case err != nil:
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					h.logf("HashPartialFile.next error: %v", err)
+					return
+				default:
+					if err := enc.Encode(cs); err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						h.logf("json.Encoder.Encode error: %v", err)
+						return
+					}
+				}
+			}
 		}
 	case "PUT":
 		t0 := h.ps.b.clock.Now()
