@@ -1,5 +1,6 @@
 import React from "react"
 import { Footer, Header, IP, State } from "src/components/legacy"
+import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
@@ -19,14 +20,7 @@ export default function App() {
 
   return !needsLogin &&
     (data.DebugMode === "login" || data.DebugMode === "full") ? (
-    <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-10">
-      {data.DebugMode === "login" ? (
-        <LoginView {...data} />
-      ) : (
-        <ManageView {...data} />
-      )}
-      <Footer className="mt-20" licensesURL={data.LicensesURL} />
-    </div>
+    <WebClient {...data} />
   ) : (
     // Legacy client UI
     <div className="py-14">
@@ -40,7 +34,34 @@ export default function App() {
   )
 }
 
-function LoginView(props: NodeData) {
+function WebClient(props: NodeData) {
+  const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
+
+  if (loadingAuth) {
+    return <div className="text-center py-14">Loading...</div>
+  }
+
+  return (
+    <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-10">
+      {props.DebugMode === "full" && auth?.ok ? (
+        <ManagementView {...props} />
+      ) : (
+        <ReadonlyView data={props} auth={auth} waitOnAuth={waitOnAuth} />
+      )}
+      <Footer className="mt-20" licensesURL={props.LicensesURL} />
+    </div>
+  )
+}
+
+function ReadonlyView({
+  data,
+  auth,
+  waitOnAuth,
+}: {
+  data: NodeData
+  auth?: AuthResponse
+  waitOnAuth: () => Promise<void>
+}) {
   return (
     <>
       <div className="pb-52 mx-auto">
@@ -48,14 +69,14 @@ function LoginView(props: NodeData) {
       </div>
       <div className="w-full p-4 bg-stone-50 rounded-3xl border border-gray-200 flex flex-col gap-4">
         <div className="flex gap-2.5">
-          <ProfilePic url={props.Profile.ProfilePicURL} />
+          <ProfilePic url={data.Profile.ProfilePicURL} />
           <div className="font-medium">
             <div className="text-neutral-500 text-xs uppercase tracking-wide">
               Owned by
             </div>
             <div className="text-neutral-800 text-sm leading-tight">
               {/* TODO(sonia): support tagged node profile view more eloquently */}
-              {props.Profile.LoginName}
+              {data.Profile.LoginName}
             </div>
           </div>
         </div>
@@ -64,19 +85,29 @@ function LoginView(props: NodeData) {
             <ConnectedDeviceIcon />
             <div className="text-neutral-800">
               <div className="text-lg font-medium leading-[25.20px]">
-                {props.DeviceName}
+                {data.DeviceName}
               </div>
-              <div className="text-sm leading-tight">{props.IP}</div>
+              <div className="text-sm leading-tight">{data.IP}</div>
             </div>
           </div>
-          <button className="button button-blue ml-6">Access</button>
+          {data.DebugMode === "full" && (
+            <button
+              className="button button-blue ml-6"
+              onClick={() => {
+                window.open(auth?.authUrl, "_blank")
+                waitOnAuth()
+              }}
+            >
+              Access
+            </button>
+          )}
         </div>
       </div>
     </>
   )
 }
 
-function ManageView(props: NodeData) {
+function ManagementView(props: NodeData) {
   return (
     <div className="px-5">
       <div className="flex justify-between mb-12">
@@ -101,6 +132,7 @@ function ManageView(props: NodeData) {
         Tailscale is up and running. You can connect to this device from devices
         in your tailnet by using its name or IP address.
       </p>
+      <button className="button button-blue mt-6">Advertise exit node</button>
     </div>
   )
 }
