@@ -268,7 +268,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 				return err
 			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
-			msg = e.messageForPort(sc, st, dnsName, srvPort)
+			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
@@ -377,18 +377,27 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 	return nil
 }
 
+var (
+	msgFunnelAvailable     = "Available on the internet:"
+	msgServeAvailable      = "Available within your tailnet:"
+	msgRunningInBackground = "Serve started and running in the background."
+	msgDisableProxy        = "To disable the proxy, run: tailscale %s --%s=%d off"
+	msgToExit              = "Press Ctrl+C to exit."
+)
+
 // messageForPort returns a message for the given port based on the
 // serve config and status.
-func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16) string {
+func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
 
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
 
 	if sc.AllowFunnel[hp] == true {
-		output.WriteString("Available on the internet:\n")
+		output.WriteString(msgFunnelAvailable)
 	} else {
-		output.WriteString("Available within your tailnet:\n")
+		output.WriteString(msgServeAvailable)
 	}
+	output.WriteString("\n")
 
 	scheme := "https"
 	if sc.IsServingHTTP(srvPort) {
@@ -404,7 +413,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	output.WriteString(fmt.Sprintf("%s://%s%s\n\n", scheme, dnsName, portPart))
 
 	if !e.bg {
-		output.WriteString("Press Ctrl+C to exit.")
+		output.WriteString(msgToExit)
 		return output.String()
 	}
 
@@ -452,8 +461,13 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
 	}
 
-	output.WriteString("\nServe started and running in the background.\n")
-	output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
+	subCmd := infoMap[e.subcmd].Name
+	subCmdSentance := strings.ToUpper(string(subCmd[0])) + subCmd[1:]
+
+	output.WriteString("\n")
+	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdSentance))
+	output.WriteString("\n")
+	output.WriteString(fmt.Sprintf(msgDisableProxy, subCmd, srvType.String(), srvPort))
 
 	return output.String()
 }
