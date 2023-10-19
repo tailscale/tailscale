@@ -587,3 +587,39 @@ func TestServeFileOrDirectory(t *testing.T) {
 		}
 	}
 }
+
+func Test_isGRPCContentType(t *testing.T) {
+	tests := map[string]struct {
+		contentType string
+		want        bool
+	}{
+		"application/grpc": {
+			contentType: "application/grpc",
+			want:        true,
+		},
+		"application/grpc;": {
+			contentType: "application/grpc;",
+			want:        true,
+		},
+		"application/grpc+": {
+			contentType: "application/grpc+",
+			want:        true,
+		},
+		"application/grpcfoobar": {
+			contentType: "application/grpcfoobar",
+		},
+		"application/text": {
+			contentType: "application/text",
+		},
+		"foobar": {
+			contentType: "foobar",
+		},
+	}
+	for name, scenario := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := isGRPCContentType(scenario.contentType); got != scenario.want {
+				t.Errorf("test case %s failed, isGRPCContentType() = %v, want %v", name, got, scenario.want)
+			}
+		})
+	}
+}
