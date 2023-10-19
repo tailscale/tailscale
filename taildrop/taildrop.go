@@ -135,7 +135,7 @@ func (opts ManagerOptions) New() *Manager {
 		opts.SendFileNotify = func() {}
 	}
 	m := &Manager{opts: opts}
-	m.deleter.Init(opts.Logf, opts.Clock, func(string) {}, opts.Dir)
+	m.deleter.Init(m, func(string) {})
 	m.emptySince.Store(-1) // invalidate this cache
 	return m
 }
@@ -250,10 +250,6 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 	return files
 }
 
-// redacted is a fake path name we use in errors, to avoid
-// accidentally logging actual filenames anywhere.
-const redacted = "redacted"
-
 type redactedError struct {
 	msg   string
 	inner error
@@ -270,6 +266,7 @@ func (re *redactedError) Unwrap() error {
 func redactString(s string) string {
 	hash := adler32.Checksum([]byte(s))
 
+	const redacted = "redacted"
 	var buf [len(redacted) + len(".12345678")]byte
 	b := append(buf[:0], []byte(redacted)...)
 	b = append(b, '.')

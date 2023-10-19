@@ -145,7 +145,7 @@ func ResumeReader(r io.Reader, hashNext func() (BlockChecksum, error)) (int64, i
 		}
 
 		// Read the contents of the next block.
-		n, err := io.ReadFull(r, b[:blockSize])
+		n, err := io.ReadFull(r, b[:cs.Size])
 		b = b[:n]
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			err = nil
