@@ -614,6 +614,9 @@ func Test_isGRPCContentType(t *testing.T) {
 		"foobar": {
 			contentType: "foobar",
 		},
+		"no content type": {
+			contentType: "",
+		},
 	}
 	for name, scenario := range tests {
 		t.Run(name, func(t *testing.T) {
