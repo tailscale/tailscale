@@ -16,7 +16,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/big"
 	"net"
 	"net/http"
@@ -24,12 +23,15 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/net/proxy"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -282,6 +284,7 @@ func TestConn(t *testing.T) {
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -356,6 +359,7 @@ func TestLoopbackLocalAPI(t *testing.T) {
 }
 
 func TestLoopbackSOCKS5(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -468,6 +472,57 @@ func TestListenerCleanup(t *testing.T) {
 	}
 }
 
+// tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
+// stop it, and restart it, even on Windows.
+func TestStartStopStartGetsSameIP(t *testing.T) {
+	controlURL := startControl(t)
+
+	tmp := t.TempDir()
+	tmps1 := filepath.Join(tmp, "s1")
+	os.MkdirAll(tmps1, 0755)
+
+	newServer := func() *Server {
+		return &Server{
+			Dir:        tmps1,
+			ControlURL: controlURL,
+			Hostname:   "s1",
+			Logf:       logger.TestLogger(t),
+		}
+	}
+	s1 := newServer()
+	defer s1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s1status, err := s1.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstIPs := s1status.TailscaleIPs
+	t.Logf("IPs: %v", firstIPs)
+
+	if err := s1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s2 := newServer()
+	defer s2.Close()
+
+	s2status, err := s2.Up(ctx)
+	if err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+
+	secondIPs := s2status.TailscaleIPs
+	t.Logf("IPs: %v", secondIPs)
+
+	if !reflect.DeepEqual(firstIPs, secondIPs) {
+		t.Fatalf("got %v but later %v", firstIPs, secondIPs)
+	}
+}
+
 func TestFunnel(t *testing.T) {
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
@@ -520,7 +575,7 @@ func TestFunnel(t *testing.T) {
 		t.Errorf("unexpected status code: %v", resp.StatusCode)
 		return
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,4 +630,46 @@ type bufferedConn struct {
 
 func (c *bufferedConn) Read(b []byte) (int, error) {
 	return c.reader.Read(b)
+}
+
+func TestFallbackTCPHandler(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL := startControl(t)
+	s1, s1ip := startServer(t, ctx, controlURL, "s1")
+	s2, _ := startServer(t, ctx, controlURL, "s2")
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	var s1TcpConnCount atomic.Int32
+	deregister := s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		s1TcpConnCount.Add(1)
+		return nil, false
+	})
+
+	if _, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip)); err == nil {
+		t.Fatal("Expected dial error because fallback handler did not intercept")
+	}
+	if got := s1TcpConnCount.Load(); got != 1 {
+		t.Errorf("s1TcpConnCount = %d, want %d", got, 1)
+	}
+	deregister()
+	if _, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip)); err == nil {
+		t.Fatal("Expected dial error because nothing would intercept")
+	}
+	if got := s1TcpConnCount.Load(); got != 1 {
+		t.Errorf("s1TcpConnCount = %d, want %d", got, 1)
+	}
 }

@@ -12,7 +12,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -23,12 +22,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -52,16 +51,17 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
+	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 )
 
-func inTest() bool { return flag.Lookup("test.v") != nil }
-
 // Server is an embedded Tailscale server.
 //
-// Its exported fields may be changed until the first call to Listen.
+// Its exported fields may be changed until the first method call.
 type Server struct {
 	// Dir specifies the name of the directory to use for
 	// state. If empty, a directory is selected automatically
@@ -108,6 +108,11 @@ type Server struct {
 	// If empty, the Tailscale default is used.
 	ControlURL string
 
+	// Port is the UDP port to listen on for WireGuard and peer-to-peer
+	// traffic. If zero, a port is automatically selected. Leave this
+	// field at zero unless you know what you are doing.
+	Port uint16
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -129,11 +134,25 @@ type Server struct {
 	logtail          *logtail.Logger
 	logid            logid.PublicID
 
-	mu        sync.Mutex
-	listeners map[listenKey]*listener
-	dialer    *tsdial.Dialer
-	closed    bool
+	mu                  sync.Mutex
+	listeners           map[listenKey]*listener
+	fallbackTCPHandlers set.HandleSet[FallbackTCPHandler]
+	dialer              *tsdial.Dialer
+	closed              bool
 }
+
+// FallbackTCPHandler describes the callback which
+// conditionally handles an incoming TCP flow for the
+// provided (src/port, dst/port) 4-tuple. These are registered
+// as handlers of last resort, and are called only if no
+// listener could handle the incoming flow.
+//
+// If the callback returns intercept=false, the flow is rejected.
+//
+// When intercept=true, the behavior depends on whether the returned handler
+// is non-nil: if nil, the connection is rejected. If non-nil, handler takes
+// over the TCP conn.
+type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
 
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
@@ -345,15 +364,6 @@ func (s *Server) Close() error {
 		}
 	}()
 
-	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral && s.lb != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Perform a best-effort logout.
-			s.lb.LogoutSync(ctx)
-		}()
-	}
-
 	if s.netstack != nil {
 		s.netstack.Close()
 		s.netstack = nil
@@ -413,7 +423,9 @@ func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
 	if nm == nil {
 		return
 	}
-	for _, addr := range nm.Addresses {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		addr := addrs.At(i)
 		ip := addr.Addr()
 		if ip.Is6() {
 			ip6 = ip
@@ -502,10 +514,11 @@ func (s *Server) start() (reterr error) {
 	sys := new(tsd.System)
 	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		ListenPort:   0,
+		ListenPort:   s.Port,
 		NetMon:       s.netMon,
 		Dialer:       s.dialer,
 		SetSubsystem: sys.Set,
+		ControlKnobs: sys.ControlKnobs(),
 	})
 	if err != nil {
 		return err
@@ -513,10 +526,12 @@ func (s *Server) start() (reterr error) {
 	closePool.add(s.dialer)
 	sys.Set(eng)
 
-	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get())
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
+	sys.Tun.Get().Start()
+	sys.Set(ns)
 	ns.ProcessLocalIPs = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
@@ -543,7 +558,7 @@ func (s *Server) start() (reterr error) {
 	if s.Ephemeral {
 		loginFlags = controlclient.LoginEphemeral
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, s.logid, sys, loginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, s.logid, sys, loginFlags|controlclient.LocalBackendStartKeyOSNeutral)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
@@ -555,9 +570,6 @@ func (s *Server) start() (reterr error) {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
 	closePool.addFunc(func() { s.lb.Shutdown() })
-	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
@@ -600,7 +612,7 @@ func (s *Server) start() (reterr error) {
 }
 
 func (s *Server) startLogger(closePool *closeOnErrorPool) error {
-	if inTest() {
+	if testenv.InTest() {
 		return nil
 	}
 	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
@@ -636,7 +648,8 @@ func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 			}
 			return w
 		},
-		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon)},
+		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
+		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
 	s.logtail = logtail.NewLogger(c, s.logf)
 	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })
@@ -758,6 +771,14 @@ func (s *Server) getTCPHandlerForFunnelFlow(src netip.AddrPort, dstPort uint16) 
 func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	ln, ok := s.listenerForDstAddr("tcp", dst, false)
 	if !ok {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, handler := range s.fallbackTCPHandlers {
+			connHandler, intercept := handler(src, dst)
+			if intercept {
+				return connHandler, intercept
+			}
+		}
 		return nil, true // don't handle, don't forward to localhost
 	}
 	return ln.handle, true
@@ -861,6 +882,24 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 	}), nil
 }
 
+// RegisterFallbackTCPHandler registers a callback which will be called
+// to handle a TCP flow to this tsnet node, for which no listeners will handle.
+//
+// If multiple fallback handlers are registered, they will be called in an
+// undefined order. See FallbackTCPHandler for details on handling a flow.
+//
+// The returned function can be used to deregister this callback.
+func (s *Server) RegisterFallbackTCPHandler(cb FallbackTCPHandler) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hnd := s.fallbackTCPHandlers.Add(cb)
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.fallbackTCPHandlers, hnd)
+	}
+}
+
 // getCert is the GetCertificate function used by ListenTLS.
 //
 // It calls GetCertificate on the localClient, passing in the ClientHelloInfo.
@@ -925,7 +964,11 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	if err != nil {
 		return nil, err
 	}
-	if err := ipn.CheckFunnelAccess(uint16(port), st.Self.Capabilities); err != nil {
+	// TODO(sonia,tailscale/corp#10577): We may want to use the interactive enable
+	// flow here instead of CheckFunnelAccess to allow the user to turn on Funnel
+	// if not already on. Specifically when running from a terminal.
+	// See cli.serveEnv.verifyFunnelEnabled.
+	if err := ipn.CheckFunnelAccess(uint16(port), st.Self); err != nil {
 		return nil, err
 	}
 

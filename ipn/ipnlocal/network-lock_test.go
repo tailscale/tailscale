@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/control/controlclient"
-	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -29,6 +28,12 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/must"
 )
+
+type observerFunc func(controlclient.Status)
+
+func (f observerFunc) SetControlClientStatus(_ controlclient.Client, s controlclient.Status) {
+	f(s)
+}
 
 func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
 	hi := hostinfo.New()
@@ -44,7 +49,7 @@ func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
 		},
 		HTTPTestClient:  c,
 		NoiseTestClient: c,
-		Status:          func(controlclient.Status) {},
+		Observer:        observerFunc(func(controlclient.Status) {}),
 	}
 
 	cc, err := controlclient.NewNoStart(opts)
@@ -66,8 +71,6 @@ func fakeNoiseServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, 
 }
 
 func TestTKAEnablementFlow(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, getting a usable genesis AUM which
@@ -148,14 +151,15 @@ func TestTKAEnablementFlow(t *testing.T) {
 			PrivateNodeKey: nodePriv,
 			NetworkLockKey: nlPriv,
 		},
-	}).View()))
+	}).View(), ""))
 	b := LocalBackend{
-		varRoot: temp,
-		cc:      cc,
-		ccAuto:  cc,
-		logf:    t.Logf,
-		pm:      pm,
-		store:   pm.Store(),
+		capTailnetLock: true,
+		varRoot:        temp,
+		cc:             cc,
+		ccAuto:         cc,
+		logf:           t.Logf,
+		pm:             pm,
+		store:          pm.Store(),
 	}
 
 	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
@@ -174,8 +178,6 @@ func TestTKAEnablementFlow(t *testing.T) {
 }
 
 func TestTKADisablementFlow(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, to seed local state.
@@ -189,7 +191,7 @@ func TestTKADisablementFlow(t *testing.T) {
 			PrivateNodeKey: nodePriv,
 			NetworkLockKey: nlPriv,
 		},
-	}).View()))
+	}).View(), ""))
 
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
@@ -297,9 +299,6 @@ func TestTKADisablementFlow(t *testing.T) {
 }
 
 func TestTKASync(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
-
 	someKeyPriv := key.NewNLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
 
@@ -384,7 +383,7 @@ func TestTKASync(t *testing.T) {
 					PrivateNodeKey: nodePriv,
 					NetworkLockKey: nlPriv,
 				},
-			}).View()))
+			}).View(), ""))
 
 			// Setup the tka authority on the control plane.
 			key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
@@ -538,9 +537,6 @@ func TestTKASync(t *testing.T) {
 }
 
 func TestTKAFilterNetmap(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
-
 	nlPriv := key.NewNLPrivate()
 	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 	storage := &tka.Mem{}
@@ -568,26 +564,26 @@ func TestTKAFilterNetmap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nm := netmap.NetworkMap{
-		Peers: []*tailcfg.Node{
+	nm := &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{
 			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 			{ID: 2, Key: n2.Public(), KeySignature: nil},                   // missing sig
 			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()}, // someone elses sig
 			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},     // messed-up signature
 			{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
-		},
+		}),
 	}
 
 	b := &LocalBackend{
 		logf: t.Logf,
 		tka:  &tkaState{authority: authority},
 	}
-	b.tkaFilterNetmapLocked(&nm)
+	b.tkaFilterNetmapLocked(nm)
 
-	want := []*tailcfg.Node{
+	want := nodeViews([]*tailcfg.Node{
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 		{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
-	}
+	})
 	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
 		return x.Raw32() == y.Raw32()
 	})
@@ -597,8 +593,6 @@ func TestTKAFilterNetmap(t *testing.T) {
 }
 
 func TestTKADisable(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, to seed local state.
@@ -611,7 +605,7 @@ func TestTKADisable(t *testing.T) {
 			PrivateNodeKey: nodePriv,
 			NetworkLockKey: nlPriv,
 		},
-	}).View()))
+	}).View(), ""))
 
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
@@ -692,8 +686,6 @@ func TestTKADisable(t *testing.T) {
 }
 
 func TestTKASign(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	nodePriv := key.NewNode()
 	toSign := key.NewNode()
 	nlPriv := key.NewNLPrivate()
@@ -704,7 +696,7 @@ func TestTKASign(t *testing.T) {
 			PrivateNodeKey: nodePriv,
 			NetworkLockKey: nlPriv,
 		},
-	}).View()))
+	}).View(), ""))
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
@@ -780,8 +772,6 @@ func TestTKASign(t *testing.T) {
 }
 
 func TestTKAForceDisable(t *testing.T) {
-	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, to seed local state.
@@ -795,7 +785,7 @@ func TestTKAForceDisable(t *testing.T) {
 			PrivateNodeKey: nodePriv,
 			NetworkLockKey: nlPriv,
 		},
-	}).View()))
+	}).View(), ""))
 
 	temp := t.TempDir()
 	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
@@ -890,7 +880,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 			PrivateNodeKey: nodePriv,
 			NetworkLockKey: nlPriv,
 		},
-	}).View()))
+	}).View(), ""))
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
@@ -1008,5 +998,131 @@ func TestTKAAffectedSigs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
+	nodePriv := key.NewNode()
+	nlPriv := key.NewNLPrivate()
+	cosignPriv := key.NewNLPrivate()
+	compromisedPriv := key.NewNLPrivate()
+
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	must.Do(pm.SetPrefs((&ipn.Prefs{
+		Persist: &persist.Persist{
+			PrivateNodeKey: nodePriv,
+			NetworkLockKey: nlPriv,
+		},
+	}).View(), ""))
+
+	// Make a fake TKA authority, to seed local state.
+	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	cosignKey := tka.Key{Kind: tka.Key25519, Public: cosignPriv.Public().Verifier(), Votes: 2}
+	compromisedKey := tka.Key{Kind: tka.Key25519, Public: compromisedPriv.Public().Verifier(), Votes: 1}
+
+	temp := t.TempDir()
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	os.Mkdir(tkaPath, 0755)
+	chonk, err := tka.ChonkDir(tkaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, _, err := tka.Create(chonk, tka.State{
+		Keys:               []tka.Key{key, compromisedKey, cosignKey},
+		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+	}, nlPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		switch r.URL.Path {
+		case "/machine/tka/sync/send":
+			body := new(tailcfg.TKASyncSendRequest)
+			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("got sync send:\n%+v", body)
+
+			var remoteHead tka.AUMHash
+			if err := remoteHead.UnmarshalText([]byte(body.Head)); err != nil {
+				t.Fatalf("head unmarshal: %v", err)
+			}
+			toApply := make([]tka.AUM, len(body.MissingAUMs))
+			for i, a := range body.MissingAUMs {
+				if err := toApply[i].Unserialize(a); err != nil {
+					t.Fatalf("decoding missingAUM[%d]: %v", i, err)
+				}
+			}
+
+			// Apply the recovery AUM to an authority to make sure it works.
+			if err := authority.Inform(chonk, toApply); err != nil {
+				t.Errorf("recovery AUM could not be applied: %v", err)
+			}
+			// Make sure the key we removed isn't trusted.
+			if authority.KeyTrusted(compromisedPriv.KeyID()) {
+				t.Error("compromised key was not removed from tka")
+			}
+
+			w.WriteHeader(200)
+			if err := json.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
+				t.Fatal(err)
+			}
+
+		default:
+			t.Errorf("unhandled endpoint path: %v", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer ts.Close()
+	cc := fakeControlClient(t, client)
+	b := LocalBackend{
+		varRoot: temp,
+		cc:      cc,
+		ccAuto:  cc,
+		logf:    t.Logf,
+		tka: &tkaState{
+			authority: authority,
+			storage:   chonk,
+		},
+		pm:    pm,
+		store: pm.Store(),
+	}
+
+	aum, err := b.NetworkLockGenerateRecoveryAUM([]tkatype.KeyID{compromisedPriv.KeyID()}, tka.AUMHash{})
+	if err != nil {
+		t.Fatalf("NetworkLockGenerateRecoveryAUM() failed: %v", err)
+	}
+
+	// Cosign using the cosigning key.
+	{
+		pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+		must.Do(pm.SetPrefs((&ipn.Prefs{
+			Persist: &persist.Persist{
+				PrivateNodeKey: nodePriv,
+				NetworkLockKey: cosignPriv,
+			},
+		}).View(), ""))
+		b := LocalBackend{
+			varRoot: temp,
+			logf:    t.Logf,
+			tka: &tkaState{
+				authority: authority,
+				storage:   chonk,
+			},
+			pm:    pm,
+			store: pm.Store(),
+		}
+		if aum, err = b.NetworkLockCosignRecoveryAUM(aum); err != nil {
+			t.Fatalf("NetworkLockCosignRecoveryAUM() failed: %v", err)
+		}
+	}
+
+	// Finally, submit the recovery AUM. Validation is done
+	// in the fake control handler.
+	if err := b.NetworkLockSubmitRecoveryAUM(aum); err != nil {
+		t.Errorf("NetworkLockSubmitRecoveryAUM() failed: %v", err)
 	}
 }

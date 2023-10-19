@@ -6,15 +6,16 @@
 package views
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"net/netip"
+	"maps"
+	"slices"
 
-	"golang.org/x/exp/slices"
-	"tailscale.com/net/tsaddr"
+	"go4.org/mem"
 )
 
-func unmarshalJSON[T any](b []byte, x *[]T) error {
+func unmarshalSliceFromJSON[T any](b []byte, x *[]T) error {
 	if *x != nil {
 		return errors.New("already initialized")
 	}
@@ -22,6 +23,83 @@ func unmarshalJSON[T any](b []byte, x *[]T) error {
 		return nil
 	}
 	return json.Unmarshal(b, x)
+}
+
+// ByteSlice is a read-only accessor for types that are backed by a []byte.
+type ByteSlice[T ~[]byte] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж T
+}
+
+// ByteSliceOf returns a ByteSlice for the provided slice.
+func ByteSliceOf[T ~[]byte](x T) ByteSlice[T] {
+	return ByteSlice[T]{x}
+}
+
+// Len returns the length of the slice.
+func (v ByteSlice[T]) Len() int {
+	return len(v.ж)
+}
+
+// IsNil reports whether the underlying slice is nil.
+func (v ByteSlice[T]) IsNil() bool {
+	return v.ж == nil
+}
+
+// Mem returns a read-only view of the underlying slice.
+func (v ByteSlice[T]) Mem() mem.RO {
+	return mem.B(v.ж)
+}
+
+// Equal reports whether the underlying slice is equal to b.
+func (v ByteSlice[T]) Equal(b T) bool {
+	return bytes.Equal(v.ж, b)
+}
+
+// EqualView reports whether the underlying slice is equal to b.
+func (v ByteSlice[T]) EqualView(b ByteSlice[T]) bool {
+	return bytes.Equal(v.ж, b.ж)
+}
+
+// AsSlice returns a copy of the underlying slice.
+func (v ByteSlice[T]) AsSlice() T {
+	return v.AppendTo(v.ж[:0:0])
+}
+
+// AppendTo appends the underlying slice values to dst.
+func (v ByteSlice[T]) AppendTo(dst T) T {
+	return append(dst, v.ж...)
+}
+
+// LenIter returns a slice the same length as the v.Len().
+// The caller can then range over it to get the valid indexes.
+// It does not allocate.
+func (v ByteSlice[T]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
+
+// At returns the byte at index `i` of the slice.
+func (v ByteSlice[T]) At(i int) byte { return v.ж[i] }
+
+// SliceFrom returns v[i:].
+func (v ByteSlice[T]) SliceFrom(i int) ByteSlice[T] { return ByteSlice[T]{v.ж[i:]} }
+
+// SliceTo returns v[:i]
+func (v ByteSlice[T]) SliceTo(i int) ByteSlice[T] { return ByteSlice[T]{v.ж[:i]} }
+
+// Slice returns v[i:j]
+func (v ByteSlice[T]) Slice(i, j int) ByteSlice[T] { return ByteSlice[T]{v.ж[i:j]} }
+
+// MarshalJSON implements json.Marshaler.
+func (v ByteSlice[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *ByteSlice[T]) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	return json.Unmarshal(b, &v.ж)
 }
 
 // StructView represents the corresponding StructView of a Viewable. The concrete types are
@@ -50,8 +128,9 @@ func SliceOfViews[T ViewCloner[T, V], V StructView[T]](x []T) SliceView[T, V] {
 	return SliceView[T, V]{x}
 }
 
-// SliceView is a read-only wrapper around a struct which should only be exposed
-// as a View.
+// SliceView wraps []T to provide accessors which return an immutable view V of
+// T. It is used to provide the equivalent of SliceOf([]V) without having to
+// allocate []V from []T.
 type SliceView[T ViewCloner[T, V], V StructView[T]] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
@@ -64,13 +143,18 @@ type SliceView[T ViewCloner[T, V], V StructView[T]] struct {
 func (v SliceView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (v *SliceView[T, V]) UnmarshalJSON(b []byte) error { return unmarshalJSON(b, &v.ж) }
+func (v *SliceView[T, V]) UnmarshalJSON(b []byte) error { return unmarshalSliceFromJSON(b, &v.ж) }
 
 // IsNil reports whether the underlying slice is nil.
 func (v SliceView[T, V]) IsNil() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
 func (v SliceView[T, V]) Len() int { return len(v.ж) }
+
+// LenIter returns a slice the same length as the v.Len().
+// The caller can then range over it to get the valid indexes.
+// It does not allocate.
+func (v SliceView[T, V]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
 
 // At returns a View of the element at index `i` of the slice.
 func (v SliceView[T, V]) At(i int) V { return v.ж[i].View() }
@@ -119,7 +203,7 @@ func (v Slice[T]) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *Slice[T]) UnmarshalJSON(b []byte) error {
-	return unmarshalJSON(b, &v.ж)
+	return unmarshalSliceFromJSON(b, &v.ж)
 }
 
 // IsNil reports whether the underlying slice is nil.
@@ -127,6 +211,11 @@ func (v Slice[T]) IsNil() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
 func (v Slice[T]) Len() int { return len(v.ж) }
+
+// LenIter returns a slice the same length as the v.Len().
+// The caller can then range over it to get the valid indexes.
+// It does not allocate.
+func (v Slice[T]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
 
 // At returns the element at index `i` of the slice.
 func (v Slice[T]) At(i int) T { return v.ж[i] }
@@ -187,6 +276,21 @@ func SliceContains[T comparable](v Slice[T], e T) bool {
 	return false
 }
 
+// SliceContainsFunc reports whether f reports true for any element in v.
+func SliceContainsFunc[T any](v Slice[T], f func(T) bool) bool {
+	for i := 0; i < v.Len(); i++ {
+		if f(v.At(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// SliceEqual is like the standard library's slices.Equal, but for two views.
+func SliceEqual[T comparable](a, b Slice[T]) bool {
+	return slices.Equal(a.ж, b.ж)
+}
+
 // SliceEqualAnyOrder reports whether a and b contain the same elements, regardless of order.
 // The underlying slices for a and b can be nil.
 func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
@@ -216,79 +320,6 @@ func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
 		}
 	}
 	return true
-}
-
-// IPPrefixSlice is a read-only accessor for a slice of netip.Prefix.
-type IPPrefixSlice struct {
-	ж Slice[netip.Prefix]
-}
-
-// IPPrefixSliceOf returns a IPPrefixSlice for the provided slice.
-func IPPrefixSliceOf(x []netip.Prefix) IPPrefixSlice { return IPPrefixSlice{SliceOf(x)} }
-
-// IsNil reports whether the underlying slice is nil.
-func (v IPPrefixSlice) IsNil() bool { return v.ж.IsNil() }
-
-// Len returns the length of the slice.
-func (v IPPrefixSlice) Len() int { return v.ж.Len() }
-
-// At returns the IPPrefix at index `i` of the slice.
-func (v IPPrefixSlice) At(i int) netip.Prefix { return v.ж.At(i) }
-
-// AppendTo appends the underlying slice values to dst.
-func (v IPPrefixSlice) AppendTo(dst []netip.Prefix) []netip.Prefix {
-	return v.ж.AppendTo(dst)
-}
-
-// Unwrap returns the underlying Slice[netip.Prefix].
-func (v IPPrefixSlice) Unwrap() Slice[netip.Prefix] {
-	return v.ж
-}
-
-// AsSlice returns a copy of underlying slice.
-func (v IPPrefixSlice) AsSlice() []netip.Prefix {
-	return v.ж.AsSlice()
-}
-
-// Filter returns a new slice, containing elements of v that match f.
-func (v IPPrefixSlice) Filter(f func(netip.Prefix) bool) []netip.Prefix {
-	return tsaddr.FilterPrefixesCopy(v.ж.ж, f)
-}
-
-// PrefixesContainsIP reports whether any IPPrefix contains IP.
-func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
-	return tsaddr.PrefixesContainsIP(v.ж.ж, ip)
-}
-
-// PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
-func (v IPPrefixSlice) ContainsFunc(f func(netip.Prefix) bool) bool {
-	return slices.ContainsFunc(v.ж.ж, f)
-}
-
-// ContainsExitRoutes reports whether v contains ExitNode Routes.
-func (v IPPrefixSlice) ContainsExitRoutes() bool {
-	return tsaddr.ContainsExitRoutes(v.ж.ж)
-}
-
-// ContainsNonExitSubnetRoutes reports whether v contains Subnet
-// Routes other than ExitNode Routes.
-func (v IPPrefixSlice) ContainsNonExitSubnetRoutes() bool {
-	for i := 0; i < v.Len(); i++ {
-		if v.At(i).Bits() != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// MarshalJSON implements json.Marshaler.
-func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
-	return v.ж.MarshalJSON()
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
-	return v.ж.UnmarshalJSON(b)
 }
 
 // MapOf returns a view over m. It is the caller's responsibility to make sure K
@@ -330,6 +361,30 @@ func (m Map[K, V]) Get(k K) V {
 func (m Map[K, V]) GetOk(k K) (V, bool) {
 	v, ok := m.ж[k]
 	return v, ok
+}
+
+// MarshalJSON implements json.Marshaler.
+func (m Map[K, V]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.ж)
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+// It should only be called on an uninitialized Map.
+func (m *Map[K, V]) UnmarshalJSON(b []byte) error {
+	if m.ж != nil {
+		return errors.New("already initialized")
+	}
+	return json.Unmarshal(b, &m.ж)
+}
+
+// AsMap returns a shallow-clone of the underlying map.
+// If V is a pointer type, it is the caller's responsibility to make sure
+// the values are immutable.
+func (m *Map[K, V]) AsMap() map[K]V {
+	if m == nil {
+		return nil
+	}
+	return maps.Clone(m.ж)
 }
 
 // MapRangeFn is the func called from a Map.Range call.

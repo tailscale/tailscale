@@ -20,12 +20,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/tailscale/golang-x-crypto/ssh"
 	"go4.org/mem"
-	"golang.org/x/exp/slices"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/lineread"
 	"tailscale.com/util/mak"

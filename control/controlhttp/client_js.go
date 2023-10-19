@@ -51,7 +51,7 @@ func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	netConn := wsconn.NetConn(context.Background(), wsConn, websocket.MessageBinary)
+	netConn := wsconn.NetConn(context.Background(), wsConn, websocket.MessageBinary, wsURL.String())
 	cbConn, err := cont(ctx, netConn)
 	if err != nil {
 		netConn.Close()

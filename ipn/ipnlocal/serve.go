@@ -5,7 +5,9 @@ package ipnlocal
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,21 +19,33 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/exp/slices"
+	"golang.org/x/net/http2"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
 )
+
+const (
+	contentTypeHeader   = "Content-Type"
+	grpcBaseContentType = "application/grpc"
+)
+
+// ErrETagMismatch signals that the given
+// If-Match header does not match with the
+// current etag of a resource.
+var ErrETagMismatch = errors.New("etag mismatch")
 
 // serveHTTPContextKey is the context.Value key for a *serveHTTPContext.
 type serveHTTPContextKey struct{}
@@ -153,8 +167,9 @@ func (s *serveListener) shouldWarnAboutListenError(err error) bool {
 	return true
 }
 
-// handleServeListenersAccept accepts connections for the Listener.
-// Calls incoming handler in a new goroutine for each accepted connection.
+// handleServeListenersAccept accepts connections for the Listener. It calls the
+// handler in a new goroutine for each accepted connection. This is used to
+// handle local "tailscale serve" traffic originating from the machine itself.
 func (s *serveListener) handleServeListenersAccept(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
@@ -164,7 +179,7 @@ func (s *serveListener) handleServeListenersAccept(ln net.Listener) error {
 		srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
 		handler := s.b.tcpHandlerForServe(s.ap.Port(), srcAddr)
 		if handler == nil {
-			s.b.logf("serve RST for %v", srcAddr)
+			s.b.logf("[unexpected] local-serve: no handler for %v to port %v", srcAddr, s.ap.Port())
 			conn.Close()
 			continue
 		}
@@ -193,12 +208,14 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 		b.logf("netMap is nil")
 		return
 	}
-	if nm.SelfNode == nil {
+	if !nm.SelfNode.Valid() {
 		b.logf("netMap SelfNode is nil")
 		return
 	}
 
-	for _, a := range nm.Addresses {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		a := addrs.At(i)
 		for _, p := range ports {
 			addrPort := netip.AddrPortFrom(a.Addr(), p)
 			if _, ok := b.serveListeners[addrPort]; ok {
@@ -214,10 +231,15 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 }
 
 // SetServeConfig establishes or replaces the current serve config.
-func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
+// ETag is an optional parameter to enforce Optimistic Concurrency Control.
+// If it is an empty string, then the config will be overwritten.
+func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig, etag string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.setServeConfigLocked(config, etag)
+}
 
+func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string) error {
 	prefs := b.pm.CurrentPrefs()
 	if config.IsFunnelOn() && prefs.ShieldsUp() {
 		return errors.New("Unable to turn on Funnel while shields-up is enabled")
@@ -227,11 +249,28 @@ func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 	if nm == nil {
 		return errors.New("netMap is nil")
 	}
-	if nm.SelfNode == nil {
+	if !nm.SelfNode.Valid() {
 		return errors.New("netMap SelfNode is nil")
 	}
-	profileID := b.pm.CurrentProfile().ID
-	confKey := ipn.ServeConfigKey(profileID)
+
+	// If etag is present, check that it has
+	// not changed from the last config.
+	prevConfig := b.serveConfig
+	if etag != "" {
+		// Note that we marshal b.serveConfig
+		// and not use b.lastServeConfJSON as that might
+		// be a Go nil value, which produces a different
+		// checksum from a JSON "null" value.
+		prevBytes, err := json.Marshal(prevConfig)
+		if err != nil {
+			return fmt.Errorf("error encoding previous config: %w", err)
+		}
+		sum := sha256.Sum256(prevBytes)
+		previousEtag := hex.EncodeToString(sum[:])
+		if etag != previousEtag {
+			return ErrETagMismatch
+		}
+	}
 
 	var bs []byte
 	if config != nil {
@@ -241,11 +280,34 @@ func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 		}
 		bs = j
 	}
+
+	profileID := b.pm.CurrentProfile().ID
+	confKey := ipn.ServeConfigKey(profileID)
 	if err := b.store.WriteState(confKey, bs); err != nil {
 		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
 	}
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
+
+	// clean up and close all previously open foreground sessions
+	// if the current ServeConfig has overwritten them.
+	if prevConfig.Valid() {
+		has := func(string) bool { return false }
+		if b.serveConfig.Valid() {
+			has = b.serveConfig.Foreground().Has
+		}
+		prevConfig.Foreground().Range(func(k string, v ipn.ServeConfigView) (cont bool) {
+			if !has(k) {
+				for _, sess := range b.notifyWatchers {
+					if sess.sessionID == k {
+						close(sess.ch)
+					}
+				}
+			}
+			return true
+		})
+	}
+
 	return nil
 }
 
@@ -257,32 +319,57 @@ func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
 	return b.serveConfig
 }
 
-func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ipn.HostPort, srcAddr netip.AddrPort, getConnOrReset func() (net.Conn, bool), sendRST func()) {
+// DeleteForegroundSession deletes a ServeConfig's foreground session
+// in the LocalBackend if it exists. It also ensures check, delete, and
+// set operations happen within the same mutex lock to avoid any races.
+func (b *LocalBackend) DeleteForegroundSession(sessionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.serveConfig.Valid() || !b.serveConfig.Foreground().Has(sessionID) {
+		return nil
+	}
+	sc := b.serveConfig.AsStruct()
+	delete(sc.Foreground, sessionID)
+	return b.setServeConfigLocked(sc, "")
+}
+
+// HandleIngressTCPConn handles a TCP connection initiated by the ingressPeer
+// proxied to the local node over the PeerAPI.
+// Target represents the destination HostPort of the conn.
+// srcAddr represents the source AddrPort and not that of the ingressPeer.
+// getConnOrReset is a callback to get the connection, or reset if the connection
+// is no longer available.
+// sendRST is a callback to send a TCP RST to the ingressPeer indicating that
+// the connection was not accepted.
+func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target ipn.HostPort, srcAddr netip.AddrPort, getConnOrReset func() (net.Conn, bool), sendRST func()) {
 	b.mu.Lock()
 	sc := b.serveConfig
 	b.mu.Unlock()
 
+	// TODO(maisem,bradfitz): make this not alloc for every conn.
+	logf := logger.WithPrefix(b.logf, "handleIngress: ")
+
 	if !sc.Valid() {
-		b.logf("localbackend: got ingress conn w/o serveConfig; rejecting")
+		logf("got ingress conn w/o serveConfig; rejecting")
 		sendRST()
 		return
 	}
 
-	if !sc.AllowFunnel().Get(target) {
-		b.logf("localbackend: got ingress conn for unconfigured %q; rejecting", target)
+	if !sc.HasFunnelForTarget(target) {
+		logf("got ingress conn for unconfigured %q; rejecting", target)
 		sendRST()
 		return
 	}
 
 	_, port, err := net.SplitHostPort(string(target))
 	if err != nil {
-		b.logf("localbackend: got ingress conn for bad target %q; rejecting", target)
+		logf("got ingress conn for bad target %q; rejecting", target)
 		sendRST()
 		return
 	}
 	port16, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
-		b.logf("localbackend: got ingress conn for bad target %q; rejecting", target)
+		logf("got ingress conn for bad target %q; rejecting", target)
 		sendRST()
 		return
 	}
@@ -292,7 +379,7 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 		if handler != nil {
 			c, ok := getConnOrReset()
 			if !ok {
-				b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+				logf("getConn didn't complete from %v to port %v", srcAddr, dport)
 				return
 			}
 			handler(c)
@@ -303,12 +390,13 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 	// extend serveHTTPContext or similar.
 	handler := b.tcpHandlerForServe(dport, srcAddr)
 	if handler == nil {
+		logf("[unexpected] no matching ingress serve handler for %v to port %v", srcAddr, dport)
 		sendRST()
 		return
 	}
 	c, ok := getConnOrReset()
 	if !ok {
-		b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+		logf("getConn didn't complete from %v to port %v", srcAddr, dport)
 		return
 	}
 	handler(c)
@@ -322,13 +410,11 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 	b.mu.Unlock()
 
 	if !sc.Valid() {
-		b.logf("[unexpected] localbackend: got TCP conn w/o serveConfig; from %v to port %v", srcAddr, dport)
 		return nil
 	}
 
-	tcph, ok := sc.TCP().GetOk(dport)
+	tcph, ok := sc.FindTCP(dport)
 	if !ok {
-		b.logf("[unexpected] localbackend: got TCP conn without TCP config for port %v; from %v", dport, srcAddr)
 		return nil
 	}
 
@@ -400,7 +486,6 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 		}
 	}
 
-	b.logf("closing TCP conn to port %v (from %v) with actionless TCPPortHandler", dport, srcAddr)
 	return nil
 }
 
@@ -415,6 +500,9 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 	hostname := r.Host
 	if r.TLS == nil {
 		tcd := "." + b.Status().CurrentTailnet.MagicDNSSuffix
+		if host, _, err := net.SplitHostPort(hostname); err == nil {
+			hostname = host
+		}
 		if !strings.HasSuffix(hostname, tcd) {
 			hostname += tcd
 		}
@@ -453,23 +541,72 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 
 // proxyHandlerForBackend creates a new HTTP reverse proxy for a particular backend that
 // we serve requests for. `backend` is a HTTPHandler.Proxy string (url, hostport or just port).
-func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.ReverseProxy, error) {
+func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, error) {
 	targetURL, insecure := expandProxyArg(backend)
 	u, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url %s: %w", targetURL, err)
 	}
-	rp := &httputil.ReverseProxy{
-		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetURL(u)
-			r.Out.Host = r.In.Host
-			addProxyForwardedHeaders(r)
-			b.addTailscaleIdentityHeaders(r)
-		},
-		Transport: &http.Transport{
-			DialContext: b.dialer.SystemDial,
+	p := &reverseProxy{
+		logf:     b.logf,
+		url:      u,
+		insecure: insecure,
+		backend:  backend,
+		lb:       b,
+	}
+	return p, nil
+}
+
+// reverseProxy is a proxy that forwards a request to a backend host
+// (preconfigured via ipn.ServeConfig). If the host is configured with
+// http+insecure prefix, connection between proxy and backend will be over
+// insecure TLS. If the backend host has a http prefix and the incoming request
+// has application/grpc content type header, the connection will be over h2c.
+// Otherwise standard Go http transport will be used.
+type reverseProxy struct {
+	logf     logger.Logf
+	url      *url.URL
+	insecure bool
+	backend  string
+	lb       *LocalBackend
+	// transport for non-h2c backends
+	httpTransport lazy.SyncValue[http.RoundTripper]
+	// transport for h2c backends
+	h2cTransport lazy.SyncValue[http.RoundTripper]
+}
+
+func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	p := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(rp.url)
+		r.Out.Host = r.In.Host
+		addProxyForwardedHeaders(r)
+		rp.lb.addTailscaleIdentityHeaders(r)
+	},
+	}
+
+	// There is no way to autodetect h2c as per RFC 9113
+	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
+	// However, we assume that http:// proxy prefix in combination with the
+	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
+	// gRPC to fix a known problem pf plaintext gRPC backends
+	if rp.shouldProxyViaH2C(r) {
+		rp.logf("received a proxy request for plaintext gRPC")
+		p.Transport = rp.getH2CTransport()
+	} else {
+		p.Transport = rp.getTransport()
+	}
+	p.ServeHTTP(w, r)
+
+}
+
+// getTransport gets transport for http backends. Transport gets created lazily
+// at most once.
+func (rp *reverseProxy) getTransport() http.RoundTripper {
+	return rp.httpTransport.Get(func() http.RoundTripper {
+		return &http.Transport{
+			DialContext: rp.lb.dialer.SystemDial,
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: insecure,
+				InsecureSkipVerify: rp.insecure,
 			},
 			// Values for the following parameters have been copied from http.DefaultTransport.
 			ForceAttemptHTTP2:     true,
@@ -477,9 +614,38 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
-		},
-	}
-	return rp, nil
+		}
+	})
+}
+
+// getH2CTranport gets transport for h2c backends. Creates it lazily at most
+// once.
+func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
+	return rp.h2cTransport.Get(func() http.RoundTripper {
+		return &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {
+				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
+			},
+		}
+	})
+}
+
+// This is not a generally reliable way how to determine whether a request is
+// for a h2c server, but sufficient for our particular use case.
+func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
+	contentType := r.Header.Get(contentTypeHeader)
+	return r.ProtoMajor == 2 && strings.HasPrefix(rp.backend, "http://") && isGRPCContentType(contentType)
+}
+
+// isGRPC accepts an HTTP request's content type header value and determines
+// whether this is gRPC content. grpc-go considers a value that equals
+// application/grpc or has a prefix of application/grpc+ or application/grpc; a
+// valid grpc content type header.
+// https://github.com/grpc/grpc-go/blob/v1.60.0-dev/internal/grpcutil/method.go#L41-L78
+func isGRPCContentType(contentType string) bool {
+	s, ok := strings.CutPrefix(contentType, grpcBaseContentType)
+	return ok && (len(s) == 0 || s[0] == '+' || s[0] == ';')
 }
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
@@ -496,6 +662,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
 	r.Out.Header.Del("Tailscale-User-Login")
 	r.Out.Header.Del("Tailscale-User-Name")
+	r.Out.Header.Del("Tailscale-User-Profile-Pic")
 	r.Out.Header.Del("Tailscale-Headers-Info")
 
 	c, ok := getServeHTTPContext(r.Out)
@@ -513,9 +680,12 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	}
 	r.Out.Header.Set("Tailscale-User-Login", user.LoginName)
 	r.Out.Header.Set("Tailscale-User-Name", user.DisplayName)
+	r.Out.Header.Set("Tailscale-User-Profile-Pic", user.ProfilePicURL)
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
 }
 
+// serveWebHandler is an http.HandlerFunc that maps incoming requests to the
+// correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	h, mountPoint, ok := b.getServeHandler(r)
 	if !ok {
@@ -657,7 +827,7 @@ func (b *LocalBackend) webServerConfig(hostname string, port uint16) (c ipn.WebS
 	if !b.serveConfig.Valid() {
 		return c, false
 	}
-	return b.serveConfig.Web().GetOk(key)
+	return b.serveConfig.FindWeb(key)
 }
 
 func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {

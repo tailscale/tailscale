@@ -56,6 +56,8 @@ func TestPrefsEqual(t *testing.T) {
 		"NetfilterMode",
 		"OperatorUser",
 		"ProfileName",
+		"AutoUpdate",
+		"PostureChecking",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
@@ -264,12 +266,18 @@ func TestPrefsEqual(t *testing.T) {
 
 		{
 			&Prefs{Persist: &persist.Persist{}},
-			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{
+				UserProfile: tailcfg.UserProfile{LoginName: "dave"},
+			}},
 			false,
 		},
 		{
-			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
-			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{
+				UserProfile: tailcfg.UserProfile{LoginName: "dave"},
+			}},
+			&Prefs{Persist: &persist.Persist{
+				UserProfile: tailcfg.UserProfile{LoginName: "dave"},
+			}},
 			true,
 		},
 		{
@@ -280,6 +288,31 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{ProfileName: "work"},
 			&Prefs{ProfileName: "home"},
+			false,
+		},
+		{
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false}},
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: false, Apply: false}},
+			false,
+		},
+		{
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: true}},
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false}},
+			false,
+		},
+		{
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false}},
+			&Prefs{AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false}},
+			true,
+		},
+		{
+			&Prefs{PostureChecking: true},
+			&Prefs{PostureChecking: true},
+			true,
+		},
+		{
+			&Prefs{PostureChecking: true},
+			&Prefs{PostureChecking: false},
 			false,
 		},
 	}
@@ -345,7 +378,9 @@ func TestPrefsPersist(t *testing.T) {
 	tstest.PanicOnLog()
 
 	c := persist.Persist{
-		LoginName: "test@example.com",
+		UserProfile: tailcfg.UserProfile{
+			LoginName: "test@example.com",
+		},
 	}
 	p := Prefs{
 		ControlURL: "https://controlplane.tailscale.com",
@@ -364,22 +399,22 @@ func TestPrefsPretty(t *testing.T) {
 		{
 			Prefs{},
 			"linux",
-			"Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist=nil}",
+			"Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}",
 		},
 		{
 			Prefs{},
 			"windows",
-			"Prefs{ra=false mesh=false dns=false want=false Persist=nil}",
+			"Prefs{ra=false mesh=false dns=false want=false update=off Persist=nil}",
 		},
 		{
 			Prefs{ShieldsUp: true},
 			"windows",
-			"Prefs{ra=false mesh=false dns=false want=false shields=true Persist=nil}",
+			"Prefs{ra=false mesh=false dns=false want=false shields=true update=off Persist=nil}",
 		},
 		{
 			Prefs{AllowSingleHosts: true},
 			"windows",
-			"Prefs{ra=false dns=false want=false Persist=nil}",
+			"Prefs{ra=false dns=false want=false update=off Persist=nil}",
 		},
 		{
 			Prefs{
@@ -387,7 +422,7 @@ func TestPrefsPretty(t *testing.T) {
 				AllowSingleHosts: true,
 			},
 			"windows",
-			"Prefs{ra=false dns=false want=false notepad=true Persist=nil}",
+			"Prefs{ra=false dns=false want=false notepad=true update=off Persist=nil}",
 		},
 		{
 			Prefs{
@@ -396,7 +431,7 @@ func TestPrefsPretty(t *testing.T) {
 				ForceDaemon:      true, // server mode
 			},
 			"windows",
-			"Prefs{ra=false dns=false want=true server=true Persist=nil}",
+			"Prefs{ra=false dns=false want=true server=true update=off Persist=nil}",
 		},
 		{
 			Prefs{
@@ -406,14 +441,14 @@ func TestPrefsPretty(t *testing.T) {
 				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
 			},
 			"darwin",
-			`Prefs{ra=false dns=false want=true tags=tag:foo,tag:bar url="http://localhost:1234" Persist=nil}`,
+			`Prefs{ra=false dns=false want=true tags=tag:foo,tag:bar url="http://localhost:1234" update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				Persist: &persist.Persist{},
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n= u=""}}`,
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist{lm=, o=, n= u=""}}`,
 		},
 		{
 			Prefs{
@@ -422,21 +457,21 @@ func TestPrefsPretty(t *testing.T) {
 				},
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist{lm=, o=, n=[B1VKl] u=""}}`,
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist{lm=, o=, n=[B1VKl] u=""}}`,
 		},
 		{
 			Prefs{
 				ExitNodeIP: netip.MustParseAddr("1.2.3.4"),
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 lan=false routes=[] nf=off Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 lan=false routes=[] nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				ExitNodeID: tailcfg.StableNodeID("myNodeABC"),
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC lan=false routes=[] nf=off Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC lan=false routes=[] nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
@@ -444,21 +479,41 @@ func TestPrefsPretty(t *testing.T) {
 				ExitNodeAllowLANAccess: true,
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC lan=true routes=[] nf=off Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false exit=myNodeABC lan=true routes=[] nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				ExitNodeAllowLANAccess: true,
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{
 				Hostname: "foo",
 			},
 			"linux",
-			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off host="foo" Persist=nil}`,
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off host="foo" update=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				AutoUpdate: AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=check Persist=nil}`,
+		},
+		{
+			Prefs{
+				AutoUpdate: AutoUpdatePrefs{
+					Check: true,
+					Apply: true,
+				},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=on Persist=nil}`,
 		},
 	}
 	for i, tt := range tests {

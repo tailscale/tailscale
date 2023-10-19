@@ -9,14 +9,14 @@ import (
 	"tailscale.com/envknob"
 )
 
-const linkDebug = true
-
 // Various debugging and experimental tweakables, set by environment
 // variable.
 var (
 	// debugDisco prints verbose logs of active discovery events as
 	// they happen.
 	debugDisco = envknob.RegisterBool("TS_DEBUG_DISCO")
+	// debugPeerMap prints verbose logs of changes to the peermap.
+	debugPeerMap = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_PEERMAP")
 	// debugOmitLocalAddresses removes all local interface addresses
 	// from magicsock's discovered local endpoints. Used in some tests.
 	debugOmitLocalAddresses = envknob.RegisterBool("TS_DEBUG_OMIT_LOCAL_ADDRS")
@@ -44,8 +44,20 @@ var (
 	// debugSendCallMeUnknownPeer sends a CallMeMaybe to a non-existent destination every
 	// time we send a real CallMeMaybe to test the PeerGoneNotHere logic.
 	debugSendCallMeUnknownPeer = envknob.RegisterBool("TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
-	// Hey you! Adding a new debugknob? Make sure to stub it out in the debugknob_stubs.go
-	// file too.
+	// debugBindSocket prints extra debugging about socket rebinding in magicsock.
+	debugBindSocket = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_BIND_SOCKET")
+	// debugRingBufferMaxSizeBytes overrides the default size of the endpoint
+	// history ringbuffer.
+	debugRingBufferMaxSizeBytes = envknob.RegisterInt("TS_DEBUG_MAGICSOCK_RING_BUFFER_MAX_SIZE_BYTES")
+	// debugEnablePMTUD enables the peer MTU feature, which does path MTU
+	// discovery on UDP connections between peers. Currently (2023-09-05)
+	// this only turns on the don't fragment bit for the magicsock UDP
+	// sockets.
+	debugEnablePMTUD = envknob.RegisterOptBool("TS_DEBUG_ENABLE_PMTUD")
+	// debugPMTUD prints extra debugging about peer MTU path discovery.
+	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
+	// Hey you! Adding a new debugknob? Make sure to stub it out in the
+	// debugknobs_stubs.go file too.
 )
 
 // inTest reports whether the running program is a test that set the

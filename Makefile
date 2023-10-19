@@ -1,6 +1,7 @@
 IMAGE_REPO ?= tailscale/tailscale
 SYNO_ARCH ?= "amd64"
 SYNO_DSM ?= "7"
+TAGS ?= "latest"
 
 vet: ## Run go vet
 	./tool/go vet ./...
@@ -36,6 +37,9 @@ buildlinuxarm: ## Build tailscale CLI for linux/arm
 buildwasm: ## Build tailscale CLI for js/wasm
 	GOOS=js GOARCH=wasm ./tool/go install ./cmd/tsconnect/wasm ./cmd/tailscale/cli
 
+buildplan9:
+	GOOS=plan9 GOARCH=amd64 ./tool/go install ./cmd/tailscale ./cmd/tailscaled
+
 buildlinuxloong64: ## Build tailscale CLI for linux/loong64
 	GOOS=linux GOARCH=loong64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
@@ -64,7 +68,7 @@ publishdevimage: ## Build and publish tailscale image to location specified by $
 	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
 	@test "${REPO}" != "tailscale/k8s-operator" || (echo "REPO=... must not be tailscale/k8s-operator" && exit 1)
 	@test "${REPO}" != "ghcr.io/tailscale/k8s-operator" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-operator" && exit 1)
-	TAGS=latest REPOS=${REPO} PUSH=true TARGET=client ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} PUSH=true TARGET=client ./build_docker.sh
 
 publishdevoperator: ## Build and publish k8s-operator image to location specified by ${REPO}
 	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
@@ -72,7 +76,7 @@ publishdevoperator: ## Build and publish k8s-operator image to location specifie
 	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
 	@test "${REPO}" != "tailscale/k8s-operator" || (echo "REPO=... must not be tailscale/k8s-operator" && exit 1)
 	@test "${REPO}" != "ghcr.io/tailscale/k8s-operator" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-operator" && exit 1)
-	TAGS=latest REPOS=${REPO} PUSH=true TARGET=operator ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} PUSH=true TARGET=operator ./build_docker.sh
 
 help: ## Show this help
 	@echo "\nSpecify a command. The choices are:\n"

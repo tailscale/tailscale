@@ -10,15 +10,15 @@ import (
 	"math/rand"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/winutil"
 )
 
@@ -28,20 +28,16 @@ var debug = envknob.RegisterBool("TS_DEBUG_PROFILES")
 
 // profileManager is a wrapper around a StateStore that manages
 // multiple profiles and the current profile.
+//
+// It is not safe for concurrent use.
 type profileManager struct {
 	store ipn.StateStore
 	logf  logger.Logf
 
 	currentUserID  ipn.WindowsUserID
-	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile
-	currentProfile *ipn.LoginProfile // always non-nil
-	prefs          ipn.PrefsView     // always Valid.
-
-	// isNewProfile is a sentinel value that indicates that the
-	// current profile is new and has not been saved to disk yet.
-	// It is reset to false after a call to SetPrefs with a filled
-	// in LoginName.
-	isNewProfile bool
+	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile // always non-nil
+	currentProfile *ipn.LoginProfile                   // always non-nil
+	prefs          ipn.PrefsView                       // always Valid.
 }
 
 func (pm *profileManager) dlogf(format string, args ...any) {
@@ -49,6 +45,10 @@ func (pm *profileManager) dlogf(format string, args ...any) {
 		return
 	}
 	pm.logf(format, args...)
+}
+
+func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
+	return ipn.WriteState(pm.store, id, val)
 }
 
 // CurrentUserID returns the current user ID. It is only non-empty on
@@ -103,40 +103,45 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	}
 	pm.currentProfile = prof
 	pm.prefs = prefs
-	pm.isNewProfile = false
 	return nil
+}
+
+// allProfiles returns all profiles that belong to the currentUserID.
+// The returned profiles are sorted by Name.
+func (pm *profileManager) allProfiles() (out []*ipn.LoginProfile) {
+	for _, p := range pm.knownProfiles {
+		if p.LocalUserID == pm.currentUserID {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b *ipn.LoginProfile) int {
+		return cmpx.Compare(a.Name, b.Name)
+	})
+	return out
 }
 
 // matchingProfiles returns all profiles that match the given predicate and
 // belong to the currentUserID.
+// The returned profiles are sorted by Name.
 func (pm *profileManager) matchingProfiles(f func(*ipn.LoginProfile) bool) (out []*ipn.LoginProfile) {
-	for _, p := range pm.knownProfiles {
-		if p.LocalUserID == pm.currentUserID && f(p) {
+	all := pm.allProfiles()
+	out = all[:0]
+	for _, p := range all {
+		if f(p) {
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
-// findProfilesByNodeID returns all profiles that have the provided nodeID and
-// belong to the same control server.
-func (pm *profileManager) findProfilesByNodeID(controlURL string, nodeID tailcfg.StableNodeID) []*ipn.LoginProfile {
-	if nodeID.IsZero() {
-		return nil
-	}
+// findMatchinProfiles returns all profiles that represent the same node/user as
+// prefs.
+// The returned profiles are sorted by Name.
+func (pm *profileManager) findMatchingProfiles(prefs *ipn.Prefs) []*ipn.LoginProfile {
 	return pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.NodeID == nodeID && p.ControlURL == controlURL
-	})
-}
-
-// findProfilesByUserID returns all profiles that have the provided userID and
-// belong to the same control server.
-func (pm *profileManager) findProfilesByUserID(controlURL string, userID tailcfg.UserID) []*ipn.LoginProfile {
-	if userID.IsZero() {
-		return nil
-	}
-	return pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.UserProfile.ID == userID && p.ControlURL == controlURL
+		return p.ControlURL == prefs.ControlURL &&
+			(p.UserProfile.ID == prefs.Persist.UserProfile.ID ||
+				p.NodeID == prefs.Persist.NodeID)
 	})
 }
 
@@ -182,9 +187,9 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 	}
 
 	if pm.prefs.ForceDaemon() {
-		return pm.store.WriteState(ipn.ServerModeStartKey, []byte(pm.currentProfile.Key))
+		return pm.WriteState(ipn.ServerModeStartKey, []byte(pm.currentProfile.Key))
 	} else {
-		return pm.store.WriteState(ipn.ServerModeStartKey, nil)
+		return pm.WriteState(ipn.ServerModeStartKey, nil)
 	}
 }
 
@@ -201,49 +206,58 @@ func init() {
 // SetPrefs sets the current profile's prefs to the provided value.
 // It also saves the prefs to the StateStore. It stores a copy of the
 // provided prefs, which may be accessed via CurrentPrefs.
-func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
-	prefs := prefsIn.AsStruct().View()
-	newPersist := prefs.Persist().AsStruct()
-	if newPersist == nil || newPersist.NodeID == "" {
-		return pm.setPrefsLocked(prefs)
+//
+// If tailnetMagicDNSName is provided non-empty, it will be used to
+// enrich the profile with the tailnet's MagicDNS name. The MagicDNS
+// name cannot be pulled from prefsIn directly because it is not saved
+// on ipn.Prefs (since it's not a field that is configurable by nodes).
+func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, tailnetMagicDNSName string) error {
+	prefs := prefsIn.AsStruct()
+	newPersist := prefs.Persist
+	if newPersist == nil || newPersist.NodeID == "" || newPersist.UserProfile.LoginName == "" {
+		// We don't know anything about this profile, so ignore it for now.
+		return pm.setPrefsLocked(prefs.View())
 	}
 	up := newPersist.UserProfile
-	if up.LoginName == "" {
-		// Backwards compatibility with old prefs files.
-		up.LoginName = newPersist.LoginName
-	} else {
-		newPersist.LoginName = up.LoginName
-	}
 	if up.DisplayName == "" {
 		up.DisplayName = up.LoginName
 	}
 	cp := pm.currentProfile
-	if pm.isNewProfile {
-		pm.isNewProfile = false
-		// Check if we already have a profile for this user.
-		existing := pm.findProfilesByUserID(prefs.ControlURL(), newPersist.UserProfile.ID)
-		// Also check if we have a profile with the same NodeID.
-		existing = append(existing, pm.findProfilesByNodeID(prefs.ControlURL(), newPersist.NodeID)...)
-		if len(existing) == 0 {
-			cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
-		} else {
-			// Only one profile per user/nodeID should exist.
-			for _, p := range existing[1:] {
-				// Best effort cleanup.
-				pm.DeleteProfile(p.ID)
+	// Check if we already have an existing profile that matches the user/node.
+	if existing := pm.findMatchingProfiles(prefs); len(existing) > 0 {
+		// We already have a profile for this user/node we should reuse it. Also
+		// cleanup any other duplicate profiles.
+		cp = existing[0]
+		existing = existing[1:]
+		for _, p := range existing {
+			// Clear the state.
+			if err := pm.store.WriteState(p.Key, nil); err != nil {
+				// We couldn't delete the state, so keep the profile around.
+				continue
 			}
-			cp = existing[0]
+			// Remove the profile, knownProfiles will be persisted below.
+			delete(pm.knownProfiles, p.ID)
 		}
+	} else if cp.ID == "" {
+		// We didn't have an existing profile, so create a new one.
+		cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
 		cp.LocalUserID = pm.currentUserID
+	} else {
+		// This means that there was a force-reauth as a new node that
+		// we haven't seen before.
 	}
-	if prefs.ProfileName() != "" {
-		cp.Name = prefs.ProfileName()
+
+	if prefs.ProfileName != "" {
+		cp.Name = prefs.ProfileName
 	} else {
 		cp.Name = up.LoginName
 	}
-	cp.ControlURL = prefs.ControlURL()
+	cp.ControlURL = prefs.ControlURL
 	cp.UserProfile = newPersist.UserProfile
 	cp.NodeID = newPersist.NodeID
+	if tailnetMagicDNSName != "" {
+		cp.TailnetMagicDNSName = tailnetMagicDNSName
+	}
 	pm.knownProfiles[cp.ID] = cp
 	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {
@@ -252,7 +266,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	if err := pm.setAsUserSelectedProfileLocked(); err != nil {
 		return err
 	}
-	if err := pm.setPrefsLocked(prefs); err != nil {
+	if err := pm.setPrefsLocked(prefs.View()); err != nil {
 		return err
 	}
 	return nil
@@ -275,7 +289,7 @@ func newUnusedID(knownProfiles map[ipn.ProfileID]*ipn.LoginProfile) (ipn.Profile
 // is not new.
 func (pm *profileManager) setPrefsLocked(clonedPrefs ipn.PrefsView) error {
 	pm.prefs = clonedPrefs
-	if pm.isNewProfile {
+	if pm.currentProfile.ID == "" {
 		return nil
 	}
 	if err := pm.writePrefsToStore(pm.currentProfile.Key, pm.prefs); err != nil {
@@ -288,7 +302,7 @@ func (pm *profileManager) writePrefsToStore(key ipn.StateKey, prefs ipn.PrefsVie
 	if key == "" {
 		return nil
 	}
-	if err := pm.store.WriteState(key, prefs.ToBytes()); err != nil {
+	if err := pm.WriteState(key, prefs.ToBytes()); err != nil {
 		pm.logf("WriteState(%q): %v", key, err)
 		return err
 	}
@@ -297,12 +311,9 @@ func (pm *profileManager) writePrefsToStore(key ipn.StateKey, prefs ipn.PrefsVie
 
 // Profiles returns the list of known profiles.
 func (pm *profileManager) Profiles() []ipn.LoginProfile {
-	profiles := pm.matchingProfiles(func(*ipn.LoginProfile) bool { return true })
-	slices.SortFunc(profiles, func(a, b *ipn.LoginProfile) bool {
-		return a.Name < b.Name
-	})
-	out := make([]ipn.LoginProfile, 0, len(profiles))
-	for _, p := range profiles {
+	allProfiles := pm.allProfiles()
+	out := make([]ipn.LoginProfile, 0, len(allProfiles))
+	for _, p := range allProfiles {
 		out = append(out, *p)
 	}
 	return out
@@ -330,13 +341,12 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 	}
 	pm.prefs = prefs
 	pm.currentProfile = kp
-	pm.isNewProfile = false
 	return pm.setAsUserSelectedProfileLocked()
 }
 
 func (pm *profileManager) setAsUserSelectedProfileLocked() error {
 	k := ipn.CurrentProfileKey(string(pm.currentUserID))
-	return pm.store.WriteState(k, []byte(pm.currentProfile.Key))
+	return pm.WriteState(k, []byte(pm.currentProfile.Key))
 }
 
 func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error) {
@@ -382,7 +392,7 @@ var errProfileNotFound = errors.New("profile not found")
 func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
 	metricDeleteProfile.Add(1)
 
-	if id == "" && pm.isNewProfile {
+	if id == "" {
 		// Deleting the in-memory only new profile, just create a new one.
 		pm.NewProfile()
 		return nil
@@ -394,7 +404,7 @@ func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
 	if kp.ID == pm.currentProfile.ID {
 		pm.NewProfile()
 	}
-	if err := pm.store.WriteState(kp.Key, nil); err != nil {
+	if err := pm.WriteState(kp.Key, nil); err != nil {
 		return err
 	}
 	delete(pm.knownProfiles, id)
@@ -407,7 +417,7 @@ func (pm *profileManager) DeleteAllProfiles() error {
 	metricDeleteAllProfile.Add(1)
 
 	for _, kp := range pm.knownProfiles {
-		if err := pm.store.WriteState(kp.Key, nil); err != nil {
+		if err := pm.WriteState(kp.Key, nil); err != nil {
 			// Write to remove references to profiles we've already deleted, but
 			// return the original error.
 			pm.writeKnownProfiles()
@@ -424,7 +434,7 @@ func (pm *profileManager) writeKnownProfiles() error {
 	if err != nil {
 		return err
 	}
-	return pm.store.WriteState(ipn.KnownProfilesStateKey, b)
+	return pm.WriteState(ipn.KnownProfilesStateKey, b)
 }
 
 // NewProfile creates and switches to a new unnamed profile. The new profile is
@@ -433,29 +443,33 @@ func (pm *profileManager) NewProfile() {
 	metricNewProfile.Add(1)
 
 	pm.prefs = defaultPrefs
-	pm.isNewProfile = true
 	pm.currentProfile = &ipn.LoginProfile{}
 }
 
 // defaultPrefs is the default prefs for a new profile.
 var defaultPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
+	prefs.LoggedOut = true
 	prefs.WantRunning = false
 
-	prefs.ControlURL = winutil.GetPolicyString("LoginURL", "")
+	controlURL, _ := winutil.GetPolicyString("LoginURL")
+	prefs.ControlURL = controlURL
+
 	prefs.ExitNodeIP = resolveExitNodeIP(netip.Addr{})
 
 	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
 	// backend), so this has to convert between the two conventions.
-	prefs.ShieldsUp = winutil.GetPolicyString("AllowIncomingConnections", "") == "never"
-	prefs.ForceDaemon = winutil.GetPolicyString("UnattendedMode", "") == "always"
+	shieldsUp, _ := winutil.GetPolicyString("AllowIncomingConnections")
+	prefs.ShieldsUp = shieldsUp == "never"
+	forceDaemon, _ := winutil.GetPolicyString("UnattendedMode")
+	prefs.ForceDaemon = forceDaemon == "always"
 
 	return prefs.View()
 }()
 
 func resolveExitNodeIP(defIP netip.Addr) (ret netip.Addr) {
 	ret = defIP
-	if exitNode := winutil.GetPolicyString("ExitNodeIP", ""); exitNode != "" {
+	if exitNode, _ := winutil.GetPolicyString("ExitNodeIP"); exitNode != "" {
 		if ip, err := netip.ParseAddr(exitNode); err == nil {
 			ret = ip
 		}
@@ -587,7 +601,7 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 		return fmt.Errorf("load legacy prefs: %w", err)
 	}
 	pm.dlogf("loaded legacy preferences; sentinel=%q", sentinel)
-	if err := pm.SetPrefs(prefs); err != nil {
+	if err := pm.SetPrefs(prefs, ""); err != nil {
 		metricMigrationError.Add(1)
 		return fmt.Errorf("migrating _daemon profile: %w", err)
 	}

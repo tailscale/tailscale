@@ -38,6 +38,7 @@ func (f handlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) err
 }
 
 func TestStdHandler(t *testing.T) {
+	const exampleRequestID = "example-request-id"
 	var (
 		handlerCode = func(code int) ReturnHandler {
 			return handlerFunc(func(w http.ResponseWriter, r *http.Request) error {
@@ -65,20 +66,21 @@ func TestStdHandler(t *testing.T) {
 		testErr = errors.New("test error")
 		bgCtx   = context.Background()
 		// canceledCtx, cancel = context.WithCancel(bgCtx)
-		clock = tstest.Clock{
-			Start: time.Now(),
-			Step:  time.Second,
-		}
+		startTime = time.Unix(1687870000, 1234)
+
+		setExampleRequestID = func(_ *http.Request) RequestID { return exampleRequestID }
 	)
 	// cancel()
 
 	tests := []struct {
-		name       string
-		rh         ReturnHandler
-		r          *http.Request
-		errHandler ErrorHandlerFunc
-		wantCode   int
-		wantLog    AccessLogRecord
+		name              string
+		rh                ReturnHandler
+		r                 *http.Request
+		errHandler        ErrorHandlerFunc
+		generateRequestID func(*http.Request) RequestID
+		wantCode          int
+		wantLog           AccessLogRecord
+		wantBody          string
 	}{
 		{
 			name:     "handler returns 200",
@@ -86,7 +88,25 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				TLS:        false,
+				Host:       "example.com",
+				Method:     "GET",
+				Code:       200,
+				RequestURI: "/",
+			},
+		},
+
+		{
+			name:              "handler returns 200 with request ID",
+			rh:                handlerCode(200),
+			r:                 req(bgCtx, "http://example.com/"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          200,
+			wantLog: AccessLogRecord{
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -103,7 +123,24 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Code:       404,
+			},
+		},
+
+		{
+			name:              "handler returns 404 with request ID",
+			rh:                handlerCode(404),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          404,
+			wantLog: AccessLogRecord{
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -119,7 +156,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -128,6 +165,27 @@ func TestStdHandler(t *testing.T) {
 				Err:        "not found: " + testErr.Error(),
 				Code:       404,
 			},
+			wantBody: "not found\n",
+		},
+
+		{
+			name:              "handler returns 404 via HTTPError with request ID",
+			rh:                handlerErr(0, Error(404, "not found", testErr)),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          404,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        "not found: " + testErr.Error(),
+				Code:       404,
+				RequestID:  exampleRequestID,
+			},
+			wantBody: "not found\n" + exampleRequestID + "\n",
 		},
 
 		{
@@ -136,7 +194,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -145,6 +203,27 @@ func TestStdHandler(t *testing.T) {
 				Err:        "not found",
 				Code:       404,
 			},
+			wantBody: "not found\n",
+		},
+
+		{
+			name:              "handler returns 404 with request ID and nil child error",
+			rh:                handlerErr(0, Error(404, "not found", nil)),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          404,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        "not found",
+				Code:       404,
+				RequestID:  exampleRequestID,
+			},
+			wantBody: "not found\n" + exampleRequestID + "\n",
 		},
 
 		{
@@ -153,7 +232,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -162,6 +241,27 @@ func TestStdHandler(t *testing.T) {
 				Err:        "visible error",
 				Code:       500,
 			},
+			wantBody: "visible error\n",
+		},
+
+		{
+			name:              "handler returns user-visible error with request ID",
+			rh:                handlerErr(0, vizerror.New("visible error")),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          500,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        "visible error",
+				Code:       500,
+				RequestID:  exampleRequestID,
+			},
+			wantBody: "visible error\n" + exampleRequestID + "\n",
 		},
 
 		{
@@ -170,7 +270,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -179,6 +279,27 @@ func TestStdHandler(t *testing.T) {
 				Err:        "visible error",
 				Code:       500,
 			},
+			wantBody: "visible error\n",
+		},
+
+		{
+			name:              "handler returns user-visible error wrapped by private error with request ID",
+			rh:                handlerErr(0, fmt.Errorf("private internal error: %w", vizerror.New("visible error"))),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          500,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        "visible error",
+				Code:       500,
+				RequestID:  exampleRequestID,
+			},
+			wantBody: "visible error\n" + exampleRequestID + "\n",
 		},
 
 		{
@@ -187,7 +308,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -196,6 +317,27 @@ func TestStdHandler(t *testing.T) {
 				Err:        testErr.Error(),
 				Code:       500,
 			},
+			wantBody: "internal server error\n",
+		},
+
+		{
+			name:              "handler returns generic error with request ID",
+			rh:                handlerErr(0, testErr),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          500,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        testErr.Error(),
+				Code:       500,
+				RequestID:  exampleRequestID,
+			},
+			wantBody: "internal server error\n" + exampleRequestID + "\n",
 		},
 
 		{
@@ -204,7 +346,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -216,12 +358,31 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
+			name:              "handler returns error after writing response with request ID",
+			rh:                handlerErr(200, testErr),
+			r:                 req(bgCtx, "http://example.com/foo"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          200,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        testErr.Error(),
+				Code:       200,
+				RequestID:  exampleRequestID,
+			},
+		},
+
+		{
 			name:     "handler returns HTTPError after writing response",
 			rh:       handlerErr(200, Error(404, "not found", testErr)),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -238,7 +399,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -260,7 +421,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:    clock.Start,
+				When:    startTime,
 				Seconds: 1.0,
 
 				Proto:      "HTTP/1.1",
@@ -270,6 +431,7 @@ func TestStdHandler(t *testing.T) {
 				Code:       101,
 			},
 		},
+
 		{
 			name:     "error handler gets run",
 			rh:       handlerErr(0, Error(404, "not found", nil)), // status code changed in errHandler
@@ -279,7 +441,7 @@ func TestStdHandler(t *testing.T) {
 				http.Error(w, e.Msg, 200)
 			},
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -289,6 +451,62 @@ func TestStdHandler(t *testing.T) {
 				Err:        "not found",
 				RequestURI: "/",
 			},
+			wantBody: "not found\n",
+		},
+
+		{
+			name:              "error handler gets run with request ID",
+			rh:                handlerErr(0, Error(404, "not found", nil)), // status code changed in errHandler
+			r:                 req(bgCtx, "http://example.com/"),
+			generateRequestID: setExampleRequestID,
+			wantCode:          200,
+			errHandler: func(w http.ResponseWriter, r *http.Request, e HTTPError) {
+				http.Error(w, fmt.Sprintf("%s with request ID %s", e.Msg, e.RequestID), 200)
+			},
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				TLS:        false,
+				Host:       "example.com",
+				Method:     "GET",
+				Code:       404,
+				Err:        "not found",
+				RequestURI: "/",
+				RequestID:  exampleRequestID,
+			},
+			wantBody: "not found with request ID " + exampleRequestID + "\n",
+		},
+
+		{
+			name: "request ID can use information from request",
+			rh:   handlerErr(0, Error(400, "bad request", nil)),
+			r: func() *http.Request {
+				r := req(bgCtx, "http://example.com/")
+				r.AddCookie(&http.Cookie{Name: "want_request_id", Value: "asdf1234"})
+				return r
+			}(),
+			generateRequestID: func(r *http.Request) RequestID {
+				c, _ := r.Cookie("want_request_id")
+				if c == nil {
+					return ""
+				}
+				return RequestID(c.Value)
+			},
+			wantCode: 400,
+			wantLog: AccessLogRecord{
+				When:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				TLS:        false,
+				Host:       "example.com",
+				RequestURI: "/",
+				Method:     "GET",
+				Code:       400,
+				Err:        "bad request",
+				RequestID:  "asdf1234",
+			},
+			wantBody: "bad request\nasdf1234\n",
 		},
 	}
 
@@ -302,10 +520,13 @@ func TestStdHandler(t *testing.T) {
 				t.Logf(fmt, args...)
 			}
 
-			clock.Reset()
+			clock := tstest.NewClock(tstest.ClockOpts{
+				Start: startTime,
+				Step:  time.Second,
+			})
 
 			rec := noopHijacker{httptest.NewRecorder(), false}
-			h := StdHandler(test.rh, HandlerOptions{Logf: logf, Now: clock.Now, OnError: test.errHandler})
+			h := StdHandler(test.rh, HandlerOptions{Logf: logf, Now: clock.Now, GenerateRequestID: test.generateRequestID, OnError: test.errHandler})
 			h.ServeHTTP(&rec, test.r)
 			res := rec.Result()
 			if res.StatusCode != test.wantCode {
@@ -323,6 +544,9 @@ func TestStdHandler(t *testing.T) {
 			})
 			if diff := cmp.Diff(logs[0], test.wantLog, errTransform); diff != "" {
 				t.Errorf("handler wrote incorrect request log (-got+want):\n%s", diff)
+			}
+			if diff := cmp.Diff(rec.Body.String(), test.wantBody); diff != "" {
+				t.Errorf("handler wrote incorrect body (-got+want):\n%s", diff)
 			}
 		})
 	}

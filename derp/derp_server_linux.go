@@ -9,45 +9,37 @@ import (
 	"net"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"tailscale.com/net/tcpinfo"
 )
 
 func (c *sclient) statsLoop(ctx context.Context) error {
-	// If we can't get a TCP socket, then we can't send stats.
-	tcpConn := c.tcpConn()
-	if tcpConn == nil {
+	// Get the RTT initially to verify it's supported.
+	conn := c.tcpConn()
+	if conn == nil {
 		c.s.tcpRtt.Add("non-tcp", 1)
 		return nil
 	}
-	rawConn, err := tcpConn.SyscallConn()
-	if err != nil {
-		c.logf("error getting SyscallConn: %v", err)
+	if _, err := tcpinfo.RTT(conn); err != nil {
+		c.logf("error fetching initial RTT: %v", err)
 		c.s.tcpRtt.Add("error", 1)
 		return nil
 	}
 
 	const statsInterval = 10 * time.Second
 
-	ticker := time.NewTicker(statsInterval)
+	ticker, tickerChannel := c.s.clock.NewTicker(statsInterval)
 	defer ticker.Stop()
 
-	var (
-		tcpInfo *unix.TCPInfo
-		sysErr  error
-	)
 statsLoop:
 	for {
 		select {
-		case <-ticker.C:
-			err = rawConn.Control(func(fd uintptr) {
-				tcpInfo, sysErr = unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
-			})
-			if err != nil || sysErr != nil {
+		case <-tickerChannel:
+			rtt, err := tcpinfo.RTT(conn)
+			if err != nil {
 				continue statsLoop
 			}
 
 			// TODO(andrew): more metrics?
-			rtt := time.Duration(tcpInfo.Rtt) * time.Microsecond
 			c.s.tcpRtt.Add(durationToLabel(rtt), 1)
 
 		case <-ctx.Done():

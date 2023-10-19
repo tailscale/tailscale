@@ -67,9 +67,7 @@ func (v *{{.ViewName}}) UnmarshalJSON(b []byte) error {
 {{end}}
 {{define "valueField"}}func (v {{.ViewName}}) {{.FieldName}}() {{.FieldType}} { return v.ж.{{.FieldName}} }
 {{end}}
-{{define "byteSliceField"}}func (v {{.ViewName}}) {{.FieldName}}() mem.RO { return mem.B(v.ж.{{.FieldName}}) }
-{{end}}
-{{define "ipPrefixSliceField"}}func (v {{.ViewName}}) {{.FieldName}}() views.IPPrefixSlice { return views.IPPrefixSliceOf(v.ж.{{.FieldName}}) }
+{{define "byteSliceField"}}func (v {{.ViewName}}) {{.FieldName}}() views.ByteSlice[{{.FieldType}}] { return views.ByteSliceOf(v.ж.{{.FieldName}}) }
 {{end}}
 {{define "sliceField"}}func (v {{.ViewName}}) {{.FieldName}}() views.Slice[{{.FieldType}}] { return views.SliceOf(v.ж.{{.FieldName}}) }
 {{end}}
@@ -171,15 +169,12 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 		case *types.Slice:
 			slice := underlying
 			elem := slice.Elem()
-			args.FieldType = it.QualifiedName(elem)
 			switch elem.String() {
 			case "byte":
-				it.Import("go4.org/mem")
+				args.FieldType = it.QualifiedName(fieldType)
 				writeTemplate("byteSliceField")
-			case "inet.af/netip.Prefix", "net/netip.Prefix":
-				it.Import("tailscale.com/types/views")
-				writeTemplate("ipPrefixSliceField")
 			default:
+				args.FieldType = it.QualifiedName(elem)
 				it.Import("tailscale.com/types/views")
 				shallow, deep, base := requiresCloning(elem)
 				if deep {
@@ -242,9 +237,10 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				slice := u
 				sElem := slice.Elem()
 				switch x := sElem.(type) {
-				case *types.Basic:
+				case *types.Basic, *types.Named:
+					sElem := it.QualifiedName(sElem)
 					args.MapValueView = fmt.Sprintf("views.Slice[%v]", sElem)
-					args.MapValueType = "[]" + sElem.String()
+					args.MapValueType = "[]" + sElem
 					args.MapFn = "views.SliceOf(t)"
 					template = "mapFnField"
 				case *types.Pointer:

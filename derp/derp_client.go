@@ -17,6 +17,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -40,6 +41,8 @@ type Client struct {
 	// Owned by Recv:
 	peeked  int                      // bytes to discard on next Recv
 	readErr syncs.AtomicValue[error] // sticky (set by Recv)
+
+	clock tstime.Clock
 }
 
 // ClientOpt is an option passed to NewClient.
@@ -103,6 +106,7 @@ func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 		meshKey:     opt.MeshKey,
 		canAckPings: opt.CanAckPings,
 		isProber:    opt.IsProber,
+		clock:       tstime.StdClock{},
 	}
 	if opt.ServerPub.IsZero() {
 		if err := c.recvServerKey(); err != nil {
@@ -214,7 +218,7 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	defer c.wmu.Unlock()
 	if c.rate != nil {
 		pktLen := frameHeaderLen + key.NodePublicRawLen + len(pkt)
-		if !c.rate.AllowN(time.Now(), pktLen) {
+		if !c.rate.AllowN(c.clock.Now(), pktLen) {
 			return nil // drop
 		}
 	}
@@ -244,7 +248,7 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err e
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 
-	timer := time.AfterFunc(5*time.Second, c.writeTimeoutFired)
+	timer := c.clock.AfterFunc(5*time.Second, c.writeTimeoutFired)
 	defer timer.Stop()
 
 	if err := writeFrameHeader(c.bw, frameForwardPacket, uint32(keyLen*2+len(pkt))); err != nil {
@@ -359,7 +363,12 @@ func (PeerGoneMessage) msg() {}
 
 // PeerPresentMessage is a ReceivedMessage that indicates that the client
 // is connected to the server. (Only used by trusted mesh clients)
-type PeerPresentMessage key.NodePublic
+type PeerPresentMessage struct {
+	// Key is the public key of the client.
+	Key key.NodePublic
+	// IPPort is the remote IP and port of the client.
+	IPPort netip.AddrPort
+}
 
 func (PeerPresentMessage) msg() {}
 
@@ -457,7 +466,6 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			c.readErr.Store(err)
 		}
 	}()
-
 	for {
 		c.nc.SetReadDeadline(time.Now().Add(timeout))
 
@@ -543,8 +551,15 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				c.logf("[unexpected] dropping short peerPresent frame from DERP server")
 				continue
 			}
-			pg := PeerPresentMessage(key.NodePublicFromRaw32(mem.B(b[:keyLen])))
-			return pg, nil
+			var msg PeerPresentMessage
+			msg.Key = key.NodePublicFromRaw32(mem.B(b[:keyLen]))
+			if n >= keyLen+16+2 {
+				msg.IPPort = netip.AddrPortFrom(
+					netip.AddrFrom16([16]byte(b[keyLen:keyLen+16])).Unmap(),
+					binary.BigEndian.Uint16(b[keyLen+16:keyLen+16+2]),
+				)
+			}
+			return msg, nil
 
 		case frameRecvPacket:
 			var rp ReceivedPacket

@@ -61,7 +61,7 @@ const (
 	// each one via RequestEngineStatus.
 	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << iota
 
-	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL
+	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
 	NotifyInitialPrefs  // if set, the first Notify message (sent immediately) will contain the current Prefs
 	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
 
@@ -76,6 +76,12 @@ const (
 type Notify struct {
 	_       structs.Incomparable
 	Version string // version number of IPN backend
+
+	// SessionID identifies the unique WatchIPNBus session.
+	// This field is only set in the first message when requesting
+	// NotifyInitialState. Clients must store it on their side as
+	// following notifications will not include this field.
+	SessionID string `json:",omitempty"`
 
 	// ErrMessage, if non-nil, contains a critical error message.
 	// For State InUseOtherUser, ErrMessage is not critical and just contains the details.
@@ -185,6 +191,13 @@ type PartialFile struct {
 //   - "_debug_magicsock_until" with value being a unix timestamp stringified
 //   - "_debug_<component>_until" with value being a unix timestamp stringified
 type StateKey string
+
+// DebuggableComponents is a list of components whose debugging can be turned on
+// and off individually using the tailscale debug command.
+var DebuggableComponents = []string{
+	"magicsock",
+	"sockstats",
+}
 
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.

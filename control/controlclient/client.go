@@ -14,17 +14,28 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// LoginFlags is a bitmask of options to change the behavior of Client.Login
+// and LocalBackend.
 type LoginFlags int
 
 const (
 	LoginDefault     = LoginFlags(0)
 	LoginInteractive = LoginFlags(1 << iota) // force user login and key refresh
 	LoginEphemeral                           // set RegisterRequest.Ephemeral
+
+	// LocalBackendStartKeyOSNeutral instructs NewLocalBackend to start the
+	// LocalBackend without any OS-dependent StateStore StartKey behavior.
+	//
+	// See https://github.com/tailscale/tailscale/issues/6973.
+	LocalBackendStartKeyOSNeutral
 )
 
 // Client represents a client connection to the control server.
 // Currently this is done through a pair of polling https requests in
 // the Auto client, but that might change eventually.
+//
+// The Client must be comparable as it is used by the Observer to detect stale
+// clients.
 type Client interface {
 	// Shutdown closes this session, which should not be used any further
 	// afterwards.
@@ -34,10 +45,6 @@ type Client interface {
 	// LoginFinished flag (on success) or an auth URL (if further
 	// interaction is needed).
 	Login(*tailcfg.Oauth2Token, LoginFlags)
-	// StartLogout starts an asynchronous logout process.
-	// When it finishes, the Status callback will be called while
-	// AuthCantContinue()==true.
-	StartLogout()
 	// Logout starts a synchronous logout process. It doesn't return
 	// until the logout operation has been completed.
 	Logout(context.Context) error

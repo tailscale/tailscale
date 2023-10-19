@@ -6,7 +6,11 @@ package ipnlocal
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -24,6 +29,7 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cmpx"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
 )
@@ -169,48 +175,180 @@ func TestGetServeHandler(t *testing.T) {
 	}
 }
 
-func TestServeHTTPProxy(t *testing.T) {
-	sys := &tsd.System{}
-	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
+func getEtag(t *testing.T, b any) string {
+	t.Helper()
+	bts, err := json.Marshal(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sys.Set(e)
-	sys.Set(new(mem.Store))
-	b, err := NewLocalBackend(t.Logf, logid.PublicID{}, sys, 0)
-	if err != nil {
-		t.Fatal(err)
+	sum := sha256.Sum256(bts)
+	return hex.EncodeToString(sum[:])
+}
+
+// TestServeConfigForeground tests the inter-dependency
+// between a ServeConfig and a WatchIPNBus:
+// 1. Creating a WatchIPNBus returns a sessionID, that
+// 2. ServeConfig sets it as the key of the Foreground field.
+// 3. ServeConfig expects the WatchIPNBus to clean up the Foreground
+// config when the session is done.
+// 4. WatchIPNBus expects the ServeConfig to send a signal (close the channel)
+// if an incoming SetServeConfig removes previous foregrounds.
+func TestServeConfigForeground(t *testing.T) {
+	b := newTestBackend(t)
+
+	ch1 := make(chan string, 1)
+	go func() {
+		defer close(ch1)
+		b.WatchNotifications(context.Background(), ipn.NotifyInitialState, nil, func(roNotify *ipn.Notify) (keepGoing bool) {
+			if roNotify.SessionID != "" {
+				ch1 <- roNotify.SessionID
+			}
+			return true
+		})
+	}()
+
+	ch2 := make(chan string, 1)
+	go func() {
+		b.WatchNotifications(context.Background(), ipn.NotifyInitialState, nil, func(roNotify *ipn.Notify) (keepGoing bool) {
+			if roNotify.SessionID != "" {
+				ch2 <- roNotify.SessionID
+				return true
+			}
+			ch2 <- "again" // let channel know fn was called again
+			return true
+		})
+	}()
+
+	var session1 string
+	select {
+	case session1 = <-ch1:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on watch notifications session id")
 	}
-	defer b.Shutdown()
-	dir := t.TempDir()
-	b.SetVarRoot(dir)
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
-	pm.currentProfile = &ipn.LoginProfile{ID: "id0"}
-	b.pm = pm
+	var session2 string
+	select {
+	case session2 = <-ch2:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on watch notifications session id")
+	}
 
-	b.netMap = &netmap.NetworkMap{
-		SelfNode: &tailcfg.Node{
-			Name: "example.ts.net",
-		},
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
-			tailcfg.UserID(1): {
-				LoginName:   "someone@example.com",
-				DisplayName: "Some One",
+	err := b.SetServeConfig(&ipn.ServeConfig{
+		Foreground: map[string]*ipn.ServeConfig{
+			session1: {TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {TCPForward: "http://localhost:3000"}},
+			},
+			session2: {TCP: map[uint16]*ipn.TCPPortHandler{
+				999: {TCPForward: "http://localhost:4000"}},
 			},
 		},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	b.nodeByAddr = map[netip.Addr]*tailcfg.Node{
-		netip.MustParseAddr("100.150.151.152"): {
-			ComputedName: "some-peer",
-			User:         tailcfg.UserID(1),
+
+	// Setting a new serve config should shut down WatchNotifications
+	// whose session IDs are no longer found: session1 goes, session2 stays.
+	err = b.SetServeConfig(&ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			5000: {TCPForward: "http://localhost:5000"},
 		},
-		netip.MustParseAddr("100.150.151.153"): {
-			ComputedName: "some-tagged-peer",
-			Tags:         []string{"tag:server", "tag:test"},
-			User:         tailcfg.UserID(1),
+		Foreground: map[string]*ipn.ServeConfig{
+			session2: {TCP: map[uint16]*ipn.TCPPortHandler{
+				999: {TCPForward: "http://localhost:4000"}},
+			},
+		},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case _, ok := <-ch1:
+		if ok {
+			t.Fatal("expected channel to be closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on watch notifications closing")
+	}
+
+	// check that the second session is still running
+	b.send(ipn.Notify{})
+	select {
+	case _, ok := <-ch2:
+		if !ok {
+			t.Fatal("expected second session to remain open")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on second session")
+	}
+}
+
+func TestServeConfigETag(t *testing.T) {
+	b := newTestBackend(t)
+
+	// a nil config with initial etag should succeed
+	err := b.SetServeConfig(nil, getEtag(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// a nil config with an invalid etag should fail
+	err = b.SetServeConfig(nil, "abc")
+	if !errors.Is(err, ErrETagMismatch) {
+		t.Fatal("expected an error but got nil")
+	}
+
+	// a new config with no etag should succeed
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {Proxy: "http://127.0.0.1:3000"},
+			}},
 		},
 	}
+	err = b.SetServeConfig(conf, getEtag(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	confView := b.ServeConfig()
+	etag := getEtag(t, confView)
+	if etag == "" {
+		t.Fatal("expected to get an etag but got an empty string")
+	}
+	conf = confView.AsStruct()
+	mak.Set(&conf.AllowFunnel, "example.ts.net:443", true)
+
+	// replacing an existing config with an invalid etag should fail
+	err = b.SetServeConfig(conf, "invalid etag")
+	if !errors.Is(err, ErrETagMismatch) {
+		t.Fatalf("expected an etag mismatch error but got %v", err)
+	}
+
+	// replacing an existing config with a valid etag should succeed
+	err = b.SetServeConfig(conf, etag)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// replacing an existing config with a previous etag should fail
+	err = b.SetServeConfig(nil, etag)
+	if !errors.Is(err, ErrETagMismatch) {
+		t.Fatalf("expected an etag mismatch error but got %v", err)
+	}
+
+	// replacing an existing config with the new etag should succeed
+	newCfg := b.ServeConfig()
+	etag = getEtag(t, newCfg)
+	err = b.SetServeConfig(nil, etag)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeHTTPProxy(t *testing.T) {
+	b := newTestBackend(t)
 
 	// Start test serve endpoint.
 	testServ := httptest.NewServer(http.HandlerFunc(
@@ -231,7 +369,7 @@ func TestServeHTTPProxy(t *testing.T) {
 			}},
 		},
 	}
-	if err := b.SetServeConfig(conf); err != nil {
+	if err := b.SetServeConfig(conf, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -253,6 +391,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.152"},
 				{"Tailscale-User-Login", "someone@example.com"},
 				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
 				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 			},
 		},
@@ -264,6 +403,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.153"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 			},
 		},
@@ -275,6 +415,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.160.161.162"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 			},
 		},
@@ -303,6 +444,58 @@ func TestServeHTTPProxy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newTestBackend(t *testing.T) *LocalBackend {
+	sys := &tsd.System{}
+	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys.Set(e)
+	sys.Set(new(mem.Store))
+	b, err := NewLocalBackend(t.Logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Shutdown)
+	dir := t.TempDir()
+	b.SetVarRoot(dir)
+
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm.currentProfile = &ipn.LoginProfile{ID: "id0"}
+	b.pm = pm
+
+	b.netMap = &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name: "example.ts.net",
+		}).View(),
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+			tailcfg.UserID(1): {
+				LoginName:     "someone@example.com",
+				DisplayName:   "Some One",
+				ProfilePicURL: "https://example.com/photo.jpg",
+			},
+		},
+	}
+	b.peers = map[tailcfg.NodeID]tailcfg.NodeView{
+		152: (&tailcfg.Node{
+			ID:           152,
+			ComputedName: "some-peer",
+			User:         tailcfg.UserID(1),
+		}).View(),
+		153: (&tailcfg.Node{
+			ID:           153,
+			ComputedName: "some-tagged-peer",
+			Tags:         []string{"tag:server", "tag:test"},
+			User:         tailcfg.UserID(1),
+		}).View(),
+	}
+	b.nodeByAddr = map[netip.Addr]tailcfg.NodeID{
+		netip.MustParseAddr("100.150.151.152"): 152,
+		netip.MustParseAddr("100.150.151.153"): 153,
+	}
+	return b
 }
 
 func TestServeFileOrDirectory(t *testing.T) {
@@ -392,5 +585,44 @@ func TestServeFileOrDirectory(t *testing.T) {
 		if err := tt.want(rec.Body.Bytes(), rec.Result()); err != nil {
 			t.Errorf("error for req %q (mount %v): %v", tt.req, tt.mount, err)
 		}
+	}
+}
+
+func Test_isGRPCContentType(t *testing.T) {
+	tests := map[string]struct {
+		contentType string
+		want        bool
+	}{
+		"application/grpc": {
+			contentType: "application/grpc",
+			want:        true,
+		},
+		"application/grpc;": {
+			contentType: "application/grpc;",
+			want:        true,
+		},
+		"application/grpc+": {
+			contentType: "application/grpc+",
+			want:        true,
+		},
+		"application/grpcfoobar": {
+			contentType: "application/grpcfoobar",
+		},
+		"application/text": {
+			contentType: "application/text",
+		},
+		"foobar": {
+			contentType: "foobar",
+		},
+		"no content type": {
+			contentType: "",
+		},
+	}
+	for name, scenario := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := isGRPCContentType(scenario.contentType); got != scenario.want {
+				t.Errorf("test case %s failed, isGRPCContentType() = %v, want %v", name, got, scenario.want)
+			}
+		})
 	}
 }

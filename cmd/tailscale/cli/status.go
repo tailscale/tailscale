@@ -23,7 +23,9 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 )
 
 var statusCmd = &ffcli.Command{
@@ -200,11 +202,19 @@ func runStatus(ctx context.Context, args []string) error {
 	if statusArgs.self && st.Self != nil {
 		printPS(st.Self)
 	}
+
+	locBasedExitNode := false
 	if statusArgs.peers {
 		var peers []*ipnstate.PeerStatus
 		for _, peer := range st.Peers() {
 			ps := st.Peer[peer]
 			if ps.ShareeNode {
+				continue
+			}
+			if ps.Location != nil && ps.ExitNodeOption && !ps.ExitNode {
+				// Location based exit nodes are only shown with the
+				// `exit-node list` command.
+				locBasedExitNode = true
 				continue
 			}
 			peers = append(peers, ps)
@@ -218,11 +228,22 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 	}
 	Stdout.Write(buf.Bytes())
+	if locBasedExitNode {
+		println()
+		println("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
+	}
 	if len(st.Health) > 0 {
 		outln()
 		printHealth()
 	}
 	printFunnelStatus(ctx)
+	if cv := st.ClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+		if cv.UrgentSecurityUpdate {
+			printf("# Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update.\n", version.Short(), cv.LatestVersion)
+		} else {
+			printf("# Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update.\n", version.Short(), cv.LatestVersion)
+		}
+	}
 	return nil
 }
 
@@ -296,12 +317,20 @@ func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 }
 
 func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
-	if ps.UserID.IsZero() {
+	// We prioritize showing the name of the sharer as the owner of a node if
+	// it's different from the node's user. This is less surprising: if user B
+	// from a company shares user's C node from the same company with user A who
+	// don't know user C, user A might be surprised to see user C listed in
+	// their netmap. We've historically (2021-01..2023-08) always shown the
+	// sharer's name in the UI. Perhaps we want to show both here? But the CLI's
+	// a bit space constrained.
+	uid := cmpx.Or(ps.AltSharerUserID, ps.UserID)
+	if uid.IsZero() {
 		return "-"
 	}
-	u, ok := st.User[ps.UserID]
+	u, ok := st.User[uid]
 	if !ok {
-		return fmt.Sprint(ps.UserID)
+		return fmt.Sprint(uid)
 	}
 	if i := strings.Index(u.LoginName, "@"); i != -1 {
 		return u.LoginName[:i+1]

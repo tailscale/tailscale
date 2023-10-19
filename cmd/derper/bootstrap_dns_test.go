@@ -98,6 +98,7 @@ func resetMetrics() {
 	publishedDNSMisses.Set(0)
 	unpublishedDNSHits.Set(0)
 	unpublishedDNSMisses.Set(0)
+	bootstrapLookupMap.Clear()
 }
 
 // Verify that we don't count an empty list in the unpublishedDNSCache as a
@@ -148,4 +149,17 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 			t.Errorf("got misses=%d; want 0", v)
 		}
 	})
+
+}
+
+func TestLookupMetric(t *testing.T) {
+	d := []string{"a.io", "b.io", "c.io", "d.io", "e.io", "e.io", "e.io", "a.io"}
+	resetMetrics()
+	for _, q := range d {
+		_ = getBootstrapDNS(t, q)
+	}
+	// {"a.io": true, "b.io": true, "c.io": true, "d.io": true, "e.io": true}
+	if bootstrapLookupMap.Len() != 5 {
+		t.Errorf("bootstrapLookupMap.Len() want=5, got %v", bootstrapLookupMap.Len())
+	}
 }

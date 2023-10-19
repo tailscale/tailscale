@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
 
@@ -68,22 +67,18 @@ func (pm *pollingMon) Receive() (message, error) {
 		// so this can go very slowly there, to save battery.
 		// https://github.com/tailscale/tailscale/issues/1427
 		d = 10 * time.Minute
-	}
-	if pm.isCloudRun() {
+	} else if pm.isCloudRun() {
 		// Cloud Run routes never change at runtime. the containers are killed within
 		// 15 minutes by default, set the interval long enough to be effectively infinite.
 		pm.logf("monitor polling: Cloud Run detected, reduce polling interval to 24h")
 		d = 24 * time.Hour
 	}
-	ticker := time.NewTicker(d)
-	defer ticker.Stop()
-	base := pm.m.InterfaceState()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	for {
-		if cur, err := pm.m.interfaceStateUncached(); err == nil && !cur.EqualFiltered(base, interfaces.UseInterestingInterfaces, interfaces.UseInterestingIPs) {
-			return unspecifiedMessage{}, nil
-		}
 		select {
-		case <-ticker.C:
+		case <-timer.C:
+			return unspecifiedMessage{}, nil
 		case <-pm.stop:
 			return nil, errors.New("stopped")
 		}

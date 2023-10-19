@@ -22,121 +22,18 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/ptr"
+	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
-
-func TestNetworkMapCompare(t *testing.T) {
-	prefix1, err := netip.ParsePrefix("192.168.0.0/24")
-	if err != nil {
-		t.Fatal(err)
-	}
-	node1 := &tailcfg.Node{Addresses: []netip.Prefix{prefix1}}
-
-	prefix2, err := netip.ParsePrefix("10.0.0.0/8")
-	if err != nil {
-		t.Fatal(err)
-	}
-	node2 := &tailcfg.Node{Addresses: []netip.Prefix{prefix2}}
-
-	tests := []struct {
-		name string
-		a, b *netmap.NetworkMap
-		want bool
-	}{
-		{
-			"both nil",
-			nil,
-			nil,
-			true,
-		},
-		{
-			"b nil",
-			&netmap.NetworkMap{},
-			nil,
-			false,
-		},
-		{
-			"a nil",
-			nil,
-			&netmap.NetworkMap{},
-			false,
-		},
-		{
-			"both default",
-			&netmap.NetworkMap{},
-			&netmap.NetworkMap{},
-			true,
-		},
-		{
-			"names identical",
-			&netmap.NetworkMap{Name: "map1"},
-			&netmap.NetworkMap{Name: "map1"},
-			true,
-		},
-		{
-			"names differ",
-			&netmap.NetworkMap{Name: "map1"},
-			&netmap.NetworkMap{Name: "map2"},
-			false,
-		},
-		{
-			"Peers identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
-			true,
-		},
-		{
-			"Peer list length",
-			// length of Peers list differs
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
-			false,
-		},
-		{
-			"Node names identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
-			true,
-		},
-		{
-			"Node names differ",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "B"}}},
-			false,
-		},
-		{
-			"Node lists identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			true,
-		},
-		{
-			"Node lists differ",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node2}},
-			false,
-		},
-		{
-			"Node Users differ",
-			// User field is not checked.
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{User: 0}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{User: 1}}},
-			true,
-		},
-	}
-	for _, tt := range tests {
-		got := dnsMapsEqual(tt.a, tt.b)
-		if got != tt.want {
-			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
-		}
-	}
-}
 
 func inRemove(ip netip.Addr) bool {
 	for _, pfx := range removeFromDefaultRoute {
@@ -383,9 +280,11 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_only_4_them_both",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -404,9 +303,11 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_only_6_them_both",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -425,10 +326,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_only_4",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -446,10 +349,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_only_6",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -467,10 +372,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_no_peerapi_service",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -483,7 +390,7 @@ func TestPeerAPIBase(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := peerAPIBase(tt.nm, tt.peer)
+			got := peerAPIBase(tt.nm, tt.peer.View())
 			if got != tt.want {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
@@ -497,10 +404,7 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	panic("unexpected HTTP request")
 }
 
-// Issue 1573: don't generate a machine key if we don't want to be running.
-func TestLazyMachineKeyGeneration(t *testing.T) {
-	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
-
+func newTestLocalBackend(t testing.TB) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	sys := new(tsd.System)
 	store := new(mem.Store)
@@ -515,7 +419,14 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	return lb
+}
 
+// Issue 1573: don't generate a machine key if we don't want to be running.
+func TestLazyMachineKeyGeneration(t *testing.T) {
+	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
+
+	lb := newTestLocalBackend(t)
 	lb.SetHTTPTestClient(&http.Client{
 		Transport: panicOnUseTransport{}, // validate we don't send HTTP requests
 	})
@@ -758,7 +669,7 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := packetFilterPermitsUnlockedNodes(tt.peers, tt.filter); got != tt.want {
+			if got := packetFilterPermitsUnlockedNodes(peersMap(nodeViews(tt.peers)), tt.filter); got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
@@ -767,21 +678,8 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 }
 
 func TestStatusWithoutPeers(t *testing.T) {
-	logf := tstest.WhileTestRunningLogger(t)
-	store := new(testStateStorage)
-	sys := new(tsd.System)
-	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
-	}
-	sys.Set(e)
-	t.Cleanup(e.Close)
+	b := newTestLocalBackend(t)
 
-	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
-	if err != nil {
-		t.Fatalf("NewLocalBackend: %v", err)
-	}
 	var cc *mockControl
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
@@ -793,11 +691,10 @@ func TestStatusWithoutPeers(t *testing.T) {
 	b.Start(ipn.Options{})
 	b.Login(nil)
 	cc.send(nil, "", false, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
-		Addresses:     ipps("100.101.101.101"),
-		SelfNode: &tailcfg.Node{
-			Addresses: ipps("100.101.101.101"),
-		},
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			Addresses:         ipps("100.101.101.101"),
+		}).View(),
 	})
 	got := b.StatusWithoutPeers()
 	if got.TailscaleIPs == nil {
@@ -826,9 +723,6 @@ type legacyBackend interface {
 	StartLoginInteractive()
 	// Login logs in with an OAuth2 token.
 	Login(token *tailcfg.Oauth2Token)
-	// Logout terminates the current login session and stops the
-	// wireguard engine.
-	Logout()
 	// SetPrefs installs a new set of user preferences, including
 	// WantRunning. This may cause the wireguard engine to
 	// reconfigure or stop.
@@ -846,6 +740,9 @@ var _ legacyBackend = (*LocalBackend)(nil)
 
 func TestWatchNotificationsCallbacks(t *testing.T) {
 	b := new(LocalBackend)
+	// activeWatchSessions is typically set in NewLocalBackend
+	// so WatchNotifications expects it to be non-empty.
+	b.activeWatchSessions = make(set.Set[string])
 	n := new(ipn.Notify)
 	b.WatchNotifications(context.Background(), 0, func() {
 		b.mu.Lock()
@@ -857,9 +754,9 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 		}
 		// Send a notification. Range over notifyWatchers to get the channel
 		// because WatchNotifications doesn't expose the handle for it.
-		for _, c := range b.notifyWatchers {
+		for _, sess := range b.notifyWatchers {
 			select {
-			case c <- n:
+			case sess.ch <- n:
 			default:
 				t.Fatalf("could not send notification")
 			}
@@ -877,4 +774,386 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 	if len(b.notifyWatchers) != 0 {
 		t.Fatalf("unexpected number of watchers in new LocalBackend, want: 0 got: %v", len(b.notifyWatchers))
 	}
+}
+
+// tests LocalBackend.updateNetmapDeltaLocked
+func TestUpdateNetmapDelta(t *testing.T) {
+	var b LocalBackend
+	if b.updateNetmapDeltaLocked(nil) {
+		t.Errorf("updateNetmapDeltaLocked() = true, want false with nil netmap")
+	}
+
+	b.netMap = &netmap.NetworkMap{}
+	for i := 0; i < 5; i++ {
+		b.netMap.Peers = append(b.netMap.Peers, (&tailcfg.Node{ID: (tailcfg.NodeID(i) + 1)}).View())
+	}
+	b.updatePeersFromNetmapLocked(b.netMap)
+
+	someTime := time.Unix(123, 0)
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{
+				NodeID:     1,
+				DERPRegion: 1,
+			},
+			{
+				NodeID: 2,
+				Online: ptr.To(true),
+			},
+			{
+				NodeID: 3,
+				Online: ptr.To(false),
+			},
+			{
+				NodeID:   4,
+				LastSeen: ptr.To(someTime),
+			},
+		},
+	}, someTime)
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+
+	if !b.updateNetmapDeltaLocked(muts) {
+		t.Fatalf("updateNetmapDeltaLocked() = false, want true with new netmap")
+	}
+
+	wants := []*tailcfg.Node{
+		{
+			ID:   1,
+			DERP: "127.3.3.40:1",
+		},
+		{
+			ID:     2,
+			Online: ptr.To(true),
+		},
+		{
+			ID:     3,
+			Online: ptr.To(false),
+		},
+		{
+			ID:       4,
+			LastSeen: ptr.To(someTime),
+		},
+	}
+	for _, want := range wants {
+		gotv, ok := b.peers[want.ID]
+		if !ok {
+			t.Errorf("netmap.Peer %v missing from b.peers", want.ID)
+			continue
+		}
+		got := gotv.AsStruct()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
+		}
+	}
+}
+
+// tests WhoIs and indirectly that setNetMapLocked updates b.nodeByAddr correctly.
+func TestWhoIs(t *testing.T) {
+	b := newTestLocalBackend(t)
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:        2,
+				User:      20,
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+			10: {
+				DisplayName: "Myself",
+			},
+			20: {
+				DisplayName: "Peer",
+			},
+		},
+	})
+	tests := []struct {
+		q        string
+		want     tailcfg.NodeID // 0 means want ok=false
+		wantName string
+	}{
+		{"100.101.102.103:0", 1, "Myself"},
+		{"100.101.102.103:123", 1, "Myself"},
+		{"100.200.200.200:0", 2, "Peer"},
+		{"100.200.200.200:123", 2, "Peer"},
+		{"100.4.0.4:404", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.q, func(t *testing.T) {
+			nv, up, ok := b.WhoIs(netip.MustParseAddrPort(tt.q))
+			var got tailcfg.NodeID
+			if ok {
+				got = nv.ID()
+			}
+			if got != tt.want {
+				t.Errorf("got nodeID %v; want %v", got, tt.want)
+			}
+			if up.DisplayName != tt.wantName {
+				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+		})
+	}
+}
+
+func TestWireguardExitNodeDNSResolvers(t *testing.T) {
+	type tc struct {
+		name          string
+		id            tailcfg.StableNodeID
+		peers         []*tailcfg.Node
+		wantOK        bool
+		wantResolvers []*dnstype.Resolver
+	}
+
+	tests := []tc{
+		{
+			name:          "no peers",
+			id:            "1",
+			wantOK:        false,
+			wantResolvers: nil,
+		},
+		{
+			name: "non wireguard peer",
+			id:   "1",
+			peers: []*tailcfg.Node{
+				{
+					ID:                   1,
+					StableID:             "1",
+					IsWireGuardOnly:      false,
+					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+				},
+			},
+			wantOK:        false,
+			wantResolvers: nil,
+		},
+		{
+			name: "no matching IDs",
+			id:   "2",
+			peers: []*tailcfg.Node{
+				{
+					ID:                   1,
+					StableID:             "1",
+					IsWireGuardOnly:      true,
+					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+				},
+			},
+			wantOK:        false,
+			wantResolvers: nil,
+		},
+		{
+			name: "wireguard peer",
+			id:   "1",
+			peers: []*tailcfg.Node{
+				{
+					ID:                   1,
+					StableID:             "1",
+					IsWireGuardOnly:      true,
+					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+				},
+			},
+			wantOK:        true,
+			wantResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+		},
+	}
+
+	for _, tc := range tests {
+		peers := peersMap(nodeViews(tc.peers))
+		nm := &netmap.NetworkMap{}
+		gotResolvers, gotOK := wireguardExitNodeDNSResolvers(nm, peers, tc.id)
+
+		if gotOK != tc.wantOK || !resolversEqual(t, gotResolvers, tc.wantResolvers) {
+			t.Errorf("case: %s: got %v, %v, want %v, %v", tc.name, gotOK, gotResolvers, tc.wantOK, tc.wantResolvers)
+		}
+	}
+}
+
+func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
+	type tc struct {
+		name                 string
+		exitNode             tailcfg.StableNodeID
+		peers                []tailcfg.NodeView
+		dnsConfig            *tailcfg.DNSConfig
+		wantDefaultResolvers []*dnstype.Resolver
+		wantRoutes           map[dnsname.FQDN][]*dnstype.Resolver
+	}
+
+	defaultResolvers := []*dnstype.Resolver{{Addr: "default.example.com"}}
+	wgResolvers := []*dnstype.Resolver{{Addr: "wg.example.com"}}
+	peers := []tailcfg.NodeView{
+		(&tailcfg.Node{
+			ID:                   1,
+			StableID:             "wg",
+			IsWireGuardOnly:      true,
+			ExitNodeDNSResolvers: wgResolvers,
+			Hostinfo:             (&tailcfg.Hostinfo{}).View(),
+		}).View(),
+		// regular tailscale exit node with DNS capabilities
+		(&tailcfg.Node{
+			Cap:      26,
+			ID:       2,
+			StableID: "ts",
+			Hostinfo: (&tailcfg.Hostinfo{}).View(),
+		}).View(),
+	}
+	exitDOH := peerAPIBase(&netmap.NetworkMap{Peers: peers}, peers[0]) + "/dns-query"
+	routes := map[dnsname.FQDN][]*dnstype.Resolver{
+		"route.example.com.": {{Addr: "route.example.com"}},
+	}
+	stringifyRoutes := func(routes map[dnsname.FQDN][]*dnstype.Resolver) map[string][]*dnstype.Resolver {
+		if routes == nil {
+			return nil
+		}
+		m := make(map[string][]*dnstype.Resolver)
+		for k, v := range routes {
+			m[string(k)] = v
+		}
+		return m
+	}
+
+	tests := []tc{
+		{
+			name:                 "noExit/noRoutes/noResolver",
+			exitNode:             "",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{},
+			wantDefaultResolvers: nil,
+			wantRoutes:           nil,
+		},
+		{
+			name:                 "tsExit/noRoutes/noResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           nil,
+		},
+		{
+			name:                 "tsExit/noRoutes/defaultResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Resolvers: defaultResolvers},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           nil,
+		},
+
+		// The following two cases may need to be revisited. For a shared-in
+		// exit node split-DNS may effectively break, furthermore in the future
+		// if different nodes observe different DNS configurations, even a
+		// tailnet local exit node may present a different DNS configuration,
+		// which may not meet expectations in some use cases.
+		// In the case where a default resolver is set, the default resolver
+		// should also perhaps take precedence also.
+		{
+			name:                 "tsExit/routes/noResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes)},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           nil,
+		},
+		{
+			name:                 "tsExit/routes/defaultResolver",
+			exitNode:             "ts",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes), Resolvers: defaultResolvers},
+			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
+			wantRoutes:           nil,
+		},
+
+		// WireGuard exit nodes with DNS capabilities provide a "fallback" type
+		// behavior, they have a lower precedence than a default resolver, but
+		// otherwise allow split-DNS to operate as normal, and are used when
+		// there is no default resolver.
+		{
+			name:                 "wgExit/noRoutes/noResolver",
+			exitNode:             "wg",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{},
+			wantDefaultResolvers: wgResolvers,
+			wantRoutes:           nil,
+		},
+		{
+			name:                 "wgExit/noRoutes/defaultResolver",
+			exitNode:             "wg",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Resolvers: defaultResolvers},
+			wantDefaultResolvers: defaultResolvers,
+			wantRoutes:           nil,
+		},
+		{
+			name:                 "wgExit/routes/defaultResolver",
+			exitNode:             "wg",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes), Resolvers: defaultResolvers},
+			wantDefaultResolvers: defaultResolvers,
+			wantRoutes:           routes,
+		},
+		{
+			name:                 "wgExit/routes/noResolver",
+			exitNode:             "wg",
+			peers:                peers,
+			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes)},
+			wantDefaultResolvers: wgResolvers,
+			wantRoutes:           routes,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nm := &netmap.NetworkMap{
+				Peers: tc.peers,
+				DNS:   *tc.dnsConfig,
+			}
+
+			prefs := &ipn.Prefs{ExitNodeID: tc.exitNode, CorpDNS: true}
+			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), t.Logf, "")
+			if !resolversEqual(t, got.DefaultResolvers, tc.wantDefaultResolvers) {
+				t.Errorf("DefaultResolvers: got %#v, want %#v", got.DefaultResolvers, tc.wantDefaultResolvers)
+			}
+			if !routesEqual(t, got.Routes, tc.wantRoutes) {
+				t.Errorf("Routes: got %#v, want %#v", got.Routes, tc.wantRoutes)
+			}
+		})
+	}
+}
+
+func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		t.Errorf("resolversEqual: a == nil || b == nil : %#v != %#v", a, b)
+		return false
+	}
+	if len(a) != len(b) {
+		t.Errorf("resolversEqual: len(a) != len(b) : %#v != %#v", a, b)
+		return false
+	}
+	for i := range a {
+		if !a[i].Equal(b[i]) {
+			t.Errorf("resolversEqual: a != b [%d]: %v != %v", i, *a[i], *b[i])
+			return false
+		}
+	}
+	return true
+}
+
+func routesEqual(t *testing.T, a, b map[dnsname.FQDN][]*dnstype.Resolver) bool {
+	if len(a) != len(b) {
+		t.Logf("routes: len(a) != len(b): %d != %d", len(a), len(b))
+		return false
+	}
+	for name := range a {
+		if !resolversEqual(t, a[name], b[name]) {
+			t.Logf("routes: a != b [%s]: %v != %v", name, a[name], b[name])
+			return false
+		}
+	}
+	return true
 }

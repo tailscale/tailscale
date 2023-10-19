@@ -12,6 +12,7 @@ import (
 	crand "crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"expvar"
@@ -39,9 +40,11 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 	"tailscale.com/version"
 )
 
@@ -149,7 +152,7 @@ type Server struct {
 	closed   bool
 	netConns map[Conn]chan struct{} // chan is closed when conn closes
 	clients  map[key.NodePublic]clientSet
-	watchers map[*sclient]bool // mesh peer -> true
+	watchers set.Set[*sclient] // mesh peers
 	// clientsMesh tracks all clients in the cluster, both locally
 	// and to mesh peers.  If the value is nil, that means the
 	// peer is only local (and thus in the clients Map, but not
@@ -164,6 +167,8 @@ type Server struct {
 
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr map[netip.AddrPort]key.NodePublic
+
+	clock tstime.Clock
 }
 
 // clientSet represents 1 or more *sclients.
@@ -216,8 +221,7 @@ func (s singleClient) ForeachClient(f func(*sclient)) { f(s.c) }
 // All fields are guarded by Server.mu.
 type dupClientSet struct {
 	// set is the set of connected clients for sclient.key.
-	// The values are all true.
-	set map[*sclient]bool
+	set set.Set[*sclient]
 
 	// last is the most recent addition to set, or nil if the most
 	// recent one has since disconnected and nobody else has send
@@ -258,7 +262,7 @@ func (s *dupClientSet) removeClient(c *sclient) bool {
 
 	trim := s.sendHistory[:0]
 	for _, v := range s.sendHistory {
-		if s.set[v] && (len(trim) == 0 || trim[len(trim)-1] != v) {
+		if s.set.Contains(v) && (len(trim) == 0 || trim[len(trim)-1] != v) {
 			trim = append(trim, v)
 		}
 	}
@@ -313,11 +317,12 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		clientsMesh:          map[key.NodePublic]PacketForwarder{},
 		netConns:             map[Conn]chan struct{}{},
 		memSys0:              ms.Sys,
-		watchers:             map[*sclient]bool{},
+		watchers:             set.Set[*sclient]{},
 		sentTo:               map[key.NodePublic]map[key.NodePublic]int64{},
 		avgQueueDuration:     new(uint64),
 		tcpRtt:               metrics.LabelMap{Label: "le"},
 		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
+		clock:                tstime.StdClock{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -467,8 +472,8 @@ func (s *Server) initMetacert() {
 			CommonName: fmt.Sprintf("derpkey%s", s.publicKey.UntypedHexString()),
 		},
 		// Windows requires NotAfter and NotBefore set:
-		NotAfter:  time.Now().Add(30 * 24 * time.Hour),
-		NotBefore: time.Now().Add(-30 * 24 * time.Hour),
+		NotAfter:  s.clock.Now().Add(30 * 24 * time.Hour),
+		NotBefore: s.clock.Now().Add(-30 * 24 * time.Hour),
 		// Per https://github.com/golang/go/issues/51759#issuecomment-1071147836,
 		// macOS requires BasicConstraints when subject == issuer:
 		BasicConstraintsValid: true,
@@ -494,8 +499,8 @@ func (s *Server) registerClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	set := s.clients[c.key]
-	switch set := set.(type) {
+	curSet := s.clients[c.key]
+	switch curSet := curSet.(type) {
 	case nil:
 		s.clients[c.key] = singleClient{c}
 		c.debugLogf("register single client")
@@ -503,14 +508,14 @@ func (s *Server) registerClient(c *sclient) {
 		s.dupClientKeys.Add(1)
 		s.dupClientConns.Add(2) // both old and new count
 		s.dupClientConnTotal.Add(1)
-		old := set.ActiveClient()
+		old := curSet.ActiveClient()
 		old.isDup.Store(true)
 		c.isDup.Store(true)
 		s.clients[c.key] = &dupClientSet{
 			last: c,
-			set: map[*sclient]bool{
-				old: true,
-				c:   true,
+			set: set.Set[*sclient]{
+				old: struct{}{},
+				c:   struct{}{},
 			},
 			sendHistory: []*sclient{old},
 		}
@@ -519,9 +524,9 @@ func (s *Server) registerClient(c *sclient) {
 		s.dupClientConns.Add(1)     // the gauge
 		s.dupClientConnTotal.Add(1) // the counter
 		c.isDup.Store(true)
-		set.set[c] = true
-		set.last = c
-		set.sendHistory = append(set.sendHistory, c)
+		curSet.set.Add(c)
+		curSet.last = c
+		curSet.sendHistory = append(curSet.sendHistory, c)
 		c.debugLogf("register another duplicate client")
 	}
 
@@ -530,7 +535,7 @@ func (s *Server) registerClient(c *sclient) {
 	}
 	s.keyOfAddr[c.remoteIPPort] = c.key
 	s.curClients.Add(1)
-	s.broadcastPeerStateChangeLocked(c.key, true)
+	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, true)
 }
 
 // broadcastPeerStateChangeLocked enqueues a message to all watchers
@@ -538,9 +543,13 @@ func (s *Server) registerClient(c *sclient) {
 // presence changed.
 //
 // s.mu must be held.
-func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, present bool) {
+func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, present bool) {
 	for w := range s.watchers {
-		w.peerStateChange = append(w.peerStateChange, peerConnState{peer: peer, present: present})
+		w.peerStateChange = append(w.peerStateChange, peerConnState{
+			peer:    peer,
+			present: present,
+			ipPort:  ipPort,
+		})
 		go w.requestMeshUpdate()
 	}
 }
@@ -561,7 +570,7 @@ func (s *Server) unregisterClient(c *sclient) {
 			delete(s.clientsMesh, c.key)
 			s.notePeerGoneFromRegionLocked(c.key)
 		}
-		s.broadcastPeerStateChangeLocked(c.key, false)
+		s.broadcastPeerStateChangeLocked(c.key, netip.AddrPort{}, false)
 	case *dupClientSet:
 		c.debugLogf("removed duplicate client")
 		if set.removeClient(c) {
@@ -651,13 +660,21 @@ func (s *Server) addWatcher(c *sclient) {
 	defer s.mu.Unlock()
 
 	// Queue messages for each already-connected client.
-	for peer := range s.clients {
-		c.peerStateChange = append(c.peerStateChange, peerConnState{peer: peer, present: true})
+	for peer, clientSet := range s.clients {
+		ac := clientSet.ActiveClient()
+		if ac == nil {
+			continue
+		}
+		c.peerStateChange = append(c.peerStateChange, peerConnState{
+			peer:    peer,
+			present: true,
+			ipPort:  ac.remoteIPPort,
+		})
 	}
 
 	// And enroll the watcher in future updates (of both
 	// connections & disconnections).
-	s.watchers[c] = true
+	s.watchers.Add(c)
 
 	go c.requestMeshUpdate()
 }
@@ -697,7 +714,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		done:           ctx.Done(),
 		remoteAddr:     remoteAddr,
 		remoteIPPort:   remoteIPPort,
-		connectedAt:    time.Now(),
+		connectedAt:    s.clock.Now(),
 		sendQueue:      make(chan pkt, perClientSendQueueDepth),
 		discoSendQueue: make(chan pkt, perClientSendQueueDepth),
 		sendPongCh:     make(chan [8]byte, 1),
@@ -927,7 +944,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 
 	return c.sendPkt(dst, pkt{
 		bs:         contents,
-		enqueuedAt: time.Now(),
+		enqueuedAt: c.s.clock.Now(),
 		src:        srcKey,
 	})
 }
@@ -994,7 +1011,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 
 	p := pkt{
 		bs:         contents,
-		enqueuedAt: time.Now(),
+		enqueuedAt: c.s.clock.Now(),
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
@@ -1345,6 +1362,7 @@ type sclient struct {
 type peerConnState struct {
 	peer    key.NodePublic
 	present bool
+	ipPort  netip.AddrPort // if present, the peer's IP:port
 }
 
 // pkt is a request to write a data frame to an sclient.
@@ -1387,7 +1405,7 @@ func (c *sclient) setPreferred(v bool) {
 	// graphs, so not important to miss a move. But it shouldn't:
 	// the netcheck/re-STUNs in magicsock only happen about every
 	// 30 seconds.
-	if time.Since(c.connectedAt) > 5*time.Second {
+	if c.s.clock.Since(c.connectedAt) > 5*time.Second {
 		homeMove.Add(1)
 	}
 }
@@ -1401,7 +1419,7 @@ func expMovingAverage(prev, newValue, alpha float64) float64 {
 
 // recordQueueTime updates the average queue duration metric after a packet has been sent.
 func (c *sclient) recordQueueTime(enqueuedAt time.Time) {
-	elapsed := float64(time.Since(enqueuedAt).Milliseconds())
+	elapsed := float64(c.s.clock.Since(enqueuedAt).Milliseconds())
 	for {
 		old := atomic.LoadUint64(c.s.avgQueueDuration)
 		newAvg := expMovingAverage(math.Float64frombits(old), elapsed, 0.1)
@@ -1431,7 +1449,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 	}()
 
 	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
-	keepAliveTick := time.NewTicker(keepAlive + jitter)
+	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 
 	var werr error // last write error
@@ -1461,7 +1479,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
 			continue
-		case <-keepAliveTick.C:
+		case <-keepAliveTickChannel:
 			werr = c.sendKeepAlive()
 			continue
 		default:
@@ -1490,7 +1508,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
 			continue
-		case <-keepAliveTick.C:
+		case <-keepAliveTickChannel:
 			werr = c.sendKeepAlive()
 		}
 	}
@@ -1538,12 +1556,18 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) e
 }
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
-func (c *sclient) sendPeerPresent(peer key.NodePublic) error {
+func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort) error {
 	c.setWriteDeadline()
-	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, keyLen); err != nil {
+	const frameLen = keyLen + 16 + 2
+	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, frameLen); err != nil {
 		return err
 	}
-	_, err := c.bw.Write(peer.AppendTo(nil))
+	payload := make([]byte, frameLen)
+	_ = peer.AppendTo(payload[:0])
+	a16 := ipPort.Addr().As16()
+	copy(payload[keyLen:], a16[:])
+	binary.BigEndian.PutUint16(payload[keyLen+16:], ipPort.Port())
+	_, err := c.bw.Write(payload)
 	return err
 }
 
@@ -1562,7 +1586,7 @@ func (c *sclient) sendMeshUpdates() error {
 		}
 		var err error
 		if pcs.present {
-			err = c.sendPeerPresent(pcs.peer)
+			err = c.sendPeerPresent(pcs.peer, pcs.ipPort)
 		} else {
 			err = c.sendPeerGone(pcs.peer, PeerGoneReasonDisconnected)
 		}

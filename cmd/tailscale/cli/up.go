@@ -6,7 +6,6 @@ package cli
 import (
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -30,11 +29,10 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/netutil"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -92,8 +90,6 @@ func acceptRouteDefault(goos string) bool {
 
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
 
-func inTest() bool { return flag.Lookup("test.v") != nil }
-
 // newUpFlagSet returns a new flag set for the "up" and "login" commands.
 func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	if cmd != "up" && cmd != "login" {
@@ -101,6 +97,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	}
 	upf := newFlagSet(cmd)
 
+	// When adding new flags, prefer to put them under "tailscale set" instead
+	// of here. Setting preferences via "tailscale up" is deprecated.
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 
@@ -116,6 +114,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
@@ -223,82 +222,6 @@ func warnf(format string, args ...any) {
 	printf("Warning: "+format+"\n", args...)
 }
 
-var (
-	ipv4default = netip.MustParsePrefix("0.0.0.0/0")
-	ipv6default = netip.MustParsePrefix("::/0")
-)
-
-func validateViaPrefix(ipp netip.Prefix) error {
-	if !tsaddr.IsViaPrefix(ipp) {
-		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
-	}
-	if ipp.Bits() < (128 - 32) {
-		return fmt.Errorf("%v 4-in-6 prefix must be at least a /%v", ipp, 128-32)
-	}
-	a := ipp.Addr().As16()
-	// The first 64 bits of a are the via prefix.
-	// The next 32 bits are the "site ID".
-	// The last 32 bits are the IPv4.
-	// For now, we reserve the top 3 bytes of the site ID,
-	// and only allow users to use site IDs 0-255.
-	siteID := binary.BigEndian.Uint32(a[8:12])
-	if siteID > 0xFF {
-		return fmt.Errorf("route %v contains invalid site ID %08x; must be 0xff or less", ipp, siteID)
-	}
-	return nil
-}
-
-func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netip.Prefix, error) {
-	routeMap := map[netip.Prefix]bool{}
-	if advertiseRoutes != "" {
-		var default4, default6 bool
-		advroutes := strings.Split(advertiseRoutes, ",")
-		for _, s := range advroutes {
-			ipp, err := netip.ParsePrefix(s)
-			if err != nil {
-				return nil, fmt.Errorf("%q is not a valid IP address or CIDR prefix", s)
-			}
-			if ipp != ipp.Masked() {
-				return nil, fmt.Errorf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
-			}
-			if tsaddr.IsViaPrefix(ipp) {
-				if err := validateViaPrefix(ipp); err != nil {
-					return nil, err
-				}
-			}
-			if ipp == ipv4default {
-				default4 = true
-			} else if ipp == ipv6default {
-				default6 = true
-			}
-			routeMap[ipp] = true
-		}
-		if default4 && !default6 {
-			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
-		} else if default6 && !default4 {
-			return nil, fmt.Errorf("%s advertised without its IPv4 counterpart, please also advertise %s", ipv6default, ipv4default)
-		}
-	}
-	if advertiseDefaultRoute {
-		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
-		routeMap[netip.MustParsePrefix("::/0")] = true
-	}
-	if len(routeMap) == 0 {
-		return nil, nil
-	}
-	routes := make([]netip.Prefix, 0, len(routeMap))
-	for r := range routeMap {
-		routes = append(routes, r)
-	}
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Bits() != routes[j].Bits() {
-			return routes[i].Bits() < routes[j].Bits()
-		}
-		return routes[i].Addr().Less(routes[j].Addr())
-	})
-	return routes, nil
-}
-
 // prefsFromUpArgs returns the ipn.Prefs for the provided args.
 //
 // Note that the parameters upArgs and warnf are named intentionally
@@ -306,7 +229,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 // function exists for testing and should have no side effects or
 // outside interactions (e.g. no making Tailscale LocalAPI calls).
 func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
-	routes, err := calcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
+	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +348,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 
 	simpleUp = env.flagSet.NFlag() == 0 &&
 		curPrefs.Persist != nil &&
-		curPrefs.Persist.LoginName != "" &&
+		curPrefs.Persist.UserProfile.LoginName != "" &&
 		env.backendState != ipn.NeedsLogin.String()
 
 	justEdit := env.backendState == ipn.Running.String() &&
@@ -577,6 +500,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	startLoginInteractive := func() { loginOnce.Do(func() { localClient.StartLoginInteractive(ctx) }) }
 
 	go func() {
+		var cv *tailcfg.ClientVersion
 		for {
 			n, err := watcher.Next()
 			if err != nil {
@@ -586,6 +510,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if n.ErrMessage != nil {
 				msg := *n.ErrMessage
 				fatalf("backend error: %v\n", msg)
+			}
+			if n.ClientVersion != nil {
+				cv = n.ClientVersion
 			}
 			if s := n.State; s != nil {
 				switch *s {
@@ -605,6 +532,15 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					} else if printed {
 						// Only need to print an update if we printed the "please click" message earlier.
 						fmt.Fprintf(Stderr, "Success.\n")
+						if cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+							if cv.UrgentSecurityUpdate {
+								fmt.Fprintf(Stderr, "\nSecurity update available: %v -> %v\n", version.Short(), cv.LatestVersion)
+							} else {
+								fmt.Fprintf(Stderr, "\nUpdate available: %v -> %v\n", version.Short(), cv.LatestVersion)
+							}
+							fmt.Fprintln(Stderr, "Changelog: https://tailscale.com/changelog/#client")
+							fmt.Fprintln(Stderr, "Run `tailscale update` or `tailscale set --auto-update` to update")
+						}
 					}
 					select {
 					case running <- true:
@@ -726,7 +662,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 // the health check, rather than just a string.
 func upWorthyWarning(s string) bool {
 	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
-		strings.Contains(s, healthmsg.WarnAcceptRoutesOff)
+		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
+		strings.Contains(s, healthmsg.LockedOut)
 }
 
 func checkUpWarnings(ctx context.Context) {
@@ -791,6 +728,9 @@ func init() {
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
 	addPrefFlagMapping("nickname", "ProfileName")
+	addPrefFlagMapping("update-check", "AutoUpdate")
+	addPrefFlagMapping("auto-update", "AutoUpdate")
+	addPrefFlagMapping("posture-checking", "PostureChecking")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -1131,9 +1071,6 @@ func init() {
 func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 	if !strings.HasPrefix(v, "tskey-client-") {
 		return v, nil
-	}
-	if !envknob.Bool("TS_EXPERIMENT_OAUTH_AUTHKEY") {
-		return "", errors.New("oauth authkeys are in experimental status")
 	}
 	if tags == "" {
 		return "", errors.New("oauth authkeys require --advertise-tags")

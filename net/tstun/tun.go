@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !wasm
+//go:build !wasm && !plan9 && !tamago
 
 // Package tun creates a tuntap device, working around OS-specific
 // quirks if necessary.
@@ -44,7 +44,7 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		}
 		dev, err = createTAP(tapName, bridgeName)
 	} else {
-		dev, err = tun.CreateTUN(tunName, int(DefaultMTU()))
+		dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
 	}
 	if err != nil {
 		return nil, "", err

@@ -5,6 +5,7 @@ package derphttp
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -26,7 +27,7 @@ import (
 //
 // To force RunWatchConnectionLoop to return quickly, its ctx needs to
 // be closed, and c itself needs to be closed.
-func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf, add, remove func(key.NodePublic)) {
+func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf, add func(key.NodePublic, netip.AddrPort), remove func(key.NodePublic)) {
 	if infoLogf == nil {
 		infoLogf = logger.Discard
 	}
@@ -51,7 +52,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		present = map[key.NodePublic]bool{}
 	}
 	lastConnGen := 0
-	lastStatus := time.Now()
+	lastStatus := c.clock.Now()
 	logConnectedLocked := func() {
 		if loggedConnected {
 			return
@@ -61,16 +62,16 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	const logConnectedDelay = 200 * time.Millisecond
-	timer := time.AfterFunc(2*time.Second, func() {
+	timer := c.clock.AfterFunc(2*time.Second, func() {
 		mu.Lock()
 		defer mu.Unlock()
 		logConnectedLocked()
 	})
 	defer timer.Stop()
 
-	updatePeer := func(k key.NodePublic, isPresent bool) {
+	updatePeer := func(k key.NodePublic, ipPort netip.AddrPort, isPresent bool) {
 		if isPresent {
-			add(k)
+			add(k, ipPort)
 		} else {
 			remove(k)
 		}
@@ -91,11 +92,11 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	sleep := func(d time.Duration) {
-		t := time.NewTimer(d)
+		t, tChannel := c.clock.NewTimer(d)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-		case <-t.C:
+		case <-tChannel:
 		}
 	}
 
@@ -126,7 +127,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 			}
 			switch m := m.(type) {
 			case derp.PeerPresentMessage:
-				updatePeer(key.NodePublic(m), true)
+				updatePeer(m.Key, m.IPPort, true)
 			case derp.PeerGoneMessage:
 				switch m.Reason {
 				case derp.PeerGoneReasonDisconnected:
@@ -138,11 +139,11 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 					logf("Recv: peer %s not at server %s for unknown reason %v",
 						key.NodePublic(m.Peer).ShortString(), c.ServerPublicKey().ShortString(), m.Reason)
 				}
-				updatePeer(key.NodePublic(m.Peer), false)
+				updatePeer(key.NodePublic(m.Peer), netip.AddrPort{}, false)
 			default:
 				continue
 			}
-			if now := time.Now(); now.Sub(lastStatus) > statusInterval {
+			if now := c.clock.Now(); now.Sub(lastStatus) > statusInterval {
 				lastStatus = now
 				infoLogf("%d peers", len(present))
 			}

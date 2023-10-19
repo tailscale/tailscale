@@ -13,45 +13,49 @@ import (
 const RegBase = regBase
 
 // GetPolicyString looks up a registry value in the local machine's path for
-// system policies, or returns the given default if it can't.
+// system policies, or returns empty string and the error.
 // Use this function to read values that may be set by sysadmins via the MSI
 // installer or via GPO. For registry settings that you do *not* want to be
 // visible to sysadmin tools, use GetRegString instead.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetPolicyString(name, defval string) string {
-	return getPolicyString(name, defval)
+// OS will always return an empty string and ErrNoValue.
+// If value does not exist or another error happens, returns empty string and error.
+func GetPolicyString(name string) (string, error) {
+	return getPolicyString(name)
 }
 
 // GetPolicyInteger looks up a registry value in the local machine's path for
-// system policies, or returns the given default if it can't.
+// system policies, or returns 0 and the associated error.
 // Use this function to read values that may be set by sysadmins via the MSI
 // installer or via GPO. For registry settings that you do *not* want to be
 // visible to sysadmin tools, use GetRegInteger instead.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetPolicyInteger(name string, defval uint64) uint64 {
-	return getPolicyInteger(name, defval)
+// OS will always return 0 and ErrNoValue.
+// If value does not exist or another error happens, returns 0 and error.
+func GetPolicyInteger(name string) (uint64, error) {
+	return getPolicyInteger(name)
 }
 
 // GetRegString looks up a registry path in the local machine path, or returns
-// the given default if it can't.
+// an empty string and error.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetRegString(name, defval string) string {
-	return getRegString(name, defval)
+// OS will always return an empty string and ErrNoValue.
+// If value does not exist or another error happens, returns empty string and error.
+func GetRegString(name string) (string, error) {
+	return getRegString(name)
 }
 
 // GetRegInteger looks up a registry path in the local machine path, or returns
-// the given default if it can't.
+// 0 and the error.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetRegInteger(name string, defval uint64) uint64 {
-	return getRegInteger(name, defval)
+// OS will always return 0 and ErrNoValue.
+// If value does not exist or another error happens, returns 0 and error.
+func GetRegInteger(name string) (uint64, error) {
+	return getRegInteger(name)
 }
 
 // IsSIDValidPrincipal determines whether the SID contained in uid represents a
@@ -74,4 +78,28 @@ func IsSIDValidPrincipal(uid string) bool {
 // OS will always return an error.
 func LookupPseudoUser(uid string) (*user.User, error) {
 	return lookupPseudoUser(uid)
+}
+
+// RegisterForRestartOpts supplies options to RegisterForRestart.
+type RegisterForRestartOpts struct {
+	RestartOnCrash   bool     // When true, this program will be restarted after a crash.
+	RestartOnHang    bool     // When true, this program will be restarted after a hang.
+	RestartOnUpgrade bool     // When true, this program will be restarted after an upgrade.
+	RestartOnReboot  bool     // When true, this program will be restarted after a reboot.
+	UseCmdLineArgs   bool     // When true, CmdLineArgs will be used as the program's arguments upon restart. Otherwise no arguments will be provided.
+	CmdLineArgs      []string // When UseCmdLineArgs == true, contains the command line arguments, excluding the executable name itself. If nil or empty, the arguments from the current process will be re-used.
+}
+
+// RegisterForRestart registers the current process' restart preferences with
+// the Windows Restart Manager. This enables the OS to intelligently restart
+// the calling executable as requested via opts. This should be called by any
+// programs which need to be restarted by the installer post-update.
+//
+// This function may be called multiple times; the opts from the most recent
+// call will override those from any previous invocations.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return nil.
+func RegisterForRestart(opts RegisterForRestartOpts) error {
+	return registerForRestart(opts)
 }

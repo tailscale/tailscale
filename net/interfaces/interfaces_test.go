@@ -23,19 +23,6 @@ func TestGetState(t *testing.T) {
 	}
 	t.Logf("Got: %s", j)
 	t.Logf("As string: %s", st)
-
-	st2, err := GetState()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !st.EqualFiltered(st2, UseAllInterfaces, UseAllIPs) {
-		// let's assume nobody was changing the system network interfaces between
-		// the two GetState calls.
-		t.Fatal("two States back-to-back were not equal")
-	}
-
-	t.Logf("As string:\n\t%s", st)
 }
 
 func TestLikelyHomeRouterIP(t *testing.T) {
@@ -154,7 +141,7 @@ func TestIsUsableV6(t *testing.T) {
 		{"first ULA", "fc00::1", true},
 		{"Tailscale", "fd7a:115c:a1e0::1", false},
 		{"Cloud Run", "fddf:3978:feb1:d745::1", true},
-		{"zeros", "0000:0000:0000:0000:0000:0000:0000:0000", false},
+		{"zeros", "0::0", false},
 		{"Link Local", "fe80::1", false},
 		{"Global", "2602::1", true},
 		{"IPv4 public", "192.0.2.1", false},
@@ -165,41 +152,6 @@ func TestIsUsableV6(t *testing.T) {
 		if got := isUsableV6(netip.MustParseAddr(test.ip)); got != test.want {
 			t.Errorf("isUsableV6(%s) = %v, want %v", test.name, got, test.want)
 		}
-	}
-}
-
-func TestStateEqualFilteredIPFilter(t *testing.T) {
-	// s1 and s2 are identical, except that an "interesting" interface
-	// has gained an "uninteresting" IP address.
-
-	s1 := &State{
-		InterfaceIPs: map[string][]netip.Prefix{"x": {
-			netip.MustParsePrefix("42.0.0.0/8"),
-			netip.MustParsePrefix("169.254.0.0/16"), // link local unicast
-		}},
-		Interface: map[string]Interface{"x": {Interface: &net.Interface{Name: "x"}}},
-	}
-
-	s2 := &State{
-		InterfaceIPs: map[string][]netip.Prefix{"x": {
-			netip.MustParsePrefix("42.0.0.0/8"),
-			netip.MustParsePrefix("169.254.0.0/16"), // link local unicast
-			netip.MustParsePrefix("127.0.0.0/8"),    // loopback (added)
-		}},
-		Interface: map[string]Interface{"x": {Interface: &net.Interface{Name: "x"}}},
-	}
-
-	// s1 and s2 are different...
-	if s1.EqualFiltered(s2, UseAllInterfaces, UseAllIPs) {
-		t.Errorf("%+v != %+v", s1, s2)
-	}
-	// ...and they look different if you only restrict to interesting interfaces...
-	if s1.EqualFiltered(s2, UseInterestingInterfaces, UseAllIPs) {
-		t.Errorf("%+v != %+v when restricting to interesting interfaces _but not_ IPs", s1, s2)
-	}
-	// ...but because the additional IP address is uninteresting, we should treat them as the same.
-	if !s1.EqualFiltered(s2, UseInterestingInterfaces, UseInterestingIPs) {
-		t.Errorf("%+v == %+v when restricting to interesting interfaces and IPs", s1, s2)
 	}
 }
 
@@ -222,11 +174,15 @@ func TestStateString(t *testing.T) {
 					"wlan0": {
 						Interface: &net.Interface{},
 					},
+					"lo": {
+						Interface: &net.Interface{},
+					},
 				},
 				InterfaceIPs: map[string][]netip.Prefix{
 					"eth0": {
 						netip.MustParsePrefix("10.0.0.2/8"),
 					},
+					"lo": {},
 				},
 				HaveV4: true,
 			},
@@ -239,10 +195,13 @@ func TestStateString(t *testing.T) {
 				Interface: map[string]Interface{
 					"foo": {
 						Desc: "a foo thing",
+						Interface: &net.Interface{
+							Flags: net.FlagUp,
+						},
 					},
 				},
 			},
-			want: `interfaces.State{defaultRoute=foo (a foo thing) ifs={} v4=false v6=false}`,
+			want: `interfaces.State{defaultRoute=foo (a foo thing) ifs={foo:[]} v4=false v6=false}`,
 		},
 	}
 	for _, tt := range tests {
@@ -250,6 +209,115 @@ func TestStateString(t *testing.T) {
 			got := tt.s.String()
 			if got != tt.want {
 				t.Errorf("wrong\n got: %s\nwant: %s\n", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsInterestingIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"fd7a:115c:a1e0:ab12:4843:cd96:624a:4603", true}, // Tailscale private ULA
+		{"fd15:bbfa:c583:4fce:f4fb:4ff:fe1a:4148", true},  // Other private ULA
+		{"10.2.3.4", true},
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"2001::2", true},
+		{"169.254.1.2", false},
+		{"fe80::1", false},
+	}
+	for _, tt := range tests {
+		if got := isInterestingIP(netip.MustParseAddr(tt.ip)); got != tt.want {
+			t.Errorf("isInterestingIP(%q) = %v, want %v", tt.ip, got, tt.want)
+		}
+	}
+}
+
+// tests (*State).Equal
+func TestEqual(t *testing.T) {
+	tests := []struct {
+		name   string
+		s1, s2 *State
+		want   bool // implies !wantMajor
+	}{
+		{
+			name: "eq_nil",
+			want: true,
+		},
+		{
+			name: "nil_mix",
+			s2:   new(State),
+			want: false,
+		},
+		{
+			name: "eq",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "default-route-changed",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "bar",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "some-interface-ips-changed",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.3/16")},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "altaddrs-changed",
+			s1: &State{
+				Interface: map[string]Interface{
+					"foo": {AltAddrs: []net.Addr{&net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}},
+				},
+			},
+			s2: &State{
+				Interface: map[string]Interface{
+					"foo": {AltAddrs: []net.Addr{&net.TCPAddr{IP: net.ParseIP("5.6.7.8")}}},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.s2.Equal(tt.s1); got != tt.want {
+				t.Errorf("Equal = %v; want %v", got, tt.want)
 			}
 		})
 	}

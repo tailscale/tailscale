@@ -37,7 +37,7 @@ func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	dialContext := logpolicy.MakeDialFunc(s.netMon)
+	dialContext := logpolicy.MakeDialFunc(s.netMon, s.logf)
 	back, err := dialContext(ctx, "tcp", hostPort)
 	if err != nil {
 		s.logf("error CONNECT dialing %v: %v", hostPort, err)

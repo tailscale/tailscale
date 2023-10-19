@@ -9,47 +9,39 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/adler32"
 	"hash/crc32"
 	"html"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
-	"path"
-	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/kortschak/wol"
-	"golang.org/x/exp/slices"
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/http/httpguts"
-	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrop"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/multierr"
-	"tailscale.com/version/distro"
+	"tailscale.com/util/httphdr"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -60,389 +52,15 @@ var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, stri
 var addH2C func(*http.Server)
 
 type peerAPIServer struct {
-	b          *LocalBackend
-	rootDir    string // empty means file receiving unavailable
-	knownEmpty atomic.Bool
-	resolver   *resolver.Resolver
+	b        *LocalBackend
+	resolver *resolver.Resolver
 
-	// directFileMode is whether we're writing files directly to a
-	// download directory (as *.partial files), rather than making
-	// the frontend retrieve it over localapi HTTP and write it
-	// somewhere itself. This is used on the GUI macOS versions
-	// and on Synology.
-	// In directFileMode, the peerapi doesn't do the final rename
-	// from "foo.jpg.partial" to "foo.jpg" unless
-	// directFileDoFinalRename is set.
-	directFileMode bool
-
-	// directFileDoFinalRename is whether in directFileMode we
-	// additionally move the *.direct file to its final name after
-	// it's received.
-	directFileDoFinalRename bool
-}
-
-const (
-	// partialSuffix is the suffix appended to files while they're
-	// still in the process of being transferred.
-	partialSuffix = ".partial"
-
-	// deletedSuffix is the suffix for a deleted marker file
-	// that's placed next to a file (without the suffix) that we
-	// tried to delete, but Windows wouldn't let us. These are
-	// only written on Windows (and in tests), but they're not
-	// permitted to be uploaded directly on any platform, like
-	// partial files.
-	deletedSuffix = ".deleted"
-)
-
-func validFilenameRune(r rune) bool {
-	switch r {
-	case '/':
-		return false
-	case '\\', ':', '*', '"', '<', '>', '|':
-		// Invalid stuff on Windows, but we reject them everywhere
-		// for now.
-		// TODO(bradfitz): figure out a better plan. We initially just
-		// wrote things to disk URL path-escaped, but that's gross
-		// when debugging, and just moves the problem to callers.
-		// So now we put the UTF-8 filenames on disk directly as
-		// sent.
-		return false
-	}
-	return unicode.IsPrint(r)
-}
-
-func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
-	if !utf8.ValidString(baseName) {
-		return "", false
-	}
-	if strings.TrimSpace(baseName) != baseName {
-		return "", false
-	}
-	if len(baseName) > 255 {
-		return "", false
-	}
-	// TODO: validate unicode normalization form too? Varies by platform.
-	clean := path.Clean(baseName)
-	if clean != baseName ||
-		clean == "." || clean == ".." ||
-		strings.HasSuffix(clean, deletedSuffix) ||
-		strings.HasSuffix(clean, partialSuffix) {
-		return "", false
-	}
-	for _, r := range baseName {
-		if !validFilenameRune(r) {
-			return "", false
-		}
-	}
-	return filepath.Join(s.rootDir, baseName), true
-}
-
-// hasFilesWaiting reports whether any files are buffered in the
-// tailscaled daemon storage.
-func (s *peerAPIServer) hasFilesWaiting() bool {
-	if s == nil || s.rootDir == "" || s.directFileMode {
-		return false
-	}
-	if s.knownEmpty.Load() {
-		// Optimization: this is usually empty, so avoid opening
-		// the directory and checking. We can't cache the actual
-		// has-files-or-not values as the macOS/iOS client might
-		// in the future use+delete the files directly. So only
-		// keep this negative cache.
-		return false
-	}
-	f, err := os.Open(s.rootDir)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	for {
-		des, err := f.ReadDir(10)
-		for _, de := range des {
-			name := de.Name()
-			if strings.HasSuffix(name, partialSuffix) {
-				continue
-			}
-			if name, ok := strings.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
-				// After we're done looping over files, then try
-				// to delete this file. Don't do it proactively,
-				// as the OS may return "foo.jpg.deleted" before "foo.jpg"
-				// and we don't want to delete the ".deleted" file before
-				// enumerating to the "foo.jpg" file.
-				defer tryDeleteAgain(filepath.Join(s.rootDir, name))
-				continue
-			}
-			if de.Type().IsRegular() {
-				_, err := os.Stat(filepath.Join(s.rootDir, name+deletedSuffix))
-				if os.IsNotExist(err) {
-					return true
-				}
-				if err == nil {
-					tryDeleteAgain(filepath.Join(s.rootDir, name))
-					continue
-				}
-			}
-		}
-		if err == io.EOF {
-			s.knownEmpty.Store(true)
-		}
-		if err != nil {
-			break
-		}
-	}
-	return false
-}
-
-// WaitingFiles returns the list of files that have been sent by a
-// peer that are waiting in the buffered "pick up" directory owned by
-// the Tailscale daemon.
-//
-// As a side effect, it also does any lazy deletion of files as
-// required by Windows.
-func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
-	if s == nil {
-		return nil, errNilPeerAPIServer
-	}
-	if s.rootDir == "" {
-		return nil, errNoTaildrop
-	}
-	if s.directFileMode {
-		return nil, nil
-	}
-	f, err := os.Open(s.rootDir)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var deleted map[string]bool // "foo.jpg" => true (if "foo.jpg.deleted" exists)
-	for {
-		des, err := f.ReadDir(10)
-		for _, de := range des {
-			name := de.Name()
-			if strings.HasSuffix(name, partialSuffix) {
-				continue
-			}
-			if name, ok := strings.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
-				if deleted == nil {
-					deleted = map[string]bool{}
-				}
-				deleted[name] = true
-				continue
-			}
-			if de.Type().IsRegular() {
-				fi, err := de.Info()
-				if err != nil {
-					continue
-				}
-				ret = append(ret, apitype.WaitingFile{
-					Name: filepath.Base(name),
-					Size: fi.Size(),
-				})
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	if len(deleted) > 0 {
-		// Filter out any return values "foo.jpg" where a
-		// "foo.jpg.deleted" marker file exists on disk.
-		all := ret
-		ret = ret[:0]
-		for _, wf := range all {
-			if !deleted[wf.Name] {
-				ret = append(ret, wf)
-			}
-		}
-		// And do some opportunistic deleting while we're here.
-		// Maybe Windows is done virus scanning the file we tried
-		// to delete a long time ago and will let us delete it now.
-		for name := range deleted {
-			tryDeleteAgain(filepath.Join(s.rootDir, name))
-		}
-	}
-	sort.Slice(ret, func(i, j int) bool { return ret[i].Name < ret[j].Name })
-	return ret, nil
+	taildrop *taildrop.Manager
 }
 
 var (
 	errNilPeerAPIServer = errors.New("peerapi unavailable; not listening")
-	errNoTaildrop       = errors.New("Taildrop disabled; no storage directory")
 )
-
-// tryDeleteAgain tries to delete path (and path+deletedSuffix) after
-// it failed earlier.  This happens on Windows when various anti-virus
-// tools hook into filesystem operations and have the file open still
-// while we're trying to delete it. In that case we instead mark it as
-// deleted (writing a "foo.jpg.deleted" marker file), but then we
-// later try to clean them up.
-//
-// fullPath is the full path to the file without the deleted suffix.
-func tryDeleteAgain(fullPath string) {
-	if err := os.Remove(fullPath); err == nil || os.IsNotExist(err) {
-		os.Remove(fullPath + deletedSuffix)
-	}
-}
-
-func (s *peerAPIServer) DeleteFile(baseName string) error {
-	if s == nil {
-		return errNilPeerAPIServer
-	}
-	if s.rootDir == "" {
-		return errNoTaildrop
-	}
-	if s.directFileMode {
-		return errors.New("deletes not allowed in direct mode")
-	}
-	path, ok := s.diskPath(baseName)
-	if !ok {
-		return errors.New("bad filename")
-	}
-	var bo *backoff.Backoff
-	logf := s.b.logf
-	t0 := time.Now()
-	for {
-		err := os.Remove(path)
-		if err != nil && !os.IsNotExist(err) {
-			err = redactErr(err)
-			// Put a retry loop around deletes on Windows. Windows
-			// file descriptor closes are effectively asynchronous,
-			// as a bunch of hooks run on/after close, and we can't
-			// necessarily delete the file for a while after close,
-			// as we need to wait for everybody to be done with
-			// it. (on Windows, unlike Unix, a file can't be deleted
-			// if it's open anywhere)
-			// So try a few times but ultimately just leave a
-			// "foo.jpg.deleted" marker file to note that it's
-			// deleted and we clean it up later.
-			if runtime.GOOS == "windows" {
-				if bo == nil {
-					bo = backoff.NewBackoff("delete-retry", logf, 1*time.Second)
-				}
-				if time.Since(t0) < 5*time.Second {
-					bo.BackOff(context.Background(), err)
-					continue
-				}
-				if err := touchFile(path + deletedSuffix); err != nil {
-					logf("peerapi: failed to leave deleted marker: %v", err)
-				}
-			}
-			logf("peerapi: failed to DeleteFile: %v", err)
-			return err
-		}
-		return nil
-	}
-}
-
-// redacted is a fake path name we use in errors, to avoid
-// accidentally logging actual filenames anywhere.
-const redacted = "redacted"
-
-type redactedErr struct {
-	msg   string
-	inner error
-}
-
-func (re *redactedErr) Error() string {
-	return re.msg
-}
-
-func (re *redactedErr) Unwrap() error {
-	return re.inner
-}
-
-func redactString(s string) string {
-	hash := adler32.Checksum([]byte(s))
-
-	var buf [len(redacted) + len(".12345678")]byte
-	b := append(buf[:0], []byte(redacted)...)
-	b = append(b, '.')
-	b = strconv.AppendUint(b, uint64(hash), 16)
-	return string(b)
-}
-
-func redactErr(root error) error {
-	// redactStrings is a list of sensitive strings that were redacted.
-	// It is not sufficient to just snub out sensitive fields in Go errors
-	// since some wrapper errors like fmt.Errorf pre-cache the error string,
-	// which would unfortunately remain unaffected.
-	var redactStrings []string
-
-	// Redact sensitive fields in known Go error types.
-	var unknownErrors int
-	multierr.Range(root, func(err error) bool {
-		switch err := err.(type) {
-		case *os.PathError:
-			redactStrings = append(redactStrings, err.Path)
-			err.Path = redactString(err.Path)
-		case *os.LinkError:
-			redactStrings = append(redactStrings, err.New, err.Old)
-			err.New = redactString(err.New)
-			err.Old = redactString(err.Old)
-		default:
-			unknownErrors++
-		}
-		return true
-	})
-
-	// If there are no redacted strings or no unknown error types,
-	// then we can return the possibly modified root error verbatim.
-	// Otherwise, we must replace redacted strings from any wrappers.
-	if len(redactStrings) == 0 || unknownErrors == 0 {
-		return root
-	}
-
-	// Stringify and replace any paths that we found above, then return
-	// the error wrapped in a type that uses the newly-redacted string
-	// while also allowing Unwrap()-ing to the inner error type(s).
-	s := root.Error()
-	for _, toRedact := range redactStrings {
-		s = strings.ReplaceAll(s, toRedact, redactString(toRedact))
-	}
-	return &redactedErr{msg: s, inner: root}
-}
-
-func touchFile(path string) error {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return redactErr(err)
-	}
-	return f.Close()
-}
-
-func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64, err error) {
-	if s == nil {
-		return nil, 0, errNilPeerAPIServer
-	}
-	if s.rootDir == "" {
-		return nil, 0, errNoTaildrop
-	}
-	if s.directFileMode {
-		return nil, 0, errors.New("opens not allowed in direct mode")
-	}
-	path, ok := s.diskPath(baseName)
-	if !ok {
-		return nil, 0, errors.New("bad filename")
-	}
-	if fi, err := os.Stat(path + deletedSuffix); err == nil && fi.Mode().IsRegular() {
-		tryDeleteAgain(path)
-		return nil, 0, &fs.PathError{Op: "open", Path: redacted, Err: fs.ErrNotExist}
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, redactErr(err)
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, 0, redactErr(err)
-	}
-	return f, fi.Size(), nil
-}
 
 func (s *peerAPIServer) listen(ip netip.Addr, ifState *interfaces.State) (ln net.Listener, err error) {
 	// Android for whatever reason often has problems creating the peerapi listener.
@@ -569,14 +187,14 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		return
 	}
 	nm := pln.lb.NetMap()
-	if nm == nil || nm.SelfNode == nil {
+	if nm == nil || !nm.SelfNode.Valid() {
 		logf("peerapi: no netmap")
 		c.Close()
 		return
 	}
 	h := &peerAPIHandler{
 		ps:         pln.ps,
-		isSelf:     nm.SelfNode.User == peerNode.User,
+		isSelf:     nm.SelfNode.User() == peerNode.User(),
 		remoteAddr: src,
 		selfNode:   nm.SelfNode,
 		peerNode:   peerNode,
@@ -596,8 +214,8 @@ type peerAPIHandler struct {
 	ps         *peerAPIServer
 	remoteAddr netip.AddrPort
 	isSelf     bool                // whether peerNode is owned by same user as this node
-	selfNode   *tailcfg.Node       // this node; always non-nil
-	peerNode   *tailcfg.Node       // peerNode is who's making the request
+	selfNode   tailcfg.NodeView    // this node; always non-nil
+	peerNode   tailcfg.NodeView    // peerNode is who's making the request
 	peerUser   tailcfg.UserProfile // profile of peerNode
 }
 
@@ -608,11 +226,14 @@ func (h *peerAPIHandler) logf(format string, a ...any) {
 // isAddressValid reports whether addr is a valid destination address for this
 // node originating from the peer.
 func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
-	if h.peerNode.SelfNodeV4MasqAddrForThisPeer != nil {
-		return *h.peerNode.SelfNodeV4MasqAddrForThisPeer == addr
+	if v := h.peerNode.SelfNodeV4MasqAddrForThisPeer(); v != nil {
+		return *v == addr
+	}
+	if v := h.peerNode.SelfNodeV6MasqAddrForThisPeer(); v != nil {
+		return *v == addr
 	}
 	pfx := netip.PrefixFrom(addr, addr.BitLen())
-	return slices.Contains(h.selfNode.Addresses, pfx)
+	return views.SliceContains(h.selfNode.Addresses(), pfx)
 }
 
 func (h *peerAPIHandler) validateHost(r *http.Request) error {
@@ -685,7 +306,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
-		metricPutCalls.Add(1)
+		if r.Method == "PUT" {
+			metricPutCalls.Add(1)
+		}
 		h.handlePeerPut(w, r)
 		return
 	}
@@ -733,7 +356,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 <body>
 <h1>Hello, %s (%v)</h1>
 This is my Tailscale device. Your device is %v.
-`, html.EscapeString(who), h.remoteAddr.Addr(), html.EscapeString(h.peerNode.ComputedName))
+`, html.EscapeString(who), h.remoteAddr.Addr(), html.EscapeString(h.peerNode.ComputedName()))
 
 	if h.isSelf {
 		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
@@ -902,8 +525,8 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	for label := range stats.Stats {
 		labels = append(labels, label)
 	}
-	slices.SortFunc(labels, func(a, b sockstats.Label) bool {
-		return a.String() < b.String()
+	slices.SortFunc(labels, func(a, b sockstats.Label) int {
+		return strings.Compare(a.String(), b.String())
 	})
 
 	txTotal := uint64(0)
@@ -964,227 +587,140 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "</pre>")
 }
 
-type incomingFile struct {
-	name        string // "foo.jpg"
-	started     time.Time
-	size        int64     // or -1 if unknown; never 0
-	w           io.Writer // underlying writer
-	ph          *peerAPIHandler
-	partialPath string // non-empty in direct mode
-
-	mu         sync.Mutex
-	copied     int64
-	done       bool
-	lastNotify time.Time
-}
-
-func (f *incomingFile) markAndNotifyDone() {
-	f.mu.Lock()
-	f.done = true
-	f.mu.Unlock()
-	b := f.ph.ps.b
-	b.sendFileNotify()
-}
-
-func (f *incomingFile) Write(p []byte) (n int, err error) {
-	n, err = f.w.Write(p)
-
-	b := f.ph.ps.b
-	var needNotify bool
-	defer func() {
-		if needNotify {
-			b.sendFileNotify()
-		}
-	}()
-	if n > 0 {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.copied += int64(n)
-		now := time.Now()
-		if f.lastNotify.IsZero() || now.Sub(f.lastNotify) > time.Second {
-			f.lastNotify = now
-			needNotify = true
-		}
-	}
-	return n, err
-}
-
-func (f *incomingFile) PartialFile() ipn.PartialFile {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return ipn.PartialFile{
-		Name:         f.name,
-		Started:      f.started,
-		DeclaredSize: f.size,
-		Received:     f.copied,
-		PartialPath:  f.partialPath,
-		Done:         f.done,
-	}
-}
-
 // canPutFile reports whether h can put a file ("Taildrop") to this node.
 func (h *peerAPIHandler) canPutFile() bool {
-	if h.peerNode.UnsignedPeerAPIOnly {
+	if h.peerNode.UnsignedPeerAPIOnly() {
 		// Unsigned peers can't send files.
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.CapabilityFileSharingSend)
+	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityFileSharingSend)
 }
 
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
-	if !slices.Contains(h.selfNode.Capabilities, tailcfg.CapabilityDebug) {
+	if !h.selfNode.HasCap(tailcfg.CapabilityDebug) {
 		// This node does not expose debug info.
 		return false
 	}
-	if h.peerNode.UnsignedPeerAPIOnly {
+	if h.peerNode.UnsignedPeerAPIOnly() {
 		// Unsigned peers can't debug.
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.CapabilityDebugPeer)
+	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityDebugPeer)
 }
 
 // canWakeOnLAN reports whether h can send a Wake-on-LAN packet from this node.
 func (h *peerAPIHandler) canWakeOnLAN() bool {
-	if h.peerNode.UnsignedPeerAPIOnly {
+	if h.peerNode.UnsignedPeerAPIOnly() {
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.CapabilityWakeOnLAN)
+	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityWakeOnLAN)
 }
 
 var allowSelfIngress = envknob.RegisterBool("TS_ALLOW_SELF_INGRESS")
 
 // canIngress reports whether h can send ingress requests to this node.
 func (h *peerAPIHandler) canIngress() bool {
-	return h.peerHasCap(tailcfg.CapabilityIngress) || (allowSelfIngress() && h.isSelf)
+	return h.peerHasCap(tailcfg.PeerCapabilityIngress) || (allowSelfIngress() && h.isSelf)
 }
 
-func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
-	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.Addr()) {
-		if hasCap == wantCap {
-			return true
-		}
-	}
-	return false
+func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
+	return h.ps.b.PeerCaps(h.remoteAddr.Addr()).HasCapability(wantCap)
 }
 
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
-	if !envknob.CanTaildrop() {
-		http.Error(w, "Taildrop disabled on device", http.StatusForbidden)
-		return
-	}
 	if !h.canPutFile() {
-		http.Error(w, "Taildrop access denied", http.StatusForbidden)
+		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
 	if !h.ps.b.hasCapFileSharing() {
-		http.Error(w, "file sharing not enabled by Tailscale admin", http.StatusForbidden)
-		return
-	}
-	if r.Method != "PUT" {
-		http.Error(w, "expected method PUT", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.ps.rootDir == "" {
-		http.Error(w, errNoTaildrop.Error(), http.StatusInternalServerError)
-		return
-	}
-	if distro.Get() == distro.Unraid && !h.ps.directFileMode {
-		http.Error(w, "Taildrop folder not configured or accessible", http.StatusInternalServerError)
+		http.Error(w, taildrop.ErrNoTaildrop.Error(), http.StatusForbidden)
 		return
 	}
 	rawPath := r.URL.EscapedPath()
-	suffix, ok := strings.CutPrefix(rawPath, "/v0/put/")
+	prefix, ok := strings.CutPrefix(rawPath, "/v0/put/")
 	if !ok {
-		http.Error(w, "misconfigured internals", 500)
+		http.Error(w, "misconfigured internals", http.StatusForbidden)
 		return
 	}
-	if suffix == "" {
-		http.Error(w, "empty filename", 400)
-		return
-	}
-	if strings.Contains(suffix, "/") {
-		http.Error(w, "directories not supported", 400)
-		return
-	}
-	baseName, err := url.PathUnescape(suffix)
+	baseName, err := url.PathUnescape(prefix)
 	if err != nil {
-		http.Error(w, "bad path encoding", 400)
+		http.Error(w, taildrop.ErrInvalidFileName.Error(), http.StatusBadRequest)
 		return
 	}
-	dstFile, ok := h.ps.diskPath(baseName)
-	if !ok {
-		http.Error(w, "bad filename", 400)
-		return
-	}
-	t0 := time.Now()
-	// TODO(bradfitz): prevent same filename being sent by two peers at once
-	partialFile := dstFile + partialSuffix
-	f, err := os.Create(partialFile)
-	if err != nil {
-		h.logf("put Create error: %v", redactErr(err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var success bool
-	defer func() {
-		if !success {
-			os.Remove(partialFile)
+	enc := json.NewEncoder(w)
+	switch r.Method {
+	case "GET":
+		id := taildrop.ClientID(h.peerNode.StableID())
+		if prefix == "" {
+			// List all the partial files.
+			files, err := h.ps.taildrop.PartialFiles(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if err := enc.Encode(files); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				h.logf("json.Encoder.Encode error: %v", err)
+				return
+			}
+		} else {
+			// Stream all the block hashes for the specified file.
+			next, close, err := h.ps.taildrop.HashPartialFile(id, baseName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer close()
+			for {
+				switch cs, err := next(); {
+				case err == io.EOF:
+					return
+				case err != nil:
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					h.logf("HashPartialFile.next error: %v", err)
+					return
+				default:
+					if err := enc.Encode(cs); err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						h.logf("json.Encoder.Encode error: %v", err)
+						return
+					}
+				}
+			}
 		}
-	}()
-	var finalSize int64
-	var inFile *incomingFile
-	if r.ContentLength != 0 {
-		inFile = &incomingFile{
-			name:    baseName,
-			started: time.Now(),
-			size:    r.ContentLength,
-			w:       f,
-			ph:      h,
-		}
-		if h.ps.directFileMode {
-			inFile.partialPath = partialFile
-		}
-		h.ps.b.registerIncomingFile(inFile, true)
-		defer h.ps.b.registerIncomingFile(inFile, false)
-		n, err := io.Copy(inFile, r.Body)
-		if err != nil {
-			err = redactErr(err)
-			f.Close()
-			h.logf("put Copy error: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		finalSize = n
-	}
-	if err := redactErr(f.Close()); err != nil {
-		h.logf("put Close error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if h.ps.directFileMode && !h.ps.directFileDoFinalRename {
-		if inFile != nil { // non-zero length; TODO: notify even for zero length
-			inFile.markAndNotifyDone()
-		}
-	} else {
-		if err := os.Rename(partialFile, dstFile); err != nil {
-			err = redactErr(err)
-			h.logf("put final rename: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
+	case "PUT":
+		t0 := h.ps.b.clock.Now()
+		id := taildrop.ClientID(h.peerNode.StableID())
 
-	d := time.Since(t0).Round(time.Second / 10)
-	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
-
-	// TODO: set modtime
-	// TODO: some real response
-	success = true
-	io.WriteString(w, "{}\n")
-	h.ps.knownEmpty.Store(false)
-	h.ps.b.sendFileNotify()
+		var offset int64
+		if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
+			ranges, ok := httphdr.ParseRange(rangeHdr)
+			if !ok || len(ranges) != 1 || ranges[0].Length != 0 {
+				http.Error(w, "invalid Range header", http.StatusBadRequest)
+				return
+			}
+			offset = ranges[0].Start
+		}
+		n, err := h.ps.taildrop.PutFile(taildrop.ClientID(fmt.Sprint(id)), baseName, r.Body, offset, r.ContentLength)
+		switch err {
+		case nil:
+			d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
+			h.logf("got put of %s in %v from %v/%v", approxSize(n), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
+			io.WriteString(w, "{}\n")
+		case taildrop.ErrNoTaildrop:
+			http.Error(w, err.Error(), http.StatusForbidden)
+		case taildrop.ErrInvalidFileName:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case taildrop.ErrFileExists:
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	default:
+		http.Error(w, "expected method GET or PUT", http.StatusMethodNotAllowed)
+	}
 }
 
 func approxSize(n int64) string {
@@ -1238,11 +774,7 @@ func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Req
 		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
-	if mc, ok := h.ps.b.sys.MagicSock.GetOK(); ok {
-		mc.ServeHTTPDebug(w, r)
-		return
-	}
-	http.Error(w, "miswired", 500)
+	h.ps.b.magicConn().ServeHTTPDebug(w, r)
 }
 
 func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1261,7 +793,7 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 	}
 	dh := health.DebugHandler("dnsfwd")
 	if dh == nil {
-		http.Error(w, "not wired up", 500)
+		http.Error(w, "not wired up", http.StatusInternalServerError)
 		return
 	}
 	dh.ServeHTTP(w, r)
@@ -1286,9 +818,9 @@ func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "bad 'mac' param", http.StatusBadRequest)
 		return
 	}
-	var password []byte // TODO(bradfitz): support?
-	st, err := interfaces.GetState()
-	if err != nil {
+	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
+	st := h.ps.b.sys.NetMon.Get().InterfaceState()
+	if st == nil {
 		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)
 		return
 	}
@@ -1399,9 +931,9 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		h.logf("handleDNS fwd error: %v", err)
 		if err := ctx.Err(); err != nil {
-			http.Error(w, err.Error(), 500)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		} else {
-			http.Error(w, "DNS forwarding error", 500)
+			http.Error(w, "DNS forwarding error", http.StatusInternalServerError)
 		}
 		return
 	}

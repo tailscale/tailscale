@@ -10,10 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 )
 

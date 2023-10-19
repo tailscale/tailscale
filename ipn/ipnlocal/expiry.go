@@ -8,6 +8,7 @@ import (
 
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -37,22 +38,22 @@ type expiryManager struct {
 	//    time.Now().Add(clockDelta) == MapResponse.ControlTime
 	clockDelta syncs.AtomicValue[time.Duration]
 
-	logf    logger.Logf
-	timeNow func() time.Time
+	logf  logger.Logf
+	clock tstime.Clock
 }
 
 func newExpiryManager(logf logger.Logf) *expiryManager {
 	return &expiryManager{
 		previouslyExpired: map[tailcfg.StableNodeID]bool{},
 		logf:              logf,
-		timeNow:           time.Now,
+		clock:             tstime.StdClock{},
 	}
 }
 
 // onControlTime is called whenever we receive a new timestamp from the control
 // server to store the delta.
 func (em *expiryManager) onControlTime(t time.Time) {
-	localNow := em.timeNow()
+	localNow := em.clock.Now()
 	delta := t.Sub(localNow)
 	if delta.Abs() > minClockDelta {
 		em.logf("[v1] netmap: flagExpiredPeers: setting clock delta to %v", delta)
@@ -86,24 +87,26 @@ func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap, localNow ti
 		return
 	}
 
-	for _, peer := range netmap.Peers {
+	for i, peer := range netmap.Peers {
 		// Nodes that don't expire have KeyExpiry set to the zero time;
 		// skip those and peers that are already marked as expired
 		// (e.g. from control).
-		if peer.KeyExpiry.IsZero() || peer.KeyExpiry.After(controlNow) {
-			delete(em.previouslyExpired, peer.StableID)
+		if peer.KeyExpiry().IsZero() || peer.KeyExpiry().After(controlNow) {
+			delete(em.previouslyExpired, peer.StableID())
 			continue
-		} else if peer.Expired {
+		} else if peer.Expired() {
 			continue
 		}
 
-		if !em.previouslyExpired[peer.StableID] {
-			em.logf("[v1] netmap: flagExpiredPeers: clearing expired peer %v", peer.StableID)
-			em.previouslyExpired[peer.StableID] = true
+		if !em.previouslyExpired[peer.StableID()] {
+			em.logf("[v1] netmap: flagExpiredPeers: clearing expired peer %v", peer.StableID())
+			em.previouslyExpired[peer.StableID()] = true
 		}
+
+		mut := peer.AsStruct()
 
 		// Actually mark the node as expired
-		peer.Expired = true
+		mut.Expired = true
 
 		// Control clears the Endpoints and DERP fields of expired
 		// nodes; do so here as well. The Expired bool is the correct
@@ -112,12 +115,14 @@ func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap, localNow ti
 		// NOTE: this is insufficient to actually break connectivity,
 		// since we discover endpoints via DERP, and due to DERP return
 		// path optimization.
-		peer.Endpoints = nil
-		peer.DERP = ""
+		mut.Endpoints = nil
+		mut.DERP = ""
 
 		// Defense-in-depth: break the node's public key as well, in
 		// case something tries to communicate.
-		peer.Key = key.NodePublicWithBadOldPrefix(peer.Key)
+		mut.Key = key.NodePublicWithBadOldPrefix(peer.Key())
+
+		netmap.Peers[i] = mut.View()
 	}
 }
 
@@ -143,13 +148,13 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 
 	var nextExpiry time.Time // zero if none
 	for _, peer := range nm.Peers {
-		if peer.KeyExpiry.IsZero() {
+		if peer.KeyExpiry().IsZero() {
 			continue // tagged node
-		} else if peer.Expired {
+		} else if peer.Expired() {
 			// Peer already expired; Expired is set by the
 			// flagExpiredPeers function, above.
 			continue
-		} else if peer.KeyExpiry.Before(controlNow) {
+		} else if peer.KeyExpiry().Before(controlNow) {
 			// This peer already expired, and peer.Expired
 			// isn't set for some reason. Skip this node.
 			continue
@@ -159,14 +164,14 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 		// an expiry; otherwise, only update if this node's expiry is
 		// sooner than the currently-stored one (since we want the
 		// soonest-occurring expiry time).
-		if nextExpiry.IsZero() || peer.KeyExpiry.Before(nextExpiry) {
-			nextExpiry = peer.KeyExpiry
+		if nextExpiry.IsZero() || peer.KeyExpiry().Before(nextExpiry) {
+			nextExpiry = peer.KeyExpiry()
 		}
 	}
 
 	// Ensure that we also fire this timer if our own node key expires.
-	if nm.SelfNode != nil {
-		selfExpiry := nm.SelfNode.KeyExpiry
+	if nm.SelfNode.Valid() {
+		selfExpiry := nm.SelfNode.KeyExpiry()
 
 		if selfExpiry.IsZero() {
 			// No expiry for self node

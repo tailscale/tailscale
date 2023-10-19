@@ -1,22 +1,24 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tlsdial originally existed to set up a tls.Config for x509
-// validation, using a memory-optimized path for iOS, but then we
-// moved that to the tailscale/go tree instead, so now this package
-// does very little. But for now we keep it as a unified point where
-// we might want to add shared policy on outgoing TLS connections from
-// the 3 places in the client that connect to Tailscale (logs,
-// control, DERP).
+// Package tlsdial generates tls.Config values and does x509 validation of
+// certs. It bakes in the LetsEncrypt roots so even if the user's machine
+// doesn't have TLS roots, we can at least connect to Tailscale's LetsEncrypt
+// services.  It's the unified point where we can add shared policy on outgoing
+// TLS connections from the three places in the client that connect to Tailscale
+// (logs, control, DERP).
 package tlsdial
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -189,6 +191,22 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 			return nil
 		}
 		return errSys
+	}
+}
+
+// NewTransport returns a new HTTP transport that verifies TLS certs using this
+// package, including its baked-in LetsEncrypt fallback roots.
+func NewTransport() *http.Transport {
+	return &http.Transport{
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			var d tls.Dialer
+			d.Config = Config(host, nil)
+			return d.DialContext(ctx, network, addr)
+		},
 	}
 }
 

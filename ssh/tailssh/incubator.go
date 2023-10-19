@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,6 @@ import (
 	"github.com/pkg/sftp"
 	"github.com/u-root/u-root/pkg/termios"
 	gossh "golang.org/x/crypto/ssh"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/hostinfo"
@@ -99,7 +99,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	gids := strings.Join(ss.conn.userGroupIDs, ",")
 	remoteUser := ci.uprof.LoginName
 	if ci.node.IsTagged() {
-		remoteUser = strings.Join(ci.node.Tags, ",")
+		remoteUser = strings.Join(ci.node.Tags().AsSlice(), ",")
 	}
 
 	incubatorArgs := []string{
@@ -270,7 +270,12 @@ func beIncubator(args []string) error {
 		if err != nil {
 			return err
 		}
-		return server.Serve()
+		// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
+		// when sftp is patched to report clean termination.
+		if err := server.Serve(); err != nil && err != io.EOF {
+			return err
+		}
+		return nil
 	}
 
 	cmd := exec.Command(ia.cmdName, ia.cmdArgs...)

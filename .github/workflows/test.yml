@@ -39,6 +39,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  race-root-integration:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          - shard: '1/4'
+          - shard: '2/4'
+          - shard: '3/4'
+          - shard: '4/4'
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: build test wrapper
+      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+    - name: integration tests as root
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
+      env:
+        TS_TEST_SHARD: ${{ matrix.shard }}
+
   test:
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -47,11 +67,18 @@ jobs:
           - goarch: amd64
           - goarch: amd64
             buildflags: "-race"
+            shard: '1/3'
+          - goarch: amd64
+            buildflags: "-race"
+            shard: '2/3'
+          - goarch: amd64
+            buildflags: "-race"
+            shard: '3/3'
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -70,10 +97,12 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
     - name: build all
+      if: matrix.buildflags == '' # skip on race builder
       run: ./tool/go build ${{matrix.buildflags}} ./...
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: build variant CLIs
+      if: matrix.buildflags == '' # skip on race builder
       run: |
         export TS_USE_TOOLCHAIN=1
         ./build_dist.sh --extra-small ./cmd/tailscaled
@@ -83,18 +112,19 @@ jobs:
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: get qemu # for tstest/archtest
-      if: matrix.goarch == 'amd64' && matrix.variant == ''
+      if: matrix.goarch == 'amd64' && matrix.buildflags == ''
       run: |
         sudo apt-get -y update
         sudo apt-get -y install qemu-user
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
-      run: ./tool/go test ${{matrix.buildflags}} -exec=/tmp/testwrapper
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
+        TS_TEST_SHARD: ${{ matrix.shard }}
     - name: bench all
-      run: ./tool/go test ${{matrix.buildflags}} -exec=/tmp/testwrapper -test.bench=. -test.benchtime=1x -test.run=^$
+      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
@@ -115,7 +145,7 @@ jobs:
     runs-on: windows-2022
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Install Go
       uses: actions/setup-go@v4
@@ -141,10 +171,12 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
     - name: test
+      run: go run ./cmd/testwrapper ./...
+    - name: bench all
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
-      run: go test -bench . -benchtime 1x ./...
+      run: go test ./... -bench . -benchtime 1x -run "^$"
 
   vm:
     runs-on: ["self-hosted", "linux", "vm"]
@@ -152,14 +184,24 @@ jobs:
     if: github.repository == 'tailscale/tailscale'
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Run VM tests
       run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
       env:
         HOME: "/tmp"
         TMPDIR: "/tmp"
         XDB_CACHE_HOME: "/var/lib/ghrunner/cache"
-  
+
+  race-build:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: build all
+      run: ./tool/go install -race ./cmd/...
+    - name: build tests
+      run: ./tool/go test -race -exec=true ./...
+
   cross: # cross-compile checks, build only.
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -194,11 +236,14 @@ jobs:
             goarch: amd64
           - goos: openbsd
             goarch: amd64
+          # Plan9
+          - goos: plan9
+            goarch: amd64
 
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -235,7 +280,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: build some
       run: ./tool/go build ./ipn/... ./wgengine/ ./types/... ./control/controlclient
       env:
@@ -249,7 +294,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
       # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
       # some Android breakages early.
@@ -264,7 +309,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -298,7 +343,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: test tailscale_go
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
@@ -366,7 +411,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check depaware
       run: |
         export PATH=$(./tool/go env GOROOT)/bin:$PATH
@@ -376,7 +421,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check that 'go generate' is clean
       run: |
         pkgs=$(./tool/go list ./... | grep -v dnsfallback)
@@ -389,7 +434,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check that 'go mod tidy' is clean
       run: |
         ./tool/go mod tidy
@@ -401,7 +446,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check licenses
       run: ./scripts/check_license_headers.sh .
 
@@ -417,7 +462,7 @@ jobs:
             goarch: "386"
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: install staticcheck
       run: GOBIN=~/.local/bin ./tool/go install honnef.co/go/tools/cmd/staticcheck
     - name: run staticcheck

@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tstime"
@@ -49,18 +48,18 @@ type Encoder interface {
 }
 
 type Config struct {
-	Collection     string           // collection name, a domain name
-	PrivateID      logid.PrivateID  // private ID for the primary log stream
-	CopyPrivateID  logid.PrivateID  // private ID for a log stream that is a superset of this log stream
-	BaseURL        string           // if empty defaults to "https://log.tailscale.io"
-	HTTPC          *http.Client     // if empty defaults to http.DefaultClient
-	SkipClientTime bool             // if true, client_time is not written to logs
-	LowMemory      bool             // if true, logtail minimizes memory use
-	TimeNow        func() time.Time // if set, substitutes uses of time.Now
-	Stderr         io.Writer        // if set, logs are sent here instead of os.Stderr
-	StderrLevel    int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
-	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
-	NewZstdEncoder func() Encoder   // if set, used to compress logs for transmission
+	Collection     string          // collection name, a domain name
+	PrivateID      logid.PrivateID // private ID for the primary log stream
+	CopyPrivateID  logid.PrivateID // private ID for a log stream that is a superset of this log stream
+	BaseURL        string          // if empty defaults to "https://log.tailscale.io"
+	HTTPC          *http.Client    // if empty defaults to http.DefaultClient
+	SkipClientTime bool            // if true, client_time is not written to logs
+	LowMemory      bool            // if true, logtail minimizes memory use
+	Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
+	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
+	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
+	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
+	NewZstdEncoder func() Encoder  // if set, used to compress logs for transmission
 
 	// MetricsDelta, if non-nil, is a func that returns an encoding
 	// delta in clientmetrics to upload alongside existing logs.
@@ -94,8 +93,8 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	if cfg.HTTPC == nil {
 		cfg.HTTPC = http.DefaultClient
 	}
-	if cfg.TimeNow == nil {
-		cfg.TimeNow = time.Now
+	if cfg.Clock == nil {
+		cfg.Clock = tstime.StdClock{}
 	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
@@ -144,9 +143,8 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		drainWake:      make(chan struct{}, 1),
 		sentinel:       make(chan int32, 16),
 		flushDelayFn:   cfg.FlushDelayFn,
-		timeNow:        cfg.TimeNow,
+		clock:          cfg.Clock,
 		metricsDelta:   cfg.MetricsDelta,
-		sockstatsLabel: sockstats.LabelLogtailLogger,
 
 		procID:              procID,
 		includeProcSequence: cfg.IncludeProcSequence,
@@ -154,6 +152,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		shutdownStart: make(chan struct{}),
 		shutdownDone:  make(chan struct{}),
 	}
+	l.SetSockstatsLabel(sockstats.LabelLogtailLogger)
 	if cfg.NewZstdEncoder != nil {
 		l.zstdEncoder = cfg.NewZstdEncoder()
 	}
@@ -181,26 +180,31 @@ type Logger struct {
 	flushDelayFn   func() time.Duration // negative or zero return value to upload aggressively, or >0 to batch at this delay
 	flushPending   atomic.Bool
 	sentinel       chan int32
-	timeNow        func() time.Time
+	clock          tstime.Clock
 	zstdEncoder    Encoder
 	uploadCancel   func()
 	explainedRaw   bool
 	metricsDelta   func() string // or nil
 	privateID      logid.PrivateID
 	httpDoCalls    atomic.Int32
-	sockstatsLabel sockstats.Label
+	sockstatsLabel atomicSocktatsLabel
 
 	procID              uint32
 	includeProcSequence bool
 
 	writeLock    sync.Mutex // guards procSequence, flushTimer, buffer.Write calls
 	procSequence uint64
-	flushTimer   *time.Timer // used when flushDelay is >0
+	flushTimer   tstime.TimerController // used when flushDelay is >0
 
 	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
 	shutdownStart   chan struct{} // closed when shutdown begins
 	shutdownDone    chan struct{} // closed when shutdown complete
 }
+
+type atomicSocktatsLabel struct{ p atomic.Uint32 }
+
+func (p *atomicSocktatsLabel) Load() sockstats.Label       { return sockstats.Label(p.p.Load()) }
+func (p *atomicSocktatsLabel) Store(label sockstats.Label) { p.p.Store(uint32(label)) }
 
 // SetVerbosityLevel controls the verbosity level that should be
 // written to stderr. 0 is the default (not verbose). Levels 1 or higher
@@ -219,7 +223,7 @@ func (l *Logger) SetNetMon(lm *netmon.Monitor) {
 
 // SetSockstatsLabel sets the label used in sockstat logs to identify network traffic from this logger.
 func (l *Logger) SetSockstatsLabel(label sockstats.Label) {
-	l.sockstatsLabel = label
+	l.sockstatsLabel.Store(label)
 }
 
 // PrivateID returns the logger's private log ID.
@@ -375,7 +379,7 @@ func (l *Logger) uploading(ctx context.Context) {
 			retryAfter, err := l.upload(ctx, body, origlen)
 			if err != nil {
 				numFailures++
-				firstFailure = time.Now()
+				firstFailure = l.clock.Now()
 
 				if !l.internetUp() {
 					fmt.Fprintf(l.stderr, "logtail: internet down; waiting\n")
@@ -398,7 +402,7 @@ func (l *Logger) uploading(ctx context.Context) {
 			} else {
 				// Only print a success message after recovery.
 				if numFailures > 0 {
-					fmt.Fprintf(l.stderr, "logtail: upload succeeded after %d failures and %s\n", numFailures, time.Since(firstFailure).Round(time.Second))
+					fmt.Fprintf(l.stderr, "logtail: upload succeeded after %d failures and %s\n", numFailures, l.clock.Since(firstFailure).Round(time.Second))
 				}
 				break
 			}
@@ -422,8 +426,8 @@ func (l *Logger) internetUp() bool {
 
 func (l *Logger) awaitInternetUp(ctx context.Context) {
 	upc := make(chan bool, 1)
-	defer l.netMonitor.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
-		if st.AnyInterfaceUp() {
+	defer l.netMonitor.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
+		if delta.New.AnyInterfaceUp() {
 			select {
 			case upc <- true:
 			default:
@@ -445,7 +449,7 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 // origlen of -1 indicates that the body is not compressed.
 func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAfter time.Duration, err error) {
 	const maxUploadTime = 45 * time.Second
-	ctx = sockstats.WithSockStats(ctx, l.sockstatsLabel, l.Logf)
+	ctx = sockstats.WithSockStats(ctx, l.sockstatsLabel.Load(), l.Logf)
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
 	defer cancel()
 
@@ -540,7 +544,7 @@ func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
 	if flushDelay > 0 {
 		if l.flushPending.CompareAndSwap(false, true) {
 			if l.flushTimer == nil {
-				l.flushTimer = time.AfterFunc(flushDelay, l.tryDrainWake)
+				l.flushTimer = l.clock.AfterFunc(flushDelay, l.tryDrainWake)
 			} else {
 				l.flushTimer.Reset(flushDelay)
 			}
@@ -554,7 +558,7 @@ func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
 // TODO: instead of allocating, this should probably just append
 // directly into the output log buffer.
 func (l *Logger) encodeText(buf []byte, skipClientTime bool, procID uint32, procSequence uint64, level int) []byte {
-	now := l.timeNow()
+	now := l.clock.Now()
 
 	// Factor in JSON encoding overhead to try to only do one alloc
 	// in the make below (so appends don't resize the buffer).
@@ -669,7 +673,7 @@ func (l *Logger) encodeLocked(buf []byte, level int) []byte {
 		return l.encodeText(buf, l.skipClientTime, l.procID, l.procSequence, level) // text fast-path
 	}
 
-	now := l.timeNow()
+	now := l.clock.Now()
 
 	obj := make(map[string]any)
 	if err := json.Unmarshal(buf, &obj); err != nil {

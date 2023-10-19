@@ -16,11 +16,9 @@ import (
 	"time"
 
 	. "tailscale.com/tailcfg"
-	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
-	"tailscale.com/version"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -59,12 +57,14 @@ func TestHostinfoEqual(t *testing.T) {
 		"GoVersion",
 		"RoutableIPs",
 		"RequestTags",
+		"WoLMACs",
 		"Services",
 		"NetInfo",
 		"SSH_HostKeys",
 		"Cloud",
 		"Userspace",
 		"UserspaceRouter",
+		"Location",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -346,12 +346,12 @@ func TestNodeEqual(t *testing.T) {
 		"Key", "KeyExpiry", "KeySignature", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
 		"Created", "Cap", "Tags", "PrimaryRoutes",
-		"LastSeen", "Online", "KeepAlive", "MachineAuthorized",
-		"Capabilities",
+		"LastSeen", "Online", "MachineAuthorized",
+		"Capabilities", "CapMap",
 		"UnsignedPeerAPIOnly",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 		"DataPlaneAuditLogID", "Expired", "SelfNodeV4MasqAddrForThisPeer",
-		"IsWireGuardOnly",
+		"SelfNodeV6MasqAddrForThisPeer", "IsWireGuardOnly", "ExitNodeDNSResolvers",
 	}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -467,13 +467,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{Endpoints: []string{}},
+			&Node{Endpoints: []netip.AddrPort{}},
 			&Node{Endpoints: nil},
 			false,
 		},
 		{
-			&Node{Endpoints: []string{}},
-			&Node{Endpoints: []string{}},
+			&Node{Endpoints: []netip.AddrPort{}},
+			&Node{Endpoints: []netip.AddrPort{}},
 			true,
 		},
 		{
@@ -546,6 +546,55 @@ func TestNodeEqual(t *testing.T) {
 			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
 			true,
 		},
+		{
+			&Node{},
+			&Node{SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
+			false,
+		},
+		{
+			&Node{SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
+			&Node{SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
+			true,
+		},
+		{
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"foo"`},
+				},
+			},
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"foo"`},
+				},
+			},
+			true,
+		},
+		{
+			&Node{
+				CapMap: NodeCapMap{
+					"bar": []RawMessage{`"foo"`},
+				},
+			},
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"bar"`},
+				},
+			},
+			false,
+		},
+		{
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": nil,
+				},
+			},
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"bar"`},
+				},
+			},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equal(tt.b)
@@ -570,6 +619,7 @@ func TestNetInfoFields(t *testing.T) {
 		"PreferredDERP",
 		"LinkType",
 		"DERPLatency",
+		"FirewallMode",
 	}
 	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
 		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -628,7 +678,7 @@ func TestCloneNode(t *testing.T) {
 		{"zero_fields", &Node{
 			Addresses:  make([]netip.Prefix, 0),
 			AllowedIPs: make([]netip.Prefix, 0),
-			Endpoints:  make([]string, 0),
+			Endpoints:  make([]netip.AddrPort, 0),
 		}},
 	}
 	for _, tt := range tests {
@@ -681,29 +731,6 @@ func TestEndpointTypeMarshal(t *testing.T) {
 	}
 }
 
-var sinkBytes []byte
-
-func BenchmarkKeyMarshalText(b *testing.B) {
-	b.ReportAllocs()
-	var k [32]byte
-	for i := 0; i < b.N; i++ {
-		sinkBytes = ExportKeyMarshalText("prefix", k)
-	}
-}
-
-func TestAppendKeyAllocs(t *testing.T) {
-	if version.IsRace() {
-		t.Skip("skipping in race detector") // append(b, make([]byte, N)...) not optimized in compiler with race
-	}
-	var k [32]byte
-	err := tstest.MinAllocsPerRun(t, 1, func() {
-		sinkBytes = ExportKeyMarshalText("prefix", k)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRegisterRequestNilClone(t *testing.T) {
 	var nilReq *RegisterRequest
 	got := nilReq.Clone()
@@ -726,5 +753,105 @@ func TestCurrentCapabilityVersion(t *testing.T) {
 	}
 	if CapabilityVersion(max) != CurrentCapabilityVersion {
 		t.Errorf("CurrentCapabilityVersion = %d; want %d", CurrentCapabilityVersion, max)
+	}
+}
+
+func TestUnmarshalHealth(t *testing.T) {
+	tests := []struct {
+		in   string   // MapResponse JSON
+		want []string // MapResponse.Health wanted value post-unmarshal
+	}{
+		{in: `{}`},
+		{in: `{"Health":null}`},
+		{in: `{"Health":[]}`, want: []string{}},
+		{in: `{"Health":["bad"]}`, want: []string{"bad"}},
+	}
+	for _, tt := range tests {
+		var mr MapResponse
+		if err := json.Unmarshal([]byte(tt.in), &mr); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(mr.Health, tt.want) {
+			t.Errorf("for %#q: got %v; want %v", tt.in, mr.Health, tt.want)
+		}
+	}
+}
+
+func TestRawMessage(t *testing.T) {
+	// Create a few types of json.RawMessages and then marshal them back and
+	// forth to make sure they round-trip.
+
+	type rule struct {
+		Ports []int `json:",omitempty"`
+	}
+	tests := []struct {
+		name string
+		val  map[string][]rule
+		wire map[string][]RawMessage
+	}{
+		{
+			name: "nil",
+			val:  nil,
+			wire: nil,
+		},
+		{
+			name: "empty",
+			val:  map[string][]rule{},
+			wire: map[string][]RawMessage{},
+		},
+		{
+			name: "one",
+			val: map[string][]rule{
+				"foo": {{Ports: []int{1, 2, 3}}},
+			},
+			wire: map[string][]RawMessage{
+				"foo": {
+					`{"Ports":[1,2,3]}`,
+				},
+			},
+		},
+		{
+			name: "many",
+			val: map[string][]rule{
+				"foo": {{Ports: []int{1, 2, 3}}},
+				"bar": {{Ports: []int{4, 5, 6}}, {Ports: []int{7, 8, 9}}},
+				"baz": nil,
+				"abc": {},
+				"def": {{}},
+			},
+			wire: map[string][]RawMessage{
+				"foo": {
+					`{"Ports":[1,2,3]}`,
+				},
+				"bar": {
+					`{"Ports":[4,5,6]}`,
+					`{"Ports":[7,8,9]}`,
+				},
+				"baz": nil,
+				"abc": {},
+				"def": {"{}"},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			j := must.Get(json.Marshal(tc.val))
+			var gotWire map[string][]RawMessage
+			if err := json.Unmarshal(j, &gotWire); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(gotWire, tc.wire) {
+				t.Errorf("got %#v; want %#v", gotWire, tc.wire)
+			}
+
+			j = must.Get(json.Marshal(tc.wire))
+			var gotVal map[string][]rule
+			if err := json.Unmarshal(j, &gotVal); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(gotVal, tc.val) {
+				t.Errorf("got %#v; want %#v", gotVal, tc.val)
+			}
+		})
 	}
 }

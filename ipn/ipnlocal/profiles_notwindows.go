@@ -16,9 +16,7 @@ import (
 func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
 	k := ipn.LegacyGlobalDaemonStateKey
 	switch {
-	case runtime.GOOS == "ios":
-		k = "ipn-go-bridge"
-	case version.IsSandboxedMacOS():
+	case runtime.GOOS == "ios", version.IsSandboxedMacOS():
 		k = "ipn-go-bridge"
 	case runtime.GOOS == "android":
 		k = "ipn-android"

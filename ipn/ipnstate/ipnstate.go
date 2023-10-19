@@ -12,9 +12,9 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"tailscale.com/tailcfg"
@@ -69,8 +69,17 @@ type Status struct {
 	// trailing periods, and without any "_acme-challenge." prefix.
 	CertDomains []string
 
+	// Peer is the state of each peer, keyed by each peer's current public key.
 	Peer map[key.NodePublic]*PeerStatus
+
+	// User contains profile information about UserIDs referenced by
+	// PeerStatus.UserID, PeerStatus.AltSharerUserID, etc.
 	User map[tailcfg.UserID]tailcfg.UserProfile
+
+	// ClientVersion, when non-nil, contains information about the latest
+	// version of the Tailscale client that's available. Depending on
+	// the platform and client settings, it may not be available.
+	ClientVersion *tailcfg.ClientVersion
 }
 
 // TKAKey describes a key trusted by network lock.
@@ -188,6 +197,7 @@ type PeerStatusLite struct {
 	NodeKey key.NodePublic
 }
 
+// PeerStatus describes a peer node and its current state.
 type PeerStatus struct {
 	ID        tailcfg.StableNodeID
 	PublicKey key.NodePublic
@@ -199,6 +209,10 @@ type PeerStatus struct {
 	OS      string // HostInfo.OS
 	UserID  tailcfg.UserID
 
+	// AltSharerUserID is the user who shared this node
+	// if it's different than UserID. Otherwise it's zero.
+	AltSharerUserID tailcfg.UserID `json:",omitempty"`
+
 	// TailscaleIPs are the IP addresses assigned to the node.
 	TailscaleIPs []netip.Addr
 
@@ -209,7 +223,7 @@ type PeerStatus struct {
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
-	PrimaryRoutes *views.IPPrefixSlice `json:",omitempty"`
+	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitempty"`
 
 	// Endpoints:
 	Addrs   []string
@@ -223,9 +237,8 @@ type PeerStatus struct {
 	LastSeen       time.Time // last seen to tailcontrol; only present if offline
 	LastHandshake  time.Time // with local wireguard
 	Online         bool      // whether node is connected to the control plane
-	KeepAlive      bool
-	ExitNode       bool // true if this is the currently selected exit node.
-	ExitNodeOption bool // true if this node can be an exit node (offered && approved)
+	ExitNode       bool      // true if this is the currently selected exit node.
+	ExitNodeOption bool      // true if this node can be an exit node (offered && approved)
 
 	// Active is whether the node was recently active. The
 	// definition is somewhat undefined but has historically and
@@ -243,7 +256,10 @@ type PeerStatus struct {
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
 	//    "funnel"
-	Capabilities []string `json:",omitempty"`
+	Capabilities []tailcfg.NodeCapability `json:",omitempty"`
+
+	// CapMap is a map of capabilities to their values.
+	CapMap tailcfg.NodeCapMap `json:",omitempty"`
 
 	// SSH_HostKeys are the node's SSH host keys, if known.
 	SSH_HostKeys []string `json:"sshHostKeys,omitempty"`
@@ -274,12 +290,26 @@ type PeerStatus struct {
 	// KeyExpiry, if present, is the time at which the node key expired or
 	// will expire.
 	KeyExpiry *time.Time `json:",omitempty"`
+
+	Location *tailcfg.Location `json:",omitempty"`
 }
 
+// HasCap reports whether ps has the given capability.
+func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
+	return ps.CapMap.Contains(cap) || slices.Contains(ps.Capabilities, cap)
+}
+
+// IsTagged reports whether ps is tagged.
+func (ps *PeerStatus) IsTagged() bool {
+	return ps.Tags != nil && ps.Tags.Len() > 0
+}
+
+// StatusBuilder is a request to construct a Status. A new StatusBuilder is
+// passed to various subsystems which then call methods on it to populate state.
+// Call its Status method to return the final constructed Status.
 type StatusBuilder struct {
 	WantPeers bool // whether caller wants peers
 
-	mu     sync.Mutex
 	locked bool
 	st     Status
 }
@@ -288,17 +318,13 @@ type StatusBuilder struct {
 //
 // It may not assume other fields of status are already populated, and
 // may not retain or write to the Status after f returns.
-//
-// MutateStatus acquires a lock so f must not call back into sb.
 func (sb *StatusBuilder) MutateStatus(f func(*Status)) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	f(&sb.st)
 }
 
+// Status returns the status that has been built up so far from previous
+// calls to MutateStatus, MutateSelfStatus, AddPeer, etc.
 func (sb *StatusBuilder) Status() *Status {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	sb.locked = true
 	return &sb.st
 }
@@ -310,8 +336,6 @@ func (sb *StatusBuilder) Status() *Status {
 //
 // MutateStatus acquires a lock so f must not call back into sb.
 func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.st.Self == nil {
 		sb.st.Self = new(PeerStatus)
 	}
@@ -320,8 +344,6 @@ func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
 
 // AddUser adds a user profile to the status.
 func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddUser after Locked")
 		return
@@ -336,8 +358,6 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 
 // AddIP adds a Tailscale IP address to the status.
 func (sb *StatusBuilder) AddTailscaleIP(ip netip.Addr) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddIP after Locked")
 		return
@@ -354,8 +374,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 		panic("nil PeerStatus")
 	}
 
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddPeer after Locked")
 		return
@@ -385,6 +403,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.UserID; v != 0 {
 		e.UserID = v
+	}
+	if v := st.AltSharerUserID; v != 0 {
+		e.AltSharerUserID = v
 	}
 	if v := st.TailscaleIPs; v != nil {
 		e.TailscaleIPs = v
@@ -437,9 +458,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if st.InEngine {
 		e.InEngine = true
 	}
-	if st.KeepAlive {
-		e.KeepAlive = true
-	}
 	if st.ExitNode {
 		e.ExitNode = true
 	}
@@ -461,6 +479,7 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if t := st.KeyExpiry; t != nil {
 		e.KeyExpiry = ptr.To(*t)
 	}
+	e.Location = st.Location
 }
 
 type StatusUpdater interface {
@@ -659,23 +678,29 @@ func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingRes
 	}
 }
 
+// SortPeers sorts peers by either their DNS name, hostname, Tailscale IP,
+// or ultimately their current public key.
 func SortPeers(peers []*PeerStatus) {
-	sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
+	slices.SortStableFunc(peers, (*PeerStatus).compare)
 }
 
-func sortKey(ps *PeerStatus) string {
-	if ps.DNSName != "" {
-		return ps.DNSName
+func (a *PeerStatus) compare(b *PeerStatus) int {
+	if a.DNSName != "" || b.DNSName != "" {
+		if v := strings.Compare(a.DNSName, b.DNSName); v != 0 {
+			return v
+		}
 	}
-	if ps.HostName != "" {
-		return ps.HostName
+	if a.HostName != "" || b.HostName != "" {
+		if v := strings.Compare(a.HostName, b.HostName); v != 0 {
+			return v
+		}
 	}
-	// TODO(bradfitz): add PeerStatus.Less and avoid these allocs in a Less func.
-	if len(ps.TailscaleIPs) > 0 {
-		return ps.TailscaleIPs[0].String()
+	if len(a.TailscaleIPs) > 0 && len(b.TailscaleIPs) > 0 {
+		if v := a.TailscaleIPs[0].Compare(b.TailscaleIPs[0]); v != 0 {
+			return v
+		}
 	}
-	raw := ps.PublicKey.Raw32()
-	return string(raw[:])
+	return a.PublicKey.Compare(b.PublicKey)
 }
 
 // DebugDERPRegionReport is the result of a "tailscale debug derp" command,

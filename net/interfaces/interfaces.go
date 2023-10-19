@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,49 +24,6 @@ import (
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
-
-// Tailscale returns the current machine's Tailscale interface, if any.
-// If none is found, all zero values are returned.
-// A non-nil error is only returned on a problem listing the system interfaces.
-func Tailscale() ([]netip.Addr, *net.Interface, error) {
-	ifs, err := netInterfaces()
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, iface := range ifs {
-		if !maybeTailscaleInterfaceName(iface.Name) {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		var tsIPs []netip.Addr
-		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok {
-				nip, ok := netip.AddrFromSlice(ipnet.IP)
-				nip = nip.Unmap()
-				if ok && tsaddr.IsTailscaleIP(nip) {
-					tsIPs = append(tsIPs, nip)
-				}
-			}
-		}
-		if len(tsIPs) > 0 {
-			return tsIPs, iface.Interface, nil
-		}
-	}
-	return nil, nil, nil
-}
-
-// maybeTailscaleInterfaceName reports whether s is an interface
-// name that might be used by Tailscale.
-func maybeTailscaleInterfaceName(s string) bool {
-	return s == "Tailscale" ||
-		strings.HasPrefix(s, "wg") ||
-		strings.HasPrefix(s, "ts") ||
-		strings.HasPrefix(s, "tailscale") ||
-		strings.HasPrefix(s, "utun")
-}
 
 func isUp(nif *net.Interface) bool       { return nif.Flags&net.FlagUp != 0 }
 func isLoopback(nif *net.Interface) bool { return nif.Flags&net.FlagLoopback != 0 }
@@ -300,9 +258,9 @@ func (s *State) String() string {
 		}
 	}
 	sb.WriteString("ifs={")
-	ifs := make([]string, 0, len(s.Interface))
+	var ifs []string
 	for k := range s.Interface {
-		if anyInterestingIP(s.InterfaceIPs[k]) {
+		if s.keepInterfaceInStringSummary(k) {
 			ifs = append(ifs, k)
 		}
 	}
@@ -318,23 +276,40 @@ func (s *State) String() string {
 		if i > 0 {
 			sb.WriteString(" ")
 		}
-		if s.Interface[ifName].IsUp() {
-			fmt.Fprintf(&sb, "%s:[", ifName)
-			needSpace := false
-			for _, pfx := range s.InterfaceIPs[ifName] {
-				if !isInterestingIP(pfx.Addr()) {
-					continue
-				}
-				if needSpace {
-					sb.WriteString(" ")
-				}
-				fmt.Fprintf(&sb, "%s", pfx)
-				needSpace = true
-			}
-			sb.WriteString("]")
-		} else {
-			fmt.Fprintf(&sb, "%s:down", ifName)
+		iface := s.Interface[ifName]
+		if iface.Interface == nil {
+			fmt.Fprintf(&sb, "%s:nil", ifName)
+			continue
 		}
+		if !iface.IsUp() {
+			fmt.Fprintf(&sb, "%s:down", ifName)
+			continue
+		}
+		fmt.Fprintf(&sb, "%s:[", ifName)
+		needSpace := false
+		for _, pfx := range s.InterfaceIPs[ifName] {
+			a := pfx.Addr()
+			if a.IsMulticast() {
+				continue
+			}
+			fam := "4"
+			if a.Is6() {
+				fam = "6"
+			}
+			if needSpace {
+				sb.WriteString(" ")
+			}
+			needSpace = true
+			switch {
+			case a.IsLoopback():
+				fmt.Fprintf(&sb, "lo%s", fam)
+			case a.IsLinkLocalUnicast():
+				fmt.Fprintf(&sb, "llu%s", fam)
+			default:
+				fmt.Fprintf(&sb, "%s", pfx)
+			}
+		}
+		sb.WriteString("]")
 	}
 	sb.WriteString("}")
 
@@ -351,18 +326,8 @@ func (s *State) String() string {
 	return sb.String()
 }
 
-// An InterfaceFilter indicates whether EqualFiltered should use i when deciding whether two States are equal.
-// ips are all the IPPrefixes associated with i.
-type InterfaceFilter func(i Interface, ips []netip.Prefix) bool
-
-// An IPFilter indicates whether EqualFiltered should use ip when deciding whether two States are equal.
-// ip is an ip address associated with some interface under consideration.
-type IPFilter func(ip netip.Addr) bool
-
-// EqualFiltered reports whether s and s2 are equal,
-// considering only interfaces in s for which filter returns true,
-// and considering only IPs for those interfaces for which filterIP returns true.
-func (s *State) EqualFiltered(s2 *State, useInterface InterfaceFilter, useIP IPFilter) bool {
+// Equal reports whether s and s2 are exactly equal.
+func (s *State) Equal(s2 *State) bool {
 	if s == nil && s2 == nil {
 		return true
 	}
@@ -378,19 +343,16 @@ func (s *State) EqualFiltered(s2 *State, useInterface InterfaceFilter, useIP IPF
 		return false
 	}
 	for iname, i := range s.Interface {
-		ips := s.InterfaceIPs[iname]
-		if !useInterface(i, ips) {
-			continue
-		}
 		i2, ok := s2.Interface[iname]
 		if !ok {
 			return false
 		}
-		ips2, ok := s2.InterfaceIPs[iname]
-		if !ok {
+		if !i.Equal(i2) {
 			return false
 		}
-		if !interfacesEqual(i, i2) || !prefixesEqualFiltered(ips, ips2, useIP) {
+	}
+	for iname, vv := range s.InterfaceIPs {
+		if !slices.Equal(vv, s2.InterfaceIPs[iname]) {
 			return false
 		}
 	}
@@ -402,10 +364,9 @@ func (s *State) HasIP(ip netip.Addr) bool {
 	if s == nil {
 		return false
 	}
-	want := netip.PrefixFrom(ip, ip.BitLen())
 	for _, pv := range s.InterfaceIPs {
 		for _, p := range pv {
-			if p == want {
+			if p.Contains(ip) {
 				return true
 			}
 		}
@@ -413,68 +374,43 @@ func (s *State) HasIP(ip netip.Addr) bool {
 	return false
 }
 
-func interfacesEqual(a, b Interface) bool {
-	return a.Index == b.Index &&
+func (a Interface) Equal(b Interface) bool {
+	if (a.Interface == nil) != (b.Interface == nil) {
+		return false
+	}
+	if !(a.Desc == b.Desc && netAddrsEqual(a.AltAddrs, b.AltAddrs)) {
+		return false
+	}
+	if a.Interface != nil && !(a.Index == b.Index &&
 		a.MTU == b.MTU &&
 		a.Name == b.Name &&
 		a.Flags == b.Flags &&
-		bytes.Equal([]byte(a.HardwareAddr), []byte(b.HardwareAddr))
-}
-
-func filteredIPPs(ipps []netip.Prefix, useIP IPFilter) []netip.Prefix {
-	// TODO: rewrite prefixesEqualFiltered to avoid making copies
-	x := make([]netip.Prefix, 0, len(ipps))
-	for _, ipp := range ipps {
-		if useIP(ipp.Addr()) {
-			x = append(x, ipp)
-		}
-	}
-	return x
-}
-
-func prefixesEqualFiltered(a, b []netip.Prefix, useIP IPFilter) bool {
-	return prefixesEqual(filteredIPPs(a, useIP), filteredIPPs(b, useIP))
-}
-
-func prefixesEqual(a, b []netip.Prefix) bool {
-	if len(a) != len(b) {
+		bytes.Equal([]byte(a.HardwareAddr), []byte(b.HardwareAddr))) {
 		return false
-	}
-	for i, v := range a {
-		if b[i] != v {
-			return false
-		}
 	}
 	return true
 }
-
-// UseInterestingInterfaces is an InterfaceFilter that reports whether i is an interesting interface.
-// An interesting interface if it is (a) not owned by Tailscale and (b) routes interesting IP addresses.
-// See UseInterestingIPs for the definition of an interesting IP address.
-func UseInterestingInterfaces(i Interface, ips []netip.Prefix) bool {
-	return !isTailscaleInterface(i.Name, ips) && anyInterestingIP(ips)
-}
-
-// UseInterestingIPs is an IPFilter that reports whether ip is an interesting IP address.
-// An IP address is interesting if it is neither a loopback nor a link local unicast IP address.
-func UseInterestingIPs(ip netip.Addr) bool {
-	return isInterestingIP(ip)
-}
-
-// UseAllInterfaces is an InterfaceFilter that includes all interfaces.
-func UseAllInterfaces(i Interface, ips []netip.Prefix) bool { return true }
-
-// UseAllIPs is an IPFilter that includes all IPs.
-func UseAllIPs(ips netip.Addr) bool { return true }
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
 // AnyInterfaceUp reports whether any interface seems like it has Internet access.
 func (s *State) AnyInterfaceUp() bool {
-	if runtime.GOOS == "js" {
+	if runtime.GOOS == "js" || runtime.GOOS == "tamago" {
 		return true
 	}
 	return s != nil && (s.HaveV4 || s.HaveV6)
+}
+
+func netAddrsEqual(a, b []net.Addr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, av := range a {
+		if av.Network() != b[i].Network() || av.String() != b[i].String() {
+			return false
+		}
+	}
+	return true
 }
 
 func hasTailscaleIP(pfxs []netip.Prefix) bool {
@@ -506,6 +442,8 @@ var getPAC func() string
 // GetState returns the state of all the current machine's network interfaces.
 //
 // It does not set the returned State.IsExpensive. The caller can populate that.
+//
+// Deprecated: use netmon.Monitor.InterfaceState instead.
 func GetState() (*State, error) {
 	s := &State{
 		InterfaceIPs: make(map[string][]netip.Prefix),
@@ -662,11 +600,23 @@ var (
 	v6Global1 = netip.MustParsePrefix("2000::/3")
 )
 
-// anyInterestingIP reports whether pfxs contains any IP that matches
-// isInterestingIP.
-func anyInterestingIP(pfxs []netip.Prefix) bool {
-	for _, pfx := range pfxs {
-		if isInterestingIP(pfx.Addr()) {
+// keepInterfaceInStringSummary reports whether the named interface should be included
+// in the String method's summary string.
+func (s *State) keepInterfaceInStringSummary(ifName string) bool {
+	iface, ok := s.Interface[ifName]
+	if !ok || iface.Interface == nil {
+		return false
+	}
+	if ifName == s.DefaultRouteInterface {
+		return true
+	}
+	up := iface.IsUp()
+	for _, p := range s.InterfaceIPs[ifName] {
+		a := p.Addr()
+		if a.IsLinkLocalUnicast() || a.IsLoopback() {
+			continue
+		}
+		if up || a.IsGlobalUnicast() || a.IsPrivate() {
 			return true
 		}
 	}
@@ -675,9 +625,12 @@ func anyInterestingIP(pfxs []netip.Prefix) bool {
 
 // isInterestingIP reports whether ip is an interesting IP that we
 // should log in interfaces.State logging. We don't need to show
-// localhost or link-local addresses.
+// loopback, link-local addresses, or non-Tailscale ULA addresses.
 func isInterestingIP(ip netip.Addr) bool {
-	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	return true
 }
 
 var altNetInterfaces func() ([]Interface, error)

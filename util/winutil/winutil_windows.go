@@ -4,24 +4,21 @@
 package winutil
 
 import (
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
+	"os"
 	"os/exec"
 	"os/user"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf16"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"tailscale.com/types/logger"
 )
 
 const (
@@ -31,6 +28,9 @@ const (
 
 // ErrNoShell is returned when the shell process is not found.
 var ErrNoShell = errors.New("no Shell process is present")
+
+// ErrNoValue is returned when the value doesn't exist in the registry.
+var ErrNoValue = registry.ErrNotExist
 
 // GetDesktopPID searches the PID of the process that's running the
 // currently active desktop. Returns ErrNoShell if the shell is not present.
@@ -50,44 +50,44 @@ func GetDesktopPID() (uint32, error) {
 	return pid, nil
 }
 
-func getPolicyString(name, defval string) string {
+func getPolicyString(name string) (string, error) {
 	s, err := getRegStringInternal(regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
-		return getRegString(name, defval)
+		return getRegString(name)
 	}
-	return s
+	return s, err
 }
 
-func getPolicyInteger(name string, defval uint64) uint64 {
+func getRegString(name string) (string, error) {
+	s, err := getRegStringInternal(regBase, name)
+	if err != nil {
+		return "", err
+	}
+	return s, err
+}
+
+func getPolicyInteger(name string) (uint64, error) {
 	i, err := getRegIntegerInternal(regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
-		return getRegInteger(name, defval)
+		return getRegInteger(name)
 	}
-	return i
+	return i, err
 }
 
-func getRegString(name, defval string) string {
-	s, err := getRegStringInternal(regBase, name)
-	if err != nil {
-		return defval
-	}
-	return s
-}
-
-func getRegInteger(name string, defval uint64) uint64 {
+func getRegInteger(name string) (uint64, error) {
 	i, err := getRegIntegerInternal(regBase, name)
 	if err != nil {
-		return defval
+		return 0, err
 	}
-	return i
+	return i, err
 }
 
 func getRegStringInternal(subKey, name string) (string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return "", err
@@ -96,7 +96,7 @@ func getRegStringInternal(subKey, name string) (string, error) {
 
 	val, _, err := key.GetStringValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
 		return "", err
@@ -117,7 +117,7 @@ func GetRegStrings(name string, defval []string) []string {
 func getRegStringsInternal(subKey, name string) ([]string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return nil, err
@@ -126,7 +126,7 @@ func getRegStringsInternal(subKey, name string) ([]string, error) {
 
 	val, _, err := key.GetStringsValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
 		return nil, err
@@ -157,7 +157,7 @@ func DeleteRegValue(name string) error {
 
 func deleteRegValueInternal(subKey, name string) error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.SET_VALUE)
-	if err == registry.ErrNotExist {
+	if err == ErrNoValue {
 		return nil
 	}
 	if err != nil {
@@ -167,7 +167,7 @@ func deleteRegValueInternal(subKey, name string) error {
 	defer key.Close()
 
 	err = key.DeleteValue(name)
-	if err == registry.ErrNotExist {
+	if err == ErrNoValue {
 		err = nil
 	}
 	return err
@@ -176,7 +176,7 @@ func deleteRegValueInternal(subKey, name string) error {
 func getRegIntegerInternal(subKey, name string) (uint64, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return 0, err
@@ -185,7 +185,7 @@ func getRegIntegerInternal(subKey, name string) (uint64, error) {
 
 	val, _, err := key.GetIntegerValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetIntegerValue(%v): %v", name, err)
 		}
 		return 0, err
@@ -558,164 +558,56 @@ func findHomeDirInRegistry(uid string) (dir string, err error) {
 }
 
 const (
-	maxBinaryValueLen  = 128   // we'll truncate any binary values longer than this
-	maxRegValueNameLen = 16384 // maximum length supported by Windows + 1
-	initialValueBufLen = 80    // large enough to contain a stringified GUID encoded as UTF-16
+	_RESTART_NO_CRASH  = 1
+	_RESTART_NO_HANG   = 2
+	_RESTART_NO_PATCH  = 4
+	_RESTART_NO_REBOOT = 8
 )
 
-const (
-	supportInfoKeyRegistry = "Registry"
-)
+func registerForRestart(opts RegisterForRestartOpts) error {
+	var flags uint32
 
-// LogSupportInfo obtains information useful for troubleshooting and support,
-// and writes it to the log as a JSON-encoded object.
-func LogSupportInfo(logf logger.Logf) {
-	var b strings.Builder
-	if err := getSupportInfo(&b); err != nil {
-		log.Printf("error encoding support info: %v", err)
-		return
+	if !opts.RestartOnCrash {
+		flags |= _RESTART_NO_CRASH
 	}
-	logf("Support Info: %s", b.String())
-}
-
-func getSupportInfo(w io.Writer) error {
-	output := make(map[string]any)
-
-	regInfo, err := getRegistrySupportInfo(registry.LOCAL_MACHINE, []string{regPolicyBase, regBase})
-	if err == nil {
-		output[supportInfoKeyRegistry] = regInfo
-	} else {
-		output[supportInfoKeyRegistry] = err
+	if !opts.RestartOnHang {
+		flags |= _RESTART_NO_HANG
+	}
+	if !opts.RestartOnUpgrade {
+		flags |= _RESTART_NO_PATCH
+	}
+	if !opts.RestartOnReboot {
+		flags |= _RESTART_NO_REBOOT
 	}
 
-	enc := json.NewEncoder(w)
-	return enc.Encode(output)
-}
-
-type getRegistrySupportInfoBufs struct {
-	nameBuf  []uint16
-	valueBuf []byte
-}
-
-func getRegistrySupportInfo(root registry.Key, subKeys []string) (map[string]any, error) {
-	bufs := getRegistrySupportInfoBufs{
-		nameBuf:  make([]uint16, maxRegValueNameLen),
-		valueBuf: make([]byte, initialValueBufLen),
-	}
-
-	output := make(map[string]any)
-
-	for _, subKey := range subKeys {
-		if err := getRegSubKey(root, subKey, 5, &bufs, output); err != nil && !errors.Is(err, registry.ErrNotExist) {
-			return nil, fmt.Errorf("getRegistrySupportInfo: %w", err)
-		}
-	}
-
-	return output, nil
-}
-
-func keyString(key registry.Key, subKey string) string {
-	var keyStr string
-	switch key {
-	case registry.CLASSES_ROOT:
-		keyStr = `HKCR\`
-	case registry.CURRENT_USER:
-		keyStr = `HKCU\`
-	case registry.LOCAL_MACHINE:
-		keyStr = `HKLM\`
-	case registry.USERS:
-		keyStr = `HKU\`
-	case registry.CURRENT_CONFIG:
-		keyStr = `HKCC\`
-	case registry.PERFORMANCE_DATA:
-		keyStr = `HKPD\`
-	default:
-	}
-
-	return keyStr + subKey
-}
-
-func getRegSubKey(key registry.Key, subKey string, recursionLimit int, bufs *getRegistrySupportInfoBufs, output map[string]any) error {
-	keyStr := keyString(key, subKey)
-	k, err := registry.OpenKey(key, subKey, registry.READ)
-	if err != nil {
-		return fmt.Errorf("opening %q: %w", keyStr, err)
-	}
-	defer k.Close()
-
-	kv := make(map[string]any)
-	index := uint32(0)
-
-loopValues:
-	for {
-		nbuf := bufs.nameBuf
-		nameLen := uint32(len(nbuf))
-		valueType := uint32(0)
-		vbuf := bufs.valueBuf
-		valueLen := uint32(len(vbuf))
-
-		err := regEnumValue(k, index, &nbuf[0], &nameLen, nil, &valueType, &vbuf[0], &valueLen)
-		switch err {
-		case windows.ERROR_NO_MORE_ITEMS:
-			break loopValues
-		case windows.ERROR_MORE_DATA:
-			bufs.valueBuf = make([]byte, valueLen)
-			continue
-		case nil:
-		default:
-			return fmt.Errorf("regEnumValue: %w", err)
+	var cmdLine *uint16
+	if opts.UseCmdLineArgs {
+		if len(opts.CmdLineArgs) == 0 {
+			// re-use our current args, excluding the exe name itself
+			opts.CmdLineArgs = os.Args[1:]
 		}
 
-		var value any
-
-		switch valueType {
-		case registry.SZ, registry.EXPAND_SZ:
-			value = windows.UTF16PtrToString((*uint16)(unsafe.Pointer(&vbuf[0])))
-		case registry.BINARY:
-			if valueLen > maxBinaryValueLen {
-				valueLen = maxBinaryValueLen
+		var b strings.Builder
+		for _, arg := range opts.CmdLineArgs {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
 			}
-			value = append([]byte{}, vbuf[:valueLen]...)
-		case registry.DWORD:
-			value = binary.LittleEndian.Uint32(vbuf[:4])
-		case registry.MULTI_SZ:
-			// Adapted from x/sys/windows/registry/(Key).GetStringsValue
-			p := (*[1 << 29]uint16)(unsafe.Pointer(&vbuf[0]))[: valueLen/2 : valueLen/2]
-			var strs []string
-			if len(p) > 0 {
-				if p[len(p)-1] == 0 {
-					p = p[:len(p)-1]
-				}
-				strs = make([]string, 0, 5)
-				from := 0
-				for i, c := range p {
-					if c == 0 {
-						strs = append(strs, string(utf16.Decode(p[from:i])))
-						from = i + 1
-					}
-				}
-			}
-			value = strs
-		case registry.QWORD:
-			value = binary.LittleEndian.Uint64(vbuf[:8])
-		default:
-			value = fmt.Sprintf("<unsupported value type %d>", valueType)
+			b.WriteString(windows.EscapeArg(arg))
 		}
 
-		kv[windows.UTF16PtrToString(&nbuf[0])] = value
-		index++
-	}
-
-	if recursionLimit > 0 {
-		if sks, err := k.ReadSubKeyNames(0); err == nil {
-			for _, sk := range sks {
-				if err := getRegSubKey(k, sk, recursionLimit-1, bufs, kv); err != nil {
-					return err
-				}
+		if b.Len() > 0 {
+			var err error
+			cmdLine, err = windows.UTF16PtrFromString(b.String())
+			if err != nil {
+				return err
 			}
 		}
 	}
 
-	output[keyStr] = kv
+	hr := registerApplicationRestart(cmdLine, flags)
+	if e := wingoes.ErrorFromHRESULT(hr); e.Failed() {
+		return e
+	}
+
 	return nil
 }

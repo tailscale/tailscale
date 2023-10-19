@@ -10,25 +10,31 @@ import (
 
 	"tailscale.com/release/dist"
 
-	_ "github.com/goreleaser/nfpm/deb"
-	_ "github.com/goreleaser/nfpm/rpm"
+	_ "github.com/goreleaser/nfpm/v2/deb"
+	_ "github.com/goreleaser/nfpm/v2/rpm"
 )
 
-func Targets() []dist.Target {
+type Signers struct {
+	Tarball dist.Signer
+	RPM     dist.Signer
+}
+
+func Targets(signers Signers) []dist.Target {
 	var ret []dist.Target
 	for goosgoarch := range tarballs {
 		goos, goarch := splitGoosGoarch(goosgoarch)
 		ret = append(ret, &tgzTarget{
-			goenv: map[string]string{
+			goEnv: map[string]string{
 				"GOOS":   goos,
 				"GOARCH": goarch,
 			},
+			signer: signers.Tarball,
 		})
 	}
 	for goosgoarch := range debs {
 		goos, goarch := splitGoosGoarch(goosgoarch)
 		ret = append(ret, &debTarget{
-			goenv: map[string]string{
+			goEnv: map[string]string{
 				"GOOS":   goos,
 				"GOARCH": goarch,
 			},
@@ -37,10 +43,11 @@ func Targets() []dist.Target {
 	for goosgoarch := range rpms {
 		goos, goarch := splitGoosGoarch(goosgoarch)
 		ret = append(ret, &rpmTarget{
-			goenv: map[string]string{
+			goEnv: map[string]string{
 				"GOOS":   goos,
 				"GOARCH": goarch,
 			},
+			signer: signers.RPM,
 		})
 	}
 
@@ -48,11 +55,12 @@ func Targets() []dist.Target {
 	// an ancient architecture.
 	ret = append(ret, &tgzTarget{
 		filenameArch: "geode",
-		goenv: map[string]string{
+		goEnv: map[string]string{
 			"GOOS":   "linux",
 			"GOARCH": "386",
 			"GO386":  "softfloat",
 		},
+		signer: signers.Tarball,
 	})
 
 	sort.Slice(ret, func(i, j int) bool {

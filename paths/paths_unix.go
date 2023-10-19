@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !windows && !js && !wasip1
+//go:build !windows && !wasm && !plan9 && !tamago
 
 package paths
 
@@ -17,6 +17,7 @@ import (
 
 func init() {
 	stateFileFunc = stateFileUnix
+	ensureStateDirPerms = ensureStateDirPermsUnix
 }
 
 func statePath() string {
@@ -65,7 +66,7 @@ func xdgDataHome() string {
 	return filepath.Join(os.Getenv("HOME"), ".local/share")
 }
 
-func ensureStateDirPerms(dir string) error {
+func ensureStateDirPermsUnix(dir string) error {
 	if filepath.Base(dir) != "tailscale" {
 		return nil
 	}
@@ -82,9 +83,4 @@ func ensureStateDirPerms(dir string) error {
 		return nil
 	}
 	return os.Chmod(dir, perm)
-}
-
-// LegacyStateFilePath is not applicable to UNIX; it is just stubbed out.
-func LegacyStateFilePath() string {
-	return ""
 }

@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -24,6 +25,13 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
+
+func epFromTyped(eps []tailcfg.Endpoint) (ret []netip.AddrPort) {
+	for _, ep := range eps {
+		ret = append(ret, ep.Addr)
+	}
+	return
+}
 
 func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.Prefix) {
 	l1 := logger.WithPrefix(logf, "e1: ")
@@ -38,11 +46,13 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf: logger.WithPrefix(logf, "tun1: "),
 		traf: traf,
 	}
+	s1 := new(tsd.System)
 	e1, err := wgengine.NewUserspaceEngine(l1, wgengine.Config{
-		Router:     router.NewFake(l1),
-		NetMon:     nil,
-		ListenPort: 0,
-		Tun:        t1,
+		Router:       router.NewFake(l1),
+		NetMon:       nil,
+		ListenPort:   0,
+		Tun:          t1,
+		SetSubsystem: s1.Set,
 	})
 	if err != nil {
 		log.Fatalf("e1 init: %v", err)
@@ -62,11 +72,13 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf: logger.WithPrefix(logf, "tun2: "),
 		traf: traf,
 	}
+	s2 := new(tsd.System)
 	e2, err := wgengine.NewUserspaceEngine(l2, wgengine.Config{
-		Router:     router.NewFake(l2),
-		NetMon:     nil,
-		ListenPort: 0,
-		Tun:        t2,
+		Router:       router.NewFake(l2),
+		NetMon:       nil,
+		ListenPort:   0,
+		Tun:          t2,
+		SetSubsystem: s2.Set,
 	})
 	if err != nil {
 		log.Fatalf("e2 init: %v", err)
@@ -91,22 +103,17 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		}
 		logf("e1 status: %v", *st)
 
-		var eps []string
-		for _, ep := range st.LocalAddrs {
-			eps = append(eps, ep.Addr.String())
-		}
-
-		n := tailcfg.Node{
+		n := &tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
 			Name:       "n1",
 			Addresses:  []netip.Prefix{a1},
 			AllowedIPs: []netip.Prefix{a1},
-			Endpoints:  eps,
+			Endpoints:  epFromTyped(st.LocalAddrs),
 		}
 		e2.SetNetworkMap(&netmap.NetworkMap{
 			NodeKey:    k2.Public(),
 			PrivateKey: k2,
-			Peers:      []*tailcfg.Node{&n},
+			Peers:      []tailcfg.NodeView{n.View()},
 		})
 
 		p := wgcfg.Peer{
@@ -114,7 +121,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 			AllowedIPs: []netip.Prefix{a1},
 		}
 		c2.Peers = []wgcfg.Peer{p}
-		e2.Reconfig(&c2, &router.Config{}, new(dns.Config), nil)
+		e2.Reconfig(&c2, &router.Config{}, new(dns.Config))
 		e1waitDoneOnce.Do(wait.Done)
 	})
 
@@ -128,22 +135,17 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		}
 		logf("e2 status: %v", *st)
 
-		var eps []string
-		for _, ep := range st.LocalAddrs {
-			eps = append(eps, ep.Addr.String())
-		}
-
-		n := tailcfg.Node{
+		n := &tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
 			Name:       "n2",
 			Addresses:  []netip.Prefix{a2},
 			AllowedIPs: []netip.Prefix{a2},
-			Endpoints:  eps,
+			Endpoints:  epFromTyped(st.LocalAddrs),
 		}
 		e1.SetNetworkMap(&netmap.NetworkMap{
 			NodeKey:    k1.Public(),
 			PrivateKey: k1,
-			Peers:      []*tailcfg.Node{&n},
+			Peers:      []tailcfg.NodeView{n.View()},
 		})
 
 		p := wgcfg.Peer{
@@ -151,13 +153,13 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 			AllowedIPs: []netip.Prefix{a2},
 		}
 		c1.Peers = []wgcfg.Peer{p}
-		e1.Reconfig(&c1, &router.Config{}, new(dns.Config), nil)
+		e1.Reconfig(&c1, &router.Config{}, new(dns.Config))
 		e2waitDoneOnce.Do(wait.Done)
 	})
 
 	// Not using DERP in this test (for now?).
-	e1.SetDERPMap(&tailcfg.DERPMap{})
-	e2.SetDERPMap(&tailcfg.DERPMap{})
+	s1.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{})
+	s2.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{})
 
 	wait.Wait()
 }

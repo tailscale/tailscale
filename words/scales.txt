@@ -27,6 +27,7 @@ alligator
 butterfly
 iguana
 pineapplefish
+pinecone
 anaconda
 puffin
 cardassian

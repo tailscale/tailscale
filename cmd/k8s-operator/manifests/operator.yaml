@@ -48,7 +48,10 @@ metadata:
   name: tailscale-operator
 rules:
 - apiGroups: [""]
-  resources: ["services", "services/status"]
+  resources: ["events", "services", "services/status"]
+  verbs: ["*"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses", "ingresses/status"]
   verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -148,8 +151,10 @@ spec:
               value: tailscale/tailscale:unstable
             - name: PROXY_TAGS
               value: tag:k8s
-            - name: AUTH_PROXY
+            - name: APISERVER_PROXY
               value: "false"
+            - name: PROXY_FIREWALL_MODE
+              value: auto
           volumeMounts:
           - name: oauth
             mountPath: /oauth

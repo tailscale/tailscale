@@ -40,7 +40,7 @@ var getMachineCertificateSubjectOnce struct {
 // Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 func getMachineCertificateSubject() string {
 	getMachineCertificateSubjectOnce.Do(func() {
-		getMachineCertificateSubjectOnce.v = winutil.GetRegString("MachineCertificateSubject", "")
+		getMachineCertificateSubjectOnce.v, _ = winutil.GetRegString("MachineCertificateSubject")
 	})
 
 	return getMachineCertificateSubjectOnce.v
@@ -127,7 +127,7 @@ func findIdentity(subject string, st certstore.Store) (certstore.Identity, []*x5
 		return nil, nil, err
 	}
 
-	selected, chain := selectIdentityFromSlice(subject, ids, time.Now())
+	selected, chain := selectIdentityFromSlice(subject, ids, clock.Now())
 
 	for _, id := range ids {
 		if id != selected {

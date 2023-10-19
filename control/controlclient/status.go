@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"tailscale.com/types/empty"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
@@ -38,6 +37,10 @@ const (
 	StateSynchronized // connected and received map update
 )
 
+func (s State) AppendText(b []byte) ([]byte, error) {
+	return append(b, s.String()...), nil
+}
+
 func (s State) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
 }
@@ -62,20 +65,43 @@ func (s State) String() string {
 }
 
 type Status struct {
-	_              structs.Incomparable
-	LoginFinished  *empty.Message // nonempty when login finishes
-	LogoutFinished *empty.Message // nonempty when logout finishes
-	Err            error
-	URL            string             // interactive URL to visit to finish logging in
-	NetMap         *netmap.NetworkMap // server-pushed configuration
+	_ structs.Incomparable
 
-	// The internal state should not be exposed outside this
+	// Err, if non-nil, is an error that occurred while logging in.
+	//
+	// If it's of type UserVisibleError then it's meant to be shown to users in
+	// their Tailscale client. Otherwise it's just logged to tailscaled's logs.
+	Err error
+
+	// URL, if non-empty, is the interactive URL to visit to finish logging in.
+	URL string
+
+	// NetMap is the latest server-pushed state of the tailnet network.
+	NetMap *netmap.NetworkMap
+
+	// Persist, when Valid, is the locally persisted configuration.
+	//
+	// TODO(bradfitz,maisem): clarify this.
+	Persist persist.PersistView
+
+	// state is the internal state. It should not be exposed outside this
 	// package, but we have some automated tests elsewhere that need to
-	// use them. Please don't use these fields.
+	// use it via the StateForTest accessor.
 	// TODO(apenwarr): Unexport or remove these.
-	State   State
-	Persist *persist.PersistView // locally persisted configuration
+	state State
 }
+
+// LoginFinished reports whether the controlclient is in its "StateAuthenticated"
+// state where it's in a happy register state but not yet in a map poll.
+//
+// TODO(bradfitz): delete this and everything around Status.state.
+func (s *Status) LoginFinished() bool { return s.state == StateAuthenticated }
+
+// StateForTest returns the internal state of s for tests only.
+func (s *Status) StateForTest() State { return s.state }
+
+// SetStateForTest sets the internal state of s for tests only.
+func (s *Status) SetStateForTest(state State) { s.state = state }
 
 // Equal reports whether s and s2 are equal.
 func (s *Status) Equal(s2 *Status) bool {
@@ -83,13 +109,11 @@ func (s *Status) Equal(s2 *Status) bool {
 		return true
 	}
 	return s != nil && s2 != nil &&
-		(s.LoginFinished == nil) == (s2.LoginFinished == nil) &&
-		(s.LogoutFinished == nil) == (s2.LogoutFinished == nil) &&
 		s.Err == s2.Err &&
 		s.URL == s2.URL &&
+		s.state == s2.state &&
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
-		reflect.DeepEqual(s.NetMap, s2.NetMap) &&
-		s.State == s2.State
+		reflect.DeepEqual(s.NetMap, s2.NetMap)
 }
 
 func (s Status) String() string {
@@ -97,5 +121,5 @@ func (s Status) String() string {
 	if err != nil {
 		panic(err)
 	}
-	return s.State.String() + " " + string(b)
+	return s.state.String() + " " + string(b)
 }

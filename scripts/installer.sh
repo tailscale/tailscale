@@ -119,7 +119,7 @@ main() {
 				VERSION="bionic"
 				APT_KEY_TYPE="legacy"
 				;;
-			pureos)
+			pureos|kaisen)
 				OS="debian"
 				PACKAGETYPE="apt"
 				VERSION="bullseye"
@@ -159,8 +159,10 @@ main() {
 				PACKAGETYPE="apt"
 				if [ "$VERSION_ID" -lt 20 ]; then
 					APT_KEY_TYPE="legacy"
+					VERSION="buster"
 				else
 					APT_KEY_TYPE="keyring"
+					VERSION="bullseye"
 				fi
 				;;
 			centos)
@@ -192,7 +194,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky|almalinux|nobara|openmandriva|sangoma|risios)
+			rocky|almalinux|nobara|openmandriva|sangoma|risios|cloudlinux|alinux|fedora-asahi-remix)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
@@ -222,7 +224,7 @@ main() {
 				VERSION="leap/15.4"
 				PACKAGETYPE="zypper"
 				;;
-			arch|archarm|endeavouros|blendos)
+			arch|archarm|endeavouros|blendos|garuda)
 				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"

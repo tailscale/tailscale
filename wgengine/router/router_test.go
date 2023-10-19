@@ -21,8 +21,8 @@ func mustCIDRs(ss ...string) []netip.Prefix {
 
 func TestConfigEqual(t *testing.T) {
 	testedFields := []string{
-		"LocalAddrs", "Routes", "LocalRoutes", "SubnetRoutes",
-		"SNATSubnetRoutes", "NetfilterMode",
+		"LocalAddrs", "Routes", "LocalRoutes", "NewMTU",
+		"SubnetRoutes", "SNATSubnetRoutes", "NetfilterMode",
 	}
 	configType := reflect.TypeOf(Config{})
 	configFields := []string{}
@@ -133,6 +133,16 @@ func TestConfigEqual(t *testing.T) {
 			&Config{NetfilterMode: preftype.NetfilterNoDivert},
 			&Config{NetfilterMode: preftype.NetfilterNoDivert},
 			true,
+		},
+		{
+			&Config{NewMTU: 0},
+			&Config{NewMTU: 0},
+			true,
+		},
+		{
+			&Config{NewMTU: 1280},
+			&Config{NewMTU: 0},
+			false,
 		},
 	}
 	for i, tt := range tests {

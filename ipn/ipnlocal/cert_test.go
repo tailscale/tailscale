@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"golang.org/x/exp/maps"
 	"tailscale.com/ipn/store/mem"
 )
 
@@ -112,7 +111,7 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 	reset := func() {
 		renewMu.Lock()
 		defer renewMu.Unlock()
-		maps.Clear(lastRenewCheck)
+		clear(renewCertAt)
 	}
 
 	mustMakePair := func(template *x509.Certificate) *TLSCertKeyPair {
@@ -173,11 +172,12 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 			want:      false,
 		},
 	}
+	b := new(LocalBackend)
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
 			reset()
 
-			ret, err := shouldStartDomainRenewal("example.com", now, mustMakePair(&x509.Certificate{
+			ret, err := b.domainRenewalTimeByExpiry(mustMakePair(&x509.Certificate{
 				SerialNumber: big.NewInt(2019),
 				Subject:      subject,
 				NotBefore:    tt.notBefore,
@@ -191,8 +191,9 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 					t.Errorf("got err=%q, want %q", err.Error(), tt.wantErr)
 				}
 			} else {
-				if ret != tt.want {
-					t.Errorf("got ret=%v, want %v", ret, tt.want)
+				renew := now.After(ret)
+				if renew != tt.want {
+					t.Errorf("got renew=%v (ret=%v), want renew %v", renew, ret, tt.want)
 				}
 			}
 		})

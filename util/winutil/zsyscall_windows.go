@@ -6,8 +6,8 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 )
 
 var _ unsafe.Pointer
@@ -40,9 +40,10 @@ func errnoErr(e syscall.Errno) error {
 
 var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
+	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
-	procQueryServiceConfig2W = modadvapi32.NewProc("QueryServiceConfig2W")
-	procRegEnumValueW        = modadvapi32.NewProc("RegEnumValueW")
+	procQueryServiceConfig2W       = modadvapi32.NewProc("QueryServiceConfig2W")
+	procRegisterApplicationRestart = modkernel32.NewProc("RegisterApplicationRestart")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
@@ -53,10 +54,8 @@ func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, b
 	return
 }
 
-func regEnumValue(key registry.Key, index uint32, valueName *uint16, valueNameLen *uint32, reserved *uint32, valueType *uint32, pData *byte, cbData *uint32) (ret error) {
-	r0, _, _ := syscall.Syscall9(procRegEnumValueW.Addr(), 8, uintptr(key), uintptr(index), uintptr(unsafe.Pointer(valueName)), uintptr(unsafe.Pointer(valueNameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(valueType)), uintptr(unsafe.Pointer(pData)), uintptr(unsafe.Pointer(cbData)), 0)
-	if r0 != 0 {
-		ret = syscall.Errno(r0)
-	}
+func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
+	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
+	ret = wingoes.HRESULT(r0)
 	return
 }

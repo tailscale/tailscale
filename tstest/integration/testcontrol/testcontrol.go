@@ -7,7 +7,6 @@ package testcontrol
 import (
 	"bytes"
 	"context"
-	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -19,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,7 +26,6 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
-	"golang.org/x/exp/slices"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
@@ -34,6 +33,9 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/must"
+	"tailscale.com/util/rands"
+	"tailscale.com/util/set"
 )
 
 const msgLimit = 1 << 20 // encrypted message length limit
@@ -44,6 +46,7 @@ type Server struct {
 	Logf           logger.Logf      // nil means to use the log package
 	DERPMap        *tailcfg.DERPMap // nil means to use prod DERP map
 	RequireAuth    bool
+	RequireAuthKey string // required authkey for all nodes
 	Verbose        bool
 	DNSConfig      *tailcfg.DNSConfig // nil means no DNS config
 	MagicDNSDomain string
@@ -65,7 +68,11 @@ type Server struct {
 	// MapResponses sent to clients. It is keyed by the requesting nodes
 	// public key, and then the peer node's public key. The value is the
 	// masquerade address to use for that peer.
-	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV4MasqAddrForThisPeer IP
+	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV{4,6}MasqAddrForThisPeer IP
+
+	// suppressAutoMapResponses is the set of nodes that should not be sent
+	// automatic map responses from serveMap. (They should only get manually sent ones)
+	suppressAutoMapResponses set.Set[key.NodePublic]
 
 	noisePubKey  key.MachinePublic
 	noisePrivKey key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
@@ -76,8 +83,8 @@ type Server struct {
 	updates       map[tailcfg.NodeID]chan updateType
 	authPath      map[string]*AuthPath
 	nodeKeyAuthed map[key.NodePublic]bool // key => true once authenticated
-	pingReqsToAdd map[key.NodePublic]*tailcfg.PingRequest
-	allExpired    bool // All nodes will be told their node key is expired.
+	msgToSend     map[key.NodePublic]any  // value is *tailcfg.PingRequest or entire *tailcfg.MapResponse
+	allExpired    bool                    // All nodes will be told their node key is expired.
 }
 
 // BaseURL returns the server's base URL, without trailing slash.
@@ -146,13 +153,32 @@ func (s *Server) AwaitNodeInMapRequest(ctx context.Context, k key.NodePublic) er
 	}
 }
 
-// AddPingRequest sends the ping pr to nodeKeyDst. It reports whether it did so. That is,
-// it reports whether nodeKeyDst was connected.
+// AddPingRequest sends the ping pr to nodeKeyDst.
+//
+// It reports whether the message was enqueued. That is, it reports whether
+// nodeKeyDst was connected.
 func (s *Server) AddPingRequest(nodeKeyDst key.NodePublic, pr *tailcfg.PingRequest) bool {
+	return s.addDebugMessage(nodeKeyDst, pr)
+}
+
+// AddRawMapResponse delivers the raw MapResponse mr to nodeKeyDst. It's meant
+// for testing incremental map updates.
+//
+// Once AddRawMapResponse has been sent to a node, all future automatic
+// MapResponses to that node will be suppressed and only explicit MapResponses
+// injected via AddRawMapResponse will be sent.
+//
+// It reports whether the message was enqueued. That is, it reports whether
+// nodeKeyDst was connected.
+func (s *Server) AddRawMapResponse(nodeKeyDst key.NodePublic, mr *tailcfg.MapResponse) bool {
+	return s.addDebugMessage(nodeKeyDst, mr)
+}
+
+func (s *Server) addDebugMessage(nodeKeyDst key.NodePublic, msg any) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.pingReqsToAdd == nil {
-		s.pingReqsToAdd = map[key.NodePublic]*tailcfg.PingRequest{}
+	if s.msgToSend == nil {
+		s.msgToSend = map[key.NodePublic]any{}
 	}
 	// Now send the update to the channel
 	node := s.nodeLocked(nodeKeyDst)
@@ -160,7 +186,14 @@ func (s *Server) AddPingRequest(nodeKeyDst key.NodePublic, pr *tailcfg.PingReque
 		return false
 	}
 
-	s.pingReqsToAdd[nodeKeyDst] = pr
+	if _, ok := msg.(*tailcfg.MapResponse); ok {
+		if s.suppressAutoMapResponses == nil {
+			s.suppressAutoMapResponses = set.Set[key.NodePublic]{}
+		}
+		s.suppressAutoMapResponses.Add(nodeKeyDst)
+	}
+
+	s.msgToSend[nodeKeyDst] = msg
 	nodeID := node.ID
 	oldUpdatesCh := s.updates[nodeID]
 	return sendUpdate(oldUpdatesCh, updateDebugInjection)
@@ -299,7 +332,7 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 // Node masquerades as for the Peer.
 //
 // Setting this will have future MapResponses for Node to have
-// Peer.SelfNodeV4MasqAddrForThisPeer set to NodeMasqueradesAs.
+// Peer.SelfNodeV{4,6}MasqAddrForThisPeer set to NodeMasqueradesAs.
 // MapResponses for the Peer will now see Node.Addresses as
 // NodeMasqueradesAs.
 type MasqueradePair struct {
@@ -400,6 +433,8 @@ func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
 	return nodes
 }
 
+const domain = "fake-control.example.net"
+
 func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -413,7 +448,6 @@ func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login)
 		return u, s.logins[nodeKey]
 	}
 	id := tailcfg.UserID(len(s.users) + 1)
-	domain := "fake-control.example.net"
 	loginName := fmt.Sprintf("user-%d@%s", id, domain)
 	displayName := fmt.Sprintf("User %d", id)
 	login := &tailcfg.Login{
@@ -422,13 +456,11 @@ func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login)
 		LoginName:     loginName,
 		DisplayName:   displayName,
 		ProfilePicURL: "https://tailscale.com/static/images/marketing/team-carney.jpg",
-		Domain:        domain,
 	}
 	user := &tailcfg.User{
 		ID:          id,
 		LoginName:   loginName,
 		DisplayName: displayName,
-		Domain:      domain,
 		Logins:      []tailcfg.LoginID{login.ID},
 	}
 	s.users[nodeKey] = user
@@ -508,6 +540,14 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		j, _ := json.MarshalIndent(req, "", "\t")
 		log.Printf("Got %T: %s", req, j)
 	}
+	if s.RequireAuthKey != "" && req.Auth.AuthKey != s.RequireAuthKey {
+		res := must.Get(s.encode(mkey, false, tailcfg.RegisterResponse{
+			Error: "invalid authkey",
+		}))
+		w.WriteHeader(200)
+		w.Write(res)
+		return
+	}
 
 	// If this is a followup request, wait until interactive followup URL visit complete.
 	if req.Followup != "" {
@@ -555,7 +595,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		AllowedIPs:        allowedIPs,
 		Hostinfo:          req.Hostinfo.View(),
 		Name:              req.Hostinfo.Hostname,
-		Capabilities: []string{
+		Capabilities: []tailcfg.NodeCapability{
+			tailcfg.CapabilityHTTPS,
 			tailcfg.NodeAttrFunnel,
 			tailcfg.CapabilityFunnelPorts + "?ports=8080,443",
 		},
@@ -569,9 +610,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 
 	authURL := ""
 	if requireAuth {
-		randHex := make([]byte, 10)
-		crand.Read(randHex)
-		authPath := fmt.Sprintf("/auth/%x", randHex)
+		authPath := fmt.Sprintf("/auth/%s", rands.HexString(20))
 		s.addAuthPath(authPath, nk)
 		authURL = s.BaseURL() + authPath
 	}
@@ -604,6 +643,7 @@ const (
 	updateSelfChanged
 
 	// updateDebugInjection is an update used for PingRequests
+	// or a raw MapResponse.
 	updateDebugInjection
 )
 
@@ -727,32 +767,48 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 
 	w.WriteHeader(200)
 	for {
-		res, err := s.MapResponse(req)
-		if err != nil {
-			// TODO: log
+		if resBytes, ok := s.takeRawMapMessage(req.NodeKey); ok {
+			if err := s.sendMapMsg(w, mkey, compress, resBytes); err != nil {
+				s.logf("sendMapMsg of raw message: %v", err)
+				return
+			}
+			if streaming {
+				continue
+			}
 			return
-		}
-		if res == nil {
-			return // done
 		}
 
-		s.mu.Lock()
-		allExpired := s.allExpired
-		s.mu.Unlock()
-		if allExpired {
-			res.Node.KeyExpiry = time.Now().Add(-1 * time.Minute)
-		}
-		// TODO: add minner if/when needed
-		resBytes, err := json.Marshal(res)
-		if err != nil {
-			s.logf("json.Marshal: %v", err)
-			return
-		}
-		if err := s.sendMapMsg(w, mkey, compress, resBytes); err != nil {
-			return
+		if s.canGenerateAutomaticMapResponseFor(req.NodeKey) {
+			res, err := s.MapResponse(req)
+			if err != nil {
+				// TODO: log
+				return
+			}
+			if res == nil {
+				return // done
+			}
+
+			s.mu.Lock()
+			allExpired := s.allExpired
+			s.mu.Unlock()
+			if allExpired {
+				res.Node.KeyExpiry = time.Now().Add(-1 * time.Minute)
+			}
+			// TODO: add minner if/when needed
+			resBytes, err := json.Marshal(res)
+			if err != nil {
+				s.logf("json.Marshal: %v", err)
+				return
+			}
+			if err := s.sendMapMsg(w, mkey, compress, resBytes); err != nil {
+				return
+			}
 		}
 		if !streaming {
 			return
+		}
+		if s.hasPendingRawMapMessage(req.NodeKey) {
+			continue
 		}
 	keepAliveLoop:
 		for {
@@ -796,7 +852,7 @@ func packetFilterWithIngressCaps() []tailcfg.FilterRule {
 		CapGrant: []tailcfg.CapGrant{
 			{
 				Dsts: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
-				Caps: []string{tailcfg.CapabilityIngress},
+				Caps: []tailcfg.PeerCapability{tailcfg.PeerCapabilityIngress},
 			},
 		},
 	})
@@ -813,6 +869,8 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		// node key rotated away (once test server supports that)
 		return nil, nil
 	}
+	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
+
 	user, _ := s.getUser(nk)
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
 	dns := s.DNSConfig
@@ -826,14 +884,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	res = &tailcfg.MapResponse{
 		Node:            node,
 		DERPMap:         s.DERPMap,
-		Domain:          string(user.Domain),
+		Domain:          domain,
 		CollectServices: "true",
 		PacketFilter:    packetFilterWithIngressCaps(),
-		Debug: &tailcfg.Debug{
-			DisableUPnP: "true",
-		},
-		DNSConfig:   dns,
-		ControlTime: &t,
+		DNSConfig:       dns,
+		ControlTime:     &t,
 	}
 
 	s.mu.Lock()
@@ -844,15 +899,24 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			continue
 		}
 		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
-			p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+			if masqIP.Is6() {
+				p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
+			} else {
+				p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+			}
 		}
 
 		s.mu.Lock()
 		peerAddress := s.masquerades[p.Key][node.Key]
 		s.mu.Unlock()
 		if peerAddress.IsValid() {
-			p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-			p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			if peerAddress.Is6() {
+				p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+				p.AllowedIPs[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			} else {
+				p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+				p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			}
 		}
 		res.Peers = append(res.Peers, p)
 	}
@@ -877,14 +941,44 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	}
 	res.Node.AllowedIPs = res.Node.Addresses
 
-	// Consume the PingRequest while protected by mutex if it exists
+	// Consume a PingRequest while protected by mutex if it exists
 	s.mu.Lock()
-	if pr, ok := s.pingReqsToAdd[nk]; ok {
-		res.PingRequest = pr
-		delete(s.pingReqsToAdd, nk)
+	defer s.mu.Unlock()
+	switch m := s.msgToSend[nk].(type) {
+	case *tailcfg.PingRequest:
+		res.PingRequest = m
+		delete(s.msgToSend, nk)
 	}
-	s.mu.Unlock()
 	return res, nil
+}
+
+func (s *Server) canGenerateAutomaticMapResponseFor(nk key.NodePublic) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.suppressAutoMapResponses.Contains(nk)
+}
+
+func (s *Server) hasPendingRawMapMessage(nk key.NodePublic) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
+	return ok
+}
+
+func (s *Server) takeRawMapMessage(nk key.NodePublic) (mapResJSON []byte, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mr, ok := s.msgToSend[nk].(*tailcfg.MapResponse)
+	if !ok {
+		return nil, false
+	}
+	delete(s.msgToSend, nk)
+	var err error
+	mapResJSON, err = json.Marshal(mr)
+	if err != nil {
+		panic(err)
+	}
+	return mapResJSON, true
 }
 
 func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compress bool, msg any) error {
@@ -956,7 +1050,7 @@ func (s *Server) encode(mkey key.MachinePublic, compress bool, v any) (b []byte,
 //
 // Two types of IPv6 endpoints are considered invalid: link-local
 // addresses, and anything with a zone.
-func filterInvalidIPv6Endpoints(eps []string) []string {
+func filterInvalidIPv6Endpoints(eps []netip.AddrPort) []netip.AddrPort {
 	clean := eps[:0]
 	for _, ep := range eps {
 		if keepClientEndpoint(ep) {
@@ -966,13 +1060,7 @@ func filterInvalidIPv6Endpoints(eps []string) []string {
 	return clean
 }
 
-func keepClientEndpoint(ep string) bool {
-	ipp, err := netip.ParseAddrPort(ep)
-	if err != nil {
-		// Shouldn't have made it this far if we unmarshalled
-		// the incoming JSON response.
-		return false
-	}
+func keepClientEndpoint(ipp netip.AddrPort) bool {
 	ip := ipp.Addr()
 	if ip.Zone() != "" {
 		return false

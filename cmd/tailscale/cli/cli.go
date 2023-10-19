@@ -14,12 +14,12 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/paths"
@@ -120,8 +120,8 @@ change in the future.
 			pingCmd,
 			ncCmd,
 			sshCmd,
-			funnelCmd,
-			serveCmd,
+			funnelCmd(),
+			serveCmd(),
 			versionCmd,
 			webCmd,
 			fileCmd,
@@ -129,15 +129,12 @@ change in the future.
 			certCmd,
 			netlockCmd,
 			licensesCmd,
+			exitNodeCmd,
+			updateCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
 		UsageFunc: usageFunc,
-	}
-	for _, c := range rootCmd.Subcommands {
-		if c.UsageFunc == nil {
-			c.UsageFunc = usageFunc
-		}
 	}
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands,
@@ -149,11 +146,15 @@ change in the future.
 	switch {
 	case slices.Contains(args, "debug"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
-	case slices.Contains(args, "update"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, updateCmd)
 	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
+	}
+
+	for _, c := range rootCmd.Subcommands {
+		if c.UsageFunc == nil {
+			c.UsageFunc = usageFunc
+		}
 	}
 
 	if err := rootCmd.Parse(args); err != nil {

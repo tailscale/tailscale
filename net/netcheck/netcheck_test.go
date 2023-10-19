@@ -159,12 +159,15 @@ func TestBasic(t *testing.T) {
 	defer cleanup()
 
 	c := &Client{
-		Logf:        t.Logf,
-		UDPBindAddr: "127.0.0.1:0",
+		Logf: t.Logf,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
+
+	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
 	if err != nil {
@@ -264,6 +267,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	tests := []struct {
 		name        string
 		steps       []step
+		homeParams  *tailcfg.DERPHomeParams
 		wantDERP    int // want PreferredDERP on final step
 		wantPrevLen int // wanted len(c.prev)
 	}{
@@ -327,6 +331,15 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantDERP:    1, // 2 didn't get fast enough
 		},
 		{
+			name: "preferred_derp_hysteresis_no_switch_absolute",
+			steps: []step{
+				{0 * time.Second, report("d1", 4*time.Millisecond, "d2", 5*time.Millisecond)},
+				{1 * time.Second, report("d1", 4*time.Millisecond, "d2", 1*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // 2 is 50%+ faster, but the absolute diff is <10ms
+		},
+		{
 			name: "preferred_derp_hysteresis_do_switch",
 			steps: []step{
 				{0 * time.Second, report("d1", 4, "d2", 5)},
@@ -335,6 +348,52 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 2,
 			wantDERP:    2, // 2 got fast enough
 		},
+		{
+			name: "derp_home_params",
+			homeParams: &tailcfg.DERPHomeParams{
+				RegionScore: map[int]float64{
+					1: 2.0 / 3, // 66%
+				},
+			},
+			steps: []step{
+				// We only use a single step here to avoid
+				// conflating DERP selection as a result of
+				// weight hints with the "stickiness" check
+				// that tries to not change the home DERP
+				// between steps.
+				{1 * time.Second, report("d1", 10, "d2", 8)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    1, // 2 was faster, but not by 50%+
+		},
+		{
+			name: "derp_home_params_high_latency",
+			homeParams: &tailcfg.DERPHomeParams{
+				RegionScore: map[int]float64{
+					1: 2.0 / 3, // 66%
+				},
+			},
+			steps: []step{
+				// See derp_home_params for why this is a single step.
+				{1 * time.Second, report("d1", 100, "d2", 10)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    2, // 2 was faster by more than 50%
+		},
+		{
+			name: "derp_home_params_invalid",
+			homeParams: &tailcfg.DERPHomeParams{
+				RegionScore: map[int]float64{
+					1: 0.0,
+					2: -1.0,
+				},
+			},
+			steps: []step{
+				{1 * time.Second, report("d1", 4, "d2", 5)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -342,9 +401,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			c := &Client{
 				TimeNow: func() time.Time { return fakeTime },
 			}
+			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
 			for _, s := range tt.steps {
 				fakeTime = fakeTime.Add(s.after)
-				c.addReportHistoryAndSetPreferredDERP(s.r)
+				c.addReportHistoryAndSetPreferredDERP(s.r, dm.View())
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r
 			if got, want := len(c.prev), tt.wantPrevLen; got != want {
@@ -794,7 +854,6 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 
 	c := &Client{
 		Logf:              t.Logf,
-		UDPBindAddr:       "127.0.0.1:0",
 		testEnoughRegions: 1,
 
 		// Set the delay long enough that we have time to cancel it
@@ -804,6 +863,10 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
+
+	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
 	if err != nil {
@@ -828,7 +891,6 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestNodeAddrResolve(t *testing.T) {
 	c := &Client{
 		Logf:        t.Logf,
-		UDPBindAddr: "127.0.0.1:0",
 		UseDNSCache: true,
 	}
 
