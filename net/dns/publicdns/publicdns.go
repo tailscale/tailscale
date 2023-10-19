@@ -26,7 +26,10 @@ var dohOfIP = map[netip.Addr]string{} // 8.8.8.8 => "https://..."
 var dohIPsOfBase = map[string][]netip.Addr{}
 var populateOnce sync.Once
 
+// Base URL for the NextDNS DoH service.
 const NextDNSBase = "https://dns.nextdns.io/"
+
+// Base URL for the Control D DoH service.
 const ControlDBase = "https://dns.controld.com/"
 
 // DoHEndpointFromIP returns the DNS-over-HTTPS base URL for a given IP
@@ -280,6 +283,8 @@ func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
 }
 
 // controlDv6Gen generates a Control D IPv6 address from provided ip and id.
+// the id is taken from the DoH query path component and represents a unique resolver configuration.
+// i.e. https://dns.controld.com/hyq3ipr2ct
 func controlDv6Gen(ip netip.Addr, id string) netip.Addr {
 	b := make([]byte, 8)
 	decoded, _ := strconv.ParseUint(id, 36, 64)
