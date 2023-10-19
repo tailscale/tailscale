@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/appctype"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/appctype"
 )
 
 func TestMakeConnectorsFromConfig(t *testing.T) {
