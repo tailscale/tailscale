@@ -2455,16 +2455,18 @@ type QueryFeatureResponse struct {
 // sent to "/machine/webclient/action" or "/machine/webclient/wait".
 // See client/web for usage.
 type WebClientAuthResponse struct {
-	// Message, if non-empty, provides a message for the user.
-	Message string `json:",omitempty"`
-
-	// Complete is true when the session authentication has been completed.
-	Complete bool `json:",omitempty"`
+	// ID is a unique identifier for the session auth request.
+	// It can be supplied to "/machine/webclient/wait" to pause until
+	// the session authentication has been completed.
+	ID string `json:",omitempty"`
 
 	// URL is the link for the user to visit to authenticate the session.
 	//
 	// When empty, there is no action for the user to take.
 	URL string `json:",omitempty"`
+
+	// Complete is true when the session authentication has been completed.
+	Complete bool `json:",omitempty"`
 }
 
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
