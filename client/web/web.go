@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/csrf"
@@ -39,7 +38,8 @@ import (
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
-	lc *tailscale.LocalClient
+	lc      *tailscale.LocalClient
+	timeNow func() time.Time
 
 	devMode     bool
 	tsDebugMode string
@@ -61,8 +61,7 @@ type Server struct {
 	//
 	// The map provides a lookup of the session by cookie value
 	// (browserSession.ID => browserSession).
-	browserSessions  sync.Map
-	controlServerURL atomic.Value // access through getControlServerURL
+	browserSessions sync.Map
 }
 
 const (
@@ -83,7 +82,8 @@ type browserSession struct {
 	ID            string
 	SrcNode       tailcfg.NodeID
 	SrcUser       tailcfg.UserID
-	AuthURL       string // control server URL for user to authenticate the session
+	AuthID        string // from tailcfg.WebClientAuthResponse
+	AuthURL       string // from tailcfg.WebClientAuthResponse
 	Created       time.Time
 	Authenticated bool
 }
@@ -102,7 +102,7 @@ func (s *browserSession) isAuthorized() bool {
 		return false
 	case !s.Authenticated:
 		return false // awaiting auth
-	case s.isExpired(): // TODO: add time field to server?
+	case s.isExpired():
 		return false // expired
 	}
 	return true
@@ -111,7 +111,7 @@ func (s *browserSession) isAuthorized() bool {
 // isExpired reports true if s is expired.
 // 2023-10-05: Sessions expire by default 30 days after creation.
 func (s *browserSession) isExpired() bool {
-	return !s.Created.IsZero() && time.Now().After(s.expires()) // TODO: add time field to server?
+	return !s.Created.IsZero() && time.Now().After(s.expires()) // TODO: use Server.timeNow field
 }
 
 // expires reports when the given session expires.
@@ -132,6 +132,10 @@ type ServerOpts struct {
 	// LocalClient is the tailscale.LocalClient to use for this web server.
 	// If nil, a new one will be created.
 	LocalClient *tailscale.LocalClient
+
+	// TimeNow optionally provides a time function.
+	// time.Now is used as default.
+	TimeNow func() time.Time
 }
 
 // NewServer constructs a new Tailscale web client server.
@@ -143,6 +147,10 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		devMode:    opts.DevMode,
 		lc:         opts.LocalClient,
 		pathPrefix: opts.PathPrefix,
+		timeNow:    opts.TimeNow,
+	}
+	if s.timeNow == nil {
+		s.timeNow = time.Now
 	}
 	s.tsDebugMode = s.debugMode()
 	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
@@ -373,7 +381,7 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	case session == nil:
 		// Create a new session.
-		d, err := s.getOrAwaitAuthURL(r.Context(), "", whois.Node.ID)
+		d, err := s.getOrAwaitAuth(r.Context(), "", whois.Node.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -387,8 +395,9 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 			ID:      sid,
 			SrcNode: whois.Node.ID,
 			SrcUser: whois.UserProfile.ID,
+			AuthID:  d.ID,
 			AuthURL: d.URL,
-			Created: time.Now(),
+			Created: s.timeNow(),
 		}
 		s.browserSessions.Store(sid, session)
 		// Set the cookie on browser.
@@ -403,7 +412,7 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 	case !session.isAuthorized():
 		if r.URL.Query().Get("wait") == "true" {
 			// Client requested we block until user completes auth.
-			d, err := s.getOrAwaitAuthURL(r.Context(), session.AuthURL, whois.Node.ID)
+			d, err := s.getOrAwaitAuth(r.Context(), session.AuthID, whois.Node.ID)
 			if errors.Is(err, errFailedAuth) {
 				http.Error(w, "user is unauthorized", http.StatusUnauthorized)
 				s.browserSessions.Delete(session.ID) // clean up the failed session
@@ -447,43 +456,22 @@ func (s *Server) newSessionID() (string, error) {
 	return "", errors.New("too many collisions generating new session; please refresh page")
 }
 
-func (s *Server) getControlServerURL(ctx context.Context) (string, error) {
-	if v := s.controlServerURL.Load(); v != nil {
-		v, _ := v.(string)
-		return v, nil
-	}
-	prefs, err := s.lc.GetPrefs(ctx)
-	if err != nil {
-		return "", err
-	}
-	url := prefs.ControlURLOrDefault()
-	s.controlServerURL.Store(url)
-	return url, nil
-}
-
-// getOrAwaitAuthURL connects to the control server for user auth,
+// getOrAwaitAuth connects to the control server for user auth,
 // with the following behavior:
 //
-//  1. If authURL is provided empty, a new auth URL is created on the
-//     control server and reported back here, which can then be used
-//     to redirect the user on the frontend.
-//  2. If authURL is provided non-empty, the connection to control
-//     blocks until the user has completed the URL. getOrAwaitAuthURL
-//     terminates when either the URL is completed, or ctx is canceled.
-func (s *Server) getOrAwaitAuthURL(ctx context.Context, authURL string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
-	serverURL, err := s.getControlServerURL(ctx)
-	if err != nil {
-		return nil, err
-	}
+//  1. If authID is provided empty, a new auth URL is created on the control
+//     server and reported back here, which can then be used to redirect the
+//     user on the frontend.
+//  2. If authID is provided non-empty, the connection to control blocks until
+//     the user has completed authenticating the associated auth URL,
+//     or until ctx is canceled.
+func (s *Server) getOrAwaitAuth(ctx context.Context, authID string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
 	type data struct {
 		ID  string
 		Src tailcfg.NodeID
 	}
 	var b bytes.Buffer
-	if err := json.NewEncoder(&b).Encode(data{
-		ID:  strings.TrimPrefix(authURL, serverURL),
-		Src: src,
-	}); err != nil {
+	if err := json.NewEncoder(&b).Encode(data{ID: authID, Src: src}); err != nil {
 		return nil, err
 	}
 	url := "http://" + apitype.LocalAPIHost + "/localapi/v0/debug-web-client"

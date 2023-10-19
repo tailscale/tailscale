@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +18,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
@@ -412,9 +410,14 @@ func TestServeTailscaleAuth(t *testing.T) {
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
+	timeNow := time.Now()
+	oneHourAgo := timeNow.Add(-time.Hour)
+	sixtyDaysAgo := timeNow.Add(-sessionCookieExpiry * 2)
+
 	s := &Server{
 		lc:          &tailscale.LocalClient{Dial: lal.Dial},
 		tsDebugMode: "full",
+		timeNow:     func() time.Time { return timeNow },
 	}
 
 	successCookie := "ts-cookie-success"
@@ -422,7 +425,8 @@ func TestServeTailscaleAuth(t *testing.T) {
 		ID:      successCookie,
 		SrcNode: remoteNode.Node.ID,
 		SrcUser: user.ID,
-		Created: time.Now(),
+		Created: oneHourAgo,
+		AuthID:  testAuthPathSuccess,
 		AuthURL: testControlURL + testAuthPathSuccess,
 	})
 	failureCookie := "ts-cookie-failure"
@@ -430,7 +434,8 @@ func TestServeTailscaleAuth(t *testing.T) {
 		ID:      failureCookie,
 		SrcNode: remoteNode.Node.ID,
 		SrcUser: user.ID,
-		Created: time.Now(),
+		Created: oneHourAgo,
+		AuthID:  testAuthPathError,
 		AuthURL: testControlURL + testAuthPathError,
 	})
 	expiredCookie := "ts-cookie-expired"
@@ -438,7 +443,8 @@ func TestServeTailscaleAuth(t *testing.T) {
 		ID:      expiredCookie,
 		SrcNode: remoteNode.Node.ID,
 		SrcUser: user.ID,
-		Created: time.Now().Add(-sessionCookieExpiry * 2),
+		Created: sixtyDaysAgo,
+		AuthID:  "/a/old-auth-url",
 		AuthURL: testControlURL + "/a/old-auth-url",
 	})
 
@@ -448,19 +454,40 @@ func TestServeTailscaleAuth(t *testing.T) {
 		query         string
 		wantStatus    int
 		wantResp      *authResponse
-		wantNewCookie bool // new cookie generated
+		wantNewCookie bool            // new cookie generated
+		wantSession   *browserSession // session associated w/ cookie at end of request
 	}{
 		{
 			name:          "new-session-created",
 			wantStatus:    http.StatusOK,
 			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
 			wantNewCookie: true,
-		}, {
+			wantSession: &browserSession{
+				ID:            "GENERATED_ID", // gets swapped for newly created ID by test
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       timeNow,
+				AuthID:        testAuthPath,
+				AuthURL:       testControlURL + testAuthPath,
+				Authenticated: false,
+			},
+		},
+		{
 			name:       "query-existing-incomplete-session",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
 			wantResp:   &authResponse{OK: false, AuthURL: testControlURL + testAuthPathSuccess},
-		}, {
+			wantSession: &browserSession{
+				ID:            successCookie,
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       oneHourAgo,
+				AuthID:        testAuthPathSuccess,
+				AuthURL:       testControlURL + testAuthPathSuccess,
+				Authenticated: false,
+			},
+		},
+		{
 			name:   "transition-to-successful-session",
 			cookie: successCookie,
 			// query "wait" indicates the FE wants to make
@@ -468,29 +495,70 @@ func TestServeTailscaleAuth(t *testing.T) {
 			query:      "wait=true",
 			wantStatus: http.StatusOK,
 			wantResp:   &authResponse{OK: true},
-		}, {
+			wantSession: &browserSession{
+				ID:            successCookie,
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       oneHourAgo,
+				AuthID:        testAuthPathSuccess,
+				AuthURL:       testControlURL + testAuthPathSuccess,
+				Authenticated: true,
+			},
+		},
+		{
 			name:       "query-existing-complete-session",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
 			wantResp:   &authResponse{OK: true},
-		}, {
-			name:       "transition-to-failed-session",
-			cookie:     failureCookie,
-			query:      "wait=true",
-			wantStatus: http.StatusUnauthorized,
-			wantResp:   nil,
-		}, {
+			wantSession: &browserSession{
+				ID:            successCookie,
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       oneHourAgo,
+				AuthID:        testAuthPathSuccess,
+				AuthURL:       testControlURL + testAuthPathSuccess,
+				Authenticated: true,
+			},
+		},
+		{
+			name:        "transition-to-failed-session",
+			cookie:      failureCookie,
+			query:       "wait=true",
+			wantStatus:  http.StatusUnauthorized,
+			wantResp:    nil,
+			wantSession: nil, // session deleted
+		},
+		{
 			name:          "failed-session-cleaned-up",
 			cookie:        failureCookie,
 			wantStatus:    http.StatusOK,
 			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
 			wantNewCookie: true,
-		}, {
+			wantSession: &browserSession{
+				ID:            "GENERATED_ID",
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       timeNow,
+				AuthID:        testAuthPath,
+				AuthURL:       testControlURL + testAuthPath,
+				Authenticated: false,
+			},
+		},
+		{
 			name:          "expired-cookie-gets-new-session",
 			cookie:        expiredCookie,
 			wantStatus:    http.StatusOK,
 			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
 			wantNewCookie: true,
+			wantSession: &browserSession{
+				ID:            "GENERATED_ID",
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       timeNow,
+				AuthID:        testAuthPath,
+				AuthURL:       testControlURL + testAuthPath,
+				Authenticated: false,
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -503,6 +571,8 @@ func TestServeTailscaleAuth(t *testing.T) {
 			s.serveTailscaleAuth(w, r)
 			res := w.Result()
 			defer res.Body.Close()
+
+			// Validate response status/data.
 			if gotStatus := res.StatusCode; tt.wantStatus != gotStatus {
 				t.Errorf("wrong status; want=%v, got=%v", tt.wantStatus, gotStatus)
 			}
@@ -516,18 +586,34 @@ func TestServeTailscaleAuth(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if !reflect.DeepEqual(gotResp, tt.wantResp) {
-				t.Errorf("wrong response; want=%v, got=%v", tt.wantResp, gotResp)
+			if diff := cmp.Diff(gotResp, tt.wantResp); diff != "" {
+				t.Errorf("wrong response; (-got+want):%v", diff)
 			}
+			// Validate cookie creation.
+			sessionID := tt.cookie
 			var gotCookie bool
 			for _, c := range w.Result().Cookies() {
 				if c.Name == sessionCookieName {
 					gotCookie = true
+					sessionID = c.Value
 					break
 				}
 			}
 			if gotCookie != tt.wantNewCookie {
 				t.Errorf("wantNewCookie wrong; want=%v, got=%v", tt.wantNewCookie, gotCookie)
+			}
+			// Validate browser session contents.
+			var gotSesson *browserSession
+			if s, ok := s.browserSessions.Load(sessionID); ok {
+				gotSesson = s.(*browserSession)
+			}
+			if tt.wantSession != nil && tt.wantSession.ID == "GENERATED_ID" {
+				// If requested, swap in the generated session ID before
+				// comparing got/want.
+				tt.wantSession.ID = sessionID
+			}
+			if diff := cmp.Diff(gotSesson, tt.wantSession); diff != "" {
+				t.Errorf("wrong session; (-got+want):%v", diff)
 			}
 		})
 	}
@@ -572,14 +658,6 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 			}
 			w.Header().Set("Content-Type", "application/json")
 			return
-		case "/localapi/v0/prefs":
-			prefs := ipn.Prefs{ControlURL: testControlURL}
-			if err := json.NewEncoder(w).Encode(prefs); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			return
 		case "/localapi/v0/debug-web-client": // used by TestServeTailscaleAuth
 			type reqData struct {
 				ID  string
@@ -596,7 +674,7 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 			}
 			var resp *tailcfg.WebClientAuthResponse
 			if data.ID == "" {
-				resp = &tailcfg.WebClientAuthResponse{URL: testControlURL + testAuthPath}
+				resp = &tailcfg.WebClientAuthResponse{ID: testAuthPath, URL: testControlURL + testAuthPath}
 			} else if data.ID == testAuthPathSuccess {
 				resp = &tailcfg.WebClientAuthResponse{Complete: true}
 			} else if data.ID == testAuthPathError {
