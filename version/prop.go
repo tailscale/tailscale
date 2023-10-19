@@ -47,19 +47,7 @@ var isSandboxedMacOS lazy.SyncValue[bool]
 // and macsys (System Extension) version on macOS, and false for
 // tailscaled-on-macOS.
 func IsSandboxedMacOS() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	return isSandboxedMacOS.Get(func() bool {
-		if IsMacSysExt() {
-			return true
-		}
-		exe, err := os.Executable()
-		if err != nil {
-			return false
-		}
-		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension" || strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
-	})
+	return IsMacAppStore() || IsMacSysExt()
 }
 
 var isMacSysExt lazy.SyncValue[bool]
@@ -76,6 +64,23 @@ func IsMacSysExt() bool {
 			return false
 		}
 		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
+	})
+}
+
+var isMacAppStore lazy.SyncValue[bool]
+
+// IsMacAppStore whether this binary is from the App Store version of Tailscale
+// for macOS.
+func IsMacAppStore() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return isMacAppStore.Get(func() bool {
+		exe, err := os.Executable()
+		if err != nil {
+			return false
+		}
+		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
 	})
 }
 

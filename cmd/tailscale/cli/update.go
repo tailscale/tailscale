@@ -26,7 +26,6 @@ var updateCmd = &ffcli.Command{
 		fs := newFlagSet("update")
 		fs.BoolVar(&updateArgs.yes, "yes", false, "update without interactive prompts")
 		fs.BoolVar(&updateArgs.dryRun, "dry-run", false, "print what update would do without doing it, or prompts")
-		fs.BoolVar(&updateArgs.appStore, "app-store", false, "HIDDEN: check the App Store for updates, even if this is not an App Store install (for testing only)")
 		// These flags are not supported on several systems that only provide
 		// the latest version of Tailscale:
 		//
@@ -42,11 +41,10 @@ var updateCmd = &ffcli.Command{
 }
 
 var updateArgs struct {
-	yes      bool
-	dryRun   bool
-	appStore bool
-	track    string // explicit track; empty means same as current
-	version  string // explicit version; empty means auto
+	yes     bool
+	dryRun  bool
+	track   string // explicit track; empty means same as current
+	version string // explicit version; empty means auto
 }
 
 func runUpdate(ctx context.Context, args []string) error {
@@ -61,12 +59,11 @@ func runUpdate(ctx context.Context, args []string) error {
 		ver = updateArgs.track
 	}
 	err := clientupdate.Update(clientupdate.Arguments{
-		Version:  ver,
-		AppStore: updateArgs.appStore,
-		Logf:     func(f string, a ...any) { printf(f+"\n", a...) },
-		Stdout:   Stdout,
-		Stderr:   Stderr,
-		Confirm:  confirmUpdate,
+		Version: ver,
+		Logf:    func(f string, a ...any) { printf(f+"\n", a...) },
+		Stdout:  Stdout,
+		Stderr:  Stderr,
+		Confirm: confirmUpdate,
 	})
 	if errors.Is(err, errors.ErrUnsupported) {
 		return errors.New("The 'update' command is not supported on this platform; see https://tailscale.com/s/client-updates")
