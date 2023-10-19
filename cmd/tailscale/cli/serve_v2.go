@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -502,7 +503,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		}
 		h.Path = target
 	default:
-		t, err := expandProxyTargetDev(target)
+		t, err := expandProxyTargetDev(target, []string{"http", "https", "https+insecure"}, "http")
 		if err != nil {
 			return err
 		}
@@ -552,34 +553,22 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("invalid TCP target %q", target)
 	}
 
-	dstURL, err := url.Parse(target)
+	targetURL, err := expandProxyTargetDev(target, []string{"tcp"}, "tcp")
+	if err != nil {
+		return fmt.Errorf("unable to expand target: %v", err)
+	}
+
+	dstURL, err := url.Parse(targetURL)
 	if err != nil {
 		return fmt.Errorf("invalid TCP target %q: %v", target, err)
 	}
-	host, dstPortStr, err := net.SplitHostPort(dstURL.Host)
-	if err != nil {
-		return fmt.Errorf("invalid TCP target %q: %v", target, err)
-	}
-
-	switch host {
-	case "localhost", "127.0.0.1":
-		// ok
-	default:
-		return fmt.Errorf("invalid TCP target %q, must be one of localhost or 127.0.0.1", target)
-	}
-
-	if p, err := strconv.ParseUint(dstPortStr, 10, 16); p == 0 || err != nil {
-		return fmt.Errorf("invalid port %q", dstPortStr)
-	}
-
-	fwdAddr := "127.0.0.1:" + dstPortStr
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if sc.IsServingWeb(srcPort) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
-	mak.Set(&sc.TCP, srcPort, &ipn.TCPPortHandler{TCPForward: fwdAddr})
+	mak.Set(&sc.TCP, srcPort, &ipn.TCPPortHandler{TCPForward: dstURL.Host})
 
 	if terminateTLS {
 		sc.TCP[srcPort].TerminateTLS = dnsName
@@ -739,24 +728,22 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 // examples:
 //   - 3000
 //   - localhost:3000
+//   - tcp://localhost:3000
 //   - http://localhost:3000
 //   - https://localhost:3000
 //   - https-insecure://localhost:3000
 //   - https-insecure://localhost:3000/foo
-func expandProxyTargetDev(target string) (string, error) {
-	var (
-		scheme = "http"
-		host   = "127.0.0.1"
-	)
+func expandProxyTargetDev(target string, supportedSchemes []string, defaultScheme string) (string, error) {
+	var host = "127.0.0.1"
 
 	// support target being a port number
 	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
-		return fmt.Sprintf("%s://%s:%d", scheme, host, port), nil
+		return fmt.Sprintf("%s://%s:%d", defaultScheme, host, port), nil
 	}
 
 	// prepend scheme if not present
 	if !strings.Contains(target, "://") {
-		target = scheme + "://" + target
+		target = defaultScheme + "://" + target
 	}
 
 	// make sure we can parse the target
@@ -766,10 +753,8 @@ func expandProxyTargetDev(target string) (string, error) {
 	}
 
 	// ensure a supported scheme
-	switch u.Scheme {
-	case "http", "https", "https+insecure":
-	default:
-		return "", errors.New("must be a URL starting with http://, https://, or https+insecure://")
+	if !slices.Contains(supportedSchemes, u.Scheme) {
+		return "", fmt.Errorf("must be a URL starting with one of the supported schemes: %v", supportedSchemes)
 	}
 
 	// validate the port
