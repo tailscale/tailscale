@@ -2117,8 +2117,12 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 				ini.BrowseToURL = ptr.To(b.authURLSticky)
 			}
 		}
+		prefs := b.sanitizedPrefsLocked()
 		if mask&ipn.NotifyInitialPrefs != 0 {
-			ini.Prefs = ptr.To(b.sanitizedPrefsLocked())
+			ini.Prefs = ptr.To(prefs)
+		}
+		if prefs.Valid() && prefs.AutoUpdate().Check {
+			ini.ClientVersion = b.lastClientVersion
 		}
 		if mask&ipn.NotifyInitialNetMap != 0 {
 			ini.NetMap = b.netMap
