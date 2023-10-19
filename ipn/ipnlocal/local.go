@@ -2344,16 +2344,7 @@ func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 	b.mu.Lock()
 	b.lastClientVersion = v
 	b.mu.Unlock()
-	switch runtime.GOOS {
-	case "darwin", "ios":
-		// These auto-update well enough, and we haven't converted the
-		// ClientVersion types to Swift yet, so don't send them in ipn.Notify
-		// messages.
-	default:
-		// But everything else is a Go client and can deal with this field, even
-		// if they ignore it.
-		b.send(ipn.Notify{ClientVersion: v})
-	}
+	b.send(ipn.Notify{ClientVersion: v})
 }
 
 // For testing lazy machine key generation.
