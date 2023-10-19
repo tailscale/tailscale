@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -564,31 +565,52 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, err
 // has application/grpc content type header, the connection will be over h2c.
 // Otherwise standard Go http transport will be used.
 type reverseProxy struct {
-	logf     logger.Logf
-	url      *url.URL
-	insecure bool
-	backend  string
-	lb       *LocalBackend
-	// transport for non-h2c backends
-	httpTransport lazy.SyncValue[http.RoundTripper]
-	// transport for h2c backends
-	h2cTransport lazy.SyncValue[http.RoundTripper]
+	logf logger.Logf
+	url  *url.URL
+	// insecure tracks whether the connection to an https backend should be
+	// insecure (i.e because we cannot verify its CA).
+	insecure      bool
+	backend       string
+	lb            *LocalBackend
+	httpTransport lazy.SyncValue[*http.Transport]  // transport for non-h2c backends
+	h2cTransport  lazy.SyncValue[*http2.Transport] // transport for h2c backends
+	// closed tracks whether proxy is closed/currently closing.
+	closed atomic.Bool
+}
+
+// close ensures that any open backend connections get closed.
+func (rp *reverseProxy) close() {
+	rp.closed.Store(true)
+	if h2cT := rp.h2cTransport.Get(func() *http2.Transport {
+		return nil
+	}); h2cT != nil {
+		h2cT.CloseIdleConnections()
+	}
+	if httpTransport := rp.httpTransport.Get(func() *http.Transport {
+		return nil
+	}); httpTransport != nil {
+		httpTransport.CloseIdleConnections()
+	}
 }
 
 func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if closed := rp.closed.Load(); closed {
+		rp.logf("received a request for a proxy that's being closed or has been closed")
+		http.Error(w, "proxy is closed", http.StatusServiceUnavailable)
+		return
+	}
 	p := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
 		r.SetURL(rp.url)
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
-	},
-	}
+	}}
 
 	// There is no way to autodetect h2c as per RFC 9113
 	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
 	// However, we assume that http:// proxy prefix in combination with the
 	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
-	// gRPC to fix a known problem pf plaintext gRPC backends
+	// gRPC to fix a known problem of plaintext gRPC backends
 	if rp.shouldProxyViaH2C(r) {
 		rp.logf("received a proxy request for plaintext gRPC")
 		p.Transport = rp.getH2CTransport()
@@ -596,13 +618,12 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.Transport = rp.getTransport()
 	}
 	p.ServeHTTP(w, r)
-
 }
 
-// getTransport gets transport for http backends. Transport gets created lazily
-// at most once.
-func (rp *reverseProxy) getTransport() http.RoundTripper {
-	return rp.httpTransport.Get(func() http.RoundTripper {
+// getTransport returns the Transport used for regular (non-GRPC) requests
+// to the backend. The Transport gets created lazily, at most once.
+func (rp *reverseProxy) getTransport() *http.Transport {
+	return rp.httpTransport.Get(func() *http.Transport {
 		return &http.Transport{
 			DialContext: rp.lb.dialer.SystemDial,
 			TLSClientConfig: &tls.Config{
@@ -618,10 +639,10 @@ func (rp *reverseProxy) getTransport() http.RoundTripper {
 	})
 }
 
-// getH2CTranport gets transport for h2c backends. Creates it lazily at most
-// once.
-func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
-	return rp.h2cTransport.Get(func() http.RoundTripper {
+// getH2CTransport returns the Transport used for GRPC requests to the backend.
+// The Transport gets created lazily, at most once.
+func (rp *reverseProxy) getH2CTransport() *http2.Transport {
+	return rp.h2cTransport.Get(func() *http2.Transport {
 		return &http2.Transport{
 			AllowHTTP: true,
 			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {

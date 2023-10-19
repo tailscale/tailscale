@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -446,6 +447,119 @@ func TestServeHTTPProxy(t *testing.T) {
 	}
 }
 
+func Test_reverseProxyConfiguration(t *testing.T) {
+	b := newTestBackend(t)
+	type test struct {
+		backend string
+		path    string
+		// set to false to test that a proxy has been removed
+		shouldExist   bool
+		wantsInsecure bool
+		wantsURL      url.URL
+	}
+	runner := func(name string, tests []test) {
+		t.Logf("running tests for %s", name)
+		host := ipn.HostPort("http://example.ts.net:80")
+		conf := &ipn.ServeConfig{
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				host: {Handlers: map[string]*ipn.HTTPHandler{}},
+			},
+		}
+		for _, tt := range tests {
+			if tt.shouldExist {
+				conf.Web[host].Handlers[tt.path] = &ipn.HTTPHandler{Proxy: tt.backend}
+			}
+		}
+		if err := b.setServeConfigLocked(conf, ""); err != nil {
+			t.Fatal(err)
+		}
+		// test that reverseproxies have been set up as expected
+		for _, tt := range tests {
+			rp, ok := b.serveProxyHandlers.Load(tt.backend)
+			if !tt.shouldExist && ok {
+				t.Errorf("proxy for backend %s should not exist, but it does", tt.backend)
+			}
+			if !tt.shouldExist {
+				continue
+			}
+			parsedRp, ok := rp.(*reverseProxy)
+			if !ok {
+				t.Errorf("proxy for backend %q is not a reverseproxy", tt.backend)
+			}
+			if parsedRp.insecure != tt.wantsInsecure {
+				t.Errorf("proxy for backend %q should be insecure: %v got insecure: %v", tt.backend, tt.wantsInsecure, parsedRp.insecure)
+			}
+			if !reflect.DeepEqual(*parsedRp.url, tt.wantsURL) {
+				t.Errorf("proxy for backend %q should have URL %#+v, got URL %+#v", tt.backend, &tt.wantsURL, parsedRp.url)
+			}
+			if tt.backend != parsedRp.backend {
+				t.Errorf("proxy for backend %q should have backend %q got %q", tt.backend, tt.backend, parsedRp.backend)
+			}
+		}
+	}
+
+	// configure local backend with some proxy backends
+	runner("initial proxy configs", []test{
+		{
+			backend:       "http://example.com/docs",
+			path:          "/example",
+			shouldExist:   true,
+			wantsInsecure: false,
+			wantsURL:      mustCreateURL(t, "http://example.com/docs"),
+		},
+		{
+			backend:       "https://example1.com",
+			path:          "/example1",
+			shouldExist:   true,
+			wantsInsecure: false,
+			wantsURL:      mustCreateURL(t, "https://example1.com"),
+		},
+		{
+			backend:       "https+insecure://example2.com",
+			path:          "/example2",
+			shouldExist:   true,
+			wantsInsecure: true,
+			wantsURL:      mustCreateURL(t, "https://example2.com"),
+		},
+	})
+
+	// reconfigure the local backend with different proxies
+	runner("reloaded proxy configs", []test{
+		{
+			backend:       "http://example.com/docs",
+			path:          "/example",
+			shouldExist:   true,
+			wantsInsecure: false,
+			wantsURL:      mustCreateURL(t, "http://example.com/docs"),
+		},
+		{
+			backend:     "https://example1.com",
+			shouldExist: false,
+		},
+		{
+			backend:     "https+insecure://example2.com",
+			shouldExist: false,
+		},
+		{
+			backend:       "https+insecure://example3.com",
+			path:          "/example3",
+			shouldExist:   true,
+			wantsInsecure: true,
+			wantsURL:      mustCreateURL(t, "https://example3.com"),
+		},
+	})
+
+}
+
+func mustCreateURL(t *testing.T, u string) url.URL {
+	t.Helper()
+	uParsed, err := url.Parse(u)
+	if err != nil {
+		t.Fatalf("failed parsing url: %v", err)
+	}
+	return *uParsed
+}
+
 func newTestBackend(t *testing.T) *LocalBackend {
 	sys := &tsd.System{}
 	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
@@ -589,40 +703,21 @@ func TestServeFileOrDirectory(t *testing.T) {
 }
 
 func Test_isGRPCContentType(t *testing.T) {
-	tests := map[string]struct {
+	tests := []struct {
 		contentType string
 		want        bool
 	}{
-		"application/grpc": {
-			contentType: "application/grpc",
-			want:        true,
-		},
-		"application/grpc;": {
-			contentType: "application/grpc;",
-			want:        true,
-		},
-		"application/grpc+": {
-			contentType: "application/grpc+",
-			want:        true,
-		},
-		"application/grpcfoobar": {
-			contentType: "application/grpcfoobar",
-		},
-		"application/text": {
-			contentType: "application/text",
-		},
-		"foobar": {
-			contentType: "foobar",
-		},
-		"no content type": {
-			contentType: "",
-		},
+		{contentType: "application/grpc", want: true},
+		{contentType: "application/grpc;", want: true},
+		{contentType: "application/grpc+", want: true},
+		{contentType: "application/grpcfoobar"},
+		{contentType: "application/text"},
+		{contentType: "foobar"},
+		{contentType: ""},
 	}
-	for name, scenario := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := isGRPCContentType(scenario.contentType); got != scenario.want {
-				t.Errorf("test case %s failed, isGRPCContentType() = %v, want %v", name, got, scenario.want)
-			}
-		})
+	for _, tt := range tests {
+		if got := isGRPCContentType(tt.contentType); got != tt.want {
+			t.Errorf("isGRPCContentType(%q) = %v, want %v", tt.contentType, got, tt.want)
+		}
 	}
 }
