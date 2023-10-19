@@ -67,8 +67,12 @@ func TestDeleter(t *testing.T) {
 	}
 	eventHook := func(event string) { eventsChan <- event }
 
+	var m Manager
 	var fd fileDeleter
-	fd.Init(t.Logf, tstime.DefaultClock{Clock: clock}, eventHook, dir)
+	m.opts.Logf = t.Logf
+	m.opts.Clock = tstime.DefaultClock{Clock: clock}
+	m.opts.Dir = dir
+	fd.Init(&m, eventHook)
 	defer fd.Shutdown()
 	insert := func(name string) {
 		t.Helper()

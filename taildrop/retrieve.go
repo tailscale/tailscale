@@ -112,16 +112,15 @@ func (m *Manager) DeleteFile(baseName string) error {
 		err := os.Remove(path)
 		if err != nil && !os.IsNotExist(err) {
 			err = redactError(err)
-			// Put a retry loop around deletes on Windows. Windows
-			// file descriptor closes are effectively asynchronous,
-			// as a bunch of hooks run on/after close, and we can't
-			// necessarily delete the file for a while after close,
-			// as we need to wait for everybody to be done with
-			// it. (on Windows, unlike Unix, a file can't be deleted
-			// if it's open anywhere)
-			// So try a few times but ultimately just leave a
-			// "foo.jpg.deleted" marker file to note that it's
-			// deleted and we clean it up later.
+			// Put a retry loop around deletes on Windows.
+			//
+			// Windows file descriptor closes are effectively asynchronous,
+			// as a bunch of hooks run on/after close,
+			// and we can't necessarily delete the file for a while after close,
+			// as we need to wait for everybody to be done with it.
+			// On Windows, unlike Unix, a file can't be deleted if it's open anywhere.
+			// So try a few times but ultimately just leave a "foo.jpg.deleted"
+			// marker file to note that it's deleted and we clean it up later.
 			if runtime.GOOS == "windows" {
 				if bo == nil {
 					bo = backoff.NewBackoff("delete-retry", logf, 1*time.Second)

@@ -27,8 +27,8 @@ const deleteDelay = time.Hour
 type fileDeleter struct {
 	logf  logger.Logf
 	clock tstime.DefaultClock
-	event func(string) // called for certain events; for testing only
 	dir   string
+	event func(string) // called for certain events; for testing only
 
 	mu     sync.Mutex
 	queue  list.List
@@ -46,11 +46,11 @@ type deleteFile struct {
 	inserted time.Time
 }
 
-func (d *fileDeleter) Init(logf logger.Logf, clock tstime.DefaultClock, event func(string), dir string) {
-	d.logf = logf
-	d.clock = clock
-	d.dir = dir
-	d.event = event
+func (d *fileDeleter) Init(m *Manager, eventHook func(string)) {
+	d.logf = m.opts.Logf
+	d.clock = m.opts.Clock
+	d.dir = m.opts.Dir
+	d.event = eventHook
 
 	// From a cold-start, load the list of partial and deleted files.
 	d.byName = make(map[string]*list.Element)
@@ -59,19 +59,30 @@ func (d *fileDeleter) Init(logf logger.Logf, clock tstime.DefaultClock, event fu
 	d.group.Go(func() {
 		d.event("start init")
 		defer d.event("end init")
-		rangeDir(dir, func(de fs.DirEntry) bool {
+		rangeDir(d.dir, func(de fs.DirEntry) bool {
 			switch {
 			case d.shutdownCtx.Err() != nil:
 				return false // terminate early
 			case !de.Type().IsRegular():
 				return true
-			case strings.Contains(de.Name(), partialSuffix):
-				d.Insert(de.Name())
-			case strings.Contains(de.Name(), deletedSuffix):
+			case strings.HasSuffix(de.Name(), partialSuffix):
+				// Only enqueue the file for deletion if there is no active put.
+				nameID := strings.TrimSuffix(de.Name(), partialSuffix)
+				if i := strings.LastIndexByte(nameID, '.'); i > 0 {
+					key := incomingFileKey{ClientID(nameID[i+len("."):]), nameID[:i]}
+					m.incomingFiles.LoadFunc(key, func(_ *incomingFile, loaded bool) {
+						if !loaded {
+							d.Insert(de.Name())
+						}
+					})
+				} else {
+					d.Insert(de.Name())
+				}
+			case strings.HasSuffix(de.Name(), deletedSuffix):
 				// Best-effort immediate deletion of deleted files.
 				name := strings.TrimSuffix(de.Name(), deletedSuffix)
-				if os.Remove(filepath.Join(dir, name)) == nil {
-					if os.Remove(filepath.Join(dir, de.Name())) == nil {
+				if os.Remove(filepath.Join(d.dir, name)) == nil {
+					if os.Remove(filepath.Join(d.dir, de.Name())) == nil {
 						break
 					}
 				}
