@@ -1,0 +1,90 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: operator
+  template:
+    metadata:
+      {{- with .Values.operatorConfig.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app: operator
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: operator
+      {{- with .Values.operatorConfig.podSecurityContext }}
+      securityContext:
+        {{- toYaml .Values.operatorConfig.podSecurityContext | nindent 8 }}
+      {{- end }}
+      volumes:
+      - name: oauth
+        secret:
+          secretName: operator-oauth
+      containers:
+        - name: operator
+          {{- with .Values.operatorConfig.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.operatorConfig.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- $operatorTag:= printf ":%s" ( .Values.operatorConfig.image.tag | default .Chart.AppVersion )}}
+          image: {{ .Values.operatorConfig.image.repo }}{{- if .Values.operatorConfig.image.digest -}}{{ printf "@%s" .Values.operatorConfig.image.digest}}{{- else -}}{{ printf "%s" $operatorTag }}{{- end }}
+          imagePullPolicy: {{ .Values.operatorConfig.image.pullPolicy }}
+          env:
+            - name: OPERATOR_HOSTNAME
+              value: {{ .Values.operatorConfig.hostname }}
+            - name: OPERATOR_SECRET
+              value: operator
+            - name: OPERATOR_LOGGING
+              value: {{ .Values.operatorConfig.logging }}
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CLIENT_ID_FILE
+              value: /oauth/client_id
+            - name: CLIENT_SECRET_FILE
+              value: /oauth/client_secret
+            {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
+            - name: PROXY_IMAGE
+              value: {{ .Values.proxyConfig.image.repo }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
+            - name: PROXY_TAGS
+              value: {{ .Values.proxyConfig.defaultTags }}
+            - name: APISERVER_PROXY
+              value: "{{ .Values.apiServerProxyConfig.mode }}"
+            - name: PROXY_FIREWALL_MODE
+              value: {{ .Values.proxyConfig.firewallMode }}
+          volumeMounts:
+          - name: oauth
+            mountPath: /oauth
+            readOnly: true
+      {{- with .Values.operatorConfig.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operatorConfig.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operatorConfig.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
