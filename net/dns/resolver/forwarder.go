@@ -458,7 +458,7 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 			req.Header.Set("X-Cd-Mac", f.dohClientMac)
 		}
 		if f.dohClientIP != "" {
-			req.Header.Set("X-Cd-IP", f.dohClientIP)
+			req.Header.Set("X-Cd-Ip", f.dohClientIP)
 		}
 	}
 
