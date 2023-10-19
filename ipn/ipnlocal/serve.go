@@ -31,6 +31,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
@@ -568,6 +569,10 @@ type reverseProxy struct {
 	insecure bool
 	backend  string
 	lb       *LocalBackend
+	// transport for non-h2c backends
+	httpTransport lazy.SyncValue[http.RoundTripper]
+	// transport for h2c backends
+	h2cTransport lazy.SyncValue[http.RoundTripper]
 }
 
 func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -586,15 +591,19 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// gRPC to fix a known problem pf plaintext gRPC backends
 	if rp.shouldProxyViaH2C(r) {
 		rp.logf("received a proxy request for plaintext gRPC")
-		p.Transport = &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {
-				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
-			},
-		}
-
+		p.Transport = rp.getH2CTransport()
 	} else {
-		p.Transport = &http.Transport{
+		p.Transport = rp.getTransport()
+	}
+	p.ServeHTTP(w, r)
+
+}
+
+// getTransport gets transport for http backends. Transport gets created lazily
+// at most once.
+func (rp *reverseProxy) getTransport() http.RoundTripper {
+	return rp.httpTransport.Get(func() http.RoundTripper {
+		return &http.Transport{
 			DialContext: rp.lb.dialer.SystemDial,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: rp.insecure,
@@ -606,9 +615,20 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
-	}
-	p.ServeHTTP(w, r)
+	})
+}
 
+// getH2CTranport gets transport for h2c backends. Creates it lazily at most
+// once.
+func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
+	return rp.h2cTransport.Get(func() http.RoundTripper {
+		return &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {
+				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
+			},
+		}
+	})
 }
 
 // This is not a generally reliable way how to determine whether a request is
@@ -625,7 +645,7 @@ func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
 // https://github.com/grpc/grpc-go/blob/v1.60.0-dev/internal/grpcutil/method.go#L41-L78
 func isGRPCContentType(contentType string) bool {
 	s, ok := strings.CutPrefix(contentType, grpcBaseContentType)
-	return ok && len(s) == 0 || s[0] == '+' || s[0] == ';'
+	return ok && (len(s) == 0 || s[0] == '+' || s[0] == ';')
 }
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
