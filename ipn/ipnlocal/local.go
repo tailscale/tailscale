@@ -14,7 +14,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -268,7 +267,7 @@ type LocalBackend struct {
 	activeWatchSessions set.Set[string]     // of WatchIPN SessionID
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
+	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -4432,8 +4431,8 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 		backend := key.(string)
 		if !backends[backend] {
 			b.logf("serve: closing idle connections to %s", backend)
-			value.(*httputil.ReverseProxy).Transport.(*http.Transport).CloseIdleConnections()
 			b.serveProxyHandlers.Delete(backend)
+			value.(*reverseProxy).close()
 		}
 		return true
 	})
