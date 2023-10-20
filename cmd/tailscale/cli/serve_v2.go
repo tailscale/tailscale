@@ -222,14 +222,6 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
 
-		if e.setPath != "" {
-			// TODO(marwan-at-work): either
-			// 1. Warn the user that this is a side effect.
-			// 2. Force the user to pass --bg
-			// 3. Allow set-path to be in the foreground.
-			e.bg = true
-		}
-
 		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)

@@ -85,7 +85,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	// --set-path runs in background
 	add(step{reset: true})
 	add(step{
-		command: cmd("serve --set-path=/ localhost:3000"),
+		command: cmd("serve --bg --set-path=/ localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -138,7 +138,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // support non Funnel port
-		command: cmd("serve --http=9999 --set-path=/abc http://localhost:3001"),
+		command: cmd("serve --http=9999 --bg --set-path=/abc http://localhost:3001"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 9999: {HTTP: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -152,7 +152,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("serve --http=9999 --set-path=/abc off"),
+		command: cmd("serve --http=9999 --bg --set-path=/abc off"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -163,7 +163,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("serve --http=8080 --set-path=/abc http://127.0.0.1:3001"),
+		command: cmd("serve --http=8080 --bg --set-path=/abc http://127.0.0.1:3001"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 8080: {HTTP: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -207,7 +207,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // support non Funnel port
-		command: cmd("serve --https=9999 --set-path=/abc http://localhost:3001"),
+		command: cmd("serve --https=9999 --bg --set-path=/abc http://localhost:3001"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 9999: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -221,7 +221,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("serve --https=9999 --set-path=/abc off"),
+		command: cmd("serve --https=9999 --bg --set-path=/abc off"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -232,7 +232,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("serve --https=8443 --set-path=/abc http://127.0.0.1:3001"),
+		command: cmd("serve --https=8443 --bg --set-path=/abc http://127.0.0.1:3001"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -264,7 +264,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("serve --https=443 --set-path=/foo off"),
+		command: cmd("serve --https=443 --bg --set-path=/foo off"),
 		want:    nil, // nothing to save
 		wantErr: anyErr(),
 	}) // handler doesn't exist, so we get an error
@@ -294,11 +294,11 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("serve --https=8443 --set-path=/abc off"),
+		command: cmd("serve --https=8443 --bg --set-path=/abc off"),
 		want:    &ipn.ServeConfig{},
 	})
 	add(step{ // clean mount: "bar" becomes "/bar"
-		command: cmd("serve --https=443 --set-path=bar https://127.0.0.1:8443"),
+		command: cmd("serve --https=443 --bg --set-path=bar https://127.0.0.1:8443"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -329,7 +329,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	})
 	add(step{reset: true})
 	add(step{
-		command: cmd("serve --https=443 --set-path=/foo localhost:3000"),
+		command: cmd("serve --https=443 --bg --set-path=/foo localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -340,7 +340,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // test a second handler on the same port
-		command: cmd("serve --https=8443 --set-path=/foo localhost:3000"),
+		command: cmd("serve --https=8443 --bg --set-path=/foo localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -414,10 +414,6 @@ func TestServeDevConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	// add(step{
-	// 	command:   cmd("serve --tls-terminated-tcp=443 --bg tcp://127.0.0.1:8443"),
-	// 	want:      nil, // nothing to save
-	// })
 	add(step{
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:8444"),
 		want: &ipn.ServeConfig{
@@ -499,7 +495,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	os.MkdirAll(filepath.Join(td, "subdir"), 0700)
 	writeFile("subdir/file-a", "this is A")
 	add(step{
-		command: cmd("serve --https=443 --set-path=/some/where " + filepath.Join(td, "subdir/file-a")),
+		command: cmd("serve --https=443 --bg --set-path=/some/where " + filepath.Join(td, "subdir/file-a")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -557,7 +553,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // serving on secondary port doesn't change funnel on primary port
-		command: cmd("serve --https=8443 --set-path=/bar localhost:3001"),
+		command: cmd("serve --https=8443 --bg --set-path=/bar localhost:3001"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
@@ -572,7 +568,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // turn funnel on for secondary port
-		command: cmd("funnel --https=8443 --set-path=/bar localhost:3001"),
+		command: cmd("funnel --https=8443 --bg --set-path=/bar localhost:3001"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true, "foo.test.ts.net:8443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
@@ -637,7 +633,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	// tricky steps
 	add(step{reset: true})
 	add(step{ // a directory with a trailing slash mount point
-		command: cmd("serve --https=443 --set-path=/dir " + filepath.Join(td, "subdir")),
+		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "subdir")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -648,7 +644,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // this should overwrite the previous one
-		command: cmd("serve --https=443 --set-path=/dir " + filepath.Join(td, "foo")),
+		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "foo")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -660,7 +656,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	})
 	add(step{reset: true}) // reset and do the opposite
 	add(step{              // a file without a trailing slash mount point
-		command: cmd("serve --https=443 --set-path=/dir " + filepath.Join(td, "foo")),
+		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "foo")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -671,7 +667,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // this should overwrite the previous one
-		command: cmd("serve --https=443 --set-path=/dir " + filepath.Join(td, "subdir")),
+		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "subdir")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
