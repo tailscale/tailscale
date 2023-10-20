@@ -39,15 +39,22 @@ type commandInfo struct {
 }
 
 var serveHelpCommon = strings.TrimSpace(`
-<target> can be a port number (e.g., 3000), a partial URL (e.g., localhost:3000), or a
-full URL including a path (e.g., http://localhost:3000/foo, https+insecure://localhost:3000/foo).
+<target> can be a file, directory, text, or most commonly the location to a service running on the
+local machine. The location to the location service can be expressed as a port number (e.g., 3000),
+a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http://localhost:3000/foo).
 
 EXAMPLES
-  - Mount a local web server at 127.0.0.1:3000 in the foreground:
-    $ tailscale %s localhost:3000
+  - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
+    $ tailscale %s 3000
 
-  - Mount a local web server at 127.0.0.1:3000 in the background:
-    $ tailscale %s --bg localhost:3000
+  - Expose an HTTP server running at 127.0.0.1:3000 in the background:
+    $ tailscale %s --bg 3000
+
+  - Expose an HTTPS server with a valid certificate at https://localhost:8443
+    $ tailscale %s https://localhost:8443
+
+  - Expose an HTTPS server with invalid or self-signed certificates at https://localhost:8443
+    $ tailscale %s https+insecure://localhost:8443
 
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
@@ -73,7 +80,7 @@ var infoMap = map[serveMode]commandInfo{
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers on your tailnet",
 		LongHelp: strings.Join([]string{
-			"Serve enables you to share a local server securely within your tailnet.\n",
+			"Tailscale Serve enables you to share a local server securely within your tailnet.\n",
 			"To share a local server on the internet, use `tailscale funnel`\n\n",
 		}, "\n"),
 	},
@@ -115,12 +122,12 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.BoolVar(&e.bg, "bg", false, "run the command in the background")
-			fs.StringVar(&e.setPath, "set-path", "", "set a path for a specific target and run in the background")
-			fs.StringVar(&e.https, "https", "", "default; HTTPS listener")
-			fs.StringVar(&e.http, "http", "", "HTTP listener")
-			fs.StringVar(&e.tcp, "tcp", "", "TCP listener")
-			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "TLS terminated TCP listener")
+			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process")
+			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
+			fs.StringVar(&e.https, "https", "", "Expose an HTTPS server at the specified port (default")
+			fs.StringVar(&e.http, "http", "", "Expose an HTTP server at the specified port")
+			fs.StringVar(&e.tcp, "tcp", "", "Expose a TCP forwarder to forward raw TCP packets at the specified port")
+			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 
 		}),
 		UsageFunc: usageFunc,
@@ -381,7 +388,7 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 var (
 	msgFunnelAvailable     = "Available on the internet:"
 	msgServeAvailable      = "Available within your tailnet:"
-	msgRunningInBackground = "Serve started and running in the background."
+	msgRunningInBackground = "%s started and running in the background."
 	msgDisableProxy        = "To disable the proxy, run: tailscale %s --%s=%d off"
 	msgToExit              = "Press Ctrl+C to exit."
 )
