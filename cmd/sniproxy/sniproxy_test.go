@@ -4,10 +4,30 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"net"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netns"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tsnet"
+	"tailscale.com/tstest/integration"
+	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 func TestPortForwardingArguments(t *testing.T) {
@@ -34,4 +54,170 @@ func TestPortForwardingArguments(t *testing.T) {
 			t.Errorf("Parsed forward (-got, +want):\n%s", diff)
 		}
 	}
+}
+
+var verboseDERP = flag.Bool("verbose-derp", false, "if set, print DERP and STUN logs")
+var verboseNodes = flag.Bool("verbose-nodes", false, "if set, print tsnet.Server logs")
+
+func startControl(t *testing.T) (control *testcontrol.Server, controlURL string) {
+	// Corp#4520: don't use netns for tests.
+	netns.SetEnabled(false)
+	t.Cleanup(func() {
+		netns.SetEnabled(true)
+	})
+
+	derpLogf := logger.Discard
+	if *verboseDERP {
+		derpLogf = t.Logf
+	}
+	derpMap := integration.RunDERPAndSTUN(t, derpLogf, "127.0.0.1")
+	control = &testcontrol.Server{
+		DERPMap: derpMap,
+		DNSConfig: &tailcfg.DNSConfig{
+			Proxied: true,
+		},
+		MagicDNSDomain: "tail-scale.ts.net",
+	}
+	control.HTTPTestServer = httptest.NewUnstartedServer(control)
+	control.HTTPTestServer.Start()
+	t.Cleanup(control.HTTPTestServer.Close)
+	controlURL = control.HTTPTestServer.URL
+	t.Logf("testcontrol listening on %s", controlURL)
+	return control, controlURL
+}
+
+func startNode(t *testing.T, ctx context.Context, controlURL, hostname string) (*tsnet.Server, key.NodePublic, netip.Addr) {
+	t.Helper()
+
+	tmp := filepath.Join(t.TempDir(), hostname)
+	os.MkdirAll(tmp, 0755)
+	s := &tsnet.Server{
+		Dir:        tmp,
+		ControlURL: controlURL,
+		Hostname:   hostname,
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+	}
+	if !*verboseNodes {
+		s.Logf = logger.Discard
+	}
+	t.Cleanup(func() { s.Close() })
+
+	status, err := s.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, status.Self.PublicKey, status.TailscaleIPs[0]
+}
+
+func TestSNIProxyWithNetmapConfig(t *testing.T) {
+	c, controlURL := startControl(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Create a listener to proxy connections to.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Start sniproxy
+	sni, nodeKey, ip := startNode(t, ctx, controlURL, "snitest")
+	go run(ctx, sni, 0, sni.Hostname, false, 0, "", "")
+
+	// Configure the mock coordination server to send down app connector config.
+	config := &appctype.AppConnectorConfig{
+		DNAT: map[appctype.ConfigID]appctype.DNATConfig{
+			"nic_test": {
+				Addrs: []netip.Addr{ip},
+				To:    []string{"127.0.0.1"},
+				IP: []tailcfg.ProtoPortRange{
+					{
+						Proto: int(ipproto.TCP),
+						Ports: tailcfg.PortRange{First: uint16(ln.Addr().(*net.TCPAddr).Port), Last: uint16(ln.Addr().(*net.TCPAddr).Port)},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetNodeCapMap(nodeKey, tailcfg.NodeCapMap{
+		configCapKey: []tailcfg.RawMessage{tailcfg.RawMessage(b)},
+	})
+
+	// Lets spin up a second node (to represent the client).
+	client, _, _ := startNode(t, ctx, controlURL, "client")
+
+	// Make sure that the sni node has received its config.
+	l, err := sni.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotConfigured := false
+	for i := 0; i < 100; i++ {
+		s, err := l.StatusWithoutPeers(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.Self.CapMap) > 0 {
+			gotConfigured = true
+			break // we got it
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !gotConfigured {
+		t.Error("sni node never received its configuration from the coordination server!")
+	}
+
+	// Lets make the client open a connection to the sniproxy node, and
+	// make sure it results in a connection to our test listener.
+	w, err := client.Dial(ctx, "tcp", fmt.Sprintf("%s:%d", ip, ln.Addr().(*net.TCPAddr).Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	r, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+}
+
+func TestSNIProxyWithFlagConfig(t *testing.T) {
+	_, controlURL := startControl(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Create a listener to proxy connections to.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Start sniproxy
+	sni, _, ip := startNode(t, ctx, controlURL, "snitest")
+	go run(ctx, sni, 0, sni.Hostname, false, 0, "", fmt.Sprintf("tcp/%d/localhost", ln.Addr().(*net.TCPAddr).Port))
+
+	// Lets spin up a second node (to represent the client).
+	client, _, _ := startNode(t, ctx, controlURL, "client")
+
+	// Lets make the client open a connection to the sniproxy node, and
+	// make sure it results in a connection to our test listener.
+	w, err := client.Dial(ctx, "tcp", fmt.Sprintf("%s:%d", ip, ln.Addr().(*net.TCPAddr).Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	r, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
 }

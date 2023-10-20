@@ -67,6 +67,7 @@ func (s *Server) Configure(cfg *appctype.AppConnectorConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connectors = makeConnectorsFromConfig(cfg)
+	log.Printf("installed app connector config: %+v", s.connectors)
 }
 
 // HandleTCPFlow implements tsnet.FallbackTCPHandler.
@@ -193,8 +194,7 @@ func (c *connector) handleDNS(req *dnsmessage.Message, localAddr netip.Addr) (re
 }
 
 func makeDNSResponse(req *dnsmessage.Message, reachableIPs []netip.Addr) (response []byte, err error) {
-	buf := make([]byte, 1500)
-	resp := dnsmessage.NewBuilder(buf,
+	resp := dnsmessage.NewBuilder(response,
 		dnsmessage.Header{
 			ID:            req.Header.ID,
 			Response:      true,
@@ -203,8 +203,8 @@ func makeDNSResponse(req *dnsmessage.Message, reachableIPs []netip.Addr) (respon
 	resp.EnableCompression()
 
 	if len(req.Questions) == 0 {
-		buf, _ = resp.Finish()
-		return buf, nil
+		response, _ = resp.Finish()
+		return response, nil
 	}
 	q := req.Questions[0]
 	err = resp.StartQuestions()

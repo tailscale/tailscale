@@ -75,6 +75,9 @@ type Server struct {
 	// masquerade address to use for that peer.
 	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV{4,6}MasqAddrForThisPeer IP
 
+	// nodeCapMaps overrides the capability map sent down to a client.
+	nodeCapMaps map[key.NodePublic]tailcfg.NodeCapMap
+
 	// suppressAutoMapResponses is the set of nodes that should not be sent
 	// automatic map responses from serveMap. (They should only get manually sent ones)
 	suppressAutoMapResponses set.Set[key.NodePublic]
@@ -367,6 +370,14 @@ func (s *Server) SetMasqueradeAddresses(pairs []MasqueradePair) {
 	defer s.mu.Unlock()
 	s.masquerades = m
 	s.updateLocked("SetMasqueradeAddresses", s.nodeIDsLocked(0))
+}
+
+// SetNodeCapMap overrides the capability map the specified client receives.
+func (s *Server) SetNodeCapMap(nodeKey key.NodePublic, capMap tailcfg.NodeCapMap) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mak.Set(&s.nodeCapMaps, nodeKey, capMap)
+	s.updateLocked("SetNodeCapMap", s.nodeIDsLocked(0))
 }
 
 // nodeIDsLocked returns the node IDs of all nodes in the server, except
@@ -881,6 +892,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		// node key rotated away (once test server supports that)
 		return nil, nil
 	}
+	node.CapMap = s.nodeCapMaps[nk]
 	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
 
 	user, _ := s.getUser(nk)
