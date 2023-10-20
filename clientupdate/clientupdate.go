@@ -73,9 +73,6 @@ type Arguments struct {
 	//
 	// Leaving this empty is the same as using CurrentTrack.
 	Version string
-	// AppStore forces a local app store check, even if the current binary was
-	// not installed via an app store. TODO(cpalmer): Remove this.
-	AppStore bool
 	// Logf is a logger for update progress messages.
 	Logf logger.Logf
 	// Stdout and Stderr should be used for output instead of os.Stdout and
@@ -182,14 +179,12 @@ func (up *Updater) getUpdateFunction() updateFunction {
 		}
 	case "darwin":
 		switch {
-		case !up.Arguments.AppStore && !version.IsSandboxedMacOS():
-			return nil
-		case !up.Arguments.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
-			// TODO(noncombatant): return up.updateMacSys when we figure out why
-			// Sparkle update doesn't work when running "tailscale update".
-			return nil
-		default:
+		case version.IsMacAppStore():
 			return up.updateMacAppStore
+		case version.IsMacSysExt():
+			return up.updateMacSys
+		default:
+			return nil
 		}
 	case "freebsd":
 		return up.updateFreeBSD
@@ -625,53 +620,15 @@ func (up *Updater) updateMacSys() error {
 }
 
 func (up *Updater) updateMacAppStore() error {
-	out, err := exec.Command("defaults", "read", "/Library/Preferences/com.apple.commerce.plist", "AutoUpdate").CombinedOutput()
+	// We can't trigger the update via App Store from the sandboxed app. At
+	// most, we can open the App Store page for them.
+	up.Logf("Please use the App Store to update Tailscale.\nConsider enabling Automatic Updates in the App Store Settings, if you haven't already.\nOpening the Tailscale app page...")
+
+	out, err := exec.Command("open", "https://apps.apple.com/us/app/tailscale/id1475387142").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("can't check App Store auto-update setting: %w, output: %q", err, string(out))
-	}
-	const on = "1\n"
-	if string(out) != on {
-		up.Logf("NOTE: Automatic updating for App Store apps is turned off. You can change this setting in System Settings (search for ‘update’).")
-	}
-
-	out, err = exec.Command("softwareupdate", "--list").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("can't check App Store for available updates: %w, output: %q", err, string(out))
-	}
-
-	newTailscale := parseSoftwareupdateList(out)
-	if newTailscale == "" {
-		up.Logf("no Tailscale update available")
-		return nil
-	}
-
-	newTailscaleVer := strings.TrimPrefix(newTailscale, "Tailscale-")
-	if !up.confirm(newTailscaleVer) {
-		return nil
-	}
-
-	cmd := exec.Command("sudo", "softwareupdate", "--install", newTailscale)
-	cmd.Stdout = up.Stdout
-	cmd.Stderr = up.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("can't install App Store update for Tailscale: %w", err)
+		return fmt.Errorf("can't open the Tailscale page in App Store: %w, output: %q", err, string(out))
 	}
 	return nil
-}
-
-var macOSAppStoreListPattern = regexp.MustCompile(`(?m)^\s+\*\s+Label:\s*(Tailscale-\d[\d\.]+)`)
-
-// parseSoftwareupdateList searches the output of `softwareupdate --list` on
-// Darwin and returns the matching Tailscale package label. If there is none,
-// returns the empty string.
-//
-// See TestParseSoftwareupdateList for example inputs.
-func parseSoftwareupdateList(stdout []byte) string {
-	matches := macOSAppStoreListPattern.FindSubmatch(stdout)
-	if len(matches) < 2 {
-		return ""
-	}
-	return string(matches[1])
 }
 
 // winMSIEnv is the environment variable that, if set, is the MSI file for the
