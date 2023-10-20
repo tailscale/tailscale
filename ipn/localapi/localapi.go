@@ -2172,12 +2172,13 @@ func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
-
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, string(body), resp.StatusCode)
 		return
 	}
+	w.Write(body)
 	w.Header().Set("Content-Type", "application/json")
 }
 

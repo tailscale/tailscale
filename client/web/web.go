@@ -292,7 +292,6 @@ var (
 	errNotUsingTailscale = errors.New("not-using-tailscale")
 	errTaggedSource      = errors.New("tagged-source")
 	errNotOwner          = errors.New("not-owner")
-	errFailedAuth        = errors.New("failed-auth")
 )
 
 // getTailscaleBrowserSession retrieves the browser session associated with
@@ -413,12 +412,12 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("wait") == "true" {
 			// Client requested we block until user completes auth.
 			d, err := s.getOrAwaitAuth(r.Context(), session.AuthID, whois.Node.ID)
-			if errors.Is(err, errFailedAuth) {
-				http.Error(w, "user is unauthorized", http.StatusUnauthorized)
-				s.browserSessions.Delete(session.ID) // clean up the failed session
-				return
-			} else if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				// Clean up the session. Doing this on any error from control
+				// server to avoid the user getting stuck with a bad session
+				// cookie.
+				s.browserSessions.Delete(session.ID)
 				return
 			}
 			if d.Complete {
@@ -485,11 +484,7 @@ func (s *Server) getOrAwaitAuth(ctx context.Context, authID string, src tailcfg.
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized {
-		// User completed auth, but control server reported
-		// them unauthorized to manage this node.
-		return nil, errFailedAuth
-	} else if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed request: %s", body)
 	}
 	var authResp *tailcfg.WebClientAuthResponse
