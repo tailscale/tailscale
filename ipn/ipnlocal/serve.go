@@ -245,6 +245,9 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	if config.IsFunnelOn() && prefs.ShieldsUp() {
 		return errors.New("Unable to turn on Funnel while shields-up is enabled")
 	}
+	if b.isConfigLocked_Locked() {
+		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
+	}
 
 	nm := b.netMap
 	if nm == nil {

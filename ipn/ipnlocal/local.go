@@ -2760,11 +2760,17 @@ func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 	return b.checkPrefsLocked(p)
 }
 
+// isConfigLocked_Locked reports whether the parsed config file is locked.
+// b.mu must be held.
+func (b *LocalBackend) isConfigLocked_Locked() bool {
+	// TODO(bradfitz,maisem): make this more fine-grained, permit changing
+	// some things if they're not explicitly set in the config. But for now
+	// (2023-10-16), just blanket disable everything.
+	return b.conf != nil && !b.conf.Parsed.Locked.EqualBool(false)
+}
+
 func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
-	if b.conf != nil && !b.conf.Parsed.Locked.EqualBool(false) {
-		// TODO(bradfitz,maisem): make this more fine-grained, permit changing
-		// some things if they're not explicitly set in the config. But for now
-		// (2023-10-16), just blanket disable everything.
+	if b.isConfigLocked_Locked() {
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 	var errs []error
