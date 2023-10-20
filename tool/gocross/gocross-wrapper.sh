@@ -90,7 +90,10 @@ fi
 # Anyway, build gocross in a stripped down universe.
 gocross_path="gocross"
 gocross_ok=0
-wantver="$(git rev-parse HEAD)"
+wantver="${GOCROSS_WANTVER:-}"
+if [[ "$wantver" == "" ]]; then
+    wantver="$(git rev-parse HEAD)"
+fi
 if [[ -x "$gocross_path" ]]; then
 	gotver="$($gocross_path gocross-version 2>/dev/null || echo '')"
 	if [[ "$gotver" == "$wantver" ]]; then

@@ -15,6 +15,9 @@ import (
 )
 
 func toolchainRev() (string, error) {
+	if v := os.Getenv("GO_TOOLCHAIN_REV"); v != "" {
+		return v, nil
+	}
 	// gocross gets built in the root of the repo that has toolchain
 	// information, so we can use os.Args[0] to locate toolchain info.
 	//
