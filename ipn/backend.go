@@ -6,10 +6,10 @@ package ipn
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrop"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -109,7 +109,7 @@ type Notify struct {
 	// of being transferred.
 	//
 	// Deprecated: use LocalClient.AwaitWaitingFiles instead.
-	IncomingFiles []PartialFile `json:",omitempty"`
+	IncomingFiles []taildrop.PartialFile `json:",omitempty"`
 
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.
@@ -162,24 +162,6 @@ func (n Notify) String() string {
 	}
 	s := sb.String()
 	return s[0:len(s)-1] + "}"
-}
-
-// PartialFile represents an in-progress file transfer.
-type PartialFile struct {
-	Name         string    // e.g. "foo.jpg"
-	Started      time.Time // time transfer started
-	DeclaredSize int64     // or -1 if unknown
-	Received     int64     // bytes copied thus far
-
-	// PartialPath is set non-empty in "direct" file mode to the
-	// in-progress '*.partial' file's path when the peerapi isn't
-	// being used; see LocalBackend.SetDirectFileRoot.
-	PartialPath string `json:",omitempty"`
-
-	// Done is set in "direct" mode when the partial file has been
-	// closed and is ready for the caller to rename away the
-	// ".partial" suffix.
-	Done bool `json:",omitempty"`
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state

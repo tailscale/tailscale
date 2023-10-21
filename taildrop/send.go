@@ -22,23 +22,69 @@ type incomingFileKey struct {
 	name string // e.g., "foo.jpeg"
 }
 
-type incomingFile struct {
+type IncomingFile struct {
 	clock tstime.DefaultClock
 
-	started        time.Time
-	size           int64     // or -1 if unknown; never 0
-	w              io.Writer // underlying writer
+	Name           string // "foo.jpg"
+	Started        time.Time
+	Size           int64     // or -1 if unknown; never 0
+	W              io.Writer // underlying writer
 	sendFileNotify func()    // called when done
-	partialPath    string    // non-empty in direct mode
+	PartialPath    string    // non-empty in direct mode
 
-	mu         sync.Mutex
-	copied     int64
-	done       bool
+	Mu         sync.Mutex
+	Copied     int64
+	Done       bool
 	lastNotify time.Time
 }
 
-func (f *incomingFile) Write(p []byte) (n int, err error) {
-	n, err = f.w.Write(p)
+// type incomingFile struct {
+// 	name        string // "foo.jpg"
+// 	started     time.Time
+// 	size        int64     // or -1 if unknown; never 0
+// 	w           io.Writer // underlying writer
+// 	ph          *peerAPIHandler
+// 	partialPath string // non-empty in direct mode
+
+// 	mu         sync.Mutex
+// 	copied     int64
+// 	done       bool
+// 	lastNotify time.Time
+// }
+
+func (f *IncomingFile) PartialFile() PartialFile {
+	f.Mu.Lock()
+	defer f.Mu.Unlock()
+	return PartialFile{
+		Name:         f.Name,
+		Started:      f.Started,
+		DeclaredSize: f.Size,
+		Received:     f.Copied,
+		PartialPath:  f.PartialPath,
+		Done:         f.Done,
+	}
+}
+
+// PartialFile represents an in-progress file transfer.
+type PartialFile struct {
+	Name         string    // e.g. "foo.jpg"
+	Started      time.Time // time transfer started
+	DeclaredSize int64     // or -1 if unknown
+	Received     int64     // bytes copied thus far
+
+	// PartialPath is set non-empty in "direct" file mode to the
+	// in-progress '*.partial' file's path when the peerapi isn't
+	// being used; see LocalBackend.SetDirectFileRoot.
+	PartialPath string `json:",omitempty"`
+
+	// Done is set in "direct" mode when the partial file has been
+	// closed and is ready for the caller to rename away the
+	// ".partial" suffix.
+	Done bool `json:",omitempty"`
+}
+
+func (f *IncomingFile) Write(p []byte) (n int, err error) {
+	n, err = f.W.Write(p)
 
 	var needNotify bool
 	defer func() {
@@ -47,9 +93,9 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 		}
 	}()
 	if n > 0 {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.copied += int64(n)
+		f.Mu.Lock()
+		defer f.Mu.Unlock()
+		f.Copied += int64(n)
 		now := f.clock.Now()
 		if f.lastNotify.IsZero() || now.Sub(f.lastNotify) > time.Second {
 			f.lastNotify = now
@@ -101,15 +147,15 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	// Check whether there is an in-progress transfer for the file.
 	partialPath := dstPath + id.partialSuffix()
 	inFileKey := incomingFileKey{id, baseName}
-	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
-		inFile := &incomingFile{
+	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *IncomingFile {
+		inFile := &IncomingFile{
 			clock:          m.opts.Clock,
-			started:        m.opts.Clock.Now(),
-			size:           length,
+			Started:        m.opts.Clock.Now(),
+			Size:           length,
 			sendFileNotify: m.opts.SendFileNotify,
 		}
 		if m.opts.DirectFileMode {
-			inFile.partialPath = partialPath
+			inFile.PartialPath = partialPath
 		}
 		return inFile
 	})
@@ -134,7 +180,7 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 			m.deleter.Insert(filepath.Base(partialPath)) // mark partial file for eventual deletion
 		}
 	}()
-	inFile.w = f
+	inFile.W = f
 
 	// A positive offset implies that we are resuming an existing file.
 	// Seek to the appropriate offset and truncate the file.
@@ -170,9 +216,9 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	// Return early for avoidPartialRename since users of AvoidFinalRename
 	// are depending on the exact naming of partial files.
 	if avoidPartialRename {
-		inFile.mu.Lock()
-		inFile.done = true
-		inFile.mu.Unlock()
+		inFile.Mu.Lock()
+		inFile.Done = true
+		inFile.Mu.Unlock()
 		m.totalReceived.Add(1)
 		m.opts.SendFileNotify()
 		return fileLength, nil

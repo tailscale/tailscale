@@ -25,7 +25,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"tailscale.com/ipn"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -110,7 +109,7 @@ type Manager struct {
 	opts ManagerOptions
 
 	// incomingFiles is a map of files actively being received.
-	incomingFiles syncs.Map[incomingFileKey, *incomingFile]
+	incomingFiles syncs.Map[incomingFileKey, *IncomingFile]
 	// deleter managers asynchronous deletion of files.
 	deleter fileDeleter
 
@@ -229,21 +228,22 @@ func rangeDir(dir string, fn func(fs.DirEntry) bool) error {
 }
 
 // IncomingFiles returns a list of active incoming files.
-func (m *Manager) IncomingFiles() []ipn.PartialFile {
+
+func (m *Manager) IncomingFiles() []PartialFile {
 	// Make sure we always set n.IncomingFiles non-nil so it gets encoded
 	// in JSON to clients. They distinguish between empty and non-nil
 	// to know whether a Notify should be able about files.
-	files := make([]ipn.PartialFile, 0)
-	m.incomingFiles.Range(func(k incomingFileKey, f *incomingFile) bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		files = append(files, ipn.PartialFile{
+	files := make([]PartialFile, 0)
+	m.incomingFiles.Range(func(k incomingFileKey, f *IncomingFile) bool {
+		f.Mu.Lock()
+		defer f.Mu.Unlock()
+		files = append(files, PartialFile{
 			Name:         k.name,
-			Started:      f.started,
-			DeclaredSize: f.size,
-			Received:     f.copied,
-			PartialPath:  f.partialPath,
-			Done:         f.done,
+			Started:      f.Started,
+			DeclaredSize: f.Size,
+			Received:     f.Copied,
+			PartialPath:  f.PartialPath,
+			Done:         f.Done,
 		})
 		return true
 	})

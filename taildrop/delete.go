@@ -70,7 +70,7 @@ func (d *fileDeleter) Init(m *Manager, eventHook func(string)) {
 				nameID := strings.TrimSuffix(de.Name(), partialSuffix)
 				if i := strings.LastIndexByte(nameID, '.'); i > 0 {
 					key := incomingFileKey{ClientID(nameID[i+len("."):]), nameID[:i]}
-					m.incomingFiles.LoadFunc(key, func(_ *incomingFile, loaded bool) {
+					m.incomingFiles.LoadFunc(key, func(_ *IncomingFile, loaded bool) {
 						if !loaded {
 							d.Insert(de.Name())
 						}
