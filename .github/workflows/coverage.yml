@@ -1,0 +1,30 @@
+name: Code Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: go.mod
+
+    - name: build all
+      run: ./tool/go install ./cmd/...
+
+    - name: Run tests on linux with coverage data
+      run: ./tool/go test -race -covermode atomic -coverprofile=covprofile ./...
