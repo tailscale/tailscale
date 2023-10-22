@@ -1,4 +1,4 @@
-name: update-flake
+name: update-nix-flake
 
 on:
   # run action when a change lands in the main branch which updates go.mod. Also
@@ -8,7 +8,7 @@ on:
       - main
     paths:
       - go.mod
-      - .github/workflows/update-flakes.yml
+      - .github/workflows/update-nix-flakes.yml
   workflow_dispatch:
 
 concurrency:
@@ -16,15 +16,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  update-flake:
+  update-nix-flake:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Run update-flakes
-        run: ./update-flake.sh
+      - name: Run update-nix-flakes
+        run: ./update-nix-flake.sh
 
       - name: Get access token
         uses: tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92 # v1.8.0
