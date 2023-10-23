@@ -146,6 +146,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 	s = &Server{
 		devMode:    opts.DevMode,
 		lc:         opts.LocalClient,
+		cgiMode:    opts.CGIMode,
 		pathPrefix: opts.PathPrefix,
 		timeNow:    opts.TimeNow,
 	}
