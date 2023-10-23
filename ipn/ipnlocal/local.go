@@ -157,7 +157,6 @@ type LocalBackend struct {
 	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                 ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
-	pushDeviceToken       syncs.AtomicValue[string]
 	backendLogID          logid.PublicID
 	unregisterNetMon      func()
 	unregisterHealthWatch func()
@@ -197,8 +196,22 @@ type LocalBackend struct {
 	shouldInterceptTCPPortAtomic syncs.AtomicValue[func(uint16) bool]
 	numClientStatusCalls         atomic.Uint32
 
-	// The mutex protects the following elements.
-	mu             sync.Mutex
+	// The mutex protects all the following elements.
+	mu sync.Mutex
+
+	// hostinfo is the up-to-date hostinfo, it is only replaced never mutated in
+	// place. This contains all values except for those listed below. To get the
+	// fully populated hostinfo, use b.generateHostinfoForControlLocked().
+	//
+	// TODO(maisem): tailcfg.NetInfo is owned by cc and blended into hostinfo,
+	// we should move it here too.
+	hostinfo tailcfg.HostinfoView
+	// The following values are plugged into a copy of b.hostinfo before it is
+	// sent to control, they are not set on b.hostinfo itself.
+	wantIngress     bool
+	services        views.Slice[tailcfg.Service]
+	pushDeviceToken string
+
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
@@ -213,8 +226,6 @@ type LocalBackend struct {
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
 	capTailnetLock bool // whether netMap contains the tailnet lock capability
-	// hostinfo is mutated in-place while mu is held.
-	hostinfo *tailcfg.Hostinfo
 	// netMap is the most recently set full netmap from the controlclient.
 	// It can't be mutated in place once set. Because it can't be mutated in place,
 	// delta updates from the control server don't apply to it. Instead, use
@@ -1444,8 +1455,8 @@ func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
 	//   * UpdatePrefs
 	//   * AuthKey
 	return b.state == ipn.Running &&
-		b.hostinfo != nil &&
-		b.hostinfo.FrontendLogID == opts.FrontendLogID &&
+		b.hostinfo.Valid() &&
+		b.hostinfo.FrontendLogID() == opts.FrontendLogID &&
 		opts.LegacyMigrationPrefs == nil &&
 		opts.UpdatePrefs == nil &&
 		opts.AuthKey == ""
@@ -1518,14 +1529,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		return nil
 	}
 
-	hostinfo := hostinfo.New()
-	applyConfigToHostinfo(hostinfo, b.conf)
-	hostinfo.BackendLogID = b.backendLogID.String()
-	hostinfo.FrontendLogID = opts.FrontendLogID
-	hostinfo.Userspace.Set(b.sys.IsNetstack())
-	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
-	b.logf.JSON(1, "Hostinfo", hostinfo)
-
 	// TODO(apenwarr): avoid the need to reinit controlclient.
 	// This will trigger a full relogin/reconfigure cycle every
 	// time a Handle reconnects to the backend. Ideally, we
@@ -1536,10 +1539,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	prevCC := b.resetControlClientLocked()
 	httpTestClient := b.httpTestClient
 
-	if b.hostinfo != nil {
-		hostinfo.Services = b.hostinfo.Services // keep any previous services
-	}
-	b.hostinfo = hostinfo
 	b.state = ipn.NoState
 
 	if err := b.migrateStateLocked(opts.LegacyMigrationPrefs); err != nil {
@@ -1557,6 +1556,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		}
 		b.setAtomicValuesFromPrefsLocked(pv)
 	}
+	b.initHostinfoLocked(opts)
+	hiForClient := b.generateHostinfoForControlLocked()
+	b.logf.JSON(1, "Hostinfo", hiForClient)
 
 	prefs := b.pm.CurrentPrefs()
 	wantRunning := prefs.WantRunning()
@@ -1573,7 +1575,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if inServerMode := prefs.ForceDaemon(); inServerMode || runtime.GOOS == "windows" {
 		b.logf("Start: serverMode=%v", inServerMode)
 	}
-	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
 
 	b.setNetMapLocked(nil)
 	persistv := prefs.Persist().AsStruct()
@@ -1581,6 +1582,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		persistv = new(persist.Persist)
 	}
 	b.updateFilterLocked(nil, ipn.PrefsView{})
+
 	b.mu.Unlock()
 
 	if b.portpoll != nil {
@@ -1627,7 +1629,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Persist:              *persistv,
 		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
-		Hostinfo:             hostinfo,
+		Hostinfo:             hiForClient,
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           debugFlags,
@@ -2021,10 +2023,7 @@ func (b *LocalBackend) readPoller() {
 		}
 
 		b.mu.Lock()
-		if b.hostinfo == nil {
-			b.hostinfo = new(tailcfg.Hostinfo)
-		}
-		b.hostinfo.Services = sl
+		b.services = views.SliceOf(sl)
 		b.mu.Unlock()
 
 		b.doSetHostinfoFilterServices()
@@ -2038,26 +2037,23 @@ func (b *LocalBackend) readPoller() {
 
 // GetPushDeviceToken returns the push notification device token.
 func (b *LocalBackend) GetPushDeviceToken() string {
-	return b.pushDeviceToken.Load()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pushDeviceToken
 }
 
 // SetPushDeviceToken sets the push notification device token and informs the
 // controlclient of the new value.
 func (b *LocalBackend) SetPushDeviceToken(tk string) {
-	old := b.pushDeviceToken.Swap(tk)
+	b.mu.Lock()
+	old := b.pushDeviceToken
+	b.pushDeviceToken = tk
+	b.mu.Unlock()
+
 	if old == tk {
 		return
 	}
 	b.doSetHostinfoFilterServices()
-}
-
-func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
-	if c == nil {
-		return
-	}
-	if c.Parsed.Hostname != nil {
-		hi.Hostname = *c.Parsed.Hostname
-	}
 }
 
 // WatchNotifications subscribes to the ipn.Notify message bus notification
@@ -2707,14 +2703,11 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 	return ret
 }
 
-// shouldUploadServices reports whether this node should include services
-// in Hostinfo. When the user preferences currently request "shields up"
-// mode, all inbound connections are refused, so services are not reported.
-// Otherwise, shouldUploadServices respects NetMap.CollectServices.
-func (b *LocalBackend) shouldUploadServices() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
+// shouldUploadServicesLocked reports whether this node should include services
+// in Hostinfo. When the user preferences currently request "shields up" mode,
+// all inbound connections are refused, so services are not reported. Otherwise,
+// shouldUploadServices respects NetMap.CollectServices.
+func (b *LocalBackend) shouldUploadServicesLocked() bool {
 	p := b.pm.CurrentPrefs()
 	if !p.Valid() || b.netMap == nil {
 		return false // default to safest setting
@@ -2940,20 +2933,6 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	b.setPrefsLockedOnEntry("SetPrefs", newp)
 }
 
-// wantIngressLocked reports whether this node has ingress configured. This bool
-// is sent to the coordination server (in Hostinfo.WireIngress) as an
-// optimization hint to know primarily which nodes are NOT using ingress, to
-// avoid doing work for regular nodes.
-//
-// Even if the user's ServeConfig.AllowFunnel map was manually edited in raw
-// mode and contains map entries with false values, sending true (from Len > 0)
-// is still fine. This is only an optimization hint for the control plane and
-// doesn't affect security or correctness. And we also don't expect people to
-// modify their ServeConfig in raw mode.
-func (b *LocalBackend) wantIngressLocked() bool {
-	return b.serveConfig.Valid() && b.serveConfig.HasAllowFunnel()
-}
-
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a readonly copy of the new prefs.
@@ -2970,13 +2949,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	// anyway. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.
-
-	oldHi := b.hostinfo
-	newHi := oldHi.Clone()
-	b.applyPrefsToHostinfoLocked(newHi, newp.View())
-	b.hostinfo = newHi
-	hostInfoChanged := !oldHi.Equal(newHi)
-	cc := b.cc
 
 	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
 	if caller == "SetPrefs" {
@@ -3010,6 +2982,14 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.logf("failed to save new controlclient state: %v", err)
 	}
 	b.lastProfileID = b.pm.CurrentProfile().ID
+
+	oldHI, newHI := b.hostinfo, b.hostinfo.AsStruct()
+	b.applyPrefsToHostinfoLocked(newHI)
+	b.hostinfo = newHI.View()
+
+	hostInfoChanged := !oldHI.Equal(b.hostinfo)
+
+	cc := b.cc
 	b.mu.Unlock()
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
@@ -3111,6 +3091,9 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	return nil, nil
 }
 
+// peerAPIServicesLocked returns the list of services that the peer API
+// is currently listening on.
+// b.mu must be held.
 func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 	for _, pln := range b.peerAPIListeners {
 		proto := tailcfg.PeerAPI4
@@ -3131,6 +3114,9 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 			Port:  1, // version
 		})
 	}
+	if b.egg {
+		ret = append(ret, tailcfg.Service{Proto: "egg", Port: 1})
+	}
 	return ret
 }
 
@@ -3141,37 +3127,45 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices() {
 	b.mu.Lock()
-	cc := b.cc
-	if cc == nil {
+	if b.cc == nil {
 		// Control client isn't up yet.
 		b.mu.Unlock()
 		return
 	}
-	if b.hostinfo == nil {
-		b.mu.Unlock()
+	cc := b.cc
+	hi := b.generateHostinfoForControlLocked()
+	b.mu.Unlock()
+	if hi == nil {
 		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
 		return
 	}
-	peerAPIServices := b.peerAPIServicesLocked()
-	if b.egg {
-		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
+	cc.SetHostinfo(hi)
+}
+
+// generateHostinfoForControlLocked generates a Hostinfo struct for sending to
+// control, based on the current state of the backend.
+// b.mu must be held.
+func (b *LocalBackend) generateHostinfoForControlLocked() *tailcfg.Hostinfo {
+	if !b.hostinfo.Valid() {
+		return nil
+	}
+	hi := b.hostinfo.AsStruct()
+
+	hi.Services = b.peerAPIServicesLocked()
+	if b.shouldUploadServicesLocked() {
+		hi.Services = b.services.AppendTo(hi.Services)
 	}
 
-	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
-	hi := *b.hostinfo // shallow copy
-	b.mu.Unlock()
+	// The Hostinfo.WantIngress field tells control whether this node wants to
+	// be wired up for ingress connections. If harmless if it's accidentally
+	// true; the actual policy is controlled in tailscaled by ServeConfig. But
+	// if this is accidentally false, then control may not configure DNS
+	// properly. This exists as an optimization to control to program fewer DNS
+	// records that have ingress enabled but are not actually being used.
+	hi.WireIngress = b.wantIngress
 
-	// Make a shallow copy of hostinfo so we can mutate
-	// at the Service field.
-	if !b.shouldUploadServices() {
-		hi.Services = []tailcfg.Service{}
-	}
-	// Don't mutate hi.Service's underlying array. Append to
-	// the slice with no free capacity.
-	c := len(hi.Services)
-	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
-	hi.PushDeviceToken = b.pushDeviceToken.Load()
-	cc.SetHostinfo(&hi)
+	hi.PushDeviceToken = b.pushDeviceToken
+	return hi
 }
 
 // NetMap returns the latest cached network map received from
@@ -3827,8 +3821,29 @@ func unmapIPPrefixes(ippsList ...[]netip.Prefix) (ret []netip.Prefix) {
 	return ret
 }
 
+// initHostinfoLocked constructs a hostinfo struct and assigns it to
+// b.hostinfo.
 // b.mu must be held.
-func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ipn.PrefsView) {
+func (b *LocalBackend) initHostinfoLocked(opts ipn.Options) {
+	hi := hostinfo.New()
+	hi.BackendLogID = b.backendLogID.String()
+	hi.FrontendLogID = opts.FrontendLogID
+	hi.Userspace.Set(b.sys.IsNetstack())
+	hi.UserspaceRouter.Set(b.sys.IsNetstackRouter())
+
+	if b.conf != nil && b.conf.Parsed.Hostname != nil {
+		hi.Hostname = *b.conf.Parsed.Hostname
+	}
+	b.applyPrefsToHostinfoLocked(hi)
+
+	b.hostinfo = hi.View()
+}
+
+// applyPrefsToHostinfoLocked updates the given hostinfo with the
+// current prefs.
+// b.mu must be held.
+func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo) {
+	prefs := b.pm.CurrentPrefs()
 	if h := prefs.Hostname(); h != "" {
 		hi.Hostname = h
 	}
@@ -3845,14 +3860,6 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		sshHostKeys = b.getSSHHostKeyPublicStrings()
 	}
 	hi.SSH_HostKeys = sshHostKeys
-
-	// The Hostinfo.WantIngress field tells control whether this node wants to
-	// be wired up for ingress connections. If harmless if it's accidentally
-	// true; the actual policy is controlled in tailscaled by ServeConfig. But
-	// if this is accidentally false, then control may not configure DNS
-	// properly. This exists as an optimization to control to program fewer DNS
-	// records that have ingress enabled but are not actually being used.
-	hi.WireIngress = b.wantIngressLocked()
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -4190,8 +4197,7 @@ func (b *LocalBackend) assertClientLocked() {
 	}
 }
 
-// setNetInfo sets b.hostinfo.NetInfo to ni, and passes ni along to the
-// controlclient, if one exists.
+// setNetInfo sets the provided NetInfo on the control client, if any.
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
@@ -4371,6 +4377,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	b.reloadServeConfigLocked(prefs)
+	var wireIngress bool
 	if b.serveConfig.Valid() {
 		servePorts := make([]uint16, 0, 3)
 		b.serveConfig.RangeOverTCPs(func(port uint16, _ ipn.TCPPortHandlerView) bool {
@@ -4387,11 +4394,12 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		if !b.sys.IsNetstack() {
 			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
 		}
+		wireIngress = b.serveConfig.HasAllowFunnel()
 	}
 	// Kick off a Hostinfo update to control if WireIngress changed.
-	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
-		b.logf("Hostinfo.WireIngress changed to %v", wire)
-		b.hostinfo.WireIngress = wire
+	if b.wantIngress != wireIngress {
+		b.wantIngress = wireIngress
+		b.logf("Hostinfo.WireIngress changed to %v", wireIngress)
 		go b.doSetHostinfoFilterServices()
 	}
 

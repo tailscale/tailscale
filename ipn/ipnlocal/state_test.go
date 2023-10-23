@@ -915,7 +915,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
-	b.hostinfo = &tailcfg.Hostinfo{OS: "testos"}
+	b.hostinfo = (&tailcfg.Hostinfo{OS: "testos"}).View()
 	b.pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey:    key.NewNode(),
