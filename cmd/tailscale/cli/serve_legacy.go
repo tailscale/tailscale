@@ -164,6 +164,7 @@ type serveEnv struct {
 	tcp              string    // TCP port
 	tlsTerminatedTCP string    // a TLS terminated TCP port
 	subcmd           serveMode // subcommand
+	yes              bool      // update without prompt
 
 	lc localServeClient // localClient interface, specific to serve
 

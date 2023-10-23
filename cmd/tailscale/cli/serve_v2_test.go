@@ -725,6 +725,40 @@ func TestServeDevConfigMutations(t *testing.T) {
 		wantErr: anyErr(),
 	})
 
+	add(step{
+		command: cmd("serve reset"),
+		want:    &ipn.ServeConfig{},
+	})
+
+	// start two handlers and turn them off in one command
+	add(step{
+		command: cmd("serve --https=4545 --set-path=/foo --bg localhost:3000"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
+					"/foo": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("serve --https=4545 --set-path=/bar --bg localhost:3000"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
+					"/foo": {Proxy: "http://127.0.0.1:3000"},
+					"/bar": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("serve --https=4545 --bg --yes localhost:3000 off"),
+		want:    &ipn.ServeConfig{},
+	})
+
 	lc := &fakeLocalServeClient{}
 	// And now run the steps above.
 	for i, st := range steps {

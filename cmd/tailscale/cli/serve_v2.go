@@ -128,7 +128,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.StringVar(&e.http, "http", "", "Expose an HTTP server at the specified port")
 			fs.StringVar(&e.tcp, "tcp", "", "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
-
+			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts")
 		}),
 		UsageFunc: usageFunc,
 		Subcommands: []*ffcli.Command{
@@ -679,13 +679,40 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-	if !sc.WebHandlerExists(hp, mount) {
+	portStr := strconv.Itoa(int(srvPort))
+	hp := ipn.HostPort(net.JoinHostPort(dnsName, portStr))
+
+	var targetExists bool
+	var mounts []string
+	// mount is deduced from e.setPath but it is ambiguous as
+	// to whether the user explicitly passed "/" or it was defaulted to.
+	if e.setPath == "" {
+		targetExists = sc.Web[hp] != nil && len(sc.Web[hp].Handlers) > 0
+		if targetExists {
+			for mount := range sc.Web[hp].Handlers {
+				mounts = append(mounts, mount)
+			}
+		}
+	} else {
+		targetExists = sc.WebHandlerExists(hp, mount)
+		mounts = []string{mount}
+	}
+
+	if !targetExists {
 		return errors.New("error: handler does not exist")
 	}
 
+	if len(mounts) > 1 {
+		msg := fmt.Sprintf("Are you sure you want to delete %d handlers under port %s?", len(mounts), portStr)
+		if !e.yes && !promptYesNo(msg) {
+			return nil
+		}
+	}
+
 	// delete existing handler, then cascade delete if empty
-	delete(sc.Web[hp].Handlers, mount)
+	for _, m := range mounts {
+		delete(sc.Web[hp].Handlers, m)
+	}
 	if len(sc.Web[hp].Handlers) == 0 {
 		delete(sc.Web, hp)
 		delete(sc.TCP, srvPort)
