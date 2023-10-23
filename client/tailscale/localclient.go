@@ -1377,6 +1377,39 @@ func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt)
 	}, nil
 }
 
+func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/update/check", http.StatusOK, nil)
+	if err != nil {
+		return nil, err
+	}
+	cv, err := decodeJSON[tailcfg.ClientVersion](body)
+	if err != nil {
+		return nil, err
+	}
+	return &cv, nil
+}
+
+func (lc *LocalClient) InstallUpdate(ctx context.Context) (io.Reader, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/update/install", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		return nil, err
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		io.Copy(writer, res.Body)
+		res.Body.Close()
+	}()
+	// reader contains progress informatiom from the update
+	// TODO(naman): doLocalRequestNiceError blocks until the request is complete, so
+	// reader doesn't actually get created or have any data until tailscaled is already
+	// restarting
+	return reader, nil
+}
+
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
 // It's returned by LocalClient.WatchIPNBus.
 //

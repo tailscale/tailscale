@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -120,6 +121,8 @@ var handler = map[string]localAPIHandler{
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
 	"query-feature":               (*Handler).serveQueryFeature,
+	"update/check":                (*Handler).serveUpdateCheck,
+	"update/install":              (*Handler).serveUpdateInstall,
 }
 
 var (
@@ -2243,6 +2246,64 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+
+	if err != nil {
+		// if we don't support auto-update, just say that we're up to date
+		if errors.Is(err, errors.ErrUnsupported) {
+			json.NewEncoder(w).Encode(tailcfg.ClientVersion{RunningLatest: true})
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	cv := h.b.StatusWithoutPeers().ClientVersion
+	if cv == nil {
+		cv = &tailcfg.ClientVersion{RunningLatest: true}
+	}
+
+	json.NewEncoder(w).Encode(cv)
+}
+
+func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		fmt.Println("err: only post allowed")
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	streamToClient := func(format string, args ...any) {
+		w.Write([]byte(fmt.Sprintf(format+"\n", args)))
+	}
+
+	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
+		Logf: streamToClient,
+	})
+
+	if err != nil {
+		fmt.Println("err:", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+
+	fmt.Println("update started")
+	err = up.Update()
+	fmt.Println("update finished with err = ", err)
+
+	// TODO(naman): this approach will necessarily not be able to send HTTP status
+	// codes, since part of the data (and therefore all of the headers) are already
+	// sent
+	if err != nil {
+		streamToClient("update failed: %v", err)
+	}
 }
 
 var (

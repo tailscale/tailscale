@@ -381,6 +381,9 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
+	case path == "/update" && r.Method == "POST":
+		s.serveSelfUpdate(w, r)
+		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
 		return
@@ -403,6 +406,7 @@ type nodeData struct {
 	UnraidToken       string
 	IPNVersion        string
 	DebugMode         string // empty when not running in any debug mode
+	ClientVersion     tailcfg.ClientVersion
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -416,21 +420,27 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	cv, err := s.lc.CheckUpdate(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	profile := st.User[st.Self.UserID]
 	deviceName := strings.Split(st.Self.DNSName, ".")[0]
 	versionShort := strings.Split(st.Version, "-")[0]
 	data := &nodeData{
-		Profile:     profile,
-		Status:      st.BackendState,
-		DeviceName:  deviceName,
-		LicensesURL: licenses.LicensesURL(),
-		TUNMode:     st.TUN,
-		IsSynology:  distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
-		DSMVersion:  distro.DSMVersion(),
-		IsUnraid:    distro.Get() == distro.Unraid,
-		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
-		IPNVersion:  versionShort,
-		DebugMode:   s.tsDebugMode,
+		Profile:       profile,
+		Status:        st.BackendState,
+		DeviceName:    deviceName,
+		LicensesURL:   licenses.LicensesURL(),
+		TUNMode:       st.TUN,
+		IsSynology:    distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
+		DSMVersion:    distro.DSMVersion(),
+		IsUnraid:      distro.Get() == distro.Unraid,
+		UnraidToken:   os.Getenv("UNRAID_CSRF_TOKEN"),
+		IPNVersion:    versionShort,
+		DebugMode:     s.tsDebugMode,
+		ClientVersion: *cv,
 	}
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
@@ -533,6 +543,15 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	} else {
 		io.WriteString(w, "{}")
 	}
+}
+
+func (s *Server) serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
+	progress, err := s.lc.InstallUpdate(r.Context())
+	if err != nil {
+		log.Printf("%v", err)
+		w.Write([]byte(err.Error()))
+	}
+	io.Copy(w, progress)
 }
 
 func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {

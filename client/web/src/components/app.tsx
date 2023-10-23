@@ -1,14 +1,21 @@
 import React from "react"
-import { Footer, Header, IP, State } from "src/components/legacy"
+import { Footer, Header, IP, State, UpdateState } from "src/components/legacy"
 import useNodeData, { NodeData } from "src/hooks/node-data"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
+import { apiFetch } from "src/api"
+import { useState } from "react"
 
 export default function App() {
   // TODO(sonia): use isPosting value from useNodeData
   // to fill loading states.
   const { data, refreshData, updateNode } = useNodeData()
+
+  const initialUpdateState =
+    (data?.ClientVersion.RunningLatest) ? UpdateState.UpToDate : UpdateState.Available
+
+  const [updating, setUpdating] = useState<UpdateState>(initialUpdateState)
 
   if (!data) {
     // TODO(sonia): add a loading view
@@ -16,6 +23,57 @@ export default function App() {
   }
 
   const needsLogin = data?.Status === "NeedsLogin" || data?.Status === "NoState"
+
+  const installUpdate = () => {
+    const currentVersion = data.ClientVersion
+
+    apiFetch('/update', 'POST')
+      .then(async (res) => {
+        const reader = res.body?.getReader()
+        const decoder = new TextDecoder()
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            console.log(decoder.decode(value))
+            if (done) break
+          }
+        }
+      })
+      .catch(err => console.error(err))
+
+    setUpdating(UpdateState.InProgress)
+
+    let wentAway = false
+    function poll() {
+      apiFetch('/data', 'GET')
+      .then(res => res.json())
+      .then((res: NodeData) => {
+        if (!wentAway) return setTimeout(poll, 1000)
+        if (
+          !res.ClientVersion.RunningLatest ||
+          currentVersion.LatestVersion === res.ClientVersion.LatestVersion
+        ) {
+          setUpdating(UpdateState.Failed)
+          return
+        }
+        // TODO(naman): do I need to worry about unraid csrf token?
+
+        setUpdating(UpdateState.Complete)
+
+        setTimeout(() => {
+          setUpdating(UpdateState.UpToDate)
+        }, 15 * 1000)
+      })
+      .catch(err => {
+        wentAway = true
+        // TODO(naman): after a sufficiently long timeout we should give up and say
+        // that tailscaled died and update probably failed
+        setTimeout(poll, 1000)
+      })
+    }
+
+    poll()
+  }
 
   return !needsLogin &&
     (data.DebugMode === "login" || data.DebugMode === "full") ? (
@@ -32,7 +90,7 @@ export default function App() {
     <div className="py-14">
       <main className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
         <Header data={data} refreshData={refreshData} updateNode={updateNode} />
-        <IP data={data} />
+        <IP data={data} installUpdate={installUpdate} updating={updating} />
         <State data={data} updateNode={updateNode} />
       </main>
       <Footer licensesURL={data.LicensesURL} />

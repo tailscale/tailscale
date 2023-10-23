@@ -15,6 +15,7 @@ export type NodeData = {
   IsUnraid: boolean
   UnraidToken: string
   IPNVersion: string
+  ClientVersion: ClientVersion
 
   DebugMode: "" | "login" | "full" // empty when not running in any debug mode
 }
@@ -30,6 +31,12 @@ export type NodeUpdate = {
   AdvertiseExitNode?: boolean
   Reauthenticate?: boolean
   ForceLogout?: boolean
+}
+
+export type ClientVersion = {
+  RunningLatest: boolean,
+  LatestVersion?: string,
+  // TODO(naman): add other fields?
 }
 
 // useNodeData returns basic data about the current node.
