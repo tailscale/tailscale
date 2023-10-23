@@ -153,19 +153,30 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 }
 
 func validateArgs(subcmd serveMode, args []string) error {
-	switch len(args) {
-	case 0:
-		return flag.ErrHelp
-	case 1, 2:
-		if isLegacyInvocation(subcmd, args) {
-			fmt.Fprintf(os.Stderr, "error: the CLI for serve and funnel has changed.")
-			fmt.Fprintf(os.Stderr, "Please see https://tailscale.com/kb/1242/tailscale-serve for more information.")
-			return errHelp
+	if translation, ok := isLegacyInvocation(subcmd, args); ok {
+		fmt.Fprint(os.Stderr, "Error: the CLI for serve and funnel has changed.")
+		if translation != "" {
+			fmt.Fprint(os.Stderr, " You can run the following command instead:\n")
+			fmt.Fprintf(os.Stderr, "\t- %s\n", translation)
 		}
-	default:
-		fmt.Fprintf(os.Stderr, "error: invalid number of arguments (%d)", len(args))
+		fmt.Fprint(os.Stderr, "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
 		return errHelp
 	}
+	if len(args) == 0 {
+		return flag.ErrHelp
+	}
+	if len(args) > 2 {
+		fmt.Fprintf(os.Stderr, "Error: invalid number of arguments (%d)\n", len(args))
+		return errHelp
+	}
+	turnOff := args[len(args)-1] == "off"
+	if len(args) == 2 && !turnOff {
+		fmt.Fprintln(os.Stderr, "Error: invalid argument format")
+		return errHelp
+	}
+
+	// Given the two checks above, we can assume there
+	// are only 1 or 2 arguments which is valid.
 	return nil
 }
 
@@ -656,18 +667,98 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 	return srvType, srvPort, nil
 }
 
-func isLegacyInvocation(subcmd serveMode, args []string) bool {
-	if subcmd == serve && len(args) == 2 {
-		prefixes := []string{"http", "https", "tcp", "tls-terminated-tcp"}
+// isLegacyInvocation helps transition customers who have been using the beta
+// CLI to the newer API by returning a translation from the old command to the new command.
+// The second result is a boolean that only returns true if the given arguments is a valid
+// legacy invocation. If the given args are in the old format but are not valid, it will
+// return false and expects the new code path has enough validations to reject the request.
+func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
+	if subcmd == funnel {
+		if len(args) != 2 {
+			return "", false
+		}
+		_, err := strconv.ParseUint(args[0], 10, 16)
+		return "", err == nil && (args[1] == "on" || args[1] == "off")
+	}
+	turnOff := len(args) > 1 && args[len(args)-1] == "off"
+	if turnOff {
+		args = args[:len(args)-1]
+	}
+	if len(args) == 0 {
+		return "", false
+	}
 
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(args[0], prefix) {
-				return true
-			}
+	srcType, srcPortStr, found := strings.Cut(args[0], ":")
+	if !found {
+		if srcType == "https" && srcPortStr == "" {
+			// Default https port to 443.
+			srcPortStr = "443"
+		} else if srcType == "http" && srcPortStr == "" {
+			// Default http port to 80.
+			srcPortStr = "80"
+		} else {
+			return "", false
 		}
 	}
 
-	return false
+	var wantLength int
+	switch srcType {
+	case "https", "http":
+		wantLength = 3
+	case "tcp", "tls-terminated-tcp":
+		wantLength = 2
+	default:
+		// return non-legacy, and let new code handle validation.
+		return "", false
+	}
+	// The length is either exactlly the same as in "https / <target>"
+	// or target is omitted as in "https / off" where omit the off at
+	// the top.
+	if len(args) != wantLength && !(turnOff && len(args) == wantLength-1) {
+		return "", false
+	}
+
+	cmd := []string{"tailscale", "serve", "--bg"}
+	switch srcType {
+	case "https":
+		// In the new code, we default to https:443,
+		// so we don't need to pass the flag explicitly.
+		if srcPortStr != "443" {
+			cmd = append(cmd, fmt.Sprintf("--https %s", srcPortStr))
+		}
+	case "http":
+		cmd = append(cmd, fmt.Sprintf("--http %s", srcPortStr))
+	case "tcp", "tls-terminated-tcp":
+		cmd = append(cmd, fmt.Sprintf("--%s %s", srcType, srcPortStr))
+	}
+
+	var mount string
+	if srcType == "https" || srcType == "http" {
+		mount = args[1]
+		if _, err := cleanMountPoint(mount); err != nil {
+			return "", false
+		}
+		if mount != "/" {
+			cmd = append(cmd, "--set-path "+mount)
+		}
+	}
+
+	// If there's no "off" there must always be a target destination.
+	// If there is "off", target is optional so check if it exists
+	// first before appending it.
+	hasTarget := !turnOff || (turnOff && len(args) == wantLength)
+	if hasTarget {
+		dest := args[len(args)-1]
+		if strings.Contains(dest, " ") {
+			dest = strconv.Quote(dest)
+		}
+		cmd = append(cmd, dest)
+	}
+	if turnOff {
+		cmd = append(cmd, "off")
+	}
+
+	return strings.Join(cmd, " "), true
 }
 
 // removeWebServe removes a web handler from the serve config
@@ -768,7 +859,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 //   - https-insecure://localhost:3000
 //   - https-insecure://localhost:3000/foo
 func expandProxyTargetDev(target string, supportedSchemes []string, defaultScheme string) (string, error) {
-	var host = "127.0.0.1"
+	const host = "127.0.0.1"
 
 	// support target being a port number
 	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
@@ -791,19 +882,20 @@ func expandProxyTargetDev(target string, supportedSchemes []string, defaultSchem
 		return "", fmt.Errorf("must be a URL starting with one of the supported schemes: %v", supportedSchemes)
 	}
 
+	// validate the host.
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1":
+	default:
+		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
+	}
+
 	// validate the port
 	port, err := strconv.ParseUint(u.Port(), 10, 16)
 	if err != nil || port == 0 {
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 
-	// validate the host.
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1":
-		u.Host = fmt.Sprintf("%s:%d", host, port)
-	default:
-		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
-	}
+	u.Host = fmt.Sprintf("%s:%d", host, port)
 
 	return u.String(), nil
 }

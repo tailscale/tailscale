@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1188,29 +1189,110 @@ func unindent(s string) string {
 
 func TestIsLegacyInvocation(t *testing.T) {
 	tests := []struct {
-		subcmd   serveMode
-		args     []string
-		expected bool
+		subcmd      serveMode
+		args        []string
+		expected    bool
+		translation string
 	}{
-		{subcmd: serve, args: []string{"https", "localhost:3000"}, expected: true},
-		{subcmd: serve, args: []string{"https:8443", "localhost:3000"}, expected: true},
-		{subcmd: serve, args: []string{"http", "localhost:3000"}, expected: true},
-		{subcmd: serve, args: []string{"http:80", "localhost:3000"}, expected: true},
-		{subcmd: serve, args: []string{"tcp:2222", "tcp://localhost:22"}, expected: true},
-		{subcmd: serve, args: []string{"tls-terminated-tcp:443", "tcp://localhost:80"}, expected: true},
+		{
+			subcmd:      serve,
+			args:        []string{"https", "/", "localhost:3000"},
+			expected:    true,
+			translation: "tailscale serve --bg localhost:3000",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"https", "/", "localhost:3000", "off"},
+			expected:    true,
+			translation: "tailscale serve --bg localhost:3000 off",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"https", "/", "off"},
+			expected:    true,
+			translation: "tailscale serve --bg off",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"https:4545", "/foo", "off"},
+			expected:    true,
+			translation: "tailscale serve --bg --https 4545 --set-path /foo off",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"https:4545", "/foo", "localhost:9090", "off"},
+			expected:    true,
+			translation: "tailscale serve --bg --https 4545 --set-path /foo localhost:9090 off",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"https:8443", "/", "localhost:3000"},
+			expected:    true,
+			translation: "tailscale serve --bg --https 8443 localhost:3000",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"http", "/", "localhost:3000"},
+			expected:    true,
+			translation: "tailscale serve --bg --http 80 localhost:3000",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"http:80", "/", "localhost:3000"},
+			expected:    true,
+			translation: "tailscale serve --bg --http 80 localhost:3000",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"https:10000", "/motd.txt", `text:Hello, world!`},
+			expected:    true,
+			translation: `tailscale serve --bg --https 10000 --set-path /motd.txt "text:Hello, world!"`,
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"tcp:2222", "tcp://localhost:22"},
+			expected:    true,
+			translation: "tailscale serve --bg --tcp 2222 tcp://localhost:22",
+		},
+		{
+			subcmd:      serve,
+			args:        []string{"tls-terminated-tcp:443", "tcp://localhost:80"},
+			expected:    true,
+			translation: "tailscale serve --bg --tls-terminated-tcp 443 tcp://localhost:80",
+		},
+		{
+			subcmd:   funnel,
+			args:     []string{"443", "on"},
+			expected: true,
+		},
+		{
+			subcmd:   funnel,
+			args:     []string{"443", "off"},
+			expected: true,
+		},
 
-		// false
-		{subcmd: serve, args: []string{"3000"}, expected: false},
-		{subcmd: serve, args: []string{"localhost:3000"}, expected: false},
+		{
+			subcmd:   serve,
+			args:     []string{"3000"},
+			expected: false,
+		},
+		{
+			subcmd:   serve,
+			args:     []string{"localhost:3000"},
+			expected: false,
+		},
 	}
 
-	for _, tt := range tests {
-		args := strings.Join(tt.args, " ")
-		t.Run(fmt.Sprintf("%v %s", infoMap[tt.subcmd].Name, args), func(t *testing.T) {
-			actual := isLegacyInvocation(tt.subcmd, tt.args)
+	for idx, tt := range tests {
+		t.Run(strconv.Itoa(idx), func(t *testing.T) {
+			gotTranslation, actual := isLegacyInvocation(tt.subcmd, tt.args)
 
 			if actual != tt.expected {
-				t.Errorf("Got: %v; expected: %v", actual, tt.expected)
+				t.Fatalf("got: %v; expected: %v", actual, tt.expected)
+			}
+
+			if gotTranslation != tt.translation {
+				t.Fatalf("expected translaction to be %q but got %q", tt.translation, gotTranslation)
 			}
 		})
 	}
