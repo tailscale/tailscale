@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -77,7 +76,7 @@ func TestSetPushDeviceToken(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Errorf("res.StatusCode=%d, want 200. body: %s", res.StatusCode, body)
 	}
-	if got := hostinfo.New().PushDeviceToken; got != want {
+	if got := h.b.GetPushDeviceToken(); got != want {
 		t.Errorf("hostinfo.PushDeviceToken=%q, want %q", got, want)
 	}
 }
