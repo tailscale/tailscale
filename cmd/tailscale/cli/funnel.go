@@ -54,7 +54,7 @@ func newFunnelCommand(e *serveEnv) *ffcli.Command {
 		Subcommands: []*ffcli.Command{
 			{
 				Name:      "status",
-				Exec:      e.runServeStatus,
+				Exec:      e.runLegacyServeStatus,
 				ShortHelp: "show current serve/funnel status",
 				FlagSet: e.newFlags("funnel-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")

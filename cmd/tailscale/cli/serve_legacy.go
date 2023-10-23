@@ -97,7 +97,7 @@ EXAMPLES
 		Subcommands: []*ffcli.Command{
 			{
 				Name:      "status",
-				Exec:      e.runServeStatus,
+				Exec:      e.runLegacyServeStatus,
 				ShortHelp: "show current serve/funnel status",
 				FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")
@@ -635,13 +635,13 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 	return errors.New("error: serve config does not exist")
 }
 
-// runServeStatus is the entry point for the "serve status"
+// runLegacyServeStatus is the entry point for the "serve status"
 // subcommand and prints the current serve config.
 //
 // Examples:
 //   - tailscale status
 //   - tailscale status --json
-func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
+func (e *serveEnv) runLegacyServeStatus(ctx context.Context, args []string) error {
 	sc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
 		return err
@@ -665,13 +665,13 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 		return err
 	}
 	if sc.IsTCPForwardingAny() {
-		if err := printTCPStatusTree(ctx, sc, st); err != nil {
+		if err := printLegacyTCPStatusTree(ctx, sc, st); err != nil {
 			return err
 		}
 		printf("\n")
 	}
 	for hp := range sc.Web {
-		err := e.printWebStatusTree(sc, hp)
+		err := e.printLegacyWebStatusTree(sc, hp)
 		if err != nil {
 			return err
 		}
@@ -688,7 +688,7 @@ func (e *serveEnv) stdout() io.Writer {
 	return os.Stdout
 }
 
-func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status) error {
+func printLegacyTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status) error {
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	for p, h := range sc.TCP {
 		if h.TCPForward == "" {
@@ -713,7 +713,7 @@ func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.S
 	return nil
 }
 
-func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) error {
+func (e *serveEnv) printLegacyWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) error {
 	// No-op if no serve config
 	if sc == nil {
 		return nil

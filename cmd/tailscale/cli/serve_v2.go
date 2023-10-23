@@ -132,7 +132,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Subcommands: []*ffcli.Command{
 			{
 				Name:      "status",
-				Exec:      e.runServeStatus,
+				Exec:      e.runServeStatus(subcmd),
 				ShortHelp: "view current proxy configuration",
 				FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")
@@ -445,34 +445,12 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		portPart = ""
 	}
 
-	srvTypeAndDesc := func(h *ipn.HTTPHandler) (string, string) {
-		switch {
-		case h.Path != "":
-			return "path", h.Path
-		case h.Proxy != "":
-			return "proxy", h.Proxy
-		case h.Text != "":
-			return "text", "\"" + elipticallyTruncate(h.Text, 20) + "\""
-		}
-		return "", ""
-	}
-
 	if sc.Web[hp] != nil {
-		var mounts []string
-
-		for k := range sc.Web[hp].Handlers {
-			mounts = append(mounts, k)
+		webTree, err := e.webStatusTree(sc, st, hp)
+		if err != nil {
+			return err.Error()
 		}
-		sort.Slice(mounts, func(i, j int) bool {
-			return len(mounts[i]) < len(mounts[j])
-		})
-
-		for _, m := range mounts {
-			h := sc.Web[hp].Handlers[m]
-			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, dnsName, portPart, m))
-			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
-		}
+		output.WriteString(webTree)
 	} else if sc.TCP[srvPort] != nil {
 		h := sc.TCP[srvPort]
 
@@ -866,6 +844,147 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 		sc.TCP = nil
 	}
 	return nil
+}
+
+// runServeStatus is the entry point for the "serve status"
+// subcommand and prints the current serve config.
+//
+// Examples:
+//   - tailscale status
+//   - tailscale status --json
+func (e *serveEnv) runServeStatus(subcmd serveMode) execFunc {
+	e.subcmd = subcmd
+
+	return func(ctx context.Context, args []string) error {
+		sc, err := e.lc.GetServeConfig(ctx)
+		if err != nil {
+			return err
+		}
+
+		if e.json {
+			j, err := json.MarshalIndent(sc, "", "  ")
+			if err != nil {
+				return err
+			}
+			j = append(j, '\n')
+			e.stdout().Write(j)
+			return nil
+		}
+
+		if sc == nil || (len(sc.TCP) == 0 && len(sc.Web) == 0 && len(sc.AllowFunnel) == 0) {
+			fmt.Printf("No %s config\n", infoMap[e.subcmd].Name)
+			return nil
+		}
+
+		st, err := e.getLocalClientStatusWithoutPeers(ctx)
+		if err != nil {
+			return err
+		}
+
+		if sc.IsTCPForwardingAny() {
+			tree := e.tcpStatusTree(sc, st)
+			printf(tree)
+		}
+		for hp := range sc.Web {
+			tree, err := e.webStatusTree(sc, st, hp)
+			if err != nil {
+				return err
+			}
+			printf(tree)
+		}
+		printFunnelWarning(sc)
+		return nil
+	}
+}
+
+func (e *serveEnv) webStatusTree(sc *ipn.ServeConfig, st *ipnstate.Status, hp ipn.HostPort) (string, error) {
+	var output strings.Builder
+
+	// No-op if no serve config
+	if sc == nil {
+		return "", nil
+	}
+	fStatus := "tailnet only"
+	if sc.AllowFunnel[hp] {
+		fStatus = "public"
+	}
+	_, portStr, _ := net.SplitHostPort(string(hp))
+
+	port, err := parseServePort(portStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid port %q: %w", portStr, err)
+	}
+
+	scheme := "https"
+	if sc.IsServingHTTP(port) {
+		scheme = "http"
+	}
+
+	portPart := ":" + portStr
+	if scheme == "http" && portStr == "80" ||
+		scheme == "https" && portStr == "443" {
+		portPart = ""
+	}
+
+	srvTypeAndDesc := func(h *ipn.HTTPHandler) (string, string) {
+		switch {
+		case h.Path != "":
+			return "path", h.Path
+		case h.Proxy != "":
+			return "proxy", h.Proxy
+		case h.Text != "":
+			return "text", "\"" + elipticallyTruncate(h.Text, 20) + "\""
+		}
+		return "", ""
+	}
+
+	var mounts []string
+
+	for k := range sc.Web[hp].Handlers {
+		mounts = append(mounts, k)
+	}
+	sort.Slice(mounts, func(i, j int) bool {
+		return len(mounts[i]) < len(mounts[j])
+	})
+
+	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+
+	for _, m := range mounts {
+		h := sc.Web[hp].Handlers[m]
+		t, d := srvTypeAndDesc(h)
+
+		output.WriteString(fmt.Sprintf("%s://%s%s%s (%s)\n", scheme, dnsName, portPart, m, fStatus))
+		output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
+	}
+
+	return output.String(), nil
+}
+
+func (e *serveEnv) tcpStatusTree(sc *ipn.ServeConfig, st *ipnstate.Status) string {
+	var output strings.Builder
+
+	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+	for p, h := range sc.TCP {
+		if h.TCPForward == "" {
+			continue
+		}
+		hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(p))))
+		tlsStatus := "TLS over TCP"
+		if h.TerminateTLS != "" {
+			tlsStatus = "TLS terminated"
+		}
+		fStatus := "tailnet only"
+		if sc.AllowFunnel[hp] {
+			fStatus = "public"
+		}
+		output.WriteString(fmt.Sprintf("tcp://%s (%s, %s)\n", hp, tlsStatus, fStatus))
+		for _, a := range st.TailscaleIPs {
+			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(p)))
+			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
+		}
+		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", h.TCPForward))
+	}
+	return output.String()
 }
 
 // expandProxyTargetDev expands the supported target values to be proxied
