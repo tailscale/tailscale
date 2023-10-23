@@ -82,7 +82,14 @@ func confirmUpdate(ver string) bool {
 		return false
 	}
 
-	fmt.Printf("This will update Tailscale from %v to %v. Continue? [y/n] ", version.Short(), ver)
+	msg := fmt.Sprintf("This will update Tailscale from %v to %v. Continue?", version.Short(), ver)
+	return promptYesNo(msg)
+}
+
+// PromptYesNo takes a question and prompts the user to answer the
+// question with a yes or no. It appends a [y/n] to the message.
+func promptYesNo(msg string) bool {
+	fmt.Print(msg + " [y/n] ")
 	var resp string
 	fmt.Scanln(&resp)
 	resp = strings.ToLower(resp)
