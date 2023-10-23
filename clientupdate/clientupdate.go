@@ -631,24 +631,53 @@ func (up *Updater) updateMacAppStore() error {
 	return nil
 }
 
-// winMSIEnv is the environment variable that, if set, is the MSI file for the
-// update command to install. It's passed like this so we can stop the
-// tailscale.exe process from running before the msiexec process runs and tries
-// to overwrite ourselves.
-const winMSIEnv = "TS_UPDATE_WIN_MSI"
+const (
+	// winMSIEnv is the environment variable that, if set, is the MSI file for
+	// the update command to install. It's passed like this so we can stop the
+	// tailscale.exe process from running before the msiexec process runs and
+	// tries to overwrite ourselves.
+	winMSIEnv = "TS_UPDATE_WIN_MSI"
+	// winExePathEnv is the environment variable that is set along with
+	// winMSIEnv and carries the full path of the calling tailscale.exe binary.
+	// It is used to re-launch the GUI process (tailscale-ipn.exe) after
+	// install is complete.
+	winExePathEnv = "TS_UPDATE_WIN_EXE_PATH"
+)
 
 var (
-	verifyAuthenticode func(string) error // or nil on non-Windows
-	markTempFileFunc   func(string) error // or nil on non-Windows
+	verifyAuthenticode          func(string) error // or nil on non-Windows
+	markTempFileFunc            func(string) error // or nil on non-Windows
+	launchTailscaleAsWinGUIUser func(string) error // or nil on non-Windows
 )
 
 func (up *Updater) updateWindows() error {
 	if msi := os.Getenv(winMSIEnv); msi != "" {
+		// stdout/stderr from this part of the install could be lost since the
+		// parent tailscaled is replaced. Create a temp log file to have some
+		// output to debug with in case update fails.
+		close, err := up.switchOutputToFile()
+		if err != nil {
+			up.Logf("failed to create log file for installation: %v; proceeding with existing outputs", err)
+		} else {
+			defer close.Close()
+		}
+
 		up.Logf("installing %v ...", msi)
 		if err := up.installMSI(msi); err != nil {
 			up.Logf("MSI install failed: %v", err)
 			return err
 		}
+		up.Logf("relaunching tailscale-ipn.exe...")
+		exePath := os.Getenv(winExePathEnv)
+		if exePath == "" {
+			up.Logf("env var %q not passed to installer binary copy", winExePathEnv)
+			return fmt.Errorf("env var %q not passed to installer binary copy", winExePathEnv)
+		}
+		if err := launchTailscaleAsWinGUIUser(exePath); err != nil {
+			up.Logf("Failed to re-launch tailscale after update: %v", err)
+			return err
+		}
+
 		up.Logf("success.")
 		return nil
 	}
@@ -691,7 +720,7 @@ func (up *Updater) updateWindows() error {
 	up.Logf("authenticode verification succeeded")
 
 	up.Logf("making tailscale.exe copy to switch to...")
-	selfCopy, err := makeSelfCopy()
+	selfOrig, selfCopy, err := makeSelfCopy()
 	if err != nil {
 		return err
 	}
@@ -699,7 +728,7 @@ func (up *Updater) updateWindows() error {
 	up.Logf("running tailscale.exe copy for final install...")
 
 	cmd := exec.Command(selfCopy, "update")
-	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget)
+	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget, winExePathEnv+"="+selfOrig)
 	cmd.Stdout = up.Stderr
 	cmd.Stderr = up.Stderr
 	cmd.Stdin = os.Stdin
@@ -712,10 +741,35 @@ func (up *Updater) updateWindows() error {
 	panic("unreachable")
 }
 
+func (up *Updater) switchOutputToFile() (io.Closer, error) {
+	var logFilePath string
+	exePath, err := os.Executable()
+	if err != nil {
+		logFilePath = filepath.Join(os.TempDir(), "tailscale-updater.log")
+	} else {
+		logFilePath = strings.TrimSuffix(exePath, ".exe") + ".log"
+	}
+
+	up.Logf("writing update output to %q", logFilePath)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	up.Logf = func(m string, args ...any) {
+		fmt.Fprintf(logFile, m+"\n", args...)
+	}
+	up.Stdout = logFile
+	up.Stderr = logFile
+	return logFile, nil
+}
+
 func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
-		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
+		// TS_NOLAUNCH: don't automatically launch the app after install.
+		// We will launch it explicitly as the current GUI user afterwards.
+		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn", "TS_NOLAUNCH=true")
 		cmd.Dir = filepath.Dir(msi)
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
@@ -724,6 +778,7 @@ func (up *Updater) installMSI(msi string) error {
 		if err == nil {
 			break
 		}
+		up.Logf("Install attempt failed: %v", err)
 		uninstallVersion := version.Short()
 		if v := os.Getenv("TS_DEBUG_UNINSTALL_VERSION"); v != "" {
 			uninstallVersion = v
@@ -753,30 +808,30 @@ func msiUUIDForVersion(ver string) string {
 	return "{" + strings.ToUpper(uuid.NewSHA1(uuid.NameSpaceURL, []byte(msiURL)).String()) + "}"
 }
 
-func makeSelfCopy() (tmpPathExe string, err error) {
+func makeSelfCopy() (origPathExe, tmpPathExe string, err error) {
 	selfExe, err := os.Executable()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	f, err := os.Open(selfExe)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer f.Close()
 	f2, err := os.CreateTemp("", "tailscale-updater-*.exe")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if f := markTempFileFunc; f != nil {
 		if err := f(f2.Name()); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	if _, err := io.Copy(f2, f); err != nil {
 		f2.Close()
-		return "", err
+		return "", "", err
 	}
-	return f2.Name(), f2.Close()
+	return selfExe, f2.Name(), f2.Close()
 }
 
 func (up *Updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
