@@ -23,6 +23,7 @@ import (
 	"github.com/kortschak/wol"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
@@ -169,6 +170,14 @@ func (b *LocalBackend) handleC2NUpdatePost(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// On macOS, we must ask the GUI client to kick off a Sparkle update. The
+	// sandboxed tailscaled process cannot do that, or even execute `tailscale
+	// update`.
+	if runtime.GOOS == "darwin" {
+		b.send(ipn.Notify{StartUpdate: true})
+		return
+	}
+
 	// Check if update was already started, and mark as started.
 	if !b.trySetC2NUpdateStarted() {
 		res.Err = "update already started"
@@ -186,12 +195,13 @@ func (b *LocalBackend) handleC2NUpdatePost(w http.ResponseWriter, r *http.Reques
 		res.Err = fmt.Sprintf("failed to find cmd/tailscale binary: %v", err)
 		return
 	}
+
 	var ver struct {
 		Long string `json:"long"`
 	}
-	out, err := exec.Command(cmdTS, "version", "--json").Output()
+	out, err := exec.Command(cmdTS, "version", "--json").CombinedOutput()
 	if err != nil {
-		res.Err = fmt.Sprintf("failed to find cmd/tailscale binary: %v", err)
+		res.Err = fmt.Sprintf("failed to query tailscale binary for current version: %v, output: %q", err, out)
 		return
 	}
 	if err := json.Unmarshal(out, &ver); err != nil {

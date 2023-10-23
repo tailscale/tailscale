@@ -121,6 +121,11 @@ type Notify struct {
 	// is available.
 	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
 
+	// StartUpdate is true when control asked us to perform an auto-update.
+	// Only set on macOS, where Sparkle has to be triggered from the GUI
+	// client.
+	StartUpdate bool `json:",omitempty"`
+
 	// type is mirrored in xcode/Shared/IPN.swift
 }
 
