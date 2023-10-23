@@ -2024,10 +2024,9 @@ func (b *LocalBackend) readPoller() {
 			b.hostinfo = new(tailcfg.Hostinfo)
 		}
 		b.hostinfo.Services = sl
-		hi := b.hostinfo
 		b.mu.Unlock()
 
-		b.doSetHostinfoFilterServices(hi)
+		b.doSetHostinfoFilterServices()
 
 		if isFirst {
 			isFirst = false
@@ -2886,7 +2885,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	if mp.EggSet {
 		mp.EggSet = false
 		b.egg = true
-		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+		go b.doSetHostinfoFilterServices()
 	}
 	p0 := b.pm.CurrentPrefs()
 	p1 := b.pm.CurrentPrefs().AsStruct()
@@ -3016,7 +3015,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	b.mu.Unlock()
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
-		b.doSetHostinfoFilterServices(newHi)
+		b.doSetHostinfoFilterServices()
 	}
 
 	if netMap != nil {
@@ -3142,11 +3141,7 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 //
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
-func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
-	if hi == nil {
-		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
-		return
-	}
+func (b *LocalBackend) doSetHostinfoFilterServices() {
 	b.mu.Lock()
 	cc := b.cc
 	if cc == nil {
@@ -3154,23 +3149,30 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 		b.mu.Unlock()
 		return
 	}
+	if b.hostinfo == nil {
+		b.mu.Unlock()
+		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
+		return
+	}
 	peerAPIServices := b.peerAPIServicesLocked()
 	if b.egg {
 		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
 	}
+
+	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
+	hi := *b.hostinfo // shallow copy
 	b.mu.Unlock()
 
 	// Make a shallow copy of hostinfo so we can mutate
 	// at the Service field.
-	hi2 := *hi // shallow copy
 	if !b.shouldUploadServices() {
-		hi2.Services = []tailcfg.Service{}
+		hi.Services = []tailcfg.Service{}
 	}
 	// Don't mutate hi.Service's underlying array. Append to
 	// the slice with no free capacity.
-	c := len(hi2.Services)
-	hi2.Services = append(hi2.Services[:c:c], peerAPIServices...)
-	cc.SetHostinfo(&hi2)
+	c := len(hi.Services)
+	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
+	cc.SetHostinfo(&hi)
 }
 
 // NetMap returns the latest cached network map received from
@@ -3662,7 +3664,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}
 
-	go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+	go b.doSetHostinfoFilterServices()
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
@@ -4391,7 +4393,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
 		b.logf("Hostinfo.WireIngress changed to %v", wire)
 		b.hostinfo.WireIngress = wire
-		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+		go b.doSetHostinfoFilterServices()
 	}
 
 	b.setTCPPortsIntercepted(handlePorts)
