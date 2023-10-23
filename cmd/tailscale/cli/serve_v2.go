@@ -5,6 +5,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -185,6 +186,20 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	e.subcmd = subcmd
 
 	return func(ctx context.Context, args []string) error {
+		// Undocumented debug command (not using ffcli subcommands) to set raw
+		// configs from stdin for now (2022-11-13).
+		if len(args) == 1 && args[0] == "set-raw" {
+			valb, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return err
+			}
+			sc := new(ipn.ServeConfig)
+			if err := json.Unmarshal(valb, sc); err != nil {
+				return fmt.Errorf("invalid JSON: %w", err)
+			}
+			return e.lc.SetServeConfig(ctx, sc)
+		}
+
 		if err := validateArgs(subcmd, args); err != nil {
 			return err
 		}
