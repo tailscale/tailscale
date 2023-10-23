@@ -16,6 +16,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
 )
 
@@ -366,10 +367,6 @@ func TestServeDevConfigMutations(t *testing.T) {
 
 	// // tcp
 	add(step{reset: true})
-	add(step{ // must include scheme for tcp
-		command: cmd("serve --tls-terminated-tcp=443 --bg localhost:5432"),
-		wantErr: exactErr(errHelp, "errHelp"),
-	})
 	add(step{ // !somehost, must be localhost or 127.0.0.1
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:5432"),
 		wantErr: exactErr(errHelp, "errHelp"),
@@ -382,6 +379,18 @@ func TestServeDevConfigMutations(t *testing.T) {
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:65536"),
 		wantErr: exactErr(errHelp, "errHelp"),
 	})
+	add(step{ // support shorthand
+		command: cmd("serve --tls-terminated-tcp=443 --bg 5432"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {
+					TCPForward:   "127.0.0.1:5432",
+					TerminateTLS: "foo.test.ts.net",
+				},
+			},
+		},
+	})
+	add(step{reset: true})
 	add(step{
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
 		want: &ipn.ServeConfig{
@@ -955,28 +964,43 @@ func TestSrcTypeFromFlags(t *testing.T) {
 
 func TestExpandProxyTargetDev(t *testing.T) {
 	tests := []struct {
-		input    string
-		expected string
-		wantErr  bool
+		name             string
+		input            string
+		defaultScheme    string
+		supportedSchemes []string
+		expected         string
+		wantErr          bool
 	}{
-		{input: "8080", expected: "http://127.0.0.1:8080"},
-		{input: "localhost:8080", expected: "http://127.0.0.1:8080"},
-		{input: "http://localhost:8080", expected: "http://127.0.0.1:8080"},
-		{input: "http://127.0.0.1:8080", expected: "http://127.0.0.1:8080"},
-		{input: "http://127.0.0.1:8080/foo", expected: "http://127.0.0.1:8080/foo"},
-		{input: "https://localhost:8080", expected: "https://127.0.0.1:8080"},
-		{input: "https+insecure://localhost:8080", expected: "https+insecure://127.0.0.1:8080"},
+		{name: "port-only", input: "8080", expected: "http://127.0.0.1:8080"},
+		{name: "hostname+port", input: "localhost:8080", expected: "http://127.0.0.1:8080"},
+		{name: "convert-localhost", input: "http://localhost:8080", expected: "http://127.0.0.1:8080"},
+		{name: "no-change", input: "http://127.0.0.1:8080", expected: "http://127.0.0.1:8080"},
+		{name: "include-path", input: "http://127.0.0.1:8080/foo", expected: "http://127.0.0.1:8080/foo"},
+		{name: "https-scheme", input: "https://localhost:8080", expected: "https://127.0.0.1:8080"},
+		{name: "https+insecure-scheme", input: "https+insecure://localhost:8080", expected: "https+insecure://127.0.0.1:8080"},
+		{name: "change-default-scheme", input: "localhost:8080", defaultScheme: "https", expected: "https://127.0.0.1:8080"},
+		{name: "change-supported-schemes", input: "localhost:8080", defaultScheme: "tcp", supportedSchemes: []string{"tcp"}, expected: "tcp://127.0.0.1:8080"},
 
 		// errors
-		{input: "localhost:9999999", wantErr: true},
-		{input: "ftp://localhost:8080", expected: "", wantErr: true},
-		{input: "https://tailscale.com:8080", expected: "", wantErr: true},
-		{input: "", expected: "", wantErr: true},
+		{name: "invalid-port", input: "localhost:9999999", wantErr: true},
+		{name: "unsupported-scheme", input: "ftp://localhost:8080", expected: "", wantErr: true},
+		{name: "not-localhost", input: "https://tailscale.com:8080", expected: "", wantErr: true},
+		{name: "empty-input", input: "", expected: "", wantErr: true},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			actual, err := expandProxyTargetDev(tt.input)
+		defaultScheme := "http"
+		supportedSchemes := []string{"http", "https", "https+insecure"}
+
+		if tt.supportedSchemes != nil {
+			supportedSchemes = tt.supportedSchemes
+		}
+		if tt.defaultScheme != "" {
+			defaultScheme = tt.defaultScheme
+		}
+
+		t.Run(tt.name, func(t *testing.T) {
+			actual, err := expandProxyTargetDev(tt.input, supportedSchemes, defaultScheme)
 
 			if tt.wantErr == true && err == nil {
 				t.Errorf("Expected an error but got none")
@@ -1027,6 +1051,105 @@ func TestCleanURLPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMessageForPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		subcmd      serveMode
+		serveConfig *ipn.ServeConfig
+		status      *ipnstate.Status
+		dnsName     string
+		srvType     serveType
+		srvPort     uint16
+		expected    string
+	}{
+		{
+			name:   "funnel-https",
+			subcmd: funnel,
+			serveConfig: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						},
+					},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					"foo.test.ts.net:443": true,
+				},
+			},
+			status:  &ipnstate.Status{},
+			dnsName: "foo.test.ts.net",
+			srvType: serveTypeHTTPS,
+			srvPort: 443,
+			expected: strings.Join([]string{
+				msgFunnelAvailable,
+				"https://foo.test.ts.net",
+				"",
+				"|-- / proxy http://127.0.0.1:3000",
+				"",
+				fmt.Sprintf(msgRunningInBackground, "Funnel"),
+				fmt.Sprintf(msgDisableProxy, "funnel", "https", 443),
+			}, "\n"),
+		},
+		{
+			name:   "serve-http",
+			subcmd: serve,
+			serveConfig: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:80": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						},
+					},
+				},
+			},
+			status:  &ipnstate.Status{},
+			dnsName: "foo.test.ts.net",
+			srvType: serveTypeHTTP,
+			srvPort: 80,
+			expected: strings.Join([]string{
+				msgServeAvailable,
+				"https://foo.test.ts.net:80",
+				"",
+				"|-- / proxy http://127.0.0.1:3000",
+				"",
+				fmt.Sprintf(msgRunningInBackground, "Serve"),
+				fmt.Sprintf(msgDisableProxy, "serve", "http", 80),
+			}, "\n"),
+		},
+	}
+
+	for _, tt := range tests {
+		e := &serveEnv{bg: true, subcmd: tt.subcmd}
+
+		t.Run(tt.name, func(t *testing.T) {
+			actual := e.messageForPort(tt.serveConfig, tt.status, tt.dnsName, tt.srvType, tt.srvPort)
+
+			if actual == "" {
+				t.Errorf("Got empty message")
+			}
+
+			if actual != tt.expected {
+				t.Errorf("Got: %q; expected: %q", actual, tt.expected)
+			}
+		})
+	}
+}
+
+func unindent(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestIsLegacyInvocation(t *testing.T) {

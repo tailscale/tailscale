@@ -14,7 +14,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -268,7 +267,7 @@ type LocalBackend struct {
 	activeWatchSessions set.Set[string]     // of WatchIPN SessionID
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
+	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -645,6 +644,9 @@ func (b *LocalBackend) Shutdown() {
 
 	if b.sockstatLogger != nil {
 		b.sockstatLogger.Shutdown()
+	}
+	if b.peerAPIServer != nil {
+		b.peerAPIServer.taildrop.Shutdown()
 	}
 
 	b.unregisterNetMon()
@@ -2341,16 +2343,7 @@ func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 	b.mu.Lock()
 	b.lastClientVersion = v
 	b.mu.Unlock()
-	switch runtime.GOOS {
-	case "darwin", "ios":
-		// These auto-update well enough, and we haven't converted the
-		// ClientVersion types to Swift yet, so don't send them in ipn.Notify
-		// messages.
-	default:
-		// But everything else is a Go client and can deal with this field, even
-		// if they ignore it.
-		b.send(ipn.Notify{ClientVersion: v})
-	}
+	b.send(ipn.Notify{ClientVersion: v})
 }
 
 // For testing lazy machine key generation.
@@ -2767,11 +2760,17 @@ func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 	return b.checkPrefsLocked(p)
 }
 
+// isConfigLocked_Locked reports whether the parsed config file is locked.
+// b.mu must be held.
+func (b *LocalBackend) isConfigLocked_Locked() bool {
+	// TODO(bradfitz,maisem): make this more fine-grained, permit changing
+	// some things if they're not explicitly set in the config. But for now
+	// (2023-10-16), just blanket disable everything.
+	return b.conf != nil && !b.conf.Parsed.Locked.EqualBool(false)
+}
+
 func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
-	if b.conf != nil && !b.conf.Parsed.Locked.EqualBool(false) {
-		// TODO(bradfitz,maisem): make this more fine-grained, permit changing
-		// some things if they're not explicitly set in the config. But for now
-		// (2023-10-16), just blanket disable everything.
+	if b.isConfigLocked_Locked() {
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 	var errs []error
@@ -3614,14 +3613,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	ps := &peerAPIServer{
 		b: b,
-		taildrop: &taildrop.Manager{
+		taildrop: taildrop.ManagerOptions{
 			Logf:             b.logf,
-			Clock:            tstime.DefaultClock{b.clock},
+			Clock:            tstime.DefaultClock{Clock: b.clock},
 			Dir:              fileRoot,
 			DirectFileMode:   b.directFileRoot != "",
 			AvoidFinalRename: !b.directFileDoFinalRename,
 			SendFileNotify:   b.sendFileNotify,
-		},
+		}.New(),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -4438,8 +4437,8 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 		backend := key.(string)
 		if !backends[backend] {
 			b.logf("serve: closing idle connections to %s", backend)
-			value.(*httputil.ReverseProxy).Transport.(*http.Transport).CloseIdleConnections()
 			b.serveProxyHandlers.Delete(backend)
+			value.(*reverseProxy).close()
 		}
 		return true
 	})

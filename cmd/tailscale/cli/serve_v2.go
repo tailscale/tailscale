@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,15 +39,22 @@ type commandInfo struct {
 }
 
 var serveHelpCommon = strings.TrimSpace(`
-<target> can be a port number (e.g., 3000), a partial URL (e.g., localhost:3000), or a
-full URL including a path (e.g., http://localhost:3000/foo, https+insecure://localhost:3000/foo).
+<target> can be a file, directory, text, or most commonly the location to a service running on the
+local machine. The location to the location service can be expressed as a port number (e.g., 3000),
+a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http://localhost:3000/foo).
 
 EXAMPLES
-  - Mount a local web server at 127.0.0.1:3000 in the foreground:
-    $ tailscale %s localhost:3000
+  - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
+    $ tailscale %s 3000
 
-  - Mount a local web server at 127.0.0.1:3000 in the background:
-    $ tailscale %s --bg localhost:3000
+  - Expose an HTTP server running at 127.0.0.1:3000 in the background:
+    $ tailscale %s --bg 3000
+
+  - Expose an HTTPS server with a valid certificate at https://localhost:8443
+    $ tailscale %s https://localhost:8443
+
+  - Expose an HTTPS server with invalid or self-signed certificates at https://localhost:8443
+    $ tailscale %s https+insecure://localhost:8443
 
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
@@ -72,7 +80,7 @@ var infoMap = map[serveMode]commandInfo{
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers on your tailnet",
 		LongHelp: strings.Join([]string{
-			"Serve enables you to share a local server securely within your tailnet.\n",
+			"Tailscale Serve enables you to share a local server securely within your tailnet.\n",
 			"To share a local server on the internet, use `tailscale funnel`\n\n",
 		}, "\n"),
 	},
@@ -114,12 +122,12 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.BoolVar(&e.bg, "bg", false, "run the command in the background")
-			fs.StringVar(&e.setPath, "set-path", "", "set a path for a specific target and run in the background")
-			fs.StringVar(&e.https, "https", "", "default; HTTPS listener")
-			fs.StringVar(&e.http, "http", "", "HTTP listener")
-			fs.StringVar(&e.tcp, "tcp", "", "TCP listener")
-			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "TLS terminated TCP listener")
+			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process")
+			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
+			fs.StringVar(&e.https, "https", "", "Expose an HTTPS server at the specified port (default")
+			fs.StringVar(&e.http, "http", "", "Expose an HTTP server at the specified port")
+			fs.StringVar(&e.tcp, "tcp", "", "Expose a TCP forwarder to forward raw TCP packets at the specified port")
+			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 
 		}),
 		UsageFunc: usageFunc,
@@ -268,7 +276,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 				return err
 			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
-			msg = e.messageForPort(sc, st, dnsName, srvPort)
+			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
@@ -377,18 +385,27 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 	return nil
 }
 
+var (
+	msgFunnelAvailable     = "Available on the internet:"
+	msgServeAvailable      = "Available within your tailnet:"
+	msgRunningInBackground = "%s started and running in the background."
+	msgDisableProxy        = "To disable the proxy, run: tailscale %s --%s=%d off"
+	msgToExit              = "Press Ctrl+C to exit."
+)
+
 // messageForPort returns a message for the given port based on the
 // serve config and status.
-func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16) string {
+func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16) string {
 	var output strings.Builder
 
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
 
 	if sc.AllowFunnel[hp] == true {
-		output.WriteString("Available on the internet:\n")
+		output.WriteString(msgFunnelAvailable)
 	} else {
-		output.WriteString("Available within your tailnet:\n")
+		output.WriteString(msgServeAvailable)
 	}
+	output.WriteString("\n")
 
 	scheme := "https"
 	if sc.IsServingHTTP(srvPort) {
@@ -404,7 +421,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	output.WriteString(fmt.Sprintf("%s://%s%s\n\n", scheme, dnsName, portPart))
 
 	if !e.bg {
-		output.WriteString("Press Ctrl+C to exit.")
+		output.WriteString(msgToExit)
 		return output.String()
 	}
 
@@ -452,8 +469,13 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
 	}
 
-	output.WriteString("\nServe started and running in the background.\n")
-	output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
+	subCmd := infoMap[e.subcmd].Name
+	subCmdSentance := strings.ToUpper(string(subCmd[0])) + subCmd[1:]
+
+	output.WriteString("\n")
+	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdSentance))
+	output.WriteString("\n")
+	output.WriteString(fmt.Sprintf(msgDisableProxy, subCmd, srvType.String(), srvPort))
 
 	return output.String()
 }
@@ -488,7 +510,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		}
 		h.Path = target
 	default:
-		t, err := expandProxyTargetDev(target)
+		t, err := expandProxyTargetDev(target, []string{"http", "https", "https+insecure"}, "http")
 		if err != nil {
 			return err
 		}
@@ -538,34 +560,22 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("invalid TCP target %q", target)
 	}
 
-	dstURL, err := url.Parse(target)
+	targetURL, err := expandProxyTargetDev(target, []string{"tcp"}, "tcp")
+	if err != nil {
+		return fmt.Errorf("unable to expand target: %v", err)
+	}
+
+	dstURL, err := url.Parse(targetURL)
 	if err != nil {
 		return fmt.Errorf("invalid TCP target %q: %v", target, err)
 	}
-	host, dstPortStr, err := net.SplitHostPort(dstURL.Host)
-	if err != nil {
-		return fmt.Errorf("invalid TCP target %q: %v", target, err)
-	}
-
-	switch host {
-	case "localhost", "127.0.0.1":
-		// ok
-	default:
-		return fmt.Errorf("invalid TCP target %q, must be one of localhost or 127.0.0.1", target)
-	}
-
-	if p, err := strconv.ParseUint(dstPortStr, 10, 16); p == 0 || err != nil {
-		return fmt.Errorf("invalid port %q", dstPortStr)
-	}
-
-	fwdAddr := "127.0.0.1:" + dstPortStr
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if sc.IsServingWeb(srcPort) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
-	mak.Set(&sc.TCP, srcPort, &ipn.TCPPortHandler{TCPForward: fwdAddr})
+	mak.Set(&sc.TCP, srcPort, &ipn.TCPPortHandler{TCPForward: dstURL.Host})
 
 	if terminateTLS {
 		sc.TCP[srcPort].TerminateTLS = dnsName
@@ -725,24 +735,22 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 // examples:
 //   - 3000
 //   - localhost:3000
+//   - tcp://localhost:3000
 //   - http://localhost:3000
 //   - https://localhost:3000
 //   - https-insecure://localhost:3000
 //   - https-insecure://localhost:3000/foo
-func expandProxyTargetDev(target string) (string, error) {
-	var (
-		scheme = "http"
-		host   = "127.0.0.1"
-	)
+func expandProxyTargetDev(target string, supportedSchemes []string, defaultScheme string) (string, error) {
+	var host = "127.0.0.1"
 
 	// support target being a port number
 	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
-		return fmt.Sprintf("%s://%s:%d", scheme, host, port), nil
+		return fmt.Sprintf("%s://%s:%d", defaultScheme, host, port), nil
 	}
 
 	// prepend scheme if not present
 	if !strings.Contains(target, "://") {
-		target = scheme + "://" + target
+		target = defaultScheme + "://" + target
 	}
 
 	// make sure we can parse the target
@@ -752,10 +760,8 @@ func expandProxyTargetDev(target string) (string, error) {
 	}
 
 	// ensure a supported scheme
-	switch u.Scheme {
-	case "http", "https", "https+insecure":
-	default:
-		return "", errors.New("must be a URL starting with http://, https://, or https+insecure://")
+	if !slices.Contains(supportedSchemes, u.Scheme) {
+		return "", fmt.Errorf("must be a URL starting with one of the supported schemes: %v", supportedSchemes)
 	}
 
 	// validate the port

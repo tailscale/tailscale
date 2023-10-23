@@ -305,8 +305,11 @@ func findCmdTailscale() (string, error) {
 	}
 	switch runtime.GOOS {
 	case "linux":
-		if self == "/usr/sbin/tailscaled" {
+		if self == "/usr/sbin/tailscaled" || self == "/usr/bin/tailscaled" {
 			return "/usr/bin/tailscale", nil
+		}
+		if self == "/usr/local/sbin/tailscaled" || self == "/usr/local/bin/tailscaled" {
+			return "/usr/local/bin/tailscale", nil
 		}
 		return "", errors.New("tailscale not found in expected place")
 	case "windows":

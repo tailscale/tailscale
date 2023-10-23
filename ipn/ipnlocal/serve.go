@@ -23,16 +23,24 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http2"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
+)
+
+const (
+	contentTypeHeader   = "Content-Type"
+	grpcBaseContentType = "application/grpc"
 )
 
 // ErrETagMismatch signals that the given
@@ -236,6 +244,9 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	prefs := b.pm.CurrentPrefs()
 	if config.IsFunnelOn() && prefs.ShieldsUp() {
 		return errors.New("Unable to turn on Funnel while shields-up is enabled")
+	}
+	if b.isConfigLocked_Locked() {
+		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 
 	nm := b.netMap
@@ -534,23 +545,92 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 
 // proxyHandlerForBackend creates a new HTTP reverse proxy for a particular backend that
 // we serve requests for. `backend` is a HTTPHandler.Proxy string (url, hostport or just port).
-func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.ReverseProxy, error) {
+func (b *LocalBackend) proxyHandlerForBackend(backend string) (http.Handler, error) {
 	targetURL, insecure := expandProxyArg(backend)
 	u, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url %s: %w", targetURL, err)
 	}
-	rp := &httputil.ReverseProxy{
-		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetURL(u)
-			r.Out.Host = r.In.Host
-			addProxyForwardedHeaders(r)
-			b.addTailscaleIdentityHeaders(r)
-		},
-		Transport: &http.Transport{
-			DialContext: b.dialer.SystemDial,
+	p := &reverseProxy{
+		logf:     b.logf,
+		url:      u,
+		insecure: insecure,
+		backend:  backend,
+		lb:       b,
+	}
+	return p, nil
+}
+
+// reverseProxy is a proxy that forwards a request to a backend host
+// (preconfigured via ipn.ServeConfig). If the host is configured with
+// http+insecure prefix, connection between proxy and backend will be over
+// insecure TLS. If the backend host has a http prefix and the incoming request
+// has application/grpc content type header, the connection will be over h2c.
+// Otherwise standard Go http transport will be used.
+type reverseProxy struct {
+	logf logger.Logf
+	url  *url.URL
+	// insecure tracks whether the connection to an https backend should be
+	// insecure (i.e because we cannot verify its CA).
+	insecure      bool
+	backend       string
+	lb            *LocalBackend
+	httpTransport lazy.SyncValue[*http.Transport]  // transport for non-h2c backends
+	h2cTransport  lazy.SyncValue[*http2.Transport] // transport for h2c backends
+	// closed tracks whether proxy is closed/currently closing.
+	closed atomic.Bool
+}
+
+// close ensures that any open backend connections get closed.
+func (rp *reverseProxy) close() {
+	rp.closed.Store(true)
+	if h2cT := rp.h2cTransport.Get(func() *http2.Transport {
+		return nil
+	}); h2cT != nil {
+		h2cT.CloseIdleConnections()
+	}
+	if httpTransport := rp.httpTransport.Get(func() *http.Transport {
+		return nil
+	}); httpTransport != nil {
+		httpTransport.CloseIdleConnections()
+	}
+}
+
+func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if closed := rp.closed.Load(); closed {
+		rp.logf("received a request for a proxy that's being closed or has been closed")
+		http.Error(w, "proxy is closed", http.StatusServiceUnavailable)
+		return
+	}
+	p := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(rp.url)
+		r.Out.Host = r.In.Host
+		addProxyForwardedHeaders(r)
+		rp.lb.addTailscaleIdentityHeaders(r)
+	}}
+
+	// There is no way to autodetect h2c as per RFC 9113
+	// https://datatracker.ietf.org/doc/html/rfc9113#name-starting-http-2.
+	// However, we assume that http:// proxy prefix in combination with the
+	// protoccol being HTTP/2 is sufficient to detect h2c for our needs. Only use this for
+	// gRPC to fix a known problem of plaintext gRPC backends
+	if rp.shouldProxyViaH2C(r) {
+		rp.logf("received a proxy request for plaintext gRPC")
+		p.Transport = rp.getH2CTransport()
+	} else {
+		p.Transport = rp.getTransport()
+	}
+	p.ServeHTTP(w, r)
+}
+
+// getTransport returns the Transport used for regular (non-GRPC) requests
+// to the backend. The Transport gets created lazily, at most once.
+func (rp *reverseProxy) getTransport() *http.Transport {
+	return rp.httpTransport.Get(func() *http.Transport {
+		return &http.Transport{
+			DialContext: rp.lb.dialer.SystemDial,
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: insecure,
+				InsecureSkipVerify: rp.insecure,
 			},
 			// Values for the following parameters have been copied from http.DefaultTransport.
 			ForceAttemptHTTP2:     true,
@@ -558,9 +638,38 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
-		},
-	}
-	return rp, nil
+		}
+	})
+}
+
+// getH2CTransport returns the Transport used for GRPC requests to the backend.
+// The Transport gets created lazily, at most once.
+func (rp *reverseProxy) getH2CTransport() *http2.Transport {
+	return rp.h2cTransport.Get(func() *http2.Transport {
+		return &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network string, addr string, _ *tls.Config) (net.Conn, error) {
+				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
+			},
+		}
+	})
+}
+
+// This is not a generally reliable way how to determine whether a request is
+// for a h2c server, but sufficient for our particular use case.
+func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
+	contentType := r.Header.Get(contentTypeHeader)
+	return r.ProtoMajor == 2 && strings.HasPrefix(rp.backend, "http://") && isGRPCContentType(contentType)
+}
+
+// isGRPC accepts an HTTP request's content type header value and determines
+// whether this is gRPC content. grpc-go considers a value that equals
+// application/grpc or has a prefix of application/grpc+ or application/grpc; a
+// valid grpc content type header.
+// https://github.com/grpc/grpc-go/blob/v1.60.0-dev/internal/grpcutil/method.go#L41-L78
+func isGRPCContentType(contentType string) bool {
+	s, ok := strings.CutPrefix(contentType, grpcBaseContentType)
+	return ok && (len(s) == 0 || s[0] == '+' || s[0] == ';')
 }
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {

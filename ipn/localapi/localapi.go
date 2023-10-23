@@ -1323,33 +1323,36 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	// Before we PUT a file we check to see if there are any existing partial file and if so,
 	// we resume the upload from where we left off by sending the remaining file instead of
 	// the full file.
-	offset, remainingBody, err := taildrop.ResumeReader(r.Body, func(offset, length int64) (taildrop.FileChecksums, error) {
-		client := &http.Client{
-			Transport: h.b.Dialer().PeerAPITransport(),
-			Timeout:   10 * time.Second,
-		}
-		req, err := http.NewRequestWithContext(r.Context(), "GET", "http://peer/v0/put/"+filenameEscaped, nil)
-		if err != nil {
-			return taildrop.FileChecksums{}, err
-		}
-
-		rangeHdr, ok := httphdr.FormatRange([]httphdr.Range{{Start: offset, Length: length}})
-		if !ok {
-			return taildrop.FileChecksums{}, fmt.Errorf("invalid offset and length")
-		}
-		req.Header.Set("Range", rangeHdr)
-		resp, err := client.Do(req)
-		if err != nil {
-			return taildrop.FileChecksums{}, err
-		}
-
-		var checksums taildrop.FileChecksums
-		err = json.NewDecoder(resp.Body).Decode(&checksums)
-		return checksums, err
-	})
+	var offset int64
+	var resumeDuration time.Duration
+	remainingBody := io.Reader(r.Body)
+	client := &http.Client{
+		Transport: h.b.Dialer().PeerAPITransport(),
+		Timeout:   10 * time.Second,
+	}
+	req, err := http.NewRequestWithContext(r.Context(), "GET", dstURL.String()+"/v0/put/"+filenameEscaped, nil)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "bogus peer URL", http.StatusInternalServerError)
 		return
+	}
+	switch resp, err := client.Do(req); {
+	case err != nil:
+		h.logf("could not fetch remote hashes: %v", err)
+	case resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotFound:
+		// noop; implies older peerapi without resume support
+	case resp.StatusCode != http.StatusOK:
+		h.logf("fetch remote hashes status code: %d", resp.StatusCode)
+	default:
+		resumeStart := time.Now()
+		dec := json.NewDecoder(resp.Body)
+		offset, remainingBody, err = taildrop.ResumeReader(r.Body, func() (out taildrop.BlockChecksum, err error) {
+			err = dec.Decode(&out)
+			return out, err
+		})
+		if err != nil {
+			h.logf("reader could not be fully resumed: %v", err)
+		}
+		resumeDuration = time.Since(resumeStart).Round(time.Millisecond)
 	}
 
 	outReq, err := http.NewRequestWithContext(r.Context(), "PUT", "http://peer/v0/put/"+filenameEscaped, remainingBody)
@@ -1359,6 +1362,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	}
 	outReq.ContentLength = r.ContentLength
 	if offset > 0 {
+		h.logf("resuming put at offset %d after %v", offset, resumeDuration)
 		rangeHdr, _ := httphdr.FormatRange([]httphdr.Range{{offset, 0}})
 		outReq.Header.Set("Range", rangeHdr)
 		if outReq.ContentLength >= 0 {
@@ -2171,14 +2175,14 @@ func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
-
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, string(body), resp.StatusCode)
 		return
 	}
+	w.Write(body)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
 }
 
 func defBool(a string, def bool) bool {
