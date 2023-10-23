@@ -65,12 +65,6 @@ type Client interface {
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
 	SetHostinfo(*tailcfg.Hostinfo)
-	// SetNetinfo changes the NetIinfo structure that will be sent in
-	// subsequent node registration requests.
-	// TODO: a server-side change would let us simply upload this
-	// in a separate http request. It has nothing to do with the rest of
-	// the state machine.
-	SetNetInfo(*tailcfg.NetInfo)
 	// SetTKAHead changes the TKA head hash value that will be sent in
 	// subsequent netmap requests.
 	SetTKAHead(headHash string)

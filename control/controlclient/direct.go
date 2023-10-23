@@ -20,7 +20,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -50,7 +49,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
@@ -93,8 +91,7 @@ type Direct struct {
 	authKey      string
 	tryingNewKey key.NodePrivate
 	expiry       time.Time         // or zero value if none/unknown
-	hostinfo     *tailcfg.Hostinfo // always non-nil
-	netinfo      *tailcfg.NetInfo
+	hostinfo     *tailcfg.Hostinfo // always non-nil, never mutated only replaced
 	endpoints    []tailcfg.Endpoint
 	tkaHead      string
 	lastPingURL  string // last PingRequest.URL received, for dup suppression
@@ -289,9 +286,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		c.SetHostinfo(hostinfo.New())
 	} else {
 		c.SetHostinfo(opts.Hostinfo)
-		if ni := opts.Hostinfo.NetInfo; ni != nil {
-			c.SetNetInfo(ni)
-		}
 	}
 	if opts.NoiseTestClient != nil {
 		c.noiseClient = &NoiseClient{
@@ -321,8 +315,6 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	if hi == nil {
 		panic("nil Hostinfo")
 	}
-	hi = ptr.To(*hi)
-	hi.NetInfo = nil
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -335,24 +327,7 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	return true
 }
 
-// SetNetInfo clones the provided NetInfo and remembers it for the
-// next update. It reports whether the NetInfo has changed.
-func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
-	if ni == nil {
-		panic("nil NetInfo")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if reflect.DeepEqual(ni, c.netinfo) {
-		return false
-	}
-	c.netinfo = ni.Clone()
-	c.logf("NetInfo: %v", ni)
-	return true
-}
-
-// SetNetInfo stores a new TKA head value for next update.
+// SetTKAHead stores a new TKA head value for next update.
 // It reports whether the TKA head changed.
 func (c *Direct) SetTKAHead(tkaHead string) bool {
 	c.mu.Lock()
@@ -445,14 +420,6 @@ type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// hostInfoLocked returns a Clone of c.hostinfo and c.netinfo.
-// It must only be called with c.mu held.
-func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
-	hi := c.hostinfo.Clone()
-	hi.NetInfo = c.netinfo.Clone()
-	return hi
-}
-
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	c.mu.Lock()
 	persist := c.persist.AsStruct()
@@ -460,7 +427,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
 	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
-	hi := c.hostInfoLocked()
+	hi := c.hostinfo
 	backendLogID := hi.BackendLogID
 	expired := !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
 	c.mu.Unlock()
@@ -849,7 +816,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	serverURL := c.serverURL
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
-	hi := c.hostInfoLocked()
+	hi := c.hostinfo
 	backendLogID := hi.BackendLogID
 	var epStrs []string
 	var eps []netip.AddrPort
