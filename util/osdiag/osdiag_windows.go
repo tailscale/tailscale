@@ -54,7 +54,7 @@ const (
 func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
 	output := make(map[string]any)
 
-	regInfo, err := getRegistrySupportInfo(registry.LOCAL_MACHINE, []string{`SOFTWARE\Policies\Tailscale`, winutil.RegBase})
+	regInfo, err := getRegistrySupportInfo(registry.LOCAL_MACHINE, []string{winutil.RegPolicyBase, winutil.RegBase})
 	if err == nil {
 		output[supportInfoKeyRegistry] = regInfo
 	} else {

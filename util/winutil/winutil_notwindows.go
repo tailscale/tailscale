@@ -13,6 +13,7 @@ import (
 )
 
 const regBase = ``
+const regPolicyBase = ``
 
 var ErrNoValue = errors.New("no value because registry is unavailable on this OS")
 
