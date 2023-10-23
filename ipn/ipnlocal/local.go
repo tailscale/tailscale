@@ -157,6 +157,7 @@ type LocalBackend struct {
 	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                 ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
+	pushDeviceToken       syncs.AtomicValue[string]
 	backendLogID          logid.PublicID
 	unregisterNetMon      func()
 	unregisterHealthWatch func()
@@ -2035,22 +2036,19 @@ func (b *LocalBackend) readPoller() {
 	}
 }
 
-// ResendHostinfoIfNeeded is called to recompute the Hostinfo and send
-// the new version to the control server.
-func (b *LocalBackend) ResendHostinfoIfNeeded() {
-	// TODO(maisem,bradfitz): this is all wrong. hostinfo has been modified
-	// a dozen ways elsewhere that this omits. This method should be rethought.
-	hi := hostinfo.New()
+// GetPushDeviceToken returns the push notification device token.
+func (b *LocalBackend) GetPushDeviceToken() string {
+	return b.pushDeviceToken.Load()
+}
 
-	b.mu.Lock()
-	applyConfigToHostinfo(hi, b.conf)
-	if b.hostinfo != nil {
-		hi.Services = b.hostinfo.Services
+// SetPushDeviceToken sets the push notification device token and informs the
+// controlclient of the new value.
+func (b *LocalBackend) SetPushDeviceToken(tk string) {
+	old := b.pushDeviceToken.Swap(tk)
+	if old == tk {
+		return
 	}
-	b.hostinfo = hi
-	b.mu.Unlock()
-
-	b.doSetHostinfoFilterServices(hi)
+	b.doSetHostinfoFilterServices()
 }
 
 func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
@@ -3172,6 +3170,7 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 	// the slice with no free capacity.
 	c := len(hi.Services)
 	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
+	hi.PushDeviceToken = b.pushDeviceToken.Load()
 	cc.SetHostinfo(&hi)
 }
 

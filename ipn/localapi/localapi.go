@@ -1553,8 +1553,7 @@ func (h *Handler) serveSetPushDeviceToken(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	hostinfo.SetPushDeviceToken(params.PushDeviceToken)
-	h.b.ResendHostinfoIfNeeded()
+	h.b.SetPushDeviceToken(params.PushDeviceToken)
 	w.WriteHeader(http.StatusOK)
 }
 
