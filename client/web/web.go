@@ -96,13 +96,13 @@ type browserSession struct {
 // the user has authenticated the session) and the session is not
 // expired.
 // 2023-10-05: Sessions expire by default 30 days after creation.
-func (s *browserSession) isAuthorized() bool {
+func (s *browserSession) isAuthorized(now time.Time) bool {
 	switch {
 	case s == nil:
 		return false
 	case !s.Authenticated:
 		return false // awaiting auth
-	case s.isExpired():
+	case s.isExpired(now):
 		return false // expired
 	}
 	return true
@@ -110,8 +110,8 @@ func (s *browserSession) isAuthorized() bool {
 
 // isExpired reports true if s is expired.
 // 2023-10-05: Sessions expire by default 30 days after creation.
-func (s *browserSession) isExpired() bool {
-	return !s.Created.IsZero() && time.Now().After(s.expires()) // TODO: use Server.timeNow field
+func (s *browserSession) isExpired(now time.Time) bool {
+	return !s.Created.IsZero() && now.After(s.expires())
 }
 
 // expires reports when the given session expires.
@@ -242,7 +242,7 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 			// should try and use the above call instead of running another
 			// localapi request.
 			session, _, err := s.getTailscaleBrowserSession(r)
-			if err != nil || !session.isAuthorized() {
+			if err != nil || !session.isAuthorized(s.timeNow()) {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
 			}
@@ -354,7 +354,7 @@ func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *
 		// Maybe the source browser's machine was logged out and then back in as a different node.
 		// Return errNoSession because there is no session for this user.
 		return nil, whoIs, errNoSession
-	} else if session.isExpired() {
+	} else if session.isExpired(s.timeNow()) {
 		// Session expired, remove from session map and return errNoSession.
 		s.browserSessions.Delete(session.ID)
 		return nil, whoIs, errNoSession
@@ -409,7 +409,7 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 			Expires: session.expires(),
 		})
 		resp = authResponse{OK: false, AuthURL: d.URL}
-	case !session.isAuthorized():
+	case !session.isAuthorized(s.timeNow()):
 		if r.URL.Query().Get("wait") == "true" {
 			// Client requested we block until user completes auth.
 			d, err := s.getOrAwaitAuth(r.Context(), session.AuthID, whois.Node.ID)
@@ -426,7 +426,7 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 				s.browserSessions.Store(session.ID, session)
 			}
 		}
-		if session.isAuthorized() {
+		if session.isAuthorized(s.timeNow()) {
 			resp = authResponse{OK: true}
 		} else {
 			resp = authResponse{OK: false, AuthURL: session.AuthURL}
