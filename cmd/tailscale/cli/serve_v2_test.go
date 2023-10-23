@@ -585,65 +585,55 @@ func TestServeDevConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	// TODO(tylersmalley) resolve these failures
-	// add(step{ // turn funnel off for primary port 443
-	// 	command:   cmd("serve --https=443 --set-path=/bar localhost:3001"),
-	// 	want: &ipn.ServeConfig{
-	// 		AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-	// 		TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-	// 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
-	// 			"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-	// 				"/": {Proxy: "http://127.0.0.1:3000"},
-	// 			}},
-	// 			"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-	// 				"/bar": {Proxy: "http://127.0.0.1:3001"},
-	// 			}},
-	// 		},
-	// 	},
-	// })
-	// add(step{ // remove secondary port
-	// 	command: cmd("https:8443 /bar off"),
-	// 	want: &ipn.ServeConfig{
-	// 		AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-	// 		TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-	// 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
-	// 			"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-	// 				"/": {Proxy: "http://127.0.0.1:3000"},
-	// 			}},
-	// 		},
-	// 	},
-	// })
-	// add(step{ // start a tcp forwarder on 8443
-	// 	command: cmd("tcp:8443 tcp://localhost:5432"),
-	// 	want: &ipn.ServeConfig{
-	// 		AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-	// 		TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
-	// 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
-	// 			"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-	// 				"/": {Proxy: "http://127.0.0.1:3000"},
-	// 			}},
-	// 		},
-	// 	},
-	// })
-	// add(step{ // remove primary port http handler
-	// 	command: cmd("https:443 / off"),
-	// 	want: &ipn.ServeConfig{
-	// 		AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-	// 		TCP:         map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
-	// 	},
-	// })
-	// add(step{ // remove tcp forwarder
-	// 	command: cmd("tls-terminated-tcp:8443 off"),
-	// 	want: &ipn.ServeConfig{
-	// 		AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-	// 	},
-	// })
-	// add(step{ // turn off funnel
-	// 	command: cmd("funnel 8443 off"),
-	// 	want:    &ipn.ServeConfig{},
-	// })
+	add(step{ // turn funnel off for primary port 443
+		command: cmd("serve --bg localhost:3000"),
+		want: &ipn.ServeConfig{
+			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
+			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/bar": {Proxy: "http://127.0.0.1:3001"},
+				}},
+			},
+		},
+	})
+	add(step{ // remove secondary port
+		command: cmd("serve --https=8443 --set-path=/bar off"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{ // start a tcp forwarder on 8443
+		command: cmd("serve --bg --tcp=8443 tcp://localhost:5432"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{ // remove primary port http handler
+		command: cmd("serve off"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
+		},
+	})
+	add(step{ // remove tcp forwarder
+		command: cmd("serve --tls-terminated-tcp=8443 off"),
+		want:    &ipn.ServeConfig{},
+	})
 
-	// // tricky steps
+	// tricky steps
 	add(step{reset: true})
 	add(step{ // a directory with a trailing slash mount point
 		command: cmd("serve --https=443 --set-path=/dir " + filepath.Join(td, "subdir")),
@@ -1122,9 +1112,9 @@ func TestMessageForPort(t *testing.T) {
 			srvPort: 443,
 			expected: strings.Join([]string{
 				msgFunnelAvailable,
-				"https://foo.test.ts.net",
 				"",
-				"|-- / proxy http://127.0.0.1:3000",
+				"https://foo.test.ts.net/",
+				"|-- proxy http://127.0.0.1:3000",
 				"",
 				fmt.Sprintf(msgRunningInBackground, "Funnel"),
 				fmt.Sprintf(msgDisableProxy, "funnel", "https", 443),
@@ -1151,9 +1141,9 @@ func TestMessageForPort(t *testing.T) {
 			srvPort: 80,
 			expected: strings.Join([]string{
 				msgServeAvailable,
-				"https://foo.test.ts.net:80",
 				"",
-				"|-- / proxy http://127.0.0.1:3000",
+				"https://foo.test.ts.net:80/",
+				"|-- proxy http://127.0.0.1:3000",
 				"",
 				fmt.Sprintf(msgRunningInBackground, "Serve"),
 				fmt.Sprintf(msgDisableProxy, "serve", "http", 80),
@@ -1172,7 +1162,7 @@ func TestMessageForPort(t *testing.T) {
 			}
 
 			if actual != tt.expected {
-				t.Errorf("Got: %q; expected: %q", actual, tt.expected)
+				t.Errorf("\nGot:      %q\nExpected: %q", actual, tt.expected)
 			}
 		})
 	}
