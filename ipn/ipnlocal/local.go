@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -202,15 +203,13 @@ type LocalBackend struct {
 	// hostinfo is the up-to-date hostinfo, it is only replaced never mutated in
 	// place. This contains all values except for those listed below. To get the
 	// fully populated hostinfo, use b.generateHostinfoForControlLocked().
-	//
-	// TODO(maisem): tailcfg.NetInfo is owned by cc and blended into hostinfo,
-	// we should move it here too.
 	hostinfo tailcfg.HostinfoView
 	// The following values are plugged into a copy of b.hostinfo before it is
 	// sent to control, they are not set on b.hostinfo itself.
 	wantIngress     bool
 	services        views.Slice[tailcfg.Service]
 	pushDeviceToken string
+	netinfo         *tailcfg.NetInfo
 
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
@@ -3122,9 +3121,6 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 
 // doSetHostinfoFilterServices calls SetHostinfo on the controlclient,
 // possibly after mangling the given hostinfo.
-//
-// TODO(danderson): we shouldn't be mangling hostinfo here after
-// painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices() {
 	b.mu.Lock()
 	if b.cc == nil {
@@ -3150,6 +3146,7 @@ func (b *LocalBackend) generateHostinfoForControlLocked() *tailcfg.Hostinfo {
 		return nil
 	}
 	hi := b.hostinfo.AsStruct()
+	hi.NetInfo = b.netinfo
 
 	hi.Services = b.peerAPIServicesLocked()
 	if b.shouldUploadServicesLocked() {
@@ -4200,13 +4197,14 @@ func (b *LocalBackend) assertClientLocked() {
 // setNetInfo sets the provided NetInfo on the control client, if any.
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
-	cc := b.cc
-	b.mu.Unlock()
-
-	if cc == nil {
+	if b.netinfo != nil && ni != nil && reflect.DeepEqual(ni, b.netinfo) {
+		b.mu.Unlock()
 		return
 	}
-	cc.SetNetInfo(ni)
+	b.netinfo = ni.Clone()
+	b.mu.Unlock()
+
+	b.doSetHostinfoFilterServices()
 }
 
 func hasCapability(nm *netmap.NetworkMap, cap tailcfg.NodeCapability) bool {

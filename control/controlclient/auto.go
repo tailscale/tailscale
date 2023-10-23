@@ -564,18 +564,6 @@ func (c *Auto) SetHostinfo(hi *tailcfg.Hostinfo) {
 	c.updateControl()
 }
 
-func (c *Auto) SetNetInfo(ni *tailcfg.NetInfo) {
-	if ni == nil {
-		panic("nil NetInfo")
-	}
-	if !c.direct.SetNetInfo(ni) {
-		return
-	}
-
-	// Send new NetInfo to server
-	c.updateControl()
-}
-
 // SetTKAHead updates the TKA head hash that map-request infrastructure sends.
 func (c *Auto) SetTKAHead(headHash string) {
 	if !c.direct.SetTKAHead(headHash) {
