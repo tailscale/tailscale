@@ -9,7 +9,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -149,10 +151,16 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
 	if id != "" {
-		// TODO: handle case where the device is already deleted, but the secret
-		// is still around.
+		logger.Debugf("deleting device %s from control", string(id))
 		if err := a.tsClient.DeleteDevice(ctx, string(id)); err != nil {
-			return false, fmt.Errorf("deleting device: %w", err)
+			errResp := &tailscale.ErrResponse{}
+			if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
+				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
+			} else {
+				return false, fmt.Errorf("deleting device: %w", err)
+			}
+		} else {
+			logger.Debugf("device %s deleted from control", string(id))
 		}
 	}
 
