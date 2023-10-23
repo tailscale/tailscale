@@ -46,16 +46,13 @@ a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http
 
 EXAMPLES
   - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
-    $ tailscale %s 3000
+    $ tailscale %[1]s 3000
 
   - Expose an HTTP server running at 127.0.0.1:3000 in the background:
-    $ tailscale %s --bg 3000
-
-  - Expose an HTTPS server with a valid certificate at https://localhost:8443
-    $ tailscale %s https://localhost:8443
+    $ tailscale %[1]s --bg 3000
 
   - Expose an HTTPS server with invalid or self-signed certificates at https://localhost:8443
-    $ tailscale %s https+insecure://localhost:8443
+    $ tailscale %[1]s https+insecure://localhost:8443
 
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
@@ -119,7 +116,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fmt.Sprintf("%s status [--json]", info.Name),
 			fmt.Sprintf("%s reset", info.Name),
 		}, "\n  "),
-		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name, info.Name),
+		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name),
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
@@ -397,6 +394,10 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
 	case serveTypeTCP, serveTypeTLSTerminatedTCP:
+		if e.setPath != "" {
+			return fmt.Errorf("cannot mount a path for TCP serve")
+		}
+
 		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
@@ -431,7 +432,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	} else {
 		output.WriteString(msgServeAvailable)
 	}
-	output.WriteString("\n")
+	output.WriteString("\n\n")
 
 	scheme := "https"
 	if sc.IsServingHTTP(srvPort) {
@@ -442,13 +443,6 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	if scheme == "http" && srvPort == 80 ||
 		scheme == "https" && srvPort == 443 {
 		portPart = ""
-	}
-
-	output.WriteString(fmt.Sprintf("%s://%s%s\n\n", scheme, dnsName, portPart))
-
-	if !e.bg {
-		output.WriteString(msgToExit)
-		return output.String()
 	}
 
 	srvTypeAndDesc := func(h *ipn.HTTPHandler) (string, string) {
@@ -472,12 +466,12 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
-		maxLen := len(mounts[len(mounts)-1])
 
 		for _, m := range mounts {
 			h := sc.Web[hp].Handlers[m]
 			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s %s%s %-5s %s\n", "|--", m, strings.Repeat(" ", maxLen-len(m)), t, d))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, dnsName, portPart, m))
+			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if sc.TCP[srvPort] != nil {
 		h := sc.TCP[srvPort]
@@ -487,6 +481,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			tlsStatus = "TLS terminated"
 		}
 
+		output.WriteString(fmt.Sprintf("%s://%s%s\n", scheme, dnsName, portPart))
 		output.WriteString(fmt.Sprintf("|-- tcp://%s (%s)\n", hp, tlsStatus))
 		for _, a := range st.TailscaleIPs {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
@@ -495,11 +490,15 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
 	}
 
-	subCmd := infoMap[e.subcmd].Name
-	subCmdSentance := strings.ToUpper(string(subCmd[0])) + subCmd[1:]
+	if !e.bg {
+		output.WriteString(msgToExit)
+		return output.String()
+	}
 
-	output.WriteString("\n")
-	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdSentance))
+	subCmd := infoMap[e.subcmd].Name
+	subCmdUpper := strings.ToUpper(string(subCmd[0])) + subCmd[1:]
+
+	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdUpper))
 	output.WriteString("\n")
 	output.WriteString(fmt.Sprintf(msgDisableProxy, subCmd, srvType.String(), srvPort))
 
@@ -623,6 +622,9 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 	// TODO: add error handling for if toggling for existing sc
 	if allowFunnel {
 		mak.Set(&sc.AllowFunnel, hp, true)
+	} else if _, exists := sc.AllowFunnel[hp]; exists {
+		fmt.Printf("Removing Funnel for %s\n", hp)
+		delete(sc.AllowFunnel, hp)
 	}
 }
 
@@ -821,6 +823,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 	}
 	if len(sc.Web[hp].Handlers) == 0 {
 		delete(sc.Web, hp)
+		delete(sc.AllowFunnel, hp)
 		delete(sc.TCP, srvPort)
 	}
 
@@ -836,6 +839,10 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 	// disable funnel if no remaining mounts exist for the serve port
 	if sc.Web == nil && sc.TCP == nil {
 		delete(sc.AllowFunnel, hp)
+	}
+
+	if len(sc.AllowFunnel) == 0 {
+		sc.AllowFunnel = nil
 	}
 
 	return nil
