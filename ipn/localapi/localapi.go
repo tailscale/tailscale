@@ -1360,7 +1360,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	outReq.ContentLength = r.ContentLength
 	if offset > 0 {
 		h.logf("resuming put at offset %d after %v", offset, resumeDuration)
-		rangeHdr, _ := httphdr.FormatRange([]httphdr.Range{{offset, 0}})
+		rangeHdr, _ := httphdr.FormatRange([]httphdr.Range{{Start: offset, Length: 0}})
 		outReq.Header.Set("Range", rangeHdr)
 		if outReq.ContentLength >= 0 {
 			outReq.ContentLength -= offset
