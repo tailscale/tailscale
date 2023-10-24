@@ -792,6 +792,26 @@ func TestServeDevConfigMutations(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "forground_with_bg_conflict",
+			steps: []step{
+				{
+					command: cmd("serve --bg --http=3000  localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{3000: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:3000": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --http=3000 localhost:3000"),
+					wantErr: exactErrMsg(fmt.Errorf(backgroundExistsMsg, "serve", "http", 3000)),
+				},
+			},
+		},
 	}
 
 	for _, group := range groups {
@@ -1330,6 +1350,6 @@ func exactErrMsg(want error) func(error) string {
 		if got.Error() == want.Error() {
 			return ""
 		}
-		return fmt.Sprintf("got error %v, want %v", got, want)
+		return fmt.Sprintf("\ngot:  %v\nwant: %v\n", got, want)
 	}
 }
