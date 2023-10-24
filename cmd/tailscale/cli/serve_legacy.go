@@ -171,6 +171,7 @@ type serveEnv struct {
 	// optional stuff for tests:
 	testFlagOut io.Writer
 	testStdout  io.Writer
+	testStderr  io.Writer
 }
 
 // getSelfDNSName returns the DNS name of the current node.
@@ -679,13 +680,6 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 	}
 	printFunnelWarning(sc)
 	return nil
-}
-
-func (e *serveEnv) stdout() io.Writer {
-	if e.testStdout != nil {
-		return e.testStdout
-	}
-	return os.Stdout
 }
 
 func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status) error {

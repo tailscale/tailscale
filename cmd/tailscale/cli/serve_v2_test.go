@@ -6,808 +6,830 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/types/logger"
 )
 
 func TestServeDevConfigMutations(t *testing.T) {
-	// Stateful mutations, starting from an empty config.
+	// step is a stateful mutation within a group
 	type step struct {
 		command []string                       // serve args; nil means no command to run (only reset)
-		reset   bool                           // if true, reset all ServeConfig state
 		want    *ipn.ServeConfig               // non-nil means we want a save of this value
 		wantErr func(error) (badErrMsg string) // nil means no error is wanted
-		line    int                            // line number of addStep call, for error messages
-
-		debugBreak func()
-	}
-	var steps []step
-	add := func(s step) {
-		_, _, s.line, _ = runtime.Caller(1)
-		steps = append(steps, s)
+		before  func(t *testing.T)
 	}
 
-	// using port number
-	add(step{reset: true})
-	add(step{
-		command: cmd("funnel --bg 3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
-		},
-	})
+	// group is a group of steps that share the same
+	// config mutation, but always starts from an empty config
+	type group struct {
+		name  string
+		steps []step
+	}
 
-	// funnel background
-	add(step{reset: true})
-	add(step{
-		command: cmd("funnel --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
-		},
-	})
-
-	// serve background
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-
-	// --set-path runs in background
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --bg --set-path=/ localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-
-	// using http listener
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --bg --http=80 localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-
-	// using https listener with a valid port
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --bg --https=8443 localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-
-	// https
-	add(step{reset: true})
-	add(step{ // allow omitting port (default to 80)
-		command: cmd("serve --http=80 --bg http://localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{ // support non Funnel port
-		command: cmd("serve --http=9999 --bg --set-path=/abc http://localhost:3001"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 9999: {HTTP: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --http=9999 --bg --set-path=/abc off"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --http=8080 --bg --set-path=/abc http://127.0.0.1:3001"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 8080: {HTTP: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8080": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-
-	// // https
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --https=443 --bg http://localhost:0"), // invalid port, too low
-		wantErr: anyErr(),
-	})
-	add(step{
-		command: cmd("serve --https=443 --bg http://localhost:65536"), // invalid port, too high
-		wantErr: anyErr(),
-	})
-	add(step{
-		command: cmd("serve --https=443 --bg http://somehost:3000"), // invalid host
-		wantErr: anyErr(),
-	})
-	add(step{
-		command: cmd("serve --https=443 --bg httpz://127.0.0.1"), // invalid scheme
-		wantErr: anyErr(),
-	})
-	add(step{ // allow omitting port (default to 443)
-		command: cmd("serve --https=443 --bg http://localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{ // support non Funnel port
-		command: cmd("serve --https=9999 --bg --set-path=/abc http://localhost:3001"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 9999: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=9999 --bg --set-path=/abc off"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=8443 --bg --set-path=/abc http://127.0.0.1:3001"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=10000 --bg text:hi"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {HTTPS: true}, 8443: {HTTPS: true}, 10000: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-				"foo.test.ts.net:10000": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Text: "hi"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=443 --bg --set-path=/foo off"),
-		want:    nil, // nothing to save
-		wantErr: anyErr(),
-	}) // handler doesn't exist, so we get an error
-	add(step{
-		command: cmd("serve --https=10000 off"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=443 off"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/abc": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=8443 --bg --set-path=/abc off"),
-		want:    &ipn.ServeConfig{},
-	})
-	add(step{ // clean mount: "bar" becomes "/bar"
-		command: cmd("serve --https=443 --bg --set-path=bar https://127.0.0.1:8443"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/bar": {Proxy: "https://127.0.0.1:8443"},
-				}},
-			},
-		},
-	})
-	// add(step{
-	// 	command:   cmd("serve --https=443 --set-path=bar https://127.0.0.1:8443"),
-	// 	want:      nil, // nothing to save
-	// })
-	add(step{ // try resetting using reset command
-		command: cmd("serve reset"),
-		want:    &ipn.ServeConfig{},
-	})
-	add(step{
-		command: cmd("serve --https=443 --bg https+insecure://127.0.0.1:3001"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "https+insecure://127.0.0.1:3001"},
-				}},
-			},
-		},
-	})
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --https=443 --bg --set-path=/foo localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/foo": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{ // test a second handler on the same port
-		command: cmd("serve --https=8443 --bg --set-path=/foo localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/foo": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/foo": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{reset: true})
-	add(step{ // support path in proxy
-		command: cmd("serve --https=443 --bg http://127.0.0.1:3000/foo/bar"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000/foo/bar"},
-				}},
-			},
-		},
-	})
-
-	// // tcp
-	add(step{reset: true})
-	add(step{ // !somehost, must be localhost or 127.0.0.1
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:5432"),
-		wantErr: exactErrMsg(errHelp),
-	})
-	add(step{ // bad target port, too low
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:0"),
-		wantErr: exactErrMsg(errHelp),
-	})
-	add(step{ // bad target port, too high
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:65536"),
-		wantErr: exactErrMsg(errHelp),
-	})
-	add(step{ // support shorthand
-		command: cmd("serve --tls-terminated-tcp=443 --bg 5432"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:5432",
-					TerminateTLS: "foo.test.ts.net",
-				},
-			},
-		},
-	})
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:5432",
-					TerminateTLS: "foo.test.ts.net",
-				},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://127.0.0.1:8443"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:8443",
-					TerminateTLS: "foo.test.ts.net",
-				},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:8444"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:8444",
-					TerminateTLS: "foo.test.ts.net",
-				},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://127.0.0.1:8445"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:8445",
-					TerminateTLS: "foo.test.ts.net",
-				},
-			},
-		},
-	})
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:123"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:123",
-					TerminateTLS: "foo.test.ts.net",
-				},
-			},
-		},
-	})
-	add(step{ // handler doesn't exist, so we get an error
-		command: cmd("serve --tls-terminated-tcp=8443 off"),
-		wantErr: anyErr(),
-	})
-	add(step{
-		command: cmd("serve --tls-terminated-tcp=443 off"),
-		want:    &ipn.ServeConfig{},
-	})
-
-	// // text
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --https=443 --bg text:hello"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Text: "hello"},
-				}},
-			},
-		},
-	})
-
-	// path
+	// creaet a temporary directory for path-based destinations
 	td := t.TempDir()
 	writeFile := func(suffix, contents string) {
 		if err := os.WriteFile(filepath.Join(td, suffix), []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	add(step{reset: true})
 	writeFile("foo", "this is foo")
-	add(step{
-		command: cmd("serve --https=443 --bg " + filepath.Join(td, "foo")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Path: filepath.Join(td, "foo")},
-				}},
-			},
-		},
-	})
-	os.MkdirAll(filepath.Join(td, "subdir"), 0700)
-	writeFile("subdir/file-a", "this is A")
-	add(step{
-		command: cmd("serve --https=443 --bg --set-path=/some/where " + filepath.Join(td, "subdir/file-a")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/":           {Path: filepath.Join(td, "foo")},
-					"/some/where": {Path: filepath.Join(td, "subdir/file-a")},
-				}},
-			},
-		},
-	})
-	add(step{ // bad path
-		command: cmd("serve --https=443 --bg bad/path"),
-		wantErr: exactErrMsg(errHelp),
-	})
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --https=443 --bg " + filepath.Join(td, "subdir")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Path: filepath.Join(td, "subdir/")},
-				}},
-			},
-		},
-	})
-	add(step{
-		command: cmd("serve --https=443 off"),
-		want:    &ipn.ServeConfig{},
-	})
+	err := os.MkdirAll(filepath.Join(td, "subdir"), 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile("subdir/file-a", "this is subdir")
 
-	// // combos
-	add(step{reset: true})
-	add(step{
-		command: cmd("serve --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
+	groups := [...]group{
+		{
+			name: "using_port_number",
+			steps: []step{{
+				command: cmd("funnel --bg 3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+				},
+			}},
 		},
-	})
-	add(step{ // enable funnel for primary port
-		command: cmd("funnel --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
+		{
+			name: "funnel_background",
+			steps: []step{{
+				command: cmd("funnel --bg localhost:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+				},
+			}},
 		},
-	})
-	add(step{ // serving on secondary port doesn't change funnel on primary port
-		command: cmd("serve --https=8443 --bg --set-path=/bar localhost:3001"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/bar": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
+		{
+			name: "serve_background",
+			steps: []step{{
+				command: cmd("serve --bg localhost:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+				},
+			}},
 		},
-	})
-	add(step{ // turn funnel on for secondary port
-		command: cmd("funnel --https=8443 --bg --set-path=/bar localhost:3001"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true, "foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/bar": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
+		{
+			name: "set_path_bg",
+			steps: []step{{
+				command: cmd("serve --set-path=/ --bg localhost:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+				},
+			}},
 		},
-	})
-	add(step{ // turn funnel off for primary port 443
-		command: cmd("serve --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
-			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/bar": {Proxy: "http://127.0.0.1:3001"},
-				}},
-			},
+		{
+			name: "http_listener",
+			steps: []step{{
+				command: cmd("serve --bg --http=80 localhost:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+				},
+			}},
 		},
-	})
-	add(step{ // remove secondary port
-		command: cmd("serve --https=8443 --set-path=/bar off"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
+		{
+			name: "https_listener_valid_port",
+			steps: []step{{
+				command: cmd("serve --bg --https=8443 localhost:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{8443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000"},
+						}},
+					},
+				},
+			}},
 		},
-	})
-	add(step{ // start a tcp forwarder on 8443
-		command: cmd("serve --bg --tcp=8443 tcp://localhost:5432"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
-			},
-		},
-	})
-	add(step{ // remove primary port http handler
-		command: cmd("serve off"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
-		},
-	})
-	add(step{ // remove tcp forwarder
-		command: cmd("serve --tls-terminated-tcp=8443 off"),
-		want:    &ipn.ServeConfig{},
-	})
-
-	// tricky steps
-	add(step{reset: true})
-	add(step{ // a directory with a trailing slash mount point
-		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "subdir")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/dir/": {Path: filepath.Join(td, "subdir/")},
-				}},
-			},
-		},
-	})
-	add(step{ // this should overwrite the previous one
-		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "foo")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/dir": {Path: filepath.Join(td, "foo")},
-				}},
-			},
-		},
-	})
-	add(step{reset: true}) // reset and do the opposite
-	add(step{              // a file without a trailing slash mount point
-		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "foo")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/dir": {Path: filepath.Join(td, "foo")},
-				}},
-			},
-		},
-	})
-	add(step{ // this should overwrite the previous one
-		command: cmd("serve --https=443 --bg --set-path=/dir " + filepath.Join(td, "subdir")),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/dir/": {Path: filepath.Join(td, "subdir/")},
-				}},
-			},
-		},
-	})
-
-	// // error states
-	add(step{reset: true})
-	add(step{ // tcp forward 5432 on serve port 443
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {
-					TCPForward:   "127.0.0.1:5432",
-					TerminateTLS: "foo.test.ts.net",
+		{
+			name: "multiple_http_with_off",
+			steps: []step{
+				{
+					command: cmd("serve --http=80 --bg http://localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // support non Funnel port
+					command: cmd("serve --bg --http=9999 --set-path=/abc http://localhost:3001"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 9999: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
+								"/abc": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
+				},
+				{ // turn off one handler
+					command: cmd("serve --bg --http=9999 --set-path=/abc off"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // add another handler
+					command: cmd("serve --bg --http=8080 --set-path=/abc http://127.0.0.1:3001"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 8080: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:8080": {Handlers: map[string]*ipn.HTTPHandler{
+								"/abc": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
 				},
 			},
 		},
-	})
-	add(step{ // try to start a web handler on the same port
-		command: cmd("serve --https=443 --bg localhost:3000"),
-		wantErr: anyErr(),
-	})
-	add(step{reset: true})
-	add(step{ // start a web handler on port 443
-		command: cmd("serve --https=443 --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Proxy: "http://127.0.0.1:3000"},
-				}},
+		{
+			name: "invalid_port_too_low",
+			steps: []step{{
+				command: cmd("serve --https=443 --bg http://localhost:0"), // invalid port, too low
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "invalid_port_too_high",
+			steps: []step{{
+				command: cmd("serve --https=443 --bg http://localhost:65536"), // invalid port, too high
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "invalid_host",
+			steps: []step{{
+				command: cmd("serve --https=443 --bg http://somehost:3000"), // invalid host
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "invalid_scheme",
+			steps: []step{{
+				command: cmd("serve --https=443 --bg httpz://127.0.0.1"), // invalid scheme
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "turn_off_https",
+			steps: []step{
+				{
+					command: cmd("serve --bg --https=443 http://localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --https=9999 --set-path=/abc http://localhost:3001"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 9999: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
+								"/abc": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --https=9999 --set-path=/abc off"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --https=8443 --set-path=/abc http://127.0.0.1:3001"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/abc": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
+				},
 			},
 		},
-	})
-	add(step{ // try to start a tcp forwarder on the same serve port
-		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
-		wantErr: anyErr(),
-	})
-
-	add(step{
-		command: cmd("serve reset"),
-		want:    &ipn.ServeConfig{},
-	})
-
-	// start two handlers and turn them off in one command
-	add(step{
-		command: cmd("serve --https=4545 --set-path=/foo --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
-					"/foo": {Proxy: "http://127.0.0.1:3000"},
-				}},
+		{
+			name: "https_text_bg",
+			steps: []step{{
+				command: cmd("serve --bg --https=10000 text:hi"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{10000: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:10000": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Text: "hi"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "handler_not_found",
+			steps: []step{{
+				command: cmd("serve --https=443 --set-path=/foo off"),
+				want:    nil, // nothing to save
+				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "clean_mount", // "bar" becomes "/bar"
+			steps: []step{{
+				command: cmd("serve --bg --https=443 --set-path=bar https://127.0.0.1:8443"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/bar": {Proxy: "https://127.0.0.1:8443"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "serve_reset",
+			steps: []step{
+				{
+					command: cmd("serve --bg --https=443 --set-path=bar https://127.0.0.1:8443"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/bar": {Proxy: "https://127.0.0.1:8443"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve reset"),
+					want:    &ipn.ServeConfig{},
+				},
 			},
 		},
-	})
-	add(step{
-		command: cmd("serve --https=4545 --set-path=/bar --bg localhost:3000"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
-					"/foo": {Proxy: "http://127.0.0.1:3000"},
-					"/bar": {Proxy: "http://127.0.0.1:3000"},
-				}},
+		{
+			name: "https_insecure",
+			steps: []step{{
+				command: cmd("serve --bg --https=443 https+insecure://127.0.0.1:3001"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "https+insecure://127.0.0.1:3001"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "two_ports_same_dest",
+			steps: []step{
+				{
+					command: cmd("serve --bg --https=443 --set-path=/foo localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/foo": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --https=8443 --set-path=/foo localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/foo": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/foo": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
 			},
 		},
-	})
-	add(step{
-		command: cmd("serve --https=4545 --bg --yes localhost:3000 off"),
-		want:    &ipn.ServeConfig{},
-	})
+		{
+			name: "path_in_dest",
+			steps: []step{{
+				command: cmd("serve --bg --https=443 http://127.0.0.1:3000/foo/bar"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://127.0.0.1:3000/foo/bar"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "unknown_host_tcp",
+			steps: []step{{
+				command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:5432"),
+				wantErr: exactErrMsg(errHelp),
+			}},
+		},
+		{
+			name: "tcp_port_too_low",
+			steps: []step{{
+				command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:0"),
+				wantErr: exactErrMsg(errHelp),
+			}},
+		},
+		{
+			name: "tcp_port_too_high",
+			steps: []step{{
+				command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:65536"),
+				wantErr: exactErrMsg(errHelp),
+			}},
+		},
+		{
+			name: "tcp_shorthand",
+			steps: []step{{
+				command: cmd("serve --tls-terminated-tcp=443 --bg 5432"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						443: {
+							TCPForward:   "127.0.0.1:5432",
+							TerminateTLS: "foo.test.ts.net",
+						},
+					},
+				},
+			}},
+		},
+		{
+			name: "tls_terminated_tcp",
+			steps: []step{
+				{
+					command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "127.0.0.1:5432",
+								TerminateTLS: "foo.test.ts.net",
+							},
+						},
+					},
+				},
+				{
+					command: cmd("serve --tls-terminated-tcp=443 --bg tcp://127.0.0.1:8443"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "127.0.0.1:8443",
+								TerminateTLS: "foo.test.ts.net",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "tcp_off",
+			steps: []step{
+				{
+					command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:123"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "127.0.0.1:123",
+								TerminateTLS: "foo.test.ts.net",
+							},
+						},
+					},
+				},
+				{ // handler doesn't exist
+					command: cmd("serve --tls-terminated-tcp=8443 off"),
+					wantErr: anyErr(),
+				},
+				{
+					command: cmd("serve --tls-terminated-tcp=443 off"),
+					want:    &ipn.ServeConfig{},
+				},
+			},
+		},
+		{
+			name: "text",
+			steps: []step{{
+				command: cmd("serve --https=443 --bg text:hello"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Text: "hello"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "path",
+			steps: []step{
+				{
+					command: cmd("serve --https=443 --bg " + filepath.Join(td, "foo")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Path: filepath.Join(td, "foo")},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --https=443 --set-path=/some/where " + filepath.Join(td, "subdir/file-a")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/":           {Path: filepath.Join(td, "foo")},
+								"/some/where": {Path: filepath.Join(td, "subdir/file-a")},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "bad_path",
+			steps: []step{{
+				command: cmd("serve --bg --https=443 bad/path"),
+				wantErr: exactErrMsg(errHelp),
+			}},
+		},
+		{
+			name: "path_off",
+			steps: []step{
+				{
+					command: cmd("serve --bg --https=443 " + filepath.Join(td, "subdir")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Path: filepath.Join(td, "subdir/")},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --https=443 off"),
+					want:    &ipn.ServeConfig{},
+				},
+			},
+		},
+		{
+			name: "combos",
+			steps: []step{
+				{
+					command: cmd("serve --bg localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // enable funnel for primary port
+					command: cmd("funnel --bg localhost:3000"),
+					want: &ipn.ServeConfig{
+						AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // serving on secondary port doesn't change funnel on primary port
+					command: cmd("serve --bg --https=8443 --set-path=/bar localhost:3001"),
+					want: &ipn.ServeConfig{
+						AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/bar": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
+				},
+				{ // turn funnel on for secondary port
+					command: cmd("funnel --bg --https=8443 --set-path=/bar localhost:3001"),
+					want: &ipn.ServeConfig{
+						AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true, "foo.test.ts.net:8443": true},
+						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/bar": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
+				},
+				{ // turn funnel off for primary port 443
+					command: cmd("serve --bg localhost:3000"),
+					want: &ipn.ServeConfig{
+						AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
+						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/bar": {Proxy: "http://127.0.0.1:3001"},
+							}},
+						},
+					},
+				},
+				{ // remove secondary port
+					command: cmd("serve --bg --https=8443 --set-path=/bar off"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // start a tcp forwarder on 8443
+					command: cmd("serve --bg --tcp=8443 tcp://localhost:5432"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // remove primary port http handler
+					command: cmd("serve off"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
+					},
+				},
+				{ // remove tcp forwarder
+					command: cmd("serve --tls-terminated-tcp=8443 off"),
+					want:    &ipn.ServeConfig{},
+				},
+			},
+		},
+		{
+			name: "tricky_steps",
+			steps: []step{
+				{ // a directory with a trailing slash mount point
+					command: cmd("serve --bg --https=443 --set-path=/dir " + filepath.Join(td, "subdir")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/dir/": {Path: filepath.Join(td, "subdir/")},
+							}},
+						},
+					},
+				},
+				{ // this should overwrite the previous one
+					command: cmd("serve --bg --https=443 --set-path=/dir " + filepath.Join(td, "foo")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/dir": {Path: filepath.Join(td, "foo")},
+							}},
+						},
+					},
+				},
+				{ // reset and do opposite
+					command: cmd("serve reset"),
+					want:    &ipn.ServeConfig{},
+				},
+				{ // a file without a trailing slash mount point
+					command: cmd("serve --bg --https=443 --set-path=/dir " + filepath.Join(td, "foo")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/dir": {Path: filepath.Join(td, "foo")},
+							}},
+						},
+					},
+				},
+				{ // this should overwrite the previous one
+					command: cmd("serve --bg --https=443 --set-path=/dir " + filepath.Join(td, "subdir")),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/dir/": {Path: filepath.Join(td, "subdir/")},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "cannot_override_tcp_with_http",
+			steps: []step{
+				{ // tcp forward 5432 on serve port 443
+					command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {
+								TCPForward:   "127.0.0.1:5432",
+								TerminateTLS: "foo.test.ts.net",
+							},
+						},
+					},
+				},
+				{
+					command: cmd("serve --https=443 --bg localhost:3000"),
+					wantErr: anyErr(),
+				},
+			},
+		},
+		{
+			name: "cannot_override_http_with_tcp",
+			steps: []step{
+				{
+					command: cmd("serve --https=443 --bg localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{ // try to start a tcp forwarder on the same serve port
+					command: cmd("serve --tls-terminated-tcp=443 --bg tcp://localhost:5432"),
+					wantErr: anyErr(),
+				},
+			},
+		},
+		{
+			name: "turn_off_multiple_handlers",
+			steps: []step{
+				{
+					command: cmd("serve --https=4545 --set-path=/foo --bg localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
+								"/foo": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --https=4545 --set-path=/bar --bg localhost:3000"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
+								"/foo": {Proxy: "http://127.0.0.1:3000"},
+								"/bar": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --https=4545 --bg --yes localhost:3000 off"),
+					want:    &ipn.ServeConfig{},
+				},
+			},
+		},
+	}
 
-	lc := &fakeLocalServeClient{}
-	// And now run the steps above.
-	for i, st := range steps {
-		if st.debugBreak != nil {
-			st.debugBreak()
-		}
-		if st.reset {
-			t.Logf("Executing step #%d, line %v: [reset]", i, st.line)
-			lc.config = nil
-		}
-		if st.command == nil {
-			continue
-		}
-		t.Logf("Executing step #%d, line %v: %q ... ", i, st.line, st.command)
+	for _, group := range groups {
+		t.Run(group.name, func(t *testing.T) {
+			lc := &fakeLocalServeClient{}
+			for i, st := range group.steps {
+				var stderr bytes.Buffer
+				var stdout bytes.Buffer
+				var flagOut bytes.Buffer
+				e := &serveEnv{
+					lc:          lc,
+					testFlagOut: &flagOut,
+					testStdout:  &stdout,
+					testStderr:  &stderr,
+				}
+				lastCount := lc.setCount
+				var cmd *ffcli.Command
+				var args []string
 
-		var stdout bytes.Buffer
-		var flagOut bytes.Buffer
-		e := &serveEnv{
-			lc:          lc,
-			testFlagOut: &flagOut,
-			testStdout:  &stdout,
-		}
-		lastCount := lc.setCount
-		var cmd *ffcli.Command
-		var args []string
+				mode := serve
+				if st.command[0] == "funnel" {
+					mode = funnel
+				}
+				cmd = newServeV2Command(e, mode)
+				args = st.command[1:]
 
-		mode := serve
-		if st.command[0] == "funnel" {
-			mode = funnel
-		}
-		cmd = newServeV2Command(e, mode)
-		args = st.command[1:]
+				err := cmd.ParseAndRun(context.Background(), args)
+				if flagOut.Len() > 0 {
+					t.Logf("flag package output: %q", flagOut.Bytes())
+				}
+				if err != nil {
+					if st.wantErr == nil {
+						t.Fatalf("step #%d: unexpected error: %v", i, err)
+					}
+					if bad := st.wantErr(err); bad != "" {
+						t.Fatalf("step #%d: unexpected error: %v", i, bad)
+					}
+					continue
+				}
+				if st.wantErr != nil {
+					t.Fatalf("step #%d: got success (saved=%v), but wanted an error", i, lc.config != nil)
+				}
+				var got *ipn.ServeConfig = nil
+				if lc.setCount > lastCount {
+					got = lc.config
+				}
+				if !reflect.DeepEqual(got, st.want) {
+					gotbts, _ := json.MarshalIndent(got, "", "\t")
+					wantbts, _ := json.MarshalIndent(st.want, "", "\t")
+					t.Fatalf("step: %d, cmd: %v, diff:\n%s", i, st.command, cmp.Diff(string(gotbts), string(wantbts)))
 
-		err := cmd.ParseAndRun(context.Background(), args)
-		if flagOut.Len() > 0 {
-			t.Logf("flag package output: %q", flagOut.Bytes())
-		}
-		if err != nil {
-			if st.wantErr == nil {
-				t.Fatalf("step #%d, line %v: unexpected error: %v", i, st.line, err)
+				}
 			}
-			if bad := st.wantErr(err); bad != "" {
-				t.Fatalf("step #%d, line %v: unexpected error: %v", i, st.line, bad)
-			}
-			continue
-		}
-		if st.wantErr != nil {
-			t.Fatalf("step #%d, line %v: got success (saved=%v), but wanted an error", i, st.line, lc.config != nil)
-		}
-		var got *ipn.ServeConfig = nil
-		if lc.setCount > lastCount {
-			got = lc.config
-		}
-		if !reflect.DeepEqual(got, st.want) {
-			t.Fatalf("[%d] %v: bad state. got:\n%v\n\nwant:\n%v\n",
-				i, st.command, logger.AsJSON(got), logger.AsJSON(st.want))
-			// NOTE: asJSON will omit empty fields, which might make
-			// result in bad state got/want diffs being the same, even
-			// though the actual state is different. Use below to debug:
-			// t.Fatalf("[%d] %v: bad state. got:\n%+v\n\nwant:\n%+v\n",
-			// 	i, st.command, got, st.want)
-		}
+		})
+
 	}
 }
 

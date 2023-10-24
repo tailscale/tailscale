@@ -156,26 +156,26 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	}
 }
 
-func validateArgs(subcmd serveMode, args []string) error {
+func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 	if translation, ok := isLegacyInvocation(subcmd, args); ok {
-		fmt.Fprint(os.Stderr, "Error: the CLI for serve and funnel has changed.")
+		fmt.Fprint(e.stderr(), "Error: the CLI for serve and funnel has changed.")
 		if translation != "" {
-			fmt.Fprint(os.Stderr, " You can run the following command instead:\n")
-			fmt.Fprintf(os.Stderr, "\t- %s\n", translation)
+			fmt.Fprint(e.stderr(), " You can run the following command instead:\n")
+			fmt.Fprintf(e.stderr(), "\t- %s\n", translation)
 		}
-		fmt.Fprint(os.Stderr, "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
+		fmt.Fprint(e.stderr(), "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
 		return errHelpFunc(subcmd)
 	}
 	if len(args) == 0 {
 		return flag.ErrHelp
 	}
 	if len(args) > 2 {
-		fmt.Fprintf(os.Stderr, "Error: invalid number of arguments (%d)\n", len(args))
+		fmt.Fprintf(e.stderr(), "Error: invalid number of arguments (%d)\n", len(args))
 		return errHelpFunc(subcmd)
 	}
 	turnOff := args[len(args)-1] == "off"
 	if len(args) == 2 && !turnOff {
-		fmt.Fprintln(os.Stderr, "Error: invalid argument format")
+		fmt.Fprintln(e.stderr(), "Error: invalid argument format")
 		return errHelpFunc(subcmd)
 	}
 
@@ -203,7 +203,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return e.lc.SetServeConfig(ctx, sc)
 		}
 
-		if err := validateArgs(subcmd, args); err != nil {
+		if err := e.validateArgs(subcmd, args); err != nil {
 			return err
 		}
 
@@ -230,7 +230,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
+			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
 			return errHelpFunc(subcmd)
 		}
 
@@ -300,19 +300,19 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
+			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
 			return errHelpFunc(subcmd)
 		}
 
 		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
 			if tailscale.IsPreconditionsFailedError(err) {
-				fmt.Fprintln(os.Stderr, "Another client is changing the serve config; please try again.")
+				fmt.Fprintln(e.stderr(), "Another client is changing the serve config; please try again.")
 			}
 			return err
 		}
 
 		if msg != "" {
-			fmt.Fprintln(os.Stderr, msg)
+			fmt.Fprintln(e.stdout(), msg)
 		}
 
 		if watcher != nil {
@@ -621,7 +621,7 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 	if allowFunnel {
 		mak.Set(&sc.AllowFunnel, hp, true)
 	} else if _, exists := sc.AllowFunnel[hp]; exists {
-		fmt.Printf("Removing Funnel for %s\n", hp)
+		fmt.Fprintf(e.stderr(), "Removing Funnel for %s\n", hp)
 		delete(sc.AllowFunnel, hp)
 	}
 }
@@ -952,4 +952,18 @@ func (s serveType) String() string {
 	default:
 		return "unknownServeType"
 	}
+}
+
+func (e *serveEnv) stdout() io.Writer {
+	if e.testStdout != nil {
+		return e.testStdout
+	}
+	return os.Stdout
+}
+
+func (e *serveEnv) stderr() io.Writer {
+	if e.testStderr != nil {
+		return e.testStderr
+	}
+	return os.Stderr
 }
