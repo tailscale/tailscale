@@ -13,7 +13,6 @@ import (
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn"
-	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/winutil/policy"
 )
 
@@ -71,8 +70,6 @@ func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
 	prefs.ExitNodeIP = resolveExitNodeIP(prefs.ExitNodeIP)
 	prefs.ShieldsUp = resolveShieldsUp(prefs.ShieldsUp)
 	prefs.ForceDaemon = resolveForceDaemon(prefs.ForceDaemon)
-	prefs.CorpDNS, _ = resolveOptionPolicy(syspolicy.EnableTailscaleDNS, prefs.CorpDNS)
-	prefs.RouteAll, _ = resolveOptionPolicy(syspolicy.EnableTailscaleSubnets, prefs.RouteAll)
 
 	pm.logf("migrating Windows profile to new format")
 	return migrationSentinel, prefs.View(), nil
@@ -90,12 +87,4 @@ func resolveShieldsUp(defval bool) bool {
 func resolveForceDaemon(defval bool) bool {
 	pol := policy.GetPreferenceOptionPolicy("UnattendedMode")
 	return pol.ShouldEnable(defval)
-}
-
-func resolveOptionPolicy(key syspolicy.Key, defval bool) (bool, error) {
-	pol, err := syspolicy.GetPreferenceOption(key)
-	if err != nil {
-		return defval, err
-	}
-	return pol.ShouldEnable(defval), nil
 }
