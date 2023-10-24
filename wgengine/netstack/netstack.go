@@ -333,7 +333,7 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 		ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
 	}
 
-	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
+	oldIPs := make(map[netip.Prefix]bool)
 	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
 		ap := protocolAddr.AddressWithPrefix
 		ip := netaddrIPFromNetstackIP(ap.Address)
@@ -343,16 +343,16 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 			// ours to delete.
 			continue
 		}
-		oldIPs[ap] = true
+		oldIPs[netip.PrefixFrom(ip, ap.PrefixLen)] = true
 	}
-	newIPs := make(map[tcpip.AddressWithPrefix]bool)
+	newIPs := make(map[netip.Prefix]bool)
 
 	isAddr := map[netip.Prefix]bool{}
 	if selfNode.Valid() {
 		for i := range selfNode.Addresses().LenIter() {
 			ipp := selfNode.Addresses().At(i)
 			isAddr[ipp] = true
-			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
+			newIPs[ipp] = true
 		}
 		for i := range selfNode.AllowedIPs().LenIter() {
 			ipp := selfNode.AllowedIPs().At(i)
@@ -362,13 +362,13 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 		}
 	}
 
-	ipsToBeAdded := make(map[tcpip.AddressWithPrefix]bool)
+	ipsToBeAdded := make(map[netip.Prefix]bool)
 	for ipp := range newIPs {
 		if !oldIPs[ipp] {
 			ipsToBeAdded[ipp] = true
 		}
 	}
-	ipsToBeRemoved := make(map[tcpip.AddressWithPrefix]bool)
+	ipsToBeRemoved := make(map[netip.Prefix]bool)
 	for ip := range oldIPs {
 		if !newIPs[ip] {
 			ipsToBeRemoved[ip] = true
@@ -376,13 +376,12 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	}
 	ns.mu.Lock()
 	for ip := range ns.connsOpenBySubnetIP {
-		ipp := tcpip.AddrFromSlice(ip.AsSlice()).WithPrefix()
-		delete(ipsToBeRemoved, ipp)
+		delete(ipsToBeRemoved, netip.PrefixFrom(ip, ip.BitLen()))
 	}
 	ns.mu.Unlock()
 
 	for ipp := range ipsToBeRemoved {
-		err := ns.ipstack.RemoveAddress(nicID, ipp.Address)
+		err := ns.ipstack.RemoveAddress(nicID, tcpip.AddrFromSlice(ipp.Addr().AsSlice()))
 		if err != nil {
 			ns.logf("netstack: could not deregister IP %s: %v", ipp, err)
 		} else {
@@ -390,25 +389,25 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 		}
 	}
 	for ipp := range ipsToBeAdded {
-		pa := tcpip.ProtocolAddress{
-			AddressWithPrefix: ipp,
-		}
-		switch ipp.Address.Len() {
-		case 16:
-			pa.Protocol = ipv6.ProtocolNumber
-		case 4:
-			pa.Protocol = ipv4.ProtocolNumber
-		default:
-			ns.logf("[unexpected] netstack: could not register IP %s without protocol: unknown IP length (%v)", ipp, ipp.Address.Len())
+		if !ipp.IsValid() {
+			ns.logf("netstack: [unexpected] skipping invalid IP (%v/%v)", ipp.Addr(), ipp.Bits())
 			continue
 		}
-		var err tcpip.Error
-		err = ns.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
+		pa := tcpip.ProtocolAddress{
+			AddressWithPrefix: ipPrefixToAddressWithPrefix(ipp),
+		}
+		if ipp.Addr().Is6() {
+			pa.Protocol = ipv6.ProtocolNumber
+		} else {
+			pa.Protocol = ipv4.ProtocolNumber
+		}
+		var tcpErr tcpip.Error // not error
+		tcpErr = ns.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
 			PEB:        stack.CanBePrimaryEndpoint, // zero value default
 			ConfigType: stack.AddressConfigStatic,  // zero value default
 		})
-		if err != nil {
-			ns.logf("netstack: could not register IP %s: %v", ipp, err)
+		if tcpErr != nil {
+			ns.logf("netstack: could not register IP %s: %v", ipp, tcpErr)
 		} else {
 			ns.logf("[v2] netstack: registered IP %s", ipp)
 		}
