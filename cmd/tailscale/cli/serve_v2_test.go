@@ -370,15 +370,15 @@ func TestServeDevConfigMutations(t *testing.T) {
 	add(step{reset: true})
 	add(step{ // !somehost, must be localhost or 127.0.0.1
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:5432"),
-		wantErr: exactErr(errHelp, "errHelp"),
+		wantErr: exactErrMsg(errHelp),
 	})
 	add(step{ // bad target port, too low
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:0"),
-		wantErr: exactErr(errHelp, "errHelp"),
+		wantErr: exactErrMsg(errHelp),
 	})
 	add(step{ // bad target port, too high
 		command: cmd("serve --tls-terminated-tcp=443 --bg tcp://somehost:65536"),
-		wantErr: exactErr(errHelp, "errHelp"),
+		wantErr: exactErrMsg(errHelp),
 	})
 	add(step{ // support shorthand
 		command: cmd("serve --tls-terminated-tcp=443 --bg 5432"),
@@ -508,7 +508,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	})
 	add(step{ // bad path
 		command: cmd("serve --https=443 --bg bad/path"),
-		wantErr: exactErr(errHelp, "errHelp"),
+		wantErr: exactErrMsg(errHelp),
 	})
 	add(step{reset: true})
 	add(step{
@@ -1281,5 +1281,16 @@ func TestIsLegacyInvocation(t *testing.T) {
 				t.Fatalf("expected translaction to be %q but got %q", tt.translation, gotTranslation)
 			}
 		})
+	}
+}
+
+// exactErrMsg returns an error checker that wants exactly the provided want error.
+// If optName is non-empty, it's used in the error message.
+func exactErrMsg(want error) func(error) string {
+	return func(got error) string {
+		if got.Error() == want.Error() {
+			return ""
+		}
+		return fmt.Sprintf("got error %v, want %v", got, want)
 	}
 }

@@ -100,6 +100,12 @@ func buildShortUsage(subcmd string) string {
 	}, "\n  ")
 }
 
+// errHelpFunc is standard error text that prompts users to
+// run `$subcmd --help` for information on how to use serve.
+var errHelpFunc = func(m serveMode) error {
+	return fmt.Errorf("try `tailscale %s --help` for usage info", infoMap[m].Name)
+}
+
 // newServeV2Command returns a new "serve" subcommand using e as its environment.
 func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	if subcmd != serve && subcmd != funnel {
@@ -158,19 +164,19 @@ func validateArgs(subcmd serveMode, args []string) error {
 			fmt.Fprintf(os.Stderr, "\t- %s\n", translation)
 		}
 		fmt.Fprint(os.Stderr, "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
-		return errHelp
+		return errHelpFunc(subcmd)
 	}
 	if len(args) == 0 {
 		return flag.ErrHelp
 	}
 	if len(args) > 2 {
 		fmt.Fprintf(os.Stderr, "Error: invalid number of arguments (%d)\n", len(args))
-		return errHelp
+		return errHelpFunc(subcmd)
 	}
 	turnOff := args[len(args)-1] == "off"
 	if len(args) == 2 && !turnOff {
 		fmt.Fprintln(os.Stderr, "Error: invalid argument format")
-		return errHelp
+		return errHelpFunc(subcmd)
 	}
 
 	// Given the two checks above, we can assume there
@@ -225,7 +231,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-			return errHelp
+			return errHelpFunc(subcmd)
 		}
 
 		sc, err := e.lc.GetServeConfig(ctx)
@@ -295,7 +301,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-			return errHelp
+			return errHelpFunc(subcmd)
 		}
 
 		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
