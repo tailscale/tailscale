@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
@@ -63,6 +64,10 @@ type Server struct {
 	cond       *sync.Cond // lazily initialized by condLocked
 	pubKey     key.MachinePublic
 	privKey    key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
+
+	// nodeSubnetRoutes is a list of subnet routes that are served
+	// by the specified node.
+	nodeSubnetRoutes map[key.NodePublic][]netip.Prefix
 
 	// masquerades is the set of masquerades that should be applied to
 	// MapResponses sent to clients. It is keyed by the requesting nodes
@@ -326,6 +331,13 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.serveUnhandled(w, r)
 	}
+}
+
+// SetSubnetRoutes sets the list of subnet routes which a node is routing.
+func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mak.Set(&s.nodeSubnetRoutes, nodeKey, routes)
 }
 
 // MasqueradePair is a pair of nodes and the IP address that the
@@ -908,6 +920,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 
 		s.mu.Lock()
 		peerAddress := s.masquerades[p.Key][node.Key]
+		routes := s.nodeSubnetRoutes[p.Key]
 		s.mu.Unlock()
 		if peerAddress.IsValid() {
 			if peerAddress.Is6() {
@@ -917,6 +930,10 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 				p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
 				p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
 			}
+		}
+		if len(routes) > 0 {
+			p.PrimaryRoutes = routes
+			p.AllowedIPs = append(p.AllowedIPs, routes...)
 		}
 		res.Peers = append(res.Peers, p)
 	}
@@ -939,11 +956,12 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		v4Prefix,
 		v6Prefix,
 	}
-	res.Node.AllowedIPs = res.Node.Addresses
 
-	// Consume a PingRequest while protected by mutex if it exists
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	res.Node.AllowedIPs = append(res.Node.Addresses, s.nodeSubnetRoutes[nk]...)
+
+	// Consume a PingRequest while protected by mutex if it exists
 	switch m := s.msgToSend[nk].(type) {
 	case *tailcfg.PingRequest:
 		res.PingRequest = m
