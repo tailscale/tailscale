@@ -2134,6 +2134,12 @@ func (c *Conn) Close() error {
 	// They will frequently have been closed already by a call to connBind.Close.
 	c.pconn6.Close()
 	c.pconn4.Close()
+	if c.closeDisco4 != nil {
+		c.closeDisco4.Close()
+	}
+	if c.closeDisco6 != nil {
+		c.closeDisco6.Close()
+	}
 
 	// Wait on goroutines updating right at the end, once everything is
 	// already closed. We want everything else in the Conn to be
