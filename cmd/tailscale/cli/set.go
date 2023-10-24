@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"net/netip"
+	"os/exec"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/clientupdate"
@@ -17,6 +18,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/views"
+	"tailscale.com/version"
 )
 
 var setCmd = &ffcli.Command{
@@ -157,9 +159,22 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 	if maskedPrefs.AutoUpdateSet {
-		_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
-		if errors.Is(err, errors.ErrUnsupported) {
-			return errors.New("automatic updates are not supported on this platform")
+		// On macsys, tailscaled will set the Sparkle auto-update setting. It
+		// does not use clientupdate.
+		if version.IsMacSysExt() {
+			apply := "0"
+			if maskedPrefs.AutoUpdate.Apply {
+				apply = "1"
+			}
+			out, err := exec.Command("defaults", "write", "io.tailscale.ipn.macsys", "SUAutomaticallyUpdate", apply).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to enable automatic updates: %v, %q", err, out)
+			}
+		} else {
+			_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
+			if errors.Is(err, errors.ErrUnsupported) {
+				return errors.New("automatic updates are not supported on this platform")
+			}
 		}
 	}
 	checkPrefs := curPrefs.Clone()
