@@ -347,17 +347,15 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	}
 	newIPs := make(map[netip.Prefix]bool)
 
-	isAddr := map[netip.Prefix]bool{}
 	if selfNode.Valid() {
 		for i := range selfNode.Addresses().LenIter() {
 			ipp := selfNode.Addresses().At(i)
-			isAddr[ipp] = true
 			newIPs[ipp] = true
 		}
-		for i := range selfNode.AllowedIPs().LenIter() {
-			ipp := selfNode.AllowedIPs().At(i)
-			if !isAddr[ipp] && ns.ProcessSubnets {
-				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
+		if ns.ProcessSubnets {
+			for i := range selfNode.AllowedIPs().LenIter() {
+				ipp := selfNode.AllowedIPs().At(i)
+				newIPs[ipp] = true
 			}
 		}
 	}
