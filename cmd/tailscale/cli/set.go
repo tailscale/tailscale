@@ -157,7 +157,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 	if maskedPrefs.AutoUpdateSet {
-		_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+		_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
 		if errors.Is(err, errors.ErrUnsupported) {
 			return errors.New("automatic updates are not supported on this platform")
 		}

@@ -265,7 +265,7 @@ func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	// Note that we create the Updater solely to check for errors; we do not
 	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
 	prefs := b.Prefs().AutoUpdate()
-	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+	_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
 	return tailcfg.C2NUpdateResponse{
 		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply,
 		Supported: err == nil,

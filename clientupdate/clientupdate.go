@@ -86,6 +86,10 @@ type Arguments struct {
 	// PkgsAddr is the address of the pkgs server to fetch updates from.
 	// Defaults to "https://pkgs.tailscale.com".
 	PkgsAddr string
+	// ForAutoUpdate should be true when Updater is created in auto-update
+	// context. When true, NewUpdater returns an error if it cannot be used for
+	// auto-updates (even if Updater.Update field is non-nil).
+	ForAutoUpdate bool
 }
 
 func (args Arguments) validate() error {
@@ -116,8 +120,12 @@ func NewUpdater(args Arguments) (*Updater, error) {
 	if up.Stderr == nil {
 		up.Stderr = os.Stderr
 	}
-	up.Update = up.getUpdateFunction()
+	var canAutoUpdate bool
+	up.Update, canAutoUpdate = up.getUpdateFunction()
 	if up.Update == nil {
+		return nil, errors.ErrUnsupported
+	}
+	if args.ForAutoUpdate && !canAutoUpdate {
 		return nil, errors.ErrUnsupported
 	}
 	switch up.Version {
@@ -144,52 +152,64 @@ func NewUpdater(args Arguments) (*Updater, error) {
 
 type updateFunction func() error
 
-func (up *Updater) getUpdateFunction() updateFunction {
+func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 	switch runtime.GOOS {
 	case "windows":
-		return up.updateWindows
+		return up.updateWindows, true
 	case "linux":
 		switch distro.Get() {
 		case distro.Synology:
-			return up.updateSynology
+			return up.updateSynology, true
 		case distro.Debian: // includes Ubuntu
-			return up.updateDebLike
+			return up.updateDebLike, true
 		case distro.Arch:
-			return up.updateArchLike
+			if up.archPackageInstalled() {
+				// Arch update func just prints a message about how to update,
+				// it doesn't support auto-updates.
+				return up.updateArchLike, false
+			}
+			return up.updateLinuxBinary, true
 		case distro.Alpine:
-			return up.updateAlpineLike
+			return up.updateAlpineLike, true
 		}
 		switch {
 		case haveExecutable("pacman"):
-			return up.updateArchLike
+			if up.archPackageInstalled() {
+				// Arch update func just prints a message about how to update,
+				// it doesn't support auto-updates.
+				return up.updateArchLike, false
+			}
+			return up.updateLinuxBinary, true
 		case haveExecutable("apt-get"): // TODO(awly): add support for "apt"
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
-			return up.updateDebLike
+			return up.updateDebLike, true
 		case haveExecutable("dnf"):
-			return up.updateFedoraLike("dnf")
+			return up.updateFedoraLike("dnf"), true
 		case haveExecutable("yum"):
-			return up.updateFedoraLike("yum")
+			return up.updateFedoraLike("yum"), true
 		case haveExecutable("apk"):
-			return up.updateAlpineLike
+			return up.updateAlpineLike, true
 		}
 		// If nothing matched, fall back to tarball updates.
 		if up.Update == nil {
-			return up.updateLinuxBinary
+			return up.updateLinuxBinary, true
 		}
 	case "darwin":
 		switch {
 		case version.IsMacAppStore():
-			return up.updateMacAppStore
+			// App store update func just opens the store page, it doesn't
+			// support auto-updates.
+			return up.updateMacAppStore, false
 		case version.IsMacSysExt():
-			return up.updateMacSys
+			return up.updateMacSys, true
 		default:
-			return nil
+			return nil, false
 		}
 	case "freebsd":
-		return up.updateFreeBSD
+		return up.updateFreeBSD, true
 	}
-	return nil
+	return nil, false
 }
 
 // Update runs a single update attempt using the platform-specific mechanism.
@@ -454,12 +474,12 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	return buf.Bytes(), nil
 }
 
+func (up *Updater) archPackageInstalled() bool {
+	err := exec.Command("pacman", "--query", "tailscale").Run()
+	return err == nil
+}
+
 func (up *Updater) updateArchLike() error {
-	if err := exec.Command("pacman", "--query", "tailscale").Run(); err != nil && isExitError(err) {
-		// Tailscale was not installed via pacman, update via tarball download
-		// instead.
-		return up.updateLinuxBinary()
-	}
 	// Arch maintainer asked us not to implement "tailscale update" or
 	// auto-updates on Arch-based distros:
 	// https://github.com/tailscale/tailscale/issues/6995#issuecomment-1687080106
