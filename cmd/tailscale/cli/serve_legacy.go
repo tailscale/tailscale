@@ -159,10 +159,10 @@ type serveEnv struct {
 	// v2 specific flags
 	bg               bool      // background mode
 	setPath          string    // serve path
-	https            string    // HTTP port
-	http             string    // HTTP port
-	tcp              string    // TCP port
-	tlsTerminatedTCP string    // a TLS terminated TCP port
+	https            uint      // HTTP port
+	http             uint      // HTTP port
+	tcp              uint      // TCP port
+	tlsTerminatedTCP uint      // a TLS terminated TCP port
 	subcmd           serveMode // subcommand
 	yes              bool      // update without prompt
 

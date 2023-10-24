@@ -208,6 +208,13 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
+			name: "invalid_mount_port_too_high",
+			steps: []step{{
+				command: cmd("serve --https=65536 --bg http://localhost:3000"), // invalid port, too high
+				wantErr: anyErr(),
+			}},
+		},
+		{
 			name: "invalid_host",
 			steps: []step{{
 				command: cmd("serve --https=443 --bg http://somehost:3000"), // invalid host
@@ -948,28 +955,28 @@ func TestSrcTypeFromFlags(t *testing.T) {
 	}{
 		{
 			name:         "only http set",
-			env:          &serveEnv{http: "80"},
+			env:          &serveEnv{http: 80},
 			expectedType: serveTypeHTTP,
 			expectedPort: 80,
 			expectedErr:  false,
 		},
 		{
 			name:         "only https set",
-			env:          &serveEnv{https: "10000"},
+			env:          &serveEnv{https: 10000},
 			expectedType: serveTypeHTTPS,
 			expectedPort: 10000,
 			expectedErr:  false,
 		},
 		{
 			name:         "only tcp set",
-			env:          &serveEnv{tcp: "8000"},
+			env:          &serveEnv{tcp: 8000},
 			expectedType: serveTypeTCP,
 			expectedPort: 8000,
 			expectedErr:  false,
 		},
 		{
 			name:         "only tls-terminated-tcp set",
-			env:          &serveEnv{tlsTerminatedTCP: "8080"},
+			env:          &serveEnv{tlsTerminatedTCP: 8080},
 			expectedType: serveTypeTLSTerminatedTCP,
 			expectedPort: 8080,
 			expectedErr:  false,
@@ -983,7 +990,7 @@ func TestSrcTypeFromFlags(t *testing.T) {
 		},
 		{
 			name:         "multiple types set",
-			env:          &serveEnv{http: "80", https: "443"},
+			env:          &serveEnv{http: 80, https: 443},
 			expectedPort: 0,
 			expectedErr:  true,
 		},
