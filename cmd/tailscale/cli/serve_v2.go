@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -126,15 +127,15 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process")
+			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process (default false)")
 			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
-			fs.StringVar(&e.https, "https", "", "Expose an HTTPS server at the specified port (default")
-			fs.StringVar(&e.http, "http", "", "Expose an HTTP server at the specified port")
-			fs.StringVar(&e.tcp, "tcp", "", "Expose a TCP forwarder to forward raw TCP packets at the specified port")
-			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
-			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts")
+			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
+			fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
+			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
+			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
+			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 		}),
-		UsageFunc: usageFunc,
+		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
 			{
 				Name:      "status",
@@ -649,7 +650,7 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType serve
 }
 
 func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, err error) {
-	sourceMap := map[serveType]string{
+	sourceMap := map[serveType]uint{
 		serveTypeHTTP:             e.http,
 		serveTypeHTTPS:            e.https,
 		serveTypeTCP:              e.tcp,
@@ -657,13 +658,15 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 	}
 
 	var srcTypeCount int
-	var srcValue string
 
 	for k, v := range sourceMap {
-		if v != "" {
+		if v != 0 {
+			if v > math.MaxUint16 {
+				return 0, 0, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
+			}
 			srcTypeCount++
 			srvType = k
-			srcValue = v
+			srvPort = uint16(v)
 		}
 	}
 
@@ -671,12 +674,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 		return 0, 0, fmt.Errorf("cannot serve multiple types for a single mount point")
 	} else if srcTypeCount == 0 {
 		srvType = serveTypeHTTPS
-		srcValue = "443"
-	}
-
-	srvPort, err = parseServePort(srcValue)
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid port %q: %w", srcValue, err)
+		srvPort = 443
 	}
 
 	return srvType, srvPort, nil
