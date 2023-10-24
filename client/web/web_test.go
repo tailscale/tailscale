@@ -151,15 +151,15 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 	tags := views.SliceOf([]string{"tag:server"})
 	tailnetNodes := map[string]*apitype.WhoIsResponse{
 		userANodeIP: {
-			Node:        &tailcfg.Node{ID: 1},
+			Node:        &tailcfg.Node{ID: 1, StableID: "1"},
 			UserProfile: userA,
 		},
 		userBNodeIP: {
-			Node:        &tailcfg.Node{ID: 2},
+			Node:        &tailcfg.Node{ID: 2, StableID: "2"},
 			UserProfile: userB,
 		},
 		taggedNodeIP: {
-			Node: &tailcfg.Node{ID: 3, Tags: tags.AsSlice()},
+			Node: &tailcfg.Node{ID: 3, StableID: "3", Tags: tags.AsSlice()},
 		},
 	}
 
@@ -240,11 +240,26 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 			wantError:   errNotOwner,
 		},
 		{
-			name:        "tagged-source",
+			name:        "tagged-remote-source",
 			selfNode:    &ipnstate.PeerStatus{ID: "self", UserID: userA.ID},
 			remoteAddr:  taggedNodeIP,
 			wantSession: nil,
-			wantError:   errTaggedSource,
+			wantError:   errTaggedRemoteSource,
+		},
+		{
+			name:        "tagged-local-source",
+			selfNode:    &ipnstate.PeerStatus{ID: "3"},
+			remoteAddr:  taggedNodeIP, // same node as selfNode
+			wantSession: nil,
+			wantError:   errTaggedLocalSource,
+		},
+		{
+			name:        "not-tagged-local-source",
+			selfNode:    &ipnstate.PeerStatus{ID: "1", UserID: userA.ID},
+			remoteAddr:  userANodeIP, // same node as selfNode
+			cookie:      userASession.ID,
+			wantSession: userASession,
+			wantError:   nil, // should not error
 		},
 		{
 			name:        "has-session",

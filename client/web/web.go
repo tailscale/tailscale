@@ -289,10 +289,11 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	errNoSession         = errors.New("no-browser-session")
-	errNotUsingTailscale = errors.New("not-using-tailscale")
-	errTaggedSource      = errors.New("tagged-source")
-	errNotOwner          = errors.New("not-owner")
+	errNoSession          = errors.New("no-browser-session")
+	errNotUsingTailscale  = errors.New("not-using-tailscale")
+	errTaggedRemoteSource = errors.New("tagged-remote-source")
+	errTaggedLocalSource  = errors.New("tagged-local-source")
+	errNotOwner           = errors.New("not-owner")
 )
 
 // getTailscaleBrowserSession retrieves the browser session associated with
@@ -304,8 +305,13 @@ var (
 //
 //   - (errNoSession) The request does not have a session.
 //
-//   - (errTaggedSource) The source is a tagged node. Users must use their
-//     own user-owned devices to manage other nodes' web clients.
+//   - (errTaggedRemoteSource) The source is remote (another node) and tagged.
+//     Users must use their own user-owned devices to manage other nodes'
+//     web clients.
+//
+//   - (errTaggedLocalSource) The source is local (the same node) and tagged.
+//     Tagged nodes can only be remotely managed, allowing ACLs to dictate
+//     access to web clients.
 //
 //   - (errNotOwner) The source is not the owner of this client (if the
 //     client is user-owned). Only the owner is allowed to manage the
@@ -318,25 +324,24 @@ var (
 // The WhoIsResponse is always populated, with a non-nil Node and UserProfile,
 // unless getTailscaleBrowserSession reports errNotUsingTailscale.
 func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, error) {
-	whoIs, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+	whoIs, whoIsErr := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+	status, statusErr := s.lc.StatusWithoutPeers(r.Context())
 	switch {
-	case err != nil:
+	case whoIsErr != nil:
 		return nil, nil, errNotUsingTailscale
+	case statusErr != nil:
+		return nil, whoIs, statusErr
+	case status.Self == nil:
+		return nil, whoIs, errors.New("missing self node in tailscale status")
+	case whoIs.Node.IsTagged() && whoIs.Node.StableID == status.Self.ID:
+		return nil, whoIs, errTaggedLocalSource
 	case whoIs.Node.IsTagged():
-		return nil, whoIs, errTaggedSource
+		return nil, whoIs, errTaggedRemoteSource
+	case !status.Self.IsTagged() && status.Self.UserID != whoIs.UserProfile.ID:
+		return nil, whoIs, errNotOwner
 	}
 	srcNode := whoIs.Node.ID
 	srcUser := whoIs.UserProfile.ID
-
-	status, err := s.lc.StatusWithoutPeers(r.Context())
-	switch {
-	case err != nil:
-		return nil, whoIs, err
-	case status.Self == nil:
-		return nil, whoIs, errors.New("missing self node in tailscale status")
-	case !status.Self.IsTagged() && status.Self.UserID != srcUser:
-		return nil, whoIs, errNotOwner
-	}
 
 	cookie, err := r.Cookie(sessionCookieName)
 	if errors.Is(err, http.ErrNoCookie) {
