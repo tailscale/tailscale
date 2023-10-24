@@ -59,6 +59,9 @@ func IsMacSysExt() bool {
 		return false
 	}
 	return isMacSysExt.Get(func() bool {
+		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
+			return true
+		}
 		exe, err := os.Executable()
 		if err != nil {
 			return false
@@ -76,6 +79,12 @@ func IsMacAppStore() bool {
 		return false
 	}
 	return isMacAppStore.Get(func() bool {
+		// Both macsys and app store versions can run CLI executable with
+		// suffix /Contents/MacOS/Tailscale. Check $HOME to filter out running
+		// as macsys.
+		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
+			return false
+		}
 		exe, err := os.Executable()
 		if err != nil {
 			return false

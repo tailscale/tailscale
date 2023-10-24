@@ -202,7 +202,9 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			// support auto-updates.
 			return up.updateMacAppStore, false
 		case version.IsMacSysExt():
-			return up.updateMacSys, true
+			// Macsys update func kicks off Sparkle. Auto-updates are done by
+			// Sparkle.
+			return up.updateMacSys, false
 		default:
 			return nil, false
 		}
