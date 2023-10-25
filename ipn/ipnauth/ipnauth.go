@@ -5,7 +5,9 @@
 package ipnauth
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -25,6 +27,35 @@ import (
 	"tailscale.com/version/distro"
 )
 
+// ErrNotImplemented is returned by ConnIdentity.WindowsToken when it is not
+// implemented for the current GOOS.
+var ErrNotImplemented = errors.New("not implemented for GOOS=" + runtime.GOOS)
+
+// WindowsToken represents the current security context of a Windows user.
+type WindowsToken interface {
+	io.Closer
+	// EqualUIDs reports whether other refers to the same user ID as the receiver.
+	EqualUIDs(other WindowsToken) bool
+	// IsAdministrator reports whether the receiver is a member of the built-in
+	// Administrators group, or else an error. Use IsElevated to determine whether
+	// the receiver is actually utilizing administrative rights.
+	IsAdministrator() (bool, error)
+	// IsUID reports whether the receiver's user ID matches uid.
+	IsUID(uid ipn.WindowsUserID) bool
+	// UID returns the ipn.WindowsUserID associated with the receiver, or else
+	// an error.
+	UID() (ipn.WindowsUserID, error)
+	// IsElevated reports whether the receiver is currently executing as an
+	// elevated administrative user.
+	IsElevated() bool
+	// UserDir returns the special directory identified by folderID as associated
+	// with the receiver. folderID must be one of the KNOWNFOLDERID values from
+	// the x/sys/windows package, serialized as a stringified GUID.
+	UserDir(folderID string) (string, error)
+	// Username returns the user name associated with the receiver.
+	Username() (string, error)
+}
+
 // ConnIdentity represents the owner of a localhost TCP or unix socket connection
 // connecting to the LocalAPI.
 type ConnIdentity struct {
@@ -38,9 +69,7 @@ type ConnIdentity struct {
 	// Used on Windows:
 	// TODO(bradfitz): merge these into the peercreds package and
 	// use that for all.
-	pid    int
-	userID ipn.WindowsUserID
-	user   *user.User
+	pid int
 }
 
 // WindowsUserID returns the local machine's userid of the connection
@@ -52,8 +81,11 @@ func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
 	if envknob.GOOS() != "windows" {
 		return ""
 	}
-	if ci.userID != "" {
-		return ci.userID
+	if tok, err := ci.WindowsToken(); err == nil {
+		defer tok.Close()
+		if uid, err := tok.UID(); err == nil {
+			return uid
+		}
 	}
 	// For Linux tests running as Windows:
 	const isBroken = true // TODO(bradfitz,maisem): fix tests; this doesn't work yet
@@ -65,7 +97,6 @@ func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
 	return ""
 }
 
-func (ci *ConnIdentity) User() *user.User       { return ci.user }
 func (ci *ConnIdentity) Pid() int               { return ci.pid }
 func (ci *ConnIdentity) IsUnixSock() bool       { return ci.isUnixSock }
 func (ci *ConnIdentity) Creds() *peercred.Creds { return ci.creds }
