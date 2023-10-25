@@ -159,7 +159,11 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 	case "linux":
 		switch distro.Get() {
 		case distro.Synology:
-			return up.updateSynology, true
+			// Synology updates use our own pkgs.tailscale.com instead of the
+			// Synology Package Center. We should eventually get to a regular
+			// release cadence with Synology Package Center and use their
+			// auto-update mechanism.
+			return up.updateSynology, false
 		case distro.Debian: // includes Ubuntu
 			return up.updateDebLike, true
 		case distro.Arch:
