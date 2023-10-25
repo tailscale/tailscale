@@ -271,7 +271,13 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var watcher *tailscale.IPNBusWatcher
-		if !e.bg && !turnOff {
+		wantFg := !e.bg && !turnOff
+		if wantFg {
+			// validate the config before creating a WatchIPNBus session
+			if err := e.validateConfig(parentSC, srvPort, srvType); err != nil {
+				return err
+			}
+
 			// if foreground mode, create a WatchIPNBus session
 			// and use the nested config for all following operations
 			// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
@@ -334,6 +340,8 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	}
 }
 
+const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
+
 func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType) error {
 	sc, isFg := findConfig(sc, port)
 	if sc == nil {
@@ -343,7 +351,7 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 		return errors.New("foreground already exists under this port")
 	}
 	if !e.bg {
-		return errors.New("background serve already exists under this port")
+		return fmt.Errorf(backgroundExistsMsg, infoMap[e.subcmd].Name, wantServe.String(), port)
 	}
 	existingServe := serveFromPortHandler(sc.TCP[port])
 	if wantServe != existingServe {
