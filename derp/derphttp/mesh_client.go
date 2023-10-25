@@ -14,6 +14,8 @@ import (
 	"tailscale.com/types/logger"
 )
 
+var retryInterval = 5 * time.Second
+
 // RunWatchConnectionLoop loops until ctx is done, sending
 // WatchConnectionChanges and subscribing to connection changes.
 //
@@ -42,7 +44,6 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		infoLogf = logger.Discard
 	}
 	logf := c.logf
-	const retryInterval = 5 * time.Second
 	const statusInterval = 10 * time.Second
 	var (
 		mu              sync.Mutex
