@@ -6,6 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -38,11 +39,12 @@ import (
 
 var fileCmd = &ffcli.Command{
 	Name:       "file",
-	ShortUsage: "file <cp|get> ...",
+	ShortUsage: "file <cp|get|ls> ...",
 	ShortHelp:  "Send or receive files",
 	Subcommands: []*ffcli.Command{
 		fileCpCmd,
 		fileGetCmd,
+		fileLsCmd,
 	},
 	Exec: func(context.Context, []string) error {
 		// TODO(bradfitz): is there a better ffcli way to
@@ -67,7 +69,7 @@ var fileCpCmd = &ffcli.Command{
 	Name:       "cp",
 	ShortUsage: "file cp <files...> <target>:",
 	ShortHelp:  "Copy file(s) to a host",
-	Exec:       runCp,
+	Exec:       runFileCp,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("cp")
 		fs.StringVar(&cpArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
@@ -83,7 +85,7 @@ var cpArgs struct {
 	targets bool
 }
 
-func runCp(ctx context.Context, args []string) error {
+func runFileCp(ctx context.Context, args []string) error {
 	if cpArgs.targets {
 		return runCpTargets(ctx, args)
 	}
@@ -640,4 +642,58 @@ func waitForFile(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+var fileLsCmd = &ffcli.Command{
+	Name:       "ls",
+	ShortUsage: "file ls",
+	ShortHelp:  "Show pending files",
+	Exec:       runFileLs,
+	FlagSet: (func() *flag.FlagSet {
+		fs := flag.NewFlagSet("ls", flag.ExitOnError)
+		fs.BoolVar(&lsArgs.asJson, "json", false, "output JSON")
+		fs.BoolVar(&lsArgs.verbose, "verbose", false, "verbose output")
+		return fs
+	})(),
+}
+
+var lsArgs struct {
+	verbose bool
+	asJson  bool
+}
+
+func runFileLs(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return errors.New("usage: file ls")
+	}
+	log.SetFlags(0)
+
+	var wfs []apitype.WaitingFile
+	var err error
+	for {
+		wfs, err = tailscale.WaitingFiles(ctx)
+		if err != nil {
+			return fmt.Errorf("getting WaitingFiles: %v", err)
+		}
+		if len(wfs) != 0 || !getArgs.wait {
+			break
+		}
+		if getArgs.verbose {
+			log.Printf("waiting for file...")
+		}
+		if err := waitForFile(ctx); err != nil {
+			return err
+		}
+	}
+
+	if lsArgs.asJson {
+		if err := json.NewEncoder(os.Stdout).Encode(wfs); err != nil {
+			return err
+		}
+	} else {
+		for _, wf := range wfs {
+			fmt.Println(wf.Name)
+		}
+	}
+	return nil
 }
