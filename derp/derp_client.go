@@ -403,10 +403,6 @@ type ServerInfoMessage struct {
 	// Zero means unspecified. There might be a limit, but the
 	// client need not try to respect it.
 	TokenBucketBytesBurst int
-
-	// AtomicWatchConn is whether this server can do an atomic upgrade of a
-	// connection to become a mesh peer watcher.
-	AtomicWatchConn bool
 }
 
 func (ServerInfoMessage) msg() {}
