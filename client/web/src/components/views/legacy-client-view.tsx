@@ -8,6 +8,52 @@ import { NodeData, NodeUpdate } from "src/hooks/node-data"
 // purely to ease migration to the new React-based web client, and will
 // eventually be completely removed.
 
+export default function LegacyClientView({
+  data,
+  refreshData,
+  updateNode,
+}: {
+  data: NodeData
+  refreshData: () => void
+  updateNode: (update: NodeUpdate) => void
+}) {
+  return (
+    <div className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
+      <Header data={data} refreshData={refreshData} updateNode={updateNode} />
+      <IP data={data} />
+      {data.Status === "NeedsMachineAuth" ? (
+        <div className="mb-4">
+          This device is authorized, but needs approval from a network admin
+          before it can connect to the network.
+        </div>
+      ) : (
+        <>
+          <div className="mb-4">
+            <p>
+              You are connected! Access this device over Tailscale using the
+              device name or IP address above.
+            </p>
+          </div>
+          <button
+            className={cx("button button-medium mb-4", {
+              "button-red": data.AdvertiseExitNode,
+              "button-blue": !data.AdvertiseExitNode,
+            })}
+            id="enabled"
+            onClick={() =>
+              updateNode({ AdvertiseExitNode: !data.AdvertiseExitNode })
+            }
+          >
+            {data.AdvertiseExitNode
+              ? "Stop advertising Exit Node"
+              : "Advertise as Exit Node"}
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 export function Header({
   data,
   refreshData,
@@ -182,117 +228,5 @@ export function IP(props: { data: NodeData }) {
         )}
       </p>
     </>
-  )
-}
-
-export function State({
-  data,
-  updateNode,
-}: {
-  data: NodeData
-  updateNode: (update: NodeUpdate) => void
-}) {
-  switch (data.Status) {
-    case "NeedsLogin":
-    case "NoState":
-      if (data.IP) {
-        return (
-          <>
-            <div className="mb-6">
-              <p className="text-gray-700">
-                Your device's key has expired. Reauthenticate this device by
-                logging in again, or{" "}
-                <a
-                  href="https://tailscale.com/kb/1028/key-expiry"
-                  className="link"
-                  target="_blank"
-                >
-                  learn more
-                </a>
-                .
-              </p>
-            </div>
-            <button
-              onClick={() => updateNode({ Reauthenticate: true })}
-              className="button button-blue w-full mb-4"
-            >
-              Reauthenticate
-            </button>
-          </>
-        )
-      } else {
-        return (
-          <>
-            <div className="mb-6">
-              <h3 className="text-3xl font-semibold mb-3">Log in</h3>
-              <p className="text-gray-700">
-                Get started by logging in to your Tailscale network.
-                Or,&nbsp;learn&nbsp;more at{" "}
-                <a
-                  href="https://tailscale.com/"
-                  className="link"
-                  target="_blank"
-                >
-                  tailscale.com
-                </a>
-                .
-              </p>
-            </div>
-            <button
-              onClick={() => updateNode({ Reauthenticate: true })}
-              className="button button-blue w-full mb-4"
-            >
-              Log In
-            </button>
-          </>
-        )
-      }
-    case "NeedsMachineAuth":
-      return (
-        <div className="mb-4">
-          This device is authorized, but needs approval from a network admin
-          before it can connect to the network.
-        </div>
-      )
-    default:
-      return (
-        <>
-          <div className="mb-4">
-            <p>
-              You are connected! Access this device over Tailscale using the
-              device name or IP address above.
-            </p>
-          </div>
-          <button
-            className={cx("button button-medium mb-4", {
-              "button-red": data.AdvertiseExitNode,
-              "button-blue": !data.AdvertiseExitNode,
-            })}
-            id="enabled"
-            onClick={() =>
-              updateNode({ AdvertiseExitNode: !data.AdvertiseExitNode })
-            }
-          >
-            {data.AdvertiseExitNode
-              ? "Stop advertising Exit Node"
-              : "Advertise as Exit Node"}
-          </button>
-        </>
-      )
-  }
-}
-
-export function Footer(props: { licensesURL: string; className?: string }) {
-  return (
-    <footer
-      className={cx("container max-w-lg mx-auto text-center", props.className)}
-    >
-      <a
-        className="text-xs text-gray-500 hover:text-gray-600"
-        href={props.licensesURL}
-      >
-        Open Source Licenses
-      </a>
-    </footer>
   )
 }
