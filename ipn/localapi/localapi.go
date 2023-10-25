@@ -157,6 +157,17 @@ type Handler struct {
 	// cert fetching access.
 	PermitCert bool
 
+	// CallerIsLocalAdmin is whether the this handler is being invoked as a
+	// result of a LocalAPI call from a user who is a local admin of the current
+	// machine.
+	//
+	// As of 2023-10-26 it is only populated on Windows.
+	//
+	// It can be used to to restrict some LocalAPI operations which should only
+	// be run by an admin and not unprivileged users in a computing environment
+	// managed by IT admins.
+	CallerIsLocalAdmin bool
+
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
