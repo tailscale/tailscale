@@ -10,6 +10,11 @@ const (
 	ControlURL Key = "LoginURL"  // default ""; if blank, ipn uses ipn.DefaultControlURL.
 	LogTarget  Key = "LogTarget" // default ""; if blank logging uses logtail.DefaultHost.
 	Tailnet    Key = "Tailnet"   // default ""; if blank, no tailnet name is sent to the server.
+	// ExitNodeID is the exit node's node id. default ""; if blank, no exit node is forced.
+	// Exit node ID takes precedence over exit node IP.
+	// To find the node ID, go to /api.md#device.
+	ExitNodeID Key = "ExitNodeID"
+	ExitNodeIP Key = "ExitNodeIP" // default ""; if blank, no exit node is forced. Value is exit node IP.
 
 	// Keys with a string value that specifies an option: "always", "never", "user-decides".
 	// The default is "user-decides" unless otherwise stated.
