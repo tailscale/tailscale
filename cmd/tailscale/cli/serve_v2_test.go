@@ -782,6 +782,16 @@ func TestServeDevConfigMutations(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "no_http_with_funnel",
+			steps: []step{
+				{
+					command: cmd("funnel --http=80 3000"),
+					// error parsing commandline arguments: flag provided but not defined: -http
+					wantErr: anyErr(),
+				},
+			},
+		},
 	}
 
 	for _, group := range groups {
