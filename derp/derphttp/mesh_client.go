@@ -146,7 +146,6 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 				}
 				updatePeer(key.NodePublic(m.Peer), netip.AddrPort{}, false)
 			default:
-				// Do nothing
 			}
 			if now := c.clock.Now(); now.Sub(lastStatus) > statusInterval {
 				lastStatus = now
