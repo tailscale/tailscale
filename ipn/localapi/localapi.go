@@ -85,6 +85,7 @@ var handler = map[string]localAPIHandler{
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
+	"handle-push-message":         (*Handler).serveHandlePushMessage,
 	"dial":                        (*Handler).serveDial,
 	"file-targets":                (*Handler).serveFileTargets,
 	"goroutines":                  (*Handler).serveGoroutines,
@@ -1554,6 +1555,26 @@ func (h *Handler) serveSetPushDeviceToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 	h.b.SetPushDeviceToken(params.PushDeviceToken)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) serveHandlePushMessage(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "handle push message not allowed", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+	var pushMessageBody map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&pushMessageBody); err != nil {
+		http.Error(w, "failed to decode JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// TODO(bradfitz): do something with pushMessageBody
+
 	w.WriteHeader(http.StatusOK)
 }
 
