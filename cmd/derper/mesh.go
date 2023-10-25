@@ -41,6 +41,7 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		return err
 	}
 	c.MeshKey = s.MeshKey()
+	c.WatchConnectionChanges = true
 
 	// For meshed peers within a region, connect via VPC addresses.
 	c.SetURLDialer(func(ctx context.Context, network, addr string) (net.Conn, error) {

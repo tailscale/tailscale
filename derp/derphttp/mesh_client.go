@@ -14,20 +14,30 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// RunWatchConnectionLoop loops until ctx is done, sending WatchConnectionChanges and subscribing to
-// connection changes.
+// RunWatchConnectionLoop loops until ctx is done, sending
+// WatchConnectionChanges and subscribing to connection changes.
 //
-// If the server's public key is ignoreServerKey, RunWatchConnectionLoop returns.
+// If the server's public key is ignoreServerKey, RunWatchConnectionLoop
+// returns.
 //
 // Otherwise, the add and remove funcs are called as clients come & go.
 //
-// infoLogf, if non-nil, is the logger to write periodic status
-// updates about how many peers are on the server. Error log output is
-// set to the c's logger, regardless of infoLogf's value.
+// infoLogf, if non-nil, is the logger to write periodic status updates about
+// how many peers are on the server. Error log output is set to the c's logger,
+// regardless of infoLogf's value.
 //
-// To force RunWatchConnectionLoop to return quickly, its ctx needs to
-// be closed, and c itself needs to be closed.
+// To force RunWatchConnectionLoop to return quickly, its ctx needs to be
+// closed, and c itself needs to be closed.
+//
+// It is a fatal error to call this on an already-started Client withoutq having
+// initialized Client.WatchConnectionChanges to true.
 func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf, add func(key.NodePublic, netip.AddrPort), remove func(key.NodePublic)) {
+	if !c.WatchConnectionChanges {
+		if c.isStarted() {
+			panic("invalid use of RunWatchConnectionLoop on already-started Client without setting Client.RunWatchConnectionLoop")
+		}
+		c.WatchConnectionChanges = true
+	}
 	if infoLogf == nil {
 		infoLogf = logger.Discard
 	}
@@ -101,14 +111,6 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	for ctx.Err() == nil {
-		err := c.WatchConnectionChanges()
-		if err != nil {
-			clear()
-			logf("WatchConnectionChanges: %v", err)
-			sleep(retryInterval)
-			continue
-		}
-
 		if c.ServerPublicKey() == ignoreServerKey {
 			logf("detected self-connect; ignoring host")
 			return

@@ -56,6 +56,12 @@ type Client struct {
 	MeshKey   string             // optional; for trusted clients
 	IsProber  bool               // optional; for probers to optional declare themselves as such
 
+	// WatchConnectionChanges is whether the client wishes to subscribe to
+	// notifications about clients connecting & disconnecting.
+	//
+	// Only trusted connections (using MeshKey) are allowed to use this.
+	WatchConnectionChanges bool
+
 	// BaseContext, if non-nil, returns the base context to use for dialing a
 	// new derp server. If nil, context.Background is used.
 	// In either case, additional timeouts may be added to the base context.
@@ -80,6 +86,7 @@ type Client struct {
 	addrFamSelAtomic syncs.AtomicValue[AddressFamilySelector]
 
 	mu           sync.Mutex
+	started      bool // true upon first connect, never transitions to false
 	preferred    bool
 	canAckPings  bool
 	closed       bool
@@ -140,6 +147,15 @@ func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf) (
 		clock:      tstime.StdClock{},
 	}
 	return c, nil
+}
+
+// isStarted reports whether this client has been used yet.
+//
+// If if reports false, it may still have its exported fields configured.
+func (c *Client) isStarted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.started
 }
 
 // Connect connects or reconnects to the server, unless already connected.
@@ -284,6 +300,7 @@ func useWebsockets() bool {
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.started = true
 	if c.closed {
 		return nil, 0, ErrClientClosed
 	}
@@ -490,6 +507,13 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}
 	if c.preferred {
 		if err := derpClient.NotePreferred(true); err != nil {
+			go httpConn.Close()
+			return nil, 0, err
+		}
+	}
+
+	if c.WatchConnectionChanges {
+		if err := derpClient.WatchConnectionChanges(); err != nil {
 			go httpConn.Close()
 			return nil, 0, err
 		}
@@ -954,22 +978,6 @@ func (c *Client) NotePreferred(v bool) {
 			c.closeForReconnect(client)
 		}
 	}
-}
-
-// WatchConnectionChanges sends a request to subscribe to
-// notifications about clients connecting & disconnecting.
-//
-// Only trusted connections (using MeshKey) are allowed to use this.
-func (c *Client) WatchConnectionChanges() error {
-	client, _, err := c.connect(c.newContext(), "derphttp.Client.WatchConnectionChanges")
-	if err != nil {
-		return err
-	}
-	err = client.WatchConnectionChanges()
-	if err != nil {
-		c.closeForReconnect(client)
-	}
-	return err
 }
 
 // ClosePeer asks the server to close target's TCP connection.
