@@ -1028,19 +1028,21 @@ var (
 
 // UPnP error metric that's keyed by code; lazily registered on first read
 var (
-	metricUPnPErrorsByCode syncs.Map[string, *clientmetric.Metric]
+	metricUPnPErrorsByCode syncs.Map[int, *clientmetric.Metric]
 )
 
 func getUPnPErrorsMetric(code int) *clientmetric.Metric {
-	// Metric names cannot contain a hyphen, so we handle negative numbers
-	// by prefixing the name with a "minus_".
-	var codeStr string
-	if code < 0 {
-		codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_minus_%d", -code)
-	} else {
-		codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_%d", code)
-	}
+	mm, _ := metricUPnPErrorsByCode.LoadOrInit(code, func() *clientmetric.Metric {
+		// Metric names cannot contain a hyphen, so we handle negative
+		// numbers by prefixing the name with a "minus_".
+		var codeStr string
+		if code < 0 {
+			codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_minus_%d", -code)
+		} else {
+			codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_%d", code)
+		}
 
-	mm, _ := metricUPnPErrorsByCode.LoadOrInit(codeStr, func() *clientmetric.Metric { return clientmetric.NewCounter(codeStr) })
+		return clientmetric.NewCounter(codeStr)
+	})
 	return mm
 }
