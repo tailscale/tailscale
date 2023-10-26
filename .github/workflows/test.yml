@@ -22,8 +22,7 @@ on:
       - "main"
       - "release-branch/*"
   pull_request:
-    branches:
-      - "*"
+    # all PRs on all branches
   merge_group:
     branches:
       - "main"
