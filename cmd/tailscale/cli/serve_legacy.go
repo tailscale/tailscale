@@ -818,6 +818,24 @@ func parseServePort(s string) (uint16, error) {
 // 2023-08-09: The only valid feature values are "serve" and "funnel".
 // This can be moved to some CLI lib when expanded past serve/funnel.
 func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, caps ...tailcfg.NodeCapability) (err error) {
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
+	if st.Self == nil {
+		return errors.New("no self node")
+	}
+	hasCaps := func() bool {
+		for _, c := range caps {
+			if !st.Self.HasCap(c) {
+				return false
+			}
+		}
+		return true
+	}
+	if hasCaps() {
+		return nil // already enabled
+	}
 	info, err := e.lc.QueryFeature(ctx, feature)
 	if err != nil {
 		return err

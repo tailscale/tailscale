@@ -213,15 +213,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
-		st, err := e.getLocalClientStatusWithoutPeers(ctx)
-		if err != nil {
-			return fmt.Errorf("getting client status: %w", err)
-		}
-
 		funnel := subcmd == funnel
 		if funnel {
 			// verify node has funnel capabilities
-			if err := e.verifyFunnelEnabled(ctx, st, 443); err != nil {
+			if err := e.verifyFunnelEnabled(ctx, 443); err != nil {
 				return err
 			}
 		}
@@ -245,6 +240,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		// nil if no config
 		if sc == nil {
 			sc = new(ipn.ServeConfig)
+		}
+		st, err := e.getLocalClientStatusWithoutPeers(ctx)
+		if err != nil {
+			return fmt.Errorf("getting client status: %w", err)
 		}
 		dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 
