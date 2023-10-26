@@ -915,6 +915,15 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(w, fmt.Errorf("decoding config: %w", err))
 			return
 		}
+
+		// require a local admin when setting a path handler
+		// TODO: roll-up this Windows-specific check into either PermitWrite
+		// or a global admin escalation check.
+		if shouldDenyServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h) {
+			http.Error(w, "must be a Windows local admin to serve a path", http.StatusUnauthorized)
+			return
+		}
+
 		etag := r.Header.Get("If-Match")
 		if err := h.b.SetServeConfig(configIn, etag); err != nil {
 			if errors.Is(err, ipnlocal.ErrETagMismatch) {
@@ -928,6 +937,16 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func shouldDenyServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) bool {
+	if goos != "windows" {
+		return false
+	}
+	if !configIn.HasPathHandler() {
+		return false
+	}
+	return !h.CallerIsLocalAdmin
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {

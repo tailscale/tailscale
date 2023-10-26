@@ -163,6 +163,30 @@ func (sc *ServeConfig) GetTCPPortHandler(port uint16) *TCPPortHandler {
 	return sc.TCP[port]
 }
 
+// HasPathHandler reports whether if ServeConfig has at least
+// one path handler, including foreground configs.
+func (sc *ServeConfig) HasPathHandler() bool {
+	if sc.Web != nil {
+		for _, webServerConfig := range sc.Web {
+			for _, httpHandler := range webServerConfig.Handlers {
+				if httpHandler.Path != "" {
+					return true
+				}
+			}
+		}
+	}
+
+	if sc.Foreground != nil {
+		for _, fgConfig := range sc.Foreground {
+			if fgConfig.HasPathHandler() {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // IsTCPForwardingAny reports whether ServeConfig is currently forwarding in
 // TCPForward mode on any port. This is exclusive of Web/HTTPS serving.
 func (sc *ServeConfig) IsTCPForwardingAny() bool {
