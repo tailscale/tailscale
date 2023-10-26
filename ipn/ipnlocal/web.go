@@ -6,30 +6,27 @@
 package ipnlocal
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
-	"sync"
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netutil"
 )
 
 // webServer holds state for the web interface for managing
 // this tailscale instance. The web interface is not used by
 // default, but initialized by calling LocalBackend.WebOrInit.
 type webServer struct {
-	ws         *web.Server  // or nil, initialized lazily
-	httpServer *http.Server // or nil, initialized lazily
+	ws *web.Server // or nil, initialized lazily
 
 	// lc optionally specifies a LocalClient to use to connect
 	// to the localapi for this tailscaled instance.
 	// If nil, a default is used.
 	lc *tailscale.LocalClient
-
-	wg sync.WaitGroup
 }
 
 // SetWebLocalClient sets the b.web.lc function.
@@ -63,24 +60,6 @@ func (b *LocalBackend) WebInit() (err error) {
 		return fmt.Errorf("web.NewServer: %w", err)
 	}
 
-	// Start up the server.
-	b.web.wg.Add(1)
-	go func() {
-		defer b.web.wg.Done()
-		// TODO(sonia/will): only listen on Tailscale IP addresses
-		addr := ":5252"
-		b.web.httpServer = &http.Server{
-			Addr:    addr,
-			Handler: http.HandlerFunc(b.web.ws.ServeHTTP),
-		}
-		b.logf("WebInit: serving web ui on %s", addr)
-		if err := b.web.httpServer.ListenAndServe(); err != nil {
-			if err != http.ErrServerClosed {
-				b.logf("[unexpected] WebInit: %v", err)
-			}
-		}
-	}()
-
 	b.logf("WebInit: started web ui")
 	return nil
 }
@@ -93,18 +72,19 @@ func (b *LocalBackend) WebInit() (err error) {
 func (b *LocalBackend) WebShutdown() {
 	b.mu.Lock()
 	webS := b.web.ws
-	httpS := b.web.httpServer
 	b.web.ws = nil
-	b.web.httpServer = nil
 	b.mu.Unlock() // release lock before shutdown
 	if webS != nil {
 		b.web.ws.Shutdown()
 	}
-	if httpS != nil {
-		if err := b.web.httpServer.Shutdown(context.Background()); err != nil {
-			b.logf("[unexpected] WebShutdown: %v", err)
-		}
-	}
-	b.web.wg.Wait()
 	b.logf("WebShutdown: shut down web ui")
+}
+
+// handleWebClientConn serves web client requests.
+func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
+	if err := b.WebInit(); err != nil {
+		return err
+	}
+	s := http.Server{Handler: b.web.ws}
+	return s.Serve(netutil.NewOneConnListener(c, nil))
 }

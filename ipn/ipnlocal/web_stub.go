@@ -7,6 +7,7 @@ package ipnlocal
 
 import (
 	"errors"
+	"net"
 
 	"tailscale.com/client/tailscale"
 )
@@ -20,3 +21,7 @@ func (b *LocalBackend) WebInit() error {
 }
 
 func (b *LocalBackend) WebShutdown() {}
+
+func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
+	return errors.New("not implemented")
+}

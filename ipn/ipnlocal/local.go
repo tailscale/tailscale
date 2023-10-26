@@ -3129,6 +3129,10 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		opts = append(opts, ptr.To(tcpip.KeepaliveIdleOption(72*time.Hour)))
 		return b.handleSSHConn, opts
 	}
+	// TODO(will,sonia): allow customizing web client port ?
+	if dst.Port() == 5252 && b.ShouldRunWebClient() {
+		return b.handleWebClientConn, opts
+	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
 		return func(c net.Conn) error {
 			b.handlePeerAPIConn(src, dst, c)
