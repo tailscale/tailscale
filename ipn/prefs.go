@@ -205,6 +205,10 @@ type Prefs struct {
 	// AutoUpdatePrefs docs for more details.
 	AutoUpdate AutoUpdatePrefs
 
+	// AppConnector sets the app connector preferences for the node agent. See
+	// AppConnectorPrefs docs for more details.
+	AppConnector AppConnectorPrefs
+
 	// PostureChecking enables the collection of information used for device
 	// posture checks.
 	PostureChecking bool
@@ -227,6 +231,13 @@ type AutoUpdatePrefs struct {
 	// enabled, tailscaled will apply available updates in the background.
 	// Check must also be set when Apply is set.
 	Apply bool
+}
+
+// AppConnectorPrefs are the app connector settings for the node agent.
+type AppConnectorPrefs struct {
+	// Advertise specifies whether the app connector subsystem is advertising
+	// this node as a connector.
+	Advertise bool
 }
 
 // MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
@@ -256,6 +267,7 @@ type MaskedPrefs struct {
 	OperatorUserSet           bool `json:",omitempty"`
 	ProfileNameSet            bool `json:",omitempty"`
 	AutoUpdateSet             bool `json:",omitempty"`
+	AppConnectorSet           bool `json:",omitempty"`
 	PostureCheckingSet        bool `json:",omitempty"`
 }
 
@@ -398,6 +410,7 @@ func (p *Prefs) pretty(goos string) string {
 		fmt.Fprintf(&sb, "op=%q ", p.OperatorUser)
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
+	sb.WriteString(p.AppConnector.Pretty())
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -455,6 +468,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate == p2.AutoUpdate &&
+		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking
 }
 
@@ -466,6 +480,13 @@ func (au AutoUpdatePrefs) Pretty() string {
 		return "update=check "
 	}
 	return "update=off "
+}
+
+func (ap AppConnectorPrefs) Pretty() string {
+	if ap.Advertise {
+		return "appconnector=advertise "
+	}
+	return ""
 }
 
 func compareIPNets(a, b []netip.Prefix) bool {
