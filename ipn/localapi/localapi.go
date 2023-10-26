@@ -2249,10 +2249,20 @@ func (h *Handler) serveWeb(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// try to set pref, but ignore errors
+		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:           ipn.Prefs{RunWebClient: true},
+			RunWebClientSet: true,
+		})
 		w.WriteHeader(http.StatusOK)
 		return
 	case "/localapi/v0/web/stop":
 		h.b.WebShutdown()
+		// try to set pref, but ignore errors
+		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:           ipn.Prefs{RunWebClient: false},
+			RunWebClientSet: true,
+		})
 		w.WriteHeader(http.StatusOK)
 		return
 	default:

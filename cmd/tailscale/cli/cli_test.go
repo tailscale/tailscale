@@ -810,6 +810,9 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "Egg":
 			// Not applicable.
 			continue
+		case "RunWebClient":
+			// TODO(tailscale/corp#14335): Currently behind a feature flag.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}
