@@ -58,6 +58,7 @@ func TestPrefsEqual(t *testing.T) {
 		"OperatorUser",
 		"ProfileName",
 		"AutoUpdate",
+		"AppConnector",
 		"PostureChecking",
 		"Persist",
 	}
@@ -307,6 +308,16 @@ func TestPrefsEqual(t *testing.T) {
 			true,
 		},
 		{
+			&Prefs{AppConnector: AppConnectorPrefs{Advertise: true}},
+			&Prefs{AppConnector: AppConnectorPrefs{Advertise: true}},
+			true,
+		},
+		{
+			&Prefs{AppConnector: AppConnectorPrefs{Advertise: true}},
+			&Prefs{AppConnector: AppConnectorPrefs{Advertise: false}},
+			false,
+		},
+		{
 			&Prefs{PostureChecking: true},
 			&Prefs{PostureChecking: true},
 			true,
@@ -515,6 +526,24 @@ func TestPrefsPretty(t *testing.T) {
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=on Persist=nil}`,
+		},
+		{
+			Prefs{
+				AppConnector: AppConnectorPrefs{
+					Advertise: true,
+				},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off appconnector=advertise Persist=nil}`,
+		},
+		{
+			Prefs{
+				AppConnector: AppConnectorPrefs{
+					Advertise: false,
+				},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
 		},
 	}
 	for i, tt := range tests {
