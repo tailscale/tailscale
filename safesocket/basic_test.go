@@ -25,7 +25,7 @@ func TestBasics(t *testing.T) {
 		t.Cleanup(downgradeSDDL())
 	}
 
-	l, err := Listen(sock)
+	ln, err := Listen(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,12 +33,12 @@ func TestBasics(t *testing.T) {
 	errs := make(chan error, 2)
 
 	go func() {
-		s, err := l.Accept()
+		s, err := ln.Accept()
 		if err != nil {
 			errs <- err
 			return
 		}
-		l.Close()
+		ln.Close()
 		s.Write([]byte("hello"))
 
 		b := make([]byte, 1024)
