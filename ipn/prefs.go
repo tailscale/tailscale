@@ -112,6 +112,11 @@ type Prefs struct {
 	// policies as configured by the Tailnet's admin(s).
 	RunSSH bool
 
+	// RunWebClient bool is whether this node should run a web client,
+	// permitting access to peers according to the
+	// policies as configured by the Tailnet's admin(s).
+	RunWebClient bool
+
 	// WantRunning indicates whether networking should be active on
 	// this node.
 	WantRunning bool
@@ -236,6 +241,7 @@ type MaskedPrefs struct {
 	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
 	CorpDNSSet                bool `json:",omitempty"`
 	RunSSHSet                 bool `json:",omitempty"`
+	RunWebClientSet           bool `json:",omitempty"`
 	WantRunningSet            bool `json:",omitempty"`
 	LoggedOutSet              bool `json:",omitempty"`
 	ShieldsUpSet              bool `json:",omitempty"`
@@ -350,6 +356,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.RunSSH {
 		sb.WriteString("ssh=true ")
 	}
+	if p.RunWebClient {
+		sb.WriteString("webclient=true ")
+	}
 	if p.LoggedOut {
 		sb.WriteString("loggedout=true ")
 	}
@@ -431,6 +440,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
+		p.RunWebClient == p2.RunWebClient &&
 		p.WantRunning == p2.WantRunning &&
 		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
@@ -689,6 +699,18 @@ func (p PrefsView) ShouldSSHBeRunning() bool {
 // the prefs.
 func (p *Prefs) ShouldSSHBeRunning() bool {
 	return p.WantRunning && p.RunSSH
+}
+
+// ShouldWebClientBeRunning reports whether the web client server should be running based on
+// the prefs.
+func (p PrefsView) ShouldWebClientBeRunning() bool {
+	return p.Valid() && p.ж.ShouldWebClientBeRunning()
+}
+
+// ShouldWebClientBeRunning reports whether the web client server should be running based on
+// the prefs.
+func (p *Prefs) ShouldWebClientBeRunning() bool {
+	return p.WantRunning && p.RunWebClient
 }
 
 // PrefsFromBytes deserializes Prefs from a JSON blob.

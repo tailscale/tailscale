@@ -168,6 +168,7 @@ type LocalBackend struct {
 	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
 	em                    *expiryManager   // non-nil
 	sshAtomicBool         atomic.Bool
+	webclientAtomicBool   atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 	debugSink             *capture.Sink
 	sockstatLogger        *sockstatlog.Logger
@@ -2500,6 +2501,7 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 // and shouldInterceptTCPPortAtomic from the prefs p, which may be !Valid().
 func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
+	b.webclientAtomicBool.Store(p.Valid() && p.RunWebClient())
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
@@ -2918,6 +2920,11 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
 		return ipn.PrefsView{}, errors.New("Tailscale SSH server administratively disabled.")
 	}
+	if p1.RunWebClient && !envknob.Bool("TS_DEBUG_WEB_UI") {
+		b.mu.Unlock()
+		b.logf("EditPrefs requests web client, but disabled by envknob; returning error")
+		return ipn.PrefsView{}, errors.New("web ui flag not set")
+	}
 	if p1.View().Equals(p0) {
 		b.mu.Unlock()
 		return stripKeysFromPrefs(p0), nil
@@ -3009,6 +3016,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 			go b.sshServer.Shutdown()
 			b.sshServer = nil
 		}
+	}
+	if oldp.ShouldWebClientBeRunning() && !newp.ShouldWebClientBeRunning() {
+		b.WebShutdown()
 	}
 	if netMap != nil {
 		newProfile := netMap.UserProfiles[netMap.User()]
@@ -4145,6 +4155,10 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
+
+func (b *LocalBackend) ShouldRunWebClient() bool {
+	return b.webclientAtomicBool.Load() && envknob.Bool("TS_DEBUG_WEB_UI")
+}
 
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to

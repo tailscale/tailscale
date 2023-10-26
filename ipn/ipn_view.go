@@ -71,6 +71,7 @@ func (v PrefsView) ExitNodeIP() netip.Addr             { return v.ж.ExitNodeIP 
 func (v PrefsView) ExitNodeAllowLANAccess() bool       { return v.ж.ExitNodeAllowLANAccess }
 func (v PrefsView) CorpDNS() bool                      { return v.ж.CorpDNS }
 func (v PrefsView) RunSSH() bool                       { return v.ж.RunSSH }
+func (v PrefsView) RunWebClient() bool                 { return v.ж.RunWebClient }
 func (v PrefsView) WantRunning() bool                  { return v.ж.WantRunning }
 func (v PrefsView) LoggedOut() bool                    { return v.ж.LoggedOut }
 func (v PrefsView) ShieldsUp() bool                    { return v.ж.ShieldsUp }
@@ -100,6 +101,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	RunSSH                 bool
+	RunWebClient           bool
 	WantRunning            bool
 	LoggedOut              bool
 	ShieldsUp              bool
