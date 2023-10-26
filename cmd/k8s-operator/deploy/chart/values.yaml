@@ -11,8 +11,10 @@
 operatorConfig:
   image:
     repo: tailscale/k8s-operator
-    # Overrides the image tag whose default is the chart appVersion.
+    # Digest will be prioritized over tag. If neither are set appVersion will be
+    # used.
     tag: ""
+    digest: ""
   logging: "info"
   hostname: "tailscale-operator"
   nodeSelector:
@@ -26,7 +28,10 @@ operatorConfig:
 proxyConfig:
   image:
     repo: tailscale/tailscale
+    # Digest will be prioritized over tag. If neither are set appVersion will be
+    # used.
     tag: ""
+    digest: ""
   # ACL tag that operator will tag proxies with. Operator must be made owner of
   # these tags
   # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator

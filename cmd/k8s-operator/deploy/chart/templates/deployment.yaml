@@ -45,7 +45,8 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          image: {{ .Values.operatorConfig.image.repo }}:{{ .Values.operatorConfig.image.tag | default .Chart.AppVersion }}
+          {{- $operatorTag:= printf ":%s" ( .Values.operatorConfig.image.tag | default .Chart.AppVersion )}}
+          image: {{ .Values.operatorConfig.image.repo }}{{- if .Values.operatorConfig.image.digest -}}{{ printf "@%s" .Values.operatorConfig.image.digest}}{{- else -}}{{ printf "%s" $operatorTag }}{{- end }}
           imagePullPolicy: {{ .Values.operatorConfig.image.pullPolicy }}
           env:
             - name: OPERATOR_HOSTNAME
@@ -62,8 +63,9 @@ spec:
               value: /oauth/client_id
             - name: CLIENT_SECRET_FILE
               value: /oauth/client_secret
+            {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
             - name: PROXY_IMAGE
-              value: {{ .Values.proxyConfig.image.repo }}:{{ .Values.proxyConfig.image.tag | default .Chart.AppVersion }}
+              value: {{ .Values.proxyConfig.image.repo }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
             - name: PROXY_TAGS
               value: {{ .Values.proxyConfig.defaultTags }}
             - name: APISERVER_PROXY
