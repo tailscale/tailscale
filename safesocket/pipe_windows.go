@@ -57,27 +57,26 @@ func listen(path string) (net.Listener, error) {
 // the Windows access token associated with the connection's client. The
 // embedded net.Conn must be a go-winio PipeConn.
 type WindowsClientConn struct {
-	net.Conn
+	winioPipeConn
 	token windows.Token
 }
 
-// winioPipeHandle is fulfilled by the underlying code implementing go-winio's
-// PipeConn interface.
-type winioPipeHandle interface {
+// winioPipeConn is a subset of the interface implemented by the go-winio's
+// unexported *win32pipe type, as returned by go-winio's ListenPipe
+// net.Listener's Accept method. This type is used in places where we really are
+// assuming that specific unexported type and its Fd method.
+type winioPipeConn interface {
+	net.Conn
 	// Fd returns the Windows handle associated with the connection.
 	Fd() uintptr
 }
 
-func resolvePipeHandle(c net.Conn) windows.Handle {
-	wph, ok := c.(winioPipeHandle)
-	if !ok {
-		return 0
-	}
-	return windows.Handle(wph.Fd())
+func resolvePipeHandle(pc winioPipeConn) windows.Handle {
+	return windows.Handle(pc.Fd())
 }
 
 func (conn *WindowsClientConn) handle() windows.Handle {
-	return resolvePipeHandle(conn.Conn)
+	return resolvePipeHandle(conn.winioPipeConn)
 }
 
 // ClientPID returns the pid of conn's client, or else an error.
@@ -99,11 +98,14 @@ func (conn *WindowsClientConn) Close() error {
 		conn.token.Close()
 		conn.token = 0
 	}
-	return conn.Conn.Close()
+	return conn.winioPipeConn.Close()
 }
 
+// winIOPipeListener is a net.Listener that wraps a go-winio PipeListener and
+// returns net.Conn values of type *WindowsClientConn with the associated
+// windows.Token.
 type winIOPipeListener struct {
-	net.Listener
+	net.Listener // must be from winio.ListenPipe
 }
 
 func (lw *winIOPipeListener) Accept() (net.Conn, error) {
@@ -112,22 +114,28 @@ func (lw *winIOPipeListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	token, err := clientUserAccessToken(conn)
+	pipeConn, ok := conn.(winioPipeConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("unexpected type %T from winio.ListenPipe listener (itself a %T)", conn, lw.Listener)
+	}
+
+	token, err := clientUserAccessToken(pipeConn)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
 
 	return &WindowsClientConn{
-		Conn:  conn,
-		token: token,
+		winioPipeConn: pipeConn,
+		token:         token,
 	}, nil
 }
 
-func clientUserAccessToken(c net.Conn) (windows.Token, error) {
-	h := resolvePipeHandle(c)
+func clientUserAccessToken(pc winioPipeConn) (windows.Token, error) {
+	h := resolvePipeHandle(pc)
 	if h == 0 {
-		return 0, fmt.Errorf("not a windows handle: %T", c)
+		return 0, fmt.Errorf("clientUserAccessToken failed to get handle from pipeConn %T", pc)
 	}
 
 	// Impersonation touches thread-local state, so we need to lock until the
