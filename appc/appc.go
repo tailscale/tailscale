@@ -31,7 +31,7 @@ type target struct {
 	Matching tailcfg.ProtoPortRange
 }
 
-// Server implements an App Connector.
+// Server implements an App Connector as expressed in sniproxy.
 type Server struct {
 	mu         sync.RWMutex // mu guards following fields
 	connectors map[appctype.ConfigID]connector

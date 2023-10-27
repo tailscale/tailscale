@@ -5,6 +5,7 @@ package ipnlocal
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,11 +15,14 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"go4.org/netipx"
+	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -679,4 +683,64 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	if !h.replyToDNSQueries() {
 		t.Errorf("unexpectedly IPv6 deny; wanted to be a DNS server")
 	}
+}
+
+func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
+	var h peerAPIHandler
+	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
+
+	rc := &routeCollector{}
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	h.ps = &peerAPIServer{
+		b: &LocalBackend{
+			e:            eng,
+			pm:           pm,
+			store:        pm.Store(),
+			appConnector: appc.NewEmbeddedAppConnector(t.Logf, rc),
+		},
+	}
+	h.ps.b.appConnector.UpdateDomains([]string{"example.com"})
+
+	h.ps.resolver = &fakeResolver{}
+	f := filter.NewAllowAllForTest(logger.Discard)
+	h.ps.b.setFilter(f)
+
+	if !h.ps.b.OfferingAppConnector() {
+		t.Fatal("expecting to be offering app connector")
+	}
+	if !h.replyToDNSQueries() {
+		t.Errorf("unexpectedly deny; wanted to be a DNS server")
+	}
+
+	w := httptest.NewRecorder()
+	h.handleDNSQuery(w, httptest.NewRequest("GET", "/dns-query?q=true&t=example.com.", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("unexpected status code: %v", w.Code)
+	}
+
+	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
+	if !slices.Equal(rc.routes, wantRoutes) {
+		t.Errorf("got %v; want %v", rc.routes, wantRoutes)
+	}
+}
+
+type fakeResolver struct{}
+
+func (f *fakeResolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+	b.EnableCompression()
+	b.StartAnswers()
+	b.AResource(
+		dnsmessage.ResourceHeader{
+			Name:  dnsmessage.MustNewName("example.com."),
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+			TTL:   0,
+		},
+		dnsmessage.AResource{
+			A: [4]byte{192, 0, 0, 8},
+		},
+	)
+	return b.Finish()
 }
