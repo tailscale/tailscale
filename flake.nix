@@ -72,11 +72,23 @@
       CGO_ENABLED = 0;
       subPackages = [ "cmd/tailscale" "cmd/tailscaled" ];
       doCheck = false;
+
+      # NOTE: We strip the ${PORT} and $FLAGS because they are unset in the
+      # environment and cause issues (specifically the unset PORT). At some
+      # point, there should be a NixOS module that allows configuration of these
+      # things, but for now, we hardcode the default of port 41641 (taken from
+      # ./cmd/tailscaled/tailscaled.defaults).
       postInstall = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
         wrapProgram $out/bin/tailscaled --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.iproute2 pkgs.iptables pkgs.getent pkgs.shadow ]}
         wrapProgram $out/bin/tailscale --suffix PATH : ${pkgs.lib.makeBinPath [ pkgs.procps ]}
 
-        sed -i -e "s#/usr/sbin#$out/bin#" -e "/^EnvironmentFile/d" ./cmd/tailscaled/tailscaled.service
+        sed -i \
+          -e "s#/usr/sbin#$out/bin#" \
+          -e "/^EnvironmentFile/d" \
+          -e 's/''${PORT}/41641/' \
+          -e 's/$FLAGS//' \
+          ./cmd/tailscaled/tailscaled.service
+
         install -D -m0444 -t $out/lib/systemd/system ./cmd/tailscaled/tailscaled.service
       '';
     };
