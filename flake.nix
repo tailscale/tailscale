@@ -67,7 +67,7 @@
 
       src = ./.;
       vendorSha256 = pkgs.lib.fileContents ./go.mod.sri;
-      nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.makeWrapper pkgs.git ];
+      nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.makeWrapper ];
       ldflags = ["-X tailscale.com/version.GitCommit=${tailscaleRev}"];
       CGO_ENABLED = 0;
       subPackages = [ "cmd/tailscale" "cmd/tailscaled" ];
