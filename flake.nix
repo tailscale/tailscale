@@ -89,6 +89,7 @@
       ts = tailscale pkgs;
     in {
       packages = {
+        default = ts;
         tailscale = ts;
       };
       devShell = pkgs.mkShell {
