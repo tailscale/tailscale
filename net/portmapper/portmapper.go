@@ -25,10 +25,10 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/mak"
 )
 
 // DebugKnobs contains debug configuration that can be provided when creating a
@@ -1028,28 +1028,21 @@ var (
 
 // UPnP error metric that's keyed by code; lazily registered on first read
 var (
-	metricUPnPErrorsByCodeMu sync.Mutex
-	metricUPnPErrorsByCode   map[int]*clientmetric.Metric
+	metricUPnPErrorsByCode syncs.Map[int, *clientmetric.Metric]
 )
 
 func getUPnPErrorsMetric(code int) *clientmetric.Metric {
-	metricUPnPErrorsByCodeMu.Lock()
-	defer metricUPnPErrorsByCodeMu.Unlock()
-	mm := metricUPnPErrorsByCode[code]
-	if mm != nil {
-		return mm
-	}
+	mm, _ := metricUPnPErrorsByCode.LoadOrInit(code, func() *clientmetric.Metric {
+		// Metric names cannot contain a hyphen, so we handle negative
+		// numbers by prefixing the name with a "minus_".
+		var codeStr string
+		if code < 0 {
+			codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_minus_%d", -code)
+		} else {
+			codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_%d", code)
+		}
 
-	// Metric names cannot contain a hyphen, so we handle negative numbers
-	// by prefixing the name with a "minus_".
-	var codeStr string
-	if code < 0 {
-		codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_minus_%d", -code)
-	} else {
-		codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_%d", code)
-	}
-
-	mm = clientmetric.NewCounter(codeStr)
-	mak.Set(&metricUPnPErrorsByCode, code, mm)
+		return clientmetric.NewCounter(codeStr)
+	})
 	return mm
 }

@@ -151,15 +151,15 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 	tags := views.SliceOf([]string{"tag:server"})
 	tailnetNodes := map[string]*apitype.WhoIsResponse{
 		userANodeIP: {
-			Node:        &tailcfg.Node{ID: 1},
+			Node:        &tailcfg.Node{ID: 1, StableID: "1"},
 			UserProfile: userA,
 		},
 		userBNodeIP: {
-			Node:        &tailcfg.Node{ID: 2},
+			Node:        &tailcfg.Node{ID: 2, StableID: "2"},
 			UserProfile: userB,
 		},
 		taggedNodeIP: {
-			Node: &tailcfg.Node{ID: 3, Tags: tags.AsSlice()},
+			Node: &tailcfg.Node{ID: 3, StableID: "3", Tags: tags.AsSlice()},
 		},
 	}
 
@@ -169,7 +169,10 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
-	s := &Server{lc: &tailscale.LocalClient{Dial: lal.Dial}}
+	s := &Server{
+		timeNow: time.Now,
+		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+	}
 
 	// Add some browser sessions to cache state.
 	userASession := &browserSession{
@@ -237,11 +240,26 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 			wantError:   errNotOwner,
 		},
 		{
-			name:        "tagged-source",
+			name:        "tagged-remote-source",
 			selfNode:    &ipnstate.PeerStatus{ID: "self", UserID: userA.ID},
 			remoteAddr:  taggedNodeIP,
 			wantSession: nil,
-			wantError:   errTaggedSource,
+			wantError:   errTaggedRemoteSource,
+		},
+		{
+			name:        "tagged-local-source",
+			selfNode:    &ipnstate.PeerStatus{ID: "3"},
+			remoteAddr:  taggedNodeIP, // same node as selfNode
+			wantSession: nil,
+			wantError:   errTaggedLocalSource,
+		},
+		{
+			name:        "not-tagged-local-source",
+			selfNode:    &ipnstate.PeerStatus{ID: "1", UserID: userA.ID},
+			remoteAddr:  userANodeIP, // same node as selfNode
+			cookie:      userASession.ID,
+			wantSession: userASession,
+			wantError:   nil, // should not error
 		},
 		{
 			name:        "has-session",
@@ -291,7 +309,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 			if diff := cmp.Diff(session, tt.wantSession); diff != "" {
 				t.Errorf("wrong session; (-got+want):%v", diff)
 			}
-			if gotIsAuthorized := session.isAuthorized(); gotIsAuthorized != tt.wantIsAuthorized {
+			if gotIsAuthorized := session.isAuthorized(s.timeNow()); gotIsAuthorized != tt.wantIsAuthorized {
 				t.Errorf("wrong isAuthorized; want=%v, got=%v", tt.wantIsAuthorized, gotIsAuthorized)
 			}
 		})
@@ -321,6 +339,7 @@ func TestAuthorizeRequest(t *testing.T) {
 	s := &Server{
 		lc:          &tailscale.LocalClient{Dial: lal.Dial},
 		tsDebugMode: "full",
+		timeNow:     time.Now,
 	}
 	validCookie := "ts-cookie"
 	s.browserSessions.Store(validCookie, &browserSession{

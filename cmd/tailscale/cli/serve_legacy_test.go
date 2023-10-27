@@ -786,7 +786,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 		{
 			name:                 "fallback-flow-enabled",
 			queryFeatureResponse: mockQueryFeatureResponse{resp: nil, err: errors.New("not-allowed")},
-			caps:                 []tailcfg.NodeCapability{tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel},
+			caps:                 []tailcfg.NodeCapability{tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel, "https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090"},
 			wantErr:              "", // no error, success
 		},
 		{
@@ -811,10 +811,6 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 				defer func() { fakeStatus.Self.Capabilities = oldCaps }() // reset after test
 				fakeStatus.Self.Capabilities = tt.caps
 			}
-			st, err := e.getLocalClientStatusWithoutPeers(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
 
 			defer func() {
 				r := recover()
@@ -826,7 +822,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 					t.Errorf("wrong panic; got=%s, want=%s", gotPanic, tt.wantPanic)
 				}
 			}()
-			gotErr := e.verifyFunnelEnabled(ctx, st, 443)
+			gotErr := e.verifyFunnelEnabled(ctx, 443)
 			var got string
 			if gotErr != nil {
 				got = gotErr.Error()

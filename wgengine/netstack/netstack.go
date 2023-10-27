@@ -393,10 +393,14 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 		pa := tcpip.ProtocolAddress{
 			AddressWithPrefix: ipp,
 		}
-		if ipp.Address.Unspecified() || ipp.Address.Len() == 16 {
+		switch ipp.Address.Len() {
+		case 16:
 			pa.Protocol = ipv6.ProtocolNumber
-		} else {
+		case 4:
 			pa.Protocol = ipv4.ProtocolNumber
+		default:
+			ns.logf("[unexpected] netstack: could not register IP %s without protocol: unknown IP length (%v)", ipp, ipp.Address.Len())
+			continue
 		}
 		var err tcpip.Error
 		err = ns.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{

@@ -14,7 +14,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
 )
@@ -88,10 +87,6 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 	if sc == nil {
 		sc = new(ipn.ServeConfig)
 	}
-	st, err := e.getLocalClientStatusWithoutPeers(ctx)
-	if err != nil {
-		return fmt.Errorf("getting client status: %w", err)
-	}
 
 	port64, err := strconv.ParseUint(args[0], 10, 16)
 	if err != nil {
@@ -103,11 +98,15 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 		// Don't block from turning off existing Funnel if
 		// network configuration/capabilities have changed.
 		// Only block from starting new Funnels.
-		if err := e.verifyFunnelEnabled(ctx, st, port); err != nil {
+		if err := e.verifyFunnelEnabled(ctx, port); err != nil {
 			return err
 		}
 	}
 
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	hp := ipn.HostPort(dnsName + ":" + strconv.Itoa(int(port)))
 	if on == sc.AllowFunnel[hp] {
@@ -141,13 +140,7 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 // If an error is reported, the CLI should stop execution and return the error.
 //
 // verifyFunnelEnabled may refresh the local state and modify the st input.
-func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, st *ipnstate.Status, port uint16) error {
-	hasFunnelAttrs := func(selfNode *ipnstate.PeerStatus) bool {
-		return selfNode.HasCap(tailcfg.CapabilityHTTPS) && selfNode.HasCap(tailcfg.NodeAttrFunnel)
-	}
-	if hasFunnelAttrs(st.Self) {
-		return nil // already enabled
-	}
+func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, port uint16) error {
 	enableErr := e.enableFeatureInteractive(ctx, "funnel", tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel)
 	st, statusErr := e.getLocalClientStatusWithoutPeers(ctx) // get updated status; interactive flow may block
 	switch {

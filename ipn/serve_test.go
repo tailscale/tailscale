@@ -43,3 +43,86 @@ func TestCheckFunnelAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestHasPathHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ServeConfig
+		want bool
+	}{
+		{
+			name: "empty-config",
+			cfg:  ServeConfig{},
+			want: false,
+		},
+		{
+			name: "with-bg-path-handler",
+			cfg: ServeConfig{
+				TCP: map[uint16]*TCPPortHandler{80: {HTTP: true}},
+				Web: map[HostPort]*WebServerConfig{
+					"foo.test.ts.net:80": {Handlers: map[string]*HTTPHandler{
+						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "with-fg-path-handler",
+			cfg: ServeConfig{
+				TCP: map[uint16]*TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Foreground: map[string]*ServeConfig{
+					"abc123": {
+						TCP: map[uint16]*TCPPortHandler{80: {HTTP: true}},
+						Web: map[HostPort]*WebServerConfig{
+							"foo.test.ts.net:80": {Handlers: map[string]*HTTPHandler{
+								"/": {Path: "/tmp"},
+							}},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "with-no-bg-path-handler",
+			cfg: ServeConfig{
+				TCP: map[uint16]*TCPPortHandler{443: {HTTPS: true}},
+				Web: map[HostPort]*WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*HTTPHandler{
+						"/": {Proxy: "http://127.0.0.1:3000"},
+					}},
+				},
+				AllowFunnel: map[HostPort]bool{"foo.test.ts.net:443": true},
+			},
+			want: false,
+		},
+		{
+			name: "with-no-fg-path-handler",
+			cfg: ServeConfig{
+				Foreground: map[string]*ServeConfig{
+					"abc123": {
+						TCP: map[uint16]*TCPPortHandler{443: {HTTPS: true}},
+						Web: map[HostPort]*WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*HTTPHandler{
+								"/": {Proxy: "http://127.0.0.1:3000"},
+							}},
+						},
+						AllowFunnel: map[HostPort]bool{"foo.test.ts.net:443": true},
+					},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.HasPathHandler()
+			if tt.want != got {
+				t.Errorf("HasPathHandler() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

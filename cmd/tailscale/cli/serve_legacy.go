@@ -159,17 +159,19 @@ type serveEnv struct {
 	// v2 specific flags
 	bg               bool      // background mode
 	setPath          string    // serve path
-	https            string    // HTTP port
-	http             string    // HTTP port
-	tcp              string    // TCP port
-	tlsTerminatedTCP string    // a TLS terminated TCP port
+	https            uint      // HTTP port
+	http             uint      // HTTP port
+	tcp              uint      // TCP port
+	tlsTerminatedTCP uint      // a TLS terminated TCP port
 	subcmd           serveMode // subcommand
+	yes              bool      // update without prompt
 
 	lc localServeClient // localClient interface, specific to serve
 
 	// optional stuff for tests:
 	testFlagOut io.Writer
 	testStdout  io.Writer
+	testStderr  io.Writer
 }
 
 // getSelfDNSName returns the DNS name of the current node.
@@ -680,13 +682,6 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (e *serveEnv) stdout() io.Writer {
-	if e.testStdout != nil {
-		return e.testStdout
-	}
-	return os.Stdout
-}
-
 func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status) error {
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	for p, h := range sc.TCP {
@@ -823,6 +818,24 @@ func parseServePort(s string) (uint16, error) {
 // 2023-08-09: The only valid feature values are "serve" and "funnel".
 // This can be moved to some CLI lib when expanded past serve/funnel.
 func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, caps ...tailcfg.NodeCapability) (err error) {
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
+	if st.Self == nil {
+		return errors.New("no self node")
+	}
+	hasCaps := func() bool {
+		for _, c := range caps {
+			if !st.Self.HasCap(c) {
+				return false
+			}
+		}
+		return true
+	}
+	if hasCaps() {
+		return nil // already enabled
+	}
 	info, err := e.lc.QueryFeature(ctx, feature)
 	if err != nil {
 		return err

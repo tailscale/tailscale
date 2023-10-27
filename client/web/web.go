@@ -96,13 +96,13 @@ type browserSession struct {
 // the user has authenticated the session) and the session is not
 // expired.
 // 2023-10-05: Sessions expire by default 30 days after creation.
-func (s *browserSession) isAuthorized() bool {
+func (s *browserSession) isAuthorized(now time.Time) bool {
 	switch {
 	case s == nil:
 		return false
 	case !s.Authenticated:
 		return false // awaiting auth
-	case s.isExpired():
+	case s.isExpired(now):
 		return false // expired
 	}
 	return true
@@ -110,8 +110,8 @@ func (s *browserSession) isAuthorized() bool {
 
 // isExpired reports true if s is expired.
 // 2023-10-05: Sessions expire by default 30 days after creation.
-func (s *browserSession) isExpired() bool {
-	return !s.Created.IsZero() && time.Now().After(s.expires()) // TODO: use Server.timeNow field
+func (s *browserSession) isExpired(now time.Time) bool {
+	return !s.Created.IsZero() && now.After(s.expires())
 }
 
 // expires reports when the given session expires.
@@ -146,6 +146,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 	s = &Server{
 		devMode:    opts.DevMode,
 		lc:         opts.LocalClient,
+		cgiMode:    opts.CGIMode,
 		pathPrefix: opts.PathPrefix,
 		timeNow:    opts.TimeNow,
 	}
@@ -241,7 +242,7 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 			// should try and use the above call instead of running another
 			// localapi request.
 			session, _, err := s.getTailscaleBrowserSession(r)
-			if err != nil || !session.isAuthorized() {
+			if err != nil || !session.isAuthorized(s.timeNow()) {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
 			}
@@ -288,10 +289,11 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	errNoSession         = errors.New("no-browser-session")
-	errNotUsingTailscale = errors.New("not-using-tailscale")
-	errTaggedSource      = errors.New("tagged-source")
-	errNotOwner          = errors.New("not-owner")
+	errNoSession          = errors.New("no-browser-session")
+	errNotUsingTailscale  = errors.New("not-using-tailscale")
+	errTaggedRemoteSource = errors.New("tagged-remote-source")
+	errTaggedLocalSource  = errors.New("tagged-local-source")
+	errNotOwner           = errors.New("not-owner")
 )
 
 // getTailscaleBrowserSession retrieves the browser session associated with
@@ -303,8 +305,13 @@ var (
 //
 //   - (errNoSession) The request does not have a session.
 //
-//   - (errTaggedSource) The source is a tagged node. Users must use their
-//     own user-owned devices to manage other nodes' web clients.
+//   - (errTaggedRemoteSource) The source is remote (another node) and tagged.
+//     Users must use their own user-owned devices to manage other nodes'
+//     web clients.
+//
+//   - (errTaggedLocalSource) The source is local (the same node) and tagged.
+//     Tagged nodes can only be remotely managed, allowing ACLs to dictate
+//     access to web clients.
 //
 //   - (errNotOwner) The source is not the owner of this client (if the
 //     client is user-owned). Only the owner is allowed to manage the
@@ -317,25 +324,24 @@ var (
 // The WhoIsResponse is always populated, with a non-nil Node and UserProfile,
 // unless getTailscaleBrowserSession reports errNotUsingTailscale.
 func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, error) {
-	whoIs, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+	whoIs, whoIsErr := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+	status, statusErr := s.lc.StatusWithoutPeers(r.Context())
 	switch {
-	case err != nil:
+	case whoIsErr != nil:
 		return nil, nil, errNotUsingTailscale
+	case statusErr != nil:
+		return nil, whoIs, statusErr
+	case status.Self == nil:
+		return nil, whoIs, errors.New("missing self node in tailscale status")
+	case whoIs.Node.IsTagged() && whoIs.Node.StableID == status.Self.ID:
+		return nil, whoIs, errTaggedLocalSource
 	case whoIs.Node.IsTagged():
-		return nil, whoIs, errTaggedSource
+		return nil, whoIs, errTaggedRemoteSource
+	case !status.Self.IsTagged() && status.Self.UserID != whoIs.UserProfile.ID:
+		return nil, whoIs, errNotOwner
 	}
 	srcNode := whoIs.Node.ID
 	srcUser := whoIs.UserProfile.ID
-
-	status, err := s.lc.StatusWithoutPeers(r.Context())
-	switch {
-	case err != nil:
-		return nil, whoIs, err
-	case status.Self == nil:
-		return nil, whoIs, errors.New("missing self node in tailscale status")
-	case !status.Self.IsTagged() && status.Self.UserID != srcUser:
-		return nil, whoIs, errNotOwner
-	}
 
 	cookie, err := r.Cookie(sessionCookieName)
 	if errors.Is(err, http.ErrNoCookie) {
@@ -353,7 +359,7 @@ func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *
 		// Maybe the source browser's machine was logged out and then back in as a different node.
 		// Return errNoSession because there is no session for this user.
 		return nil, whoIs, errNoSession
-	} else if session.isExpired() {
+	} else if session.isExpired(s.timeNow()) {
 		// Session expired, remove from session map and return errNoSession.
 		s.browserSessions.Delete(session.ID)
 		return nil, whoIs, errNoSession
@@ -408,7 +414,7 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 			Expires: session.expires(),
 		})
 		resp = authResponse{OK: false, AuthURL: d.URL}
-	case !session.isAuthorized():
+	case !session.isAuthorized(s.timeNow()):
 		if r.URL.Query().Get("wait") == "true" {
 			// Client requested we block until user completes auth.
 			d, err := s.getOrAwaitAuth(r.Context(), session.AuthID, whois.Node.ID)
@@ -425,7 +431,7 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 				s.browserSessions.Store(session.ID, session)
 			}
 		}
-		if session.isAuthorized() {
+		if session.isAuthorized(s.timeNow()) {
 			resp = authResponse{OK: true}
 		} else {
 			resp = authResponse{OK: false, AuthURL: session.AuthURL}

@@ -5,11 +5,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -45,16 +47,13 @@ a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http
 
 EXAMPLES
   - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
-    $ tailscale %s 3000
+    $ tailscale %[1]s 3000
 
   - Expose an HTTP server running at 127.0.0.1:3000 in the background:
-    $ tailscale %s --bg 3000
-
-  - Expose an HTTPS server with a valid certificate at https://localhost:8443
-    $ tailscale %s https://localhost:8443
+    $ tailscale %[1]s --bg 3000
 
   - Expose an HTTPS server with invalid or self-signed certificates at https://localhost:8443
-    $ tailscale %s https+insecure://localhost:8443
+    $ tailscale %[1]s https+insecure://localhost:8443
 
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
@@ -102,6 +101,12 @@ func buildShortUsage(subcmd string) string {
 	}, "\n  ")
 }
 
+// errHelpFunc is standard error text that prompts users to
+// run `$subcmd --help` for information on how to use serve.
+var errHelpFunc = func(m serveMode) error {
+	return fmt.Errorf("try `tailscale %s --help` for usage info", infoMap[m].Name)
+}
+
 // newServeV2Command returns a new "serve" subcommand using e as its environment.
 func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	if subcmd != serve && subcmd != funnel {
@@ -118,19 +123,21 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fmt.Sprintf("%s status [--json]", info.Name),
 			fmt.Sprintf("%s reset", info.Name),
 		}, "\n  "),
-		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name, info.Name),
+		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name),
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process")
+			fs.BoolVar(&e.bg, "bg", false, "Run the command as a background process (default false)")
 			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
-			fs.StringVar(&e.https, "https", "", "Expose an HTTPS server at the specified port (default")
-			fs.StringVar(&e.http, "http", "", "Expose an HTTP server at the specified port")
-			fs.StringVar(&e.tcp, "tcp", "", "Expose a TCP forwarder to forward raw TCP packets at the specified port")
-			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
-
+			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
+			if subcmd == serve {
+				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
+			}
+			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
+			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
+			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 		}),
-		UsageFunc: usageFunc,
+		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
 			{
 				Name:      "status",
@@ -152,20 +159,31 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	}
 }
 
-func validateArgs(subcmd serveMode, args []string) error {
-	switch len(args) {
-	case 0:
-		return flag.ErrHelp
-	case 1, 2:
-		if isLegacyInvocation(subcmd, args) {
-			fmt.Fprintf(os.Stderr, "error: the CLI for serve and funnel has changed.")
-			fmt.Fprintf(os.Stderr, "Please see https://tailscale.com/kb/1242/tailscale-serve for more information.")
-			return errHelp
+func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
+	if translation, ok := isLegacyInvocation(subcmd, args); ok {
+		fmt.Fprint(e.stderr(), "Error: the CLI for serve and funnel has changed.")
+		if translation != "" {
+			fmt.Fprint(e.stderr(), " You can run the following command instead:\n")
+			fmt.Fprintf(e.stderr(), "\t- %s\n", translation)
 		}
-	default:
-		fmt.Fprintf(os.Stderr, "error: invalid number of arguments (%d)", len(args))
-		return errHelp
+		fmt.Fprint(e.stderr(), "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
+		return errHelpFunc(subcmd)
 	}
+	if len(args) == 0 {
+		return flag.ErrHelp
+	}
+	if len(args) > 2 {
+		fmt.Fprintf(e.stderr(), "Error: invalid number of arguments (%d)\n", len(args))
+		return errHelpFunc(subcmd)
+	}
+	turnOff := args[len(args)-1] == "off"
+	if len(args) == 2 && !turnOff {
+		fmt.Fprintln(e.stderr(), "Error: invalid argument format")
+		return errHelpFunc(subcmd)
+	}
+
+	// Given the two checks above, we can assume there
+	// are only 1 or 2 arguments which is valid.
 	return nil
 }
 
@@ -174,22 +192,31 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	e.subcmd = subcmd
 
 	return func(ctx context.Context, args []string) error {
-		if err := validateArgs(subcmd, args); err != nil {
+		// Undocumented debug command (not using ffcli subcommands) to set raw
+		// configs from stdin for now (2022-11-13).
+		if len(args) == 1 && args[0] == "set-raw" {
+			valb, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return err
+			}
+			sc := new(ipn.ServeConfig)
+			if err := json.Unmarshal(valb, sc); err != nil {
+				return fmt.Errorf("invalid JSON: %w", err)
+			}
+			return e.lc.SetServeConfig(ctx, sc)
+		}
+
+		if err := e.validateArgs(subcmd, args); err != nil {
 			return err
 		}
 
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 		defer cancel()
 
-		st, err := e.getLocalClientStatusWithoutPeers(ctx)
-		if err != nil {
-			return fmt.Errorf("getting client status: %w", err)
-		}
-
 		funnel := subcmd == funnel
 		if funnel {
 			// verify node has funnel capabilities
-			if err := e.verifyFunnelEnabled(ctx, st, 443); err != nil {
+			if err := e.verifyFunnelEnabled(ctx, 443); err != nil {
 				return err
 			}
 		}
@@ -199,18 +226,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
 
-		if e.setPath != "" {
-			// TODO(marwan-at-work): either
-			// 1. Warn the user that this is a side effect.
-			// 2. Force the user to pass --bg
-			// 3. Allow set-path to be in the foreground.
-			e.bg = true
-		}
-
 		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-			return errHelp
+			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
+			return errHelpFunc(subcmd)
 		}
 
 		sc, err := e.lc.GetServeConfig(ctx)
@@ -221,6 +240,10 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		// nil if no config
 		if sc == nil {
 			sc = new(ipn.ServeConfig)
+		}
+		st, err := e.getLocalClientStatusWithoutPeers(ctx)
+		if err != nil {
+			return fmt.Errorf("getting client status: %w", err)
 		}
 		dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 
@@ -247,7 +270,13 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var watcher *tailscale.IPNBusWatcher
-		if !e.bg && !turnOff {
+		wantFg := !e.bg && !turnOff
+		if wantFg {
+			// validate the config before creating a WatchIPNBus session
+			if err := e.validateConfig(parentSC, srvPort, srvType); err != nil {
+				return err
+			}
+
 			// if foreground mode, create a WatchIPNBus session
 			// and use the nested config for all following operations
 			// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
@@ -279,19 +308,19 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-			return errHelp
+			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
+			return errHelpFunc(subcmd)
 		}
 
 		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
 			if tailscale.IsPreconditionsFailedError(err) {
-				fmt.Fprintln(os.Stderr, "Another client is changing the serve config; please try again.")
+				fmt.Fprintln(e.stderr(), "Another client is changing the serve config; please try again.")
 			}
 			return err
 		}
 
 		if msg != "" {
-			fmt.Fprintln(os.Stderr, msg)
+			fmt.Fprintln(e.stdout(), msg)
 		}
 
 		if watcher != nil {
@@ -310,6 +339,8 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	}
 }
 
+const backgroundExistsMsg = "background configuration already exists, use `tailscale %s --%s=%d off` to remove the existing configuration"
+
 func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType) error {
 	sc, isFg := findConfig(sc, port)
 	if sc == nil {
@@ -319,7 +350,7 @@ func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe se
 		return errors.New("foreground already exists under this port")
 	}
 	if !e.bg {
-		return errors.New("background serve already exists under this port")
+		return fmt.Errorf(backgroundExistsMsg, infoMap[e.subcmd].Name, wantServe.String(), port)
 	}
 	existingServe := serveFromPortHandler(sc.TCP[port])
 	if wantServe != existingServe {
@@ -371,6 +402,10 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName st
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
 	case serveTypeTCP, serveTypeTLSTerminatedTCP:
+		if e.setPath != "" {
+			return fmt.Errorf("cannot mount a path for TCP serve")
+		}
+
 		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
@@ -405,7 +440,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	} else {
 		output.WriteString(msgServeAvailable)
 	}
-	output.WriteString("\n")
+	output.WriteString("\n\n")
 
 	scheme := "https"
 	if sc.IsServingHTTP(srvPort) {
@@ -416,13 +451,6 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	if scheme == "http" && srvPort == 80 ||
 		scheme == "https" && srvPort == 443 {
 		portPart = ""
-	}
-
-	output.WriteString(fmt.Sprintf("%s://%s%s\n\n", scheme, dnsName, portPart))
-
-	if !e.bg {
-		output.WriteString(msgToExit)
-		return output.String()
 	}
 
 	srvTypeAndDesc := func(h *ipn.HTTPHandler) (string, string) {
@@ -446,12 +474,12 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
-		maxLen := len(mounts[len(mounts)-1])
 
 		for _, m := range mounts {
 			h := sc.Web[hp].Handlers[m]
 			t, d := srvTypeAndDesc(h)
-			output.WriteString(fmt.Sprintf("%s %s%s %-5s %s\n", "|--", m, strings.Repeat(" ", maxLen-len(m)), t, d))
+			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, dnsName, portPart, m))
+			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if sc.TCP[srvPort] != nil {
 		h := sc.TCP[srvPort]
@@ -461,6 +489,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			tlsStatus = "TLS terminated"
 		}
 
+		output.WriteString(fmt.Sprintf("%s://%s%s\n", scheme, dnsName, portPart))
 		output.WriteString(fmt.Sprintf("|-- tcp://%s (%s)\n", hp, tlsStatus))
 		for _, a := range st.TailscaleIPs {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
@@ -469,11 +498,15 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
 	}
 
-	subCmd := infoMap[e.subcmd].Name
-	subCmdSentance := strings.ToUpper(string(subCmd[0])) + subCmd[1:]
+	if !e.bg {
+		output.WriteString(msgToExit)
+		return output.String()
+	}
 
-	output.WriteString("\n")
-	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdSentance))
+	subCmd := infoMap[e.subcmd].Name
+	subCmdUpper := strings.ToUpper(string(subCmd[0])) + subCmd[1:]
+
+	output.WriteString(fmt.Sprintf(msgRunningInBackground, subCmdUpper))
 	output.WriteString("\n")
 	output.WriteString(fmt.Sprintf(msgDisableProxy, subCmd, srvType.String(), srvPort))
 
@@ -597,6 +630,9 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 	// TODO: add error handling for if toggling for existing sc
 	if allowFunnel {
 		mak.Set(&sc.AllowFunnel, hp, true)
+	} else if _, exists := sc.AllowFunnel[hp]; exists {
+		fmt.Fprintf(e.stderr(), "Removing Funnel for %s\n", hp)
+		delete(sc.AllowFunnel, hp)
 	}
 }
 
@@ -623,7 +659,7 @@ func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType serve
 }
 
 func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, err error) {
-	sourceMap := map[serveType]string{
+	sourceMap := map[serveType]uint{
 		serveTypeHTTP:             e.http,
 		serveTypeHTTPS:            e.https,
 		serveTypeTCP:              e.tcp,
@@ -631,13 +667,15 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 	}
 
 	var srcTypeCount int
-	var srcValue string
 
 	for k, v := range sourceMap {
-		if v != "" {
+		if v != 0 {
+			if v > math.MaxUint16 {
+				return 0, 0, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
+			}
 			srcTypeCount++
 			srvType = k
-			srcValue = v
+			srvPort = uint16(v)
 		}
 	}
 
@@ -645,29 +683,104 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 		return 0, 0, fmt.Errorf("cannot serve multiple types for a single mount point")
 	} else if srcTypeCount == 0 {
 		srvType = serveTypeHTTPS
-		srcValue = "443"
-	}
-
-	srvPort, err = parseServePort(srcValue)
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid port %q: %w", srcValue, err)
+		srvPort = 443
 	}
 
 	return srvType, srvPort, nil
 }
 
-func isLegacyInvocation(subcmd serveMode, args []string) bool {
-	if subcmd == serve && len(args) == 2 {
-		prefixes := []string{"http", "https", "tcp", "tls-terminated-tcp"}
+// isLegacyInvocation helps transition customers who have been using the beta
+// CLI to the newer API by returning a translation from the old command to the new command.
+// The second result is a boolean that only returns true if the given arguments is a valid
+// legacy invocation. If the given args are in the old format but are not valid, it will
+// return false and expects the new code path has enough validations to reject the request.
+func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
+	if subcmd == funnel {
+		if len(args) != 2 {
+			return "", false
+		}
+		_, err := strconv.ParseUint(args[0], 10, 16)
+		return "", err == nil && (args[1] == "on" || args[1] == "off")
+	}
+	turnOff := len(args) > 1 && args[len(args)-1] == "off"
+	if turnOff {
+		args = args[:len(args)-1]
+	}
+	if len(args) == 0 {
+		return "", false
+	}
 
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(args[0], prefix) {
-				return true
-			}
+	srcType, srcPortStr, found := strings.Cut(args[0], ":")
+	if !found {
+		if srcType == "https" && srcPortStr == "" {
+			// Default https port to 443.
+			srcPortStr = "443"
+		} else if srcType == "http" && srcPortStr == "" {
+			// Default http port to 80.
+			srcPortStr = "80"
+		} else {
+			return "", false
 		}
 	}
 
-	return false
+	var wantLength int
+	switch srcType {
+	case "https", "http":
+		wantLength = 3
+	case "tcp", "tls-terminated-tcp":
+		wantLength = 2
+	default:
+		// return non-legacy, and let new code handle validation.
+		return "", false
+	}
+	// The length is either exactlly the same as in "https / <target>"
+	// or target is omitted as in "https / off" where omit the off at
+	// the top.
+	if len(args) != wantLength && !(turnOff && len(args) == wantLength-1) {
+		return "", false
+	}
+
+	cmd := []string{"tailscale", "serve", "--bg"}
+	switch srcType {
+	case "https":
+		// In the new code, we default to https:443,
+		// so we don't need to pass the flag explicitly.
+		if srcPortStr != "443" {
+			cmd = append(cmd, fmt.Sprintf("--https %s", srcPortStr))
+		}
+	case "http":
+		cmd = append(cmd, fmt.Sprintf("--http %s", srcPortStr))
+	case "tcp", "tls-terminated-tcp":
+		cmd = append(cmd, fmt.Sprintf("--%s %s", srcType, srcPortStr))
+	}
+
+	var mount string
+	if srcType == "https" || srcType == "http" {
+		mount = args[1]
+		if _, err := cleanMountPoint(mount); err != nil {
+			return "", false
+		}
+		if mount != "/" {
+			cmd = append(cmd, "--set-path "+mount)
+		}
+	}
+
+	// If there's no "off" there must always be a target destination.
+	// If there is "off", target is optional so check if it exists
+	// first before appending it.
+	hasTarget := !turnOff || (turnOff && len(args) == wantLength)
+	if hasTarget {
+		dest := args[len(args)-1]
+		if strings.Contains(dest, " ") {
+			dest = strconv.Quote(dest)
+		}
+		cmd = append(cmd, dest)
+	}
+	if turnOff {
+		cmd = append(cmd, "off")
+	}
+
+	return strings.Join(cmd, " "), true
 }
 
 // removeWebServe removes a web handler from the serve config
@@ -679,15 +792,43 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-	if !sc.WebHandlerExists(hp, mount) {
+	portStr := strconv.Itoa(int(srvPort))
+	hp := ipn.HostPort(net.JoinHostPort(dnsName, portStr))
+
+	var targetExists bool
+	var mounts []string
+	// mount is deduced from e.setPath but it is ambiguous as
+	// to whether the user explicitly passed "/" or it was defaulted to.
+	if e.setPath == "" {
+		targetExists = sc.Web[hp] != nil && len(sc.Web[hp].Handlers) > 0
+		if targetExists {
+			for mount := range sc.Web[hp].Handlers {
+				mounts = append(mounts, mount)
+			}
+		}
+	} else {
+		targetExists = sc.WebHandlerExists(hp, mount)
+		mounts = []string{mount}
+	}
+
+	if !targetExists {
 		return errors.New("error: handler does not exist")
 	}
 
+	if len(mounts) > 1 {
+		msg := fmt.Sprintf("Are you sure you want to delete %d handlers under port %s?", len(mounts), portStr)
+		if !e.yes && !promptYesNo(msg) {
+			return nil
+		}
+	}
+
 	// delete existing handler, then cascade delete if empty
-	delete(sc.Web[hp].Handlers, mount)
+	for _, m := range mounts {
+		delete(sc.Web[hp].Handlers, m)
+	}
 	if len(sc.Web[hp].Handlers) == 0 {
 		delete(sc.Web, hp)
+		delete(sc.AllowFunnel, hp)
 		delete(sc.TCP, srvPort)
 	}
 
@@ -703,6 +844,10 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 	// disable funnel if no remaining mounts exist for the serve port
 	if sc.Web == nil && sc.TCP == nil {
 		delete(sc.AllowFunnel, hp)
+	}
+
+	if len(sc.AllowFunnel) == 0 {
+		sc.AllowFunnel = nil
 	}
 
 	return nil
@@ -741,7 +886,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 //   - https-insecure://localhost:3000
 //   - https-insecure://localhost:3000/foo
 func expandProxyTargetDev(target string, supportedSchemes []string, defaultScheme string) (string, error) {
-	var host = "127.0.0.1"
+	const host = "127.0.0.1"
 
 	// support target being a port number
 	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
@@ -764,19 +909,20 @@ func expandProxyTargetDev(target string, supportedSchemes []string, defaultSchem
 		return "", fmt.Errorf("must be a URL starting with one of the supported schemes: %v", supportedSchemes)
 	}
 
+	// validate the host.
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1":
+	default:
+		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
+	}
+
 	// validate the port
 	port, err := strconv.ParseUint(u.Port(), 10, 16)
 	if err != nil || port == 0 {
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 
-	// validate the host.
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1":
-		u.Host = fmt.Sprintf("%s:%d", host, port)
-	default:
-		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
-	}
+	u.Host = fmt.Sprintf("%s:%d", host, port)
 
 	return u.String(), nil
 }
@@ -813,4 +959,18 @@ func (s serveType) String() string {
 	default:
 		return "unknownServeType"
 	}
+}
+
+func (e *serveEnv) stdout() io.Writer {
+	if e.testStdout != nil {
+		return e.testStdout
+	}
+	return os.Stdout
+}
+
+func (e *serveEnv) stderr() io.Writer {
+	if e.testStderr != nil {
+		return e.testStderr
+	}
+	return os.Stderr
 }
