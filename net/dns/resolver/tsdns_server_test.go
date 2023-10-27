@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -168,7 +169,8 @@ func resolveToTXT(txts []string, ednsMaxSize uint16) dns.HandlerFunc {
 		}
 
 		if err := w.WriteMsg(m); err != nil {
-			panic(err)
+			out, err2 := exec.Command("ip", "a").CombinedOutput()
+			panic(fmt.Sprintf("WriteMsg: %v, out=%v, %s", err, err2, out))
 		}
 	}
 }
