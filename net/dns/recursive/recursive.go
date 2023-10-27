@@ -64,7 +64,7 @@ var (
 
 var rootServersV4 = []netip.Addr{
 	netip.MustParseAddr("198.41.0.4"),     // a.root-servers.net
-	netip.MustParseAddr("199.9.14.201"),   // b.root-servers.net
+	netip.MustParseAddr("170.247.170.2"),  // b.root-servers.net
 	netip.MustParseAddr("192.33.4.12"),    // c.root-servers.net
 	netip.MustParseAddr("199.7.91.13"),    // d.root-servers.net
 	netip.MustParseAddr("192.203.230.10"), // e.root-servers.net
@@ -80,7 +80,7 @@ var rootServersV4 = []netip.Addr{
 
 var rootServersV6 = []netip.Addr{
 	netip.MustParseAddr("2001:503:ba3e::2:30"), // a.root-servers.net
-	netip.MustParseAddr("2001:500:200::b"),     // b.root-servers.net
+	netip.MustParseAddr("2801:1b8:10::b"),      // b.root-servers.net
 	netip.MustParseAddr("2001:500:2::c"),       // c.root-servers.net
 	netip.MustParseAddr("2001:500:2d::d"),      // d.root-servers.net
 	netip.MustParseAddr("2001:500:a8::e"),      // e.root-servers.net
