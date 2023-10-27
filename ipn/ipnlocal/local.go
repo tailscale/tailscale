@@ -4605,6 +4605,9 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		if !b.peerIsTaildropTargetLocked(p) {
 			continue
 		}
+		if p.Hostinfo().OS() == "tvOS" {
+			continue
+		}
 		peerAPI := peerAPIBase(b.netMap, p)
 		if peerAPI == "" {
 			continue
