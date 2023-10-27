@@ -272,11 +272,11 @@ func (up *Updater) updateSynology() error {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
 	}
 
-	if !up.confirm(latest.SPKsVersion) {
-		return nil
-	}
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if !up.confirm(latest.SPKsVersion) {
+		return nil
 	}
 
 	// Download the SPK into a temporary directory.
@@ -716,11 +716,11 @@ func (up *Updater) updateWindows() error {
 		arch = "x86"
 	}
 
-	if !up.confirm(ver) {
-		return nil
-	}
 	if !winutil.IsCurrentProcessElevated() {
 		return errors.New("must be run as Administrator")
+	}
+	if !up.confirm(ver) {
+		return nil
 	}
 
 	tsDir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
@@ -914,12 +914,12 @@ func (up *Updater) updateLinuxBinary() error {
 	if err != nil {
 		return err
 	}
-	if !up.confirm(ver) {
-		return nil
-	}
 	// Root is needed to overwrite binaries and restart systemd unit.
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if !up.confirm(ver) {
+		return nil
 	}
 
 	dlPath, err := up.downloadLinuxTarball(ver)
