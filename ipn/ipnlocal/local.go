@@ -32,6 +32,7 @@ import (
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
@@ -203,9 +204,10 @@ type LocalBackend struct {
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
-	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
-	ccGen          clientGen    // function for producing controlclient; lazily populated
-	sshServer      SSHServer    // or nil, initialized lazily.
+	httpTestClient *http.Client               // for controlclient. nil by default, used by tests.
+	ccGen          clientGen                  // function for producing controlclient; lazily populated
+	sshServer      SSHServer                  // or nil, initialized lazily.
+	appConnector   *appc.EmbeddedAppConnector // or nil, initialized when configured.
 	webClient      webClient
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
@@ -2995,6 +2997,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
+	if newHi == nil {
+		newHi = new(tailcfg.Hostinfo)
+	}
 	b.applyPrefsToHostinfoLocked(newHi, newp.View())
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
@@ -3240,6 +3245,10 @@ func (b *LocalBackend) authReconfig() {
 	disableSubnetsIfPAC := hasCapability(nm, tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
+	// If the current node is an app connector, ensure the app connector machine is started
+	if prefs.AppConnector().Advertise && b.appConnector == nil {
+		b.appConnector = appc.NewEmbeddedAppConnector(b.logf, b)
+	}
 	b.mu.Unlock()
 
 	if blocked {
@@ -4812,6 +4821,14 @@ func (b *LocalBackend) OfferingExitNode() bool {
 	return def4 && def6
 }
 
+// OfferingAppConnector reports whether b is currently offering app
+// connector services.
+func (b *LocalBackend) OfferingAppConnector() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.appConnector != nil
+}
+
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
 // proxy is allowed to serve responses for the provided DNS name.
 func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
@@ -5396,6 +5413,39 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.magicConn().DebugBreakDERPConns()
+}
+
+// ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
+// App Connector to enable route discovery.
+func (b *LocalBackend) ObserveDNSResponse(res []byte) {
+	var appConnector *appc.EmbeddedAppConnector
+	b.mu.Lock()
+	if b.appConnector == nil {
+		b.mu.Unlock()
+		return
+	}
+	appConnector = b.appConnector
+	b.mu.Unlock()
+
+	appConnector.ObserveDNSResponse(res)
+}
+
+// AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
+// route advertisement if one is not already present in the existing routes.
+func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
+	currentRoutes := b.Prefs().AdvertiseRoutes()
+	// TODO(raggi): check if the new route is a subset of an existing route.
+	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool { return r == ipp }) {
+		return nil
+	}
+	routes := append(currentRoutes.AsSlice(), ipp)
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: routes,
+		},
+		AdvertiseRoutesSet: true,
+	})
+	return err
 }
 
 // mayDeref dereferences p if non-nil, otherwise it returns the zero value.

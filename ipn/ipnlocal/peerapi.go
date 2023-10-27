@@ -32,7 +32,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
-	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
@@ -51,9 +50,14 @@ var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, stri
 // ("cleartext" HTTP/2) support to the peerAPI.
 var addH2C func(*http.Server)
 
+// peerDNSQueryHandler is implemented by tsdns.Resolver.
+type peerDNSQueryHandler interface {
+	HandlePeerDNSQuery(context.Context, []byte, netip.AddrPort, func(name string) bool) (res []byte, err error)
+}
+
 type peerAPIServer struct {
 	b        *LocalBackend
-	resolver *resolver.Resolver
+	resolver peerDNSQueryHandler
 
 	taildrop *taildrop.Manager
 }
@@ -861,9 +865,9 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 		return true
 	}
 	b := h.ps.b
-	if !b.OfferingExitNode() {
-		// If we're not an exit node, there's no point to
-		// being a DNS server for somebody.
+	if !b.OfferingExitNode() && !b.OfferingAppConnector() {
+		// If we're not an exit node or app connector, there's
+		// no point to being a DNS server for somebody.
 		return false
 	}
 	if !h.remoteAddr.IsValid() {
@@ -927,7 +931,7 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 
 	ctx, cancel := context.WithTimeout(r.Context(), arbitraryTimeout)
 	defer cancel()
-	res, err := h.ps.resolver.HandleExitNodeDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
+	res, err := h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
 	if err != nil {
 		h.logf("handleDNS fwd error: %v", err)
 		if err := ctx.Err(); err != nil {
@@ -937,6 +941,13 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
+	// TODO(raggi): consider pushing the integration down into the resolver
+	// instead to avoid re-parsing the DNS response for improved performance in
+	// the future.
+	if h.ps.b.OfferingAppConnector() {
+		h.ps.b.ObserveDNSResponse(res)
+	}
+
 	if pretty {
 		// Non-standard response for interactive debugging.
 		w.Header().Set("Content-Type", "application/json")
