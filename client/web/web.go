@@ -154,7 +154,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		s.timeNow = time.Now
 	}
 	s.tsDebugMode = s.debugMode()
-	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
+	s.assetsHandler, cleanup = assetsHandler(false)
 
 	// Create handler for "/api" requests with CSRF protection.
 	// We don't require secure cookies, since the web client is regularly used
@@ -179,14 +179,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 // The empty string is returned in the case that this instance is
 // not running in any debug mode.
 func (s *Server) debugMode() string {
-	if !s.devMode {
-		return "" // debug modes only available in dev
-	}
-	switch mode := os.Getenv("TS_DEBUG_WEB_CLIENT_MODE"); mode {
-	case "login", "full": // valid debug modes
-		return mode
-	}
-	return ""
+	return "login"
 }
 
 // ServeHTTP processes all requests for the Tailscale web client.
@@ -272,6 +265,11 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 // which protects the handler using gorilla csrf.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
+	// TODO(naman): remove this from here once full web client is ready
+	if r.URL.Path == "/api/update" && r.Method == "POST" {
+		s.serveSelfUpdate(w, r)
+		return
+	}
 	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
 		http.Error(w, "invalid endpoint", http.StatusNotFound)
 		return
@@ -687,12 +685,13 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
-	progress, err := s.lc.InstallUpdate(r.Context())
+	err := s.lc.InstallUpdate(r.Context())
 	if err != nil {
 		log.Printf("%v", err)
-		w.Write([]byte(err.Error()))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		w.WriteHeader(http.StatusNoContent)
 	}
-	io.Copy(w, progress)
 }
 
 func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {

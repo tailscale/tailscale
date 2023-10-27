@@ -1,8 +1,7 @@
 import cx from "classnames"
 import React from "react"
 import { apiFetch } from "src/api"
-import { ClientVersion, NodeData, NodeUpdate } from "src/hooks/node-data"
-import { ReactComponent as UpdateAvailableIcon } from "src/icons/arrow-up-circle.svg"
+import { NodeData, NodeUpdate } from "src/hooks/node-data"
 
 // TODO(tailscale/corp#13775): legacy.tsx contains a set of components
 // that (crudely) implement the pre-2023 web client. These are implemented
@@ -124,69 +123,10 @@ export function Header({
   )
 }
 
-export enum UpdateState {
-  UpToDate,
-  Available,
-  InProgress,
-  Complete,
-  Failed
-}
-
-export function UpdateAvailableNotification(props: {
-  details: ClientVersion,
-  updating: UpdateState,
-  installUpdate: () => void
-}) {
-  const { details, updating, installUpdate } = props
-
-  let buttonMessage = ''
-  switch (updating) {
-    case UpdateState.UpToDate:
-      return null
-    case UpdateState.InProgress:
-      buttonMessage = 'Updating Tailscale...'
-      break
-    case UpdateState.Failed:
-      buttonMessage = 'Update failed'
-      break
-    case UpdateState.Complete:
-      buttonMessage = 'Update complete!'
-      break
-    default:
-      buttonMessage = 'Update Tailscale on this device'
-      break
-  }
-
-  return (
-    <div className="width-full flex items-start min-width-0 mt-2 ms-2">
-      <UpdateAvailableIcon
-        className="flex-shrink-0 mr-2 ml-1"
-        title="hello"
-        width="16"
-      />
-      <div>
-        <h5 className="font-semibold">Tailscale update available</h5>
-        <p className="text-sm mb-1 mt-1">
-          {details.LatestVersion ? `Version ${details.LatestVersion}` : 'A new update'} is now available to download!
-          Click <a href="https://google.com" className="link">here to read the release notes</a> and
-          TODO(naman): fix text!</p>
-        <button
-          className="button button-blue mb-3 mt-3 text-sm"
-          onClick={installUpdate}
-        >
-          { buttonMessage }
-        </button>
-      </div>
-    </div>
-  )
-}
-
 export function IP(props: {
-  data: NodeData,
-  updating: UpdateState,
-  installUpdate: () => void
+  data: NodeData
 }) {
-  const { data, updating, installUpdate } = props
+  const { data } = props
 
   if (!data.IP) {
     return null
@@ -195,32 +135,29 @@ export function IP(props: {
   return (
     <>
       <div className="border border-gray-200 bg-gray-50 rounded-md p-2 pl-3 pr-3 width-full">
-        <div className="width-full flex items-center justify-between">
-          <div className="flex items-center min-width-0">
-            <svg
-              className="flex-shrink-0 text-gray-600 mr-3 ml-1"
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-              <line x1="6" y1="6" x2="6.01" y2="6"></line>
-              <line x1="6" y1="18" x2="6.01" y2="18"></line>
-            </svg>
-            <h4 className="font-semibold truncate mr-2">
-              {data.DeviceName || "Your device"}
-            </h4>
-          </div>
-          <h5>{data.IP}</h5>
+        <div className="flex items-center min-width-0">
+          <svg
+            className="flex-shrink-0 text-gray-600 mr-3 ml-1"
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+          </svg>
+          <h4 className="font-semibold truncate mr-2">
+            {data.DeviceName || "Your device"}
+          </h4>
         </div>
-        <UpdateAvailableNotification details={data.ClientVersion} updating={updating} installUpdate={installUpdate} />
+        <h5>{data.IP}</h5>
       </div>
       <p className="mt-1 ml-1 mb-6 text-xs text-gray-600">
         Debug info: Tailscale {data.IPNVersion}, tun={data.TUNMode.toString()}

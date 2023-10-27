@@ -2309,33 +2309,26 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		fmt.Println("err: only post allowed")
 		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	streamToClient := func(format string, args ...any) {
-		w.Write([]byte(fmt.Sprintf(format+"\n", args)))
-	}
-
 	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
-		Logf: streamToClient,
+		Logf: h.logf,
 	})
 
 	if err != nil {
-		fmt.Println("err:", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 
-	fmt.Println("update started")
+	h.logf("update started")
 	err = up.Update()
-	fmt.Println("update finished with err = ", err)
+	h.logf("update finished with err = %v", err)
 
-	// TODO(naman): this approach will necessarily not be able to send HTTP status
-	// codes, since part of the data (and therefore all of the headers) are already
-	// sent
 	if err != nil {
-		streamToClient("update failed: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		w.Write([]byte("OK"))
 	}
 }
 
