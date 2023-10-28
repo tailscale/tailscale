@@ -860,7 +860,12 @@ func (n *nftablesRunner) createDummyPostroutingChains() (retErr error) {
 }
 
 // deleteChainIfExists deletes a chain if it exists.
+//
+// If table is nil, it returns nil.
 func deleteChainIfExists(c *nftables.Conn, table *nftables.Table, name string) error {
+	if table == nil {
+		return nil
+	}
 	chain, err := getChainFromTable(c, table, name)
 	if err != nil && !errors.Is(err, errorChainNotFound{table.Name, name}) {
 		return fmt.Errorf("get chain: %w", err)
