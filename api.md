@@ -277,6 +277,15 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
   // tailnet lock is not enabled.
   // Learn more about tailnet lock at https://tailscale.com/kb/1226/.
   "tailnetLockKey": "",
+
+  // postureIdentity contains extra identifiers from the device when the tailnet
+  // it is connected to has device posture identification collection enabled.
+  // If the device has not opted-in to posture identification collection, this
+  // will contain {"disabled": true}.
+  // Learn more about posture identity at https://tailscale.com/kb/1326/device-identity
+  "postureIdentity": {
+    "serialNumbers": ["CP74LFQJXM"]
+  }
 }
 ```
 
@@ -328,6 +337,7 @@ Currently, there are two supported options:
   - `enabledRoutes`
   - `advertisedRoutes`
   - `clientConnectivity` (which contains the following fields: `mappingVariesByDestIP`, `derp`, `endpoints`, `latency`, and `clientSupports`)
+  - `postureIdentity`
 
 ### Request example
 
