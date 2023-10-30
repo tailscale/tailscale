@@ -18,7 +18,7 @@ jobs:
     runs-on: [ ubuntu-latest ]
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build checklocks
         run: ./tool/go build -o /tmp/checklocks gvisor.dev/gvisor/tools/checklocks/cmd/checklocks
