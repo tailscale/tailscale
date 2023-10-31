@@ -237,10 +237,10 @@ func Update(args Arguments) error {
 func (up *Updater) confirm(ver string) bool {
 	switch cmpver.Compare(version.Short(), ver) {
 	case 0:
-		up.Logf("already running %v; no update needed", ver)
+		up.Logf("already running %v version %v; no update needed", up.track, ver)
 		return false
 	case 1:
-		up.Logf("installed version %v is newer than the latest available version %v; no update needed", version.Short(), ver)
+		up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.track, version.Short(), ver)
 		return false
 	}
 	if up.Confirm != nil {
