@@ -66,7 +66,7 @@ require (
 	github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
 	github.com/tailscale/web-client-prebuilt v0.0.0-20230919211114-7bcd7bca7bc5
-	github.com/tailscale/wireguard-go v0.0.0-20230929223258-2f6748dc88e7
+	github.com/tailscale/wireguard-go v0.0.0-20231026190909-24f8d7c9e731
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
