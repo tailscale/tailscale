@@ -206,7 +206,7 @@ type LocalBackend struct {
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	ccGen          clientGen    // function for producing controlclient; lazily populated
 	sshServer      SSHServer    // or nil, initialized lazily.
-	web            webServer
+	webClient      webClient
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
@@ -645,7 +645,7 @@ func (b *LocalBackend) Shutdown() {
 		b.debugSink = nil
 	}
 	b.mu.Unlock()
-	b.WebShutdown()
+	b.WebClientShutdown()
 
 	if b.sockstatLogger != nil {
 		b.sockstatLogger.Shutdown()
@@ -3018,7 +3018,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		}
 	}
 	if oldp.ShouldWebClientBeRunning() && !newp.ShouldWebClientBeRunning() {
-		b.WebShutdown()
+		b.WebClientShutdown()
 	}
 	if netMap != nil {
 		newProfile := netMap.UserProfiles[netMap.User()]

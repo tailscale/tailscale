@@ -62,11 +62,11 @@ type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 // then it's a prefix match.
 var handler = map[string]localAPIHandler{
 	// The prefix match handlers end with a slash:
-	"cert/":     (*Handler).serveCert,
-	"file-put/": (*Handler).serveFilePut,
-	"files/":    (*Handler).serveFiles,
-	"profiles/": (*Handler).serveProfiles,
-	"web/":      (*Handler).serveWeb,
+	"cert/":      (*Handler).serveCert,
+	"file-put/":  (*Handler).serveFilePut,
+	"files/":     (*Handler).serveFiles,
+	"profiles/":  (*Handler).serveProfiles,
+	"webclient/": (*Handler).serveWebClient,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
@@ -2234,7 +2234,7 @@ func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 }
 
-func (h *Handler) serveWeb(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) serveWebClient(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "access denied", http.StatusForbidden)
 		return
@@ -2244,8 +2244,8 @@ func (h *Handler) serveWeb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case "/localapi/v0/web/start":
-		if err := h.b.WebInit(); err != nil {
+	case "/localapi/v0/webclient/start":
+		if err := h.b.WebClientInit(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -2256,8 +2256,8 @@ func (h *Handler) serveWeb(w http.ResponseWriter, r *http.Request) {
 		})
 		w.WriteHeader(http.StatusOK)
 		return
-	case "/localapi/v0/web/stop":
-		h.b.WebShutdown()
+	case "/localapi/v0/webclient/stop":
+		h.b.WebClientShutdown()
 		// try to set pref, but ignore errors
 		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
 			Prefs:           ipn.Prefs{RunWebClient: false},
