@@ -14,6 +14,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/webauth"
 	"tailscale.com/net/netutil"
 )
 
@@ -56,6 +57,8 @@ func (b *LocalBackend) WebClientInit() (err error) {
 		// TODO(sonia): allow passing back dev mode flag
 		LocalClient: b.webClient.lc,
 		Logf:        b.logf,
+		TimeNow:     b.clock.Now,
+		AuthServer:  webauth.NewServer(b.webClient.lc, b.clock.Now),
 	}); err != nil {
 		return fmt.Errorf("web.NewServer: %w", err)
 	}
