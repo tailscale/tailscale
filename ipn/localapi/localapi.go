@@ -1574,8 +1574,9 @@ func (h *Handler) serveHandlePushMessage(w http.ResponseWriter, r *http.Request)
 	}
 
 	// TODO(bradfitz): do something with pushMessageBody
+	h.logf("localapi: got push message: %v", logger.AsJSON(pushMessageBody))
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Request) {
