@@ -11,8 +11,10 @@ import (
 	"strings"
 	"sync"
 
+	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 )
 
 /*
@@ -70,6 +72,15 @@ func (e *EmbeddedAppConnector) UpdateDomains(domains []string) {
 		d = strings.ToLower(d)
 		e.domains[d] = old[d]
 	}
+	e.logf("handling domains: %v", xmaps.Keys(e.domains))
+}
+
+// Domains returns the currently configured domain list.
+func (e *EmbeddedAppConnector) Domains() views.Slice[string] {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return views.SliceOf(xmaps.Keys(e.domains))
 }
 
 // ObserveDNSResponse is a callback invoked by the DNS resolver when a DNS

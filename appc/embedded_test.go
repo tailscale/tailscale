@@ -16,7 +16,7 @@ import (
 func TestUpdateDomains(t *testing.T) {
 	a := NewEmbeddedAppConnector(t.Logf, nil)
 	a.UpdateDomains([]string{"example.com"})
-	if got, want := xmaps.Keys(a.domains), []string{"example.com"}; !slices.Equal(got, want) {
+	if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 
