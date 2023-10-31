@@ -261,6 +261,13 @@ func (c *Client) breakConnection(brokenClient *derp.Client) {
 // updates after a different thread breaks and reconnects the connection, while
 // the watcher is waiting on recv().
 func TestBreakWatcherConnRecv(t *testing.T) {
+	// Set the wait time before a retry after connection failure to be much lower.
+	// This needs to be early in the test, for defer to run right at the end after
+	// the DERP client has finished.
+	origRetryInterval := retryInterval
+	retryInterval = 50 * time.Millisecond
+	defer func() { retryInterval = origRetryInterval }()
+
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	// Make the watcher server
@@ -281,11 +288,6 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	defer cancel()
 
 	watcherChan := make(chan int, 1)
-
-	// Set the wait time after a connection fails to much lower
-	origRetryInterval := retryInterval
-	retryInterval = 50 * time.Millisecond
-	defer func() { retryInterval = origRetryInterval }()
 
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
@@ -329,6 +331,13 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 // updates after a different thread breaks and reconnects the connection, while
 // the watcher is not waiting on recv().
 func TestBreakWatcherConn(t *testing.T) {
+	// Set the wait time before a retry after connection failure to be much lower.
+	// This needs to be early in the test, for defer to run right at the end after
+	// the DERP client has finished.
+	origRetryInterval := retryInterval
+	retryInterval = 50 * time.Millisecond
+	defer func() { retryInterval = origRetryInterval }()
+
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	// Make the watcher server
@@ -350,11 +359,6 @@ func TestBreakWatcherConn(t *testing.T) {
 
 	watcherChan := make(chan int, 1)
 	breakerChan := make(chan bool, 1)
-
-	// Set the wait time after a connection fails to much lower
-	origRetryInterval := retryInterval
-	retryInterval = 50 * time.Millisecond
-	defer func() { retryInterval = origRetryInterval }()
 
 	// Start the watcher thread (which connects to the watched server)
 	wg.Add(1) // To avoid using t.Logf after the test ends. See https://golang.org/issue/40343
