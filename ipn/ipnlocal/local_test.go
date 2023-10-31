@@ -1187,6 +1187,49 @@ func TestObserveDNSResponse(t *testing.T) {
 	}
 }
 
+func TestReconfigureAppConnector(t *testing.T) {
+	b := newTestBackend(t)
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	if b.appConnector != nil {
+		t.Fatal("unexpected app connector")
+	}
+
+	b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{
+				Advertise: true,
+			},
+		},
+		AppConnectorSet: true,
+	})
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	if b.appConnector == nil {
+		t.Fatal("expected app connector")
+	}
+
+	appCfg := `{
+		"name": "example",
+		"domains": ["example.com"],
+		"connectors": ["tag:example"]
+	}`
+
+	b.netMap.SelfNode = (&tailcfg.Node{
+		Name: "example.ts.net",
+		Tags: []string{"tag:example"},
+		CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+			"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
+		}),
+	}).View()
+
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+
+	want := []string{"example.com"}
+	if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {
+		t.Fatalf("got domains %v, want %v", b.appConnector.Domains(), want)
+	}
+
+}
+
 func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
 	if a == nil && b == nil {
 		return true

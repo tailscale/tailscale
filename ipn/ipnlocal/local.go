@@ -67,6 +67,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -3233,6 +3234,49 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 	b.mu.Unlock()
 }
 
+// reconfigAppConnectorLocked updates the app connector state based on the
+// current network map and preferences.
+// b.mu must be held.
+func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	const appConnectorCapName = "tailscale.com/app-connectors"
+
+	if !prefs.AppConnector().Advertise {
+		b.appConnector = nil
+		return
+	}
+
+	if b.appConnector == nil {
+		b.appConnector = appc.NewEmbeddedAppConnector(b.logf, b)
+	}
+	if nm == nil {
+		return
+	}
+
+	// TODO(raggi): rework the view infrastructure so the large deep clone is no
+	// longer required
+	sn := nm.SelfNode.AsStruct()
+	attrs, err := tailcfg.UnmarshalNodeCapJSON[appctype.AppConnectorAttr](sn.CapMap, appConnectorCapName)
+	if err != nil {
+		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
+		return
+	}
+
+	var domains []string
+	for _, attr := range attrs {
+		// Geometric cost, assumes that the number of advertised tags is small
+		if !nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
+			return slices.Contains(attr.Connectors, tag)
+		}) {
+			continue
+		}
+
+		domains = append(domains, attr.Domains...)
+	}
+	slices.Sort(domains)
+	slices.Compact(domains)
+	b.appConnector.UpdateDomains(domains)
+}
+
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
@@ -3246,9 +3290,7 @@ func (b *LocalBackend) authReconfig() {
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
-	if prefs.AppConnector().Advertise && b.appConnector == nil {
-		b.appConnector = appc.NewEmbeddedAppConnector(b.logf, b)
-	}
+	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
 
 	if blocked {
