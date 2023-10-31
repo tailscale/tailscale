@@ -1,9 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package cmpver
+package cmpver_test
 
-import "testing"
+import (
+	"testing"
+
+	"tailscale.com/util/cmpver"
+)
 
 func TestCompare(t *testing.T) {
 	tests := []struct {
@@ -87,6 +91,16 @@ func TestCompare(t *testing.T) {
 			v2:   "0.96-105",
 			want: 1,
 		},
+		{
+			// Though ۱ and ۲ both satisfy unicode.IsNumber, our previous use
+			// of strconv.ParseUint with these characters would have lead us to
+			// panic. We're now only looking at ascii numbers, so test these are
+			// compared as text.
+			name: "only ascii numbers",
+			v1:   "۱۱", // 2x EXTENDED ARABIC-INDIC DIGIT ONE
+			v2:   "۲",  // 1x EXTENDED ARABIC-INDIC DIGIT TWO
+			want: -1,
+		},
 
 		// A few specific OS version tests below.
 		{
@@ -147,17 +161,17 @@ func TestCompare(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := Compare(test.v1, test.v2)
+			got := cmpver.Compare(test.v1, test.v2)
 			if got != test.want {
 				t.Errorf("Compare(%v, %v) = %v, want %v", test.v1, test.v2, got, test.want)
 			}
 			// Reversing the comparison should reverse the outcome.
-			got2 := Compare(test.v2, test.v1)
+			got2 := cmpver.Compare(test.v2, test.v1)
 			if got2 != -test.want {
 				t.Errorf("Compare(%v, %v) = %v, want %v", test.v2, test.v1, got2, -test.want)
 			}
 			// Check that version comparison does not allocate.
-			if n := testing.AllocsPerRun(100, func() { Compare(test.v1, test.v2) }); n > 0 {
+			if n := testing.AllocsPerRun(100, func() { cmpver.Compare(test.v1, test.v2) }); n > 0 {
 				t.Errorf("Compare(%v, %v) got %v allocs per run", test.v1, test.v2, n)
 			}
 		})

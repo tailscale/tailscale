@@ -119,7 +119,8 @@ type CapabilityVersion int
 //   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
 //   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
 //   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
-const CurrentCapabilityVersion CapabilityVersion = 78
+//   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
+const CurrentCapabilityVersion CapabilityVersion = 79
 
 type StableID string
 
@@ -1100,6 +1101,17 @@ type RegisterRequest struct {
 	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
 	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
 	Signature     []byte        `json:",omitempty"` // as described by SignatureType
+
+	// Tailnet is an optional identifier specifying the name of the recommended or required
+	// network that the node should join. Its exact form should not be depended on; new
+	// forms are coming later. The identifier is generally a domain name (for an organization)
+	// or e-mail address (for a personal account on a shared e-mail provider). It is the same name
+	// used by the API, as described in /api.md#tailnet.
+	// If Tailnet begins with the prefix "required:" then the server should prevent logging in to a different
+	// network than the one specified. Otherwise, the server should recommend the specified network
+	// but still permit logging in to other networks.
+	// If empty, no recommendation is offered to the server and the login page should show all options.
+	Tailnet string `json:",omitempty"`
 }
 
 // RegisterResponse is returned by the server in response to a RegisterRequest.
@@ -1848,9 +1860,12 @@ type ClientVersion struct {
 	// LatestVersion is the latest version.Short ("1.34.2") version available
 	// for download for the client's platform and packaging type.
 	// It won't be populated if RunningLatest is true.
-	// The primary purpose of the LatestVersion value is to invalidate the client's
-	// cache update check value, if any. This primarily applies to Windows.
 	LatestVersion string `json:",omitempty"`
+
+	// UrgentSecurityUpdate is set when the client is missing an important
+	// security update. That update may be in LatestVersion or earlier.
+	// UrgentSecurityUpdate should not be set if RunningLatest is false.
+	UrgentSecurityUpdate bool `json:",omitempty"`
 
 	// Notify is whether the client should do an OS-specific notification about
 	// a new version being available. This should not be populated if
@@ -2440,16 +2455,18 @@ type QueryFeatureResponse struct {
 // sent to "/machine/webclient/action" or "/machine/webclient/wait".
 // See client/web for usage.
 type WebClientAuthResponse struct {
-	// Message, if non-empty, provides a message for the user.
-	Message string `json:",omitempty"`
-
-	// Complete is true when the session authentication has been completed.
-	Complete bool `json:",omitempty"`
+	// ID is a unique identifier for the session auth request.
+	// It can be supplied to "/machine/webclient/wait" to pause until
+	// the session authentication has been completed.
+	ID string `json:",omitempty"`
 
 	// URL is the link for the user to visit to authenticate the session.
 	//
 	// When empty, there is no action for the user to take.
 	URL string `json:",omitempty"`
+
+	// Complete is true when the session authentication has been completed.
+	Complete bool `json:",omitempty"`
 }
 
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>

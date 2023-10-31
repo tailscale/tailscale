@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"net/netip"
+	"os/exec"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/clientupdate"
@@ -17,6 +18,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/views"
+	"tailscale.com/version"
 )
 
 var setCmd = &ffcli.Command{
@@ -65,8 +67,8 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	setf.StringVar(&setArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	setf.BoolVar(&setArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
-	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "HIDDEN: notify about available Tailscale updates")
-	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "HIDDEN: automatically update to the latest available version")
+	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
+	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "HIDDEN: allow management plane to gather device posture information")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
@@ -157,9 +159,22 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 	if maskedPrefs.AutoUpdateSet {
-		_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
-		if errors.Is(err, errors.ErrUnsupported) {
-			return errors.New("automatic updates are not supported on this platform")
+		// On macsys, tailscaled will set the Sparkle auto-update setting. It
+		// does not use clientupdate.
+		if version.IsMacSysExt() {
+			apply := "0"
+			if maskedPrefs.AutoUpdate.Apply {
+				apply = "1"
+			}
+			out, err := exec.Command("defaults", "write", "io.tailscale.ipn.macsys", "SUAutomaticallyUpdate", apply).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to enable automatic updates: %v, %q", err, out)
+			}
+		} else {
+			_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
+			if errors.Is(err, errors.ErrUnsupported) {
+				return errors.New("automatic updates are not supported on this platform")
+			}
 		}
 	}
 	checkPrefs := curPrefs.Clone()

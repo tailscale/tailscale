@@ -234,13 +234,16 @@ func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *htt
 	// this will first check syspolicy, MDM settings like Registry
 	// on Windows or defaults on macOS. If they are not set, it falls
 	// back to the cli-flag, `--posture-checking`.
-	enabled, err := syspolicy.GetBoolean(syspolicy.PostureChecking, b.Prefs().PostureChecking())
+	choice, err := syspolicy.GetPreferenceOption(syspolicy.PostureChecking)
 	if err != nil {
-		enabled = b.Prefs().PostureChecking()
-		b.logf("c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s", enabled, err)
+		b.logf(
+			"c2n: failed to read PostureChecking from syspolicy, returning default from CLI: %s; got error: %s",
+			b.Prefs().PostureChecking(),
+			err,
+		)
 	}
 
-	if enabled {
+	if choice.ShouldEnable(b.Prefs().PostureChecking()) {
 		sns, err := posture.GetSerialNumbers(b.logf)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -258,16 +261,14 @@ func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *htt
 
 func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	// If NewUpdater does not return an error, we can update the installation.
-	// Exception: When version.IsMacSysExt returns true, we don't support that
-	// yet. TODO(cpalmer, #6995): Implement it.
 	//
 	// Note that we create the Updater solely to check for errors; we do not
 	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
 	prefs := b.Prefs().AutoUpdate()
-	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+	_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
 	return tailcfg.C2NUpdateResponse{
 		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply,
-		Supported: err == nil && !version.IsMacSysExt(),
+		Supported: err == nil,
 	}
 }
 
@@ -304,8 +305,11 @@ func findCmdTailscale() (string, error) {
 	}
 	switch runtime.GOOS {
 	case "linux":
-		if self == "/usr/sbin/tailscaled" {
+		if self == "/usr/sbin/tailscaled" || self == "/usr/bin/tailscaled" {
 			return "/usr/bin/tailscale", nil
+		}
+		if self == "/usr/local/sbin/tailscaled" || self == "/usr/local/bin/tailscaled" {
+			return "/usr/local/bin/tailscale", nil
 		}
 		return "", errors.New("tailscale not found in expected place")
 	case "windows":

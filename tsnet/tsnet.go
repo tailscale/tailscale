@@ -53,6 +53,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
@@ -133,11 +134,25 @@ type Server struct {
 	logtail          *logtail.Logger
 	logid            logid.PublicID
 
-	mu        sync.Mutex
-	listeners map[listenKey]*listener
-	dialer    *tsdial.Dialer
-	closed    bool
+	mu                  sync.Mutex
+	listeners           map[listenKey]*listener
+	fallbackTCPHandlers set.HandleSet[FallbackTCPHandler]
+	dialer              *tsdial.Dialer
+	closed              bool
 }
+
+// FallbackTCPHandler describes the callback which
+// conditionally handles an incoming TCP flow for the
+// provided (src/port, dst/port) 4-tuple. These are registered
+// as handlers of last resort, and are called only if no
+// listener could handle the incoming flow.
+//
+// If the callback returns intercept=false, the flow is rejected.
+//
+// When intercept=true, the behavior depends on whether the returned handler
+// is non-nil: if nil, the connection is rejected. If non-nil, handler takes
+// over the TCP conn.
+type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
 
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
@@ -515,8 +530,10 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
+	sys.Tun.Get().Start()
 	sys.Set(ns)
 	ns.ProcessLocalIPs = true
+	ns.ProcessSubnets = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
 	s.netstack = ns
@@ -715,19 +732,39 @@ func networkForFamily(netBase string, is6 bool) string {
 //   - ("tcp", "", port)
 //
 // The netBase is "tcp" or "udp" (without any '4' or '6' suffix).
+//
+// Listeners which do not specify an IP address will match for traffic
+// for the local node (that is, a destination address of the IPv4 or
+// IPv6 address of this node) only. To listen for traffic on other addresses
+// such as those routed inbound via subnet routes, explicitly specify
+// the listening address or use RegisterFallbackTCPHandler.
 func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort, funnel bool) (_ *listener, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, a := range [2]netip.Addr{0: dst.Addr()} {
+
+	// Search for a listener with the specified IP
+	for _, net := range [2]string{
+		networkForFamily(netBase, dst.Addr().Is6()),
+		netBase,
+	} {
+		if ln, ok := s.listeners[listenKey{net, dst.Addr(), dst.Port(), funnel}]; ok {
+			return ln, true
+		}
+	}
+
+	// Search for a listener without an IP if the destination was
+	// one of the native IPs of the node.
+	if ip4, ip6 := s.TailscaleIPs(); dst.Addr() == ip4 || dst.Addr() == ip6 {
 		for _, net := range [2]string{
 			networkForFamily(netBase, dst.Addr().Is6()),
 			netBase,
 		} {
-			if ln, ok := s.listeners[listenKey{net, a, dst.Port(), funnel}]; ok {
+			if ln, ok := s.listeners[listenKey{net, netip.Addr{}, dst.Port(), funnel}]; ok {
 				return ln, true
 			}
 		}
 	}
+
 	return nil, false
 }
 
@@ -755,6 +792,14 @@ func (s *Server) getTCPHandlerForFunnelFlow(src netip.AddrPort, dstPort uint16) 
 func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
 	ln, ok := s.listenerForDstAddr("tcp", dst, false)
 	if !ok {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, handler := range s.fallbackTCPHandlers {
+			connHandler, intercept := handler(src, dst)
+			if intercept {
+				return connHandler, intercept
+			}
+		}
 		return nil, true // don't handle, don't forward to localhost
 	}
 	return ln.handle, true
@@ -829,6 +874,12 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
+//
+// Listeners which do not specify an IP address will match for traffic
+// for the local node (that is, a destination address of the IPv4 or
+// IPv6 address of this node) only. To listen for traffic on other addresses
+// such as those routed inbound via subnet routes, explicitly specify
+// the listening address or use RegisterFallbackTCPHandler.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }
@@ -856,6 +907,24 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 	return tls.NewListener(ln, &tls.Config{
 		GetCertificate: s.getCert,
 	}), nil
+}
+
+// RegisterFallbackTCPHandler registers a callback which will be called
+// to handle a TCP flow to this tsnet node, for which no listeners will handle.
+//
+// If multiple fallback handlers are registered, they will be called in an
+// undefined order. See FallbackTCPHandler for details on handling a flow.
+//
+// The returned function can be used to deregister this callback.
+func (s *Server) RegisterFallbackTCPHandler(cb FallbackTCPHandler) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hnd := s.fallbackTCPHandlers.Add(cb)
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.fallbackTCPHandlers, hnd)
+	}
 }
 
 // getCert is the GetCertificate function used by ListenTLS.

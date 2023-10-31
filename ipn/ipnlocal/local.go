@@ -14,7 +14,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -44,6 +43,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
@@ -157,6 +157,7 @@ type LocalBackend struct {
 	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                 ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
+	pushDeviceToken       syncs.AtomicValue[string]
 	backendLogID          logid.PublicID
 	unregisterNetMon      func()
 	unregisterHealthWatch func()
@@ -198,7 +199,8 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
-	pm             *profileManager // mu guards access
+	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
+	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	ccGen          clientGen    // function for producing controlclient; lazily populated
@@ -259,6 +261,7 @@ type LocalBackend struct {
 	componentLogUntil       map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus updateStatus
+	currentUser     ipnauth.WindowsToken
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -266,7 +269,7 @@ type LocalBackend struct {
 	activeWatchSessions set.Set[string]     // of WatchIPN SessionID
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
+	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -320,8 +323,18 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		sds.SetDialer(dialer.SystemDial)
 	}
 
-	hi := hostinfo.New()
-	logf.JSON(1, "Hostinfo", hi)
+	if sys.InitialConfig != nil {
+		p := pm.CurrentPrefs().AsStruct()
+		mp, err := sys.InitialConfig.Parsed.ToPrefs()
+		if err != nil {
+			return nil, err
+		}
+		p.ApplyEdits(&mp)
+		if err := pm.SetPrefs(p.View(), ""); err != nil {
+			return nil, err
+		}
+	}
+
 	envknob.LogCurrent(logf)
 	if dialer == nil {
 		dialer = &tsdial.Dialer{Logf: logf}
@@ -340,6 +353,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                 sys,
+		conf:                sys.InitialConfig,
 		e:                   e,
 		dialer:              dialer,
 		store:               store,
@@ -518,6 +532,25 @@ func (b *LocalBackend) SetDirectFileDoFinalRename(v bool) {
 	b.directFileDoFinalRename = v
 }
 
+// ReloadCOnfig reloads the backend's config from disk.
+//
+// It returns (false, nil) if not running in declarative mode, (true, nil) on
+// success, or (false, error) on failure.
+func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.conf == nil {
+		return false, nil
+	}
+	conf, err := conffile.Load(b.conf.Path)
+	if err != nil {
+		return false, err
+	}
+	b.conf = conf
+	// TODO(bradfitz): apply things
+	return true, nil
+}
+
 // pauseOrResumeControlClientLocked pauses b.cc if there is no network available
 // or if the LocalBackend is in Stopped state with a valid NetMap. In all other
 // cases, it unpauses it. It is a no-op if b.cc is nil.
@@ -613,6 +646,9 @@ func (b *LocalBackend) Shutdown() {
 
 	if b.sockstatLogger != nil {
 		b.sockstatLogger.Shutdown()
+	}
+	if b.peerAPIServer != nil {
+		b.peerAPIServer.taildrop.Shutdown()
 	}
 
 	b.unregisterNetMon()
@@ -1451,6 +1487,17 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		}
 	}
 	profileID := b.pm.CurrentProfile().ID
+	if b.state != ipn.Running && b.conf != nil && b.conf.Parsed.AuthKey != nil && opts.AuthKey == "" {
+		v := *b.conf.Parsed.AuthKey
+		if filename, ok := strings.CutPrefix(v, "file:"); ok {
+			b, err := os.ReadFile(filename)
+			if err != nil {
+				return fmt.Errorf("error reading config file authKey: %w", err)
+			}
+			v = strings.TrimSpace(string(b))
+		}
+		opts.AuthKey = v
+	}
 
 	// The iOS client sends a "Start" whenever its UI screen comes
 	// up, just because it wants a netmap. That should be fixed,
@@ -1473,10 +1520,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	hostinfo := hostinfo.New()
+	applyConfigToHostinfo(hostinfo, b.conf)
 	hostinfo.BackendLogID = b.backendLogID.String()
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
+	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
 	// This will trigger a full relogin/reconfigure cycle every
@@ -1626,6 +1675,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		}
 		tkaHead = string(head)
 	}
+	confWantRunning := b.conf != nil && wantRunning
 	b.mu.Unlock()
 
 	if endpoints != nil {
@@ -1640,7 +1690,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: &prefs})
 
-	if !loggedOut && b.hasNodeKey() {
+	if !loggedOut && (b.hasNodeKey() || confWantRunning) {
 		// Even if !WantRunning, we should verify our key, if there
 		// is one. If you want tailscaled to be completely idle,
 		// use logout instead.
@@ -1976,10 +2026,9 @@ func (b *LocalBackend) readPoller() {
 			b.hostinfo = new(tailcfg.Hostinfo)
 		}
 		b.hostinfo.Services = sl
-		hi := b.hostinfo
 		b.mu.Unlock()
 
-		b.doSetHostinfoFilterServices(hi)
+		b.doSetHostinfoFilterServices()
 
 		if isFirst {
 			isFirst = false
@@ -1988,19 +2037,28 @@ func (b *LocalBackend) readPoller() {
 	}
 }
 
-// ResendHostinfoIfNeeded is called to recompute the Hostinfo and send
-// the new version to the control server.
-func (b *LocalBackend) ResendHostinfoIfNeeded() {
-	hi := hostinfo.New()
+// GetPushDeviceToken returns the push notification device token.
+func (b *LocalBackend) GetPushDeviceToken() string {
+	return b.pushDeviceToken.Load()
+}
 
-	b.mu.Lock()
-	if b.hostinfo != nil {
-		hi.Services = b.hostinfo.Services
+// SetPushDeviceToken sets the push notification device token and informs the
+// controlclient of the new value.
+func (b *LocalBackend) SetPushDeviceToken(tk string) {
+	old := b.pushDeviceToken.Swap(tk)
+	if old == tk {
+		return
 	}
-	b.hostinfo = hi
-	b.mu.Unlock()
+	b.doSetHostinfoFilterServices()
+}
 
-	b.doSetHostinfoFilterServices(hi)
+func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
+	if c == nil {
+		return
+	}
+	if c.Parsed.Hostname != nil {
+		hi.Hostname = *c.Parsed.Hostname
+	}
 }
 
 // WatchNotifications subscribes to the ipn.Notify message bus notification
@@ -2283,16 +2341,7 @@ func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 	b.mu.Lock()
 	b.lastClientVersion = v
 	b.mu.Unlock()
-	switch runtime.GOOS {
-	case "darwin", "ios":
-		// These auto-update well enough, and we haven't converted the
-		// ClientVersion types to Swift yet, so don't send them in ipn.Notify
-		// messages.
-	default:
-		// But everything else is a Go client and can deal with this field, even
-		// if they ignore it.
-		b.send(ipn.Notify{ClientVersion: v})
-	}
+	b.send(ipn.Notify{ClientVersion: v})
 }
 
 // For testing lazy machine key generation.
@@ -2674,7 +2723,7 @@ func (b *LocalBackend) shouldUploadServices() bool {
 	return !p.ShieldsUp() && b.netMap.CollectServices
 }
 
-// SetCurrentUserID is used to implement support for multi-user systems (only
+// SetCurrentUser is used to implement support for multi-user systems (only
 // Windows 2022-11-25). On such systems, the uid is used to determine which
 // user's state should be used. The current user is maintained by active
 // connections open to the backend.
@@ -2689,18 +2738,35 @@ func (b *LocalBackend) shouldUploadServices() bool {
 // unattended mode. The user must disable unattended mode before the user can be
 // changed.
 //
-// On non-multi-user systems, the uid should be set to empty string.
-func (b *LocalBackend) SetCurrentUserID(uid ipn.WindowsUserID) {
+// On non-multi-user systems, the token should be set to nil.
+//
+// SetCurrentUser returns the ipn.WindowsUserID associated with token
+// when successful.
+func (b *LocalBackend) SetCurrentUser(token ipnauth.WindowsToken) (ipn.WindowsUserID, error) {
+	var uid ipn.WindowsUserID
+	if token != nil {
+		var err error
+		uid, err = token.UID()
+		if err != nil {
+			return "", err
+		}
+	}
+
 	b.mu.Lock()
 	if b.pm.CurrentUserID() == uid {
 		b.mu.Unlock()
-		return
+		return uid, nil
 	}
 	if err := b.pm.SetCurrentUserID(uid); err != nil {
 		b.mu.Unlock()
-		return
+		return uid, nil
 	}
+	if b.currentUser != nil {
+		b.currentUser.Close()
+	}
+	b.currentUser = token
 	b.resetForProfileChangeLockedOnEntry()
+	return uid, nil
 }
 
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
@@ -2709,7 +2775,19 @@ func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 	return b.checkPrefsLocked(p)
 }
 
+// isConfigLocked_Locked reports whether the parsed config file is locked.
+// b.mu must be held.
+func (b *LocalBackend) isConfigLocked_Locked() bool {
+	// TODO(bradfitz,maisem): make this more fine-grained, permit changing
+	// some things if they're not explicitly set in the config. But for now
+	// (2023-10-16), just blanket disable everything.
+	return b.conf != nil && !b.conf.Parsed.Locked.EqualBool(false)
+}
+
 func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
+	if b.isConfigLocked_Locked() {
+		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
+	}
 	var errs []error
 	if p.Hostname == "badhostname.tailscale." {
 		// Keep this one just for testing.
@@ -2823,7 +2901,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	if mp.EggSet {
 		mp.EggSet = false
 		b.egg = true
-		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+		go b.doSetHostinfoFilterServices()
 	}
 	p0 := b.pm.CurrentPrefs()
 	p1 := b.pm.CurrentPrefs().AsStruct()
@@ -2953,7 +3031,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	b.mu.Unlock()
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
-		b.doSetHostinfoFilterServices(newHi)
+		b.doSetHostinfoFilterServices()
 	}
 
 	if netMap != nil {
@@ -3079,11 +3157,7 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 //
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
-func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
-	if hi == nil {
-		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
-		return
-	}
+func (b *LocalBackend) doSetHostinfoFilterServices() {
 	b.mu.Lock()
 	cc := b.cc
 	if cc == nil {
@@ -3091,23 +3165,31 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 		b.mu.Unlock()
 		return
 	}
+	if b.hostinfo == nil {
+		b.mu.Unlock()
+		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
+		return
+	}
 	peerAPIServices := b.peerAPIServicesLocked()
 	if b.egg {
 		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
 	}
+
+	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
+	hi := *b.hostinfo // shallow copy
 	b.mu.Unlock()
 
 	// Make a shallow copy of hostinfo so we can mutate
 	// at the Service field.
-	hi2 := *hi // shallow copy
 	if !b.shouldUploadServices() {
-		hi2.Services = []tailcfg.Service{}
+		hi.Services = []tailcfg.Service{}
 	}
 	// Don't mutate hi.Service's underlying array. Append to
 	// the slice with no free capacity.
-	c := len(hi2.Services)
-	hi2.Services = append(hi2.Services[:c:c], peerAPIServices...)
-	cc.SetHostinfo(&hi2)
+	c := len(hi.Services)
+	hi.Services = append(hi.Services[:c:c], peerAPIServices...)
+	hi.PushDeviceToken = b.pushDeviceToken.Load()
+	cc.SetHostinfo(&hi)
 }
 
 // NetMap returns the latest cached network map received from
@@ -3550,13 +3632,14 @@ func (b *LocalBackend) initPeerAPIListener() {
 
 	ps := &peerAPIServer{
 		b: b,
-		taildrop: &taildrop.Handler{
+		taildrop: taildrop.ManagerOptions{
 			Logf:             b.logf,
-			Clock:            b.clock,
+			Clock:            tstime.DefaultClock{Clock: b.clock},
 			Dir:              fileRoot,
 			DirectFileMode:   b.directFileRoot != "",
 			AvoidFinalRename: !b.directFileDoFinalRename,
-		},
+			SendFileNotify:   b.sendFileNotify,
+		}.New(),
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
 		ps.resolver = dm.Resolver()
@@ -3598,7 +3681,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
 	}
 
-	go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+	go b.doSetHostinfoFilterServices()
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
@@ -3770,6 +3853,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
+	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
@@ -4046,6 +4130,10 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
+	if b.currentUser != nil {
+		b.currentUser.Close()
+		b.currentUser = nil
+	}
 	b.keyExpired = false
 	b.authURL = ""
 	b.authURLSticky = ""
@@ -4326,7 +4414,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
 		b.logf("Hostinfo.WireIngress changed to %v", wire)
 		b.hostinfo.WireIngress = wire
-		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+		go b.doSetHostinfoFilterServices()
 	}
 
 	b.setTCPPortsIntercepted(handlePorts)
@@ -4372,8 +4460,8 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 		backend := key.(string)
 		if !backends[backend] {
 			b.logf("serve: closing idle connections to %s", backend)
-			value.(*httputil.ReverseProxy).Transport.(*http.Transport).CloseIdleConnections()
 			b.serveProxyHandlers.Delete(backend)
+			value.(*reverseProxy).close()
 		}
 		return true
 	})
@@ -4515,6 +4603,9 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	}
 	for _, p := range b.peers {
 		if !b.peerIsTaildropTargetLocked(p) {
+			continue
+		}
+		if p.Hostinfo().OS() == "tvOS" {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)

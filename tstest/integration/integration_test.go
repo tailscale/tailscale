@@ -41,7 +41,10 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/ptr"
+	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
+	"tailscale.com/version"
 )
 
 var (
@@ -67,8 +70,31 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+// Tests that tailscaled starts up in TUN mode, and also without data races:
+// https://github.com/tailscale/tailscale/issues/7894
+func TestTUNMode(t *testing.T) {
+	tstest.Shard(t)
+	if os.Getuid() != 0 {
+		t.Skip("skipping when not root")
+	}
+	tstest.Parallel(t)
+	env := newTestEnv(t)
+	env.tunMode = true
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
+
+	d1.MustCleanShutdown(t)
+}
+
 func TestOneNodeUpNoAuth(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -85,7 +111,8 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 }
 
 func TestOneNodeExpiredKey(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -121,7 +148,8 @@ func TestOneNodeExpiredKey(t *testing.T) {
 }
 
 func TestControlKnobs(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -151,7 +179,8 @@ func TestControlKnobs(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n := newTestNode(t, env)
 
@@ -181,7 +210,8 @@ func TestCollectPanic(t *testing.T) {
 }
 
 func TestControlTimeLogLine(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
 	n := newTestNode(t, env)
@@ -204,7 +234,8 @@ func TestControlTimeLogLine(t *testing.T) {
 
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -240,7 +271,8 @@ func TestStateSavedOnStart(t *testing.T) {
 }
 
 func TestOneNodeUpAuth(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
 		control.RequireAuth = true
 	}))
@@ -282,9 +314,37 @@ func TestOneNodeUpAuth(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
-func TestTwoNodes(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
+func TestConfigFileAuthKey(t *testing.T) {
+	tstest.SkipOnUnshardedCI(t)
+	tstest.Shard(t)
 	t.Parallel()
+	const authKey = "opensesame"
+	env := newTestEnv(t, configureControl(func(control *testcontrol.Server) {
+		control.RequireAuthKey = authKey
+	}))
+
+	n1 := newTestNode(t, env)
+	n1.configFile = filepath.Join(n1.dir, "config.json")
+	authKeyFile := filepath.Join(n1.dir, "my-auth-key")
+	must.Do(os.WriteFile(authKeyFile, fmt.Appendf(nil, "%s\n", authKey), 0666))
+	must.Do(os.WriteFile(n1.configFile, must.Get(json.Marshal(ipn.ConfigVAlpha{
+		Version:   "alpha0",
+		AuthKey:   ptr.To("file:" + authKeyFile),
+		ServerURL: ptr.To(n1.env.ControlServer.URL),
+	})), 0644))
+	d1 := n1.StartDaemon()
+
+	n1.AwaitListening()
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
+
+	d1.MustCleanShutdown(t)
+}
+
+func TestTwoNodes(t *testing.T) {
+	tstest.Shard(t)
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 
 	// Create two nodes:
@@ -332,8 +392,9 @@ func TestTwoNodes(t *testing.T) {
 // tests two nodes where the first gets a incremental MapResponse (with only
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
+	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 
 	// Create one node:
@@ -416,8 +477,9 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 }
 
 func TestNodeAddressIPFields(t *testing.T) {
+	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
-	t.Parallel()
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	d1 := n1.StartDaemon()
@@ -443,7 +505,8 @@ func TestNodeAddressIPFields(t *testing.T) {
 }
 
 func TestAddPingRequest(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.StartDaemon()
@@ -495,7 +558,8 @@ func TestAddPingRequest(t *testing.T) {
 }
 
 func TestC2NPingRequest(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.StartDaemon()
@@ -565,7 +629,8 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
@@ -606,7 +671,8 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 	n1.upFlagGOOS = "windows"
@@ -624,7 +690,8 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
 		env := newTestEnv(t)
 		registerNode := func() (*testNode, key.NodePublic) {
@@ -751,7 +818,8 @@ func TestNATPing(t *testing.T) {
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
-	t.Parallel()
+	tstest.Shard(t)
+	tstest.Parallel(t)
 	env := newTestEnv(t)
 	// Spin up some nodes.
 	nodes := make([]*testNode, 2)
@@ -807,9 +875,10 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
-	t      testing.TB
-	cli    string
-	daemon string
+	t       testing.TB
+	tunMode bool
+	cli     string
+	daemon  string
 
 	LogCatcher       *LogCatcher
 	LogCatcherServer *httptest.Server
@@ -880,6 +949,7 @@ type testNode struct {
 	env *testEnv
 
 	dir        string // temp dir for sock & state
+	configFile string // or empty for none
 	sockFile   string
 	stateFile  string
 	upFlagGOOS string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
@@ -898,12 +968,25 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 		sockFile = filepath.Join(os.TempDir(), rands.HexString(8)+".sock")
 		t.Cleanup(func() { os.Remove(sockFile) })
 	}
-	return &testNode{
+	n := &testNode{
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
 		stateFile: filepath.Join(dir, "tailscale.state"),
 	}
+
+	// Look for a data race. Once we see the start marker, start logging the rest.
+	var sawRace bool
+	n.addLogLineHook(func(line []byte) {
+		if mem.Contains(mem.B(line), mem.S("WARNING: DATA RACE")) {
+			sawRace = true
+		}
+		if sawRace {
+			t.Logf("%s", line)
+		}
+	})
+
+	return n
 }
 
 func (n *testNode) diskPrefs() *ipn.Prefs {
@@ -962,7 +1045,7 @@ func (n *testNode) socks5AddrChan() <-chan string {
 		if i == -1 {
 			return
 		}
-		addr := string(line)[i+len(sub):]
+		addr := strings.TrimSpace(string(line)[i+len(sub):])
 		select {
 		case ch <- addr:
 		default:
@@ -1009,11 +1092,10 @@ func (op *nodeOutputParser) parseLines() {
 		}
 		line := buf[:nl+1]
 		buf = buf[nl+1:]
-		lineTrim := bytes.TrimSpace(line)
 
 		n.mu.Lock()
 		for _, f := range n.onLogLine {
-			f(lineTrim)
+			f(line)
 		}
 		n.mu.Unlock()
 	}
@@ -1047,14 +1129,22 @@ func (n *testNode) StartDaemon() *Daemon {
 
 func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	t := n.env.t
-	cmd := exec.Command(n.env.daemon,
-		"--tun=userspace-networking",
+	cmd := exec.Command(n.env.daemon)
+	cmd.Args = append(cmd.Args,
 		"--state="+n.stateFile,
 		"--socket="+n.sockFile,
 		"--socks5-server=localhost:0",
 	)
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
+	}
+	if !n.env.tunMode {
+		cmd.Args = append(cmd.Args,
+			"--tun=userspace-networking",
+		)
+	}
+	if n.configFile != "" {
+		cmd.Args = append(cmd.Args, "--config="+n.configFile)
 	}
 	cmd.Env = append(os.Environ(),
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
@@ -1065,6 +1155,9 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_LOGS_DIR="+t.TempDir(),
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
 	)
+	if version.IsRace() {
+		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
+	}
 	cmd.Stderr = &nodeOutputParser{n: n}
 	if *verboseTailscaled {
 		cmd.Stdout = os.Stdout
@@ -1136,11 +1229,10 @@ func (n *testNode) AwaitListening() {
 	s := safesocket.DefaultConnectionStrategy(n.sockFile)
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
 		c, err := safesocket.Connect(s)
-		if err != nil {
-			return err
+		if err == nil {
+			c.Close()
 		}
-		c.Close()
-		return nil
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1234,7 +1326,8 @@ func (n *testNode) AwaitNeedsLogin() {
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
 func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
-	cmd := exec.Command(n.env.cli, "--socket="+n.sockFile)
+	cmd := exec.Command(n.env.cli)
+	cmd.Args = append(cmd.Args, "--socket="+n.sockFile)
 	cmd.Args = append(cmd.Args, arg...)
 	cmd.Dir = n.dir
 	cmd.Env = append(os.Environ(),

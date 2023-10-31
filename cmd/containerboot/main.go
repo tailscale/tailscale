@@ -19,8 +19,7 @@
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//   - TS_EXTRA_ARGS: extra arguments to 'tailscale login', these are not
-//     reset on restart.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
@@ -36,15 +35,9 @@
 //   - TS_SOCKET: the path where the tailscaled LocalAPI socket should
 //     be created.
 //   - TS_AUTH_ONCE: if true, only attempt to log in if not already
-//     logged in. If false, forcibly log in every time the container starts.
-//     The default until 1.50.0 was false, but that was misleading: until
-//     1.50, containerboot used `tailscale up` which would ignore an authkey
-//     argument if there was already a node key. Effectively, this behaved
-//     as though TS_AUTH_ONCE were always true.
-//     In 1.50.0 the change was made to use `tailscale login` instead of `up`,
-//     and login will reauthenticate every time it is given an authkey.
-//     In 1.50.1 we set the TS_AUTH_ONCE to true, to match the previously
-//     observed behavior.
+//     logged in. If false (the default, for backwards
+//     compatibility), forcibly log in every time the
+//     container starts.
 //   - TS_SERVE_CONFIG: if specified, is the file path where the ipn.ServeConfig is located.
 //     It will be applied once tailscaled is up and running. If the file contains
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
@@ -84,9 +77,18 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
+	"tailscale.com/util/linuxfw"
 )
+
+func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
+	if defaultBool("TS_TEST_FAKE_NETFILTER", false) {
+		return linuxfw.NewFakeIPTablesRunner(), nil
+	}
+	return linuxfw.New(logf)
+}
 
 func main() {
 	log.SetPrefix("boot: ")
@@ -109,7 +111,7 @@ func main() {
 		SOCKSProxyAddr:  defaultEnv("TS_SOCKS5_SERVER", ""),
 		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:        defaultBool("TS_AUTH_ONCE", true),
+		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
@@ -203,7 +205,7 @@ func main() {
 		}
 		didLogin = true
 		w.Close()
-		if err := tailscaleLogin(bootCtx, cfg); err != nil {
+		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %v", err)
 		}
 		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
@@ -253,10 +255,12 @@ authLoop:
 	ctx, cancel := context.WithCancel(context.Background()) // no deadline now that we're in steady state
 	defer cancel()
 
-	// Now that we are authenticated, we can set/reset any of the
-	// settings that we need to.
-	if err := tailscaleSet(ctx, cfg); err != nil {
-		log.Fatalf("failed to auth tailscale: %v", err)
+	if cfg.AuthOnce {
+		// Now that we are authenticated, we can set/reset any of the
+		// settings that we need to.
+		if err := tailscaleSet(ctx, cfg); err != nil {
+			log.Fatalf("failed to auth tailscale: %v", err)
+		}
 	}
 
 	if cfg.ServeConfigPath != "" {
@@ -295,6 +299,13 @@ authLoop:
 	if cfg.ServeConfigPath != "" {
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
+	var nfr linuxfw.NetfilterRunner
+	if wantProxy {
+		nfr, err = newNetfilterRunner(log.Printf)
+		if err != nil {
+			log.Fatalf("error creating new netfilter runner: %v", err)
+		}
+	}
 	for {
 		n, err := w.Next()
 		if err != nil {
@@ -315,7 +326,7 @@ authLoop:
 			ipsHaveChanged := newCurrentIPs != currentIPs
 			if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
 				log.Printf("Installing proxy rules")
-				if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs); err != nil {
+				if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
 					log.Fatalf("installing ingress proxy rules: %v", err)
 				}
 			}
@@ -330,7 +341,7 @@ authLoop:
 				}
 			}
 			if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) > 0 {
-				if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs); err != nil {
+				if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
 					log.Fatalf("installing egress proxy rules: %v", err)
 				}
 			}
@@ -385,19 +396,20 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		panic("cd must not be nil")
 	}
 	var tickChan <-chan time.Time
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
+	var eventChan <-chan fsnotify.Event
+	if w, err := fsnotify.NewWatcher(); err != nil {
 		log.Printf("failed to create fsnotify watcher, timer-only mode: %v", err)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		tickChan = ticker.C
 	} else {
 		defer w.Close()
+		if err := w.Add(filepath.Dir(path)); err != nil {
+			log.Fatalf("failed to add fsnotify watch: %v", err)
+		}
+		eventChan = w.Events
 	}
 
-	if err := w.Add(filepath.Dir(path)); err != nil {
-		log.Fatalf("failed to add fsnotify watch: %v", err)
-	}
 	var certDomain string
 	var prevServeConfig *ipn.ServeConfig
 	for {
@@ -407,7 +419,7 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		case <-cdChanged:
 			certDomain = *certDomainAtomic.Load()
 		case <-tickChan:
-		case <-w.Events:
+		case <-eventChan:
 			// We can't do any reasonable filtering on the event because of how
 			// k8s handles these mounts. So just re-read the file and apply it
 			// if it's changed.
@@ -528,29 +540,40 @@ func tailscaledArgs(cfg *settings) []string {
 	return args
 }
 
-// tailscaleLogin uses cfg to run 'tailscale login' everytime containerboot
-// starts, or if TS_AUTH_ONCE is set, only the first time containerboot starts.
-func tailscaleLogin(ctx context.Context, cfg *settings) error {
-	args := []string{"--socket=" + cfg.Socket, "login"}
+// tailscaleUp uses cfg to run 'tailscale up' everytime containerboot starts, or
+// if TS_AUTH_ONCE is set, only the first time containerboot starts.
+func tailscaleUp(ctx context.Context, cfg *settings) error {
+	args := []string{"--socket=" + cfg.Socket, "up"}
+	if cfg.AcceptDNS {
+		args = append(args, "--accept-dns=true")
+	} else {
+		args = append(args, "--accept-dns=false")
+	}
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
+	}
+	if cfg.Routes != "" {
+		args = append(args, "--advertise-routes="+cfg.Routes)
+	}
+	if cfg.Hostname != "" {
+		args = append(args, "--hostname="+cfg.Hostname)
 	}
 	if cfg.ExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.ExtraArgs)...)
 	}
-	log.Printf("Running 'tailscale login'")
+	log.Printf("Running 'tailscale up'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tailscale login failed: %v", err)
+		return fmt.Errorf("tailscale up failed: %v", err)
 	}
 	return nil
 }
 
 // tailscaleSet uses cfg to run 'tailscale set' to set any known configuration
 // options that are passed in via environment variables. This is run after the
-// node is in Running state.
+// node is in Running state and only if TS_AUTH_ONCE is set.
 func tailscaleSet(ctx context.Context, cfg *settings) error {
 	args := []string{"--socket=" + cfg.Socket, "set"}
 	if cfg.AcceptDNS {
@@ -662,16 +685,12 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, routes string
 	return nil
 }
 
-func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
+func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
 	}
-	argv0 := "iptables"
-	if dst.Is6() {
-		argv0 = "ip6tables"
-	}
-	var local string
+	var local netip.Addr
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
@@ -679,52 +698,30 @@ func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []net
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
 		}
-		local = pfx.Addr().String()
+		local = pfx.Addr()
 		break
 	}
-	if local == "" {
+	if !local.IsValid() {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
-	// Technically, if the control server ever changes the IPs assigned to this
-	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
-	// for now we'll live with it.
-	// Set up a rule that ensures that all packets
-	// except for those received on tailscale0 interface is forwarded to
-	// destination address
-	cmdDNAT := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "!", "-i", "tailscale0", "-j", "DNAT", "--to-destination", dstStr)
-	cmdDNAT.Stdout = os.Stdout
-	cmdDNAT.Stderr = os.Stderr
-	if err := cmdDNAT.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	if err := nfr.DNATNonTailscaleTraffic("tailscale0", dst); err != nil {
+		return fmt.Errorf("installing egress proxy rules: %w", err)
 	}
-	// Set up a rule that ensures that all packets sent to the destination
-	// address will have the proxy's IP set as source IP
-	cmdSNAT := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "POSTROUTING", "1", "--destination", dstStr, "-j", "SNAT", "--to-source", local)
-	cmdSNAT.Stdout = os.Stdout
-	cmdSNAT.Stderr = os.Stderr
-	if err := cmdSNAT.Run(); err != nil {
-		return fmt.Errorf("setting up SNAT via iptables failed: %w", err)
+	if err := nfr.AddSNATRuleForDst(local, dst); err != nil {
+		return fmt.Errorf("installing egress proxy rules: %w", err)
 	}
-
-	cmdClamp := exec.CommandContext(ctx, argv0, "-t", "mangle", "-A", "FORWARD", "-o", "tailscale0", "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
-	cmdClamp.Stdout = os.Stdout
-	cmdClamp.Stderr = os.Stderr
-	if err := cmdClamp.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	if err := nfr.ClampMSSToPMTU("tailscale0", dst); err != nil {
+		return fmt.Errorf("installing egress proxy rules: %w", err)
 	}
 	return nil
 }
 
-func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
+func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
 	}
-	argv0 := "iptables"
-	if dst.Is6() {
-		argv0 = "ip6tables"
-	}
-	var local string
+	var local netip.Addr
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
@@ -732,26 +729,17 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
 		}
-		local = pfx.Addr().String()
+		local = pfx.Addr()
 		break
 	}
-	if local == "" {
+	if !local.IsValid() {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
-	// Technically, if the control server ever changes the IPs assigned to this
-	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
-	// for now we'll live with it.
-	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "-d", local, "-j", "DNAT", "--to-destination", dstStr)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	if err := nfr.AddDNATRule(local, dst); err != nil {
+		return fmt.Errorf("installing ingress proxy rules: %w", err)
 	}
-	cmdClamp := exec.CommandContext(ctx, argv0, "-t", "mangle", "-A", "FORWARD", "-o", "tailscale0", "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
-	cmdClamp.Stdout = os.Stdout
-	cmdClamp.Stderr = os.Stderr
-	if err := cmdClamp.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	if err := nfr.ClampMSSToPMTU("tailscale0", dst); err != nil {
+		return fmt.Errorf("installing ingress proxy rules: %w", err)
 	}
 	return nil
 }

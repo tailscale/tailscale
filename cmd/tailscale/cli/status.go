@@ -238,7 +238,11 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	printFunnelStatus(ctx)
 	if cv := st.ClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-		printf("# Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update.\n", version.Short(), cv.LatestVersion)
+		if cv.UrgentSecurityUpdate {
+			printf("# Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update.\n", version.Short(), cv.LatestVersion)
+		} else {
+			printf("# Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update.\n", version.Short(), cv.LatestVersion)
+		}
 	}
 	return nil
 }

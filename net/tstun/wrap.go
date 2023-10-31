@@ -25,6 +25,7 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun/table"
 	"tailscale.com/syncs"
@@ -77,12 +78,18 @@ var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 
 // Wrapper augments a tun.Device with packet filtering and injection.
+//
+// A Wrapper starts in a "corked" mode where Read calls are blocked
+// until the Wrapper's Start method is called.
 type Wrapper struct {
 	logf        logger.Logf
 	limitedLogf logger.Logf // aggressively rate-limited logf used for potentially high volume errors
 	// tdev is the underlying Wrapper device.
 	tdev  tun.Device
 	isTAP bool // whether tdev is a TAP device
+
+	started atomic.Bool   // whether Start has been called
+	startCh chan struct{} // closed in Start
 
 	closeOnce sync.Once
 
@@ -218,6 +225,16 @@ type setWrapperer interface {
 	setWrapper(*Wrapper)
 }
 
+// Start unblocks any Wrapper.Read calls that have already started
+// and makes the Wrapper functional.
+//
+// Start must be called exactly once after the various Tailscale
+// subsystems have been wired up to each other.
+func (w *Wrapper) Start() {
+	w.started.Store(true)
+	close(w.startCh)
+}
+
 func WrapTAP(logf logger.Logf, tdev tun.Device) *Wrapper {
 	return wrap(logf, tdev, true)
 }
@@ -243,6 +260,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 		eventsOther:    make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
+		startCh:     make(chan struct{}),
 	}
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
@@ -308,6 +326,9 @@ func (t *Wrapper) isSelfDisco(p *packet.Parsed) bool {
 func (t *Wrapper) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
+		if t.started.CompareAndSwap(false, true) {
+			close(t.startCh)
+		}
 		close(t.closed)
 		t.bufferConsumedMu.Lock()
 		t.bufferConsumedClosed = true
@@ -487,7 +508,7 @@ func (t *Wrapper) snat(p *packet.Parsed) {
 	oldSrc := p.Src.Addr()
 	newSrc := nc.selectSrcIP(oldSrc, p.Dst.Addr())
 	if oldSrc != newSrc {
-		p.UpdateSrcAddr(newSrc)
+		checksum.UpdateSrcAddr(p, newSrc)
 	}
 }
 
@@ -497,7 +518,7 @@ func (t *Wrapper) dnat(p *packet.Parsed) {
 	oldDst := p.Dst.Addr()
 	newDst := nc.mapDstIP(oldDst)
 	if newDst != oldDst {
-		p.UpdateDstAddr(newDst)
+		checksum.UpdateDstAddr(p, newDst)
 	}
 }
 
@@ -673,16 +694,16 @@ func (c *natFamilyConfig) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 // natConfigFromWGConfig generates a natFamilyConfig from nm,
 // for the indicated address family.
 // If NAT is not required for that address family, it returns nil.
-func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *natFamilyConfig {
+func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.Version) *natFamilyConfig {
 	if wcfg == nil {
 		return nil
 	}
 
 	var nativeAddr netip.Addr
 	switch addrFam {
-	case ipproto.IPProtoVersion4:
+	case ipproto.Version4:
 		nativeAddr = findV4(wcfg.Addresses)
-	case ipproto.IPProtoVersion6:
+	case ipproto.Version6:
 		nativeAddr = findV6(wcfg.Addresses)
 	}
 	if !nativeAddr.IsValid() {
@@ -703,8 +724,8 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *
 		isExitNode := slices.Contains(p.AllowedIPs, tsaddr.AllIPv4()) || slices.Contains(p.AllowedIPs, tsaddr.AllIPv6())
 		if isExitNode {
 			hasMasqAddrsForFamily := false ||
-				(addrFam == ipproto.IPProtoVersion4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid()) ||
-				(addrFam == ipproto.IPProtoVersion6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid())
+				(addrFam == ipproto.Version4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid()) ||
+				(addrFam == ipproto.Version6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid())
 			if hasMasqAddrsForFamily {
 				exitNodeRequiresMasq = true
 			}
@@ -714,10 +735,10 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *
 	for i := range wcfg.Peers {
 		p := &wcfg.Peers[i]
 		var addrToUse netip.Addr
-		if addrFam == ipproto.IPProtoVersion4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
+		if addrFam == ipproto.Version4 && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
 			addrToUse = *p.V4MasqAddr
 			mak.Set(&listenAddrs, addrToUse, struct{}{})
-		} else if addrFam == ipproto.IPProtoVersion6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
+		} else if addrFam == ipproto.Version6 && p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
 			addrToUse = *p.V6MasqAddr
 			mak.Set(&listenAddrs, addrToUse, struct{}{})
 		} else if exitNodeRequiresMasq {
@@ -741,7 +762,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.IPProtoVersion) *
 
 // SetNetMap is called when a new NetworkMap is received.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
-	v4, v6 := natConfigFromWGConfig(wcfg, ipproto.IPProtoVersion4), natConfigFromWGConfig(wcfg, ipproto.IPProtoVersion6)
+	v4, v6 := natConfigFromWGConfig(wcfg, ipproto.Version4), natConfigFromWGConfig(wcfg, ipproto.Version6)
 	var cfg *natConfig
 	if v4 != nil || v6 != nil {
 		cfg = &natConfig{v4: v4, v6: v6}
@@ -835,6 +856,9 @@ func (t *Wrapper) IdleDuration() time.Duration {
 }
 
 func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
+	if !t.started.Load() {
+		<-t.startCh
+	}
 	// packet from OS read and sent to WG
 	res, ok := <-t.vectorOutbound
 	if !ok {

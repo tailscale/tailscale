@@ -55,6 +55,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/systemd"
 )
 
@@ -566,6 +567,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, opt.URL, nil, err
 	}
+
+	tailnet, err := syspolicy.GetString(syspolicy.Tailnet, "")
+	if err != nil {
+		c.logf("unable to provide Tailnet field in register request. err: %v", err)
+	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:          1,
@@ -577,6 +583,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Timestamp:        &now,
 		Ephemeral:        (opt.Flags & LoginEphemeral) != 0,
 		NodeKeySignature: nodeKeySignature,
+		Tailnet:          tailnet,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past

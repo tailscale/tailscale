@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"tailscale.com/net/stun"
+	"tailscale.com/tstest/deptest"
 )
 
 func TestProdAutocertHostPolicy(t *testing.T) {
@@ -127,4 +128,15 @@ func TestNoContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		BadDeps: map[string]string{
+			"gvisor.dev/gvisor/pkg/buffer":       "https://github.com/tailscale/tailscale/issues/9756",
+			"gvisor.dev/gvisor/pkg/cpuid":        "https://github.com/tailscale/tailscale/issues/9756",
+			"gvisor.dev/gvisor/pkg/tcpip":        "https://github.com/tailscale/tailscale/issues/9756",
+			"gvisor.dev/gvisor/pkg/tcpip/header": "https://github.com/tailscale/tailscale/issues/9756",
+		},
+	}.Check(t)
 }

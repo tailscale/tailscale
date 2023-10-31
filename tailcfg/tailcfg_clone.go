@@ -362,6 +362,7 @@ var _RegisterRequestCloneNeedsRegeneration = RegisterRequest(struct {
 	Timestamp        *time.Time
 	DeviceCert       []byte
 	Signature        []byte
+	Tailnet          string
 }{})
 
 // Clone makes a deep copy of DERPHomeParams.

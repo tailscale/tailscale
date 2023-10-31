@@ -23,6 +23,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -46,6 +47,16 @@ type System struct {
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
+
+	// InitialConfig is initial server config, if any.
+	// It is nil if the node is not in declarative mode.
+	// This value is never updated after startup.
+	// LocalBackend tracks the current config after any reloads.
+	InitialConfig *conffile.Config
+
+	// onlyNetstack is whether the Tun value is a fake TUN device
+	// and we're using netstack for everything.
+	onlyNetstack bool
 
 	controlKnobs controlknobs.Knobs
 	proxyMap     proxymap.Mapper
@@ -74,6 +85,12 @@ func (s *System) Set(v any) {
 	case router.Router:
 		s.Router.Set(v)
 	case *tstun.Wrapper:
+		type ft interface {
+			IsFakeTun() bool
+		}
+		if _, ok := v.Unwrap().(ft); ok {
+			s.onlyNetstack = true
+		}
 		s.Tun.Set(v)
 	case *magicsock.Conn:
 		s.MagicSock.Set(v)
@@ -97,8 +114,7 @@ func (s *System) IsNetstackRouter() bool {
 
 // IsNetstack reports whether Tailscale is running as a netstack-based TUN-free engine.
 func (s *System) IsNetstack() bool {
-	name, _ := s.Tun.Get().Name()
-	return name == tstun.FakeTUNName
+	return s.onlyNetstack
 }
 
 // ControlKnobs returns the control knobs for this node.

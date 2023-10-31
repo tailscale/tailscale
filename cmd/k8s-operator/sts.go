@@ -9,7 +9,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -79,6 +81,14 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	tsFirewallMode         string
+}
+
+func (sts tailscaleSTSReconciler) validate() error {
+	if sts.tsFirewallMode != "" && !isValidFirewallMode(sts.tsFirewallMode) {
+		return fmt.Errorf("invalid proxy firewall mode %s, valid modes are iptables, nftables or unset", sts.tsFirewallMode)
+	}
+	return nil
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -141,10 +151,16 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
 	if id != "" {
-		// TODO: handle case where the device is already deleted, but the secret
-		// is still around.
+		logger.Debugf("deleting device %s from control", string(id))
 		if err := a.tsClient.DeleteDevice(ctx, string(id)); err != nil {
-			return false, fmt.Errorf("deleting device: %w", err)
+			errResp := &tailscale.ErrResponse{}
+			if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
+				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
+			} else {
+				return false, fmt.Errorf("deleting device: %w", err)
+			}
+		} else {
+			logger.Debugf("device %s deleted from control", string(id))
 		}
 	}
 
@@ -291,10 +307,10 @@ func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) 
 	return key, nil
 }
 
-//go:embed manifests/proxy.yaml
+//go:embed deploy/manifests/proxy.yaml
 var proxyYaml []byte
 
-//go:embed manifests/userspace-proxy.yaml
+//go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, authKeySecret string) (*appsv1.StatefulSet, error) {
@@ -306,6 +322,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	} else {
 		if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+		}
+		for i := range ss.Spec.Template.Spec.InitContainers {
+			c := &ss.Spec.Template.Spec.InitContainers[i]
+			if c.Name == "sysctler" {
+				c.Image = a.proxyImage
+				break
+			}
 		}
 	}
 	container := &ss.Spec.Template.Spec.Containers[0]
@@ -352,6 +375,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 				},
 			},
 		})
+	}
+	if a.tsFirewallMode != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEBUG_FIREWALL_MODE",
+			Value: a.tsFirewallMode,
+		},
+		)
 	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
@@ -491,4 +521,8 @@ func nameForService(svc *corev1.Service) (string, error) {
 		return h, nil
 	}
 	return svc.Namespace + "-" + svc.Name, nil
+}
+
+func isValidFirewallMode(m string) bool {
+	return m == "auto" || m == "nftables" || m == "iptables"
 }

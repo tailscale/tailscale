@@ -73,9 +73,6 @@ type Arguments struct {
 	//
 	// Leaving this empty is the same as using CurrentTrack.
 	Version string
-	// AppStore forces a local app store check, even if the current binary was
-	// not installed via an app store. TODO(cpalmer): Remove this.
-	AppStore bool
 	// Logf is a logger for update progress messages.
 	Logf logger.Logf
 	// Stdout and Stderr should be used for output instead of os.Stdout and
@@ -89,6 +86,10 @@ type Arguments struct {
 	// PkgsAddr is the address of the pkgs server to fetch updates from.
 	// Defaults to "https://pkgs.tailscale.com".
 	PkgsAddr string
+	// ForAutoUpdate should be true when Updater is created in auto-update
+	// context. When true, NewUpdater returns an error if it cannot be used for
+	// auto-updates (even if Updater.Update field is non-nil).
+	ForAutoUpdate bool
 }
 
 func (args Arguments) validate() error {
@@ -119,8 +120,12 @@ func NewUpdater(args Arguments) (*Updater, error) {
 	if up.Stderr == nil {
 		up.Stderr = os.Stderr
 	}
-	up.Update = up.getUpdateFunction()
+	var canAutoUpdate bool
+	up.Update, canAutoUpdate = up.getUpdateFunction()
 	if up.Update == nil {
+		return nil, errors.ErrUnsupported
+	}
+	if args.ForAutoUpdate && !canAutoUpdate {
 		return nil, errors.ErrUnsupported
 	}
 	switch up.Version {
@@ -147,52 +152,70 @@ func NewUpdater(args Arguments) (*Updater, error) {
 
 type updateFunction func() error
 
-func (up *Updater) getUpdateFunction() updateFunction {
+func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 	switch runtime.GOOS {
 	case "windows":
-		return up.updateWindows
+		return up.updateWindows, true
 	case "linux":
 		switch distro.Get() {
 		case distro.Synology:
-			return up.updateSynology
+			// Synology updates use our own pkgs.tailscale.com instead of the
+			// Synology Package Center. We should eventually get to a regular
+			// release cadence with Synology Package Center and use their
+			// auto-update mechanism.
+			return up.updateSynology, false
 		case distro.Debian: // includes Ubuntu
-			return up.updateDebLike
+			return up.updateDebLike, true
 		case distro.Arch:
-			return up.updateArchLike
+			if up.archPackageInstalled() {
+				// Arch update func just prints a message about how to update,
+				// it doesn't support auto-updates.
+				return up.updateArchLike, false
+			}
+			return up.updateLinuxBinary, true
 		case distro.Alpine:
-			return up.updateAlpineLike
+			return up.updateAlpineLike, true
 		}
 		switch {
 		case haveExecutable("pacman"):
-			return up.updateArchLike
+			if up.archPackageInstalled() {
+				// Arch update func just prints a message about how to update,
+				// it doesn't support auto-updates.
+				return up.updateArchLike, false
+			}
+			return up.updateLinuxBinary, true
 		case haveExecutable("apt-get"): // TODO(awly): add support for "apt"
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
-			return up.updateDebLike
+			return up.updateDebLike, true
 		case haveExecutable("dnf"):
-			return up.updateFedoraLike("dnf")
+			return up.updateFedoraLike("dnf"), true
 		case haveExecutable("yum"):
-			return up.updateFedoraLike("yum")
+			return up.updateFedoraLike("yum"), true
 		case haveExecutable("apk"):
-			return up.updateAlpineLike
+			return up.updateAlpineLike, true
 		}
 		// If nothing matched, fall back to tarball updates.
 		if up.Update == nil {
-			return up.updateLinuxBinary
+			return up.updateLinuxBinary, true
 		}
 	case "darwin":
 		switch {
-		case !up.Arguments.AppStore && !version.IsSandboxedMacOS():
-			return nil
-		case !up.Arguments.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
-			return up.updateMacSys
+		case version.IsMacAppStore():
+			// App store update func just opens the store page, it doesn't
+			// support auto-updates.
+			return up.updateMacAppStore, false
+		case version.IsMacSysExt():
+			// Macsys update func kicks off Sparkle. Auto-updates are done by
+			// Sparkle.
+			return up.updateMacSys, false
 		default:
-			return up.updateMacAppStore
+			return nil, false
 		}
 	case "freebsd":
-		return up.updateFreeBSD
+		return up.updateFreeBSD, true
 	}
-	return nil
+	return nil, false
 }
 
 // Update runs a single update attempt using the platform-specific mechanism.
@@ -249,11 +272,11 @@ func (up *Updater) updateSynology() error {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
 	}
 
-	if !up.confirm(latest.SPKsVersion) {
-		return nil
-	}
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if !up.confirm(latest.SPKsVersion) {
+		return nil
 	}
 
 	// Download the SPK into a temporary directory.
@@ -457,12 +480,12 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	return buf.Bytes(), nil
 }
 
+func (up *Updater) archPackageInstalled() bool {
+	err := exec.Command("pacman", "--query", "tailscale").Run()
+	return err == nil
+}
+
 func (up *Updater) updateArchLike() error {
-	if err := exec.Command("pacman", "--query", "tailscale").Run(); err != nil && isExitError(err) {
-		// Tailscale was not installed via pacman, update via tarball download
-		// instead.
-		return up.updateLinuxBinary()
-	}
 	// Arch maintainer asked us not to implement "tailscale update" or
 	// auto-updates on Arch-based distros:
 	// https://github.com/tailscale/tailscale/issues/6995#issuecomment-1687080106
@@ -623,73 +646,64 @@ func (up *Updater) updateMacSys() error {
 }
 
 func (up *Updater) updateMacAppStore() error {
-	out, err := exec.Command("defaults", "read", "/Library/Preferences/com.apple.commerce.plist", "AutoUpdate").CombinedOutput()
+	// We can't trigger the update via App Store from the sandboxed app. At
+	// most, we can open the App Store page for them.
+	up.Logf("Please use the App Store to update Tailscale.\nConsider enabling Automatic Updates in the App Store Settings, if you haven't already.\nOpening the Tailscale app page...")
+
+	out, err := exec.Command("open", "https://apps.apple.com/us/app/tailscale/id1475387142").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("can't check App Store auto-update setting: %w, output: %q", err, string(out))
-	}
-	const on = "1\n"
-	if string(out) != on {
-		up.Logf("NOTE: Automatic updating for App Store apps is turned off. You can change this setting in System Settings (search for ‘update’).")
-	}
-
-	out, err = exec.Command("softwareupdate", "--list").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("can't check App Store for available updates: %w, output: %q", err, string(out))
-	}
-
-	newTailscale := parseSoftwareupdateList(out)
-	if newTailscale == "" {
-		up.Logf("no Tailscale update available")
-		return nil
-	}
-
-	newTailscaleVer := strings.TrimPrefix(newTailscale, "Tailscale-")
-	if !up.confirm(newTailscaleVer) {
-		return nil
-	}
-
-	cmd := exec.Command("sudo", "softwareupdate", "--install", newTailscale)
-	cmd.Stdout = up.Stdout
-	cmd.Stderr = up.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("can't install App Store update for Tailscale: %w", err)
+		return fmt.Errorf("can't open the Tailscale page in App Store: %w, output: %q", err, string(out))
 	}
 	return nil
 }
 
-var macOSAppStoreListPattern = regexp.MustCompile(`(?m)^\s+\*\s+Label:\s*(Tailscale-\d[\d\.]+)`)
-
-// parseSoftwareupdateList searches the output of `softwareupdate --list` on
-// Darwin and returns the matching Tailscale package label. If there is none,
-// returns the empty string.
-//
-// See TestParseSoftwareupdateList for example inputs.
-func parseSoftwareupdateList(stdout []byte) string {
-	matches := macOSAppStoreListPattern.FindSubmatch(stdout)
-	if len(matches) < 2 {
-		return ""
-	}
-	return string(matches[1])
-}
-
-// winMSIEnv is the environment variable that, if set, is the MSI file for the
-// update command to install. It's passed like this so we can stop the
-// tailscale.exe process from running before the msiexec process runs and tries
-// to overwrite ourselves.
-const winMSIEnv = "TS_UPDATE_WIN_MSI"
+const (
+	// winMSIEnv is the environment variable that, if set, is the MSI file for
+	// the update command to install. It's passed like this so we can stop the
+	// tailscale.exe process from running before the msiexec process runs and
+	// tries to overwrite ourselves.
+	winMSIEnv = "TS_UPDATE_WIN_MSI"
+	// winExePathEnv is the environment variable that is set along with
+	// winMSIEnv and carries the full path of the calling tailscale.exe binary.
+	// It is used to re-launch the GUI process (tailscale-ipn.exe) after
+	// install is complete.
+	winExePathEnv = "TS_UPDATE_WIN_EXE_PATH"
+)
 
 var (
-	verifyAuthenticode func(string) error // or nil on non-Windows
-	markTempFileFunc   func(string) error // or nil on non-Windows
+	verifyAuthenticode          func(string) error // or nil on non-Windows
+	markTempFileFunc            func(string) error // or nil on non-Windows
+	launchTailscaleAsWinGUIUser func(string) error // or nil on non-Windows
 )
 
 func (up *Updater) updateWindows() error {
 	if msi := os.Getenv(winMSIEnv); msi != "" {
+		// stdout/stderr from this part of the install could be lost since the
+		// parent tailscaled is replaced. Create a temp log file to have some
+		// output to debug with in case update fails.
+		close, err := up.switchOutputToFile()
+		if err != nil {
+			up.Logf("failed to create log file for installation: %v; proceeding with existing outputs", err)
+		} else {
+			defer close.Close()
+		}
+
 		up.Logf("installing %v ...", msi)
 		if err := up.installMSI(msi); err != nil {
 			up.Logf("MSI install failed: %v", err)
 			return err
 		}
+		up.Logf("relaunching tailscale-ipn.exe...")
+		exePath := os.Getenv(winExePathEnv)
+		if exePath == "" {
+			up.Logf("env var %q not passed to installer binary copy", winExePathEnv)
+			return fmt.Errorf("env var %q not passed to installer binary copy", winExePathEnv)
+		}
+		if err := launchTailscaleAsWinGUIUser(exePath); err != nil {
+			up.Logf("Failed to re-launch tailscale after update: %v", err)
+			return err
+		}
+
 		up.Logf("success.")
 		return nil
 	}
@@ -702,11 +716,11 @@ func (up *Updater) updateWindows() error {
 		arch = "x86"
 	}
 
-	if !up.confirm(ver) {
-		return nil
-	}
 	if !winutil.IsCurrentProcessElevated() {
 		return errors.New("must be run as Administrator")
+	}
+	if !up.confirm(ver) {
+		return nil
 	}
 
 	tsDir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
@@ -732,7 +746,7 @@ func (up *Updater) updateWindows() error {
 	up.Logf("authenticode verification succeeded")
 
 	up.Logf("making tailscale.exe copy to switch to...")
-	selfCopy, err := makeSelfCopy()
+	selfOrig, selfCopy, err := makeSelfCopy()
 	if err != nil {
 		return err
 	}
@@ -740,7 +754,7 @@ func (up *Updater) updateWindows() error {
 	up.Logf("running tailscale.exe copy for final install...")
 
 	cmd := exec.Command(selfCopy, "update")
-	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget)
+	cmd.Env = append(os.Environ(), winMSIEnv+"="+msiTarget, winExePathEnv+"="+selfOrig)
 	cmd.Stdout = up.Stderr
 	cmd.Stderr = up.Stderr
 	cmd.Stdin = os.Stdin
@@ -753,10 +767,35 @@ func (up *Updater) updateWindows() error {
 	panic("unreachable")
 }
 
+func (up *Updater) switchOutputToFile() (io.Closer, error) {
+	var logFilePath string
+	exePath, err := os.Executable()
+	if err != nil {
+		logFilePath = filepath.Join(os.TempDir(), "tailscale-updater.log")
+	} else {
+		logFilePath = strings.TrimSuffix(exePath, ".exe") + ".log"
+	}
+
+	up.Logf("writing update output to %q", logFilePath)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	up.Logf = func(m string, args ...any) {
+		fmt.Fprintf(logFile, m+"\n", args...)
+	}
+	up.Stdout = logFile
+	up.Stderr = logFile
+	return logFile, nil
+}
+
 func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
-		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
+		// TS_NOLAUNCH: don't automatically launch the app after install.
+		// We will launch it explicitly as the current GUI user afterwards.
+		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn", "TS_NOLAUNCH=true")
 		cmd.Dir = filepath.Dir(msi)
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
@@ -765,6 +804,7 @@ func (up *Updater) installMSI(msi string) error {
 		if err == nil {
 			break
 		}
+		up.Logf("Install attempt failed: %v", err)
 		uninstallVersion := version.Short()
 		if v := os.Getenv("TS_DEBUG_UNINSTALL_VERSION"); v != "" {
 			uninstallVersion = v
@@ -794,30 +834,30 @@ func msiUUIDForVersion(ver string) string {
 	return "{" + strings.ToUpper(uuid.NewSHA1(uuid.NameSpaceURL, []byte(msiURL)).String()) + "}"
 }
 
-func makeSelfCopy() (tmpPathExe string, err error) {
+func makeSelfCopy() (origPathExe, tmpPathExe string, err error) {
 	selfExe, err := os.Executable()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	f, err := os.Open(selfExe)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer f.Close()
 	f2, err := os.CreateTemp("", "tailscale-updater-*.exe")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if f := markTempFileFunc; f != nil {
 		if err := f(f2.Name()); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	if _, err := io.Copy(f2, f); err != nil {
 		f2.Close()
-		return "", err
+		return "", "", err
 	}
-	return f2.Name(), f2.Close()
+	return selfExe, f2.Name(), f2.Close()
 }
 
 func (up *Updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
@@ -874,12 +914,12 @@ func (up *Updater) updateLinuxBinary() error {
 	if err != nil {
 		return err
 	}
-	if !up.confirm(ver) {
-		return nil
-	}
 	// Root is needed to overwrite binaries and restart systemd unit.
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if !up.confirm(ver) {
+		return nil
 	}
 
 	dlPath, err := up.downloadLinuxTarball(ver)
@@ -909,7 +949,7 @@ func (up *Updater) updateLinuxBinary() error {
 func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
 	dlDir, err := os.UserCacheDir()
 	if err != nil {
-		return "", err
+		dlDir = os.TempDir()
 	}
 	dlDir = filepath.Join(dlDir, "tailscale-update")
 	if err := os.MkdirAll(dlDir, 0700); err != nil {

@@ -4,9 +4,8 @@ go 1.21
 
 require (
 	filippo.io/mkcert v1.4.4
-	github.com/Microsoft/go-winio v0.6.1
 	github.com/akutz/memconn v0.1.0
-	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
+	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.0.5
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/aws/aws-sdk-go-v2 v1.21.0
@@ -58,7 +57,7 @@ require (
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/common v0.44.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/tailscale/certstore v0.1.1-0.20220316223106-78d6e1c49d8d
+	github.com/tailscale/certstore v0.1.1-0.20231020161753-77811a65f4ff
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/golang-x-crypto v0.0.0-20230713185742-f0b76a10a08e
@@ -104,6 +103,7 @@ require (
 )
 
 require (
+	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
 )
@@ -321,6 +321,7 @@ require (
 	github.com/stretchr/testify v1.8.4 // indirect
 	github.com/subosito/gotenv v1.4.2 // indirect
 	github.com/t-yuki/gocover-cobertura v0.0.0-20180217150009-aaee18c8195c // indirect
+	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55
 	github.com/tdakkota/asciicheck v0.2.0 // indirect
 	github.com/tetafro/godot v1.4.11 // indirect
 	github.com/timakin/bodyclose v0.0.0-20230421092635-574207250966 // indirect

@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
 )
@@ -94,7 +96,7 @@ func TestListenerPort(t *testing.T) {
 var verboseDERP = flag.Bool("verbose-derp", false, "if set, print DERP and STUN logs")
 var verboseNodes = flag.Bool("verbose-nodes", false, "if set, print tsnet.Server logs")
 
-func startControl(t *testing.T) (controlURL string) {
+func startControl(t *testing.T) (controlURL string, control *testcontrol.Server) {
 	// Corp#4520: don't use netns for tests.
 	netns.SetEnabled(false)
 	t.Cleanup(func() {
@@ -106,7 +108,7 @@ func startControl(t *testing.T) (controlURL string) {
 		derpLogf = t.Logf
 	}
 	derpMap := integration.RunDERPAndSTUN(t, derpLogf, "127.0.0.1")
-	control := &testcontrol.Server{
+	control = &testcontrol.Server{
 		DERPMap: derpMap,
 		DNSConfig: &tailcfg.DNSConfig{
 			Proxied: true,
@@ -118,7 +120,7 @@ func startControl(t *testing.T) (controlURL string) {
 	t.Cleanup(control.HTTPTestServer.Close)
 	controlURL = control.HTTPTestServer.URL
 	t.Logf("testcontrol listening on %s", controlURL)
-	return controlURL
+	return controlURL, control
 }
 
 type testCertIssuer struct {
@@ -199,7 +201,7 @@ func (tci *testCertIssuer) Pool() *x509.CertPool {
 
 var testCertRoot = newCertIssuer()
 
-func startServer(t *testing.T, ctx context.Context, controlURL, hostname string) (*Server, netip.Addr) {
+func startServer(t *testing.T, ctx context.Context, controlURL, hostname string) (*Server, netip.Addr, key.NodePublic) {
 	t.Helper()
 
 	tmp := filepath.Join(t.TempDir(), hostname)
@@ -221,7 +223,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s, status.TailscaleIPs[0]
+	return s, status.TailscaleIPs[0], status.Self.PublicKey
 }
 
 func TestConn(t *testing.T) {
@@ -229,9 +231,17 @@ func TestConn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	controlURL := startControl(t)
-	s1, s1ip := startServer(t, ctx, controlURL, "s1")
-	s2, _ := startServer(t, ctx, controlURL, "s2")
+	controlURL, c := startControl(t)
+	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+
+	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+		},
+		AdvertiseRoutesSet: true,
+	})
+	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
 
 	lc2, err := s2.LocalClient()
 	if err != nil {
@@ -280,6 +290,15 @@ func TestConn(t *testing.T) {
 	if err == nil {
 		t.Fatalf("unexpected success; should have seen a connection refused error")
 	}
+
+	// s1 is a subnet router for TEST-NET-1 (192.0.2.0/24). Lets dial to that
+	// subnet from s2 to ensure a listener without an IP address (i.e. ":8081")
+	// only matches destination IPs corresponding to the node's IP, and not
+	// to any random IP a subnet is routing.
+	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", "192.0.2.1"))
+	if err == nil {
+		t.Fatalf("unexpected success; should have seen a connection refused error")
+	}
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {
@@ -288,8 +307,8 @@ func TestLoopbackLocalAPI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	controlURL := startControl(t)
-	s1, _ := startServer(t, ctx, controlURL, "s1")
+	controlURL, _ := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
 
 	addr, proxyCred, localAPICred, err := s1.Loopback()
 	if err != nil {
@@ -362,9 +381,9 @@ func TestLoopbackSOCKS5(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	controlURL := startControl(t)
-	s1, s1ip := startServer(t, ctx, controlURL, "s1")
-	s2, _ := startServer(t, ctx, controlURL, "s2")
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
 
 	addr, proxyCred, _, err := s2.Loopback()
 	if err != nil {
@@ -409,7 +428,7 @@ func TestLoopbackSOCKS5(t *testing.T) {
 }
 
 func TestTailscaleIPs(t *testing.T) {
-	controlURL := startControl(t)
+	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
 	tmps1 := filepath.Join(tmp, "s1")
@@ -454,8 +473,8 @@ func TestListenerCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	controlURL := startControl(t)
-	s1, _ := startServer(t, ctx, controlURL, "s1")
+	controlURL, _ := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
 
 	ln, err := s1.Listen("tcp", ":8081")
 	if err != nil {
@@ -474,7 +493,7 @@ func TestListenerCleanup(t *testing.T) {
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
 // stop it, and restart it, even on Windows.
 func TestStartStopStartGetsSameIP(t *testing.T) {
-	controlURL := startControl(t)
+	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
 	tmps1 := filepath.Join(tmp, "s1")
@@ -526,9 +545,9 @@ func TestFunnel(t *testing.T) {
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
-	controlURL := startControl(t)
-	s1, _ := startServer(t, ctx, controlURL, "s1")
-	s2, _ := startServer(t, ctx, controlURL, "s2")
+	controlURL, _ := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
 
 	ln := must.Get(s1.ListenFunnel("tcp", ":443"))
 	defer ln.Close()
@@ -629,4 +648,46 @@ type bufferedConn struct {
 
 func (c *bufferedConn) Read(b []byte) (int, error) {
 	return c.reader.Read(b)
+}
+
+func TestFallbackTCPHandler(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	var s1TcpConnCount atomic.Int32
+	deregister := s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		s1TcpConnCount.Add(1)
+		return nil, false
+	})
+
+	if _, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip)); err == nil {
+		t.Fatal("Expected dial error because fallback handler did not intercept")
+	}
+	if got := s1TcpConnCount.Load(); got != 1 {
+		t.Errorf("s1TcpConnCount = %d, want %d", got, 1)
+	}
+	deregister()
+	if _, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip)); err == nil {
+		t.Fatal("Expected dial error because nothing would intercept")
+	}
+	if got := s1TcpConnCount.Load(); got != 1 {
+		t.Errorf("s1TcpConnCount = %d, want %d", got, 1)
+	}
 }

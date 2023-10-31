@@ -24,7 +24,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -34,17 +33,14 @@ import (
 
 var serveCmd = func() *ffcli.Command {
 	se := &serveEnv{lc: &localClient}
-	// This flag is used to switch to an in-development
-	// implementation of the tailscale funnel command.
-	// See https://github.com/tailscale/tailscale/issues/7844
-	if envknob.UseWIPCode() {
-		return newServeDevCommand(se, serve)
-	}
-	return newServeCommand(se)
+	// previously used to serve legacy newFunnelCommand unless useWIPCode is true
+	// change is limited to make a revert easier and full cleanup to come after the relase.
+	// TODO(tylersmalley): cleanup and removal of newServeLegacyCommand as of 2023-10-16
+	return newServeV2Command(se, serve)
 }
 
-// newServeCommand returns a new "serve" subcommand using e as its environment.
-func newServeCommand(e *serveEnv) *ffcli.Command {
+// newServeLegacyCommand returns a new "serve" subcommand using e as its environment.
+func newServeLegacyCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers",
@@ -163,17 +159,19 @@ type serveEnv struct {
 	// v2 specific flags
 	bg               bool      // background mode
 	setPath          string    // serve path
-	https            string    // HTTP port
-	http             string    // HTTP port
-	tcp              string    // TCP port
-	tlsTerminatedTCP string    // a TLS terminated TCP port
+	https            uint      // HTTP port
+	http             uint      // HTTP port
+	tcp              uint      // TCP port
+	tlsTerminatedTCP uint      // a TLS terminated TCP port
 	subcmd           serveMode // subcommand
+	yes              bool      // update without prompt
 
 	lc localServeClient // localClient interface, specific to serve
 
 	// optional stuff for tests:
 	testFlagOut io.Writer
 	testStdout  io.Writer
+	testStderr  io.Writer
 }
 
 // getSelfDNSName returns the DNS name of the current node.
@@ -684,13 +682,6 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (e *serveEnv) stdout() io.Writer {
-	if e.testStdout != nil {
-		return e.testStdout
-	}
-	return os.Stdout
-}
-
 func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status) error {
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	for p, h := range sc.TCP {
@@ -827,6 +818,24 @@ func parseServePort(s string) (uint16, error) {
 // 2023-08-09: The only valid feature values are "serve" and "funnel".
 // This can be moved to some CLI lib when expanded past serve/funnel.
 func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, caps ...tailcfg.NodeCapability) (err error) {
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
+	if st.Self == nil {
+		return errors.New("no self node")
+	}
+	hasCaps := func() bool {
+		for _, c := range caps {
+			if !st.Self.HasCap(c) {
+				return false
+			}
+		}
+		return true
+	}
+	if hasCaps() {
+		return nil // already enabled
+	}
 	info, err := e.lc.QueryFeature(ctx, feature)
 	if err != nil {
 		return err

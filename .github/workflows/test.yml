@@ -22,8 +22,7 @@ on:
       - "main"
       - "release-branch/*"
   pull_request:
-    branches:
-      - "*"
+    # all PRs on all branches
   merge_group:
     branches:
       - "main"
@@ -39,6 +38,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  race-root-integration:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          - shard: '1/4'
+          - shard: '2/4'
+          - shard: '3/4'
+          - shard: '4/4'
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: build test wrapper
+      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+    - name: integration tests as root
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -exec "sudo -E" -race ./tstest/integration/
+      env:
+        TS_TEST_SHARD: ${{ matrix.shard }}
+
   test:
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -47,6 +66,13 @@ jobs:
           - goarch: amd64
           - goarch: amd64
             buildflags: "-race"
+            shard: '1/3'
+          - goarch: amd64
+            buildflags: "-race"
+            shard: '2/3'
+          - goarch: amd64
+            buildflags: "-race"
+            shard: '3/3'
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-22.04
     steps:
@@ -70,6 +96,7 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
     - name: build all
+      if: matrix.buildflags == '' # skip on race builder
       run: ./tool/go build ${{matrix.buildflags}} ./...
       env:
         GOARCH: ${{ matrix.goarch }}
@@ -94,6 +121,7 @@ jobs:
       run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
+        TS_TEST_SHARD: ${{ matrix.shard }}
     - name: bench all
       run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
@@ -162,7 +190,17 @@ jobs:
         HOME: "/tmp"
         TMPDIR: "/tmp"
         XDB_CACHE_HOME: "/var/lib/ghrunner/cache"
-  
+
+  race-build:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: build all
+      run: ./tool/go install -race ./cmd/...
+    - name: build tests
+      run: ./tool/go test -race -exec=true ./...
+
   cross: # cross-compile checks, build only.
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails

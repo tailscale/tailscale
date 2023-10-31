@@ -23,7 +23,7 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal handler config wired wrong", 500)
 		return
 	}
-	pair, err := h.b.GetCertPEM(r.Context(), domain, true)
+	pair, err := h.b.GetCertPEM(r.Context(), domain)
 	if err != nil {
 		// TODO(bradfitz): 500 is a little lazy here. The errors returned from
 		// GetCertPEM (and everywhere) should carry info info to get whether

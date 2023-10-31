@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -71,18 +70,24 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 // set to true. Package build errors will not emit a testAttempt (as no valid
 // JSON is produced) but the [os/exec.ExitError] will be returned.
 // It calls close(ch) when it's done.
-func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) error {
+func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, testArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
-	args := []string{"test", "-json", pt.Pattern}
-	args = append(args, otherArgs...)
+	args := []string{"test"}
+	args = append(args, goTestArgs...)
+	args = append(args, pt.Pattern)
 	if len(pt.Tests) > 0 {
 		runArg := strings.Join(pt.Tests, "|")
-		args = append(args, "-run", runArg)
+		args = append(args, "--run", runArg)
 	}
+	args = append(args, testArgs...)
+	args = append(args, "-json")
 	if debug {
 		fmt.Println("running", strings.Join(args, " "))
 	}
 	cmd := exec.CommandContext(ctx, "go", args...)
+	if len(pt.Tests) > 0 {
+		cmd.Env = append(os.Environ(), "TS_TEST_SHARD=") // clear test shard; run all tests we say to run
+	}
 	r, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("error creating stdout pipe: %v", err)
@@ -178,54 +183,28 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 }
 
 func main() {
+	goTestArgs, packages, testArgs, err := splitArgs(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	if len(packages) == 0 {
+		fmt.Println("testwrapper: no packages specified")
+		return
+	}
+
 	ctx := context.Background()
-
-	// We only need to parse the -v flag to figure out whether to print the logs
-	// for a test. We don't need to parse any other flags, so we just use the
-	// flag package to parse the -v flag and then pass the rest of the args
-	// through to 'go test'.
-	// We run `go test -json` which returns the same information as `go test -v`,
-	// but in a machine-readable format. So this flag is only for testwrapper's
-	// output.
-	v := flag.Bool("v", false, "verbose")
-
-	flag.Usage = func() {
-		fmt.Println("usage: testwrapper [testwrapper-flags] [pattern] [build/test flags & test binary flags]")
-		fmt.Println()
-		fmt.Println("testwrapper-flags:")
-		flag.CommandLine.PrintDefaults()
-		fmt.Println()
-		fmt.Println("examples:")
-		fmt.Println("\ttestwrapper -v ./... -count=1")
-		fmt.Println("\ttestwrapper ./pkg/foo -run TestBar -count=1")
-		fmt.Println()
-		fmt.Println("Unlike 'go test', testwrapper requires a package pattern as the first positional argument and only supports a single pattern.")
-	}
-	flag.Parse()
-
-	args := flag.Args()
-	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
-		fmt.Println("no pattern specified")
-		flag.Usage()
-		os.Exit(1)
-	} else if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
-		fmt.Println("expected single pattern")
-		flag.Usage()
-		os.Exit(1)
-	}
-	pattern, otherArgs := args[0], args[1:]
-
 	type nextRun struct {
 		tests   []*packageTests
 		attempt int // starting at 1
 	}
-
-	toRun := []*nextRun{
-		{
-			tests:   []*packageTests{{Pattern: pattern}},
-			attempt: 1,
-		},
+	firstRun := &nextRun{
+		attempt: 1,
 	}
+	for _, pkg := range packages {
+		firstRun.tests = append(firstRun.tests, &packageTests{Pattern: pkg})
+	}
+	toRun := []*nextRun{firstRun}
 	printPkgOutcome := func(pkg, outcome string, attempt int) {
 		if outcome == "skip" {
 			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
@@ -263,7 +242,7 @@ func main() {
 			runErr := make(chan error, 1)
 			go func() {
 				defer close(runErr)
-				runErr <- runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
+				runErr <- runTests(ctx, thisRun.attempt, pt, goTestArgs, testArgs, ch)
 			}()
 
 			var failed bool
@@ -273,7 +252,7 @@ func main() {
 				// convenient for us to to specify files in tests, so fix tr.pkg
 				// so that subsequent testwrapper attempts run correctly.
 				if tr.pkg == "command-line-arguments" {
-					tr.pkg = pattern
+					tr.pkg = packages[0]
 				}
 				if tr.pkgFinished {
 					if tr.outcome == "fail" && len(toRetry[tr.pkg]) == 0 {
@@ -285,7 +264,7 @@ func main() {
 					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt)
 					continue
 				}
-				if *v || tr.outcome == "fail" {
+				if testingVerbose || tr.outcome == "fail" {
 					io.Copy(os.Stdout, &tr.logs)
 				}
 				if tr.outcome != "fail" {
