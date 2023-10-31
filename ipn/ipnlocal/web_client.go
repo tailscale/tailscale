@@ -13,8 +13,8 @@ import (
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
-	"tailscale.com/envknob"
 	"tailscale.com/net/netutil"
+	"tailscale.com/tailcfg"
 )
 
 // webClient holds state for the web interface for managing
@@ -41,8 +41,8 @@ func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {
 // tailscaled instance.
 // If the web interface is already running, WebClientInit is a no-op.
 func (b *LocalBackend) WebClientInit() (err error) {
-	if !envknob.Bool("TS_DEBUG_WEB_UI") {
-		return errors.New("web ui flag unset")
+	if !hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient) {
+		return errors.New("web client not enabled for this device")
 	}
 
 	b.mu.Lock()

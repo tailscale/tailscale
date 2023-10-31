@@ -2040,6 +2040,7 @@ const (
 	CapabilityDataPlaneAuditLogs NodeCapability = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 	CapabilityDebug              NodeCapability = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
 	CapabilityHTTPS              NodeCapability = "https"                                           // https cert provisioning enabled on tailnet
+	CapabilityPreviewWebClient   NodeCapability = "preview-webclient"                               // allows starting web client in tailscaled
 
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more

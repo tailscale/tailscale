@@ -2920,11 +2920,6 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
 		return ipn.PrefsView{}, errors.New("Tailscale SSH server administratively disabled.")
 	}
-	if p1.RunWebClient && !envknob.Bool("TS_DEBUG_WEB_UI") {
-		b.mu.Unlock()
-		b.logf("EditPrefs requests web client, but disabled by envknob; returning error")
-		return ipn.PrefsView{}, errors.New("web ui flag not set")
-	}
 	if p1.View().Equals(p0) {
 		b.mu.Unlock()
 		return stripKeysFromPrefs(p0), nil
@@ -4161,7 +4156,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
 func (b *LocalBackend) ShouldRunWebClient() bool {
-	return b.webclientAtomicBool.Load() && envknob.Bool("TS_DEBUG_WEB_UI")
+	return b.webclientAtomicBool.Load() && hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient)
 }
 
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
