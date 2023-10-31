@@ -12,15 +12,15 @@ import (
 	"tailscale.com/client/tailscale"
 )
 
-type webServer struct{}
+type webClient struct{}
 
 func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {}
 
-func (b *LocalBackend) WebInit() error {
+func (b *LocalBackend) WebClientInit() error {
 	return errors.New("not implemented")
 }
 
-func (b *LocalBackend) WebShutdown() {}
+func (b *LocalBackend) WebClientShutdown() {}
 
 func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
 	return errors.New("not implemented")
