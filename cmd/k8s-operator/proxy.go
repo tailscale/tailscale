@@ -166,10 +166,11 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 		logf: logf,
 		lc:   lc,
 		rp: &httputil.ReverseProxy{
-			Director: func(r *http.Request) {
+			Rewrite: func(r *httputil.ProxyRequest) {
 				// Replace the URL with the Kubernetes APIServer.
-				r.URL.Scheme = u.Scheme
-				r.URL.Host = u.Host
+
+				r.Out.URL.Scheme = u.Scheme
+				r.Out.URL.Host = u.Host
 				if mode == apiserverProxyModeNoAuth {
 					// If we are not providing authentication, then we are just
 					// proxying to the Kubernetes API, so we don't need to do
@@ -184,18 +185,18 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 
 				// Out of paranoia, remove all authentication headers that might
 				// have been set by the client.
-				r.Header.Del("Authorization")
-				r.Header.Del("Impersonate-Group")
-				r.Header.Del("Impersonate-User")
-				r.Header.Del("Impersonate-Uid")
-				for k := range r.Header {
+				r.Out.Header.Del("Authorization")
+				r.Out.Header.Del("Impersonate-Group")
+				r.Out.Header.Del("Impersonate-User")
+				r.Out.Header.Del("Impersonate-Uid")
+				for k := range r.Out.Header {
 					if strings.HasPrefix(k, "Impersonate-Extra-") {
-						r.Header.Del(k)
+						r.Out.Header.Del(k)
 					}
 				}
 
 				// Now add the impersonation headers that we want.
-				if err := addImpersonationHeaders(r); err != nil {
+				if err := addImpersonationHeaders(r.Out); err != nil {
 					panic("failed to add impersonation headers: " + err.Error())
 				}
 			},
