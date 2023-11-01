@@ -1151,7 +1151,7 @@ func TestOfferingAppConnector(t *testing.T) {
 	if b.OfferingAppConnector() {
 		t.Fatal("unexpected offering app connector")
 	}
-	b.appConnector = appc.NewEmbeddedAppConnector(t.Logf, nil)
+	b.appConnector = appc.NewAppConnector(t.Logf, nil)
 	if !b.OfferingAppConnector() {
 		t.Fatal("unexpected not offering app connector")
 	}
@@ -1173,7 +1173,7 @@ func TestAppConnectorHostinfoService(t *testing.T) {
 	if hasAppConnectorService(b.peerAPIServicesLocked()) {
 		t.Fatal("unexpected app connector service")
 	}
-	b.appConnector = appc.NewEmbeddedAppConnector(t.Logf, nil)
+	b.appConnector = appc.NewAppConnector(t.Logf, nil)
 	if !hasAppConnectorService(b.peerAPIServicesLocked()) {
 		t.Fatal("expected app connector service")
 	}
@@ -1199,7 +1199,7 @@ func TestObserveDNSResponse(t *testing.T) {
 	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 
 	rc := &routeCollector{}
-	b.appConnector = appc.NewEmbeddedAppConnector(t.Logf, rc)
+	b.appConnector = appc.NewAppConnector(t.Logf, rc)
 	b.appConnector.UpdateDomains([]string{"example.com"})
 
 	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))

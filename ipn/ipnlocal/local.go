@@ -205,10 +205,10 @@ type LocalBackend struct {
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
-	httpTestClient *http.Client               // for controlclient. nil by default, used by tests.
-	ccGen          clientGen                  // function for producing controlclient; lazily populated
-	sshServer      SSHServer                  // or nil, initialized lazily.
-	appConnector   *appc.EmbeddedAppConnector // or nil, initialized when configured.
+	httpTestClient *http.Client       // for controlclient. nil by default, used by tests.
+	ccGen          clientGen          // function for producing controlclient; lazily populated
+	sshServer      SSHServer          // or nil, initialized lazily.
+	appConnector   *appc.AppConnector // or nil, initialized when configured.
 	webClient      webClient
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
@@ -3250,7 +3250,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	}
 
 	if b.appConnector == nil {
-		b.appConnector = appc.NewEmbeddedAppConnector(b.logf, b)
+		b.appConnector = appc.NewAppConnector(b.logf, b)
 	}
 	if nm == nil {
 		return
@@ -5476,7 +5476,7 @@ func (b *LocalBackend) DebugBreakDERPConns() error {
 // ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
 // App Connector to enable route discovery.
 func (b *LocalBackend) ObserveDNSResponse(res []byte) {
-	var appConnector *appc.EmbeddedAppConnector
+	var appConnector *appc.AppConnector
 	b.mu.Lock()
 	if b.appConnector == nil {
 		b.mu.Unlock()

@@ -14,7 +14,7 @@ import (
 )
 
 func TestUpdateDomains(t *testing.T) {
-	a := NewEmbeddedAppConnector(t.Logf, nil)
+	a := NewAppConnector(t.Logf, nil)
 	a.UpdateDomains([]string{"example.com"})
 	if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
@@ -37,7 +37,7 @@ func TestUpdateDomains(t *testing.T) {
 
 func TestObserveDNSResponse(t *testing.T) {
 	rc := &routeCollector{}
-	a := NewEmbeddedAppConnector(t.Logf, rc)
+	a := NewAppConnector(t.Logf, rc)
 
 	// a has no domains configured, so it should not advertise any routes
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
