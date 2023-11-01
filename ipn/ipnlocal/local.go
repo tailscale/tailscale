@@ -3166,6 +3166,12 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 			Port:  1, // version
 		})
 	}
+	if b.appConnector != nil {
+		ret = append(ret, tailcfg.Service{
+			Proto: tailcfg.AppConnector,
+			Port:  1, // version
+		})
+	}
 	return ret
 }
 

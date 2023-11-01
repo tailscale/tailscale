@@ -624,11 +624,12 @@ func (h *Hostinfo) CheckRequestTags() error {
 type ServiceProto string
 
 const (
-	TCP        = ServiceProto("tcp")
-	UDP        = ServiceProto("udp")
-	PeerAPI4   = ServiceProto("peerapi4")
-	PeerAPI6   = ServiceProto("peerapi6")
-	PeerAPIDNS = ServiceProto("peerapi-dns-proxy")
+	TCP          = ServiceProto("tcp")
+	UDP          = ServiceProto("udp")
+	PeerAPI4     = ServiceProto("peerapi4")
+	PeerAPI6     = ServiceProto("peerapi6")
+	PeerAPIDNS   = ServiceProto("peerapi-dns-proxy")
+	AppConnector = ServiceProto("app-connector")
 )
 
 // Service represents a service running on a node.
@@ -645,10 +646,13 @@ type Service struct {
 	//     * "peerapi6": peerapi is available on IPv6; Port is the
 	//        port number that the peerapi is running on the
 	//        node's Tailscale IPv6 address.
-	//     * "peerapi-dns": the local peerapi service supports
+	//     * "peerapi-dns-proxy": the local peerapi service supports
 	//        being a DNS proxy (when the node is an exit
 	//        node). For this service, the Port number is really
 	//        the version number of the service.
+	//     * "app-connector": the local app-connector service is
+	//        available. For this service, the Port number is
+	//        really the version number of the service.
 	Proto ServiceProto
 
 	// Port is the port number.
