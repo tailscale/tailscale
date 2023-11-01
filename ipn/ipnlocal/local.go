@@ -534,7 +534,7 @@ func (b *LocalBackend) SetDirectFileDoFinalRename(v bool) {
 	b.directFileDoFinalRename = v
 }
 
-// ReloadCOnfig reloads the backend's config from disk.
+// ReloadConfig reloads the backend's config from disk.
 //
 // It returns (false, nil) if not running in declarative mode, (true, nil) on
 // success, or (false, error) on failure.
