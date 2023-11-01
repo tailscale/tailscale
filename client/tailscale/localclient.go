@@ -679,6 +679,26 @@ func (lc *LocalClient) CheckIPForwarding(ctx context.Context) error {
 	return nil
 }
 
+// CheckUDPGROForwarding asks the local Tailscale daemon whether it looks like
+// the machine is optimally configured to forward UDP packets as a subnet router
+// or exit node.
+func (lc *LocalClient) CheckUDPGROForwarding(ctx context.Context) error {
+	body, err := lc.get200(ctx, "/localapi/v0/check-udp-gro-forwarding")
+	if err != nil {
+		return err
+	}
+	var jres struct {
+		Warning string
+	}
+	if err := json.Unmarshal(body, &jres); err != nil {
+		return fmt.Errorf("invalid JSON from check-udp-gro-forwarding: %w", err)
+	}
+	if jres.Warning != "" {
+		return errors.New(jres.Warning)
+	}
+	return nil
+}
+
 // CheckPrefs validates the provided preferences, without making any changes.
 //
 // The CLI uses this before a Start call to fail fast if the preferences won't
