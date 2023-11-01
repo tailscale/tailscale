@@ -1003,7 +1003,7 @@ func dnsQueryForName(name, typStr string) []byte {
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{
 		OpCode:           0, // query
 		RecursionDesired: true,
-		ID:               0,
+		ID:               1, // arbitrary, but 0 is rejected by some servers
 	})
 	if !strings.HasSuffix(name, ".") {
 		name += "."

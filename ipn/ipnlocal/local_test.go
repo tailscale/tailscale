@@ -1157,6 +1157,28 @@ func TestOfferingAppConnector(t *testing.T) {
 	}
 }
 
+func TestAppConnectorHostinfoService(t *testing.T) {
+	hasAppConnectorService := func(s []tailcfg.Service) bool {
+		for _, s := range s {
+			if s.Proto == tailcfg.AppConnector && s.Port == 1 {
+				return true
+			}
+		}
+		return false
+	}
+
+	b := newTestBackend(t)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if hasAppConnectorService(b.peerAPIServicesLocked()) {
+		t.Fatal("unexpected app connector service")
+	}
+	b.appConnector = appc.NewEmbeddedAppConnector(t.Logf, nil)
+	if !hasAppConnectorService(b.peerAPIServicesLocked()) {
+		t.Fatal("expected app connector service")
+	}
+}
+
 func TestRouteAdvertiser(t *testing.T) {
 	b := newTestBackend(t)
 	testPrefix := netip.MustParsePrefix("192.0.0.8/32")
