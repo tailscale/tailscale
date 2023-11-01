@@ -252,6 +252,11 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid endpoint", http.StatusNotFound)
 		return
 	}
+	if r.URL.Path != "/api/auth" {
+		// empty JSON response until we serve auth for the login client
+		fmt.Fprintf(w, "{}")
+		return
+	}
 	switch r.Method {
 	case httpm.GET:
 		// TODO(soniaappasamy): we may want a minimal node data response here
@@ -354,8 +359,11 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/auth":
 		if s.tsDebugMode == "full" { // behind debug flag
 			s.serveTailscaleAuth(w, r)
-			return
+		} else {
+			// empty JSON response until we serve auth for other modes
+			fmt.Fprintf(w, "{}")
 		}
+		return
 	case path == "/data":
 		switch r.Method {
 		case httpm.GET:
