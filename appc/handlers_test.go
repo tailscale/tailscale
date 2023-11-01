@@ -17,8 +17,6 @@ import (
 )
 
 func echoConnOnce(conn net.Conn) {
-	defer conn.Close()
-
 	b := make([]byte, 256)
 	n, err := conn.Read(b)
 	if err != nil {
@@ -31,6 +29,7 @@ func echoConnOnce(conn net.Conn) {
 }
 
 func TestTCPRoundRobinHandler(t *testing.T) {
+	conns := make(chan net.Conn, 1)
 	h := tcpRoundRobinHandler{
 		To: []string{"yeet.com"},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -42,6 +41,7 @@ func TestTCPRoundRobinHandler(t *testing.T) {
 			}
 
 			c, s := memnet.NewConn("outbound", 1024)
+			conns <- c
 			go echoConnOnce(s)
 			return c, nil
 		},
@@ -49,6 +49,11 @@ func TestTCPRoundRobinHandler(t *testing.T) {
 
 	cSock, sSock := memnet.NewTCPConn(netip.MustParseAddrPort("10.64.1.2:22"), netip.MustParseAddrPort("10.64.1.2:22"), 1024)
 	h.Handle(sSock)
+	// TODO(raggi): work around a test flake that actually stems from a bug that
+	// half-close is not being performed correctly, so an early close in the
+	// handler sometimes results in EOF observed at the client. This is a bug
+	// that should be fixed in the upstream proxy.
+	defer (<-conns).Close()
 
 	// Test data write and read, the other end will echo back
 	// a single stanza
