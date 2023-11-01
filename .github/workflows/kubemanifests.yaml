@@ -1,0 +1,24 @@
+name: "Kubernetes manifests"
+on:
+  pull_request:
+   paths: 
+   - './cmd/k8s-operator/'
+   - '.github/workflows/kubemanifests.yaml'
+
+# Cancel workflow run if there is a newer push to the same PR for which it is
+# running
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  testchart:
+    runs-on: [ ubuntu-latest ]
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+    - name: Build and lint Helm chart
+      run: |
+        eval `./tool/go run ./cmd/mkversion`
+        ./tool/helm package --app-version="${VERSION_SHORT}" --version=${VERSION_SHORT} './cmd/k8s-operator/deploy/chart'
+        ./tool/helm lint "tailscale-operator-${VERSION_SHORT}.tgz"
