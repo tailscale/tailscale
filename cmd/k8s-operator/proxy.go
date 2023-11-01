@@ -91,6 +91,9 @@ func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config,
 	}
 	hostinfo.SetApp("k8s-operator-proxy")
 	startlog := zlog.Named("launchAPIProxy")
+	if mode == apiserverProxyModeNoAuth {
+		restConfig = rest.AnonymousClientConfig(restConfig)
+	}
 	cfg, err := restConfig.TransportConfig()
 	if err != nil {
 		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
