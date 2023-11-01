@@ -64,7 +64,7 @@ func TestLocalLogLines(t *testing.T) {
 	}
 	defer lb.Shutdown()
 
-	lb.hostinfo = &tailcfg.Hostinfo{}
+	lb.hostinfo = (&tailcfg.Hostinfo{}).View()
 	// hacky manual override of the usual log-on-change behaviour of keylogf
 	lb.keyLogf = logListen.Logf
 
