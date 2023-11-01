@@ -4,6 +4,10 @@
 // Package set contains set types.
 package set
 
+import (
+	"maps"
+)
+
 // Set is a set of T.
 type Set[T comparable] map[T]struct{}
 
@@ -14,12 +18,24 @@ func SetOf[T comparable](slice []T) Set[T] {
 	return s
 }
 
-// Add adds e to the set.
+// Clone returns a new set cloned from the elements in s.
+func Clone[T comparable](s Set[T]) Set[T] {
+	return maps.Clone(s)
+}
+
+// Add adds e to s.
 func (s Set[T]) Add(e T) { s[e] = struct{}{} }
 
-// AddSlice adds each element of es to the set.
+// AddSlice adds each element of es to s.
 func (s Set[T]) AddSlice(es []T) {
 	for _, e := range es {
+		s.Add(e)
+	}
+}
+
+// AddSet adds each element of es to s.
+func (s Set[T]) AddSet(es Set[T]) {
+	for e := range es {
 		s.Add(e)
 	}
 }
@@ -45,3 +61,8 @@ func (s Set[T]) Contains(e T) bool {
 
 // Len reports the number of items in s.
 func (s Set[T]) Len() int { return len(s) }
+
+// Equal reports whether s is equal to other.
+func (s Set[T]) Equal(other Set[T]) bool {
+	return maps.Equal(s, other)
+}

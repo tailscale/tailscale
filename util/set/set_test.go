@@ -54,11 +54,61 @@ func TestSet(t *testing.T) {
 func TestSetOf(t *testing.T) {
 	s := SetOf[int]([]int{1, 2, 3, 4, 4, 1})
 	if s.Len() != 4 {
-		t.Errorf("wrong len %d; want 2", s.Len())
+		t.Errorf("wrong len %d; want 4", s.Len())
 	}
 	for _, n := range []int{1, 2, 3, 4} {
 		if !s.Contains(n) {
 			t.Errorf("should contain %d", n)
 		}
+	}
+}
+
+func TestEqual(t *testing.T) {
+	type test struct {
+		name     string
+		a        Set[int]
+		b        Set[int]
+		expected bool
+	}
+	tests := []test{
+		{
+			"equal",
+			SetOf([]int{1, 2, 3, 4}),
+			SetOf([]int{1, 2, 3, 4}),
+			true,
+		},
+		{
+			"not equal",
+			SetOf([]int{1, 2, 3, 4}),
+			SetOf([]int{1, 2, 3, 5}),
+			false,
+		},
+		{
+			"different lengths",
+			SetOf([]int{1, 2, 3, 4, 5}),
+			SetOf([]int{1, 2, 3, 5}),
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		if tt.a.Equal(tt.b) != tt.expected {
+			t.Errorf("%s: failed", tt.name)
+		}
+	}
+}
+
+func TestClone(t *testing.T) {
+	s := SetOf[int]([]int{1, 2, 3, 4, 4, 1})
+	if s.Len() != 4 {
+		t.Errorf("wrong len %d; want 4", s.Len())
+	}
+	s2 := Clone(s)
+	if !s.Equal(s2) {
+		t.Error("clone not equal to original")
+	}
+	s.Add(100)
+	if s.Equal(s2) {
+		t.Error("clone is not distinct from original")
 	}
 }
