@@ -214,10 +214,10 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
 			//
-			// TODO(sonia): s.getTailscaleBrowserSession calls whois again,
+			// TODO(sonia): s.getSession calls whois again,
 			// should try and use the above call instead of running another
 			// localapi request.
-			session, _, err := s.getTailscaleBrowserSession(r)
+			session, _, err := s.getSession(r)
 			if err != nil || !session.isAuthorized(s.timeNow()) {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
@@ -289,56 +289,33 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	var resp authResponse
 
-	session, whois, err := s.getTailscaleBrowserSession(r)
+	session, whois, err := s.getSession(r)
 	switch {
 	case err != nil && !errors.Is(err, errNoSession):
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	case session == nil:
 		// Create a new session.
-		d, err := s.getOrAwaitAuth(r.Context(), "", whois.Node.ID)
+		session, err := s.newSession(r.Context(), whois)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		sid, err := s.newSessionID()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		session := &browserSession{
-			ID:      sid,
-			SrcNode: whois.Node.ID,
-			SrcUser: whois.UserProfile.ID,
-			AuthID:  d.ID,
-			AuthURL: d.URL,
-			Created: s.timeNow(),
-		}
-		s.browserSessions.Store(sid, session)
 		// Set the cookie on browser.
 		http.SetCookie(w, &http.Cookie{
 			Name:    sessionCookieName,
-			Value:   sid,
-			Raw:     sid,
+			Value:   session.ID,
+			Raw:     session.ID,
 			Path:    "/",
 			Expires: session.expires(),
 		})
-		resp = authResponse{OK: false, AuthURL: d.URL}
+		resp = authResponse{OK: false, AuthURL: session.AuthURL}
 	case !session.isAuthorized(s.timeNow()):
 		if r.URL.Query().Get("wait") == "true" {
 			// Client requested we block until user completes auth.
-			d, err := s.getOrAwaitAuth(r.Context(), session.AuthID, whois.Node.ID)
-			if err != nil {
+			if err := s.awaitUserAuth(r.Context(), session); err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
-				// Clean up the session. Doing this on any error from control
-				// server to avoid the user getting stuck with a bad session
-				// cookie.
-				s.browserSessions.Delete(session.ID)
 				return
-			}
-			if d.Complete {
-				session.Authenticated = d.Complete
-				s.browserSessions.Store(session.ID, session)
 			}
 		}
 		if session.isAuthorized(s.timeNow()) {
