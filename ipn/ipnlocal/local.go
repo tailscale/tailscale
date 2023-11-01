@@ -3239,7 +3239,7 @@ func (b *LocalBackend) authReconfig() {
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := hasCapability(nm, tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
-	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
+	dcfg := b.dnsConfigForNetmapLocked(prefs, version.OS())
 	b.mu.Unlock()
 
 	if blocked {
@@ -3329,12 +3329,15 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 	return false
 }
 
-// dnsConfigForNetmap returns a *dns.Config for the given netmap,
+// dnsConfigForNetmapLocked returns a *dns.Config for the given netmap,
 // prefs, client OS version, and cloud hosting environment.
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, logf logger.Logf, versionOS string) *dns.Config {
+//
+// b.mu must be held
+func (b *LocalBackend) dnsConfigForNetmapLocked(prefs ipn.PrefsView, versionOS string) *dns.Config {
+	nm := b.netMap
 	if nm == nil {
 		return nil
 	}
@@ -3361,10 +3364,21 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		if err != nil {
 			return // TODO: propagate error?
 		}
-		var have4 bool
+		var have4, osHasV6 bool
 		for i := range addrs.LenIter() {
-			if addrs.At(i).Addr().Is4() {
+			addr := addrs.At(i).Addr()
+			if addr.Is4() {
 				have4 = true
+			}
+
+			// TODO(andrew): PeerCaps depend on the IPProto, so we
+			// need to do this for every address; can we make this
+			// less expensive?
+			if b.peerHasCapLocked(addr, tailcfg.PeerCapabilityOSIPv6) {
+				osHasV6 = true
+			}
+
+			if have4 && osHasV6 {
 				break
 			}
 		}
@@ -3377,23 +3391,24 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 				}
 				continue
 			}
-			// If this node has an IPv4 address, then
-			// remove peers' IPv6 addresses for now, as we
-			// don't guarantee that the peer node actually
-			// can speak IPv6 correctly.
+
+			// If this node has an IPv4 address and doesn't have
+			// host-level IPv6 support, then we don't return IPv6
+			// addresses to stop this node from trying to
+			// communicate with the peer over IPv6.
 			//
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 {
+			if addr.Addr().Is6() && have4 && !osHasV6 {
 				continue
 			}
 			ips = append(ips, addr.Addr())
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	set(nm.Name, nm.GetAddresses())
-	for _, peer := range peers {
+	set(nm.Name, nm.GetAddresses()) // TODO(andrew): set osHasV6 properly here?
+	for _, peer := range b.peers {
 		set(peer.Name(), peer.Addresses())
 	}
 	for _, rec := range nm.DNS.ExtraRecords {
@@ -3423,7 +3438,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	for _, dom := range nm.DNS.Domains {
 		fqdn, err := dnsname.ToFQDN(dom)
 		if err != nil {
-			logf("[unexpected] non-FQDN search domain %q", dom)
+			b.logf("[unexpected] non-FQDN search domain %q", dom)
 		}
 		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 	}
@@ -3439,7 +3454,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it.
-	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
+	if dohURL, ok := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID()); ok {
 		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
 		return dcfg
 	}
@@ -3450,7 +3465,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	if len(nm.DNS.Resolvers) > 0 {
 		addDefault(nm.DNS.Resolvers)
 	} else {
-		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
+		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, b.peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
 		}
 	}
@@ -3458,7 +3473,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	for suffix, resolvers := range nm.DNS.Routes {
 		fqdn, err := dnsname.ToFQDN(suffix)
 		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
+			b.logf("[unexpected] non-FQDN route suffix %q", suffix)
 		}
 
 		// Create map entry even if len(resolvers) == 0; Issue 2706.

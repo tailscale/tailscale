@@ -1334,6 +1334,10 @@ const (
 	PeerCapabilityWakeOnLAN PeerCapability = "https://tailscale.com/cap/wake-on-lan"
 	// PeerCapabilityIngress grants the ability for a peer to send ingress traffic.
 	PeerCapabilityIngress PeerCapability = "https://tailscale.com/cap/ingress"
+	// PeerCapabilityOSIPv6 grants the ability for the current node to send
+	// traffic to the peer over IPv6; this indicates that the node has IPv6
+	// support at the OS level.
+	PeerCapabilityOSIPv6 PeerCapability = "https://tailscale.com/cap/os-ipv6"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
