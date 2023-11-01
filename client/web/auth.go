@@ -77,8 +77,8 @@ var (
 	errNotOwner           = errors.New("not-owner")
 )
 
-// getTailscaleBrowserSession retrieves the browser session associated with
-// the request, if one exists.
+// getSession retrieves the browser session associated with the request,
+// if one exists.
 //
 // An error is returned in any of the following cases:
 //
@@ -104,7 +104,7 @@ var (
 //
 // The WhoIsResponse is always populated, with a non-nil Node and UserProfile,
 // unless getTailscaleBrowserSession reports errNotUsingTailscale.
-func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, error) {
+func (s *Server) getSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, error) {
 	whoIs, whoIsErr := s.lc.WhoIs(r.Context(), r.RemoteAddr)
 	status, statusErr := s.lc.StatusWithoutPeers(r.Context())
 	switch {
@@ -146,6 +146,52 @@ func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, *
 		return nil, whoIs, errNoSession
 	}
 	return session, whoIs, nil
+}
+
+// newSession creates a new session associated with the given source user/node,
+// and stores it back to the session cache. Creating of a new session includes
+// generating a new auth URL from the control server.
+func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*browserSession, error) {
+	d, err := s.getOrAwaitAuth(ctx, "", src.Node.ID)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := s.newSessionID()
+	if err != nil {
+		return nil, err
+	}
+	session := &browserSession{
+		ID:      sid,
+		SrcNode: src.Node.ID,
+		SrcUser: src.UserProfile.ID,
+		AuthID:  d.ID,
+		AuthURL: d.URL,
+		Created: s.timeNow(),
+	}
+	s.browserSessions.Store(sid, session)
+	return session, nil
+}
+
+// awaitUserAuth blocks until the given session auth has been completed
+// by the user on the control server, then updates the session cache upon
+// completion. An error is returned if control auth failed for any reason.
+func (s *Server) awaitUserAuth(ctx context.Context, session *browserSession) error {
+	if session.isAuthorized(s.timeNow()) {
+		return nil // already authorized
+	}
+	d, err := s.getOrAwaitAuth(ctx, session.AuthID, session.SrcNode)
+	if err != nil {
+		// Clean up the session. Doing this on any error from control
+		// server to avoid the user getting stuck with a bad session
+		// cookie.
+		s.browserSessions.Delete(session.ID)
+		return err
+	}
+	if d.Complete {
+		session.Authenticated = d.Complete
+		s.browserSessions.Store(session.ID, session)
+	}
+	return nil
 }
 
 // getOrAwaitAuth connects to the control server for user auth,
