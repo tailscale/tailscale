@@ -23,11 +23,11 @@ import (
 	"go4.org/mem"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	"tailscale.com/net/art"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/net/tstun/table"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
@@ -610,15 +610,12 @@ type natFamilyConfig struct {
 	// peers will use to connect to this node.
 	listenAddrs views.Map[netip.Addr, struct{}] // masqAddr -> struct{}
 
-	// dstMasqAddrs is map of dst addresses to their respective MasqueradeAsIP
-	// addresses. The MasqueradeAsIP address is the address that should be used
-	// as the source address for packets to dst.
-	dstMasqAddrs views.Map[key.NodePublic, netip.Addr] // dst -> masqAddr
+	dstMasqAddrCount views.Map[netip.Addr, int] // counter of peers using this masqAddr, used for logging
 
-	// dstAddrToPeerKeyMapper is the routing table used to map a given dst IP to
-	// the peer key responsible for that IP.
-	// It only contains peers that require a MasqueradeAsIP address.
-	dstAddrToPeerKeyMapper *table.RoutingTable
+	// dstAddrToMasqAddrMapper is the routing table used to map a given dst IP
+	// to the masquerade address to use for that destination. It only contains
+	// peers that require a MasqueradeAsIP address.
+	dstAddrToMasqAddrMapper *art.Table[netip.Addr]
 }
 
 func (c *natFamilyConfig) String() string {
@@ -639,21 +636,17 @@ func (c *natFamilyConfig) String() string {
 		i++
 		return true
 	})
-	count := map[netip.Addr]int{}
-	c.dstMasqAddrs.Range(func(_ key.NodePublic, v netip.Addr) bool {
-		count[v]++
-		return true
-	})
 
-	i = 0
 	b.WriteString("], dstMasqAddrs: [")
-	for k, v := range count {
+	i = 0
+	c.dstMasqAddrCount.Range(func(ip netip.Addr, count int) bool {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		fmt.Fprintf(&b, "%v: %v peers", k, v)
+		fmt.Fprintf(&b, "%v: %d peers", ip, count)
 		i++
-	}
+		return true
+	})
 	b.WriteString("]}")
 
 	return b.String()
@@ -681,11 +674,7 @@ func (c *natFamilyConfig) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	if oldSrc != c.nativeAddr {
 		return oldSrc
 	}
-	p, ok := c.dstAddrToPeerKeyMapper.Lookup(dst)
-	if !ok {
-		return oldSrc
-	}
-	if eip, ok := c.dstMasqAddrs.GetOk(p); ok {
+	if eip, ok := c.dstAddrToMasqAddrMapper.Get(dst); ok {
 		return eip
 	}
 	return oldSrc
@@ -711,9 +700,9 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.Version) *natFami
 	}
 
 	var (
-		rt           table.RoutingTableBuilder
-		dstMasqAddrs map[key.NodePublic]netip.Addr
-		listenAddrs  set.Set[netip.Addr]
+		dstMasqAddrs     art.Table[netip.Addr]
+		dstMasqAddrCount map[netip.Addr]int
+		listenAddrs      set.Set[netip.Addr]
 	)
 
 	// When using an exit node that requires masquerading, we need to
@@ -746,17 +735,22 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config, addrFam ipproto.Version) *natFami
 		} else {
 			continue
 		}
-		rt.InsertOrReplace(p.PublicKey, p.AllowedIPs...)
-		mak.Set(&dstMasqAddrs, p.PublicKey, addrToUse)
+		for _, ip := range p.AllowedIPs {
+			dstMasqAddrs.Insert(ip, addrToUse)
+		}
+		if dstMasqAddrCount == nil {
+			dstMasqAddrCount = make(map[netip.Addr]int)
+		}
+		dstMasqAddrCount[addrToUse]++
 	}
-	if len(listenAddrs) == 0 && len(dstMasqAddrs) == 0 {
+	if len(listenAddrs) == 0 && len(dstMasqAddrCount) == 0 {
 		return nil
 	}
 	return &natFamilyConfig{
-		nativeAddr:             nativeAddr,
-		listenAddrs:            views.MapOf(listenAddrs),
-		dstMasqAddrs:           views.MapOf(dstMasqAddrs),
-		dstAddrToPeerKeyMapper: rt.Build(),
+		nativeAddr:              nativeAddr,
+		listenAddrs:             views.MapOf(listenAddrs),
+		dstMasqAddrCount:        views.MapOf(dstMasqAddrCount),
+		dstAddrToMasqAddrMapper: &dstMasqAddrs,
 	}
 }
 
