@@ -17,7 +17,8 @@ const (
 	ExitNodeIP Key = "ExitNodeIP" // default ""; if blank, no exit node is forced. Value is exit node IP.
 
 	// Keys with a string value that specifies an option: "always", "never", "user-decides".
-	// The default is "user-decides" unless otherwise stated.
+	// The default is "user-decides" unless otherwise stated. Enforcement of
+	// these policies is typically performed in ipnlocal.applySysPolicy().
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
@@ -25,7 +26,9 @@ const (
 	EnableTailscaleSubnets    Key = "UseTailscaleSubnets"
 
 	// Keys with a string value that controls visibility: "show", "hide".
-	// The default is "show" unless otherwise stated.
+	// The default is "show" unless otherwise stated. Enforcement of these
+	// policies is typically performed by the UI code for the relevant operating
+	// system.
 	AdminConsoleVisibility    Key = "AdminConsole"
 	NetworkDevicesVisibility  Key = "NetworkDevices"
 	TestMenuVisibility        Key = "TestMenu"

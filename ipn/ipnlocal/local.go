@@ -1119,6 +1119,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if setExitNodeID(prefs, st.NetMap) {
 		prefsChanged = true
 	}
+	if applySysPolicy(prefs) {
+		prefsChanged = true
+	}
 
 	// Until recently, we did not store the account's tailnet name. So check if this is the case,
 	// and backfill it on incoming status update.
@@ -1225,6 +1228,35 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
 	// This is where netmap information gets propagated to router and magicsock.
 	b.authReconfig()
+}
+
+// applySysPolicy overwrites configured preferences with policies that may be
+// configured by the system administrator in an OS-specific way.
+func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
+	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
+		prefs.ControlURL = controlURL
+		anyChange = true
+	}
+
+	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
+	// backend), so this has to convert between the two conventions.
+	if shieldsUp, err := syspolicy.GetPreferenceOption(syspolicy.EnableIncomingConnections); err == nil {
+		newVal := !shieldsUp.ShouldEnable(!prefs.ShieldsUp)
+		if prefs.ShieldsUp != newVal {
+			prefs.ShieldsUp = newVal
+			anyChange = true
+		}
+	}
+
+	if forceDaemon, err := syspolicy.GetPreferenceOption(syspolicy.EnableServerMode); err == nil {
+		newVal := forceDaemon.ShouldEnable(prefs.ForceDaemon)
+		if prefs.ForceDaemon != newVal {
+			prefs.ForceDaemon = newVal
+			anyChange = true
+		}
+	}
+
+	return anyChange
 }
 
 var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
@@ -3051,10 +3083,12 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// findExitNodeIDLocked returns whether it updated b.prefs, but
+	// setExitNodeID returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
+	// applySysPolicy does likewise so we can also ignore its return value.
+	applySysPolicy(newp)
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
