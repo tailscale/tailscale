@@ -722,7 +722,12 @@ func (up *Updater) updateWindows() error {
 	}
 
 	if !winutil.IsCurrentProcessElevated() {
-		return errors.New("must be run as Administrator")
+		return errors.New(`update must be run as Administrator
+
+you can run the command prompt as Administrator one of these ways:
+* right-click cmd.exe, select 'Run as administrator'
+* press Windows+x, then press a
+* press Windows+r, type in "cmd", then press Ctrl+Shift+Enter`)
 	}
 	if !up.confirm(ver) {
 		return nil
