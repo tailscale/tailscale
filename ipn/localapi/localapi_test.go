@@ -5,7 +5,10 @@ package localapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +20,13 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
+	"tailscale.com/wgengine"
 )
 
 func TestValidHost(t *testing.T) {
@@ -211,4 +219,93 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServeWatchIPNBus(t *testing.T) {
+	tstest.Replace(t, &validLocalHostForTesting, true)
+
+	tests := []struct {
+		desc                    string
+		permitRead, permitWrite bool
+		mask                    ipn.NotifyWatchOpt // extra bits in addition to ipn.NotifyInitialState
+		wantStatus              int
+	}{
+		{
+			desc:        "no-permission",
+			permitRead:  false,
+			permitWrite: false,
+			wantStatus:  http.StatusForbidden,
+		},
+		{
+			desc:        "read-initial-state",
+			permitRead:  true,
+			permitWrite: false,
+			wantStatus:  http.StatusForbidden,
+		},
+		{
+			desc:        "read-initial-state-no-private-keys",
+			permitRead:  true,
+			permitWrite: false,
+			mask:        ipn.NotifyNoPrivateKeys,
+			wantStatus:  http.StatusOK,
+		},
+		{
+			desc:        "read-initial-state-with-private-keys",
+			permitRead:  true,
+			permitWrite: true,
+			wantStatus:  http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			h := &Handler{
+				PermitRead:  tt.permitRead,
+				PermitWrite: tt.permitWrite,
+				b:           newTestLocalBackend(t),
+			}
+			s := httptest.NewServer(h)
+			defer s.Close()
+			c := s.Client()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState|tt.mask), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := c.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			// Cancel the context so that localapi stops streaming IPN bus
+			// updates.
+			cancel()
+			body, err := io.ReadAll(res.Body)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+			if res.StatusCode != tt.wantStatus {
+				t.Errorf("res.StatusCode=%d, want %d. body: %s", res.StatusCode, tt.wantStatus, body)
+			}
+		})
+	}
+}
+
+func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
+	var logf logger.Logf = logger.Discard
+	sys := new(tsd.System)
+	store := new(mem.Store)
+	sys.Set(store)
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
+	if err != nil {
+		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	}
+	t.Cleanup(eng.Close)
+	sys.Set(eng)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	return lb
 }

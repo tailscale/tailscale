@@ -1049,7 +1049,6 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a flusher", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 
 	var mask ipn.NotifyWatchOpt
 	if s := r.FormValue("mask"); s != "" {
@@ -1060,6 +1059,16 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
+	// Users with only read access must request private key filtering. If they
+	// don't filter out private keys, require write access.
+	if (mask & ipn.NotifyNoPrivateKeys) == 0 {
+		if !h.PermitWrite {
+			http.Error(w, "watch IPN bus access denied, must set ipn.NotifyNoPrivateKeys when not running as admin/root or operator", http.StatusForbidden)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 	h.b.WatchNotifications(ctx, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		js, err := json.Marshal(roNotify)
