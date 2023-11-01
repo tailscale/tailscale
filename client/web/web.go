@@ -269,9 +269,17 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+type authType string
+
+var (
+	synoAuth      authType = "synology"  // user needs a SynoToken for subsequent API calls
+	tailscaleAuth authType = "tailscale" // user needs to complete Tailscale check mode
+)
+
 type authResponse struct {
-	OK      bool   `json:"ok"`                // true when user has valid auth session
-	AuthURL string `json:"authUrl,omitempty"` // filled when user has control auth action to take
+	OK         bool     `json:"ok"`                   // true when user has valid auth session
+	AuthURL    string   `json:"authUrl,omitempty"`    // filled when user has control auth action to take
+	AuthNeeded authType `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
 }
 
 func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {

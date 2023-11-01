@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useState } from "react"
-import { apiFetch } from "src/api"
+import { apiFetch, setSynoToken } from "src/api"
+
+export enum AuthType {
+  synology = "synology",
+  tailscale = "tailscale",
+}
 
 export type AuthResponse = {
   ok: boolean
   authUrl?: string
+  authNeeded?: AuthType
 }
 
 // useAuth reports and refreshes Tailscale auth status
@@ -18,6 +24,14 @@ export default function useAuth() {
     return apiFetch(url, "GET")
       .then((r) => r.json())
       .then((d) => {
+        if ((d as AuthResponse).authNeeded == AuthType.synology) {
+          fetch("/webman/login.cgi")
+            .then((r) => r.json())
+            .then((data) => {
+              setSynoToken(data.SynoToken)
+            })
+        }
+
         setLoading(false)
         setData(d)
       })
