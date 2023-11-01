@@ -18,12 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tailscale/art"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
-	"tailscale.com/net/art"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
