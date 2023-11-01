@@ -335,10 +335,7 @@ func inAzureAppService() bool {
 }
 
 func inAWSFargate() bool {
-	if os.Getenv("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE" {
-		return true
-	}
-	return false
+	return os.Getenv("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE"
 }
 
 func inFlyDotIo() bool {
@@ -364,10 +361,7 @@ func inKubernetes() bool {
 }
 
 func inDockerDesktop() bool {
-	if os.Getenv("TS_HOST_ENV") == "dde" {
-		return true
-	}
-	return false
+	return os.Getenv("TS_HOST_ENV") == "dde"
 }
 
 func inHomeAssistantAddOn() bool {
