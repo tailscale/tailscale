@@ -436,7 +436,8 @@ func TestLoggingPrivacy(t *testing.T) {
 	logB.AddPrefix(netip.MustParsePrefix("100.64.0.0/10"))
 	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
-	f.logIPs, _ = logB.IPSet()
+	logIPsSet, _ := logB.IPSet()
+	f.logIPsContains = logIPsSet.Contains
 
 	var (
 		ts4       = netip.AddrPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
