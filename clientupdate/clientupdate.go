@@ -175,6 +175,11 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			return up.updateLinuxBinary, true
 		case distro.Alpine:
 			return up.updateAlpineLike, true
+		case distro.Unraid:
+			// Unraid runs from memory, updates must be installed via the Unraid
+			// plugin manager to be persistent.
+			// TODO(awly): implement Unraid updates using the 'plugin' CLI.
+			return nil, false
 		}
 		switch {
 		case haveExecutable("pacman"):
