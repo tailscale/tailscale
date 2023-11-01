@@ -1333,32 +1333,41 @@ func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
 }
 
 type mockSyspolicyHandler struct {
-	t             *testing.T
-	key           syspolicy.Key
-	s             string
-	exitNodeIDKey bool
-	exitNodeIPKey bool
-	exitNodeID    string
-	exitNodeIP    string
+	t *testing.T
+	// stringPolicies is the collection of policies that we expect to see
+	// queried by the current test. If the policy is expected but unset, then
+	// use nil, otherwise use a string equal to the policy's desired value.
+	stringPolicies map[syspolicy.Key]*string
+	// failUnknownPolicies is set if policies other than those in stringPolicies
+	// (uint64 or bool policies are not supported by mockSyspolicyHandler yet)
+	// should be considered a test failure if they are queried.
+	failUnknownPolicies bool
 }
 
 func (h *mockSyspolicyHandler) ReadString(key string) (string, error) {
-	if h.exitNodeIDKey && key == string(syspolicy.ExitNodeID) {
-		return h.exitNodeID, nil
+	if s, ok := h.stringPolicies[syspolicy.Key(key)]; ok {
+		if s == nil {
+			return "", syspolicy.ErrNoSuchKey
+		}
+		return *s, nil
 	}
-	if h.exitNodeIPKey && key == string(syspolicy.ExitNodeIP) {
-		return h.exitNodeIP, nil
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadString(%q) unexpectedly called", key)
 	}
 	return "", syspolicy.ErrNoSuchKey
 }
 
 func (h *mockSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
-	h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
+	}
 	return 0, syspolicy.ErrNoSuchKey
 }
 
 func (h *mockSyspolicyHandler) ReadBoolean(key string) (bool, error) {
-	h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
+	}
 	return false, syspolicy.ErrNoSuchKey
 }
 
@@ -1558,13 +1567,20 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			b := newTestBackend(t)
-			syspolicy.SetHandlerForTest(t, &mockSyspolicyHandler{
-				t:             t,
-				exitNodeID:    test.exitNodeID,
-				exitNodeIP:    test.exitNodeIP,
-				exitNodeIDKey: test.exitNodeIDKey,
-				exitNodeIPKey: test.exitNodeIPKey,
-			})
+			msh := &mockSyspolicyHandler{
+				t: t,
+				stringPolicies: map[syspolicy.Key]*string{
+					syspolicy.ExitNodeID: nil,
+					syspolicy.ExitNodeIP: nil,
+				},
+			}
+			if test.exitNodeIDKey {
+				msh.stringPolicies[syspolicy.ExitNodeID] = &test.exitNodeID
+			}
+			if test.exitNodeIPKey {
+				msh.stringPolicies[syspolicy.ExitNodeIP] = &test.exitNodeIP
+			}
+			syspolicy.SetHandlerForTest(t, msh)
 			if test.nm == nil {
 				test.nm = new(netmap.NetworkMap)
 			}
@@ -1577,26 +1593,261 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.pm = pm
 			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm)
 			b.SetPrefs(pm.CurrentPrefs().AsStruct())
-			if test.exitNodeIDKey {
-				got := b.pm.prefs.ExitNodeID()
-				if got != tailcfg.StableNodeID(test.exitNodeIDWant) {
-					t.Errorf("got %v want %v", got, test.exitNodeIDWant)
-				}
+			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
+				t.Errorf("got %v want %v", got, test.exitNodeIDWant)
 			}
-			if test.exitNodeIPKey {
-				got := b.pm.prefs.ExitNodeIP()
-				if test.exitNodeIPWant == "" {
-					if got.String() != "invalid IP" {
-						t.Errorf("got %v want invalid IP", got)
-					}
-				} else if got.String() != test.exitNodeIPWant {
-					t.Errorf("got %v want %v", got, test.exitNodeIPWant)
+			if got := b.pm.prefs.ExitNodeIP(); test.exitNodeIPWant == "" {
+				if got.String() != "invalid IP" {
+					t.Errorf("got %v want invalid IP", got)
 				}
+			} else if got.String() != test.exitNodeIPWant {
+				t.Errorf("got %v want %v", got, test.exitNodeIPWant)
 			}
 
 			if changed != test.prefsChanged {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
+		})
+	}
+}
+
+func TestApplySysPolicy(t *testing.T) {
+	tests := []struct {
+		name           string
+		prefs          ipn.Prefs
+		wantPrefs      ipn.Prefs
+		wantAnyChange  bool
+		stringPolicies map[syspolicy.Key]string
+	}{
+		{
+			name: "empty prefs without policies",
+		},
+		{
+			name: "prefs set without policies",
+			prefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+		},
+		{
+			name: "empty prefs with policies",
+			wantPrefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL:                "1",
+				syspolicy.EnableIncomingConnections: "never",
+				syspolicy.EnableServerMode:          "always",
+			},
+		},
+		{
+			name: "prefs set with matching policies",
+			prefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL:                "1",
+				syspolicy.EnableIncomingConnections: "never",
+				syspolicy.EnableServerMode:          "always",
+			},
+		},
+		{
+			name: "prefs set with conflicting policies",
+			prefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:  "2",
+				ShieldsUp:   false,
+				ForceDaemon: false,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL:                "2",
+				syspolicy.EnableIncomingConnections: "always",
+				syspolicy.EnableServerMode:          "never",
+			},
+		},
+		{
+			name: "prefs set with neutral policies",
+			prefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.EnableIncomingConnections: "user-decides",
+				syspolicy.EnableServerMode:          "user-decides",
+			},
+		},
+		{
+			name: "ControlURL",
+			wantPrefs: ipn.Prefs{
+				ControlURL: "set",
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL: "set",
+			},
+		},
+		{
+			name: "always incoming connections",
+			prefs: ipn.Prefs{
+				ShieldsUp: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ShieldsUp: false,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.EnableIncomingConnections: "always",
+			},
+		},
+		{
+			name: "never incoming connections",
+			prefs: ipn.Prefs{
+				ShieldsUp: false,
+			},
+			wantPrefs: ipn.Prefs{
+				ShieldsUp: true,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.EnableIncomingConnections: "never",
+			},
+		},
+		{
+			name: "always server mode",
+			prefs: ipn.Prefs{
+				ForceDaemon: false,
+			},
+			wantPrefs: ipn.Prefs{
+				ForceDaemon: true,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.EnableServerMode: "always",
+			},
+		},
+		{
+			name: "never server mode",
+			prefs: ipn.Prefs{
+				ForceDaemon: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ForceDaemon: false,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.EnableServerMode: "never",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("unit", func(t *testing.T) {
+				// Be strict when testing the func directly.
+				msh := &mockSyspolicyHandler{
+					t: t,
+					stringPolicies: map[syspolicy.Key]*string{
+						syspolicy.ControlURL:                nil,
+						syspolicy.EnableIncomingConnections: nil,
+						syspolicy.EnableServerMode:          nil,
+					},
+					failUnknownPolicies: true,
+				}
+				for p, v := range tt.stringPolicies {
+					v := v // construct a unique pointer for each policy value
+					msh.stringPolicies[p] = &v
+				}
+				syspolicy.SetHandlerForTest(t, msh)
+
+				prefs := tt.prefs.Clone()
+
+				gotAnyChange := applySysPolicy(prefs)
+
+				if gotAnyChange && prefs.Equals(&tt.prefs) {
+					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
+				}
+				if !gotAnyChange && !prefs.Equals(&tt.prefs) {
+					t.Errorf("!anyChange but prefs changed from %v to %v", tt.prefs.Pretty(), prefs.Pretty())
+				}
+				if gotAnyChange != tt.wantAnyChange {
+					t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantAnyChange)
+				}
+				if !prefs.Equals(&tt.wantPrefs) {
+					t.Errorf("prefs=%v, want %v", prefs.Pretty(), tt.wantPrefs.Pretty())
+				}
+			})
+			// Create a more relaxed syspolicy for integration tests.
+			msh := &mockSyspolicyHandler{
+				t:              t,
+				stringPolicies: make(map[syspolicy.Key]*string, len(tt.stringPolicies)),
+			}
+			for p, v := range tt.stringPolicies {
+				v := v // construct a unique pointer for each policy value
+				msh.stringPolicies[p] = &v
+			}
+			syspolicy.SetHandlerForTest(t, msh)
+
+			t.Run("set prefs", func(t *testing.T) {
+
+				b := newTestBackend(t)
+				b.SetPrefs(tt.prefs.Clone())
+				if !b.Prefs().Equals(tt.wantPrefs.View()) {
+					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), tt.wantPrefs.Pretty())
+				}
+			})
+
+			t.Run("status update", func(t *testing.T) {
+				// Profile manager fills in blank ControlURL but it's not set
+				// in most test cases to avoid cluttering them, so adjust for
+				// that.
+				usePrefs := tt.prefs.Clone()
+				if usePrefs.ControlURL == "" {
+					usePrefs.ControlURL = ipn.DefaultControlURL
+				}
+				wantPrefs := tt.wantPrefs.Clone()
+				if wantPrefs.ControlURL == "" {
+					wantPrefs.ControlURL = ipn.DefaultControlURL
+				}
+
+				pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+				pm.prefs = usePrefs.View()
+
+				b := newTestBackend(t)
+				b.mu.Lock()
+				b.pm = pm
+				b.mu.Unlock()
+
+				b.SetControlClientStatus(b.cc, controlclient.Status{})
+				if !b.Prefs().Equals(wantPrefs.View()) {
+					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), wantPrefs.Pretty())
+				}
+			})
 		})
 	}
 }
