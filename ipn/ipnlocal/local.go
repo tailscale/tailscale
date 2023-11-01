@@ -3013,7 +3013,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		}
 	}
 	if oldp.ShouldWebClientBeRunning() && !newp.ShouldWebClientBeRunning() {
-		b.WebClientShutdown()
+		go b.WebClientShutdown()
 	}
 	if netMap != nil {
 		newProfile := netMap.UserProfiles[netMap.User()]
