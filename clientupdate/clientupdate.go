@@ -178,6 +178,7 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 		case distro.Unraid:
 			// Unraid runs from memory, updates must be installed via the Unraid
 			// plugin manager to be persistent.
+			// TODO(awly): implement Unraid updates using the 'plugin' CLI.
 			return nil, false
 		}
 		switch {
