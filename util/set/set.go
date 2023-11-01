@@ -19,7 +19,7 @@ func SetOf[T comparable](slice []T) Set[T] {
 }
 
 // Clone returns a new set cloned from the elements in s.
-func Clone[T comparable](s Set[T]) Set[T] {
+func (s Set[T]) Clone() Set[T] {
 	return maps.Clone(s)
 }
 

@@ -103,7 +103,7 @@ func TestClone(t *testing.T) {
 	if s.Len() != 4 {
 		t.Errorf("wrong len %d; want 4", s.Len())
 	}
-	s2 := Clone(s)
+	s2 := s.Clone()
 	if !s.Equal(s2) {
 		t.Error("clone not equal to original")
 	}
