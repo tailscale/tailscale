@@ -43,6 +43,9 @@ type Server struct {
 	lc      *tailscale.LocalClient
 	timeNow func() time.Time
 
+	// devMode indicates that the server run with frontend assets
+	// served by a Vite dev server, allowing for local development
+	// on the web client frontend.
 	devMode    bool
 	cgiMode    bool
 	pathPrefix string
@@ -100,11 +103,6 @@ type ServerOpts struct {
 	// Mode specifies the mode of web client being constructed.
 	Mode ServerMode
 
-	// DevMode indicates that the server should be started with frontend
-	// assets served by a Vite dev server, allowing for local development
-	// on the web client frontend.
-	DevMode bool
-
 	// CGIMode indicates if the server is running as a CGI script.
 	CGIMode bool
 
@@ -143,7 +141,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	s = &Server{
 		mode:       opts.Mode,
 		logf:       opts.Logf,
-		devMode:    opts.DevMode,
+		devMode:    envknob.Bool("TS_DEBUG_WEB_CLIENT_DEV"),
 		lc:         opts.LocalClient,
 		cgiMode:    opts.CGIMode,
 		pathPrefix: opts.PathPrefix,
@@ -155,7 +153,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	if s.logf == nil {
 		s.logf = log.Printf
 	}
-	s.assetsHandler, s.assetsCleanup = assetsHandler(opts.DevMode)
+	s.assetsHandler, s.assetsCleanup = assetsHandler(s.devMode)
 
 	var metric string // clientmetric to report on startup
 
