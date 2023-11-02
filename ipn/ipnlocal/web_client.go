@@ -14,7 +14,6 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
 	"tailscale.com/net/netutil"
-	"tailscale.com/tailcfg"
 )
 
 // webClient holds state for the web interface for managing
@@ -41,7 +40,7 @@ func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {
 // tailscaled instance.
 // If the web interface is already running, WebClientInit is a no-op.
 func (b *LocalBackend) WebClientInit() (err error) {
-	if !hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient) {
+	if !b.ShouldRunWebClient() {
 		return errors.New("web client not enabled for this device")
 	}
 

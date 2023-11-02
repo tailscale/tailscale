@@ -170,7 +170,7 @@ type LocalBackend struct {
 	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
 	em                    *expiryManager   // non-nil
 	sshAtomicBool         atomic.Bool
-	webclientAtomicBool   atomic.Bool
+	webClientAtomicBool   atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 	debugSink             *capture.Sink
 	sockstatLogger        *sockstatlog.Logger
@@ -1113,6 +1113,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
 		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLock)
+		b.setWebClientAtomicBoolLocked(st.NetMap, prefs.View())
 
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
 		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
@@ -2504,7 +2505,7 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 // and shouldInterceptTCPPortAtomic from the prefs p, which may be !Valid().
 func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
-	b.webclientAtomicBool.Store(p.Valid() && p.RunWebClient())
+	b.setWebClientAtomicBoolLocked(b.netMap, p)
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
@@ -3017,9 +3018,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 			go b.sshServer.Shutdown()
 			b.sshServer = nil
 		}
-	}
-	if oldp.ShouldWebClientBeRunning() && !newp.ShouldWebClientBeRunning() {
-		go b.WebClientShutdown()
 	}
 	if netMap != nil {
 		newProfile := netMap.UserProfiles[netMap.User()]
@@ -4212,8 +4210,14 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
-func (b *LocalBackend) ShouldRunWebClient() bool {
-	return b.webclientAtomicBool.Load() && hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient)
+func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
+
+func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	shouldRun := prefs.Valid() && prefs.RunWebClient() && hasCapability(nm, tailcfg.CapabilityPreviewWebClient)
+	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
+	if wasRunning && !shouldRun {
+		go b.WebClientShutdown() // stop web client
+	}
 }
 
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
