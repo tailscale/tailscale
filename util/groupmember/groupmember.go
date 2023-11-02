@@ -27,3 +27,26 @@ func IsMemberOfGroup(group, userName string) (bool, error) {
 	}
 	return slices.Contains(ugids, g.Gid), nil
 }
+
+// IsMemberOfAnyGroup reports whether the provided user is a member of the any
+// of the provided system groups.
+func IsMemberOfAnyGroup(userName string, groups ...string) (bool, error) {
+	u, err := user.Lookup(userName)
+	if err != nil {
+		return false, err
+	}
+	ugids, err := u.GroupIds()
+	if err != nil {
+		return false, err
+	}
+	for _, group := range groups {
+		g, err := user.LookupGroup(group)
+		if err != nil {
+			return false, err
+		}
+		if slices.Contains(ugids, g.Gid) {
+			return true, nil
+		}
+	}
+	return false, nil
+}

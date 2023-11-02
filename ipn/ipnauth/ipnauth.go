@@ -5,15 +5,20 @@
 package ipnauth
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/netip"
 	"os"
 	"os/user"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 
 	"inet.af/peercred"
 	"tailscale.com/envknob"
@@ -191,21 +196,47 @@ func (ci *ConnIdentity) IsReadonlyConn(operatorUID string, logf logger.Logf) boo
 	return ro
 }
 
+// IsLocalAdmin reports whether the connected user has local administrative
+// privileges on the host. This means root, or one of:
+//
+//   - Windows: member of the Administrators group
+//   - macOS: member of the admin group
+//   - Linux: member of any sudoers group (usually "sudo" or "wheel")
+func (ci *ConnIdentity) IsLocalAdmin() (bool, error) {
+	if ci.creds == nil {
+		return false, nil
+	}
+	uid, ok := ci.creds.UserID()
+	if !ok {
+		return false, nil
+	}
+	if uid == "0" {
+		return true, nil
+	}
+	return isLocalAdmin(uid)
+}
+
 func isLocalAdmin(uid string) (bool, error) {
 	u, err := user.LookupId(uid)
 	if err != nil {
 		return false, err
 	}
-	var adminGroup string
+	var adminGroups []string
 	switch {
 	case runtime.GOOS == "darwin":
-		adminGroup = "admin"
+		adminGroups = []string{"admin"}
 	case distro.Get() == distro.QNAP:
-		adminGroup = "administrators"
+		adminGroups = []string{"administrators"}
+	case runtime.GOOS == "linux":
+		adminGroups, err = linuxSudoersGroups("/etc/sudoers")
+		log.Printf("========= linuxSudoersGroups(etc/sudoers): %q %v", adminGroups, err)
+		if err != nil {
+			return false, err
+		}
 	default:
 		return false, fmt.Errorf("no system admin group found")
 	}
-	return groupmember.IsMemberOfGroup(adminGroup, u.Username)
+	return groupmember.IsMemberOfAnyGroup(u.Username, adminGroups...)
 }
 
 func peerPid(entries []netstat.Entry, la, ra netip.AddrPort) int {
@@ -215,4 +246,60 @@ func peerPid(entries []netstat.Entry, la, ra netip.AddrPort) int {
 		}
 	}
 	return 0
+}
+
+func linuxSudoersGroups(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// We're looking for lines like:
+	//
+	//  %wheel ALL=(ALL:ALL) ALL
+	//  %sudo ALL=(ALL:ALL) ALL
+	//
+	// where group name after % is allowed to sudo as any user and run any
+	// command. Membership in these groups is equivalent to local admin.
+	s := bufio.NewScanner(f)
+	var groups []string
+	for s.Scan() {
+		line := s.Text()
+		if strings.HasPrefix(line, "@includedir ") {
+			dir := strings.TrimPrefix(line, "@includedir ")
+			paths, err := os.ReadDir(dir)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range paths {
+				if !p.Type().IsRegular() {
+					continue
+				}
+				incGroups, err := linuxSudoersGroups(filepath.Join(dir, p.Name()))
+				log.Printf("========= linuxSudoersGroups(%q): %q %v", filepath.Join(dir, p.Name()), incGroups, err)
+				if err != nil {
+					return nil, err
+				}
+				groups = append(groups, incGroups...)
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "%") {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if !slices.Contains([]string{"ALL=(ALL:ALL) ALL", "ALL=(ALL) ALL"}, parts[1]) {
+			continue
+		}
+		group := strings.TrimPrefix(parts[0], "%")
+		if group != "" {
+			groups = append(groups, group)
+		}
+	}
+
+	return groups, s.Err()
 }

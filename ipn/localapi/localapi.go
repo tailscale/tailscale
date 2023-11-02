@@ -921,7 +921,7 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 		// TODO: roll-up this Windows-specific check into either PermitWrite
 		// or a global admin escalation check.
 		if shouldDenyServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h) {
-			http.Error(w, "must be a Windows local admin to serve a path", http.StatusUnauthorized)
+			http.Error(w, "must be a local admin to serve a path", http.StatusUnauthorized)
 			return
 		}
 
@@ -941,7 +941,7 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func shouldDenyServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) bool {
-	if goos != "windows" {
+	if !slices.Contains([]string{"windows", "linux"}, goos) {
 		return false
 	}
 	if !configIn.HasPathHandler() {
