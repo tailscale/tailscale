@@ -47,6 +47,14 @@ export type UpdateProgress = {
   version: string,
 }
 
+export enum UpdateState {
+  UpToDate,
+  Available,
+  InProgress,
+  Complete,
+  Failed
+}
+
 // useNodeData returns basic data about the current node.
 export default function useNodeData() {
   const [data, setData] = useState<NodeData>()
