@@ -4210,6 +4210,9 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
+// ShouldRunWebClient reports whether the web client is being run
+// within this tailscaled instance. ShouldRunWebClient is safe to
+// call regardless of whether b.mu is held or not.
 func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
 
 func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
@@ -4466,6 +4469,9 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
+	}
+	if b.ShouldRunWebClient() {
+		handlePorts = append(handlePorts, 5252)
 	}
 
 	b.reloadServeConfigLocked(prefs)
