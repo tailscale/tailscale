@@ -3,17 +3,36 @@ import React from "react"
 import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
 import ReadonlyClientView from "src/components/views/readonly-client-view"
-import useAuth from "src/hooks/auth"
+import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData from "src/hooks/node-data"
 import ManagementClientView from "./views/management-client-view"
 
 export default function App() {
-  const { data, refreshData, updateNode } = useNodeData()
   const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
 
   return (
     <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-14">
-      {!data || loadingAuth ? (
+      {loadingAuth ? (
+        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
+      ) : (
+        <WebClient auth={auth} waitOnAuth={waitOnAuth} />
+      )}
+    </div>
+  )
+}
+
+function WebClient({
+  auth,
+  waitOnAuth,
+}: {
+  auth?: AuthResponse
+  waitOnAuth: () => Promise<void>
+}) {
+  const { data, refreshData, updateNode } = useNodeData()
+
+  return (
+    <>
+      {!data ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : data?.Status === "NeedsLogin" || data?.Status === "NoState" ? (
         // Client not on a tailnet, render login.
@@ -35,8 +54,8 @@ export default function App() {
           updateNode={updateNode}
         />
       )}
-      {data && !loadingAuth && <Footer licensesURL={data.LicensesURL} />}
-    </div>
+      {data && <Footer licensesURL={data.LicensesURL} />}
+    </>
   )
 }
 

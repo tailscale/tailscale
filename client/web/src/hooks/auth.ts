@@ -16,7 +16,7 @@ export type AuthResponse = {
 // for the web client.
 export default function useAuth() {
   const [data, setData] = useState<AuthResponse>()
-  const [loading, setLoading] = useState<boolean>(false)
+  const [loading, setLoading] = useState<boolean>(true)
 
   const loadAuth = useCallback((wait?: boolean) => {
     const url = wait ? "/auth?wait=true" : "/auth"
@@ -24,16 +24,19 @@ export default function useAuth() {
     return apiFetch(url, "GET")
       .then((r) => r.json())
       .then((d) => {
-        if ((d as AuthResponse).authNeeded == AuthType.synology) {
-          fetch("/webman/login.cgi")
-            .then((r) => r.json())
-            .then((data) => {
-              setSynoToken(data.SynoToken)
-            })
-        }
-
-        setLoading(false)
         setData(d)
+        switch ((d as AuthResponse).authNeeded) {
+          case AuthType.synology:
+            fetch("/webman/login.cgi")
+              .then((r) => r.json())
+              .then((a) => {
+                setSynoToken(a.SynoToken)
+                setLoading(false)
+              })
+            break
+          default:
+            setLoading(false)
+        }
       })
       .catch((error) => {
         setLoading(false)
