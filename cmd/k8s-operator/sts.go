@@ -307,10 +307,10 @@ func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) 
 	return key, nil
 }
 
-//go:embed manifests/proxy.yaml
+//go:embed deploy/manifests/proxy.yaml
 var proxyYaml []byte
 
-//go:embed manifests/userspace-proxy.yaml
+//go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, authKeySecret string) (*appsv1.StatefulSet, error) {

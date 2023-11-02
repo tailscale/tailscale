@@ -32,6 +32,7 @@ import (
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
@@ -67,6 +68,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
+	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -169,6 +171,7 @@ type LocalBackend struct {
 	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
 	em                    *expiryManager   // non-nil
 	sshAtomicBool         atomic.Bool
+	webclientAtomicBool   atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 	debugSink             *capture.Sink
 	sockstatLogger        *sockstatlog.Logger
@@ -203,9 +206,11 @@ type LocalBackend struct {
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
-	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
-	ccGen          clientGen    // function for producing controlclient; lazily populated
-	sshServer      SSHServer    // or nil, initialized lazily.
+	httpTestClient *http.Client               // for controlclient. nil by default, used by tests.
+	ccGen          clientGen                  // function for producing controlclient; lazily populated
+	sshServer      SSHServer                  // or nil, initialized lazily.
+	appConnector   *appc.EmbeddedAppConnector // or nil, initialized when configured.
+	webClient      webClient
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
@@ -537,7 +542,7 @@ func (b *LocalBackend) SetDirectFileDoFinalRename(v bool) {
 	b.directFileDoFinalRename = v
 }
 
-// ReloadCOnfig reloads the backend's config from disk.
+// ReloadConfig reloads the backend's config from disk.
 //
 // It returns (false, nil) if not running in declarative mode, (true, nil) on
 // success, or (false, error) on failure.
@@ -648,6 +653,7 @@ func (b *LocalBackend) Shutdown() {
 		b.debugSink = nil
 	}
 	b.mu.Unlock()
+	b.WebClientShutdown()
 
 	if b.sockstatLogger != nil {
 		b.sockstatLogger.Shutdown()
@@ -2503,6 +2509,7 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 // and shouldInterceptTCPPortAtomic from the prefs p, which may be !Valid().
 func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
+	b.webclientAtomicBool.Store(p.Valid() && p.RunWebClient())
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
@@ -2996,6 +3003,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
+	if newHi == nil {
+		newHi = new(tailcfg.Hostinfo)
+	}
 	b.applyPrefsToHostinfoLocked(newHi, newp.View())
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
@@ -3012,6 +3022,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 			go b.sshServer.Shutdown()
 			b.sshServer = nil
 		}
+	}
+	if oldp.ShouldWebClientBeRunning() && !newp.ShouldWebClientBeRunning() {
+		go b.WebClientShutdown()
 	}
 	if netMap != nil {
 		newProfile := netMap.UserProfiles[netMap.User()]
@@ -3122,6 +3135,10 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		opts = append(opts, ptr.To(tcpip.KeepaliveIdleOption(72*time.Hour)))
 		return b.handleSSHConn, opts
 	}
+	// TODO(will,sonia): allow customizing web client port ?
+	if dst.Port() == 5252 && b.ShouldRunWebClient() {
+		return b.handleWebClientConn, opts
+	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
 		return func(c net.Conn) error {
 			b.handlePeerAPIConn(src, dst, c)
@@ -3151,6 +3168,12 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 		// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
 		ret = append(ret, tailcfg.Service{
 			Proto: tailcfg.PeerAPIDNS,
+			Port:  1, // version
+		})
+	}
+	if b.appConnector != nil {
+		ret = append(ret, tailcfg.Service{
+			Proto: tailcfg.AppConnector,
 			Port:  1, // version
 		})
 	}
@@ -3222,6 +3245,49 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 	b.mu.Unlock()
 }
 
+// reconfigAppConnectorLocked updates the app connector state based on the
+// current network map and preferences.
+// b.mu must be held.
+func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	const appConnectorCapName = "tailscale.com/app-connectors"
+
+	if !prefs.AppConnector().Advertise {
+		b.appConnector = nil
+		return
+	}
+
+	if b.appConnector == nil {
+		b.appConnector = appc.NewEmbeddedAppConnector(b.logf, b)
+	}
+	if nm == nil {
+		return
+	}
+
+	// TODO(raggi): rework the view infrastructure so the large deep clone is no
+	// longer required
+	sn := nm.SelfNode.AsStruct()
+	attrs, err := tailcfg.UnmarshalNodeCapJSON[appctype.AppConnectorAttr](sn.CapMap, appConnectorCapName)
+	if err != nil {
+		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
+		return
+	}
+
+	var domains []string
+	for _, attr := range attrs {
+		// Geometric cost, assumes that the number of advertised tags is small
+		if !nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
+			return slices.Contains(attr.Connectors, tag)
+		}) {
+			continue
+		}
+
+		domains = append(domains, attr.Domains...)
+	}
+	slices.Sort(domains)
+	slices.Compact(domains)
+	b.appConnector.UpdateDomains(domains)
+}
+
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
@@ -3234,6 +3300,8 @@ func (b *LocalBackend) authReconfig() {
 	disableSubnetsIfPAC := hasCapability(nm, tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
+	// If the current node is an app connector, ensure the app connector machine is started
+	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
 
 	if blocked {
@@ -4149,6 +4217,10 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
+func (b *LocalBackend) ShouldRunWebClient() bool {
+	return b.webclientAtomicBool.Load() && hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient)
+}
+
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
 // by Tailscale.
@@ -4610,6 +4682,9 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		if !b.peerIsTaildropTargetLocked(p) {
 			continue
 		}
+		if p.Hostinfo().OS() == "tvOS" {
+			continue
+		}
 		peerAPI := peerAPIBase(b.netMap, p)
 		if peerAPI == "" {
 			continue
@@ -4797,6 +4872,14 @@ func (b *LocalBackend) OfferingExitNode() bool {
 		}
 	}
 	return def4 && def6
+}
+
+// OfferingAppConnector reports whether b is currently offering app
+// connector services.
+func (b *LocalBackend) OfferingAppConnector() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.appConnector != nil
 }
 
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
@@ -5423,6 +5506,39 @@ func (b *LocalBackend) DoWebUIUpdate() {
 	} else {
 		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart, please restart Tailscale manually!"))
 	}
+}
+
+// ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
+// App Connector to enable route discovery.
+func (b *LocalBackend) ObserveDNSResponse(res []byte) {
+	var appConnector *appc.EmbeddedAppConnector
+	b.mu.Lock()
+	if b.appConnector == nil {
+		b.mu.Unlock()
+		return
+	}
+	appConnector = b.appConnector
+	b.mu.Unlock()
+
+	appConnector.ObserveDNSResponse(res)
+}
+
+// AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
+// route advertisement if one is not already present in the existing routes.
+func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
+	currentRoutes := b.Prefs().AdvertiseRoutes()
+	// TODO(raggi): check if the new route is a subset of an existing route.
+	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool { return r == ipp }) {
+		return nil
+	}
+	routes := append(currentRoutes.AsSlice(), ipp)
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: routes,
+		},
+		AdvertiseRoutesSet: true,
+	})
+	return err
 }
 
 // mayDeref dereferences p if non-nil, otherwise it returns the zero value.

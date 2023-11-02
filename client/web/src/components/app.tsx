@@ -1,151 +1,20 @@
+import cx from "classnames"
 import React from "react"
-import { Footer, Header, IP, State } from "src/components/legacy"
-import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, { NodeData, ClientVersion, UpdateProgress } from "src/hooks/node-data"
-import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
-import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
-import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
+import LegacyClientView from "src/components/views/legacy-client-view"
+import LoginClientView from "src/components/views/login-client-view"
+import ReadonlyClientView from "src/components/views/readonly-client-view"
+import useAuth from "src/hooks/auth"
+import useNodeData, { ClientVersion, UpdateProgress } from "src/hooks/node-data"
+import ManagementClientView from "./views/management-client-view"
 import { ReactComponent as UpdateAvailableIcon } from "src/icons/arrow-up-circle.svg"
 import { ReactComponent as CheckCircleIcon } from "src/icons/check-circle.svg"
 import { ReactComponent as XCircleIcon } from "src/icons/x-circle.svg"
+import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
 import Spinner from "src/ui/spinner"
 import { apiFetch } from "src/api"
 import { useState } from "react"
 
-export default function App() {
-  // TODO(sonia): use isPosting value from useNodeData
-  // to fill loading states.
-  const { data, refreshData, updateNode } = useNodeData()
 
-  const initialUpdateState =
-    (data?.ClientVersion.RunningLatest) ? UpdateState.UpToDate : UpdateState.Available
-
-  const [updating, setUpdating] = useState<UpdateState>(initialUpdateState)
-
-  const [updateLog, setUpdateLog] = useState<string>('')
-
-  const appendUpdateLog = (msg: string) => {
-    console.log(msg)
-    setUpdateLog(updateLog + msg + '\n')
-  }
-
-  if (!data) {
-    // TODO(sonia): add a loading view
-    return <div className="text-center py-14">Loading...</div>
-  }
-
-  const needsLogin = data?.Status === "NeedsLogin" || data?.Status === "NoState"
-
-  const installUpdate = () => {
-    const currentVersion = data.IPNVersion
-
-    apiFetch('/update', 'POST')
-      .catch(err => {
-        console.log(err)
-        setUpdating(UpdateState.Failed)
-      })
-
-    setUpdating(UpdateState.InProgress)
-
-    let tsAwayForPolls = 0
-    function poll() {
-      apiFetch('/update/progress', 'GET')
-      .then(res => res.json())
-      .then((res: UpdateProgress[]) => {
-        for (const up of res) {
-          console.log(up)
-          if (up.status === 'UpdateFailed') {
-            setUpdating(UpdateState.Failed)
-            if (up.message) appendUpdateLog('ERROR: ' + up.message)
-            return
-          }
-
-          if (up.status === 'UpdateFinished') {
-            // if update finished and tailscaled did not go away (ie. did not restart),
-            // then the version being the same might not be an error, it might just require
-            // the user to restart Tailscale manually (this is required in some cases in the
-            // clientupdate package).
-            if (up.version === currentVersion && tsAwayForPolls > 0) {
-              setUpdating(UpdateState.Failed)
-              appendUpdateLog('ERROR: Update failed, still running Tailscale ' + up.version)
-              if (up.message) appendUpdateLog('ERROR: ' + up.message)
-            }
-            else {
-              setUpdating(UpdateState.Complete)
-              if (up.message) appendUpdateLog('INFO: ' + up.message)
-            }
-            return
-          }
-
-          setUpdating(UpdateState.InProgress)
-          if (up.message) appendUpdateLog('INFO: ' + up.message)
-        }
-
-        setTimeout(poll, 1000)
-      })
-      .catch(err => {
-        ++tsAwayForPolls
-        if (tsAwayForPolls >= 5 * 60) {
-          setUpdating(UpdateState.Failed)
-          appendUpdateLog('ERROR: tailscaled went away but did not come back!')
-          appendUpdateLog('ERROR: last error received:')
-          appendUpdateLog(err.toString())
-        }
-        else {
-          setTimeout(poll, 1000)
-        }
-      })
-    }
-
-    poll()
-  }
-
-  return !needsLogin &&
-    (data.DebugMode === "login" || data.DebugMode === "full") ? (
-    <WebClient {...data} updating={updating} installUpdate={installUpdate} updateLog={updateLog} />
-  ) : (
-    // Legacy client UI
-    <div className="py-14">
-      <main className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
-        <Header data={data} refreshData={refreshData} updateNode={updateNode} />
-        <IP data={data} />
-        <State data={data} updateNode={updateNode} />
-      </main>
-      <Footer licensesURL={data.LicensesURL} />
-    </div>
-  )
-}
-
-// TODO(naman): clean this interface up?
-function WebClient(props: NodeData & {
-  updating: UpdateState,
-  installUpdate: () => void,
-  updateLog: string,
-}) {
-  const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
-  const { updating, installUpdate, updateLog } = props
-
-  if (loadingAuth) {
-    return <div className="text-center py-14">Loading...</div>
-  }
-
-  const updatingViewStates = [
-    UpdateState.InProgress, UpdateState.Complete, UpdateState.Failed
-  ]
-
-  return (
-    <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-10 align-middle h-screen">
-      {(updatingViewStates.includes(updating)) ? (
-        <UpdatingView updating={updating} cv={props.ClientVersion} updateLog={updateLog} />
-      ) : (props.DebugMode === "full" && auth?.ok) ? (
-        <ManagementView {...props} />
-      ) : (
-        <ReadonlyView data={props} auth={auth} waitOnAuth={waitOnAuth} updating={updating} installUpdate={installUpdate} />
-      )}
-      <Footer className="mt-20" licensesURL={props.LicensesURL} />
-    </div>
-  )
-}
 
 function UpdatingView(props: {
   updating: UpdateState,
@@ -204,115 +73,6 @@ function UpdatingView(props: {
         </code></pre>
       </div>
     </>
-  )
-}
-
-function ReadonlyView({
-  data,
-  auth,
-  waitOnAuth,
-  updating,
-  installUpdate
-}: {
-  data: NodeData
-  auth?: AuthResponse
-  waitOnAuth: () => Promise<void>
-  updating: UpdateState
-  installUpdate: () => void
-}) {
-  return (
-    <>
-      <div className="pb-52 mx-auto">
-        <TailscaleLogo />
-      </div>
-      <div className="w-full p-4 bg-stone-50 rounded-3xl border border-gray-200 flex flex-col gap-4">
-        <div className="flex gap-2.5">
-          <ProfilePic url={data.Profile.ProfilePicURL} />
-          <div className="font-medium">
-            <div className="text-neutral-500 text-xs uppercase tracking-wide">
-              Owned by
-            </div>
-            <div className="text-neutral-800 text-sm leading-tight">
-              {/* TODO(sonia): support tagged node profile view more eloquently */}
-              {data.Profile.LoginName}
-            </div>
-          </div>
-        </div>
-        <div className="px-5 py-4 bg-white rounded-lg border border-gray-200">
-          <div className="justify-between items-center flex">
-            <div className="flex gap-3">
-              <ConnectedDeviceIcon />
-              <div className="text-neutral-800">
-                <div className="text-lg font-medium leading-[25.20px]">
-                  {data.DeviceName}
-                </div>
-                <div className="text-sm leading-tight">{data.IP}</div>
-              </div>
-            </div>
-            {data.DebugMode === "full" && (
-              <button
-                className="button button-blue ml-6"
-                onClick={() => {
-                  window.open(auth?.authUrl, "_blank")
-                  waitOnAuth()
-                }}
-              >
-                Access
-              </button>
-            )}
-          </div>
-          <UpdateAvailableNotification details={data.ClientVersion} updating={updating} installUpdate={installUpdate} />
-        </div>
-      </div>
-    </>
-  )
-}
-
-function ManagementView(props: NodeData) {
-  return (
-    <div className="px-5">
-      <div className="flex justify-between mb-12">
-        <TailscaleIcon />
-        <div className="flex">
-          <p className="mr-2">{props.Profile.LoginName}</p>
-          {/* TODO(sonia): support tagged node profile view more eloquently */}
-          <ProfilePic url={props.Profile.ProfilePicURL} />
-        </div>
-      </div>
-      <p className="tracking-wide uppercase text-gray-600 pb-3">This device</p>
-      <div className="-mx-5 border rounded-md px-5 py-4 bg-white">
-        <div className="flex justify-between items-center text-lg">
-          <div className="flex items-center">
-            <ConnectedDeviceIcon />
-            <p className="font-medium ml-3">{props.DeviceName}</p>
-          </div>
-          <p className="tracking-widest">{props.IP}</p>
-        </div>
-      </div>
-      <p className="text-gray-500 pt-2">
-        Tailscale is up and running. You can connect to this device from devices
-        in your tailnet by using its name or IP address.
-      </p>
-      <button className="button button-blue mt-6">Advertise exit node</button>
-    </div>
-  )
-}
-
-function ProfilePic({ url }: { url: string }) {
-  return (
-    <div className="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
-      {url ? (
-        <div
-          className="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
-          style={{
-            backgroundImage: `url(${url})`,
-            backgroundSize: "cover",
-          }}
-        />
-      ) : (
-        <div className="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed" />
-      )}
-    </div>
   )
 }
 
@@ -389,4 +149,133 @@ function ChangelogText({ version }: { version?: string }) {
     )
   }
   return null
+}
+
+export default function App() {
+  const { data, refreshData, updateNode } = useNodeData()
+  const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
+  const initialUpdateState =
+    (data?.ClientVersion.RunningLatest) ? UpdateState.UpToDate : UpdateState.Available
+
+  const [updating, setUpdating] = useState<UpdateState>(initialUpdateState)
+
+  const [updateLog, setUpdateLog] = useState<string>('')
+
+  const appendUpdateLog = (msg: string) => {
+    console.log(msg)
+    setUpdateLog(updateLog + msg + '\n')
+  }
+
+  const installUpdate = () => {
+    if (!data) return
+
+    const currentVersion = data.IPNVersion
+
+    apiFetch('/update', 'POST')
+      .catch(err => {
+        console.log(err)
+        setUpdating(UpdateState.Failed)
+      })
+
+    setUpdating(UpdateState.InProgress)
+
+    let tsAwayForPolls = 0
+    function poll() {
+      apiFetch('/update/progress', 'GET')
+      .then(res => res.json())
+      .then((res: UpdateProgress[]) => {
+        for (const up of res) {
+          console.log(up)
+          if (up.status === 'UpdateFailed') {
+            setUpdating(UpdateState.Failed)
+            if (up.message) appendUpdateLog('ERROR: ' + up.message)
+            return
+          }
+
+          if (up.status === 'UpdateFinished') {
+            // if update finished and tailscaled did not go away (ie. did not restart),
+            // then the version being the same might not be an error, it might just require
+            // the user to restart Tailscale manually (this is required in some cases in the
+            // clientupdate package).
+            if (up.version === currentVersion && tsAwayForPolls > 0) {
+              setUpdating(UpdateState.Failed)
+              appendUpdateLog('ERROR: Update failed, still running Tailscale ' + up.version)
+              if (up.message) appendUpdateLog('ERROR: ' + up.message)
+            }
+            else {
+              setUpdating(UpdateState.Complete)
+              if (up.message) appendUpdateLog('INFO: ' + up.message)
+            }
+            return
+          }
+
+          setUpdating(UpdateState.InProgress)
+          if (up.message) appendUpdateLog('INFO: ' + up.message)
+        }
+
+        setTimeout(poll, 1000)
+      })
+      .catch(err => {
+        ++tsAwayForPolls
+        if (tsAwayForPolls >= 5 * 60) {
+          setUpdating(UpdateState.Failed)
+          appendUpdateLog('ERROR: tailscaled went away but did not come back!')
+          appendUpdateLog('ERROR: last error received:')
+          appendUpdateLog(err.toString())
+        }
+        else {
+          setTimeout(poll, 1000)
+        }
+      })
+    }
+
+    poll()
+  }
+
+  const updatingViewStates = [
+    UpdateState.InProgress, UpdateState.Complete, UpdateState.Failed
+  ]
+
+  return (
+    <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-14">
+      {!data || loadingAuth ? (
+        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
+      ) : data?.Status === "NeedsLogin" || data?.Status === "NoState" ? (
+        // Client not on a tailnet, render login.
+        <LoginClientView
+          data={data}
+          onLoginClick={() => updateNode({ Reauthenticate: true })}
+        />
+      ) : data.DebugMode === "full" && auth?.ok ? (
+        // Render new client interface in management mode.
+        <ManagementClientView {...data} />
+      ) : data.DebugMode === "login" || data.DebugMode === "full" ? (
+        // Render new client interface in readonly mode.
+        <ReadonlyClientView data={data} auth={auth} waitOnAuth={waitOnAuth} />
+      ) : (
+        // Render legacy client interface.
+        <LegacyClientView
+          data={data}
+          refreshData={refreshData}
+          updateNode={updateNode}
+        />
+      )}
+      {data && !loadingAuth && <Footer licensesURL={data.LicensesURL} />}
+    </div>
+  )
+}
+
+export function Footer(props: { licensesURL: string; className?: string }) {
+  return (
+    <footer
+      className={cx("container max-w-lg mx-auto text-center", props.className)}
+    >
+      <a
+        className="text-xs text-gray-500 hover:text-gray-600"
+        href={props.licensesURL}
+      >
+        Open Source Licenses
+      </a>
+    </footer>
+  )
 }

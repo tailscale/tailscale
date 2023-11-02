@@ -175,6 +175,11 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			return up.updateLinuxBinary, true
 		case distro.Alpine:
 			return up.updateAlpineLike, true
+		case distro.Unraid:
+			// Unraid runs from memory, updates must be installed via the Unraid
+			// plugin manager to be persistent.
+			// TODO(awly): implement Unraid updates using the 'plugin' CLI.
+			return nil, false
 		}
 		switch {
 		case haveExecutable("pacman"):
@@ -237,10 +242,10 @@ func Update(args Arguments) error {
 func (up *Updater) confirm(ver string) bool {
 	switch cmpver.Compare(version.Short(), ver) {
 	case 0:
-		up.Logf("already running %v; no update needed", ver)
+		up.Logf("already running %v version %v; no update needed", up.track, ver)
 		return false
 	case 1:
-		up.Logf("installed version %v is newer than the latest available version %v; no update needed", version.Short(), ver)
+		up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.track, version.Short(), ver)
 		return false
 	}
 	if up.Confirm != nil {
@@ -717,7 +722,12 @@ func (up *Updater) updateWindows() error {
 	}
 
 	if !winutil.IsCurrentProcessElevated() {
-		return errors.New("must be run as Administrator")
+		return errors.New(`update must be run as Administrator
+
+you can run the command prompt as Administrator one of these ways:
+* right-click cmd.exe, select 'Run as administrator'
+* press Windows+x, then press a
+* press Windows+r, type in "cmd", then press Ctrl+Shift+Enter`)
 	}
 	if !up.confirm(ver) {
 		return nil

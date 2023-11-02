@@ -1,0 +1,29 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
+
+apiVersion: v2
+name: tailscale-operator
+description: A Helm chart for Tailscale Kubernetes operator
+home: https://github.com/tailscale/tailscale
+
+keywords:
+  - "tailscale"
+  - "vpn"
+  - "ingress"
+  - "egress"
+  - "wireguard"
+
+sources:
+- https://github.com/tailscale/tailscale
+
+type: application
+
+maintainers:
+  - name: tailscale-maintainers
+    url: https://tailscale.com/
+
+# version will be set to Tailscale repo tag (without 'v') at release time.
+version: 0.1.0
+
+# appVersion will be set to Tailscale repo tag at release time.
+appVersion: "unstable"

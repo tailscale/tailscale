@@ -333,7 +333,7 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 		ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
 	}
 
-	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
+	oldPfx := make(map[netip.Prefix]bool)
 	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
 		ap := protocolAddr.AddressWithPrefix
 		ip := netaddrIPFromNetstackIP(ap.Address)
@@ -343,74 +343,77 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 			// ours to delete.
 			continue
 		}
-		oldIPs[ap] = true
+		p := netip.PrefixFrom(ip, ap.PrefixLen)
+		oldPfx[p] = true
 	}
-	newIPs := make(map[tcpip.AddressWithPrefix]bool)
+	newPfx := make(map[netip.Prefix]bool)
 
-	isAddr := map[netip.Prefix]bool{}
 	if selfNode.Valid() {
 		for i := range selfNode.Addresses().LenIter() {
-			ipp := selfNode.Addresses().At(i)
-			isAddr[ipp] = true
-			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
+			p := selfNode.Addresses().At(i)
+			newPfx[p] = true
 		}
-		for i := range selfNode.AllowedIPs().LenIter() {
-			ipp := selfNode.AllowedIPs().At(i)
-			if !isAddr[ipp] && ns.ProcessSubnets {
-				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
+		if ns.ProcessSubnets {
+			for i := range selfNode.AllowedIPs().LenIter() {
+				p := selfNode.AllowedIPs().At(i)
+				newPfx[p] = true
 			}
 		}
 	}
 
-	ipsToBeAdded := make(map[tcpip.AddressWithPrefix]bool)
-	for ipp := range newIPs {
-		if !oldIPs[ipp] {
-			ipsToBeAdded[ipp] = true
+	pfxToAdd := make(map[netip.Prefix]bool)
+	for p := range newPfx {
+		if !oldPfx[p] {
+			pfxToAdd[p] = true
 		}
 	}
-	ipsToBeRemoved := make(map[tcpip.AddressWithPrefix]bool)
-	for ip := range oldIPs {
-		if !newIPs[ip] {
-			ipsToBeRemoved[ip] = true
+	pfxToRemove := make(map[netip.Prefix]bool)
+	for p := range oldPfx {
+		if !newPfx[p] {
+			pfxToRemove[p] = true
 		}
 	}
 	ns.mu.Lock()
 	for ip := range ns.connsOpenBySubnetIP {
-		ipp := tcpip.AddrFromSlice(ip.AsSlice()).WithPrefix()
-		delete(ipsToBeRemoved, ipp)
+		// TODO(maisem): this looks like a bug, remove or document. It seems as
+		// though we might end up either leaking the address on the netstack
+		// NIC, or where we do accounting for connsOpenBySubnetIP from 1 to 0,
+		// we might end up removing the address from the netstack NIC that was
+		// still being advertised.
+		delete(pfxToRemove, netip.PrefixFrom(ip, ip.BitLen()))
 	}
 	ns.mu.Unlock()
 
-	for ipp := range ipsToBeRemoved {
-		err := ns.ipstack.RemoveAddress(nicID, ipp.Address)
+	for p := range pfxToRemove {
+		err := ns.ipstack.RemoveAddress(nicID, tcpip.AddrFromSlice(p.Addr().AsSlice()))
 		if err != nil {
-			ns.logf("netstack: could not deregister IP %s: %v", ipp, err)
+			ns.logf("netstack: could not deregister IP %s: %v", p, err)
 		} else {
-			ns.logf("[v2] netstack: deregistered IP %s", ipp)
+			ns.logf("[v2] netstack: deregistered IP %s", p)
 		}
 	}
-	for ipp := range ipsToBeAdded {
-		pa := tcpip.ProtocolAddress{
-			AddressWithPrefix: ipp,
-		}
-		switch ipp.Address.Len() {
-		case 16:
-			pa.Protocol = ipv6.ProtocolNumber
-		case 4:
-			pa.Protocol = ipv4.ProtocolNumber
-		default:
-			ns.logf("[unexpected] netstack: could not register IP %s without protocol: unknown IP length (%v)", ipp, ipp.Address.Len())
+	for p := range pfxToAdd {
+		if !p.IsValid() {
+			ns.logf("netstack: [unexpected] skipping invalid IP (%v/%v)", p.Addr(), p.Bits())
 			continue
 		}
-		var err tcpip.Error
-		err = ns.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
+		tcpAddr := tcpip.ProtocolAddress{
+			AddressWithPrefix: ipPrefixToAddressWithPrefix(p),
+		}
+		if p.Addr().Is6() {
+			tcpAddr.Protocol = ipv6.ProtocolNumber
+		} else {
+			tcpAddr.Protocol = ipv4.ProtocolNumber
+		}
+		var tcpErr tcpip.Error // not error
+		tcpErr = ns.ipstack.AddProtocolAddress(nicID, tcpAddr, stack.AddressProperties{
 			PEB:        stack.CanBePrimaryEndpoint, // zero value default
 			ConfigType: stack.AddressConfigStatic,  // zero value default
 		})
-		if err != nil {
-			ns.logf("netstack: could not register IP %s: %v", ipp, err)
+		if tcpErr != nil {
+			ns.logf("netstack: could not register IP %s: %v", p, tcpErr)
 		} else {
-			ns.logf("[v2] netstack: registered IP %s", ipp)
+			ns.logf("[v2] netstack: registered IP %s", p)
 		}
 	}
 }

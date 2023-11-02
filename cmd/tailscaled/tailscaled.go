@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -569,6 +570,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
+	lb.SetWebLocalClient(&tailscale.LocalClient{Socket: args.socketpath, UseSocketOnly: args.socketpath != ""})
 	configureTaildrop(logf, lb)
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)

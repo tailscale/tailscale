@@ -7,6 +7,7 @@ package groupmember
 
 import (
 	"os/user"
+	"slices"
 )
 
 // IsMemberOfGroup reports whether the provided user is a member of
@@ -16,18 +17,13 @@ func IsMemberOfGroup(group, userName string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ugids, err := u.GroupIds()
-	if err != nil {
-		return false, err
-	}
 	g, err := user.LookupGroup(group)
 	if err != nil {
 		return false, err
 	}
-	for _, ugid := range ugids {
-		if g.Gid == ugid {
-			return true, nil
-		}
+	ugids, err := u.GroupIds()
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return slices.Contains(ugids, g.Gid), nil
 }

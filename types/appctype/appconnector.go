@@ -57,3 +57,16 @@ type SNIProxyConfig struct {
 	// the domain starts with a `.` that means any subdomain of the suffix.
 	AllowedDomains []string `json:",omitempty"`
 }
+
+// AppConnectorAttr describes a set of domains
+// serviced by specified app connectors.
+type AppConnectorAttr struct {
+	// Name is the name of this collection of domains.
+	Name string `json:"name,omitempty"`
+	// Domains enumerates the domains serviced by the specified app connectors.
+	// Domains can be of the form: example.com, or *.example.com.
+	Domains []string `json:"domains,omitempty"`
+	// Connectors enumerates the app connectors which service these domains.
+	// These can be any target type supported by Tailscale's ACL language.
+	Connectors []string `json:"connectors,omitempty"`
+}

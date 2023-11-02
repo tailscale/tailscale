@@ -63,10 +63,11 @@ type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 // then it's a prefix match.
 var handler = map[string]localAPIHandler{
 	// The prefix match handlers end with a slash:
-	"cert/":     (*Handler).serveCert,
-	"file-put/": (*Handler).serveFilePut,
-	"files/":    (*Handler).serveFiles,
-	"profiles/": (*Handler).serveProfiles,
+	"cert/":      (*Handler).serveCert,
+	"file-put/":  (*Handler).serveFilePut,
+	"files/":     (*Handler).serveFiles,
+	"profiles/":  (*Handler).serveProfiles,
+	"webclient/": (*Handler).serveWebClient,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
@@ -86,6 +87,7 @@ var handler = map[string]localAPIHandler{
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
+	"handle-push-message":         (*Handler).serveHandlePushMessage,
 	"dial":                        (*Handler).serveDial,
 	"file-targets":                (*Handler).serveFileTargets,
 	"goroutines":                  (*Handler).serveGoroutines,
@@ -1591,6 +1593,27 @@ func (h *Handler) serveSetPushDeviceToken(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 }
 
+func (h *Handler) serveHandlePushMessage(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "handle push message not allowed", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+	var pushMessageBody map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&pushMessageBody); err != nil {
+		http.Error(w, "failed to decode JSON body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// TODO(bradfitz): do something with pushMessageBody
+	h.logf("localapi: got push message: %v", logger.AsJSON(pushMessageBody))
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
@@ -2213,6 +2236,43 @@ func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write(body)
 	w.Header().Set("Content-Type", "application/json")
+}
+
+func (h *Handler) serveWebClient(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	switch r.URL.Path {
+	case "/localapi/v0/webclient/start":
+		if err := h.b.WebClientInit(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// try to set pref, but ignore errors
+		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:           ipn.Prefs{RunWebClient: true},
+			RunWebClientSet: true,
+		})
+		w.WriteHeader(http.StatusOK)
+		return
+	case "/localapi/v0/webclient/stop":
+		h.b.WebClientShutdown()
+		// try to set pref, but ignore errors
+		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:           ipn.Prefs{RunWebClient: false},
+			RunWebClientSet: true,
+		})
+		w.WriteHeader(http.StatusOK)
+		return
+	default:
+		http.Error(w, "invalid action", http.StatusBadRequest)
+		return
+	}
 }
 
 func defBool(a string, def bool) bool {

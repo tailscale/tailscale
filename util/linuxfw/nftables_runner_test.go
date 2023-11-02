@@ -533,7 +533,9 @@ func TestAddAndDelNetfilterChains(t *testing.T) {
 	checkChains(t, conn, nftables.TableFamilyIPv6, 0)
 
 	runner := newFakeNftablesRunner(t, conn)
-	runner.AddChains()
+	if err := runner.AddChains(); err != nil {
+		t.Fatalf("runner.AddChains() failed: %v", err)
+	}
 
 	tables, err := conn.ListTables()
 	if err != nil {
@@ -664,9 +666,13 @@ func TestNFTAddAndDelNetfilterBase(t *testing.T) {
 	conn := newSysConn(t)
 
 	runner := newFakeNftablesRunner(t, conn)
-	runner.AddChains()
+	if err := runner.AddChains(); err != nil {
+		t.Fatalf("AddChains() failed: %v", err)
+	}
 	defer runner.DelChains()
-	runner.AddBase("testTunn")
+	if err := runner.AddBase("testTunn"); err != nil {
+		t.Fatalf("AddBase() failed: %v", err)
+	}
 
 	// check number of rules in each IPv4 TS chain
 	inputV4, forwardV4, postroutingV4, err := getTsChains(conn, nftables.TableFamilyIPv4)
@@ -754,7 +760,9 @@ func TestNFTAddAndDelLoopbackRule(t *testing.T) {
 	conn := newSysConn(t)
 
 	runner := newFakeNftablesRunner(t, conn)
-	runner.AddChains()
+	if err := runner.AddChains(); err != nil {
+		t.Fatalf("AddChains() failed: %v", err)
+	}
 	defer runner.DelChains()
 
 	inputV4, _, _, err := getTsChains(conn, nftables.TableFamilyIPv4)
@@ -810,9 +818,13 @@ func TestNFTAddAndDelLoopbackRule(t *testing.T) {
 func TestNFTAddAndDelHookRule(t *testing.T) {
 	conn := newSysConn(t)
 	runner := newFakeNftablesRunner(t, conn)
-	runner.AddChains()
+	if err := runner.AddChains(); err != nil {
+		t.Fatalf("AddChains() failed: %v", err)
+	}
 	defer runner.DelChains()
-	runner.AddHooks()
+	if err := runner.AddHooks(); err != nil {
+		t.Fatalf("AddHooks() failed: %v", err)
+	}
 
 	forwardChain, err := getChainFromTable(conn, runner.nft4.Filter, "FORWARD")
 	if err != nil {

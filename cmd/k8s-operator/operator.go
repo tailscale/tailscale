@@ -67,10 +67,20 @@ func main() {
 	zlog := kzap.NewRaw(opts...).Sugar()
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
 
+	// The operator can run either as a plain operator or it can
+	// additionally act as api-server proxy
+	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
+	mode := parseAPIProxyMode()
+	if mode == apiserverProxyModeDisabled {
+		hostinfo.SetApp("k8s-operator")
+	} else {
+		hostinfo.SetApp("k8s-operator-proxy")
+	}
+
 	s, tsClient := initTSNet(zlog)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
-	maybeLaunchAPIServerProxy(zlog, restConfig, s)
+	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
 	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
 }
 
@@ -78,7 +88,6 @@ func main() {
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
 func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
-	hostinfo.SetApp("k8s-operator")
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")

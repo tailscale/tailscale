@@ -533,6 +533,7 @@ func (s *Server) start() (reterr error) {
 	sys.Tun.Get().Start()
 	sys.Set(ns)
 	ns.ProcessLocalIPs = true
+	ns.ProcessSubnets = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
 	s.netstack = ns
@@ -731,19 +732,39 @@ func networkForFamily(netBase string, is6 bool) string {
 //   - ("tcp", "", port)
 //
 // The netBase is "tcp" or "udp" (without any '4' or '6' suffix).
+//
+// Listeners which do not specify an IP address will match for traffic
+// for the local node (that is, a destination address of the IPv4 or
+// IPv6 address of this node) only. To listen for traffic on other addresses
+// such as those routed inbound via subnet routes, explicitly specify
+// the listening address or use RegisterFallbackTCPHandler.
 func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort, funnel bool) (_ *listener, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, a := range [2]netip.Addr{0: dst.Addr()} {
+
+	// Search for a listener with the specified IP
+	for _, net := range [2]string{
+		networkForFamily(netBase, dst.Addr().Is6()),
+		netBase,
+	} {
+		if ln, ok := s.listeners[listenKey{net, dst.Addr(), dst.Port(), funnel}]; ok {
+			return ln, true
+		}
+	}
+
+	// Search for a listener without an IP if the destination was
+	// one of the native IPs of the node.
+	if ip4, ip6 := s.TailscaleIPs(); dst.Addr() == ip4 || dst.Addr() == ip6 {
 		for _, net := range [2]string{
 			networkForFamily(netBase, dst.Addr().Is6()),
 			netBase,
 		} {
-			if ln, ok := s.listeners[listenKey{net, a, dst.Port(), funnel}]; ok {
+			if ln, ok := s.listeners[listenKey{net, netip.Addr{}, dst.Port(), funnel}]; ok {
 				return ln, true
 			}
 		}
 	}
+
 	return nil, false
 }
 
@@ -853,6 +874,12 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
+//
+// Listeners which do not specify an IP address will match for traffic
+// for the local node (that is, a destination address of the IPv4 or
+// IPv6 address of this node) only. To listen for traffic on other addresses
+// such as those routed inbound via subnet routes, explicitly specify
+// the listening address or use RegisterFallbackTCPHandler.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }

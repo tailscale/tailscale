@@ -314,9 +314,9 @@ func parseExitNodeQuery(q []byte) *response {
 	return p.response()
 }
 
-// HandleExitNodeDNSQuery handles a DNS query that arrived from a peer
-// via the peerapi's DoH server. This is only used when the local
-// node is being an exit node.
+// HandlePeerDNSQuery handles a DNS query that arrived from a peer
+// via the peerapi's DoH server. This is used when the local
+// node is being an exit node or an app connector.
 //
 // The provided allowName callback is whether a DNS query for a name
 // (as found by parsing q) is allowed.
@@ -325,7 +325,7 @@ func parseExitNodeQuery(q []byte) *response {
 // still result in a response DNS packet (saying there's a failure)
 // and a nil error.
 // TODO: figure out if we even need an error result.
-func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
+func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
 	metricDNSExitProxyQuery.Add(1)
 	ch := make(chan packet, 1)
 
