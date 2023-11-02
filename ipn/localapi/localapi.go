@@ -1685,8 +1685,8 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "lock status access denied", http.StatusForbidden)
+	if !h.PermitWrite {
+		http.Error(w, "lock sign access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
