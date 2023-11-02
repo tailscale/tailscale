@@ -14,10 +14,13 @@ import (
 	"net/http"
 	"net/http/cgi"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/web"
+	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/cmpx"
 )
 
@@ -76,11 +79,31 @@ func tlsConfigFromEnvironment() *tls.Config {
 }
 
 func runWeb(ctx context.Context, args []string) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+	defer cancel()
+
 	if len(args) > 0 {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
+	st, err := localClient.StatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("getting client status: %w", err)
+	}
+	hasPreviewCap := st.Self.HasCap(tailcfg.CapabilityPreviewWebClient)
+
+	cliServerMode := web.LegacyServerMode
+	if hasPreviewCap {
+		cliServerMode = web.LoginServerMode
+		// Also start full client in tailscaled.
+		log.Printf("starting tailscaled web client at %s:5252\n", st.Self.TailscaleIPs[0])
+		if err := setRunWebClient(ctx, true); err != nil {
+			return fmt.Errorf("starting web client in tailscaled: %w", err)
+		}
+	}
+
 	webServer, err := web.NewServer(web.ServerOpts{
+		Mode:        cliServerMode,
 		DevMode:     webArgs.dev,
 		CGIMode:     webArgs.cgi,
 		PathPrefix:  webArgs.prefix,
@@ -90,30 +113,49 @@ func runWeb(ctx context.Context, args []string) error {
 		log.Printf("tailscale.web: %v", err)
 		return err
 	}
-	defer webServer.Shutdown()
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Shutdown the server.
+			webServer.Shutdown()
+			if hasPreviewCap && !webArgs.cgi {
+				log.Println("stopping tailscaled web client")
+				// When not in cgi mode, shut down the tailscaled
+				// web client on cli termination.
+				if err := setRunWebClient(context.Background(), false); err != nil {
+					log.Printf("stopping tailscaled web client: %v", err)
+				}
+			}
+		}
+		os.Exit(0)
+	}()
 
 	if webArgs.cgi {
 		if err := cgi.Serve(webServer); err != nil {
 			log.Printf("tailscale.cgi: %v", err)
-			return err
 		}
 		return nil
-	}
-
-	tlsConfig := tlsConfigFromEnvironment()
-	if tlsConfig != nil {
+	} else if tlsConfig := tlsConfigFromEnvironment(); tlsConfig != nil {
 		server := &http.Server{
 			Addr:      webArgs.listen,
 			TLSConfig: tlsConfig,
 			Handler:   webServer,
 		}
-
+		defer server.Shutdown(ctx)
 		log.Printf("web server running on: https://%s", server.Addr)
 		return server.ListenAndServeTLS("", "")
 	} else {
 		log.Printf("web server running on: %s", urlOfListenAddr(webArgs.listen))
 		return http.ListenAndServe(webArgs.listen, webServer)
 	}
+}
+
+func setRunWebClient(ctx context.Context, val bool) error {
+	_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:           ipn.Prefs{RunWebClient: val},
+		RunWebClientSet: true,
+	})
+	return err
 }
 
 // urlOfListenAddr parses a given listen address into a formatted URL

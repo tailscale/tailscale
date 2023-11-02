@@ -52,6 +52,7 @@ func (b *LocalBackend) WebClientInit() (err error) {
 
 	b.logf("WebClientInit: initializing web ui")
 	if b.webClient.server, err = web.NewServer(web.ServerOpts{
+		Mode: web.ManageServerMode,
 		// TODO(sonia): allow passing back dev mode flag
 		LocalClient: b.webClient.lc,
 		Logf:        b.logf,
