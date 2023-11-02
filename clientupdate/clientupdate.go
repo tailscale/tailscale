@@ -284,7 +284,7 @@ func (up *Updater) updateSynology() error {
 		return nil
 	}
 
-	up.cleanupOldDownloads(filepath.Join(os.TempDir(), "tailscale-update*"))
+	up.cleanupOldDownloads(filepath.Join(os.TempDir(), "tailscale-update*", "*.spk"))
 	// Download the SPK into a temporary directory.
 	spkDir, err := os.MkdirTemp("", "tailscale-update")
 	if err != nil {
@@ -833,6 +833,9 @@ func (up *Updater) installMSI(msi string) error {
 	return err
 }
 
+// cleanupOldDownloads removes all files matching glob (see filepath.Glob).
+// Only regular files are removed, so the glob must match specific files and
+// not directories.
 func (up *Updater) cleanupOldDownloads(glob string) {
 	matches, err := filepath.Glob(glob)
 	if err != nil {
@@ -840,7 +843,15 @@ func (up *Updater) cleanupOldDownloads(glob string) {
 		return
 	}
 	for _, m := range matches {
-		if err := os.RemoveAll(m); err != nil {
+		s, err := os.Lstat(m)
+		if err != nil {
+			up.Logf("cleaning up old downloads: %v", err)
+			continue
+		}
+		if !s.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(m); err != nil {
 			up.Logf("cleaning up old downloads: %v", err)
 		}
 	}
