@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cgi"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -84,11 +85,13 @@ func runWeb(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
+	var hasPreviewCap bool
+	var selfIP netip.Addr
 	st, err := localClient.StatusWithoutPeers(ctx)
-	if err != nil {
-		return fmt.Errorf("getting client status: %w", err)
+	if err == nil && st.Self != nil && len(st.Self.TailscaleIPs) > 0 {
+		hasPreviewCap = st.Self.HasCap(tailcfg.CapabilityPreviewWebClient)
+		selfIP = st.Self.TailscaleIPs[0]
 	}
-	hasPreviewCap := st.Self.HasCap(tailcfg.CapabilityPreviewWebClient)
 
 	cliServerMode := web.LegacyServerMode
 	var existingWebClient bool
@@ -99,7 +102,7 @@ func runWeb(ctx context.Context, args []string) error {
 		cliServerMode = web.LoginServerMode
 		if !existingWebClient {
 			// Also start full client in tailscaled.
-			log.Printf("starting tailscaled web client at %s:5252\n", st.Self.TailscaleIPs[0])
+			log.Printf("starting tailscaled web client at %s:%d\n", selfIP.String(), web.ListenPort)
 			if err := setRunWebClient(ctx, true); err != nil {
 				return fmt.Errorf("starting web client in tailscaled: %w", err)
 			}
