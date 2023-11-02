@@ -21,7 +21,6 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/hostinfo"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
@@ -84,12 +83,10 @@ func parseAPIProxyMode() apiServerProxyMode {
 // maybeLaunchAPIServerProxy launches the auth proxy, which is a small HTTP server
 // that authenticates requests using the Tailscale LocalAPI and then proxies
 // them to the kube-apiserver.
-func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server) {
-	mode := parseAPIProxyMode()
+func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server, mode apiServerProxyMode) {
 	if mode == apiserverProxyModeDisabled {
 		return
 	}
-	hostinfo.SetApp("k8s-operator-proxy")
 	startlog := zlog.Named("launchAPIProxy")
 	if mode == apiserverProxyModeNoAuth {
 		restConfig = rest.AnonymousClientConfig(restConfig)
