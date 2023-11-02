@@ -37,13 +37,13 @@ import (
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
+	mode ServerMode
+
 	logf    logger.Logf
 	lc      *tailscale.LocalClient
 	timeNow func() time.Time
 
-	devMode     bool
-	tsDebugMode string
-
+	devMode    bool
 	cgiMode    bool
 	pathPrefix string
 
@@ -65,6 +65,31 @@ type Server struct {
 	browserSessions sync.Map
 }
 
+// ServerMode specifies the mode of a running web.Server.
+type ServerMode string
+
+const (
+	// LoginServerMode serves a readonly login client for logging a
+	// node into a tailnet, and viewing a readonly interface of the
+	// node's current Tailscale settings.
+	//
+	// In this mode, API calls are authenticated via platform auth.
+	LoginServerMode ServerMode = "login"
+
+	// ManageServerMode serves a management client for editing tailscale
+	// settings of a node.
+	//
+	// This mode restricts the app to only being assessible over Tailscale,
+	// and API calls are authenticated via browser sessions associated with
+	// the source's Tailscale identity. If the source browser does not have
+	// a valid session, a readonly version of the app is displayed.
+	ManageServerMode ServerMode = "manage"
+
+	// LegacyServerMode serves the legacy web client, visible to users
+	// prior to release of tailscale/corp#14335.
+	LegacyServerMode ServerMode = "legacy"
+)
+
 var (
 	exitNodeRouteV4 = netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 = netip.MustParsePrefix("::/0")
@@ -72,6 +97,12 @@ var (
 
 // ServerOpts contains options for constructing a new Server.
 type ServerOpts struct {
+	// Mode specifies the mode of web client being constructed.
+	Mode ServerMode
+
+	// DevMode indicates that the server should be started with frontend
+	// assets served by a Vite dev server, allowing for local development
+	// on the web client frontend.
 	DevMode bool
 
 	// CGIMode indicates if the server is running as a CGI script.
@@ -88,6 +119,8 @@ type ServerOpts struct {
 	// time.Now is used as default.
 	TimeNow func() time.Time
 
+	// Logf optionally provides a logger function.
+	// log.Printf is used as default.
 	Logf logger.Logf
 }
 
@@ -96,10 +129,19 @@ type ServerOpts struct {
 // ctx is only required to live the duration of the NewServer call,
 // and not the lifespan of the web server.
 func NewServer(opts ServerOpts) (s *Server, err error) {
+	switch opts.Mode {
+	case LoginServerMode, ManageServerMode, LegacyServerMode:
+		// valid types
+	case "":
+		return nil, fmt.Errorf("must specify a Mode")
+	default:
+		return nil, fmt.Errorf("invalid Mode provided")
+	}
 	if opts.LocalClient == nil {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
 	s = &Server{
+		mode:       opts.Mode,
 		logf:       opts.Logf,
 		devMode:    opts.DevMode,
 		lc:         opts.LocalClient,
@@ -113,7 +155,6 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	if s.logf == nil {
 		s.logf = log.Printf
 	}
-	s.tsDebugMode = s.debugMode()
 	s.assetsHandler, s.assetsCleanup = assetsHandler(opts.DevMode)
 
 	var metric string // clientmetric to report on startup
@@ -124,9 +165,7 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 	// The client is secured by limiting the interface it listens on,
 	// or by authenticating requests before they reach the web client.
 	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
-	if s.tsDebugMode == "login" {
-		// For the login client, we don't serve the full web client API,
-		// only the login endpoints.
+	if s.mode == LoginServerMode {
 		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
 		metric = "web_login_client_initialization"
 	} else {
@@ -146,23 +185,10 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 }
 
 func (s *Server) Shutdown() {
+	s.logf("web.Server: shutting down")
 	if s.assetsCleanup != nil {
 		s.assetsCleanup()
 	}
-}
-
-// debugMode returns the debug mode the web client is being run in.
-// The empty string is returned in the case that this instance is
-// not running in any debug mode.
-func (s *Server) debugMode() string {
-	if !s.devMode {
-		return "" // debug modes only available in dev
-	}
-	switch mode := os.Getenv("TS_DEBUG_WEB_CLIENT_MODE"); mode {
-	case "login", "full": // valid debug modes
-		return mode
-	}
-	return ""
 }
 
 // ServeHTTP processes all requests for the Tailscale web client.
@@ -203,7 +229,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 // authorizeRequest manages writing out any relevant authorization
 // errors to the ResponseWriter itself.
 func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
-	if s.tsDebugMode == "full" { // client using tailscale auth
+	if s.mode == ManageServerMode { // client using tailscale auth
 		_, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
 		switch {
 		case err != nil:
@@ -256,11 +282,9 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	case httpm.GET:
 		// TODO(soniaappasamy): we may want a minimal node data response here
 		s.serveGetNodeData(w, r)
-	case httpm.POST:
-		// TODO(soniaappasamy): implement
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+	http.Error(w, "invalid endpoint", http.StatusNotFound)
 	return
 }
 
@@ -404,6 +428,12 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	profile := st.User[st.Self.UserID]
 	deviceName := strings.Split(st.Self.DNSName, ".")[0]
 	versionShort := strings.Split(st.Version, "-")[0]
+	var debugMode string
+	if s.mode == ManageServerMode {
+		debugMode = "full"
+	} else if s.mode == LoginServerMode {
+		debugMode = "login"
+	}
 	data := &nodeData{
 		Profile:     profile,
 		Status:      st.BackendState,
@@ -415,7 +445,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		IsUnraid:    distro.Get() == distro.Unraid,
 		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
 		IPNVersion:  versionShort,
-		DebugMode:   s.tsDebugMode,
+		DebugMode:   debugMode, // TODO(sonia,will): just pass back s.mode directly?
 	}
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {

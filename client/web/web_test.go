@@ -337,9 +337,9 @@ func TestAuthorizeRequest(t *testing.T) {
 	go localapi.Serve(lal)
 
 	s := &Server{
-		lc:          &tailscale.LocalClient{Dial: lal.Dial},
-		tsDebugMode: "full",
-		timeNow:     time.Now,
+		mode:    ManageServerMode,
+		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		timeNow: time.Now,
 	}
 	validCookie := "ts-cookie"
 	s.browserSessions.Store(validCookie, &browserSession{
@@ -428,9 +428,9 @@ func TestServeTailscaleAuth(t *testing.T) {
 	sixtyDaysAgo := timeNow.Add(-sessionCookieExpiry * 2)
 
 	s := &Server{
-		lc:          &tailscale.LocalClient{Dial: lal.Dial},
-		tsDebugMode: "full",
-		timeNow:     func() time.Time { return timeNow },
+		mode:    ManageServerMode,
+		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		timeNow: func() time.Time { return timeNow },
 	}
 
 	successCookie := "ts-cookie-success"
