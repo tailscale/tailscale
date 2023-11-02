@@ -9,6 +9,7 @@ package web
 import (
 	"crypto/tls"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,21 +19,17 @@ import (
 
 // authorizeQNAP authenticates the logged-in QNAP user and verifies that they
 // are authorized to use the web client.
-// It reports true if the request is authorized to continue, and false otherwise.
-// authorizeQNAP manages writing out any relevant authorization errors to the
-// ResponseWriter itself.
-func authorizeQNAP(w http.ResponseWriter, r *http.Request) (ok bool) {
+// If the user is not authorized to use the client, an error is returned.
+func authorizeQNAP(r *http.Request) (ar authResponse, err error) {
 	_, resp, err := qnapAuthn(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return false
+		return ar, err
 	}
 	if resp.IsAdmin == 0 {
-		http.Error(w, "user is not an admin", http.StatusForbidden)
-		return false
+		return ar, errors.New("user is not an admin")
 	}
 
-	return true
+	return authResponse{OK: true}, nil
 }
 
 type qnapAuthResponse struct {

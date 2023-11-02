@@ -370,12 +370,6 @@ func TestAuthorizeRequest(t *testing.T) {
 		wantOkWithoutSession:   false,
 		wantOkWithSession:      true,
 	}, {
-		reqPath:                "/api/auth",
-		reqMethod:              httpm.GET,
-		wantOkNotOverTailscale: false,
-		wantOkWithoutSession:   true,
-		wantOkWithSession:      true,
-	}, {
 		reqPath:                "/api/somethingelse",
 		reqMethod:              httpm.GET,
 		wantOkNotOverTailscale: false,
@@ -587,7 +581,7 @@ func TestServeTailscaleAuth(t *testing.T) {
 			r.RemoteAddr = remoteIP
 			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
 			w := httptest.NewRecorder()
-			s.serveTailscaleAuth(w, r)
+			s.serveAPIAuth(w, r)
 			res := w.Result()
 			defer res.Body.Close()
 

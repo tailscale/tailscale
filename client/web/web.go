@@ -178,10 +178,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
-	if ok := s.authorizeRequest(w, r); !ok {
-		return
-	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.Method == httpm.GET && r.URL.Path == "/api/auth" {
+			s.serveAPIAuth(w, r)
+			return
+		}
+		if ok := s.authorizeRequest(w, r); !ok {
+			http.Error(w, "not authorized", http.StatusUnauthorized)
+			return
+		}
 		// Pass API requests through to the API handler.
 		s.apiHandler.ServeHTTP(w, r)
 		return
@@ -208,9 +213,6 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
 			// Readonly endpoint allowed without browser session.
 			return true
-		case r.URL.Path == "/api/auth":
-			// Endpoint for browser to request auth allowed without browser session.
-			return true
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
 			//
@@ -229,15 +231,13 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 		}
 	}
 	// Client using system-specific auth.
-	d := distro.Get()
-	switch {
-	case strings.HasPrefix(r.URL.Path, "/assets/") && r.Method == httpm.GET:
-		// Don't require authorization for static assets.
-		return true
-	case d == distro.Synology:
-		return authorizeSynology(w, r)
-	case d == distro.QNAP:
-		return authorizeQNAP(w, r)
+	switch distro.Get() {
+	case distro.Synology:
+		resp, _ := authorizeSynology(r)
+		return resp.OK
+	case distro.QNAP:
+		resp, _ := authorizeQNAP(r)
+		return resp.OK
 	default:
 		return true // no additional auth for this distro
 	}
@@ -250,11 +250,6 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
 		http.Error(w, "invalid endpoint", http.StatusNotFound)
-		return
-	}
-	if r.URL.Path != "/api/auth" {
-		// empty JSON response until we serve auth for the login client
-		fmt.Fprintf(w, "{}")
 		return
 	}
 	switch r.Method {
@@ -282,7 +277,9 @@ type authResponse struct {
 	AuthNeeded authType `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
 }
 
-func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
+// serverAPIAuth handles requests to the /api/auth endpoint
+// and returns an authResponse indicating the current auth state and any steps the user needs to take.
+func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != httpm.GET {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -291,6 +288,24 @@ func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
 
 	session, whois, err := s.getSession(r)
 	switch {
+	case err != nil && errors.Is(err, errNotUsingTailscale):
+		// not using tailscale, so perform platform auth
+		switch distro.Get() {
+		case distro.Synology:
+			resp, err = authorizeSynology(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+		case distro.QNAP:
+			resp, err = authorizeQNAP(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+		default:
+			resp.OK = true // no additional auth for this distro
+		}
 	case err != nil && !errors.Is(err, errNoSession):
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
@@ -341,14 +356,6 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
-	case path == "/auth":
-		if s.tsDebugMode == "full" { // behind debug flag
-			s.serveTailscaleAuth(w, r)
-		} else {
-			// empty JSON response until we serve auth for other modes
-			fmt.Fprintf(w, "{}")
-		}
-		return
 	case path == "/data":
 		switch r.Method {
 		case httpm.GET:
