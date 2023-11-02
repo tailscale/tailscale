@@ -52,8 +52,7 @@ func (b *LocalBackend) WebClientInit() (err error) {
 
 	b.logf("WebClientInit: initializing web ui")
 	if b.webClient.server, err = web.NewServer(web.ServerOpts{
-		Mode: web.ManageServerMode,
-		// TODO(sonia): allow passing back dev mode flag
+		Mode:        web.ManageServerMode,
 		LocalClient: b.webClient.lc,
 		Logf:        b.logf,
 	}); err != nil {
@@ -75,8 +74,8 @@ func (b *LocalBackend) WebClientShutdown() {
 	b.mu.Unlock() // release lock before shutdown
 	if server != nil {
 		server.Shutdown()
+		b.logf("WebClientShutdown: shut down web ui")
 	}
-	b.logf("WebClientShutdown: shut down web ui")
 }
 
 // handleWebClientConn serves web client requests.
