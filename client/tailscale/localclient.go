@@ -1390,20 +1390,20 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 }
 
 func (lc *LocalClient) InstallUpdate(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/update/install", nil)
+	_, err := lc.send(ctx, "POST", "/localapi/v0/update/install", http.StatusAccepted, nil)
+	return err
+}
+
+func (lc *LocalClient) GetUpdateProgress(ctx context.Context) ([]ipnstate.UpdateProgress, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/update/progress", http.StatusOK, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	res, err := lc.doLocalRequestNiceError(req)
+	st, err := decodeJSON[[]ipnstate.UpdateProgress](body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if res.StatusCode >= 400 {
-		data, _ := io.ReadAll(res.Body)
-		res.Body.Close()
-		return errors.New(string(data))
-	}
-	return nil
+	return st, nil
 }
 
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.

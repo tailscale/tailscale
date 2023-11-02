@@ -154,7 +154,9 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		s.timeNow = time.Now
 	}
 	s.tsDebugMode = s.debugMode()
-	s.assetsHandler, cleanup = assetsHandler(false)
+	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
+	// TODO(naman): remove, this lets me use compiled assets without env flag
+	// s.assetsHandler, cleanup = assetsHandler(false)
 
 	// Create handler for "/api" requests with CSRF protection.
 	// We don't require secure cookies, since the web client is regularly used
@@ -179,7 +181,16 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 // The empty string is returned in the case that this instance is
 // not running in any debug mode.
 func (s *Server) debugMode() string {
-	return "login"
+	if !s.devMode {
+		return "" // debug modes only available in dev
+	}
+	switch mode := os.Getenv("TS_DEBUG_WEB_CLIENT_MODE"); mode {
+	case "login", "full": // valid debug modes
+		return mode
+	}
+	return ""
+	// TODO(naman): remove, this lets me use compiled assets without env flag
+	// return "login"
 }
 
 // ServeHTTP processes all requests for the Tailscale web client.
@@ -265,9 +276,13 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 // which protects the handler using gorilla csrf.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
-	// TODO(naman): remove this from here once full web client is ready
+	// TODO(naman): remove update stuff from here once full web client is ready
 	if r.URL.Path == "/api/update" && r.Method == "POST" {
 		s.serveSelfUpdate(w, r)
+		return
+	}
+	if r.URL.Path == "/api/update/progress" && r.Method == "GET" {
+		s.serveUpdateProgress(w, r)
 		return
 	}
 	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
@@ -520,9 +535,6 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
-	case path == "/update" && r.Method == "POST":
-		s.serveSelfUpdate(w, r)
-		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
 		return
@@ -690,7 +702,16 @@ func (s *Server) serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	} else {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+func (s *Server) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
+	ups, err := s.lc.GetUpdateProgress(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		json.NewEncoder(w).Encode(ups)
 	}
 }
 

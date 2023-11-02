@@ -33,10 +33,18 @@ export type NodeUpdate = {
   ForceLogout?: boolean
 }
 
+// see tailcfg.ClientVersion
 export type ClientVersion = {
   RunningLatest: boolean,
   LatestVersion?: string,
   // TODO(naman): add other fields?
+}
+
+// see ipnstate.UpdateProgress
+export type UpdateProgress = {
+  status: 'UpdateFinished' | 'UpdateInProgress' | 'UpdateFailed',
+  message: string,
+  version: string,
 }
 
 // useNodeData returns basic data about the current node.

@@ -123,6 +123,7 @@ var handler = map[string]localAPIHandler{
 	"query-feature":               (*Handler).serveQueryFeature,
 	"update/check":                (*Handler).serveUpdateCheck,
 	"update/install":              (*Handler).serveUpdateInstall,
+	"update/progress":             (*Handler).serveUpdateProgress,
 }
 
 var (
@@ -2313,23 +2314,20 @@ func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
-		Logf: h.logf,
-	})
+	w.WriteHeader(http.StatusAccepted)
 
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	go h.b.DoWebUIUpdate()
+}
+
+func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	h.logf("update started")
-	err = up.Update()
-	h.logf("update finished with err = %v", err)
+	ups := h.b.GetWebUIUpdateProgress()
 
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	} else {
-		w.Write([]byte("OK"))
-	}
+	json.NewEncoder(w).Encode(ups)
 }
 
 var (

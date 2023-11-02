@@ -33,6 +33,7 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/doctor"
@@ -260,8 +261,10 @@ type LocalBackend struct {
 	directFileDoFinalRename bool // false on macOS, true on several NAS platforms
 	componentLogUntil       map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
-	c2nUpdateStatus updateStatus
-	currentUser     ipnauth.WindowsToken
+	c2nUpdateStatus      updateStatus
+	currentUser          ipnauth.WindowsToken
+	webUIUpdateProgress  []ipnstate.UpdateProgress
+	lastWebUIUpdateState ipnstate.ProgressStatus
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -347,25 +350,27 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	clock := tstime.StdClock{}
 
 	b := &LocalBackend{
-		ctx:                 ctx,
-		ctxCancel:           cancel,
-		logf:                logf,
-		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		sys:                 sys,
-		conf:                sys.InitialConfig,
-		e:                   e,
-		dialer:              dialer,
-		store:               store,
-		pm:                  pm,
-		backendLogID:        logID,
-		state:               ipn.NoState,
-		portpoll:            portpoll,
-		em:                  newExpiryManager(logf),
-		gotPortPollRes:      make(chan struct{}),
-		loginFlags:          loginFlags,
-		clock:               clock,
-		activeWatchSessions: make(set.Set[string]),
+		ctx:                  ctx,
+		ctxCancel:            cancel,
+		logf:                 logf,
+		keyLogf:              logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:            logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		sys:                  sys,
+		conf:                 sys.InitialConfig,
+		e:                    e,
+		dialer:               dialer,
+		store:                store,
+		pm:                   pm,
+		backendLogID:         logID,
+		state:                ipn.NoState,
+		portpoll:             portpoll,
+		em:                   newExpiryManager(logf),
+		gotPortPollRes:       make(chan struct{}),
+		loginFlags:           loginFlags,
+		clock:                clock,
+		activeWatchSessions:  make(set.Set[string]),
+		webUIUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
+		lastWebUIUpdateState: ipnstate.UpdateFinished,
 	}
 
 	netMon := sys.NetMon.Get()
@@ -5378,6 +5383,46 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.magicConn().DebugBreakDERPConns()
+}
+
+func (b *LocalBackend) pushWebUIUpdateProgress(up ipnstate.UpdateProgress) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.logf("update progress: %+v", up)
+	b.webUIUpdateProgress = append(b.webUIUpdateProgress, up)
+}
+
+func (b *LocalBackend) GetWebUIUpdateProgress() []ipnstate.UpdateProgress {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	res := b.webUIUpdateProgress
+	b.webUIUpdateProgress = make([]ipnstate.UpdateProgress, 0)
+	if len(res) == 0 {
+		res = append(res, ipnstate.NewUpdateProgress(b.lastWebUIUpdateState, ""))
+	} else {
+		b.lastWebUIUpdateState = res[len(res)-1].Status
+	}
+	return res
+}
+
+func (b *LocalBackend) DoWebUIUpdate() {
+	b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, ""))
+	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
+		Logf: func(format string, args ...any) {
+			b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, fmt.Sprintf(format, args...)))
+		},
+	})
+	if err != nil {
+		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
+	}
+	b.logf("update started")
+	err = up.Update()
+	b.logf("update done: %v", err)
+	if err != nil {
+		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
+	} else {
+		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart, please restart Tailscale manually!"))
+	}
 }
 
 // mayDeref dereferences p if non-nil, otherwise it returns the zero value.

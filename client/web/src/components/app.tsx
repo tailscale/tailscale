@@ -1,7 +1,7 @@
 import React from "react"
 import { Footer, Header, IP, State } from "src/components/legacy"
 import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, { NodeData, ClientVersion } from "src/hooks/node-data"
+import useNodeData, { NodeData, ClientVersion, UpdateProgress } from "src/hooks/node-data"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
@@ -22,6 +22,13 @@ export default function App() {
 
   const [updating, setUpdating] = useState<UpdateState>(initialUpdateState)
 
+  const [updateLog, setUpdateLog] = useState<string>('')
+
+  const appendUpdateLog = (msg: string) => {
+    console.log(msg)
+    setUpdateLog(updateLog + msg + '\n')
+  }
+
   if (!data) {
     // TODO(sonia): add a loading view
     return <div className="text-center py-14">Loading...</div>
@@ -30,20 +37,9 @@ export default function App() {
   const needsLogin = data?.Status === "NeedsLogin" || data?.Status === "NoState"
 
   const installUpdate = () => {
-    const currentVersion = data.ClientVersion
+    const currentVersion = data.IPNVersion
 
     apiFetch('/update', 'POST')
-      .then(async (res) => {
-        const reader = res.body?.getReader()
-        const decoder = new TextDecoder()
-        if (reader) {
-          while (true) {
-            const { done, value } = await reader.read()
-            console.log(decoder.decode(value))
-            if (done) break
-          }
-        }
-      })
       .catch(err => {
         console.log(err)
         setUpdating(UpdateState.Failed)
@@ -53,30 +49,47 @@ export default function App() {
 
     let tsAwayForPolls = 0
     function poll() {
-      apiFetch('/data', 'GET')
+      apiFetch('/update/progress', 'GET')
       .then(res => res.json())
-      .then((res: NodeData) => {
-        if (updating === UpdateState.Failed) return
-        if (tsAwayForPolls === 0) return setTimeout(poll, 1000)
-        if (
-          !res.ClientVersion.RunningLatest ||
-          currentVersion.LatestVersion === res.ClientVersion.LatestVersion
-        ) {
-          setUpdating(UpdateState.Failed)
-          return
+      .then((res: UpdateProgress[]) => {
+        for (const up of res) {
+          console.log(up)
+          if (up.status === 'UpdateFailed') {
+            setUpdating(UpdateState.Failed)
+            if (up.message) appendUpdateLog('ERROR: ' + up.message)
+            return
+          }
+
+          if (up.status === 'UpdateFinished') {
+            // if update finished and tailscaled did not go away (ie. did not restart),
+            // then the version being the same might not be an error, it might just require
+            // the user to restart Tailscale manually (this is required in some cases in the
+            // clientupdate package).
+            if (up.version === currentVersion && tsAwayForPolls > 0) {
+              setUpdating(UpdateState.Failed)
+              appendUpdateLog('ERROR: Update failed, still running Tailscale ' + up.version)
+              if (up.message) appendUpdateLog('ERROR: ' + up.message)
+            }
+            else {
+              setUpdating(UpdateState.Complete)
+              if (up.message) appendUpdateLog('INFO: ' + up.message)
+            }
+            return
+          }
+
+          setUpdating(UpdateState.InProgress)
+          if (up.message) appendUpdateLog('INFO: ' + up.message)
         }
-        // TODO(naman): do I need to worry about unraid csrf token?
 
-        setUpdating(UpdateState.Complete)
-
-        setTimeout(() => {
-          setUpdating(UpdateState.UpToDate)
-        }, 15 * 1000)
+        setTimeout(poll, 1000)
       })
       .catch(err => {
         ++tsAwayForPolls
         if (tsAwayForPolls >= 5 * 60) {
           setUpdating(UpdateState.Failed)
+          appendUpdateLog('ERROR: tailscaled went away but did not come back!')
+          appendUpdateLog('ERROR: last error received:')
+          appendUpdateLog(err.toString())
         }
         else {
           setTimeout(poll, 1000)
@@ -89,7 +102,7 @@ export default function App() {
 
   return !needsLogin &&
     (data.DebugMode === "login" || data.DebugMode === "full") ? (
-    <WebClient {...data} updating={updating} installUpdate={installUpdate} />
+    <WebClient {...data} updating={updating} installUpdate={installUpdate} updateLog={updateLog} />
   ) : (
     // Legacy client UI
     <div className="py-14">
@@ -106,10 +119,11 @@ export default function App() {
 // TODO(naman): clean this interface up?
 function WebClient(props: NodeData & {
   updating: UpdateState,
-  installUpdate: () => void
+  installUpdate: () => void,
+  updateLog: string,
 }) {
   const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
-  const { updating, installUpdate } = props
+  const { updating, installUpdate, updateLog } = props
 
   if (loadingAuth) {
     return <div className="text-center py-14">Loading...</div>
@@ -122,7 +136,7 @@ function WebClient(props: NodeData & {
   return (
     <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-10 align-middle h-screen">
       {(updatingViewStates.includes(updating)) ? (
-        <UpdatingView updating={updating} cv={props.ClientVersion} />
+        <UpdatingView updating={updating} cv={props.ClientVersion} updateLog={updateLog} />
       ) : (props.DebugMode === "full" && auth?.ok) ? (
         <ManagementView {...props} />
       ) : (
@@ -135,9 +149,10 @@ function WebClient(props: NodeData & {
 
 function UpdatingView(props: {
   updating: UpdateState,
-  cv: ClientVersion
+  cv: ClientVersion,
+  updateLog: string,
 }) {
-  const { updating, cv } = props
+  const { updating, cv, updateLog } = props
   return (
     <>
       <div className="mx-auto">
@@ -184,6 +199,9 @@ function UpdatingView(props: {
             </>
           )
         }
+        <pre className="h-64 overflow-scroll"><code>
+          { updateLog }
+        </code></pre>
       </div>
     </>
   )
