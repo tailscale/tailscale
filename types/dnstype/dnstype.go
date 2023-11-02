@@ -21,6 +21,8 @@ type Resolver struct {
 	//    as of 2022-09-08 only used for certain well-known resolvers
 	//    (see the publicdns package) for which the IP addresses to dial DoH are
 	//    known ahead of time, so bootstrap DNS resolution is not required.
+	//  - "http://node-address:port/path" for DNS over HTTP over WireGuard. This
+	//    is implemented in the PeerAPI for exit nodes and app connectors.
 	//  - [TODO] "tls://resolver.com" for DNS over TCP+TLS
 	Addr string `json:",omitempty"`
 
