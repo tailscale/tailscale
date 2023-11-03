@@ -8,8 +8,12 @@ export enum AuthType {
 
 export type AuthResponse = {
   ok: boolean
-  authUrl?: string
   authNeeded?: AuthType
+}
+
+export type SessionsCallbacks = {
+  new: () => Promise<string> // creates new auth session and returns authURL
+  wait: () => Promise<void> // blocks until auth is completed
 }
 
 // useAuth reports and refreshes Tailscale auth status
@@ -18,10 +22,9 @@ export default function useAuth() {
   const [data, setData] = useState<AuthResponse>()
   const [loading, setLoading] = useState<boolean>(true)
 
-  const loadAuth = useCallback((wait?: boolean) => {
-    const url = wait ? "/auth?wait=true" : "/auth"
+  const loadAuth = useCallback(() => {
     setLoading(true)
-    return apiFetch(url, "GET")
+    return apiFetch("/auth", "GET")
       .then((r) => r.json())
       .then((d) => {
         setData(d)
@@ -44,11 +47,33 @@ export default function useAuth() {
       })
   }, [])
 
+  const newSession = useCallback(() => {
+    return apiFetch("/auth/session/new", "GET")
+      .then((r) => r.json())
+      .then((d) => d.authUrl)
+      .catch((error) => {
+        console.error(error)
+      })
+  }, [])
+
+  const waitForSessionCompletion = useCallback(() => {
+    return apiFetch("/auth/session/wait", "GET")
+      .then(() => loadAuth()) // refresh auth data
+      .catch((error) => {
+        console.error(error)
+      })
+  }, [])
+
   useEffect(() => {
     loadAuth()
   }, [])
 
-  const waitOnAuth = useCallback(() => loadAuth(true), [])
-
-  return { data, loading, waitOnAuth }
+  return {
+    data,
+    loading,
+    sessions: {
+      new: newSession,
+      wait: waitForSessionCompletion,
+    },
+  }
 }

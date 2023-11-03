@@ -3,19 +3,19 @@ import React from "react"
 import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
 import ReadonlyClientView from "src/components/views/readonly-client-view"
-import useAuth, { AuthResponse } from "src/hooks/auth"
+import useAuth, { AuthResponse, SessionsCallbacks } from "src/hooks/auth"
 import useNodeData from "src/hooks/node-data"
 import ManagementClientView from "./views/management-client-view"
 
 export default function App() {
-  const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
+  const { data: auth, loading: loadingAuth, sessions } = useAuth()
 
   return (
     <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-14">
       {loadingAuth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
-        <WebClient auth={auth} waitOnAuth={waitOnAuth} />
+        <WebClient auth={auth} sessions={sessions} />
       )}
     </div>
   )
@@ -23,10 +23,10 @@ export default function App() {
 
 function WebClient({
   auth,
-  waitOnAuth,
+  sessions,
 }: {
   auth?: AuthResponse
-  waitOnAuth: () => Promise<void>
+  sessions: SessionsCallbacks
 }) {
   const { data, refreshData, updateNode } = useNodeData()
 
@@ -45,7 +45,7 @@ function WebClient({
         <ManagementClientView {...data} />
       ) : data.DebugMode === "login" || data.DebugMode === "full" ? (
         // Render new client interface in readonly mode.
-        <ReadonlyClientView data={data} auth={auth} waitOnAuth={waitOnAuth} />
+        <ReadonlyClientView data={data} auth={auth} sessions={sessions} />
       ) : (
         // Render legacy client interface.
         <LegacyClientView
