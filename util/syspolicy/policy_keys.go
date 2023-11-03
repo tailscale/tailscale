@@ -15,6 +15,7 @@ const (
 	// The default is "user-decides" unless otherwise stated.
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
+	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
 
 	// Keys with a string value that controls visibility: "show", "hide".
 	// The default is "show" unless otherwise stated.
