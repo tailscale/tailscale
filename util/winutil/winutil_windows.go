@@ -225,14 +225,32 @@ func isSIDValidPrincipal(uid string) bool {
 	}
 }
 
-// EnableCurrentThreadPrivilege enables the named privilege
-// in the current thread access token.
-func EnableCurrentThreadPrivilege(name string) error {
+// EnableCurrentThreadPrivilege enables the named privilege in the current
+// thread access token. The current goroutine is also locked to the OS thread
+// (runtime.LockOSThread). Callers must call the returned disable function when
+// done with the privileged task.
+func EnableCurrentThreadPrivilege(name string) (disable func() error, err error) {
+	runtime.LockOSThread()
+
+	if err := windows.ImpersonateSelf(windows.SecurityImpersonation); err != nil {
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+	disable = func() error {
+		defer runtime.UnlockOSThread()
+		return windows.RevertToSelf()
+	}
+	defer func() {
+		if err != nil {
+			disable()
+		}
+	}()
+
 	var t windows.Token
-	err := windows.OpenThreadToken(windows.CurrentThread(),
+	err = windows.OpenThreadToken(windows.CurrentThread(),
 		windows.TOKEN_QUERY|windows.TOKEN_ADJUST_PRIVILEGES, false, &t)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer t.Close()
 
@@ -240,15 +258,15 @@ func EnableCurrentThreadPrivilege(name string) error {
 
 	privStr, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	err = windows.LookupPrivilegeValue(nil, privStr, &tp.Privileges[0].Luid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tp.PrivilegeCount = 1
 	tp.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
-	return windows.AdjustTokenPrivileges(t, false, &tp, 0, nil, nil)
+	return disable, windows.AdjustTokenPrivileges(t, false, &tp, 0, nil, nil)
 }
 
 // StartProcessAsChild starts exePath process as a child of parentPID.
@@ -256,16 +274,7 @@ func EnableCurrentThreadPrivilege(name string) error {
 // the new process, along with any optional environment variables in extraEnv.
 func StartProcessAsChild(parentPID uint32, exePath string, extraEnv []string) error {
 	// The rest of this function requires SeDebugPrivilege to be held.
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	err := windows.ImpersonateSelf(windows.SecurityImpersonation)
-	if err != nil {
-		return err
-	}
-	defer windows.RevertToSelf()
-
+	//
 	// According to https://docs.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights
 	//
 	// ... To open a handle to another process and obtain full access rights,
@@ -277,10 +286,11 @@ func StartProcessAsChild(parentPID uint32, exePath string, extraEnv []string) er
 	//
 	// TODO: try look for something less than SeDebugPrivilege
 
-	err = EnableCurrentThreadPrivilege("SeDebugPrivilege")
+	disableSeDebug, err := EnableCurrentThreadPrivilege("SeDebugPrivilege")
 	if err != nil {
 		return err
 	}
+	defer disableSeDebug()
 
 	ph, err := windows.OpenProcess(
 		windows.PROCESS_CREATE_PROCESS|windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_DUP_HANDLE,
