@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -410,7 +411,11 @@ func TestAuthorizeRequest(t *testing.T) {
 
 func TestServeAuth(t *testing.T) {
 	user := &tailcfg.UserProfile{ID: tailcfg.UserID(1)}
-	self := &ipnstate.PeerStatus{ID: "self", UserID: user.ID}
+	self := &ipnstate.PeerStatus{
+		ID:           "self",
+		UserID:       user.ID,
+		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.1.2.3")},
+	}
 	remoteNode := &apitype.WhoIsResponse{Node: &tailcfg.Node{ID: 1}, UserProfile: user}
 	remoteIP := "100.100.100.101"
 
@@ -605,7 +610,7 @@ func TestServeAuth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", tt.path, nil)
+			r := httptest.NewRequest("GET", "http://100.1.2.3:5252"+tt.path, nil)
 			r.RemoteAddr = remoteIP
 			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
 			w := httptest.NewRecorder()
@@ -658,6 +663,92 @@ func TestServeAuth(t *testing.T) {
 			}
 			if diff := cmp.Diff(gotSesson, tt.wantSession); diff != "" {
 				t.Errorf("wrong session; (-got+want):%v", diff)
+			}
+		})
+	}
+}
+
+func TestRequireTailscaleIP(t *testing.T) {
+	self := &ipnstate.PeerStatus{
+		TailscaleIPs: []netip.Addr{
+			netip.MustParseAddr("100.1.2.3"),
+			netip.MustParseAddr("fd7a:115c::1234"),
+		},
+	}
+
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+	localapi := mockLocalAPI(t, nil, func() *ipnstate.PeerStatus { return self })
+	defer localapi.Close()
+	go localapi.Serve(lal)
+
+	s := &Server{
+		mode:    ManageServerMode,
+		lc:      &tailscale.LocalClient{Dial: lal.Dial},
+		timeNow: time.Now,
+		logf:    t.Logf,
+	}
+
+	tests := []struct {
+		name         string
+		target       string
+		wantHandled  bool
+		wantLocation string
+	}{
+		{
+			name:         "localhost",
+			target:       "http://localhost/",
+			wantHandled:  true,
+			wantLocation: "http://100.1.2.3:5252/",
+		},
+		{
+			name:         "ipv4-no-port",
+			target:       "http://100.1.2.3/",
+			wantHandled:  true,
+			wantLocation: "http://100.1.2.3:5252/",
+		},
+		{
+			name:        "ipv4-correct-port",
+			target:      "http://100.1.2.3:5252/",
+			wantHandled: false,
+		},
+		{
+			name:         "ipv6-no-port",
+			target:       "http://[fd7a:115c::1234]/",
+			wantHandled:  true,
+			wantLocation: "http://100.1.2.3:5252/",
+		},
+		{
+			name:        "ipv6-correct-port",
+			target:      "http://[fd7a:115c::1234]:5252/",
+			wantHandled: false,
+		},
+		{
+			name:        "quad-100",
+			target:      "http://100.100.100.100/",
+			wantHandled: false,
+		},
+		{
+			name:        "ipv6-service-addr",
+			target:      "http://[fd7a:115c:a1e0::53]/",
+			wantHandled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			s.logf = t.Logf
+			r := httptest.NewRequest(httpm.GET, tt.target, nil)
+			w := httptest.NewRecorder()
+			handled := s.requireTailscaleIP(w, r)
+
+			if handled != tt.wantHandled {
+				t.Errorf("request(%q) was handled; want=%v, got=%v", tt.target, tt.wantHandled, handled)
+			}
+
+			location := w.Header().Get("Location")
+			if location != tt.wantLocation {
+				t.Errorf("request(%q) wrong location; want=%q, got=%q", tt.target, tt.wantLocation, location)
 			}
 		})
 	}

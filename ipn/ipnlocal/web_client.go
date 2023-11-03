@@ -16,6 +16,8 @@ import (
 	"tailscale.com/net/netutil"
 )
 
+const webClientPort = web.ListenPort
+
 // webClient holds state for the web interface for managing
 // this tailscale instance. The web interface is not used by
 // default, but initialized by calling LocalBackend.WebOrInit.

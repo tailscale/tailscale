@@ -29,11 +29,16 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/licenses"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
 	"tailscale.com/version/distro"
 )
+
+// ListenPort is the static port used for the web client when run inside tailscaled.
+// (5252 are the numbers above the letters "TSTS" on a qwerty keyboard.)
+const ListenPort = 5252
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
@@ -202,6 +207,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if s.mode == ManageServerMode {
+		// In manage mode, requests must be sent directly to the bare Tailscale IP address.
+		// If a request comes in on any other hostname, redirect.
+		if s.requireTailscaleIP(w, r) {
+			return // user was redirected
+		}
+
+		// serve HTTP 204 on /ok requests as connectivity check
+		if r.Method == httpm.GET && r.URL.Path == "/ok" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	}
+
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		switch {
 		case r.URL.Path == "/api/auth" && r.Method == httpm.GET:
@@ -226,6 +249,45 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.lc.IncrementCounter(r.Context(), "web_client_page_load", 1)
 	}
 	s.assetsHandler.ServeHTTP(w, r)
+}
+
+// requireTailscaleIP redirects an incoming request if the HTTP request was not made to a bare Tailscale IP address.
+// The request will be redirected to the Tailscale IP, port 5252, with the original request path.
+// This allows any custom hostname to be used to access the device, but protects against DNS rebinding attacks.
+// Returns true if the request has been fully handled, either be returning a redirect or an HTTP error.
+func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (handled bool) {
+	const (
+		ipv4ServiceHost = tsaddr.TailscaleServiceIPString
+		ipv6ServiceHost = "[" + tsaddr.TailscaleServiceIPv6String + "]"
+	)
+	// allow requests on quad-100 (or ipv6 equivalent)
+	if r.URL.Host == ipv4ServiceHost || r.URL.Host == ipv6ServiceHost {
+		return false
+	}
+
+	st, err := s.lc.StatusWithoutPeers(r.Context())
+	if err != nil {
+		s.logf("error getting status: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return true
+	}
+
+	var ipv4 string // store the first IPv4 address we see for redirect later
+	for _, ip := range st.Self.TailscaleIPs {
+		if ip.Is4() {
+			if r.Host == fmt.Sprintf("%s:%d", ip, ListenPort) {
+				return false
+			}
+			ipv4 = ip.String()
+		}
+		if ip.Is6() && r.Host == fmt.Sprintf("[%s]:%d", ip, ListenPort) {
+			return false
+		}
+	}
+	newURL := *r.URL
+	newURL.Host = fmt.Sprintf("%s:%d", ipv4, ListenPort)
+	http.Redirect(w, r, newURL.String(), http.StatusMovedPermanently)
+	return true
 }
 
 // authorizeRequest reports whether the request from the web client
