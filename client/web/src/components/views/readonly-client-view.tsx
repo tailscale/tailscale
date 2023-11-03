@@ -1,5 +1,5 @@
 import React from "react"
-import { AuthResponse } from "src/hooks/auth"
+import { AuthResponse, AuthType, SessionsCallbacks } from "src/hooks/auth"
 import { NodeData } from "src/hooks/node-data"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
@@ -17,11 +17,11 @@ import ProfilePic from "src/ui/profile-pic"
 export default function ReadonlyClientView({
   data,
   auth,
-  waitOnAuth,
+  sessions,
 }: {
   data: NodeData
   auth?: AuthResponse
-  waitOnAuth: () => Promise<void>
+  sessions: SessionsCallbacks
 }) {
   return (
     <>
@@ -51,12 +51,14 @@ export default function ReadonlyClientView({
               <div className="text-sm leading-tight">{data.IP}</div>
             </div>
           </div>
-          {data.DebugMode === "full" && (
+          {auth?.authNeeded == AuthType.tailscale && (
             <button
               className="button button-blue ml-6"
               onClick={() => {
-                window.open(auth?.authUrl, "_blank")
-                waitOnAuth()
+                sessions
+                  .new()
+                  .then((url) => window.open(url, "_blank"))
+                  .then(() => sessions.wait())
               }}
             >
               Access

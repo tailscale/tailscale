@@ -408,7 +408,7 @@ func TestAuthorizeRequest(t *testing.T) {
 	}
 }
 
-func TestServeTailscaleAuth(t *testing.T) {
+func TestServeAuth(t *testing.T) {
 	user := &tailcfg.UserProfile{ID: tailcfg.UserID(1)}
 	self := &ipnstate.PeerStatus{ID: "self", UserID: user.ID}
 	remoteNode := &apitype.WhoIsResponse{Node: &tailcfg.Node{ID: 1}, UserProfile: user}
@@ -462,18 +462,29 @@ func TestServeTailscaleAuth(t *testing.T) {
 	})
 
 	tests := []struct {
-		name          string
-		cookie        string
-		query         string
-		wantStatus    int
-		wantResp      *authResponse
-		wantNewCookie bool            // new cookie generated
-		wantSession   *browserSession // session associated w/ cookie at end of request
+		name string
+
+		cookie        string          // cookie attached to request
+		wantNewCookie bool            // want new cookie generated during request
+		wantSession   *browserSession // session associated w/ cookie after request
+
+		path       string
+		wantStatus int
+		wantResp   any
 	}{
 		{
-			name:          "new-session-created",
+			name:          "no-session",
+			path:          "/api/auth",
 			wantStatus:    http.StatusOK,
-			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
+			wantResp:      &authResponse{OK: false, AuthNeeded: tailscaleAuth},
+			wantNewCookie: false,
+			wantSession:   nil,
+		},
+		{
+			name:          "new-session",
+			path:          "/api/auth/session/new",
+			wantStatus:    http.StatusOK,
+			wantResp:      &newSessionAuthResponse{AuthURL: testControlURL + testAuthPath},
 			wantNewCookie: true,
 			wantSession: &browserSession{
 				ID:            "GENERATED_ID", // gets swapped for newly created ID by test
@@ -487,9 +498,10 @@ func TestServeTailscaleAuth(t *testing.T) {
 		},
 		{
 			name:       "query-existing-incomplete-session",
+			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{OK: false, AuthURL: testControlURL + testAuthPathSuccess},
+			wantResp:   &authResponse{OK: false, AuthNeeded: tailscaleAuth},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
@@ -501,13 +513,27 @@ func TestServeTailscaleAuth(t *testing.T) {
 			},
 		},
 		{
-			name:   "transition-to-successful-session",
-			cookie: successCookie,
-			// query "wait" indicates the FE wants to make
-			// local api call to wait until session completed.
-			query:      "wait=true",
+			name:       "existing-session-used",
+			path:       "/api/auth/session/new", // should not create new session
+			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{OK: true},
+			wantResp:   &newSessionAuthResponse{AuthURL: testControlURL + testAuthPathSuccess},
+			wantSession: &browserSession{
+				ID:            successCookie,
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       oneHourAgo,
+				AuthID:        testAuthPathSuccess,
+				AuthURL:       testControlURL + testAuthPathSuccess,
+				Authenticated: false,
+			},
+		},
+		{
+			name:       "transition-to-successful-session",
+			path:       "/api/auth/session/wait",
+			cookie:     successCookie,
+			wantStatus: http.StatusOK,
+			wantResp:   nil,
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
@@ -520,6 +546,7 @@ func TestServeTailscaleAuth(t *testing.T) {
 		},
 		{
 			name:       "query-existing-complete-session",
+			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
 			wantResp:   &authResponse{OK: true},
@@ -535,17 +562,18 @@ func TestServeTailscaleAuth(t *testing.T) {
 		},
 		{
 			name:        "transition-to-failed-session",
+			path:        "/api/auth/session/wait",
 			cookie:      failureCookie,
-			query:       "wait=true",
 			wantStatus:  http.StatusUnauthorized,
 			wantResp:    nil,
 			wantSession: nil, // session deleted
 		},
 		{
 			name:          "failed-session-cleaned-up",
+			path:          "/api/auth/session/new",
 			cookie:        failureCookie,
 			wantStatus:    http.StatusOK,
-			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
+			wantResp:      &newSessionAuthResponse{AuthURL: testControlURL + testAuthPath},
 			wantNewCookie: true,
 			wantSession: &browserSession{
 				ID:            "GENERATED_ID",
@@ -559,9 +587,10 @@ func TestServeTailscaleAuth(t *testing.T) {
 		},
 		{
 			name:          "expired-cookie-gets-new-session",
+			path:          "/api/auth/session/new",
 			cookie:        expiredCookie,
 			wantStatus:    http.StatusOK,
-			wantResp:      &authResponse{OK: false, AuthURL: testControlURL + testAuthPath},
+			wantResp:      &newSessionAuthResponse{AuthURL: testControlURL + testAuthPath},
 			wantNewCookie: true,
 			wantSession: &browserSession{
 				ID:            "GENERATED_ID",
@@ -576,12 +605,11 @@ func TestServeTailscaleAuth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/api/auth", nil)
-			r.URL.RawQuery = tt.query
+			r := httptest.NewRequest("GET", tt.path, nil)
 			r.RemoteAddr = remoteIP
 			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
 			w := httptest.NewRecorder()
-			s.serveAPIAuth(w, r)
+			s.serve(w, r)
 			res := w.Result()
 			defer res.Body.Close()
 
@@ -589,17 +617,20 @@ func TestServeTailscaleAuth(t *testing.T) {
 			if gotStatus := res.StatusCode; tt.wantStatus != gotStatus {
 				t.Errorf("wrong status; want=%v, got=%v", tt.wantStatus, gotStatus)
 			}
-			var gotResp *authResponse
+			var gotResp string
 			if res.StatusCode == http.StatusOK {
 				body, err := io.ReadAll(res.Body)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := json.Unmarshal(body, &gotResp); err != nil {
-					t.Fatal(err)
-				}
+				gotResp = strings.Trim(string(body), "\n")
 			}
-			if diff := cmp.Diff(gotResp, tt.wantResp); diff != "" {
+			var wantResp string
+			if tt.wantResp != nil {
+				b, _ := json.Marshal(tt.wantResp)
+				wantResp = string(b)
+			}
+			if diff := cmp.Diff(gotResp, string(wantResp)); diff != "" {
 				t.Errorf("wrong response; (-got+want):%v", diff)
 			}
 			// Validate cookie creation.
@@ -654,22 +685,13 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 				t.Fatalf("/whois call missing \"addr\" query")
 			}
 			if node := whoIs[addr]; node != nil {
-				if err := json.NewEncoder(w).Encode(&node); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
+				writeJSON(w, &node)
 				return
 			}
 			http.Error(w, "not a node", http.StatusUnauthorized)
 			return
 		case "/localapi/v0/status":
-			status := ipnstate.Status{Self: self()}
-			if err := json.NewEncoder(w).Encode(status); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
+			writeJSON(w, ipnstate.Status{Self: self()})
 			return
 		case "/localapi/v0/debug-web-client": // used by TestServeTailscaleAuth
 			type reqData struct {
@@ -694,11 +716,7 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 				http.Error(w, "authenticated as wrong user", http.StatusUnauthorized)
 				return
 			}
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
+			writeJSON(w, resp)
 			return
 		default:
 			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)

@@ -203,8 +203,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		if r.Method == httpm.GET && r.URL.Path == "/api/auth" {
-			s.serveAPIAuth(w, r)
+		switch {
+		case r.URL.Path == "/api/auth" && r.Method == httpm.GET:
+			s.serveAPIAuth(w, r) // serve auth status
+			return
+		case r.URL.Path == "/api/auth/session/new" && r.Method == httpm.GET:
+			s.serveAPIAuthSessionNew(w, r) // create new session
+			return
+		case r.URL.Path == "/api/auth/session/wait" && r.Method == httpm.GET:
+			s.serveAPIAuthSessionWait(w, r) // wait for session to be authorized
 			return
 		}
 		if ok := s.authorizeRequest(w, r); !ok {
@@ -295,20 +302,15 @@ var (
 
 type authResponse struct {
 	OK         bool     `json:"ok"`                   // true when user has valid auth session
-	AuthURL    string   `json:"authUrl,omitempty"`    // filled when user has control auth action to take
 	AuthNeeded authType `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
 }
 
 // serverAPIAuth handles requests to the /api/auth endpoint
 // and returns an authResponse indicating the current auth state and any steps the user needs to take.
 func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != httpm.GET {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var resp authResponse
 
-	session, whois, err := s.getSession(r)
+	session, _, err := s.getSession(r)
 	switch {
 	case err != nil && errors.Is(err, errNotUsingTailscale):
 		// not using tailscale, so perform platform auth
@@ -328,12 +330,43 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		default:
 			resp.OK = true // no additional auth for this distro
 		}
+	case err != nil && (errors.Is(err, errNotOwner) ||
+		errors.Is(err, errNotUsingTailscale) ||
+		errors.Is(err, errTaggedLocalSource) ||
+		errors.Is(err, errTaggedRemoteSource)):
+		// These cases are all restricted to the readonly view.
+		// No auth action to take.
+		resp = authResponse{OK: false}
 	case err != nil && !errors.Is(err, errNoSession):
+		// Any other error.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	case session.isAuthorized(s.timeNow()):
+		resp = authResponse{OK: true}
+	default:
+		resp = authResponse{OK: false, AuthNeeded: tailscaleAuth}
+	}
+
+	writeJSON(w, resp)
+}
+
+type newSessionAuthResponse struct {
+	AuthURL string `json:"authUrl,omitempty"`
+}
+
+// serveAPIAuthSessionNew handles requests to the /api/auth/session/new endpoint.
+func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) {
+	session, whois, err := s.getSession(r)
+	if err != nil && !errors.Is(err, errNoSession) {
+		// Source associated with request not allowed to create
+		// a session for this web client.
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
-	case session == nil:
+	}
+	if session == nil {
 		// Create a new session.
-		session, err := s.newSession(r.Context(), whois)
+		// If one already existed, we return that authURL rather than creating a new one.
+		session, err = s.newSession(r.Context(), whois)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -346,29 +379,25 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 			Path:    "/",
 			Expires: session.expires(),
 		})
-		resp = authResponse{OK: false, AuthURL: session.AuthURL}
-	case !session.isAuthorized(s.timeNow()):
-		if r.URL.Query().Get("wait") == "true" {
-			// Client requested we block until user completes auth.
-			if err := s.awaitUserAuth(r.Context(), session); err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-		}
-		if session.isAuthorized(s.timeNow()) {
-			resp = authResponse{OK: true}
-		} else {
-			resp = authResponse{OK: false, AuthURL: session.AuthURL}
-		}
-	default:
-		resp = authResponse{OK: true}
 	}
 
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	writeJSON(w, newSessionAuthResponse{AuthURL: session.AuthURL})
+}
+
+// serveAPIAuthSessionWait handles requests to the /api/auth/session/wait endpoint.
+func (s *Server) serveAPIAuthSessionWait(w http.ResponseWriter, r *http.Request) {
+	session, _, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	if session.isAuthorized(s.timeNow()) {
+		return // already authorized
+	}
+	if err := s.awaitUserAuth(r.Context(), session); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 }
 
 // serveAPI serves requests for the web client api.
@@ -458,11 +487,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	if len(st.TailscaleIPs) != 0 {
 		data.IP = st.TailscaleIPs[0].String()
 	}
-	if err := json.NewEncoder(w).Encode(*data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, *data)
 }
 
 type nodeUpdate struct {
@@ -718,5 +743,14 @@ func enforcePrefix(prefix string, h http.HandlerFunc) http.HandlerFunc {
 		}
 		prefix = strings.TrimSuffix(prefix, "/")
 		http.StripPrefix(prefix, h).ServeHTTP(w, r)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		w.Header().Set("Content-Type", "text/plain")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
