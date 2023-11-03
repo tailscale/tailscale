@@ -3132,7 +3132,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		return b.handleSSHConn, opts
 	}
 	// TODO(will,sonia): allow customizing web client port ?
-	if dst.Port() == 5252 && b.ShouldRunWebClient() {
+	if dst.Port() == webClientPort && b.ShouldRunWebClient() {
 		return b.handleWebClientConn, opts
 	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
@@ -4474,7 +4474,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		handlePorts = append(handlePorts, 22)
 	}
 	if b.ShouldRunWebClient() {
-		handlePorts = append(handlePorts, 5252)
+		handlePorts = append(handlePorts, webClientPort)
 	}
 
 	b.reloadServeConfigLocked(prefs)

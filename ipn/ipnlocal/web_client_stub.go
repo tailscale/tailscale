@@ -12,6 +12,8 @@ import (
 	"tailscale.com/client/tailscale"
 )
 
+const webClientPort = 5252
+
 type webClient struct{}
 
 func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {}
