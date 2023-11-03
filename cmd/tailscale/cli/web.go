@@ -91,12 +91,18 @@ func runWeb(ctx context.Context, args []string) error {
 	hasPreviewCap := st.Self.HasCap(tailcfg.CapabilityPreviewWebClient)
 
 	cliServerMode := web.LegacyServerMode
+	var existingWebClient bool
+	if prefs, err := localClient.GetPrefs(ctx); err == nil {
+		existingWebClient = prefs.RunWebClient
+	}
 	if hasPreviewCap {
 		cliServerMode = web.LoginServerMode
-		// Also start full client in tailscaled.
-		log.Printf("starting tailscaled web client at %s:5252\n", st.Self.TailscaleIPs[0])
-		if err := setRunWebClient(ctx, true); err != nil {
-			return fmt.Errorf("starting web client in tailscaled: %w", err)
+		if !existingWebClient {
+			// Also start full client in tailscaled.
+			log.Printf("starting tailscaled web client at %s:5252\n", st.Self.TailscaleIPs[0])
+			if err := setRunWebClient(ctx, true); err != nil {
+				return fmt.Errorf("starting web client in tailscaled: %w", err)
+			}
 		}
 	}
 
@@ -115,7 +121,7 @@ func runWeb(ctx context.Context, args []string) error {
 		case <-ctx.Done():
 			// Shutdown the server.
 			webServer.Shutdown()
-			if hasPreviewCap && !webArgs.cgi {
+			if hasPreviewCap && !webArgs.cgi && !existingWebClient {
 				log.Println("stopping tailscaled web client")
 				// When not in cgi mode, shut down the tailscaled
 				// web client on cli termination.
