@@ -4348,6 +4348,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.capFileSharing = fs
 
+	b.magicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
+
 	b.setDebugLogsByCapabilityLocked(nm)
 
 	// See the netns package for documentation on what this capability does.
