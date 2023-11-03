@@ -37,14 +37,20 @@ for file in $(find $1 \( -name '*.go' -or -name '*.tsx' -or -name '*.ts' -not -n
         $1/cmd/tailscale/cli/authenticode_windows.go)
             # WireGuard copyright.
         ;;
-		*_string.go)
-			# Generated file from go:generate stringer
-		;;
-		$1/control/controlbase/noiseexplorer_test.go)
-			# Noiseexplorer.com copyright.
-		;;
+        *_string.go)
+          # Generated file from go:generate stringer
+        ;;
+        $1/control/controlbase/noiseexplorer_test.go)
+          # Noiseexplorer.com copyright.
+        ;;
         */zsyscall_windows.go)
             # Generated syscall wrappers
+        ;;
+        $1/util/winutil/subprocess_windows_test.go)
+            # Subprocess test harness code
+        ;;
+        $1/util/winutil/testdata/testrestartableprocesses/main.go)
+            # Subprocess test harness code
         ;;
         *)
             header="$(head -2 $file)"
