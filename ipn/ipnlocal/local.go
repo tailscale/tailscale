@@ -3113,6 +3113,9 @@ var (
 // apply to the socket before calling the handler.
 func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c net.Conn) error, opts []tcpip.SettableSocketOption) {
 	if dst.Port() == 80 && (dst.Addr() == magicDNSIP || dst.Addr() == magicDNSIPv6) {
+		if b.ShouldRunWebClient() {
+			return b.handleWebClientConn, opts
+		}
 		return b.HandleQuad100Port80Conn, opts
 	}
 	if !b.isLocalIP(dst.Addr()) {
