@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"os/user"
 	"runtime"
@@ -16,7 +15,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -384,7 +382,9 @@ func CreateAppMutex(name string) (windows.Handle, error) {
 	return windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(name))
 }
 
-func getTokenInfo[T any](token windows.Token, infoClass uint32) (*T, error) {
+// getTokenInfoVariableLen obtains variable-length token information. Use
+// this function for information classes that output variable-length data.
+func getTokenInfoVariableLen[T any](token windows.Token, infoClass uint32) (*T, error) {
 	var buf []byte
 	var desiredLen uint32
 
@@ -402,6 +402,15 @@ func getTokenInfo[T any](token windows.Token, infoClass uint32) (*T, error) {
 	return (*T)(unsafe.Pointer(unsafe.SliceData(buf))), nil
 }
 
+// getTokenInfoFixedLen obtains known fixed-length token information. Use this
+// function for information classes that output enumerations, BOOLs, integers etc.
+func getTokenInfoFixedLen[T any](token windows.Token, infoClass uint32) (result T, err error) {
+	var actualLen uint32
+	p := (*byte)(unsafe.Pointer(&result))
+	err = windows.GetTokenInformation(token, infoClass, p, uint32(unsafe.Sizeof(result)), &actualLen)
+	return result, err
+}
+
 type tokenElevationType int32
 
 const (
@@ -410,16 +419,9 @@ const (
 	tokenElevationTypeLimited tokenElevationType = 3
 )
 
-func getTokenElevationType(token windows.Token) (result tokenElevationType, err error) {
-	var actualLen uint32
-	p := (*byte)(unsafe.Pointer(&result))
-	err = windows.GetTokenInformation(token, windows.TokenElevationType, p, uint32(unsafe.Sizeof(result)), &actualLen)
-	return result, err
-}
-
 // IsTokenLimited returns whether token is a limited UAC token.
 func IsTokenLimited(token windows.Token) (bool, error) {
-	elevationType, err := getTokenElevationType(token)
+	elevationType, err := getTokenInfoFixedLen[tokenElevationType](token, windows.TokenElevationType)
 	if err != nil {
 		return false, err
 	}
@@ -616,61 +618,6 @@ func findHomeDirInRegistry(uid string) (dir string, err error) {
 	return dir, nil
 }
 
-const (
-	_RESTART_NO_CRASH  = 1
-	_RESTART_NO_HANG   = 2
-	_RESTART_NO_PATCH  = 4
-	_RESTART_NO_REBOOT = 8
-)
-
-func registerForRestart(opts RegisterForRestartOpts) error {
-	var flags uint32
-
-	if !opts.RestartOnCrash {
-		flags |= _RESTART_NO_CRASH
-	}
-	if !opts.RestartOnHang {
-		flags |= _RESTART_NO_HANG
-	}
-	if !opts.RestartOnUpgrade {
-		flags |= _RESTART_NO_PATCH
-	}
-	if !opts.RestartOnReboot {
-		flags |= _RESTART_NO_REBOOT
-	}
-
-	var cmdLine *uint16
-	if opts.UseCmdLineArgs {
-		if len(opts.CmdLineArgs) == 0 {
-			// re-use our current args, excluding the exe name itself
-			opts.CmdLineArgs = os.Args[1:]
-		}
-
-		var b strings.Builder
-		for _, arg := range opts.CmdLineArgs {
-			if b.Len() > 0 {
-				b.WriteByte(' ')
-			}
-			b.WriteString(windows.EscapeArg(arg))
-		}
-
-		if b.Len() > 0 {
-			var err error
-			cmdLine, err = windows.UTF16PtrFromString(b.String())
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	hr := registerApplicationRestart(cmdLine, flags)
-	if e := wingoes.ErrorFromHRESULT(hr); e.Failed() {
-		return e
-	}
-
-	return nil
-}
-
 // ProcessImageName returns the fully-qualified path to the executable image
 // associated with process.
 func ProcessImageName(process windows.Handle) (string, error) {
@@ -694,13 +641,18 @@ func TSSessionIDToLogonSessionID(tsSessionID uint32) (logonSessionID windows.LUI
 	return LogonSessionID(token)
 }
 
+// TSSessionID obtains the Terminal Services (RDP) session ID associated with token.
+func TSSessionID(token windows.Token) (tsSessionID uint32, err error) {
+	return getTokenInfoFixedLen[uint32](token, windows.TokenSessionId)
+}
+
 type tokenOrigin struct {
 	originatingLogonSession windows.LUID
 }
 
 // LogonSessionID obtains the logon session ID associated with token.
 func LogonSessionID(token windows.Token) (logonSessionID windows.LUID, err error) {
-	origin, err := getTokenInfo[tokenOrigin](token, windows.TokenOrigin)
+	origin, err := getTokenInfoFixedLen[tokenOrigin](token, windows.TokenOrigin)
 	if err != nil {
 		return logonSessionID, err
 	}
