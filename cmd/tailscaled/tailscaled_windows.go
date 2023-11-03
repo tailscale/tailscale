@@ -529,12 +529,11 @@ func uninstallWinTun(logf logger.Logf) {
 
 func fullyQualifiedWintunPath(logf logger.Logf) string {
 	var dir string
-	var buf [windows.MAX_PATH]uint16
-	length := uint32(len(buf))
-	if err := windows.QueryFullProcessImageName(windows.CurrentProcess(), 0, &buf[0], &length); err != nil {
-		logf("QueryFullProcessImageName failed: %v", err)
+	imgName, err := winutil.ProcessImageName(windows.CurrentProcess())
+	if err != nil {
+		logf("ProcessImageName failed: %v", err)
 	} else {
-		dir = filepath.Dir(windows.UTF16ToString(buf[:length]))
+		dir = filepath.Dir(imgName)
 	}
 
 	return filepath.Join(dir, "wintun.dll")
