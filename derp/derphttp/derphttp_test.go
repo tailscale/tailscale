@@ -401,3 +401,49 @@ func TestBreakWatcherConn(t *testing.T) {
 		timer.Reset(5 * time.Second)
 	}
 }
+
+func noopAdd(key.NodePublic, netip.AddrPort) {}
+func noopRemove(key.NodePublic)              {}
+
+func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
+	defer func() { testHookWatchLookConnectResult = nil }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	priv := key.NewNode()
+	serverURL, s := newTestServer(t, priv)
+	defer s.Close()
+
+	pub := priv.Public()
+
+	watcher := newWatcherClient(t, priv, serverURL)
+	defer watcher.Close()
+
+	// Test connecting to ourselves, and that we get hung up on.
+	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("error connecting to server: %v", err)
+		}
+		if !wasSelfConnect {
+			t.Error("wanted self-connect; wasn't")
+		}
+		return false
+	}
+	watcher.RunWatchConnectionLoop(ctx, pub, t.Logf, noopAdd, noopRemove)
+
+	// Test connecting to the server with a zero value for ignoreServerKey,
+	// so we should always connect.
+	testHookWatchLookConnectResult = func(err error, wasSelfConnect bool) bool {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("error connecting to server: %v", err)
+		}
+		if wasSelfConnect {
+			t.Error("wanted normal connect; got self connect")
+		}
+		return false
+	}
+	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove)
+}

@@ -16,6 +16,10 @@ import (
 
 var retryInterval = 5 * time.Second
 
+// testHookWatchLookConnectResult, if non-nil for tests, is called by RunWatchConnectionLoop
+// with the connect result. If it returns false, the loop ends.
+var testHookWatchLookConnectResult func(connectError error, wasSelfConnect bool) (keepRunning bool)
+
 // RunWatchConnectionLoop loops until ctx is done, sending
 // WatchConnectionChanges and subscribing to connection changes.
 //
@@ -112,7 +116,21 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	for ctx.Err() == nil {
-		if c.ServerPublicKey() == ignoreServerKey {
+		// Make sure we're connected before calling s.ServerPublicKey.
+		_, _, err := c.connect(ctx, "RunWatchConnectionLoop")
+		if err != nil {
+			if f := testHookWatchLookConnectResult; f != nil && !f(err, false) {
+				return
+			}
+			logf("mesh connect: %v", err)
+			sleep(retryInterval)
+			continue
+		}
+		selfConnect := c.ServerPublicKey() == ignoreServerKey
+		if f := testHookWatchLookConnectResult; f != nil && !f(err, selfConnect) {
+			return
+		}
+		if selfConnect {
 			logf("detected self-connect; ignoring host")
 			return
 		}
