@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  h1 {
+    @apply text-neutral-500 text-sm font-medium uppercase leading-tight tracking-wide;
+  }
+}
+
+@layer components {
+  .card {
+    @apply p-5 bg-white rounded-lg border border-gray-200;
+  }
+  
+  .hover-button {
+    @apply px-2 py-1.5 bg-white rounded-[1px] cursor-pointer;
+  }
+  .hover-button:hover {
+    @apply bg-stone-100;
+  }
+}
+
 /**
  * Non-Tailwind styles begin here.
  */
