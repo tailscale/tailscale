@@ -2,10 +2,10 @@ import cx from "classnames"
 import React from "react"
 import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
+import ManagementClientView from "src/components/views/management-client-view"
 import ReadonlyClientView from "src/components/views/readonly-client-view"
 import useAuth, { AuthResponse, SessionsCallbacks } from "src/hooks/auth"
 import useNodeData from "src/hooks/node-data"
-import ManagementClientView from "./views/management-client-view"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, sessions } = useAuth()

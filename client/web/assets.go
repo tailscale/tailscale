@@ -35,7 +35,7 @@ func startDevServer() (cleanup func()) {
 	node := filepath.Join(root, "tool", "node")
 	vite := filepath.Join(webClientPath, "node_modules", ".bin", "vite")
 
-	log.Printf("installing JavaScript deps using %s... (might take ~30s)", yarn)
+	log.Printf("installing JavaScript deps using %s...", yarn)
 	out, err := exec.Command(yarn, "--non-interactive", "-s", "--cwd", webClientPath, "install").CombinedOutput()
 	if err != nil {
 		log.Fatalf("error running tailscale web's yarn install: %v, %s", err, out)
