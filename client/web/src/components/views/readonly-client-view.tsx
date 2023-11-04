@@ -1,5 +1,5 @@
 import React from "react"
-import { AuthResponse, AuthType, SessionsCallbacks } from "src/hooks/auth"
+import { AuthResponse, AuthType } from "src/hooks/auth"
 import { NodeData } from "src/hooks/node-data"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
@@ -17,11 +17,11 @@ import ProfilePic from "src/ui/profile-pic"
 export default function ReadonlyClientView({
   data,
   auth,
-  sessions,
+  newSession,
 }: {
   data: NodeData
   auth?: AuthResponse
-  sessions: SessionsCallbacks
+  newSession: () => Promise<void>
 }) {
   return (
     <>
@@ -51,18 +51,22 @@ export default function ReadonlyClientView({
               <div className="text-sm leading-tight">{data.IP}</div>
             </div>
           </div>
-          {auth?.authNeeded == AuthType.tailscale && (
-            <button
-              className="button button-blue ml-6"
-              onClick={() => {
-                sessions
-                  .new()
-                  .then((url) => window.open(url, "_blank"))
-                  .then(() => sessions.wait())
-              }}
-            >
+          {auth?.authNeeded == AuthType.tailscale ? (
+            <button className="button button-blue ml-6" onClick={newSession}>
               Access
             </button>
+          ) : (
+            window.location.hostname != data.IP && (
+              // TODO: check connectivity to tailscale IP
+              <button
+                className="button button-blue ml-6"
+                onClick={() => {
+                  window.location.href = `http://${data.IP}:5252/?check=now`
+                }}
+              >
+                Manage
+              </button>
+            )
           )}
         </div>
       </div>
