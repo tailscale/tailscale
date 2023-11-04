@@ -11,11 +11,6 @@ export type AuthResponse = {
   authNeeded?: AuthType
 }
 
-export type SessionsCallbacks = {
-  new: () => Promise<string> // creates new auth session and returns authURL
-  wait: () => Promise<void> // blocks until auth is completed
-}
-
 // useAuth reports and refreshes Tailscale auth status
 // for the web client.
 export default function useAuth() {
@@ -50,15 +45,13 @@ export default function useAuth() {
   const newSession = useCallback(() => {
     return apiFetch("/auth/session/new", "GET")
       .then((r) => r.json())
-      .then((d) => d.authUrl)
-      .catch((error) => {
-        console.error(error)
+      .then((d) => {
+        if (d.authUrl) {
+          window.open(d.authUrl, "_blank")
+          // refresh data when auth complete
+          apiFetch("/auth/session/wait", "GET").then(() => loadAuth())
+        }
       })
-  }, [])
-
-  const waitForSessionCompletion = useCallback(() => {
-    return apiFetch("/auth/session/wait", "GET")
-      .then(() => loadAuth()) // refresh auth data
       .catch((error) => {
         console.error(error)
       })
@@ -66,14 +59,14 @@ export default function useAuth() {
 
   useEffect(() => {
     loadAuth()
+    if (new URLSearchParams(window.location.search).get("check") == "now") {
+      newSession()
+    }
   }, [])
 
   return {
     data,
     loading,
-    sessions: {
-      new: newSession,
-      wait: waitForSessionCompletion,
-    },
+    newSession,
   }
 }
