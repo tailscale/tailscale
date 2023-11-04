@@ -10,7 +10,6 @@ Windows][].  See also the dependencies in the [Tailscale CLI][].
 
 
  - [filippo.io/edwards25519](https://pkg.go.dev/filippo.io/edwards25519) ([BSD-3-Clause](https://github.com/FiloSottile/edwards25519/blob/v1.0.0/LICENSE))
- - [github.com/Microsoft/go-winio](https://pkg.go.dev/github.com/Microsoft/go-winio) ([MIT](https://github.com/Microsoft/go-winio/blob/v0.6.1/LICENSE))
  - [github.com/alexbrainman/sspi](https://pkg.go.dev/github.com/alexbrainman/sspi) ([BSD-3-Clause](https://github.com/alexbrainman/sspi/blob/1a75b4708caa/LICENSE))
  - [github.com/apenwarr/fixconsole](https://pkg.go.dev/github.com/apenwarr/fixconsole) ([Apache-2.0](https://github.com/apenwarr/fixconsole/blob/5a9f6489cc29/LICENSE))
  - [github.com/apenwarr/w32](https://pkg.go.dev/github.com/apenwarr/w32) ([BSD-3-Clause](https://github.com/apenwarr/w32/blob/aa00fece76ab/LICENSE))
@@ -35,6 +34,7 @@ Windows][].  See also the dependencies in the [Tailscale CLI][].
  - [github.com/nfnt/resize](https://pkg.go.dev/github.com/nfnt/resize) ([ISC](https://github.com/nfnt/resize/blob/83c6a9932646/LICENSE))
  - [github.com/peterbourgon/diskv](https://pkg.go.dev/github.com/peterbourgon/diskv) ([MIT](https://github.com/peterbourgon/diskv/blob/v2.0.1/LICENSE))
  - [github.com/skip2/go-qrcode](https://pkg.go.dev/github.com/skip2/go-qrcode) ([MIT](https://github.com/skip2/go-qrcode/blob/da1b6568686e/LICENSE))
+ - [github.com/tailscale/go-winio](https://pkg.go.dev/github.com/tailscale/go-winio) ([MIT](https://github.com/tailscale/go-winio/blob/c4f33415bf55/LICENSE))
  - [github.com/tailscale/netlink](https://pkg.go.dev/github.com/tailscale/netlink) ([Apache-2.0](https://github.com/tailscale/netlink/blob/cabfb018fe85/LICENSE))
  - [github.com/tailscale/walk](https://pkg.go.dev/github.com/tailscale/walk) ([BSD-3-Clause](https://github.com/tailscale/walk/blob/dff4ed649e49/LICENSE))
  - [github.com/tailscale/win](https://pkg.go.dev/github.com/tailscale/win) ([BSD-3-Clause](https://github.com/tailscale/win/blob/84569fd814a9/LICENSE))
