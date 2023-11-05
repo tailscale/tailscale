@@ -64,15 +64,12 @@ type mapSession struct {
 	// to request that the long poll activity watchdog timeout be reset.
 	onDebug func(_ context.Context, _ *tailcfg.Debug, watchdogReset chan<- struct{}) error
 
-	// onConciseNetMapSummary, if non-nil, is called with the Netmap.VeryConcise summary
-	// whenever a map response is received.
-	onConciseNetMapSummary func(string)
-
 	// onSelfNodeChanged is called before the NetmapUpdater if the self node was
 	// changed.
 	onSelfNodeChanged func(*netmap.NetworkMap)
 
 	// Fields storing state over the course of multiple MapResponses.
+	lastPrintMap           time.Time
 	lastNode               tailcfg.NodeView
 	peers                  map[tailcfg.NodeID]*tailcfg.NodeView // pointer to view (oddly). same pointers as sortedPeers.
 	sortedPeers            []*tailcfg.NodeView                  // same pointers as peers, but sorted by Node.ID
@@ -108,15 +105,28 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		watchdogReset:   make(chan struct{}),
 
 		// Non-nil no-op defaults, to be optionally overridden by the caller.
-		logf:                   logger.Discard,
-		vlogf:                  logger.Discard,
-		cancel:                 func() {},
-		onDebug:                func(context.Context, *tailcfg.Debug, chan<- struct{}) error { return nil },
-		onConciseNetMapSummary: func(string) {},
-		onSelfNodeChanged:      func(*netmap.NetworkMap) {},
+		logf:              logger.Discard,
+		vlogf:             logger.Discard,
+		cancel:            func() {},
+		onDebug:           func(context.Context, *tailcfg.Debug, chan<- struct{}) error { return nil },
+		onSelfNodeChanged: func(*netmap.NetworkMap) {},
 	}
 	ms.sessionAliveCtx, ms.sessionAliveCtxClose = context.WithCancel(context.Background())
 	return ms
+}
+
+// occasionallyPrintSummary logs summary at most once very 5 minutes. The
+// summary is the Netmap.VeryConcise result from the last received map response.
+func (ms *mapSession) occasionallyPrintSummary(summary string) {
+	// Occasionally print the netmap header.
+	// This is handy for debugging, and our logs processing
+	// pipeline depends on it. (TODO: Remove this dependency.)
+	now := ms.clock().Now()
+	if now.Sub(ms.lastPrintMap) < 5*time.Minute {
+		return
+	}
+	ms.lastPrintMap = now
+	ms.logf("[v1] new network map (periodic):\n%s", summary)
 }
 
 func (ms *mapSession) clock() tstime.Clock {
@@ -200,7 +210,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	ms.updateStateFromResponse(resp)
 
 	if ms.tryHandleIncrementally(resp) {
-		ms.onConciseNetMapSummary(ms.lastNetmapSummary) // every 5s log
+		ms.occasionallyPrintSummary(ms.lastNetmapSummary)
 		return nil
 	}
 
@@ -210,7 +220,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	nm := ms.netmap()
 	ms.lastNetmapSummary = nm.VeryConcise()
-	ms.onConciseNetMapSummary(ms.lastNetmapSummary)
+	ms.occasionallyPrintSummary(ms.lastNetmapSummary)
 
 	// If the self node changed, we might need to update persist.
 	if resp.Node != nil {

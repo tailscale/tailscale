@@ -67,7 +67,6 @@ type Direct struct {
 	controlKnobs          *controlknobs.Knobs // always non-nil
 	serverURL             string              // URL of the tailcontrol server
 	clock                 tstime.Clock
-	lastPrintMap          time.Time
 	logf                  logger.Logf
 	netMon                *netmon.Monitor // or nil
 	discoPubKey           key.DiscoPublic
@@ -969,8 +968,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return nil
 	}
 
-	var mapResIdx int // 0 for first message, then 1+ for deltas
-
 	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
 	defer sess.Close()
 	sess.cancel = cancel
@@ -979,17 +976,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	sess.altClock = c.clock
 	sess.machinePubKey = machinePubKey
 	sess.onDebug = c.handleDebugMessage
-	sess.onConciseNetMapSummary = func(summary string) {
-		// Occasionally print the netmap header.
-		// This is handy for debugging, and our logs processing
-		// pipeline depends on it. (TODO: Remove this dependency.)
-		now := c.clock.Now()
-		if now.Sub(c.lastPrintMap) < 5*time.Minute {
-			return
-		}
-		c.lastPrintMap = now
-		c.logf("[v1] new network map[%d]:\n%s", mapResIdx, summary)
-	}
 	sess.onSelfNodeChanged = func(nm *netmap.NetworkMap) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -1019,7 +1005,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	// the same format before just closing the connection.
 	// We can use this same read loop either way.
 	var msg []byte
-	for ; mapResIdx == 0 || isStreaming; mapResIdx++ {
+	for mapResIdx := 0; mapResIdx == 0 || isStreaming; mapResIdx++ {
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), mapResIdx)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
