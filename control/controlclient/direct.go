@@ -828,7 +828,7 @@ const watchdogTimeout = 120 * time.Second
 // if the context expires or the server returns an error/closes the connection
 // and as such always returns a non-nil error.
 //
-// If cb is nil, OmitPeers will be set to true.
+// If nu is nil, OmitPeers will be set to true.
 func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu NetmapUpdater) error {
 	if isStreaming && nu == nil {
 		panic("cb must be non-nil if isStreaming is true")
@@ -992,7 +992,27 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 		c.expiry = nm.Expiry
 	}
-	sess.StartWatchdog()
+
+	// Create a watchdog timer that breaks the connection if we don't receive a
+	// MapResponse from the network at least once every two minutes. The
+	// watchdog timer is stopped every time we receive a MapResponse (so it
+	// doesn't run when we're processing a MapResponse message, including any
+	// long-running requested operations like Debug.Sleep) and is reset whenever
+	// we go back to blocking on network reads.
+	watchdogTimer, watchdogTimedOut := c.clock.NewTimer(watchdogTimeout)
+	defer watchdogTimer.Stop()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			vlogf("netmap: ending timeout goroutine")
+			return
+		case <-watchdogTimedOut:
+			c.logf("map response long-poll timed out!")
+			cancel()
+			return
+		}
+	}()
 
 	// gotNonKeepAliveMessage is whether we've yet received a MapResponse message without
 	// KeepAlive set.
@@ -1006,6 +1026,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	// We can use this same read loop either way.
 	var msg []byte
 	for mapResIdx := 0; mapResIdx == 0 || isStreaming; mapResIdx++ {
+		watchdogTimer.Reset(watchdogTimeout)
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), mapResIdx)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
@@ -1026,6 +1047,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			vlogf("netmap: decode error: %v")
 			return err
 		}
+		watchdogTimer.Stop()
 
 		metricMapResponseMessages.Add(1)
 
@@ -1068,14 +1090,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 				c.logf("netmap: [unexpected] new dial plan; nowhere to store it")
 			}
 		}
-
-		select {
-		case sess.watchdogReset <- struct{}{}:
-			vlogf("netmap: sent timer reset")
-		case <-ctx.Done():
-			c.logf("[v1] netmap: not resetting timer; context done: %v", ctx.Err())
-			return ctx.Err()
-		}
 		if resp.KeepAlive {
 			metricMapResponseKeepAlives.Add(1)
 			continue
@@ -1102,7 +1116,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	return nil
 }
 
-func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug, watchdogReset chan<- struct{}) error {
+func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug) error {
 	if code := debug.Exit; code != nil {
 		c.logf("exiting process with status %v per controlplane", *code)
 		os.Exit(*code)
@@ -1112,7 +1126,7 @@ func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug, w
 		envknob.SetNoLogsNoSupport()
 	}
 	if sleep := time.Duration(debug.SleepSeconds * float64(time.Second)); sleep > 0 {
-		if err := sleepAsRequested(ctx, c.logf, watchdogReset, sleep, c.clock); err != nil {
+		if err := sleepAsRequested(ctx, c.logf, sleep, c.clock); err != nil {
 			return err
 		}
 	}
@@ -1444,7 +1458,7 @@ func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr
 // that the client sleep. The complication is that while we're sleeping (if for
 // a long time), we need to periodically reset the watchdog timer before it
 // expires.
-func sleepAsRequested(ctx context.Context, logf logger.Logf, watchdogReset chan<- struct{}, d time.Duration, clock tstime.Clock) error {
+func sleepAsRequested(ctx context.Context, logf logger.Logf, d time.Duration, clock tstime.Clock) error {
 	const maxSleep = 5 * time.Minute
 	if d > maxSleep {
 		logf("sleeping for %v, capped from server-requested %v ...", maxSleep, d)
@@ -1453,25 +1467,13 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, watchdogReset chan<
 		logf("sleeping for server-requested %v ...", d)
 	}
 
-	ticker, tickerChannel := clock.NewTicker(watchdogTimeout / 2)
-	defer ticker.Stop()
 	timer, timerChannel := clock.NewTimer(d)
 	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timerChannel:
-			return nil
-		case <-tickerChannel:
-			select {
-			case watchdogReset <- struct{}{}:
-			case <-timerChannel:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timerChannel:
+		return nil
 	}
 }
 
