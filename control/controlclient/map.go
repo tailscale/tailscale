@@ -49,7 +49,6 @@ type mapSession struct {
 	machinePubKey  key.MachinePublic
 	altClock       tstime.Clock       // if nil, regular time is used
 	cancel         context.CancelFunc // always non-nil, shuts down caller's base long poll context
-	watchdogReset  chan struct{}      // send to request that the long poll activity watchdog timeout be reset
 
 	// sessionAliveCtx is a Background-based context that's alive for the
 	// duration of the mapSession that we own the lifetime of. It's closed by
@@ -57,12 +56,12 @@ type mapSession struct {
 	sessionAliveCtx      context.Context
 	sessionAliveCtxClose context.CancelFunc // closes sessionAliveCtx
 
-	// Optional hooks, set once before use.
+	// Optional hooks, guaranteed non-nil (set to no-op funcs) by the
+	// newMapSession constructor. They must be overridden if desired
+	// before the mapSession is used.
 
 	// onDebug specifies what to do with a *tailcfg.Debug message.
-	// If the watchdogReset chan is nil, it's not used. Otherwise it can be sent to
-	// to request that the long poll activity watchdog timeout be reset.
-	onDebug func(_ context.Context, _ *tailcfg.Debug, watchdogReset chan<- struct{}) error
+	onDebug func(context.Context, *tailcfg.Debug) error
 
 	// onSelfNodeChanged is called before the NetmapUpdater if the self node was
 	// changed.
@@ -102,13 +101,12 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		publicNodeKey:   privateNodeKey.Public(),
 		lastDNSConfig:   new(tailcfg.DNSConfig),
 		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfile{},
-		watchdogReset:   make(chan struct{}),
 
 		// Non-nil no-op defaults, to be optionally overridden by the caller.
 		logf:              logger.Discard,
 		vlogf:             logger.Discard,
 		cancel:            func() {},
-		onDebug:           func(context.Context, *tailcfg.Debug, chan<- struct{}) error { return nil },
+		onDebug:           func(context.Context, *tailcfg.Debug) error { return nil },
 		onSelfNodeChanged: func(*netmap.NetworkMap) {},
 	}
 	ms.sessionAliveCtx, ms.sessionAliveCtxClose = context.WithCancel(context.Background())
@@ -133,38 +131,6 @@ func (ms *mapSession) clock() tstime.Clock {
 	return cmpx.Or[tstime.Clock](ms.altClock, tstime.StdClock{})
 }
 
-// StartWatchdog starts the session's watchdog timer.
-// If there's no activity in too long, it tears down the connection.
-// Call Close to release these resources.
-func (ms *mapSession) StartWatchdog() {
-	timer, timedOutChan := ms.clock().NewTimer(watchdogTimeout)
-	go func() {
-		defer timer.Stop()
-		for {
-			select {
-			case <-ms.sessionAliveCtx.Done():
-				ms.vlogf("netmap: ending timeout goroutine")
-				return
-			case <-timedOutChan:
-				ms.logf("map response long-poll timed out!")
-				ms.cancel()
-				return
-			case <-ms.watchdogReset:
-				if !timer.Stop() {
-					select {
-					case <-timedOutChan:
-					case <-ms.sessionAliveCtx.Done():
-						ms.vlogf("netmap: ending timeout goroutine")
-						return
-					}
-				}
-				ms.vlogf("netmap: reset timeout timer")
-				timer.Reset(watchdogTimeout)
-			}
-		}
-	}()
-}
-
 func (ms *mapSession) Close() {
 	ms.sessionAliveCtxClose()
 }
@@ -179,7 +145,7 @@ func (ms *mapSession) Close() {
 // is [re]factoring progress enough.
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
 	if debug := resp.Debug; debug != nil {
-		if err := ms.onDebug(ctx, debug, ms.watchdogReset); err != nil {
+		if err := ms.onDebug(ctx, debug); err != nil {
 			return err
 		}
 	}
