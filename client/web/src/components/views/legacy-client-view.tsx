@@ -169,9 +169,7 @@ export function Header({
   )
 }
 
-export function IP(props: {
-  data: NodeData
-}) {
+export function IP(props: { data: NodeData }) {
   const { data } = props
 
   if (!data.IP) {

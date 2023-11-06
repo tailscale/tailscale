@@ -12,11 +12,12 @@ export function UpdateAvailableNotification(props: {
   appendUpdateLog: (msg: string) => void,
 }) {
   const { details, updating, currentVersion, setUpdating, appendUpdateLog } = props
+  if (updating === UpdateState.UpToDate) {
+    return null
+  }
   
   let buttonMessage = ''
   switch (updating) {
-    case UpdateState.UpToDate:
-      return null
     case UpdateState.InProgress:
       buttonMessage = 'Updating Tailscale...'
       break

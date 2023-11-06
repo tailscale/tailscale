@@ -6,12 +6,15 @@ import { ClientVersion, UpdateState } from "src/hooks/node-data"
 import { ChangelogText } from "src/ui/update-available"
 import Spinner from "src/ui/spinner"
 
-export function UpdatingView(props: {
-  updating: UpdateState,
+/**
+ * UpdatingView is rendered when the user initiates a Tailscale update, and
+ * the update is in-progress, failed, or completed.
+ */
+export function UpdatingView({ state, cv, updateLog }: {
+  state: UpdateState,
   cv: ClientVersion,
   updateLog: string,
 }) {
-  const { updating, cv, updateLog } = props
   return (
     <>
       <div className="mx-auto">
@@ -19,7 +22,7 @@ export function UpdatingView(props: {
       </div>
       <div className="flex-1 flex flex-col justify-center items-center text-center">
         {
-          (updating === UpdateState.InProgress) ? (
+          (state === UpdateState.InProgress) ? (
             <>
               <Spinner size="sm" className="text-gray-400" />
               <h1 className="text-2xl m-3">Update in progress</h1>
@@ -28,7 +31,7 @@ export function UpdatingView(props: {
                 Once it's completed, you will be asked to log in again.
               </p>
             </>
-          ) : (updating === UpdateState.Complete) ? (
+          ) : (state === UpdateState.Complete) ? (
             <>
               <CheckCircleIcon />
               <h1 className="text-2xl m-3">Update complete!</h1>

@@ -2348,7 +2348,9 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+	_, err := clientupdate.NewUpdater(clientupdate.Arguments{
+		ForAutoUpdate: true,
+	})
 
 	if err != nil {
 		// if we don't support auto-update, just say that we're up to date

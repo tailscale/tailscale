@@ -37,7 +37,7 @@ export default function App() {
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : updatingViewStates.includes(updating) ? (
         <UpdatingView
-          updating={updating}
+          state={updating}
           cv={data.ClientVersion}
           updateLog={updateLog}
         />

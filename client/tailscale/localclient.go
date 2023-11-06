@@ -1378,7 +1378,7 @@ func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt)
 }
 
 func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, error) {
-	body, err := lc.send(ctx, "GET", "/localapi/v0/update/check", http.StatusOK, nil)
+	body, err := lc.get200(ctx, "/localapi/v0/update/check")
 	if err != nil {
 		return nil, err
 	}
@@ -1395,7 +1395,7 @@ func (lc *LocalClient) InstallUpdate(ctx context.Context) error {
 }
 
 func (lc *LocalClient) GetUpdateProgress(ctx context.Context) ([]ipnstate.UpdateProgress, error) {
-	body, err := lc.send(ctx, "GET", "/localapi/v0/update/progress", http.StatusOK, nil)
+	body, err := lc.get200(ctx, "/localapi/v0/update/progress")
 	if err != nil {
 		return nil, err
 	}
