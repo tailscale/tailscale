@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -52,13 +53,24 @@ func (d *fileDeleter) Init(m *Manager, eventHook func(string)) {
 	d.dir = m.opts.Dir
 	d.event = eventHook
 
-	// From a cold-start, load the list of partial and deleted files.
 	d.byName = make(map[string]*list.Element)
 	d.emptySignal = make(chan struct{})
 	d.shutdownCtx, d.shutdown = context.WithCancel(context.Background())
+
+	// From a cold-start, load the list of partial and deleted files.
+	//
+	// Only run this if we have ever received at least one file
+	// to avoid ever touching the taildrop directory on systems (e.g., MacOS)
+	// that pop up a security dialog window upon first access.
+	if m.opts.State == nil {
+		return
+	}
+	if b, _ := m.opts.State.ReadState(ipn.TaildropReceivedKey); len(b) == 0 {
+		return
+	}
 	d.group.Go(func() {
-		d.event("start init")
-		defer d.event("end init")
+		d.event("start full-scan")
+		defer d.event("end full-scan")
 		rangeDir(d.dir, func(de fs.DirEntry) bool {
 			switch {
 			case d.shutdownCtx.Err() != nil:

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/tstime"
 	"tailscale.com/version/distro"
 )
@@ -135,6 +136,17 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		}
 	}()
 	inFile.w = f
+
+	// Record that we have started to receive at least one file.
+	// This is used by the deleter upon a cold-start to scan the directory
+	// for any files that need to be deleted.
+	if m.opts.State != nil {
+		if b, _ := m.opts.State.ReadState(ipn.TaildropReceivedKey); len(b) == 0 {
+			if err := m.opts.State.WriteState(ipn.TaildropReceivedKey, []byte{1}); err != nil {
+				m.opts.Logf("WriteState error: %v", err) // non-fatal error
+			}
+		}
+	}
 
 	// A positive offset implies that we are resuming an existing file.
 	// Seek to the appropriate offset and truncate the file.

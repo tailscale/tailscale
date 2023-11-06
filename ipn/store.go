@@ -53,6 +53,11 @@ const (
 	// CurrentProfileStateKey is the key under which we store the current
 	// profile.
 	CurrentProfileStateKey = StateKey("_current-profile")
+
+	// TaildropReceivedKey is the key to indicate whether any taildrop file
+	// has ever been received (even if partially).
+	// Any non-empty value indicates that at least one file has been received.
+	TaildropReceivedKey = StateKey("_taildrop-received")
 )
 
 // CurrentProfileID returns the StateKey that stores the
