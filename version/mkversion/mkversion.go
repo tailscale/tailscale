@@ -234,6 +234,7 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 		track = "stable"
 	}
 
+	v.patch = 1
 	ret := VersionInfo{
 		Major:   v.major,
 		Minor:   v.minor,
