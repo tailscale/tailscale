@@ -100,7 +100,7 @@ type Client struct {
 }
 
 func (c *Client) String() string {
-	return fmt.Sprintf("<derphttp_client.Client %s url=%s>", c.serverPubKey.ShortString(), c.url)
+	return fmt.Sprintf("<derphttp_client.Client %s url=%s>", c.ServerPublicKey().ShortString(), c.url)
 }
 
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
