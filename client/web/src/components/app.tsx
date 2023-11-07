@@ -4,7 +4,7 @@ import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
 import ManagementClientView from "src/components/views/management-client-view"
 import ReadonlyClientView from "src/components/views/readonly-client-view"
-import useAuth, { AuthResponse, SessionsCallbacks } from "src/hooks/auth"
+import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData, NodeUpdate } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import ProfilePic from "src/ui/profile-pic"
@@ -12,7 +12,7 @@ import { Link, Route, Switch, useLocation } from "wouter"
 import DeviceDetailsView from "./views/device-details-view"
 
 export default function App() {
-  const { data: auth, loading: loadingAuth, sessions } = useAuth()
+  const { data: auth, loading: loadingAuth, newSession } = useAuth()
   const { data, refreshData, updateNode } = useNodeData()
   useEffect(() => {
     refreshData()
@@ -32,7 +32,7 @@ export default function App() {
               <HomeView
                 auth={auth}
                 data={data}
-                sessions={sessions}
+                newSession={newSession}
                 refreshData={refreshData}
                 updateNode={updateNode}
               />
@@ -60,13 +60,13 @@ export default function App() {
 function HomeView({
   auth,
   data,
-  sessions,
+  newSession,
   refreshData,
   updateNode,
 }: {
   auth?: AuthResponse
   data: NodeData
-  sessions: SessionsCallbacks
+  newSession: () => Promise<void>
   refreshData: () => Promise<void>
   updateNode: (update: NodeUpdate) => void
 }) {
@@ -83,7 +83,7 @@ function HomeView({
         <ManagementClientView {...data} />
       ) : data.DebugMode === "login" || data.DebugMode === "full" ? (
         // Render new client interface in readonly mode.
-        <ReadonlyClientView data={data} auth={auth} sessions={sessions} />
+        <ReadonlyClientView data={data} auth={auth} newSession={newSession} />
       ) : (
         // Render legacy client interface.
         <LegacyClientView
