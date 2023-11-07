@@ -260,6 +260,9 @@ func (up *Updater) updateSynology() error {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Synology is not supported")
 	}
+	if err := requireRoot(); err != nil {
+		return err
+	}
 
 	// Get the latest version and list of SPKs from pkgs.tailscale.com.
 	dsmVersion := distro.DSMVersion()
@@ -277,9 +280,6 @@ func (up *Updater) updateSynology() error {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
 	}
 
-	if err := requireRoot(); err != nil {
-		return err
-	}
 	if !up.confirm(latest.SPKsVersion) {
 		return nil
 	}
@@ -713,14 +713,6 @@ func (up *Updater) updateWindows() error {
 		up.Logf("success.")
 		return nil
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.track)
-	if err != nil {
-		return err
-	}
-	arch := runtime.GOARCH
-	if arch == "386" {
-		arch = "x86"
-	}
 
 	if !winutil.IsCurrentProcessElevated() {
 		return errors.New(`update must be run as Administrator
@@ -729,6 +721,14 @@ you can run the command prompt as Administrator one of these ways:
 * right-click cmd.exe, select 'Run as administrator'
 * press Windows+x, then press a
 * press Windows+r, type in "cmd", then press Ctrl+Shift+Enter`)
+	}
+	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	if err != nil {
+		return err
+	}
+	arch := runtime.GOARCH
+	if arch == "386" {
+		arch = "x86"
 	}
 	if !up.confirm(ver) {
 		return nil
@@ -946,12 +946,12 @@ func (up *Updater) updateFreeBSD() (err error) {
 }
 
 func (up *Updater) updateLinuxBinary() error {
-	ver, err := requestedTailscaleVersion(up.Version, up.track)
-	if err != nil {
-		return err
-	}
 	// Root is needed to overwrite binaries and restart systemd unit.
 	if err := requireRoot(); err != nil {
+		return err
+	}
+	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	if err != nil {
 		return err
 	}
 	if !up.confirm(ver) {
