@@ -31,13 +31,6 @@
   .card td:last-child {
     @apply text-neutral-800 text-sm leading-tight;
   }
-  
-  .hover-button {
-    @apply px-2 py-1.5 bg-white rounded-[1px] cursor-pointer;
-  }
-  .hover-button:hover {
-    @apply bg-stone-100;
-  }
 }
 
 /**

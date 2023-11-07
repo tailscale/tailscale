@@ -75,7 +75,7 @@ export default function useNodeData() {
             : data.AdvertiseExitNode,
       }
 
-      apiFetch("/data", "POST", update, { up: "true" })
+      return apiFetch("/data", "POST", update, { up: "true" })
         .then((r) => r.json())
         .then((r) => {
           setIsPosting(false)
@@ -89,7 +89,10 @@ export default function useNodeData() {
           }
           refreshData()
         })
-        .catch((err) => alert("Failed operation: " + err.message))
+        .catch((err) => {
+          alert("Failed operation: " + err.message)
+          throw err
+        })
     },
     [data]
   )
