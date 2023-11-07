@@ -697,7 +697,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 			e:            eng,
 			pm:           pm,
 			store:        pm.Store(),
-			appConnector: appc.NewEmbeddedAppConnector(t.Logf, rc),
+			appConnector: appc.NewAppConnector(t.Logf, rc),
 		},
 	}
 	h.ps.b.appConnector.UpdateDomains([]string{"example.com"})

@@ -1254,9 +1254,6 @@ func (lc *LocalClient) ReloadConfig(ctx context.Context) (ok bool, err error) {
 	if err != nil {
 		return
 	}
-	if err != nil {
-		return false, err
-	}
 	if res.Err != "" {
 		return false, errors.New(res.Err)
 	}

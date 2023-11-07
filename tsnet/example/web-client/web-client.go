@@ -14,8 +14,7 @@ import (
 )
 
 var (
-	addr    = flag.String("addr", "localhost:8060", "address of Tailscale web client")
-	devMode = flag.Bool("dev", false, "run web client in dev mode")
+	addr = flag.String("addr", "localhost:8060", "address of Tailscale web client")
 )
 
 func main() {
@@ -31,7 +30,7 @@ func main() {
 
 	// Serve the Tailscale web client.
 	ws, err := web.NewServer(web.ServerOpts{
-		DevMode:     *devMode,
+		Mode:        web.LegacyServerMode,
 		LocalClient: lc,
 	})
 	if err != nil {

@@ -1,8 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package appc implements App Connectors.
-package appc
+package main
 
 import (
 	"expvar"

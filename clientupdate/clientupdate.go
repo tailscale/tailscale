@@ -284,6 +284,7 @@ func (up *Updater) updateSynology() error {
 		return nil
 	}
 
+	up.cleanupOldDownloads(filepath.Join(os.TempDir(), "tailscale-update*", "*.spk"))
 	// Download the SPK into a temporary directory.
 	spkDir, err := os.MkdirTemp("", "tailscale-update")
 	if err != nil {
@@ -743,6 +744,7 @@ you can run the command prompt as Administrator one of these ways:
 	if err := os.MkdirAll(msiDir, 0700); err != nil {
 		return err
 	}
+	up.cleanupOldDownloads(filepath.Join(msiDir, "*.msi"))
 	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
 	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
@@ -829,6 +831,30 @@ func (up *Updater) installMSI(msi string) error {
 		up.Logf("msiexec uninstall: %v", err)
 	}
 	return err
+}
+
+// cleanupOldDownloads removes all files matching glob (see filepath.Glob).
+// Only regular files are removed, so the glob must match specific files and
+// not directories.
+func (up *Updater) cleanupOldDownloads(glob string) {
+	matches, err := filepath.Glob(glob)
+	if err != nil {
+		up.Logf("cleaning up old downloads: %v", err)
+		return
+	}
+	for _, m := range matches {
+		s, err := os.Lstat(m)
+		if err != nil {
+			up.Logf("cleaning up old downloads: %v", err)
+			continue
+		}
+		if !s.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(m); err != nil {
+			up.Logf("cleaning up old downloads: %v", err)
+		}
+	}
 }
 
 func msiUUIDForVersion(ver string) string {

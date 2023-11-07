@@ -1,18 +1,30 @@
+import cx from "classnames"
 import React from "react"
 
-export default function ProfilePic({ url }: { url: string }) {
+export default function ProfilePic({
+  url,
+  size = "medium",
+}: {
+  url: string
+  size?: "small" | "medium"
+}) {
   return (
-    <div className="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
+    <div
+      className={cx("relative flex-shrink-0 rounded-full overflow-hidden", {
+        "w-5 h-5": size === "small",
+        "w-8 h-8": size === "medium",
+      })}
+    >
       {url ? (
         <div
-          className="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
+          className="w-full h-full flex pointer-events-none rounded-full bg-gray-200"
           style={{
             backgroundImage: `url(${url})`,
             backgroundSize: "cover",
           }}
         />
       ) : (
-        <div className="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed" />
+        <div className="w-full h-full flex pointer-events-none rounded-full border border-gray-400 border-dashed" />
       )}
     </div>
   )

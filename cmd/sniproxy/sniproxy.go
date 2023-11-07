@@ -22,8 +22,6 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3"
-	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -37,8 +35,6 @@ import (
 )
 
 const configCapKey = "tailscale.com/sniproxy"
-
-var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 
 // portForward is the state for a single port forwarding entry, as passed to the --forward flag.
 type portForward struct {
@@ -99,7 +95,7 @@ func main() {
 func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, promoteHTTPS bool, debugPort int, ports, forwards string) {
 	// Wire up Tailscale node + app connector server
 	hostinfo.SetApp("sniproxy")
-	var s server
+	var s sniproxy
 	s.ts = ts
 
 	s.ts.Port = uint16(wgPort)
@@ -110,7 +106,7 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 		log.Fatalf("LocalClient() failed: %v", err)
 	}
 	s.lc = lc
-	s.ts.RegisterFallbackTCPHandler(s.appc.HandleTCPFlow)
+	s.ts.RegisterFallbackTCPHandler(s.srv.HandleTCPFlow)
 
 	// Start special-purpose listeners: dns, http promotion, debug server
 	ln, err := s.ts.Listen("udp", ":53")
@@ -181,18 +177,18 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 			// on the command line. This is intentionally done after we advertise any routes
 			// because its never correct to advertise the nodes native IP addresses.
 			s.mergeConfigFromFlags(&c, ports, forwards)
-			s.appc.Configure(&c)
+			s.srv.Configure(&c)
 		}
 	}
 }
 
-type server struct {
-	appc appc.Server
-	ts   *tsnet.Server
-	lc   *tailscale.LocalClient
+type sniproxy struct {
+	srv Server
+	ts  *tsnet.Server
+	lc  *tailscale.LocalClient
 }
 
-func (s *server) advertiseRoutesFromConfig(ctx context.Context, c *appctype.AppConnectorConfig) error {
+func (s *sniproxy) advertiseRoutesFromConfig(ctx context.Context, c *appctype.AppConnectorConfig) error {
 	// Collect the set of addresses to advertise, using a map
 	// to avoid duplicate entries.
 	addrs := map[netip.Addr]struct{}{}
@@ -224,7 +220,7 @@ func (s *server) advertiseRoutesFromConfig(ctx context.Context, c *appctype.AppC
 	return err
 }
 
-func (s *server) mergeConfigFromFlags(out *appctype.AppConnectorConfig, ports, forwards string) {
+func (s *sniproxy) mergeConfigFromFlags(out *appctype.AppConnectorConfig, ports, forwards string) {
 	ip4, ip6 := s.ts.TailscaleIPs()
 
 	sniConfigFromFlags := appctype.SNIProxyConfig{
@@ -276,18 +272,18 @@ func (s *server) mergeConfigFromFlags(out *appctype.AppConnectorConfig, ports, f
 	}
 }
 
-func (s *server) serveDNS(ln net.Listener) {
+func (s *sniproxy) serveDNS(ln net.Listener) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			log.Printf("serveDNS accept: %v", err)
 			return
 		}
-		go s.appc.HandleDNS(c.(nettype.ConnPacketConn))
+		go s.srv.HandleDNS(c.(nettype.ConnPacketConn))
 	}
 }
 
-func (s *server) promoteHTTPS(ln net.Listener) {
+func (s *sniproxy) promoteHTTPS(ln net.Listener) {
 	err := http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusFound)
 	}))

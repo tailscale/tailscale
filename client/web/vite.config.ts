@@ -47,14 +47,8 @@ export default defineConfig({
     // This needs to be 127.0.0.1 instead of localhost, because of how our
     // Go proxy connects to it.
     host: "127.0.0.1",
-    // If you change the port, be sure to update the proxy in adminhttp.go too.
+    // If you change the port, be sure to update the proxy in assets.go too.
     port: 4000,
-    // Don't proxy the WebSocket connection used for live reloading by running
-    // it on a separate port.
-    hmr: {
-      protocol: "ws",
-      port: 4001,
-    },
   },
   test: {
     exclude: ["**/node_modules/**", "**/dist/**"],

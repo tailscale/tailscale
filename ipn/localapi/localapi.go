@@ -63,11 +63,10 @@ type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
 // then it's a prefix match.
 var handler = map[string]localAPIHandler{
 	// The prefix match handlers end with a slash:
-	"cert/":      (*Handler).serveCert,
-	"file-put/":  (*Handler).serveFilePut,
-	"files/":     (*Handler).serveFiles,
-	"profiles/":  (*Handler).serveProfiles,
-	"webclient/": (*Handler).serveWebClient,
+	"cert/":     (*Handler).serveCert,
+	"file-put/": (*Handler).serveFilePut,
+	"files/":    (*Handler).serveFiles,
+	"profiles/": (*Handler).serveProfiles,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
@@ -1053,7 +1052,6 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a flusher", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 
 	var mask ipn.NotifyWatchOpt
 	if s := r.FormValue("mask"); s != "" {
@@ -1064,6 +1062,16 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
+	// Users with only read access must request private key filtering. If they
+	// don't filter out private keys, require write access.
+	if (mask & ipn.NotifyNoPrivateKeys) == 0 {
+		if !h.PermitWrite {
+			http.Error(w, "watch IPN bus access denied, must set ipn.NotifyNoPrivateKeys when not running as admin/root or operator", http.StatusForbidden)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 	h.b.WatchNotifications(ctx, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		js, err := json.Marshal(roNotify)
@@ -1681,8 +1689,8 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "lock status access denied", http.StatusForbidden)
+	if !h.PermitWrite {
+		http.Error(w, "lock sign access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
@@ -2236,43 +2244,6 @@ func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Write(body)
 	w.Header().Set("Content-Type", "application/json")
-}
-
-func (h *Handler) serveWebClient(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != httpm.POST {
-		http.Error(w, "use POST", http.StatusMethodNotAllowed)
-		return
-	}
-	switch r.URL.Path {
-	case "/localapi/v0/webclient/start":
-		if err := h.b.WebClientInit(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// try to set pref, but ignore errors
-		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
-			Prefs:           ipn.Prefs{RunWebClient: true},
-			RunWebClientSet: true,
-		})
-		w.WriteHeader(http.StatusOK)
-		return
-	case "/localapi/v0/webclient/stop":
-		h.b.WebClientShutdown()
-		// try to set pref, but ignore errors
-		_, _ = h.b.EditPrefs(&ipn.MaskedPrefs{
-			Prefs:           ipn.Prefs{RunWebClient: false},
-			RunWebClientSet: true,
-		})
-		w.WriteHeader(http.StatusOK)
-		return
-	default:
-		http.Error(w, "invalid action", http.StatusBadRequest)
-		return
-	}
 }
 
 func defBool(a string, def bool) bool {

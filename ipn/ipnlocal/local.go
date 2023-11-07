@@ -171,7 +171,7 @@ type LocalBackend struct {
 	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
 	em                    *expiryManager   // non-nil
 	sshAtomicBool         atomic.Bool
-	webclientAtomicBool   atomic.Bool
+	webClientAtomicBool   atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 	debugSink             *capture.Sink
 	sockstatLogger        *sockstatlog.Logger
@@ -206,10 +206,10 @@ type LocalBackend struct {
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
-	httpTestClient *http.Client               // for controlclient. nil by default, used by tests.
-	ccGen          clientGen                  // function for producing controlclient; lazily populated
-	sshServer      SSHServer                  // or nil, initialized lazily.
-	appConnector   *appc.EmbeddedAppConnector // or nil, initialized when configured.
+	httpTestClient *http.Client       // for controlclient. nil by default, used by tests.
+	ccGen          clientGen          // function for producing controlclient; lazily populated
+	sshServer      SSHServer          // or nil, initialized lazily.
+	appConnector   *appc.AppConnector // or nil, initialized when configured.
 	webClient      webClient
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
@@ -1118,6 +1118,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
 		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLock)
+		b.setWebClientAtomicBoolLocked(st.NetMap, prefs.View())
 
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
 		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
@@ -2509,7 +2510,7 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 // and shouldInterceptTCPPortAtomic from the prefs p, which may be !Valid().
 func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
-	b.webclientAtomicBool.Store(p.Valid() && p.RunWebClient())
+	b.setWebClientAtomicBoolLocked(b.netMap, p)
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
@@ -3023,9 +3024,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 			b.sshServer = nil
 		}
 	}
-	if oldp.ShouldWebClientBeRunning() && !newp.ShouldWebClientBeRunning() {
-		go b.WebClientShutdown()
-	}
 	if netMap != nil {
 		newProfile := netMap.UserProfiles[netMap.User()]
 		if newLoginName := newProfile.LoginName; newLoginName != "" {
@@ -3120,6 +3118,9 @@ var (
 // apply to the socket before calling the handler.
 func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c net.Conn) error, opts []tcpip.SettableSocketOption) {
 	if dst.Port() == 80 && (dst.Addr() == magicDNSIP || dst.Addr() == magicDNSIPv6) {
+		if b.ShouldRunWebClient() {
+			return b.handleWebClientConn, opts
+		}
 		return b.HandleQuad100Port80Conn, opts
 	}
 	if !b.isLocalIP(dst.Addr()) {
@@ -3136,7 +3137,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		return b.handleSSHConn, opts
 	}
 	// TODO(will,sonia): allow customizing web client port ?
-	if dst.Port() == 5252 && b.ShouldRunWebClient() {
+	if dst.Port() == webClientPort && b.ShouldRunWebClient() {
 		return b.handleWebClientConn, opts
 	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
@@ -3257,7 +3258,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	}
 
 	if b.appConnector == nil {
-		b.appConnector = appc.NewEmbeddedAppConnector(b.logf, b)
+		b.appConnector = appc.NewAppConnector(b.logf, b)
 	}
 	if nm == nil {
 		return
@@ -4217,8 +4218,17 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
-func (b *LocalBackend) ShouldRunWebClient() bool {
-	return b.webclientAtomicBool.Load() && hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient)
+// ShouldRunWebClient reports whether the web client is being run
+// within this tailscaled instance. ShouldRunWebClient is safe to
+// call regardless of whether b.mu is held or not.
+func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
+
+func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	shouldRun := prefs.Valid() && prefs.RunWebClient() && hasCapability(nm, tailcfg.CapabilityPreviewWebClient)
+	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
+	if wasRunning && !shouldRun {
+		go b.WebClientShutdown() // stop web client
+	}
 }
 
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
@@ -4467,6 +4477,9 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
+	}
+	if b.ShouldRunWebClient() {
+		handlePorts = append(handlePorts, webClientPort)
 	}
 
 	b.reloadServeConfigLocked(prefs)
@@ -5511,7 +5524,7 @@ func (b *LocalBackend) DoWebUIUpdate() {
 // ObserveDNSResponse passes a DNS response from the PeerAPI DNS server to the
 // App Connector to enable route discovery.
 func (b *LocalBackend) ObserveDNSResponse(res []byte) {
-	var appConnector *appc.EmbeddedAppConnector
+	var appConnector *appc.AppConnector
 	b.mu.Lock()
 	if b.appConnector == nil {
 		b.mu.Unlock()

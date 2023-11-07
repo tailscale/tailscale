@@ -1335,7 +1335,11 @@ func (de *endpoint) stopAndReset() {
 	defer de.mu.Unlock()
 
 	if closing := de.c.closing.Load(); !closing {
-		de.c.logf("[v1] magicsock: doing cleanup for discovery key %s", de.discoShort())
+		if de.isWireguardOnly {
+			de.c.logf("[v1] magicsock: doing cleanup for wireguard key %s", de.publicKey.ShortString())
+		} else {
+			de.c.logf("[v1] magicsock: doing cleanup for discovery key %s", de.discoShort())
+		}
 	}
 
 	de.debugUpdates.Add(EndpointChange{
@@ -1359,8 +1363,10 @@ func (de *endpoint) resetLocked() {
 	for _, es := range de.endpointState {
 		es.lastPing = 0
 	}
-	for txid, sp := range de.sentPing {
-		de.removeSentDiscoPingLocked(txid, sp)
+	if !de.isWireguardOnly {
+		for txid, sp := range de.sentPing {
+			de.removeSentDiscoPingLocked(txid, sp)
+		}
 	}
 }
 

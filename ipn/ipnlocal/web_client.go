@@ -14,8 +14,9 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
 	"tailscale.com/net/netutil"
-	"tailscale.com/tailcfg"
 )
+
+const webClientPort = web.ListenPort
 
 // webClient holds state for the web interface for managing
 // this tailscale instance. The web interface is not used by
@@ -41,7 +42,7 @@ func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {
 // tailscaled instance.
 // If the web interface is already running, WebClientInit is a no-op.
 func (b *LocalBackend) WebClientInit() (err error) {
-	if !hasCapability(b.netMap, tailcfg.CapabilityPreviewWebClient) {
+	if !b.ShouldRunWebClient() {
 		return errors.New("web client not enabled for this device")
 	}
 
@@ -53,7 +54,7 @@ func (b *LocalBackend) WebClientInit() (err error) {
 
 	b.logf("WebClientInit: initializing web ui")
 	if b.webClient.server, err = web.NewServer(web.ServerOpts{
-		// TODO(sonia): allow passing back dev mode flag
+		Mode:        web.ManageServerMode,
 		LocalClient: b.webClient.lc,
 		Logf:        b.logf,
 	}); err != nil {
@@ -75,8 +76,8 @@ func (b *LocalBackend) WebClientShutdown() {
 	b.mu.Unlock() // release lock before shutdown
 	if server != nil {
 		server.Shutdown()
+		b.logf("WebClientShutdown: shut down web ui")
 	}
-	b.logf("WebClientShutdown: shut down web ui")
 }
 
 // handleWebClientConn serves web client requests.
