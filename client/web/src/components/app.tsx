@@ -8,7 +8,7 @@ import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData, NodeUpdate } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import ProfilePic from "src/ui/profile-pic"
-import { Link, Route, Switch, useLocation } from "wouter"
+import { Link, Route, Router, Switch, useLocation } from "wouter"
 import DeviceDetailsView from "./views/device-details-view"
 
 export default function App() {
@@ -46,30 +46,32 @@ function WebClient({
       {/* TODO(sonia): get rid of the conditions here once full/readonly
        * views live on same components */}
       {data.DebugMode === "full" && auth?.ok && <Header node={data} />}
-      <Switch>
-        <Route path="/">
-          <HomeView
-            auth={auth}
-            data={data}
-            newSession={newSession}
-            refreshData={refreshData}
-            updateNode={updateNode}
-          />
-        </Route>
-        {data.DebugMode !== "" && (
-          <>
-            <Route path="/details">
-              <DeviceDetailsView node={data} />
-            </Route>
-            <Route path="/subnets">{/* TODO */}Subnet router</Route>
-            <Route path="/ssh">{/* TODO */}Tailscale SSH server</Route>
-            <Route path="/serve">{/* TODO */}Share local content</Route>
-          </>
-        )}
-        <Route>
-          <h2 className="mt-8">Page not found</h2>
-        </Route>
-      </Switch>
+      <Router base={data.URLPrefix}>
+        <Switch>
+          <Route path="/">
+            <HomeView
+              auth={auth}
+              data={data}
+              newSession={newSession}
+              refreshData={refreshData}
+              updateNode={updateNode}
+            />
+          </Route>
+          {data.DebugMode !== "" && (
+            <>
+              <Route path="/details">
+                <DeviceDetailsView node={data} />
+              </Route>
+              <Route path="/subnets">{/* TODO */}Subnet router</Route>
+              <Route path="/ssh">{/* TODO */}Tailscale SSH server</Route>
+              <Route path="/serve">{/* TODO */}Share local content</Route>
+            </>
+          )}
+          <Route>
+            <h2 className="mt-8">Page not found</h2>
+          </Route>
+        </Switch>
+      </Router>
     </>
   )
 }
