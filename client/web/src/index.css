@@ -4,6 +4,10 @@
 
 @layer base {
   h1 {
+    @apply text-neutral-800 text-[22px] font-medium leading-[30.80px];
+  }
+
+  h2 {
     @apply text-neutral-500 text-sm font-medium uppercase leading-tight tracking-wide;
   }
 }
@@ -11,6 +15,21 @@
 @layer components {
   .card {
     @apply p-5 bg-white rounded-lg border border-gray-200;
+  }
+  .card h1 {
+    @apply text-neutral-800 text-lg font-medium leading-snug;
+  }
+  .card h2 {
+    @apply text-neutral-500 text-xs font-semibold uppercase tracking-wide;
+  }
+  .card tbody {
+    @apply flex flex-col gap-2;
+  }
+  .card td:first-child {
+    @apply w-40 text-neutral-500 text-sm leading-tight;
+  }
+  .card td:last-child {
+    @apply text-neutral-800 text-sm leading-tight;
   }
   
   .hover-button {
