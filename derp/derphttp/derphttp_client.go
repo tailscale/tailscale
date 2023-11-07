@@ -244,6 +244,9 @@ func (c *Client) tlsServerName(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.Hostname()
 	}
+	if node == nil {
+		return ""
+	}
 	return node.HostName
 }
 
@@ -285,7 +288,7 @@ func (c *Client) preferIPv6() bool {
 }
 
 // dialWebsocketFunc is non-nil (set by websocket.go's init) when compiled in.
-var dialWebsocketFunc func(ctx context.Context, urlStr string) (net.Conn, error)
+var dialWebsocketFunc func(ctx context.Context, urlStr string, tlsConfig *tls.Config) (net.Conn, error)
 
 func useWebsockets() bool {
 	if runtime.GOOS == "js" {
@@ -353,13 +356,16 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	switch {
 	case useWebsockets():
 		var urlStr string
+		var tlsConfig *tls.Config
 		if c.url != nil {
 			urlStr = c.url.String()
+			tlsConfig = c.tlsConfig(nil)
 		} else {
 			urlStr = c.urlString(reg.Nodes[0])
+			tlsConfig = c.tlsConfig(reg.Nodes[0])
 		}
 		c.logf("%s: connecting websocket to %v", caller, urlStr)
-		conn, err := dialWebsocketFunc(ctx, urlStr)
+		conn, err := dialWebsocketFunc(ctx, urlStr, tlsConfig)
 		if err != nil {
 			c.logf("%s: websocket to %v error: %v", caller, urlStr, err)
 			return nil, 0, err
@@ -424,7 +430,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	var serverProtoVersion int
 	var tlsState *tls.ConnectionState
 	if c.useHTTPS() {
-		tlsConn := c.tlsClient(tcpConn, node)
+		tlsConn := tls.Client(tcpConn, c.tlsConfig(node))
 		httpConn = tlsConn
 
 		// Force a handshake now (instead of waiting for it to
@@ -590,7 +596,7 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 	return nil, nil, firstErr
 }
 
-func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
+func (c *Client) tlsConfig(node *tailcfg.DERPNode) *tls.Config {
 	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
 	if node != nil {
 		if node.InsecureForTests {
@@ -601,7 +607,7 @@ func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
 		}
 	}
-	return tls.Client(nc, tlsConf)
+	return tlsConf
 }
 
 // DialRegionTLS returns a TLS connection to a DERP node in the given region.
@@ -617,7 +623,7 @@ func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tl
 	done := make(chan bool) // unbuffered
 	defer close(done)
 
-	tlsConn = c.tlsClient(tcpConn, node)
+	tlsConn = tls.Client(tcpConn, c.tlsConfig(node))
 	go func() {
 		select {
 		case <-done:
