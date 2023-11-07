@@ -11,7 +11,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"os/user"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +32,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
+	"tailscale.com/version"
 )
 
 // Server is an IPN backend and its set of 0 or more active localhost
@@ -371,16 +374,52 @@ func (s *Server) connCanFetchCerts(ci *ipnauth.ConnIdentity) bool {
 // This is useful because, on Windows, tailscaled itself always runs with
 // elevated rights: we want to avoid privilege escalation for certain mutative operations.
 func (s *Server) connIsLocalAdmin(ci *ipnauth.ConnIdentity) bool {
-	tok, err := ci.WindowsToken()
-	if err != nil {
-		if !errors.Is(err, ipnauth.ErrNotImplemented) {
-			s.logf("ipnauth.ConnIdentity.WindowsToken() error: %v", err)
+	switch runtime.GOOS {
+	case "windows":
+		tok, err := ci.WindowsToken()
+		if err != nil {
+			if !errors.Is(err, ipnauth.ErrNotImplemented) {
+				s.logf("ipnauth.ConnIdentity.WindowsToken() error: %v", err)
+			}
+			return false
 		}
+		defer tok.Close()
+
+		return tok.IsElevated()
+
+	case "darwin":
+		if version.IsSandboxedMacOS() {
+			return false
+		}
+		// This is a standalone tailscaled setup, use the same logic as on
+		// Linux.
+		fallthrough
+	case "linux":
+		uid, ok := ci.Creds().UserID()
+		if !ok {
+			return false
+		}
+		// root is always admin.
+		if uid == "0" {
+			return true
+		}
+		// if non-root, must be operator AND able to execute "sudo tailscale".
+		operatorUID := s.mustBackend().OperatorUserID()
+		if operatorUID != "" && uid != operatorUID {
+			return false
+		}
+		u, err := user.LookupId(uid)
+		if err != nil {
+			return false
+		}
+		if err := exec.Command("sudo", "--other-user="+u.Name, "--list", "tailscale").Run(); err != nil {
+			return false
+		}
+		return true
+
+	default:
 		return false
 	}
-	defer tok.Close()
-
-	return tok.IsElevated()
 }
 
 // addActiveHTTPRequest adds c to the server's list of active HTTP requests.
