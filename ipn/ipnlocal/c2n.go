@@ -121,6 +121,15 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, res)
+	case "/appconnector/routes":
+		switch r.Method {
+		case httpm.GET:
+			b.handleC2NAppConnectorDomainRoutesGet(w, r)
+			return
+		default:
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			return
+		}
 	case "/sockstats":
 		if r.Method != "POST" {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
@@ -137,6 +146,26 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unknown c2n path", http.StatusBadRequest)
 	}
+}
+
+// handleC2NAppConnectorDomainRoutesGet handles returning the domains
+// that the app connector is responsible for, as well as the resolved
+// IP addresses for each domain. If the node is not configured as
+// an app connector, an empty map is returned.
+func (b *LocalBackend) handleC2NAppConnectorDomainRoutesGet(w http.ResponseWriter, r *http.Request) {
+	b.logf("c2n: GET /appconnector/routes received")
+
+	var res tailcfg.C2NAppConnectorDomainRoutesResponse
+	if b.appConnector == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	res.Domains = b.appConnector.DomainRoutes()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func (b *LocalBackend) handleC2NUpdateGet(w http.ResponseWriter, r *http.Request) {
