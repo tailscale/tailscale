@@ -5,6 +5,8 @@
 
 package tailcfg
 
+import "net/netip"
+
 // C2NSSHUsernamesRequest is the request for the /ssh/usernames.
 // A GET request without a request body is equivalent to the zero value of this type.
 // Otherwise, a POST request with a JSON-encoded request body is expected.
@@ -63,4 +65,13 @@ type C2NPostureIdentityResponse struct {
 	// PostureDisabled indicates if the machine has opted out of
 	// device posture collection.
 	PostureDisabled bool `json:",omitempty"`
+}
+
+// C2NAppConnectorDomainRoutesResponse contains a map of domains to
+// slice of addresses, indicating what IP addresses have been resolved
+// for each domain.
+type C2NAppConnectorDomainRoutesResponse struct {
+	// Domains is a map of lower case domain names with no trailing dot,
+	// to a list of resolved IP addresses.
+	Domains map[string][]netip.Addr
 }
