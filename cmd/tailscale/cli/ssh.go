@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/netip"
@@ -43,13 +44,55 @@ The 'tailscale ssh' wrapper adds a few things:
   system 'ssh' command that connects via a pipe through tailscaled.
 * It automatically checks the destination server's SSH host key against the
   node's SSH host key as advertised via the Tailscale coordination server.
+
+Tailscale can also be integrated with the system 'ssh' and related commands
+by using the --config flag. This will output an SSH config snippet that can 
+be added to your ~/.ssh/config file to enable Tailscale for all SSH connections.
 `),
 	Exec: runSSH,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("ssh")
+		fs.BoolVar(&sshArgs.config, "config", false, "output an SSH config snippet to integrate with standard ssh")
+		fs.StringVar(&sshArgs.check, "check", "", "check if host SSH is managed by Tailscale")
+		return fs
+	})(),
+}
+
+var sshArgs struct {
+	check  string // Check if host SSH is managed by Tailscale
+	config bool   // Output an SSH config snippet to integrate with standard ssh
 }
 
 func runSSH(ctx context.Context, args []string) error {
+	tailscaleBin, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	st, err := localClient.Status(ctx)
+	if err != nil {
+		return err
+	}
+	knownHostsFile, err := writeKnownHosts(st)
+	if err != nil {
+		return err
+	}
+	if sshArgs.check != "" {
+		if isSSHHost(st, sshArgs.check) {
+			return nil
+		} else {
+			return errors.New("host ssh is not managed by Tailscale")
+		}
+	}
+	if sshArgs.config {
+		fmt.Printf(`
+# Tailscale ssh config
+Match exec "%s ssh --check %%h"
+  UserKnownHostsFile %s
+`, tailscaleBin, knownHostsFile)
+		return nil
+	}
 	if runtime.GOOS == "darwin" && version.IsSandboxedMacOS() && !envknob.UseWIPCode() {
-		return errors.New("The 'tailscale ssh' subcommand is not available on sandboxed macOS builds.\nUse the regular 'ssh' client instead.")
+		return errors.New("The 'tailscale ssh' wrapper subcommand is not available on sandboxed macOS builds.\nUse the regular 'ssh' client instead.")
 	}
 	if len(args) == 0 {
 		return errors.New("usage: ssh [user@]<host>")
@@ -65,11 +108,6 @@ func runSSH(ctx context.Context, args []string) error {
 		username = lu.Username
 	}
 
-	st, err := localClient.Status(ctx)
-	if err != nil {
-		return err
-	}
-
 	// hostForSSH is the hostname we'll tell OpenSSH we're
 	// connecting to, so we have to maintain fewer entries in the
 	// known_hosts files.
@@ -77,20 +115,11 @@ func runSSH(ctx context.Context, args []string) error {
 	if v, ok := nodeDNSNameFromArg(st, host); ok {
 		hostForSSH = v
 	}
-
 	ssh, err := findSSH()
 	if err != nil {
 		// TODO(bradfitz): use Go's crypto/ssh client instead
 		// of failing. But for now:
 		return fmt.Errorf("no system 'ssh' command found: %w", err)
-	}
-	tailscaleBin, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	knownHostsFile, err := writeKnownHosts(st)
-	if err != nil {
-		return err
 	}
 
 	argv := []string{ssh}
@@ -171,38 +200,54 @@ func genKnownHosts(st *ipnstate.Status) []byte {
 			if strings.ContainsAny(hostKey, "\n\r") { // invalid
 				continue
 			}
-			fmt.Fprintf(&buf, "%s %s\n", ps.DNSName, hostKey)
+			// Join all ps.TailscaleIPs as strings separated by commas.
+			ips := make([]string, len(ps.TailscaleIPs))
+			for i, ip := range ps.TailscaleIPs {
+				ips[i] = ip.String()
+			}
+			// Generate comma separated string of all possible names for the host.
+			n := strings.Join(append(ips, ps.DNSName, strings.TrimSuffix(ps.DNSName, "."), strings.Split(ps.DNSName, ".")[0]), ",")
+			fmt.Fprintf(&buf, "%s %s\n", n, hostKey)
 		}
 	}
 	return buf.Bytes()
+}
+
+// nodeFromArg returns the PeerStatus value from a peer in st that matches the input arg
+// which can be a base name, full DNS name, or an IP.
+func nodeFromArg(st *ipnstate.Status, arg string) (ps *ipnstate.PeerStatus, ok bool) {
+	if arg == "" {
+		return
+	}
+	argIP, _ := netip.ParseAddr(arg)
+	for _, ps = range st.Peer {
+		if argIP.IsValid() {
+			for _, ip := range ps.TailscaleIPs {
+				if ip == argIP {
+					return ps, true
+				}
+			}
+			continue
+		}
+		if strings.EqualFold(strings.TrimSuffix(arg, "."), strings.TrimSuffix(ps.DNSName, ".")) {
+			return ps, true
+		}
+		if base, _, ok := strings.Cut(ps.DNSName, "."); ok && strings.EqualFold(base, arg) {
+			return ps, true
+		}
+	}
+	return nil, false
 }
 
 // nodeDNSNameFromArg returns the PeerStatus.DNSName value from a peer
 // in st that matches the input arg which can be a base name, full
 // DNS name, or an IP.
 func nodeDNSNameFromArg(st *ipnstate.Status, arg string) (dnsName string, ok bool) {
-	if arg == "" {
-		return
+	ps, ok := nodeFromArg(st, arg)
+	if !ok {
+		return "", false
 	}
-	argIP, _ := netip.ParseAddr(arg)
-	for _, ps := range st.Peer {
-		dnsName = ps.DNSName
-		if argIP.IsValid() {
-			for _, ip := range ps.TailscaleIPs {
-				if ip == argIP {
-					return dnsName, true
-				}
-			}
-			continue
-		}
-		if strings.EqualFold(strings.TrimSuffix(arg, "."), strings.TrimSuffix(dnsName, ".")) {
-			return dnsName, true
-		}
-		if base, _, ok := strings.Cut(ps.DNSName, "."); ok && strings.EqualFold(base, arg) {
-			return dnsName, true
-		}
-	}
-	return "", false
+	return ps.DNSName, true
 }
 
 // getSSHClientEnvVar returns the "SSH_CLIENT" environment variable
@@ -228,4 +273,16 @@ func isSSHOverTailscale() bool {
 		return false
 	}
 	return tsaddr.IsTailscaleIP(ip)
+}
+
+// isSSHHost checks if the node's ssh is managed by Tailscale.
+func isSSHHost(st *ipnstate.Status, arg string) bool {
+	ps, ok := nodeFromArg(st, arg)
+	if !ok {
+		return false
+	}
+	if len(ps.SSH_HostKeys) == 0 {
+		return false
+	}
+	return true
 }
