@@ -118,24 +118,24 @@ function HomeView({
         />
       ) : data.DebugMode === "full" && auth?.ok ? (
         // Render new client interface in management mode.
+        <>
         <ManagementClientView node={data} updateNode={updateNode} />
+        {
+          // TODO(naman): move into ReadonlyClient or ManagementClient
+          data.ClientVersion.RunningLatest ? null : (
+            <UpdateAvailableNotification
+              currentVersion={data.IPNVersion}
+              details={data.ClientVersion}
+              updating={updating}
+              setUpdating={setUpdating}
+              appendUpdateLog={appendUpdateLog}
+            />
+          )
+        }
+      </>
       ) : data.DebugMode === "login" || data.DebugMode === "full" ? (
         // Render new client interface in readonly mode.
-        <>
-          <ReadonlyClientView data={data} auth={auth} newSession={newSession} />
-          {
-            // TODO(naman): move into ReadonlyClient or ManagementClient
-            data.ClientVersion.RunningLatest ? null : (
-              <UpdateAvailableNotification
-                currentVersion={data.IPNVersion}
-                details={data.ClientVersion}
-                updating={updating}
-                setUpdating={setUpdating}
-                appendUpdateLog={appendUpdateLog}
-              />
-            )
-          }
-        </>
+        <ReadonlyClientView data={data} auth={auth} newSession={newSession} />
       ) : (
         // Render legacy client interface.
         <LegacyClientView

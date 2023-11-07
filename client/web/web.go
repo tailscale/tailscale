@@ -345,15 +345,6 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	s.logf("serveLoginAPI")
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
-	// TODO(naman): remove update stuff from here once full web client is ready
-	if r.URL.Path == "/api/update" && r.Method == "POST" {
-		s.serveSelfUpdate(w, r)
-		return
-	}
-	if r.URL.Path == "/api/update/progress" && r.Method == "GET" {
-		s.serveUpdateProgress(w, r)
-		return
-	}
 	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
 		http.Error(w, "invalid endpoint", http.StatusNotFound)
 		return
@@ -488,6 +479,22 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 			s.serveGetNodeData(w, r)
 		case httpm.POST:
 			s.servePostNodeUpdate(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	case path == "/update":
+		switch r.Method {
+		case httpm.POST:
+			s.serveSelfUpdate(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	case path == "/update/progress":
+		switch r.Method {
+		case httpm.GET:
+			s.serveUpdateProgress(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
