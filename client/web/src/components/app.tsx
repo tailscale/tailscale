@@ -13,47 +13,64 @@ import DeviceDetailsView from "./views/device-details-view"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
+
+  return (
+    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
+      {loadingAuth ? (
+        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
+      ) : (
+        <WebClient auth={auth} newSession={newSession} />
+      )}
+    </main>
+  )
+}
+
+function WebClient({
+  auth,
+  newSession,
+}: {
+  auth?: AuthResponse
+  newSession: () => Promise<void>
+}) {
   const { data, refreshData, updateNode } = useNodeData()
   useEffect(() => {
     refreshData()
   }, [auth, refreshData])
 
+  if (!data) {
+    return <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
+  }
+
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
-      {loadingAuth || !data ? (
-        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
-      ) : (
-        <>
-          {/* TODO(sonia): get rid of the conditions here once full/readonly
-           * views live on same components */}
-          {data.DebugMode === "full" && auth?.ok && <Header node={data} />}
-          <Switch>
-            <Route path="/">
-              <HomeView
-                auth={auth}
-                data={data}
-                newSession={newSession}
-                refreshData={refreshData}
-                updateNode={updateNode}
-              />
+    <>
+      {/* TODO(sonia): get rid of the conditions here once full/readonly
+       * views live on same components */}
+      {data.DebugMode === "full" && auth?.ok && <Header node={data} />}
+      <Switch>
+        <Route path="/">
+          <HomeView
+            auth={auth}
+            data={data}
+            newSession={newSession}
+            refreshData={refreshData}
+            updateNode={updateNode}
+          />
+        </Route>
+        {data.DebugMode !== "" && (
+          <>
+            <Route path="/details">
+              <DeviceDetailsView node={data} />
             </Route>
-            {data.DebugMode !== "" && (
-              <>
-                <Route path="/details">
-                  <DeviceDetailsView node={data} />
-                </Route>
-                <Route path="/subnets">{/* TODO */}Subnet router</Route>
-                <Route path="/ssh">{/* TODO */}Tailscale SSH server</Route>
-                <Route path="/serve">{/* TODO */}Share local content</Route>
-              </>
-            )}
-            <Route>
-              <h2 className="mt-8">Page not found</h2>
-            </Route>
-          </Switch>
-        </>
-      )}
-    </main>
+            <Route path="/subnets">{/* TODO */}Subnet router</Route>
+            <Route path="/ssh">{/* TODO */}Tailscale SSH server</Route>
+            <Route path="/serve">{/* TODO */}Share local content</Route>
+          </>
+        )}
+        <Route>
+          <h2 className="mt-8">Page not found</h2>
+        </Route>
+      </Switch>
+    </>
   )
 }
 
