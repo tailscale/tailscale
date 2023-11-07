@@ -88,7 +88,13 @@ func (d *derpProber) ProbeMap(ctx context.Context) error {
 			wantProbes[n] = true
 			if d.probes[n] == nil {
 				log.Printf("adding DERP TLS probe for %s (%s)", server.Name, region.RegionName)
-				d.probes[n] = d.p.Run(n, d.tlsInterval, labels, d.tlsProbeFn(server.HostName+":443"))
+
+				derpPort := 443
+				if server.DERPPort != 0 {
+					derpPort = server.DERPPort
+				}
+
+				d.probes[n] = d.p.Run(n, d.tlsInterval, labels, d.tlsProbeFn(fmt.Sprintf("%s:%d", server.HostName, derpPort)))
 			}
 
 			for idx, ipStr := range []string{server.IPv6, server.IPv4} {
