@@ -920,8 +920,8 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 		// require a local admin when setting a path handler
 		// TODO: roll-up this Windows-specific check into either PermitWrite
 		// or a global admin escalation check.
-		if shouldDenyServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h) {
-			http.Error(w, "must be a Windows local admin to serve a path", http.StatusUnauthorized)
+		if err := authorizeServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h); err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
 
@@ -940,14 +940,30 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func shouldDenyServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) bool {
-	if goos != "windows" {
-		return false
+func authorizeServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) error {
+	if !slices.Contains([]string{"windows", "linux", "darwin"}, goos) {
+		return nil
+	}
+	if goos == "darwin" && !version.IsSandboxedMacOS() {
+		return nil
 	}
 	if !configIn.HasPathHandler() {
-		return false
+		return nil
 	}
-	return !h.CallerIsLocalAdmin
+	if h.CallerIsLocalAdmin {
+		return nil
+	}
+	switch goos {
+	case "windows":
+		return errors.New("must be a Windows local admin to serve a path")
+	case "linux", "darwin":
+		return errors.New("must be root, or be an operator and able to run 'sudo tailscale' to serve a path")
+	default:
+		// We filter goos at the start of the func, this default case
+		// should never happen.
+		panic("unreachable")
+	}
+
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {

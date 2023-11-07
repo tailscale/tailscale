@@ -161,14 +161,40 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 		goos     string
 		configIn *ipn.ServeConfig
 		h        *Handler
-		want     bool
+		wantErr  bool
 	}{
 		{
 			name:     "linux",
 			goos:     "linux",
 			configIn: &ipn.ServeConfig{},
 			h:        &Handler{CallerIsLocalAdmin: false},
-			want:     false,
+			wantErr:  false,
+		},
+		{
+			name: "linux-path-handler-admin",
+			goos: "linux",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:       &Handler{CallerIsLocalAdmin: true},
+			wantErr: false,
+		},
+		{
+			name: "linux-path-handler-not-admin",
+			goos: "linux",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:       &Handler{CallerIsLocalAdmin: false},
+			wantErr: true,
 		},
 		{
 			name: "windows-not-path-handler",
@@ -180,8 +206,8 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 					}},
 				},
 			},
-			h:    &Handler{CallerIsLocalAdmin: false},
-			want: false,
+			h:       &Handler{CallerIsLocalAdmin: false},
+			wantErr: false,
 		},
 		{
 			name: "windows-path-handler-admin",
@@ -193,8 +219,8 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 					}},
 				},
 			},
-			h:    &Handler{CallerIsLocalAdmin: true},
-			want: false,
+			h:       &Handler{CallerIsLocalAdmin: true},
+			wantErr: false,
 		},
 		{
 			name: "windows-path-handler-not-admin",
@@ -206,16 +232,17 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 					}},
 				},
 			},
-			h:    &Handler{CallerIsLocalAdmin: false},
-			want: true,
+			h:       &Handler{CallerIsLocalAdmin: false},
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldDenyServeConfigForGOOSAndUserContext(tt.goos, tt.configIn, tt.h)
-			if got != tt.want {
-				t.Errorf("shouldDenyServeConfigForGOOSAndUserContext() got = %v, want %v", got, tt.want)
+			err := authorizeServeConfigForGOOSAndUserContext(tt.goos, tt.configIn, tt.h)
+			gotErr := err != nil
+			if gotErr != tt.wantErr {
+				t.Errorf("authorizeServeConfigForGOOSAndUserContext() got error = %v, want error %v", err, tt.wantErr)
 			}
 		})
 	}
