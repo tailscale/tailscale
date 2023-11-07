@@ -4,30 +4,18 @@ import { NodeData } from "src/hooks/node-data"
 import { ReactComponent as ArrowRight } from "src/icons/arrow-right.svg"
 import { ReactComponent as ChevronDown } from "src/icons/chevron-down.svg"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
-import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
-import ProfilePic from "src/ui/profile-pic"
+import { Link } from "wouter"
 
 export default function ManagementClientView(props: NodeData) {
   return (
-    <div className="px-5 mb-12 w-full">
-      <div className="flex justify-between mb-12">
-        <TailscaleIcon />
-        <div className="flex">
-          <p className="mr-2">{props.Profile.LoginName}</p>
-          <ProfilePic url={props.Profile.ProfilePicURL} />
-        </div>
-      </div>
-
-      <h1 className="mb-3">This device</h1>
-
+    <div className="mb-12 w-full">
+      <h2 className="mb-3">This device</h2>
       <div className="-mx-5 card mb-9">
         <div className="flex justify-between items-center text-lg mb-5">
           <div className="flex items-center">
             <ConnectedDeviceIcon />
             <div className="ml-3">
-              <p className="text-neutral-800 text-lg font-medium leading-snug">
-                {props.DeviceName}
-              </p>
+              <h1>{props.DeviceName}</h1>
               {/* TODO(sonia): display actual status */}
               <p className="text-neutral-500 text-sm">Connected</p>
             </div>
@@ -37,23 +25,28 @@ export default function ManagementClientView(props: NodeData) {
           </p>
         </div>
         <ExitNodeSelector className="mb-5" />
-        <a className="text-indigo-500 font-medium leading-snug">
+        <Link
+          className="text-indigo-500 font-medium leading-snug"
+          to="/details"
+        >
           View device details &rarr;
-        </a>
+        </Link>
       </div>
-
-      <h1 className="mb-3">Settings</h1>
+      <h2 className="mb-3">Settings</h2>
       <SettingsCard
+        link="/subnets"
         className="mb-3"
         title="Subnet router"
         body="Add devices to your tailnet without installing Tailscale on them."
       />
       <SettingsCard
+        link="/ssh"
         className="mb-3"
         title="Tailscale SSH server"
         body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
       />
       <SettingsCard
+        link="/serve"
         title="Share local content"
         body="Share local ports, services, and content to your Tailscale network or to the broader internet."
       />
@@ -79,15 +72,18 @@ function ExitNodeSelector({ className }: { className?: string }) {
 
 function SettingsCard({
   title,
+  link,
   body,
   className,
 }: {
   title: string
+  link: string
   body: string
   className?: string
 }) {
   return (
-    <div
+    <Link
+      to={link}
       className={cx(
         "-mx-5 card flex justify-between items-center cursor-pointer",
         className
@@ -102,6 +98,6 @@ function SettingsCard({
       <div>
         <ArrowRight className="ml-3" />
       </div>
-    </div>
+    </Link>
   )
 }
