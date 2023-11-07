@@ -68,7 +68,7 @@ function HomeView({
   data: NodeData
   newSession: () => Promise<void>
   refreshData: () => Promise<void>
-  updateNode: (update: NodeUpdate) => void
+  updateNode: (update: NodeUpdate) => Promise<void> | undefined
 }) {
   return (
     <>
@@ -80,7 +80,7 @@ function HomeView({
         />
       ) : data.DebugMode === "full" && auth?.ok ? (
         // Render new client interface in management mode.
-        <ManagementClientView {...data} />
+        <ManagementClientView node={data} updateNode={updateNode} />
       ) : data.DebugMode === "login" || data.DebugMode === "full" ? (
         // Render new client interface in readonly mode.
         <ReadonlyClientView data={data} auth={auth} newSession={newSession} />
