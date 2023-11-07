@@ -65,7 +65,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
-	github.com/tailscale/web-client-prebuilt v0.0.0-20231107164829-ce4b8446c577
+	github.com/tailscale/web-client-prebuilt v0.0.0-20231107191425-777c9efc9f36
 	github.com/tailscale/wireguard-go v0.0.0-20231101022006-db7604d1aa90
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
