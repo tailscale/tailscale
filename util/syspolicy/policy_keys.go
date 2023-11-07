@@ -16,6 +16,8 @@ const (
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
+	EnableTailscaleDNS        Key = "EnableTailscaleDNSSettings"
+	EnableTailscaleSubnets    Key = "EnableTailscaleSubnets"
 
 	// Keys with a string value that controls visibility: "show", "hide".
 	// The default is "show" unless otherwise stated.
@@ -25,6 +27,8 @@ const (
 	UpdateMenuVisibility      Key = "UpdateMenu"
 	RunExitNodeVisibility     Key = "RunExitNode"
 	PreferencesMenuVisibility Key = "PreferencesMenu"
+	ExitNodeMenuVisibility    Key = "ExitNodesPicker"
+	AutoUpdateVisibility      Key = "ApplyUpdates"
 
 	// Keys with a string value formatted for use with time.ParseDuration().
 	KeyExpirationNoticeTime Key = "KeyExpirationNotice" // default 24 hours
