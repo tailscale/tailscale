@@ -42,6 +42,7 @@ type setArgsT struct {
 	exitNodeAllowLANAccess bool
 	shieldsUp              bool
 	runSSH                 bool
+	runWebClient           bool
 	hostname               string
 	advertiseRoutes        string
 	advertiseDefaultRoute  bool
@@ -72,6 +73,11 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "HIDDEN: allow management plane to gather device posture information")
+
+	// TODO(tailscale/corp#14335): during development only expose -webclient on dev and unstable builds
+	if version.GetMeta().IsDev || version.IsUnstableBuild() {
+		setf.BoolVar(&setArgs.runWebClient, "webclient", false, "run a web client, permitting access per tailnet admin's declared policy")
+	}
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -108,6 +114,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
 			ShieldsUp:              setArgs.shieldsUp,
 			RunSSH:                 setArgs.runSSH,
+			RunWebClient:           setArgs.runWebClient,
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
 			ForceDaemon:            setArgs.forceDaemon,

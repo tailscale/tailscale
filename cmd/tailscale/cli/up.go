@@ -116,6 +116,11 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 
+	// TODO(tailscale/corp#14335): during development only expose -webclient on dev and unstable builds
+	if version.GetMeta().IsDev || version.IsUnstableBuild() {
+		upf.BoolVar(&upArgs.runWebClient, "webclient", false, "run a web client, permitting access per tailnet admin's declared policy")
+	}
+
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
@@ -161,6 +166,7 @@ type upArgsT struct {
 	exitNodeAllowLANAccess bool
 	shieldsUp              bool
 	runSSH                 bool
+	runWebClient           bool
 	forceReauth            bool
 	forceDaemon            bool
 	advertiseRoutes        string
@@ -279,6 +285,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.RunSSH = upArgs.runSSH
+	prefs.RunWebClient = upArgs.runWebClient
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.Hostname = upArgs.hostname
@@ -730,6 +737,7 @@ func init() {
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
+	addPrefFlagMapping("webclient", "RunWebClient")
 	addPrefFlagMapping("nickname", "ProfileName")
 	addPrefFlagMapping("update-check", "AutoUpdate")
 	addPrefFlagMapping("auto-update", "AutoUpdate")
@@ -938,6 +946,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			panic(fmt.Sprintf("unhandled flag %q", f.Name))
 		case "ssh":
 			set(prefs.RunSSH)
+		case "webclient":
+			set(prefs.RunWebClient)
 		case "login-server":
 			set(prefs.ControlURL)
 		case "accept-routes":
