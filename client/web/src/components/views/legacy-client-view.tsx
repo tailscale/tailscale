@@ -178,7 +178,7 @@ export function IP(props: { data: NodeData }) {
 
   return (
     <>
-      <div className="border border-gray-200 bg-gray-50 rounded-md p-2 pl-3 pr-3 width-full">
+      <div className="border border-gray-200 bg-gray-50 rounded-md p-2 pl-3 pr-3 width-full flex items-center justify-between">
         <div className="flex items-center min-width-0">
           <svg
             className="flex-shrink-0 text-gray-600 mr-3 ml-1"

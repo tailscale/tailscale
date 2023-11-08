@@ -343,7 +343,6 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
 // which protects the handler using gorilla csrf.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
-	s.logf("serveLoginAPI")
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
 		http.Error(w, "invalid endpoint", http.StatusNotFound)
@@ -525,7 +524,6 @@ type nodeData struct {
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("serveGetNodeData")
 	st, err := s.lc.Status(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
