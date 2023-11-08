@@ -26,7 +26,7 @@
     @apply flex flex-col gap-2;
   }
   .card td:first-child {
-    @apply w-40 text-neutral-500 text-sm leading-tight;
+    @apply w-40 text-neutral-500 text-sm leading-tight flex-shrink-0;
   }
   .card td:last-child {
     @apply text-neutral-800 text-sm leading-tight;
