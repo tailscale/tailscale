@@ -12,11 +12,14 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
@@ -54,16 +57,22 @@ be added to your ~/.ssh/config file to enable Tailscale for all SSH connections.
 		fs := newFlagSet("ssh")
 		fs.BoolVar(&sshArgs.config, "config", false, "output an SSH config snippet to integrate with standard ssh")
 		fs.StringVar(&sshArgs.check, "check", "", "check if host SSH is managed by Tailscale")
+		fs.BoolVar(&sshArgs.knownHosts, "known-hosts", false, "output the known hosts file")
 		return fs
 	})(),
 }
 
 var sshArgs struct {
-	check  string // Check if host SSH is managed by Tailscale
-	config bool   // Output an SSH config snippet to integrate with standard ssh
+	check      string // Check if host SSH is managed by Tailscale
+	config     bool   // Output an SSH config snippet to integrate with standard ssh
+	knownHosts bool   // Output the known hosts file
 }
 
 func runSSH(ctx context.Context, args []string) error {
+	if runtime.GOOS == "darwin" && version.IsSandboxedMacOS() && !envknob.UseWIPCode() && !sshArgs.config && sshArgs.check == "" {
+		return errors.New("The 'tailscale ssh' wrapper subcommand is not available on sandboxed macOS builds.\nRun tailscale ssh --config >> ~/.ssh/config to use the regular 'ssh' client instead.")
+	}
+
 	tailscaleBin, err := os.Executable()
 	if err != nil {
 		return err
@@ -72,10 +81,13 @@ func runSSH(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	knownHostsFile, err := writeKnownHosts(st)
+	ssh, err := findSSH()
 	if err != nil {
-		return err
+		// TODO(bradfitz): use Go's crypto/ssh client instead
+		// of failing. But for now:
+		return fmt.Errorf("no system 'ssh' command found: %w", err)
 	}
+
 	if sshArgs.check != "" {
 		if isSSHHost(st, sshArgs.check) {
 			return nil
@@ -84,16 +96,19 @@ func runSSH(ctx context.Context, args []string) error {
 		}
 	}
 	if sshArgs.config {
-		fmt.Printf(`
-# Tailscale ssh config
-Match exec "%s ssh --check %%h"
-  UserKnownHostsFile %s
-`, tailscaleBin, knownHostsFile)
+		sshConfig, err := genSSHConfig(st, tailscaleBin)
+		if err != nil {
+			return err
+		}
+		fmt.Print(sshConfig)
 		return nil
 	}
-	if runtime.GOOS == "darwin" && version.IsSandboxedMacOS() && !envknob.UseWIPCode() {
-		return errors.New("The 'tailscale ssh' wrapper subcommand is not available on sandboxed macOS builds.\nUse the regular 'ssh' client instead.")
+	if sshArgs.knownHosts {
+		knownHosts := genKnownHostsFile(st)
+		fmt.Print(string(knownHosts))
+		return nil
 	}
+
 	if len(args) == 0 {
 		return errors.New("usage: ssh [user@]<host>")
 	}
@@ -115,21 +130,19 @@ Match exec "%s ssh --check %%h"
 	if v, ok := nodeDNSNameFromArg(st, host); ok {
 		hostForSSH = v
 	}
-	ssh, err := findSSH()
-	if err != nil {
-		// TODO(bradfitz): use Go's crypto/ssh client instead
-		// of failing. But for now:
-		return fmt.Errorf("no system 'ssh' command found: %w", err)
-	}
 
 	argv := []string{ssh}
+	knownHostsOption, err := genKnownHostsOption(st, tailscaleBin)
+	if err != nil {
+		return err
+	}
 
 	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
 		argv = append(argv, "-vvv")
 	}
 	argv = append(argv,
 		// Only trust SSH hosts that we know about.
-		"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHostsFile),
+		"-o", knownHostsOption,
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking yes",
 	)
@@ -182,7 +195,7 @@ func writeKnownHosts(st *ipnstate.Status) (knownHostsFile string, err error) {
 		return "", err
 	}
 	knownHostsFile = filepath.Join(tsConfDir, "ssh_known_hosts")
-	want := genKnownHosts(st)
+	want := genKnownHostsFile(st)
 	if cur, err := os.ReadFile(knownHostsFile); err != nil || !bytes.Equal(cur, want) {
 		if err := os.WriteFile(knownHostsFile, want, 0644); err != nil {
 			return "", err
@@ -191,7 +204,29 @@ func writeKnownHosts(st *ipnstate.Status) (knownHostsFile string, err error) {
 	return knownHostsFile, nil
 }
 
-func genKnownHosts(st *ipnstate.Status) []byte {
+// genKnownHostsOption generates either a UserKnownHostsFile or KnownHostsCommand option
+// based on the OpenSSH version. If the version is less than 8.4, it will return a
+// UserKnownHostsFile option, otherwise it will return a KnownHostsCommand.
+func genKnownHostsOption(st *ipnstate.Status, tailscaleBin string) (string, error) {
+	// OpenSSH added the KnownHostsCommand option in 8.4, this is more flexible than
+	// the UserKnownHostsFile option and allows using the system 'ssh' command on MacOs.
+	// But we need to support older versions of OpenSSH so we fallback to the UserKnownHostsFile
+	ssh, err := findSSH()
+	if err != nil {
+		return "", err
+	}
+	sshVersion := getSSHClientVersion(ssh)
+	if sshVersion.LessThan(semver.MustParse("8.4")) {
+		knownhostsFile, err := writeKnownHosts(st)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(`UserKnownHostsFile %s`, knownhostsFile), nil
+	}
+	return fmt.Sprintf(`KnownHostsCommand %s ssh --known-hosts`, tailscaleBin), nil
+}
+
+func genKnownHostsFile(st *ipnstate.Status) []byte {
 	var buf bytes.Buffer
 	for _, k := range st.Peers() {
 		ps := st.Peer[k]
@@ -211,6 +246,22 @@ func genKnownHosts(st *ipnstate.Status) []byte {
 		}
 	}
 	return buf.Bytes()
+}
+
+// genSSHConfig generates an SSH config snippet that can be used to integrate Tailscale
+// with the system 'ssh' command.
+func genSSHConfig(st *ipnstate.Status, tailscaleBin string) (string, error) {
+	knownHostsOption, err := genKnownHostsOption(st, tailscaleBin)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`
+# Tailscale ssh config
+Match exec "%s ssh --check %%h"
+  %s
+  UpdateHostKeys no
+  StrictHostKeyChecking yes
+`, tailscaleBin, knownHostsOption), nil
 }
 
 // nodeFromArg returns the PeerStatus value from a peer in st that matches the input arg
@@ -254,6 +305,18 @@ func nodeDNSNameFromArg(st *ipnstate.Status, arg string) (dnsName string, ok boo
 // for the current process group, if any.
 var getSSHClientEnvVar = func() string {
 	return ""
+}
+
+// getSSHClientVersion returns the current version of the SSH client
+func getSSHClientVersion(ssh string) *semver.Version {
+	cmd := exec.Command(ssh, "-V")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Println(err)
+	}
+	re := regexp.MustCompile(`(?:^OpenSSH_[\D]*)(\d.\d)`)
+	ver := re.FindStringSubmatch(string(out))
+	return semver.MustParse(ver[1])
 }
 
 // isSSHOverTailscale checks if the invocation is in a SSH session over Tailscale.
