@@ -67,6 +67,22 @@ func TestObserveDNSResponse(t *testing.T) {
 	}
 }
 
+func TestWildcardDomains(t *testing.T) {
+	rc := &routeCollector{}
+	a := NewAppConnector(t.Logf, rc)
+
+	a.UpdateDomains([]string{"*.example.com"})
+	a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8"))
+	if got, want := rc.routes, []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	a.UpdateDomains([]string{"*.example.com", "example.com"})
+	if _, ok := a.domains["foo.example.com"]; !ok {
+		t.Errorf("expected foo.example.com to be preserved in domains due to wildcard")
+	}
+}
+
 // dnsResponse is a test helper that creates a DNS response buffer for the given domain and address
 func dnsResponse(domain, address string) []byte {
 	addr := netip.MustParseAddr(address)
