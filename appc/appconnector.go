@@ -19,6 +19,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/dnsname"
 )
 
 // RouteAdvertiser is an interface that allows the AppConnector to advertise
@@ -47,6 +48,9 @@ type AppConnector struct {
 	// domains is a map of lower case domain names with no trailing dot, to a
 	// list of resolved IP addresses.
 	domains map[string][]netip.Addr
+
+	// wildcards is the list of domain strings that match subdomains.
+	wildcards []string
 }
 
 // NewAppConnector creates a new AppConnector.
@@ -59,18 +63,37 @@ func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser) *AppConn
 
 // UpdateDomains replaces the current set of configured domains with the
 // supplied set of domains. Domains must not contain a trailing dot, and should
-// be lower case.
+// be lower case. If the domain contains a leading '*' label it matches all
+// subdomains of a domain.
 func (e *AppConnector) UpdateDomains(domains []string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var old map[string][]netip.Addr
-	old, e.domains = e.domains, make(map[string][]netip.Addr, len(domains))
+	var oldDomains map[string][]netip.Addr
+	oldDomains, e.domains = e.domains, make(map[string][]netip.Addr, len(domains))
 	for _, d := range domains {
 		d = strings.ToLower(d)
-		e.domains[d] = old[d]
+		if len(d) == 0 {
+			continue
+		}
+		if strings.HasPrefix(d, "*.") {
+			e.wildcards = append(e.wildcards, d[2:])
+			continue
+		}
+		e.domains[d] = oldDomains[d]
+		delete(oldDomains, d)
 	}
-	e.logf("handling domains: %v", xmaps.Keys(e.domains))
+
+	// Ensure that still-live wildcards addresses are preserved as well.
+	for d, addrs := range oldDomains {
+		for _, wc := range e.wildcards {
+			if dnsname.HasSuffix(d, wc) {
+				e.domains[d] = addrs
+				break
+			}
+		}
+	}
+	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
 }
 
 // Domains returns the currently configured domain list.
@@ -134,15 +157,24 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		if len(domain) == 0 {
 			return
 		}
-		if domain[len(domain)-1] == '.' {
-			domain = domain[:len(domain)-1]
-		}
+		domain = strings.TrimSuffix(domain, ".")
 		domain = strings.ToLower(domain)
 		e.logf("[v2] observed DNS response for %s", domain)
 
 		e.mu.Lock()
 		addrs, ok := e.domains[domain]
+		// match wildcard domains
+		if !ok {
+			for _, wc := range e.wildcards {
+				if dnsname.HasSuffix(domain, wc) {
+					e.domains[domain] = nil
+					ok = true
+					break
+				}
+			}
+		}
 		e.mu.Unlock()
+
 		if !ok {
 			if err := p.SkipAnswer(); err != nil {
 				return
