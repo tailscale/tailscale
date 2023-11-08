@@ -332,24 +332,33 @@ func findCmdTailscale() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	var ts string
 	switch runtime.GOOS {
 	case "linux":
 		if self == "/usr/sbin/tailscaled" || self == "/usr/bin/tailscaled" {
-			return "/usr/bin/tailscale", nil
+			ts = "/usr/bin/tailscale"
 		}
 		if self == "/usr/local/sbin/tailscaled" || self == "/usr/local/bin/tailscaled" {
-			return "/usr/local/bin/tailscale", nil
+			ts = "/usr/local/bin/tailscale"
 		}
-		return "", errors.New("tailscale not found in expected place")
 	case "windows":
-		dir := filepath.Dir(self)
-		ts := filepath.Join(dir, "tailscale.exe")
-		if fi, err := os.Stat(ts); err == nil && fi.Mode().IsRegular() {
-			return ts, nil
+		ts = filepath.Join(filepath.Dir(self), "tailscale.exe")
+	case "freebsd":
+		if self == "/usr/local/bin/tailscaled" {
+			ts = "/usr/local/bin/tailscale"
 		}
-		return "", errors.New("tailscale.exe not found in expected place")
+	default:
+		return "", fmt.Errorf("unsupported OS %v", runtime.GOOS)
 	}
-	return "", fmt.Errorf("unsupported OS %v", runtime.GOOS)
+	if ts != "" && regularFileExists(ts) {
+		return ts, nil
+	}
+	return "", errors.New("tailscale executable not found in expected place")
+}
+
+func regularFileExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
 }
 
 func (b *LocalBackend) handleC2NWoL(w http.ResponseWriter, r *http.Request) {
