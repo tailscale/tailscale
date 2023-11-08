@@ -5481,43 +5481,43 @@ func (b *LocalBackend) DebugBreakDERPConns() error {
 	return b.magicConn().DebugBreakDERPConns()
 }
 
-func (b *LocalBackend) pushWebUIUpdateProgress(up ipnstate.UpdateProgress) {
+func (b *LocalBackend) pushSelfUpdateProgress(up ipnstate.UpdateProgress) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.logf("update progress: %+v", up)
 	b.webUIUpdateProgress = append(b.webUIUpdateProgress, up)
+	b.lastWebUIUpdateState = up.Status
 }
 
-func (b *LocalBackend) GetWebUIUpdateProgress() []ipnstate.UpdateProgress {
+func (b *LocalBackend) GetSelfUpdateProgress() []ipnstate.UpdateProgress {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	res := b.webUIUpdateProgress
-	b.webUIUpdateProgress = make([]ipnstate.UpdateProgress, 0)
-	if len(res) == 0 {
-		res = append(res, ipnstate.NewUpdateProgress(b.lastWebUIUpdateState, ""))
-	} else {
-		b.lastWebUIUpdateState = res[len(res)-1].Status
-	}
+	res := make([]ipnstate.UpdateProgress, len(b.webUIUpdateProgress))
+	copy(res, b.webUIUpdateProgress)
 	return res
 }
 
-func (b *LocalBackend) DoWebUIUpdate() {
-	b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, ""))
+func (b *LocalBackend) DoSelfUpdate() {
+	b.mu.Lock()
+	updateState := b.lastWebUIUpdateState
+	b.mu.Unlock()
+	// don't start an update if one is already in progress
+	if updateState == ipnstate.UpdateInProgress {
+		return
+	}
+	b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, ""))
 	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
 		Logf: func(format string, args ...any) {
-			b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, fmt.Sprintf(format, args...)))
+			b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, fmt.Sprintf(format, args...)))
 		},
 	})
 	if err != nil {
-		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
+		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
 	}
-	b.logf("update started")
 	err = up.Update()
-	b.logf("update done: %v", err)
 	if err != nil {
-		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
+		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
 	} else {
-		b.pushWebUIUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart, please restart Tailscale manually!"))
+		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart, please restart Tailscale manually!"))
 	}
 }
 

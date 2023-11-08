@@ -5,15 +5,12 @@ import LoginClientView from "src/components/views/login-client-view"
 import ManagementClientView from "src/components/views/management-client-view"
 import ReadonlyClientView from "src/components/views/readonly-client-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, { NodeData, NodeUpdate, UpdateProgress, UpdateState } from "src/hooks/node-data"
+import useNodeData, { NodeData, NodeUpdate } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import ProfilePic from "src/ui/profile-pic"
 import { Link, Route, Switch, useLocation } from "wouter"
 import DeviceDetailsView from "./views/device-details-view"
-import { apiFetch } from "src/api"
-import { useState } from "react"
 import { UpdatingView } from "./views/updating-view"
-import { UpdateAvailableNotification } from "src/ui/update-available"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
@@ -21,18 +18,6 @@ export default function App() {
   useEffect(() => {
     refreshData()
   }, [auth, refreshData])
-
-  const initialUpdateState =
-    (data?.ClientVersion.RunningLatest) ? UpdateState.UpToDate : UpdateState.Available
-
-  const [updating, setUpdating] = useState<UpdateState>(initialUpdateState)
-
-  const [updateLog, setUpdateLog] = useState<string>('')
-
-  const appendUpdateLog = (msg: string) => {
-    console.log(msg)
-    setUpdateLog(updateLog + msg + '\n')
-  }
 
   return (
     <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
@@ -51,10 +36,6 @@ export default function App() {
                 newSession={newSession}
                 refreshData={refreshData}
                 updateNode={updateNode}
-                updating={updating}
-                updateLog={updateLog}
-                setUpdating={setUpdating}
-                appendUpdateLog={appendUpdateLog}
               />
             </Route>
             {data.DebugMode !== "" && (
@@ -67,6 +48,9 @@ export default function App() {
                 <Route path="/serve">{/* TODO */}Share local content</Route>
               </>
             )}
+            <Route path="/update">
+              <UpdatingView cv={data.ClientVersion} current={data.IPNVersion} />
+            </Route>
             <Route>
               <h2 className="mt-8">Page not found</h2>
             </Route>
@@ -83,25 +67,13 @@ function HomeView({
   newSession,
   refreshData,
   updateNode,
-  updating,
-  updateLog,
-  setUpdating,
-  appendUpdateLog,
 }: {
   auth?: AuthResponse
   data: NodeData
   newSession: () => Promise<void>
   refreshData: () => Promise<void>
   updateNode: (update: NodeUpdate) => Promise<void> | undefined
-  updating: UpdateState
-  updateLog: string,
-  setUpdating: (u: UpdateState) => void,
-  appendUpdateLog: (msg: string) => void,
 }) {
-  const updatingViewStates = [
-    UpdateState.InProgress, UpdateState.Complete, UpdateState.Failed
-  ]
-
   return (
     <>
       {data?.Status === "NeedsLogin" || data?.Status === "NoState" ? (
@@ -110,29 +82,9 @@ function HomeView({
           data={data}
           onLoginClick={() => updateNode({ Reauthenticate: true })}
         />
-      ) : updatingViewStates.includes(updating) ? (
-        <UpdatingView
-          state={updating}
-          cv={data.ClientVersion}
-          updateLog={updateLog}
-        />
       ) : data.DebugMode === "full" && auth?.ok ? (
         // Render new client interface in management mode.
-        <>
         <ManagementClientView node={data} updateNode={updateNode} />
-        {
-          // TODO(naman): move into ReadonlyClient or ManagementClient
-          data.ClientVersion.RunningLatest ? null : (
-            <UpdateAvailableNotification
-              currentVersion={data.IPNVersion}
-              details={data.ClientVersion}
-              updating={updating}
-              setUpdating={setUpdating}
-              appendUpdateLog={appendUpdateLog}
-            />
-          )
-        }
-      </>
       ) : data.DebugMode === "login" || data.DebugMode === "full" ? (
         // Render new client interface in readonly mode.
         <ReadonlyClientView data={data} auth={auth} newSession={newSession} />

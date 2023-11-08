@@ -2349,7 +2349,7 @@ func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusAccepted)
 
-	go h.b.DoWebUIUpdate()
+	go h.b.DoSelfUpdate()
 }
 
 func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
@@ -2358,7 +2358,7 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ups := h.b.GetWebUIUpdateProgress()
+	ups := h.b.GetSelfUpdateProgress()
 
 	json.NewEncoder(w).Encode(ups)
 }

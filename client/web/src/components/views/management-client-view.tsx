@@ -4,6 +4,7 @@ import ExitNodeSelector from "src/components/exit-node-selector"
 import { NodeData, NodeUpdate } from "src/hooks/node-data"
 import { ReactComponent as ArrowRight } from "src/icons/arrow-right.svg"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
+import { UpdateAvailableNotification } from "src/ui/update-available"
 import { Link } from "wouter"
 
 export default function ManagementClientView({
@@ -41,6 +42,14 @@ export default function ManagementClientView({
         >
           View device details &rarr;
         </Link>
+        {
+          node.ClientVersion.RunningLatest ? null : (
+            <UpdateAvailableNotification
+              currentVersion={node.IPNVersion}
+              details={node.ClientVersion}
+            />
+          )
+        }
       </div>
       <h2 className="mb-3">Settings</h2>
       <SettingsCard
