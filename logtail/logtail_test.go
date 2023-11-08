@@ -379,3 +379,30 @@ func TestEncode(t *testing.T) {
 		}
 	}
 }
+
+// Test that even if Logger.Write modifies the input buffer, we still return the
+// length of the input buffer, not what we shrank it down to. Otherwise the
+// caller will think we did a short write, violating the io.Writer contract.
+func TestLoggerWriteResult(t *testing.T) {
+	buf := NewMemoryBuffer(100)
+	lg := &Logger{
+		clock:  tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 0)}),
+		buffer: buf,
+	}
+
+	const in = "[v1] foo"
+	n, err := lg.Write([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := n, len(in); got != want {
+		t.Errorf("Write = %v; want %v", got, want)
+	}
+	back, err := buf.TryReadLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(back), `{"logtail": {"client_time": "1970-01-01T00:02:03Z"}, "v":1,"text": "foo"}`+"\n"; got != want {
+		t.Errorf("mismatch.\n got: %#q\nwant: %#q", back, want)
+	}
+}
