@@ -881,6 +881,13 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	// ourselves. As a proxy for autogroup:internet access, we see
 	// if we would've accepted a packet to 0.0.0.0:53. We treat
 	// the IP 0.0.0.0 as being "the internet".
+	//
+	// Because of the way that filter checks work, rules are only
+	// checked after ensuring the destination IP is part of the
+	// local set of IPs. An exit node has 0.0.0.0/0 so its fine,
+	// but an app connector explicitly adds 0.0.0.0/32 (and the
+	// IPv6 equivalent) to make this work (see updateFilterLocked
+	// in LocalBackend).
 	f := b.filterAtomic.Load()
 	if f == nil {
 		return false

@@ -1125,15 +1125,19 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.logf("[v1] TKA sync error: %v", err)
 		}
 		b.mu.Lock()
-		if b.tka != nil {
-			head, err := b.tka.authority.Head().MarshalText()
-			if err != nil {
-				b.logf("[v1] error marshalling tka head: %v", err)
+		// As we stepped outside of the lock, it's possible for b.cc
+		// to now be nil.
+		if b.cc != nil {
+			if b.tka != nil {
+				head, err := b.tka.authority.Head().MarshalText()
+				if err != nil {
+					b.logf("[v1] error marshalling tka head: %v", err)
+				} else {
+					b.cc.SetTKAHead(string(head))
+				}
 			} else {
-				b.cc.SetTKAHead(string(head))
+				b.cc.SetTKAHead("")
 			}
-		} else {
-			b.cc.SetTKAHead("")
 		}
 
 		if !envknob.TKASkipSignatureCheck() {
@@ -1780,6 +1784,18 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 				// in the audit logs.
 				logNetsB.AddPrefix(r)
 			}
+		}
+
+		// App connectors handle DNS requests for app domains over PeerAPI (corp#11961),
+		// but a safety check verifies the requesting peer has at least permission
+		// to send traffic to 0.0.0.0:53 (or 2000:: for IPv6) before handling the DNS
+		// request (see peerAPIHandler.replyToDNSQueries in peerapi.go).
+		// The correct filter rules are synthesized by the coordination server
+		// and sent down, but the address needs to be part of the 'local net' for the
+		// filter package to even bother checking the filter rules, so we set them here.
+		if prefs.AppConnector().Advertise {
+			localNetsB.Add(netip.MustParseAddr("0.0.0.0"))
+			localNetsB.Add(netip.MustParseAddr("::0"))
 		}
 	}
 	localNets, _ := localNetsB.IPSet()

@@ -81,6 +81,20 @@ func (e *AppConnector) Domains() views.Slice[string] {
 	return views.SliceOf(xmaps.Keys(e.domains))
 }
 
+// DomainRoutes returns a map of domains to resolved IP
+// addresses.
+func (e *AppConnector) DomainRoutes() map[string][]netip.Addr {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	drCopy := make(map[string][]netip.Addr)
+	for k, v := range e.domains {
+		copy(drCopy[k], v)
+	}
+
+	return drCopy
+}
+
 // ObserveDNSResponse is a callback invoked by the DNS resolver when a DNS
 // response is being returned over the PeerAPI. The response is parsed and
 // matched against the configured domains, if matched the routeAdvertiser is

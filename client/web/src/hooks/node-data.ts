@@ -16,6 +16,7 @@ export type NodeData = {
   UnraidToken: string
   IPNVersion: string
   ClientVersion: ClientVersion
+  URLPrefix: string
 
   DebugMode: "" | "login" | "full" // empty when not running in any debug mode
 }

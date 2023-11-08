@@ -521,6 +521,7 @@ type nodeData struct {
 	IPNVersion        string
 	DebugMode         string // empty when not running in any debug mode
 	ClientVersion     tailcfg.ClientVersion
+	URLPrefix         string // if set, the URL prefix the client is served behind
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -559,6 +560,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		IsUnraid:      distro.Get() == distro.Unraid,
 		UnraidToken:   os.Getenv("UNRAID_CSRF_TOKEN"),
 		IPNVersion:    versionShort,
+		URLPrefix:     strings.TrimSuffix(s.pathPrefix, "/"),
 		DebugMode:     debugMode, // TODO(sonia,will): just pass back s.mode directly?
 		ClientVersion: *cv,
 	}
