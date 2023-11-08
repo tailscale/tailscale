@@ -3,9 +3,14 @@ import { apiFetch, setUnraidCsrfToken } from "src/api"
 
 export type NodeData = {
   Profile: UserProfile
-  Status: string
+  Status: NodeState
   DeviceName: string
+  OS: string
   IP: string
+  IPv6: string
+  ID: string
+  KeyExpiry: string
+  KeyExpired: boolean
   AdvertiseExitNode: boolean
   AdvertiseRoutes: string
   LicensesURL: string
@@ -16,9 +21,20 @@ export type NodeData = {
   UnraidToken: string
   IPNVersion: string
   URLPrefix: string
+  TailnetName: string
+  IsTagged: boolean
+  Tags: string[]
 
   DebugMode: "" | "login" | "full" // empty when not running in any debug mode
 }
+
+type NodeState =
+  | "NoState"
+  | "NeedsLogin"
+  | "NeedsMachineAuth"
+  | "Stopped"
+  | "Starting"
+  | "Running"
 
 export type UserProfile = {
   LoginName: string

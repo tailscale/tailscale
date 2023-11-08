@@ -490,21 +490,35 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 type nodeData struct {
-	Profile           tailcfg.UserProfile
-	Status            string
-	DeviceName        string
-	IP                string
+	ID          tailcfg.StableNodeID
+	Status      string
+	DeviceName  string
+	TailnetName string // TLS cert name
+	IP          string // IPv4
+	IPv6        string
+	OS          string
+	IPNVersion  string
+
+	Profile  tailcfg.UserProfile
+	IsTagged bool
+	Tags     []string
+
+	KeyExpiry  string // time.RFC3339
+	KeyExpired bool
+
+	TUNMode     bool
+	IsSynology  bool
+	DSMVersion  int // 6 or 7, if IsSynology=true
+	IsUnraid    bool
+	UnraidToken string
+	URLPrefix   string // if set, the URL prefix the client is served behind
+
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
-	LicensesURL       string
-	TUNMode           bool
-	IsSynology        bool
-	DSMVersion        int // 6 or 7, if IsSynology=true
-	IsUnraid          bool
-	UnraidToken       string
-	IPNVersion        string
-	DebugMode         string // empty when not running in any debug mode
-	URLPrefix         string // if set, the URL prefix the client is served behind
+
+	LicensesURL string
+
+	DebugMode string // empty when not running in any debug mode
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -518,9 +532,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	profile := st.User[st.Self.UserID]
-	deviceName := strings.Split(st.Self.DNSName, ".")[0]
-	versionShort := strings.Split(st.Version, "-")[0]
 	var debugMode string
 	if s.mode == ManageServerMode {
 		debugMode = "full"
@@ -528,18 +539,39 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		debugMode = "login"
 	}
 	data := &nodeData{
-		Profile:     profile,
+		ID:          st.Self.ID,
 		Status:      st.BackendState,
-		DeviceName:  deviceName,
-		LicensesURL: licenses.LicensesURL(),
+		DeviceName:  strings.Split(st.Self.DNSName, ".")[0],
+		TailnetName: st.CurrentTailnet.MagicDNSSuffix,
+		OS:          st.Self.OS,
+		IPNVersion:  strings.Split(st.Version, "-")[0],
+		Profile:     st.User[st.Self.UserID],
+		IsTagged:    st.Self.IsTagged(),
+		KeyExpired:  st.Self.Expired,
 		TUNMode:     st.TUN,
 		IsSynology:  distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
 		DSMVersion:  distro.DSMVersion(),
 		IsUnraid:    distro.Get() == distro.Unraid,
 		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
-		IPNVersion:  versionShort,
 		URLPrefix:   strings.TrimSuffix(s.pathPrefix, "/"),
+		LicensesURL: licenses.LicensesURL(),
 		DebugMode:   debugMode, // TODO(sonia,will): just pass back s.mode directly?
+	}
+	for _, ip := range st.TailscaleIPs {
+		if ip.Is4() {
+			data.IP = ip.String()
+		} else if ip.Is6() {
+			data.IPv6 = ip.String()
+		}
+		if data.IP != "" && data.IPv6 != "" {
+			break
+		}
+	}
+	if st.Self.Tags != nil {
+		data.Tags = st.Self.Tags.AsSlice()
+	}
+	if st.Self.KeyExpiry != nil {
+		data.KeyExpiry = st.Self.KeyExpiry.Format(time.RFC3339)
 	}
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
@@ -550,9 +582,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 			}
 			data.AdvertiseRoutes += r.String()
 		}
-	}
-	if len(st.TailscaleIPs) != 0 {
-		data.IP = st.TailscaleIPs[0].String()
 	}
 	writeJSON(w, *data)
 }

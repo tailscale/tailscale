@@ -1,8 +1,13 @@
+import cx from "classnames"
 import React from "react"
+import { apiFetch } from "src/api"
 import { NodeData } from "src/hooks/node-data"
-import ProfilePic from "src/ui/profile-pic"
+import { useLocation } from "wouter"
+import ACLTag from "../acl-tag"
 
 export default function DeviceDetailsView({ node }: { node: NodeData }) {
+  const [, setLocation] = useLocation()
+
   return (
     <div>
       <h1 className="mb-10">Device details</h1>
@@ -11,37 +16,36 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h1>{node.DeviceName}</h1>
-              {/* TODO: connected status */}
-              <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full" />
+              <div
+                className={cx("w-2.5 h-2.5 rounded-full", {
+                  "bg-emerald-500": node.Status === "Running",
+                  "bg-gray-300": node.Status !== "Running",
+                })}
+              />
             </div>
-            <button className="px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-neutral-800 text-sm font-medium">
-              Log out…
+            <button
+              className="px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-neutral-800 text-sm font-medium"
+              onClick={() =>
+                apiFetch("/local/v0/logout", "POST")
+                  .then(() => setLocation("/"))
+                  .catch((err) => alert("Logout failed: " + err.message))
+              }
+            >
+              Disconnect…
             </button>
-          </div>
-          <hr className="my-5" />
-          <div className="text-neutral-500 text-sm leading-tight mb-1">
-            Managed by
-          </div>
-          <div className="flex">
-            {/* TODO: tags display */}
-            <ProfilePic size="small" url={node.Profile.ProfilePicURL} />
-            <div className="ml-2 text-neutral-800 text-sm leading-tight">
-              {node.Profile.LoginName}
-            </div>
           </div>
         </div>
         <div className="card">
           <h2 className="mb-2">General</h2>
           <table>
             <tbody>
-              {/* TODO: pipe through these values */}
-              <tr>
-                <td>Creator</td>
-                <td>{node.Profile.DisplayName}</td>
-              </tr>
-              <tr>
+              <tr className="flex">
                 <td>Managed by</td>
-                <td>{node.Profile.DisplayName}</td>
+                <td className="flex gap-1 flex-wrap">
+                  {node.IsTagged
+                    ? node.Tags.map((t) => <ACLTag key={t} tag={t} />)
+                    : node.Profile.DisplayName}
+                </td>
               </tr>
               <tr>
                 <td>Machine name</td>
@@ -49,11 +53,11 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
               </tr>
               <tr>
                 <td>OS</td>
-                <td>MacOS</td>
+                <td>{node.OS}</td>
               </tr>
               <tr>
                 <td>ID</td>
-                <td>nPKyyg3CNTRL</td>
+                <td>{node.ID}</td>
               </tr>
               <tr>
                 <td>Tailscale version</td>
@@ -61,7 +65,12 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
               </tr>
               <tr>
                 <td>Key expiry</td>
-                <td>3 months from now</td>
+                <td>
+                  {node.KeyExpired
+                    ? "Expired"
+                    : // TODO: present as relative expiry (e.g. "5 months from now")
+                      new Date(node.KeyExpiry).toLocaleString()}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -76,7 +85,7 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
               </tr>
               <tr>
                 <td>Tailscale IPv6</td>
-                <td>fd7a:115c:a1e0:ab12:4843:cd96:627a:f179</td>
+                <td>{node.IPv6}</td>
               </tr>
               <tr>
                 <td>Short domain</td>
@@ -84,7 +93,9 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
               </tr>
               <tr>
                 <td>Full domain</td>
-                <td>{node.DeviceName}.corp.ts.net</td>
+                <td>
+                  {node.DeviceName}.{node.TailnetName}
+                </td>
               </tr>
             </tbody>
           </table>
