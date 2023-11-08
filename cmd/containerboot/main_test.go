@@ -576,6 +576,22 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
+			Name: "extra_args_accept_routes",
+			Env: map[string]string{
+				"TS_EXTRA_ARGS": "--accept-routes",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --accept-routes",
+					},
+				}, {
+					Notify: runningNotify,
+				},
+			},
+		},
+		{
 			Name: "hostname",
 			Env: map[string]string{
 				"TS_HOSTNAME": "my-server",
