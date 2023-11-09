@@ -606,11 +606,11 @@ func (up *Updater) updateAlpineLike() (err error) {
 
 	out, err := exec.Command("apk", "update").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed refresh apk repository indexes: %w, output: %q", err, out)
+		return fmt.Errorf("failed refresh apk repository indexes: %w, output:\n%s", err, out)
 	}
 	out, err = exec.Command("apk", "info", "tailscale").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed checking apk for latest tailscale version: %w, output: %q", err, out)
+		return fmt.Errorf("failed checking apk for latest tailscale version: %w, output:\n%s", err, out)
 	}
 	ver, err := parseAlpinePackageVersion(out)
 	if err != nil {
@@ -658,7 +658,7 @@ func (up *Updater) updateMacAppStore() error {
 
 	out, err := exec.Command("open", "https://apps.apple.com/us/app/tailscale/id1475387142").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("can't open the Tailscale page in App Store: %w, output: %q", err, string(out))
+		return fmt.Errorf("can't open the Tailscale page in App Store: %w, output:\n%s", err, string(out))
 	}
 	return nil
 }
@@ -925,22 +925,28 @@ func (up *Updater) updateFreeBSD() (err error) {
 
 	out, err := exec.Command("pkg", "update").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed refresh pkg repository indexes: %w, output: %q", err, out)
+		return fmt.Errorf("failed refresh pkg repository indexes: %w, output:\n%s", err, out)
 	}
 	out, err = exec.Command("pkg", "rquery", "%v", "tailscale").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed checking pkg for latest tailscale version: %w, output: %q", err, out)
+		return fmt.Errorf("failed checking pkg for latest tailscale version: %w, output:\n%s", err, out)
 	}
 	ver := string(bytes.TrimSpace(out))
 	if !up.confirm(ver) {
 		return nil
 	}
 
-	cmd := exec.Command("pkg", "upgrade", "tailscale")
+	cmd := exec.Command("pkg", "upgrade", "-y", "tailscale")
 	cmd.Stdout = up.Stdout
 	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed tailscale update using pkg: %w", err)
+	}
+
+	// pkg does not automatically restart services after upgrade.
+	out, err = exec.Command("service", "tailscaled", "restart").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to restart tailscaled after update: %w, output:\n%s", err, out)
 	}
 	return nil
 }
