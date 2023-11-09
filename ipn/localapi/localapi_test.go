@@ -156,49 +156,17 @@ func TestWhoIsJustIP(t *testing.T) {
 }
 
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
+	newHandler := func(connIsLocalAdmin bool) *Handler {
+		return &Handler{testConnIsLocalAdmin: &connIsLocalAdmin}
+	}
 	tests := []struct {
 		name     string
-		goos     string
 		configIn *ipn.ServeConfig
 		h        *Handler
 		wantErr  bool
 	}{
 		{
-			name:     "linux",
-			goos:     "linux",
-			configIn: &ipn.ServeConfig{},
-			h:        &Handler{CallerIsLocalAdmin: false},
-			wantErr:  false,
-		},
-		{
-			name: "linux-path-handler-admin",
-			goos: "linux",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Path: "/tmp"},
-					}},
-				},
-			},
-			h:       &Handler{CallerIsLocalAdmin: true},
-			wantErr: false,
-		},
-		{
-			name: "linux-path-handler-not-admin",
-			goos: "linux",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Path: "/tmp"},
-					}},
-				},
-			},
-			h:       &Handler{CallerIsLocalAdmin: false},
-			wantErr: true,
-		},
-		{
-			name: "windows-not-path-handler",
-			goos: "windows",
+			name: "not-path-handler",
 			configIn: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -206,12 +174,11 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 					}},
 				},
 			},
-			h:       &Handler{CallerIsLocalAdmin: false},
+			h:       newHandler(false),
 			wantErr: false,
 		},
 		{
-			name: "windows-path-handler-admin",
-			goos: "windows",
+			name: "path-handler-admin",
 			configIn: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -219,12 +186,11 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 					}},
 				},
 			},
-			h:       &Handler{CallerIsLocalAdmin: true},
+			h:       newHandler(true),
 			wantErr: false,
 		},
 		{
-			name: "windows-path-handler-not-admin",
-			goos: "windows",
+			name: "path-handler-not-admin",
 			configIn: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -232,20 +198,36 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 					}},
 				},
 			},
-			h:       &Handler{CallerIsLocalAdmin: false},
+			h:       newHandler(false),
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := authorizeServeConfigForGOOSAndUserContext(tt.goos, tt.configIn, tt.h)
-			gotErr := err != nil
-			if gotErr != tt.wantErr {
-				t.Errorf("authorizeServeConfigForGOOSAndUserContext() got error = %v, want error %v", err, tt.wantErr)
-			}
-		})
+		for _, goos := range []string{"linux", "windows", "darwin"} {
+			t.Run(goos+"-"+tt.name, func(t *testing.T) {
+				err := authorizeServeConfigForGOOSAndUserContext(goos, tt.configIn, tt.h)
+				gotErr := err != nil
+				if gotErr != tt.wantErr {
+					t.Errorf("authorizeServeConfigForGOOSAndUserContext() got error = %v, want error %v", err, tt.wantErr)
+				}
+			})
+		}
 	}
+	t.Run("other-goos", func(t *testing.T) {
+		configIn := &ipn.ServeConfig{
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Path: "/tmp"},
+				}},
+			},
+		}
+		h := newHandler(false)
+		err := authorizeServeConfigForGOOSAndUserContext("dos", configIn, h)
+		if err != nil {
+			t.Errorf("authorizeServeConfigForGOOSAndUserContext() got error = %v, want nil", err)
+		}
+	})
 }
 
 func TestServeWatchIPNBus(t *testing.T) {
