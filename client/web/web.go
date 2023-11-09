@@ -482,6 +482,22 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
+	case path == "/update":
+		switch r.Method {
+		case httpm.POST:
+			s.serveSelfUpdate(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	case path == "/update/progress":
+		switch r.Method {
+		case httpm.GET:
+			s.serveUpdateProgress(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
 		return
@@ -516,6 +532,8 @@ type nodeData struct {
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
 
+	ClientVersion tailcfg.ClientVersion
+
 	LicensesURL string
 
 	DebugMode string // empty when not running in any debug mode
@@ -532,6 +550,11 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	cv, err := s.lc.CheckUpdate(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var debugMode string
 	if s.mode == ManageServerMode {
 		debugMode = "full"
@@ -539,23 +562,24 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		debugMode = "login"
 	}
 	data := &nodeData{
-		ID:          st.Self.ID,
-		Status:      st.BackendState,
-		DeviceName:  strings.Split(st.Self.DNSName, ".")[0],
-		TailnetName: st.CurrentTailnet.MagicDNSSuffix,
-		OS:          st.Self.OS,
-		IPNVersion:  strings.Split(st.Version, "-")[0],
-		Profile:     st.User[st.Self.UserID],
-		IsTagged:    st.Self.IsTagged(),
-		KeyExpired:  st.Self.Expired,
-		TUNMode:     st.TUN,
-		IsSynology:  distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
-		DSMVersion:  distro.DSMVersion(),
-		IsUnraid:    distro.Get() == distro.Unraid,
-		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
-		URLPrefix:   strings.TrimSuffix(s.pathPrefix, "/"),
-		LicensesURL: licenses.LicensesURL(),
-		DebugMode:   debugMode, // TODO(sonia,will): just pass back s.mode directly?
+		ID:            st.Self.ID,
+		Status:        st.BackendState,
+		DeviceName:    strings.Split(st.Self.DNSName, ".")[0],
+		TailnetName:   st.CurrentTailnet.MagicDNSSuffix,
+		OS:            st.Self.OS,
+		IPNVersion:    strings.Split(st.Version, "-")[0],
+		Profile:       st.User[st.Self.UserID],
+		IsTagged:      st.Self.IsTagged(),
+		KeyExpired:    st.Self.Expired,
+		TUNMode:       st.TUN,
+		IsSynology:    distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
+		DSMVersion:    distro.DSMVersion(),
+		IsUnraid:      distro.Get() == distro.Unraid,
+		UnraidToken:   os.Getenv("UNRAID_CSRF_TOKEN"),
+		URLPrefix:     strings.TrimSuffix(s.pathPrefix, "/"),
+		LicensesURL:   licenses.LicensesURL(),
+		DebugMode:     debugMode, // TODO(sonia,will): just pass back s.mode directly?
+		ClientVersion: *cv,
 	}
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {
@@ -666,6 +690,25 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(mi{"url": url})
 	} else {
 		io.WriteString(w, "{}")
+	}
+}
+
+func (s *Server) serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
+	err := s.lc.InstallUpdate(r.Context())
+	if err != nil {
+		log.Printf("%v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+func (s *Server) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
+	ups, err := s.lc.GetUpdateProgress(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		json.NewEncoder(w).Encode(ups)
 	}
 }
 

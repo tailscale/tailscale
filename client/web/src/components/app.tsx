@@ -10,12 +10,13 @@ import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import ProfilePic from "src/ui/profile-pic"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 import DeviceDetailsView from "./views/device-details-view"
+import { UpdatingView } from "./views/updating-view"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
+    <main className="min-w-sm max-w-lg mx-auto py-14 px-5 h-screen">
       {loadingAuth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
@@ -67,6 +68,9 @@ function WebClient({
               <Route path="/serve">{/* TODO */}Share local content</Route>
             </>
           )}
+          <Route path="/update">
+            <UpdatingView cv={data.ClientVersion} current={data.IPNVersion} />
+          </Route>
           <Route>
             <h2 className="mt-8">Page not found</h2>
           </Route>
@@ -128,7 +132,7 @@ function Header({ node }: { node: NodeData }) {
           <ProfilePic url={node.Profile.ProfilePicURL} />
         </div>
       </div>
-      {loc !== "/" && (
+      {loc !== "/" && loc !== "/update" && (
         <Link
           to="/"
           className="text-indigo-500 font-medium leading-snug block mb-[10px]"
