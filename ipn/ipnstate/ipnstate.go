@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 )
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=TKAFilteredPeer
@@ -709,4 +710,26 @@ type DebugDERPRegionReport struct {
 	Info     []string
 	Warnings []string
 	Errors   []string
+}
+
+type ProgressStatus string
+
+const (
+	UpdateFinished   ProgressStatus = "UpdateFinished"
+	UpdateInProgress ProgressStatus = "UpdateInProgress"
+	UpdateFailed     ProgressStatus = "UpdateFailed"
+)
+
+type UpdateProgress struct {
+	Status  ProgressStatus `json:"status,omitempty"`
+	Message string         `json:"message,omitempty"`
+	Version string         `json:"version,omitempty"`
+}
+
+func NewUpdateProgress(ps ProgressStatus, msg string) UpdateProgress {
+	return UpdateProgress{
+		Status:  ps,
+		Message: msg,
+		Version: version.Short(),
+	}
 }
