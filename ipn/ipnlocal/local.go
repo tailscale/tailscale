@@ -266,10 +266,10 @@ type LocalBackend struct {
 	directFileDoFinalRename bool // false on macOS, true on several NAS platforms
 	componentLogUntil       map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
-	c2nUpdateStatus      updateStatus
-	currentUser          ipnauth.WindowsToken
-	webUIUpdateProgress  []ipnstate.UpdateProgress
-	lastWebUIUpdateState ipnstate.ProgressStatus
+	c2nUpdateStatus     updateStatus
+	currentUser         ipnauth.WindowsToken
+	selfUpdateProgress  []ipnstate.UpdateProgress
+	lastSelfUpdateState ipnstate.ProgressStatus
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -355,27 +355,27 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	clock := tstime.StdClock{}
 
 	b := &LocalBackend{
-		ctx:                  ctx,
-		ctxCancel:            cancel,
-		logf:                 logf,
-		keyLogf:              logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		statsLogf:            logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		sys:                  sys,
-		conf:                 sys.InitialConfig,
-		e:                    e,
-		dialer:               dialer,
-		store:                store,
-		pm:                   pm,
-		backendLogID:         logID,
-		state:                ipn.NoState,
-		portpoll:             portpoll,
-		em:                   newExpiryManager(logf),
-		gotPortPollRes:       make(chan struct{}),
-		loginFlags:           loginFlags,
-		clock:                clock,
-		activeWatchSessions:  make(set.Set[string]),
-		webUIUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
-		lastWebUIUpdateState: ipnstate.UpdateFinished,
+		ctx:                 ctx,
+		ctxCancel:           cancel,
+		logf:                logf,
+		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		sys:                 sys,
+		conf:                sys.InitialConfig,
+		e:                   e,
+		dialer:              dialer,
+		store:               store,
+		pm:                  pm,
+		backendLogID:        logID,
+		state:               ipn.NoState,
+		portpoll:            portpoll,
+		em:                  newExpiryManager(logf),
+		gotPortPollRes:      make(chan struct{}),
+		loginFlags:          loginFlags,
+		clock:               clock,
+		activeWatchSessions: make(set.Set[string]),
+		selfUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
+		lastSelfUpdateState: ipnstate.UpdateFinished,
 	}
 
 	netMon := sys.NetMon.Get()
@@ -5500,26 +5500,34 @@ func (b *LocalBackend) DebugBreakDERPConns() error {
 func (b *LocalBackend) pushSelfUpdateProgress(up ipnstate.UpdateProgress) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.webUIUpdateProgress = append(b.webUIUpdateProgress, up)
-	b.lastWebUIUpdateState = up.Status
+	b.selfUpdateProgress = append(b.selfUpdateProgress, up)
+	b.lastSelfUpdateState = up.Status
+}
+
+func (b *LocalBackend) clearSelfUpdateProgress() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.selfUpdateProgress = make([]ipnstate.UpdateProgress, 0)
+	b.lastSelfUpdateState = ipnstate.UpdateFinished
 }
 
 func (b *LocalBackend) GetSelfUpdateProgress() []ipnstate.UpdateProgress {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	res := make([]ipnstate.UpdateProgress, len(b.webUIUpdateProgress))
-	copy(res, b.webUIUpdateProgress)
+	res := make([]ipnstate.UpdateProgress, len(b.selfUpdateProgress))
+	copy(res, b.selfUpdateProgress)
 	return res
 }
 
 func (b *LocalBackend) DoSelfUpdate() {
 	b.mu.Lock()
-	updateState := b.lastWebUIUpdateState
+	updateState := b.lastSelfUpdateState
 	b.mu.Unlock()
 	// don't start an update if one is already in progress
 	if updateState == ipnstate.UpdateInProgress {
 		return
 	}
+	b.clearSelfUpdateProgress()
 	b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateInProgress, ""))
 	up, err := clientupdate.NewUpdater(clientupdate.Arguments{
 		Logf: func(format string, args ...any) {

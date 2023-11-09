@@ -2329,6 +2329,12 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// serveUpdateCheck returns the ClientVersion from Status, which contains
+// information on whether an update is available, and if so, what version,
+// *if* we support auto-updates on this platform. if we don't, this endpoint
+// always returns a ClientVersion saying we're running the newest version.
+// effectively, it tells us whether serveUpdateInstall will be able to install
+// an update for us.
 func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
@@ -2357,6 +2363,11 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cv)
 }
 
+// serveUpdateInstall sends a request to the LocalBackend to start a Tailscale
+// self-update. it does not indicate whether or not the update or the request
+// to start it succeeded, only that it was accepted. clients should use
+// serveUpdateProgress after pinging this endpoint to check how the update is
+// going.
 func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
@@ -2368,6 +2379,10 @@ func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	go h.b.DoSelfUpdate()
 }
 
+// serveUpdateProgress returns the status of an in-progress Tailscale self-update.
+// this is provided as a slice of ipnstate.UpdateProgress structs with various
+// log messages in order from oldest to newest. if an update is not in progress,
+// the returned slice will be empty.
 func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
