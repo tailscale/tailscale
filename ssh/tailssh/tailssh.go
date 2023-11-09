@@ -712,8 +712,10 @@ func (srv *server) fetchPublicKeysURL(url string) ([]string, error) {
 func (c *conn) handleSessionPostSSHAuth(s ssh.Session) {
 	// Do this check after auth, but before starting the session.
 	switch s.Subsystem() {
-	case "sftp", "":
+	case "sftp":
 		metricSFTP.Add(1)
+	case "":
+		// Regular SSH session.
 	default:
 		fmt.Fprintf(s.Stderr(), "Unsupported subsystem %q\r\n", s.Subsystem())
 		s.Exit(1)
@@ -1891,7 +1893,7 @@ var (
 	metricTerminalFetchError   = clientmetric.NewCounter("ssh_terminalaction_fetch_error")
 	metricHolds                = clientmetric.NewCounter("ssh_holds")
 	metricPolicyChangeKick     = clientmetric.NewCounter("ssh_policy_change_kick")
-	metricSFTP                 = clientmetric.NewCounter("ssh_sftp_requests")
+	metricSFTP                 = clientmetric.NewCounter("ssh_sftp_sessions")
 	metricLocalPortForward     = clientmetric.NewCounter("ssh_local_port_forward_requests")
 	metricRemotePortForward    = clientmetric.NewCounter("ssh_remote_port_forward_requests")
 )
