@@ -21,6 +21,7 @@ export type NodeData = {
   UnraidToken: string
   IPNVersion: string
   URLPrefix: string
+  DomainName: string
   TailnetName: string
   IsTagged: boolean
   Tags: string[]
