@@ -71,6 +71,7 @@ var handler = map[string]localAPIHandler{
 	// without a trailing slash:
 	"bugreport":                   (*Handler).serveBugReport,
 	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
+	"check-udp-gro-forwarding":    (*Handler).serveCheckUDPGROForwarding,
 	"check-prefs":                 (*Handler).serveCheckPrefs,
 	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
 	"debug":                       (*Handler).serveDebug,
@@ -973,6 +974,23 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 	}
 	var warning string
 	if err := h.b.CheckIPForwarding(); err != nil {
+		warning = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warning string
+	}{
+		Warning: warning,
+	})
+}
+
+func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "UDP GRO forwarding check access denied", http.StatusForbidden)
+		return
+	}
+	var warning string
+	if err := h.b.CheckUDPGROForwarding(); err != nil {
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")

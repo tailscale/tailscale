@@ -54,6 +54,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
@@ -4865,6 +4866,45 @@ func (b *LocalBackend) CheckIPForwarding() error {
 
 	// TODO: let the caller pass in the ranges.
 	warn, err := netutil.CheckIPForwarding(tsaddr.ExitRoutes(), b.sys.NetMon.Get().InterfaceState())
+	if err != nil {
+		return err
+	}
+	return warn
+}
+
+// CheckUDPGROForwarding checks if the machine is optimally configured to
+// forward UDP packets between the default route and Tailscale TUN interfaces.
+// It returns an error if the check fails or if suboptimal configuration is
+// detected. No error is returned if we are unable to gather the interface
+// names from the relevant subsystems.
+func (b *LocalBackend) CheckUDPGROForwarding() error {
+	if b.sys.IsNetstackRouter() {
+		return nil
+	}
+	// We return nil when the interface name or subsystem it's tied to can't be
+	// fetched. This is intentional as answering the question "are netdev
+	// features optimal for performance?" is a low priority in that situation.
+	tunSys, ok := b.sys.Tun.GetOK()
+	if !ok {
+		return nil
+	}
+	tunInterface, err := tunSys.Name()
+	if err != nil {
+		return nil
+	}
+	netmonSys, ok := b.sys.NetMon.GetOK()
+	if !ok {
+		return nil
+	}
+	state := netmonSys.InterfaceState()
+	if state == nil {
+		return nil
+	}
+	// We return warn or err. If err is non-nil there was a problem
+	// communicating with the kernel via ethtool semantics/ioctl. ethtool ioctl
+	// errors are interesting for our future selves as we consider tweaking
+	// netdev features automatically using similar API infra.
+	warn, err := netkernelconf.CheckUDPGROForwarding(tunInterface, state.DefaultRouteInterface)
 	if err != nil {
 		return err
 	}

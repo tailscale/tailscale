@@ -443,8 +443,15 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	}
 
 	if len(prefs.AdvertiseRoutes) > 0 {
-		if err := localClient.CheckIPForwarding(context.Background()); err != nil {
+		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
+		//  into a single HTTP req.
+		if err := localClient.CheckIPForwarding(ctx); err != nil {
 			warnf("%v", err)
+		}
+		if runtime.GOOS == "linux" {
+			if err := localClient.CheckUDPGROForwarding(ctx); err != nil {
+				warnf("%v", err)
+			}
 		}
 	}
 

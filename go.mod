@@ -56,6 +56,7 @@ require (
 	github.com/pkg/sftp v1.13.6
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/common v0.44.0
+	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tailscale/certstore v0.1.1-0.20231020161753-77811a65f4ff
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
