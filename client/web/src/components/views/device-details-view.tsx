@@ -5,7 +5,13 @@ import { NodeData } from "src/hooks/node-data"
 import { useLocation } from "wouter"
 import ACLTag from "../acl-tag"
 
-export default function DeviceDetailsView({ node }: { node: NodeData }) {
+export default function DeviceDetailsView({
+  readonly,
+  node,
+}: {
+  readonly: boolean
+  node: NodeData
+}) {
   const [, setLocation] = useLocation()
 
   return (
@@ -24,12 +30,16 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
               />
             </div>
             <button
-              className="px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-neutral-800 text-sm font-medium"
+              className={cx(
+                "px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-neutral-800 text-sm font-medium",
+                { "cursor-not-allowed": readonly }
+              )}
               onClick={() =>
                 apiFetch("/local/v0/logout", "POST")
                   .then(() => setLocation("/"))
                   .catch((err) => alert("Logout failed: " + err.message))
               }
+              disabled={readonly}
             >
               Disconnect…
             </button>

@@ -329,11 +329,11 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 	// Client using system-specific auth.
 	switch distro.Get() {
 	case distro.Synology:
-		resp, _ := authorizeSynology(r)
-		return resp.OK
+		authorized, _ := authorizeSynology(r)
+		return authorized
 	case distro.QNAP:
-		resp, _ := authorizeQNAP(r)
-		return resp.OK
+		authorized, _ := authorizeQNAP(r)
+		return authorized
 	default:
 		return true // no additional auth for this distro
 	}
@@ -366,8 +366,18 @@ var (
 )
 
 type authResponse struct {
-	OK         bool     `json:"ok"`                   // true when user has valid auth session
-	AuthNeeded authType `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
+	AuthNeeded     authType        `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
+	CanManageNode  bool            `json:"canManageNode"`
+	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitempty"`
+}
+
+// viewerIdentity is the Tailscale identity of the source node
+// connected to this web client.
+type viewerIdentity struct {
+	LoginName     string `json:"loginName"`
+	NodeName      string `json:"nodeName"`
+	NodeIP        string `json:"nodeIP"`
+	ProfilePicURL string `json:"profilePicUrl,omitempty"`
 }
 
 // serverAPIAuth handles requests to the /api/auth endpoint
@@ -375,25 +385,27 @@ type authResponse struct {
 func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	var resp authResponse
 
-	session, _, err := s.getSession(r)
+	session, whois, err := s.getSession(r)
 	switch {
 	case err != nil && errors.Is(err, errNotUsingTailscale):
 		// not using tailscale, so perform platform auth
 		switch distro.Get() {
 		case distro.Synology:
-			resp, err = authorizeSynology(r)
+			authorized, err := authorizeSynology(r)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
 			}
+			if !authorized {
+				resp.AuthNeeded = synoAuth
+			}
 		case distro.QNAP:
-			resp, err = authorizeQNAP(r)
-			if err != nil {
+			if _, err := authorizeQNAP(r); err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
 			}
 		default:
-			resp.OK = true // no additional auth for this distro
+			// no additional auth for this distro
 		}
 	case err != nil && (errors.Is(err, errNotOwner) ||
 		errors.Is(err, errNotUsingTailscale) ||
@@ -401,17 +413,28 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		errors.Is(err, errTaggedRemoteSource)):
 		// These cases are all restricted to the readonly view.
 		// No auth action to take.
-		resp = authResponse{OK: false}
+		resp.AuthNeeded = ""
 	case err != nil && !errors.Is(err, errNoSession):
 		// Any other error.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	case session.isAuthorized(s.timeNow()):
-		resp = authResponse{OK: true}
+		resp.CanManageNode = true
+		resp.AuthNeeded = ""
 	default:
-		resp = authResponse{OK: false, AuthNeeded: tailscaleAuth}
+		resp.AuthNeeded = tailscaleAuth
 	}
 
+	if whois != nil {
+		resp.ViewerIdentity = &viewerIdentity{
+			LoginName:     whois.UserProfile.LoginName,
+			NodeName:      whois.Node.Name,
+			ProfilePicURL: whois.UserProfile.ProfilePicURL,
+		}
+		if addrs := whois.Node.Addresses; len(addrs) > 0 {
+			resp.ViewerIdentity.NodeIP = addrs[0].Addr().String()
+		}
+	}
 	writeJSON(w, resp)
 }
 
@@ -494,6 +517,7 @@ type nodeData struct {
 	Status      string
 	DeviceName  string
 	TailnetName string // TLS cert name
+	DomainName  string
 	IP          string // IPv4
 	IPv6        string
 	OS          string
@@ -543,6 +567,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		Status:      st.BackendState,
 		DeviceName:  strings.Split(st.Self.DNSName, ".")[0],
 		TailnetName: st.CurrentTailnet.MagicDNSSuffix,
+		DomainName:  st.CurrentTailnet.Name,
 		OS:          st.Self.OS,
 		IPNVersion:  strings.Split(st.Version, "-")[0],
 		Profile:     st.User[st.Self.UserID],

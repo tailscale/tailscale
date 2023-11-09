@@ -3,17 +3,24 @@ import React from "react"
 
 export default function ProfilePic({
   url,
-  size = "medium",
+  size = "large",
+  className,
 }: {
-  url: string
-  size?: "small" | "medium"
+  url?: string
+  size?: "small" | "medium" | "large"
+  className?: string
 }) {
   return (
     <div
-      className={cx("relative flex-shrink-0 rounded-full overflow-hidden", {
-        "w-5 h-5": size === "small",
-        "w-8 h-8": size === "medium",
-      })}
+      className={cx(
+        "relative flex-shrink-0 rounded-full overflow-hidden",
+        {
+          "w-5 h-5": size === "small",
+          "w-[26px] h-[26px]": size === "medium",
+          "w-8 h-8": size === "large",
+        },
+        className
+      )}
     >
       {url ? (
         <div

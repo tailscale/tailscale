@@ -7,8 +7,14 @@ export enum AuthType {
 }
 
 export type AuthResponse = {
-  ok: boolean
   authNeeded?: AuthType
+  canManageNode: boolean
+  viewerIdentity?: {
+    loginName: string
+    nodeName: string
+    nodeIP: string
+    profilePicUrl?: string
+  }
 }
 
 // useAuth reports and refreshes Tailscale auth status

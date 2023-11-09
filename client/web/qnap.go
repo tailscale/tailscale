@@ -20,16 +20,16 @@ import (
 // authorizeQNAP authenticates the logged-in QNAP user and verifies that they
 // are authorized to use the web client.
 // If the user is not authorized to use the client, an error is returned.
-func authorizeQNAP(r *http.Request) (ar authResponse, err error) {
+func authorizeQNAP(r *http.Request) (authorized bool, err error) {
 	_, resp, err := qnapAuthn(r)
 	if err != nil {
-		return ar, err
+		return false, err
 	}
 	if resp.IsAdmin == 0 {
-		return ar, errors.New("user is not an admin")
+		return false, errors.New("user is not an admin")
 	}
 
-	return authResponse{OK: true}, nil
+	return true, nil
 }
 
 type qnapAuthResponse struct {
