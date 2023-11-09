@@ -6,14 +6,20 @@
 package ipnlocal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
+	"time"
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/web"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
+	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 const webClientPort = web.ListenPort
@@ -73,6 +79,9 @@ func (b *LocalBackend) WebClientShutdown() {
 	b.mu.Lock()
 	server := b.webClient.server
 	b.webClient.server = nil
+	for _, ln := range b.webClientListeners {
+		ln.Close()
+	}
 	b.mu.Unlock() // release lock before shutdown
 	if server != nil {
 		server.Shutdown()
@@ -87,4 +96,42 @@ func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
 	}
 	s := http.Server{Handler: b.webClient.server}
 	return s.Serve(netutil.NewOneConnListener(c, nil))
+}
+
+// updateWebClientListenersLocked creates listeners on the web client port (5252)
+// for each of the local device's Tailscale IP addresses. This is needed to properly
+// route local traffic when using kernel networking mode.
+func (b *LocalBackend) updateWebClientListenersLocked() {
+	if b.netMap == nil {
+		return
+	}
+
+	addrs := b.netMap.GetAddresses()
+	for i := range addrs.LenIter() {
+		addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), webClientPort)
+		if _, ok := b.webClientListeners[addrPort]; ok {
+			continue // already listening
+		}
+
+		sl := b.newWebClientListener(context.Background(), addrPort, b.logf)
+		mak.Set(&b.webClientListeners, addrPort, sl)
+
+		go sl.Run()
+	}
+}
+
+// newWebClientListener returns a listener for local connections to the built-in web client
+// used to manage this Tailscale instance.
+func (b *LocalBackend) newWebClientListener(ctx context.Context, ap netip.AddrPort, logf logger.Logf) *localListener {
+	ctx, cancel := context.WithCancel(ctx)
+	return &localListener{
+		b:      b,
+		ap:     ap,
+		ctx:    ctx,
+		cancel: cancel,
+		logf:   logf,
+
+		handler: b.handleWebClientConn,
+		bo:      backoff.NewBackoff("webclient-listener", logf, 30*time.Second),
+	}
 }

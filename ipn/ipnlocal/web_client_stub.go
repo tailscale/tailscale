@@ -27,3 +27,4 @@ func (b *LocalBackend) WebClientShutdown() {}
 func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
 	return errors.New("not implemented")
 }
+func (b *LocalBackend) updateWebClientListenersLocked() {}
