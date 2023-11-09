@@ -49,7 +49,10 @@ import (
 )
 
 var (
-	sshVerboseLogging = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
+	sshVerboseLogging    = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
+	sshDisableSFTP       = envknob.RegisterBool("TS_SSH_DISABLE_SFTP")
+	sshDisableForwarding = envknob.RegisterBool("TS_SSH_DISABLE_FORWARDING")
+	sshDisablePTY        = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
 )
 
 const (
@@ -473,6 +476,9 @@ func (srv *server) newConn() (*conn, error) {
 // to the specified host and port.
 // TODO(bradfitz/maisem): should we have more checks on host/port?
 func (c *conn) mayReversePortForwardTo(ctx ssh.Context, destinationHost string, destinationPort uint32) bool {
+	if sshDisableForwarding() {
+		return false
+	}
 	if c.finalAction != nil && c.finalAction.AllowRemotePortForwarding {
 		metricRemotePortForward.Add(1)
 		return true
@@ -484,6 +490,9 @@ func (c *conn) mayReversePortForwardTo(ctx ssh.Context, destinationHost string, 
 // to the specified host and port.
 // TODO(bradfitz/maisem): should we have more checks on host/port?
 func (c *conn) mayForwardLocalPortTo(ctx ssh.Context, destinationHost string, destinationPort uint32) bool {
+	if sshDisableForwarding() {
+		return false
+	}
 	if c.finalAction != nil && c.finalAction.AllowLocalPortForwarding {
 		metricLocalPortForward.Add(1)
 		return true
@@ -713,6 +722,11 @@ func (c *conn) handleSessionPostSSHAuth(s ssh.Session) {
 	// Do this check after auth, but before starting the session.
 	switch s.Subsystem() {
 	case "sftp":
+		if sshDisableSFTP() {
+			fmt.Fprintf(s.Stderr(), "sftp disabled\r\n")
+			s.Exit(1)
+			return
+		}
 		metricSFTP.Add(1)
 	case "":
 		// Regular SSH session.
@@ -986,6 +1000,12 @@ var errSessionDone = errors.New("session is done")
 // On success, it assigns ss.agentListener.
 func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *userMeta) error {
 	if !ssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
+		return nil
+	}
+	if sshDisableForwarding() {
+		// TODO(bradfitz): or do we want to return an error here instead so the user
+		// gets an error if they ran with ssh -A? But for now we just silently
+		// don't work, like the condition above.
 		return nil
 	}
 	ss.logf("ssh: agent forwarding requested")
