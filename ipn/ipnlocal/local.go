@@ -209,7 +209,6 @@ type LocalBackend struct {
 	ccGen          clientGen          // function for producing controlclient; lazily populated
 	sshServer      SSHServer          // or nil, initialized lazily.
 	appConnector   *appc.AppConnector // or nil, initialized when configured.
-	webClient      webClient
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
@@ -273,7 +272,10 @@ type LocalBackend struct {
 	serveConfig         ipn.ServeConfigView // or !Valid if none
 	activeWatchSessions set.Set[string]     // of WatchIPN SessionID
 
-	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
+	webClient          webClient
+	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
+
+	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
@@ -4491,6 +4493,11 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 	if b.ShouldRunWebClient() {
 		handlePorts = append(handlePorts, webClientPort)
+
+		// don't listen on netmap addresses if we're in userspace mode
+		if !b.sys.IsNetstack() {
+			b.updateWebClientListenersLocked()
+		}
 	}
 
 	b.reloadServeConfigLocked(prefs)
