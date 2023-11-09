@@ -37,7 +37,7 @@ export function UpdatingView({ cv, current }: {
 
   return (
     <>
-      <div className="flex-1 flex flex-col justify-center items-center text-center">
+      <div className="flex-1 flex flex-col justify-center items-center text-center h-full">
         {
           (updateState === UpdateState.InProgress) ? (
             <>
@@ -92,7 +92,7 @@ export function UpdatingView({ cv, current }: {
             </>
           )
         }
-        <pre className="h-64 overflow-scroll"><code>
+        <pre className="h-64 overflow-scroll m-3"><code>
           { updateLog }
         </code></pre>
       </div>

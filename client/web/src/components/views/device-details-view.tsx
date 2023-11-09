@@ -1,6 +1,7 @@
 import React from "react"
 import { NodeData } from "src/hooks/node-data"
 import ProfilePic from "src/ui/profile-pic"
+import { UpdateAvailableNotification } from "src/ui/update-available"
 
 export default function DeviceDetailsView({ node }: { node: NodeData }) {
   return (
@@ -30,6 +31,13 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
             </div>
           </div>
         </div>
+        {
+            node.ClientVersion.RunningLatest ? null : (
+              <UpdateAvailableNotification
+                details={node.ClientVersion}
+              />
+            )
+        }
         <div className="card">
           <h2 className="mb-2">General</h2>
           <table>
