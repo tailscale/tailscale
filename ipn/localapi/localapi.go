@@ -2331,9 +2331,9 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 
 // serveUpdateCheck returns the ClientVersion from Status, which contains
 // information on whether an update is available, and if so, what version,
-// *if* we support auto-updates on this platform. if we don't, this endpoint
+// *if* we support auto-updates on this platform. If we don't, this endpoint
 // always returns a ClientVersion saying we're running the newest version.
-// effectively, it tells us whether serveUpdateInstall will be able to install
+// Effectively, it tells us whether serveUpdateInstall will be able to install
 // an update for us.
 func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
@@ -2356,6 +2356,10 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cv := h.b.StatusWithoutPeers().ClientVersion
+	// ipnstate.Status documentation notes that ClientVersion may be nil on some
+	// platforms where this information is unavailable. In that case, return a
+	// ClientVersion that says we're up to date, since we have no information on
+	// whether an update is possible.
 	if cv == nil {
 		cv = &tailcfg.ClientVersion{RunningLatest: true}
 	}
@@ -2364,8 +2368,8 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveUpdateInstall sends a request to the LocalBackend to start a Tailscale
-// self-update. it does not indicate whether or not the update or the request
-// to start it succeeded, only that it was accepted. clients should use
+// self-update. A successful response does not indicate whether the update
+// succeeded, only that the request was accepted. Clients should use
 // serveUpdateProgress after pinging this endpoint to check how the update is
 // going.
 func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
@@ -2380,8 +2384,8 @@ func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveUpdateProgress returns the status of an in-progress Tailscale self-update.
-// this is provided as a slice of ipnstate.UpdateProgress structs with various
-// log messages in order from oldest to newest. if an update is not in progress,
+// This is provided as a slice of ipnstate.UpdateProgress structs with various
+// log messages in order from oldest to newest. If an update is not in progress,
 // the returned slice will be empty.
 func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {

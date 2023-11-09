@@ -712,21 +712,21 @@ type DebugDERPRegionReport struct {
 	Errors   []string
 }
 
-type ProgressStatus string
+type SelfUpdateStatus string
 
 const (
-	UpdateFinished   ProgressStatus = "UpdateFinished"
-	UpdateInProgress ProgressStatus = "UpdateInProgress"
-	UpdateFailed     ProgressStatus = "UpdateFailed"
+	UpdateFinished   SelfUpdateStatus = "UpdateFinished"
+	UpdateInProgress SelfUpdateStatus = "UpdateInProgress"
+	UpdateFailed     SelfUpdateStatus = "UpdateFailed"
 )
 
 type UpdateProgress struct {
-	Status  ProgressStatus `json:"status,omitempty"`
-	Message string         `json:"message,omitempty"`
-	Version string         `json:"version,omitempty"`
+	Status  SelfUpdateStatus `json:"status,omitempty"`
+	Message string           `json:"message,omitempty"`
+	Version string           `json:"version,omitempty"`
 }
 
-func NewUpdateProgress(ps ProgressStatus, msg string) UpdateProgress {
+func NewUpdateProgress(ps SelfUpdateStatus, msg string) UpdateProgress {
 	return UpdateProgress{
 		Status:  ps,
 		Message: msg,

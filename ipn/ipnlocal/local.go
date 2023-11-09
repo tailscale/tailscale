@@ -269,7 +269,7 @@ type LocalBackend struct {
 	c2nUpdateStatus     updateStatus
 	currentUser         ipnauth.WindowsToken
 	selfUpdateProgress  []ipnstate.UpdateProgress
-	lastSelfUpdateState ipnstate.ProgressStatus
+	lastSelfUpdateState ipnstate.SelfUpdateStatus
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -5541,7 +5541,7 @@ func (b *LocalBackend) DoSelfUpdate() {
 	if err != nil {
 		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
 	} else {
-		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart, please restart Tailscale manually!"))
+		b.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFinished, "tailscaled did not restart; please restart Tailscale manually."))
 	}
 }
 
