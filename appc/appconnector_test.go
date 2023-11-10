@@ -74,12 +74,24 @@ func TestWildcardDomains(t *testing.T) {
 	a.UpdateDomains([]string{"*.example.com"})
 	a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8"))
 	if got, want := rc.routes, []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
-		t.Errorf("got %v; want %v", got, want)
+		t.Errorf("routes: got %v; want %v", got, want)
+	}
+	if got, want := a.wildcards, []string{"example.com"}; !slices.Equal(got, want) {
+		t.Errorf("wildcards: got %v; want %v", got, want)
 	}
 
 	a.UpdateDomains([]string{"*.example.com", "example.com"})
 	if _, ok := a.domains["foo.example.com"]; !ok {
 		t.Errorf("expected foo.example.com to be preserved in domains due to wildcard")
+	}
+	if got, want := a.wildcards, []string{"example.com"}; !slices.Equal(got, want) {
+		t.Errorf("wildcards: got %v; want %v", got, want)
+	}
+
+	// There was an early regression where the wildcard domain was added repeatedly, this guards against that.
+	a.UpdateDomains([]string{"*.example.com", "example.com"})
+	if len(a.wildcards) != 1 {
+		t.Errorf("expected only one wildcard domain, got %v", a.wildcards)
 	}
 }
 
