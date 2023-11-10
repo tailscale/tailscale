@@ -1157,28 +1157,6 @@ func TestOfferingAppConnector(t *testing.T) {
 	}
 }
 
-func TestAppConnectorHostinfoService(t *testing.T) {
-	hasAppConnectorService := func(s []tailcfg.Service) bool {
-		for _, s := range s {
-			if s.Proto == tailcfg.AppConnector && s.Port == 1 {
-				return true
-			}
-		}
-		return false
-	}
-
-	b := newTestBackend(t)
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if hasAppConnectorService(b.peerAPIServicesLocked()) {
-		t.Fatal("unexpected app connector service")
-	}
-	b.appConnector = appc.NewAppConnector(t.Logf, nil)
-	if !hasAppConnectorService(b.peerAPIServicesLocked()) {
-		t.Fatal("expected app connector service")
-	}
-}
-
 func TestRouteAdvertiser(t *testing.T) {
 	b := newTestBackend(t)
 	testPrefix := netip.MustParsePrefix("192.0.0.8/32")
@@ -1249,20 +1227,6 @@ func TestReconfigureAppConnector(t *testing.T) {
 	if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {
 		t.Fatalf("got domains %v, want %v", b.appConnector.Domains(), want)
 	}
-
-	// Check that hostinfo has been updated to include the AppConnector service
-	// This is spawned in a goroutine, so may take some attempts to observe
-	var foundAppConnectorService bool
-	for i := 0; i < 10; i++ {
-		foundAppConnectorService = hasAppConnectorService(b)
-		if foundAppConnectorService {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !foundAppConnectorService {
-		t.Fatalf("expected app connector service")
-	}
 	if v, _ := b.hostinfo.AppConnector.Get(); !v {
 		t.Fatalf("expected app connector service")
 	}
@@ -1280,31 +1244,9 @@ func TestReconfigureAppConnector(t *testing.T) {
 	if b.appConnector != nil {
 		t.Fatal("expected no app connector")
 	}
-	// expect the connector service to be removed
-	for i := 0; i < 10; i++ {
-		foundAppConnectorService = hasAppConnectorService(b)
-		if !foundAppConnectorService {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if foundAppConnectorService {
-		t.Fatalf("expected no app connector service")
-	}
 	if v, _ := b.hostinfo.AppConnector.Get(); v {
 		t.Fatalf("expected no app connector service")
 	}
-}
-
-func hasAppConnectorService(b *LocalBackend) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, s := range b.peerAPIServicesLocked() {
-		if s.Proto == tailcfg.AppConnector && s.Port == 1 {
-			return true
-		}
-	}
-	return false
 }
 
 func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
