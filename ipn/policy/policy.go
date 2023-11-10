@@ -14,6 +14,8 @@ import (
 // to our peer nodes for discovery purposes.
 func IsInterestingService(s tailcfg.Service, os string) bool {
 	switch s.Proto {
+	// Avoid further extension of this approach to advertising peer services.
+	// TODO(bradfitz,raggi): point to preferred approach
 	case tailcfg.PeerAPI4, tailcfg.PeerAPI6, tailcfg.PeerAPIDNS, tailcfg.AppConnector:
 		return true
 	}

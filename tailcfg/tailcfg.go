@@ -653,6 +653,9 @@ type Service struct {
 	//     * "app-connector": the local app-connector service is
 	//        available. For this service, the Port number is
 	//        really the version number of the service.
+	//
+	// Avoid further extension of this approach to advertising peer services.
+	// TODO(bradfitz,raggi): point to preferred approach
 	Proto ServiceProto
 
 	// Port is the port number.
