@@ -31,6 +31,7 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 )
 
 var c2nLogHeap func(http.ResponseWriter, *http.Request) // non-nil on most platforms (c2n_pprof.go)
@@ -340,6 +341,14 @@ func findCmdTailscale() (string, error) {
 		}
 		if self == "/usr/local/sbin/tailscaled" || self == "/usr/local/bin/tailscaled" {
 			ts = "/usr/local/bin/tailscale"
+		}
+		if distro.Get() == distro.QNAP {
+			// The volume under /share/ where qpkg are installed is not
+			// predictable. But the rest of the path is.
+			ok, err := filepath.Match("/share/*/.qpkg/Tailscale/tailscaled", self)
+			if err == nil && ok {
+				ts = filepath.Join(filepath.Dir(self), "tailscale")
+			}
 		}
 	case "windows":
 		ts = filepath.Join(filepath.Dir(self), "tailscale.exe")

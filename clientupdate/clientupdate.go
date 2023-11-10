@@ -180,6 +180,8 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			// plugin manager to be persistent.
 			// TODO(awly): implement Unraid updates using the 'plugin' CLI.
 			return nil, false
+		case distro.QNAP:
+			return up.updateQNAP, true
 		}
 		switch {
 		case haveExecutable("pacman"):
@@ -1064,6 +1066,77 @@ func (up *Updater) unpackLinuxTarball(path string) error {
 		return err
 	}
 	up.Logf("Updated %s", tailscaled)
+	return nil
+}
+
+func (up *Updater) updateQNAP() (err error) {
+	if up.Version != "" {
+		return errors.New("installing a specific version on QNAP is not supported")
+	}
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf(`%w; you can try updating using "qpkg_cli --add Tailscale"`, err)
+		}
+	}()
+
+	out, err := exec.Command("qpkg_cli", "--upgradable", "Tailscale").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to check if Tailscale is upgradable using qpkg_cli: %w, output: %q", err, out)
+	}
+
+	// Output should look like this:
+	//
+	// $ qpkg_cli -G Tailscale
+	// [Tailscale]
+	// upgradeStatus = 1
+	statusRe := regexp.MustCompile(`upgradeStatus = (\d)`)
+	m := statusRe.FindStringSubmatch(string(out))
+	if len(m) < 2 {
+		return fmt.Errorf("failed to check if Tailscale is upgradable using qpkg_cli, output: %q", out)
+	}
+	status, err := strconv.Atoi(m[1])
+	if err != nil {
+		return fmt.Errorf("cannot parse upgradeStatus from qpkg_cli output %q: %w", out, err)
+	}
+	// Possible status values:
+	//  0:can upgrade
+	//  1:can not upgrade
+	//  2:error
+	//  3:can not get rss information
+	//  4:qpkg not found
+	//  5:qpkg not installed
+	//
+	// We want status 0.
+	switch status {
+	case 0: // proceed with upgrade
+	case 1:
+		up.Logf("no update available")
+		return nil
+	case 2, 3, 4:
+		return fmt.Errorf("failed to check update status with qpkg_cli (upgradeStatus = %d)", status)
+	case 5:
+		return errors.New("Tailscale was not found in the QNAP App Center")
+	default:
+		return fmt.Errorf("failed to check update status with qpkg_cli (upgradeStatus = %d)", status)
+	}
+
+	// There doesn't seem to be a way to fetch what the available upgrade
+	// version is. Use the generic "latest" version in confirmation prompt.
+	if up.Confirm != nil && !up.Confirm("latest") {
+		return nil
+	}
+
+	up.Logf("c2n: running qpkg_cli --add Tailscale")
+	cmd := exec.Command("qpkg_cli", "--add", "Tailscale")
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed tailscale update using qpkg_cli: %w", err)
+	}
 	return nil
 }
 
