@@ -14,7 +14,7 @@ import (
 // to our peer nodes for discovery purposes.
 func IsInterestingService(s tailcfg.Service, os string) bool {
 	switch s.Proto {
-	case tailcfg.PeerAPI4, tailcfg.PeerAPI6, tailcfg.PeerAPIDNS, tailcfg.AppConnector:
+	case tailcfg.PeerAPI4, tailcfg.PeerAPI6, tailcfg.PeerAPIDNS:
 		return true
 	}
 	if s.Proto != tailcfg.TCP {
