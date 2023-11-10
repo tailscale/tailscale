@@ -3272,7 +3272,13 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	const appConnectorCapName = "tailscale.com/app-connectors"
 
 	if !prefs.AppConnector().Advertise {
-		b.appConnector = nil
+		var old *appc.AppConnector
+		old, b.appConnector = b.appConnector, nil
+		if old != nil {
+			// Ensure that the app connector service will not be advertised now
+			// that b.appConnector is no longer set.
+			go b.doSetHostinfoFilterServices()
+		}
 		return
 	}
 
@@ -3306,6 +3312,10 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	slices.Sort(domains)
 	slices.Compact(domains)
 	b.appConnector.UpdateDomains(domains)
+
+	// Ensure that the app connector service will be advertised now that
+	// b.appConnector is set.
+	go b.doSetHostinfoFilterServices()
 }
 
 // authReconfig pushes a new configuration into wgengine, if engine
