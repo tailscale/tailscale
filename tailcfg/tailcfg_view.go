@@ -317,6 +317,7 @@ func (v HostinfoView) SSH_HostKeys() views.Slice[string]      { return views.Sli
 func (v HostinfoView) Cloud() string                          { return v.ж.Cloud }
 func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.Userspace }
 func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
+func (v HostinfoView) AppConnector() opt.Bool                 { return v.ж.AppConnector }
 func (v HostinfoView) Location() *Location {
 	if v.ж.Location == nil {
 		return nil
@@ -363,6 +364,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Cloud           string
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
+	AppConnector    opt.Bool
 	Location        *Location
 }{})
 

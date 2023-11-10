@@ -177,6 +177,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Cloud           string
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
+	AppConnector    opt.Bool
 	Location        *Location
 }{})
 

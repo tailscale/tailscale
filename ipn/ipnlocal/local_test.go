@@ -1263,6 +1263,9 @@ func TestReconfigureAppConnector(t *testing.T) {
 	if !foundAppConnectorService {
 		t.Fatalf("expected app connector service")
 	}
+	if v, _ := b.hostinfo.AppConnector.Get(); !v {
+		t.Fatalf("expected app connector service")
+	}
 
 	// disable the connector in order to assert that the service is removed
 	b.EditPrefs(&ipn.MaskedPrefs{
@@ -1286,6 +1289,9 @@ func TestReconfigureAppConnector(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if foundAppConnectorService {
+		t.Fatalf("expected no app connector service")
+	}
+	if v, _ := b.hostinfo.AppConnector.Get(); v {
 		t.Fatalf("expected no app connector service")
 	}
 }

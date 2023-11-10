@@ -17,6 +17,7 @@ import (
 
 	. "tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
 )
@@ -64,6 +65,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"Cloud",
 		"Userspace",
 		"UserspaceRouter",
+		"AppConnector",
 		"Location",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
@@ -227,6 +229,16 @@ func TestHostinfoEqual(t *testing.T) {
 			&Hostinfo{App: "golink"},
 			&Hostinfo{App: "golink"},
 			true,
+		},
+		{
+			&Hostinfo{AppConnector: opt.Bool("true")},
+			&Hostinfo{AppConnector: opt.Bool("true")},
+			true,
+		},
+		{
+			&Hostinfo{AppConnector: opt.Bool("true")},
+			&Hostinfo{AppConnector: opt.Bool("false")},
+			false,
 		},
 	}
 	for i, tt := range tests {
