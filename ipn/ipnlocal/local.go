@@ -1544,6 +1544,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
+	hostinfo.AppConnector.Set(b.appConnector != nil)
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -3270,6 +3271,11 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 // b.mu must be held.
 func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
 	const appConnectorCapName = "tailscale.com/app-connectors"
+	defer func() {
+		if b.hostinfo != nil {
+			b.hostinfo.AppConnector.Set(b.appConnector != nil)
+		}
+	}()
 
 	if !prefs.AppConnector().Advertise {
 		var old *appc.AppConnector

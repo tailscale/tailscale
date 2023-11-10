@@ -624,11 +624,12 @@ func (h *Hostinfo) CheckRequestTags() error {
 type ServiceProto string
 
 const (
-	TCP          = ServiceProto("tcp")
-	UDP          = ServiceProto("udp")
-	PeerAPI4     = ServiceProto("peerapi4")
-	PeerAPI6     = ServiceProto("peerapi6")
-	PeerAPIDNS   = ServiceProto("peerapi-dns-proxy")
+	TCP        = ServiceProto("tcp")
+	UDP        = ServiceProto("udp")
+	PeerAPI4   = ServiceProto("peerapi4")
+	PeerAPI6   = ServiceProto("peerapi6")
+	PeerAPIDNS = ServiceProto("peerapi-dns-proxy")
+	// Deprecated: use the field on HostInfo instead.
 	AppConnector = ServiceProto("app-connector")
 )
 
@@ -650,9 +651,9 @@ type Service struct {
 	//        being a DNS proxy (when the node is an exit
 	//        node). For this service, the Port number is really
 	//        the version number of the service.
-	//     * "app-connector": the local app-connector service is
-	//        available. For this service, the Port number is
-	//        really the version number of the service.
+	//     * "app-connector": (deprecated) the local app-connector
+	//        service is available. For this service, the Port number
+	//        is really the version number of the service.
 	Proto ServiceProto
 
 	// Port is the port number.
@@ -748,6 +749,7 @@ type Hostinfo struct {
 	Cloud           string         `json:",omitempty"`
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
+	AppConnector    opt.Bool       `json:",omitempty"` // if the client is running the app-connector service
 
 	// Location represents geographical location data about a
 	// Tailscale host. Location is optional and only set if
