@@ -71,6 +71,7 @@ func (e *AppConnector) UpdateDomains(domains []string) {
 
 	var oldDomains map[string][]netip.Addr
 	oldDomains, e.domains = e.domains, make(map[string][]netip.Addr, len(domains))
+	e.wildcards = e.wildcards[:0]
 	for _, d := range domains {
 		d = strings.ToLower(d)
 		if len(d) == 0 {
