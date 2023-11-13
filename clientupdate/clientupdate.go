@@ -415,17 +415,25 @@ func (up *Updater) updateDebLike() error {
 		// we're not updating them:
 		"-o", "APT::Get::List-Cleanup=0",
 	)
-	cmd.Stdout = up.Stdout
-	cmd.Stderr = up.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("apt-get update failed: %w; output:\n%s", err, out)
 	}
 
-	cmd = exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver)
-	cmd.Stdout = up.Stdout
-	cmd.Stderr = up.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	for i := 0; i < 2; i++ {
+		out, err := exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver).CombinedOutput()
+		if err != nil {
+			if !bytes.Contains(out, []byte(`dpkg was interrupted`)) {
+				return fmt.Errorf("apt-get install failed: %w; output:\n%s", err, out)
+			}
+			up.Logf("apt-get install failed: %s; output:\n%s", err, out)
+			up.Logf("running dpkg --configure tailscale")
+			out, err = exec.Command("dpkg", "--force-confdef,downgrade", "--configure", "tailscale").CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("dpkg --configure tailscale failed: %w; output:\n%s", err, out)
+			}
+			continue
+		}
+		break
 	}
 
 	return nil
