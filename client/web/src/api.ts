@@ -10,7 +10,7 @@ let unraidCsrfToken: string | undefined // required for unraid POST requests (#8
 // (i.e. provide `/data` rather than `api/data`).
 export function apiFetch(
   endpoint: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH",
   body?: any,
   params?: Record<string, string>
 ): Promise<Response> {

@@ -539,6 +539,7 @@ type nodeData struct {
 
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
+	RunningSSHServer  bool
 
 	LicensesURL string
 
@@ -563,24 +564,25 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		debugMode = "login"
 	}
 	data := &nodeData{
-		ID:          st.Self.ID,
-		Status:      st.BackendState,
-		DeviceName:  strings.Split(st.Self.DNSName, ".")[0],
-		TailnetName: st.CurrentTailnet.MagicDNSSuffix,
-		DomainName:  st.CurrentTailnet.Name,
-		OS:          st.Self.OS,
-		IPNVersion:  strings.Split(st.Version, "-")[0],
-		Profile:     st.User[st.Self.UserID],
-		IsTagged:    st.Self.IsTagged(),
-		KeyExpired:  st.Self.Expired,
-		TUNMode:     st.TUN,
-		IsSynology:  distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
-		DSMVersion:  distro.DSMVersion(),
-		IsUnraid:    distro.Get() == distro.Unraid,
-		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
-		URLPrefix:   strings.TrimSuffix(s.pathPrefix, "/"),
-		LicensesURL: licenses.LicensesURL(),
-		DebugMode:   debugMode, // TODO(sonia,will): just pass back s.mode directly?
+		ID:               st.Self.ID,
+		Status:           st.BackendState,
+		DeviceName:       strings.Split(st.Self.DNSName, ".")[0],
+		TailnetName:      st.CurrentTailnet.MagicDNSSuffix,
+		DomainName:       st.CurrentTailnet.Name,
+		OS:               st.Self.OS,
+		IPNVersion:       strings.Split(st.Version, "-")[0],
+		Profile:          st.User[st.Self.UserID],
+		IsTagged:         st.Self.IsTagged(),
+		KeyExpired:       st.Self.Expired,
+		TUNMode:          st.TUN,
+		IsSynology:       distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
+		DSMVersion:       distro.DSMVersion(),
+		IsUnraid:         distro.Get() == distro.Unraid,
+		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
+		RunningSSHServer: prefs.RunSSH,
+		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
+		LicensesURL:      licenses.LicensesURL(),
+		DebugMode:        debugMode, // TODO(sonia,will): just pass back s.mode directly?
 	}
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {
@@ -800,12 +802,9 @@ func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) 
 // Rather than exposing all localapi endpoints over the proxy,
 // this limits to just the ones actually used from the web
 // client frontend.
-//
-// TODO(sonia,will): Shouldn't expand this beyond the existing
-// localapi endpoints until the larger web client auth story
-// is worked out (tailscale/corp#14335).
 var localapiAllowlist = []string{
 	"/v0/logout",
+	"/v0/prefs",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.

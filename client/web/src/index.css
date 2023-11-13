@@ -31,6 +31,107 @@
   .card td:last-child {
     @apply text-neutral-800 text-sm leading-tight;
   }
+
+  .description {
+    @apply text-neutral-500 leading-snug
+  }
+
+  /**
+   * .toggle applies "Toggle" UI styles to input[type="checkbox"] form elements.
+   * You can use the -large and -small modifiers for size variants.
+   */
+  .toggle {
+    @apply appearance-none relative w-10 h-5 rounded-full bg-neutral-300 cursor-pointer;
+    transition: background-color 200ms ease-in-out;
+  }
+
+  .toggle:disabled {
+    @apply bg-neutral-200;
+    @apply cursor-not-allowed;
+  }
+
+  .toggle:checked {
+    @apply bg-indigo-500;
+  }
+
+  .toggle:checked:disabled {
+    @apply bg-indigo-300;
+  }
+
+  .toggle:focus {
+    @apply outline-none ring;
+  }
+
+  .toggle::after {
+    @apply absolute bg-white rounded-full will-change-[width];
+    @apply w-3.5 h-3.5 m-[0.1875rem] translate-x-0;
+    content: " ";
+    transition: width 200ms ease, transform 200ms ease;
+  }
+
+  .toggle:checked::after {
+    @apply translate-x-5;
+  }
+
+  .toggle:checked:disabled::after {
+    @apply bg-indigo-50;
+  }
+
+  .toggle:enabled:active::after {
+    @apply w-[1.125rem];
+  }
+
+  .toggle:checked:enabled:active::after {
+    @apply w-[1.125rem] translate-x-3.5;
+  }
+
+  .toggle-large {
+    @apply w-12 h-6;
+  }
+
+  .toggle-large::after {
+    @apply m-1 w-4 h-4;
+  }
+
+  .toggle-large:checked::after {
+    @apply translate-x-6;
+  }
+
+  .toggle-large:enabled:active::after {
+    @apply w-6;
+  }
+
+  .toggle-large:checked:enabled:active::after {
+    @apply w-6 translate-x-4;
+  }
+
+  .toggle-small {
+    @apply w-6 h-3;
+  }
+
+  .toggle-small:focus {
+    /**
+     * We disable ring for .toggle-small because it is a
+     * small, inline element.
+     */
+    @apply outline-none shadow-none;
+  }
+
+  .toggle-small::after {
+    @apply w-2 h-2 m-0.5;
+  }
+
+  .toggle-small:checked::after {
+    @apply translate-x-3;
+  }
+
+  .toggle-small:enabled:active::after {
+    @apply w-[0.675rem];
+  }
+
+  .toggle-small:checked:enabled:active::after {
+    @apply w-[0.675rem] translate-x-[0.55rem];
+  }
 }
 
 /**
