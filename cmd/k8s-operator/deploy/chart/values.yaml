@@ -19,6 +19,7 @@ operatorConfig:
   hostname: "tailscale-operator"
   nodeSelector:
     kubernetes.io/os: linux
+  tailscaleBaseURL: "https://login.tailscale.com"
 
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
