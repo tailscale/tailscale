@@ -89,6 +89,7 @@ require (
 	golang.org/x/tools v0.13.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
+	gopkg.in/square/go-jose.v2 v2.6.0
 	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
 	honnef.co/go/tools v0.4.6
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
