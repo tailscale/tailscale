@@ -341,6 +341,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		corev1.EnvVar{
 			Name:  "TS_HOSTNAME",
 			Value: sts.Hostname,
+		},
+		corev1.EnvVar{
+			Name:  "TS_EXTRA_ARGS",
+			Value: "--login-server=" + a.tsnetServer.ControlURL,
 		})
 	if sts.ClusterTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
