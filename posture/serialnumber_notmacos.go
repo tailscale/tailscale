@@ -8,7 +8,6 @@
 package posture
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -31,17 +30,17 @@ func getByteFromSmbiosStructure(s *smbios.Structure, specOffset int) uint8 {
 
 // getStringFromSmbiosStructure retrieves a string at the given specOffset.
 // Returns an empty string if no string was present.
-func getStringFromSmbiosStructure(s *smbios.Structure, specOffset int) (string, error) {
+func getStringFromSmbiosStructure(s *smbios.Structure, specOffset int) string {
 	index := getByteFromSmbiosStructure(s, specOffset)
 
 	if index == 0 || int(index) > len(s.Strings) {
-		return "", errors.New("specified offset does not exist in smbios structure")
+		return ""
 	}
 
 	str := s.Strings[index-1]
 	trimmed := strings.TrimSpace(str)
 
-	return trimmed, nil
+	return trimmed
 }
 
 // Product Table (Type 1) structure
@@ -71,7 +70,6 @@ func init() {
 		validTables = append(validTables, table)
 	}
 	numOfTables = len(validTables)
-
 }
 
 // serialFromSmbiosStructure extracts a serial number from a product,
@@ -86,14 +84,7 @@ func serialFromSmbiosStructure(s *smbios.Structure) (string, error) {
 		)
 	}
 
-	serial, err := getStringFromSmbiosStructure(s, serialNumberOffset)
-	if err != nil {
-		return "", fmt.Errorf(
-			"failed to get serial from %s table: %w",
-			idToTableName[int(s.Header.Type)],
-			err,
-		)
-	}
+	serial := getStringFromSmbiosStructure(s, serialNumberOffset)
 
 	return serial, nil
 }
@@ -125,7 +116,9 @@ func GetSerialNumbers(logf logger.Logf) ([]string, error) {
 				continue
 			}
 
-			serials = append(serials, serial)
+			if serial != "" {
+				serials = append(serials, serial)
+			}
 		}
 	}
 
