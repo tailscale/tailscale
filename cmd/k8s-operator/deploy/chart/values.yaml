@@ -33,6 +33,7 @@ operatorConfig:
   hostname: "tailscale-operator"
   nodeSelector:
     kubernetes.io/os: linux
+  tailscaleBaseURL: "https://login.tailscale.com"
 
   resources: {}
 

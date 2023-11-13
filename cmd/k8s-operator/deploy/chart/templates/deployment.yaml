@@ -74,6 +74,8 @@ spec:
               value: "{{ .Values.apiServerProxyConfig.mode }}"
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
+            - name: TAILSCALE_BASE_URL
+              value: {{ .Values.operatorConfig.tailscaleBaseURL }}
           volumeMounts:
           - name: oauth
             mountPath: /oauth
