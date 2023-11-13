@@ -2,9 +2,9 @@ import cx from "classnames"
 import React from "react"
 import { apiFetch } from "src/api"
 import { NodeData } from "src/hooks/node-data"
+import { UpdateAvailableNotification } from "src/ui/update-available"
 import { useLocation } from "wouter"
 import ACLTag from "../acl-tag"
-import { UpdateAvailableNotification } from "src/ui/update-available"
 
 export default function DeviceDetailsView({ node }: { node: NodeData }) {
   const [, setLocation] = useLocation()
@@ -36,13 +36,9 @@ export default function DeviceDetailsView({ node }: { node: NodeData }) {
             </button>
           </div>
         </div>
-        {
-            node.ClientVersion.RunningLatest ? null : (
-              <UpdateAvailableNotification
-                details={node.ClientVersion}
-              />
-            )
-        }
+        {!node.ClientVersion.RunningLatest && (
+          <UpdateAvailableNotification details={node.ClientVersion} />
+        )}
         <div className="card">
           <h2 className="mb-2">General</h2>
           <table>

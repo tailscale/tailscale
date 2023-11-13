@@ -16,7 +16,7 @@ export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-14 px-5 h-screen">
+    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
       {loadingAuth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (

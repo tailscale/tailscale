@@ -552,8 +552,9 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	}
 	cv, err := s.lc.CheckUpdate(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		s.logf("could not check for updates: %v", err)
+		// In case update check fails, just say we're up to date
+		cv = &tailcfg.ClientVersion{RunningLatest: true}
 	}
 	var debugMode string
 	if s.mode == ManageServerMode {
@@ -694,22 +695,21 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
-	err := s.lc.InstallUpdate(r.Context())
-	if err != nil {
+	if err := s.lc.InstallUpdate(r.Context()); err != nil {
 		log.Printf("%v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	} else {
-		w.WriteHeader(http.StatusAccepted)
+		return
 	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	ups, err := s.lc.GetUpdateProgress(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	} else {
-		json.NewEncoder(w).Encode(ups)
+		return
 	}
+	json.NewEncoder(w).Encode(ups)
 }
 
 func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {

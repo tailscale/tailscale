@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch, setUnraidCsrfToken } from "src/api"
+import { ClientVersion } from "src/hooks/self-update"
 
 export type NodeData = {
   Profile: UserProfile
@@ -48,28 +49,6 @@ export type NodeUpdate = {
   AdvertiseExitNode?: boolean
   Reauthenticate?: boolean
   ForceLogout?: boolean
-}
-
-// see tailcfg.ClientVersion
-export type ClientVersion = {
-  RunningLatest: boolean,
-  LatestVersion?: string,
-  // TODO(naman): add other fields?
-}
-
-// see ipnstate.UpdateProgress
-export type UpdateProgress = {
-  status: 'UpdateFinished' | 'UpdateInProgress' | 'UpdateFailed',
-  message: string,
-  version: string,
-}
-
-export enum UpdateState {
-  UpToDate,
-  Available,
-  InProgress,
-  Complete,
-  Failed
 }
 
 // useNodeData returns basic data about the current node.

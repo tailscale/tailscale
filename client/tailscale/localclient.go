@@ -1394,6 +1394,9 @@ func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt)
 	}, nil
 }
 
+// CheckUpdate returns a tailcfg.ClientVersion indicating whether or not an update is available
+// to be installed via the LocalAPI. In case the LocalAPI can't install updates, it returns a
+// ClientVersion that says that we are up to date.
 func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/update/check")
 	if err != nil {
@@ -1406,11 +1409,19 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
+// InstallUpdate initiates a self-update via the LocalAPI, if one is possible. Calling this endpoint
+// if we are already up to date, or if an update is already in progress, is a no-op. The error value
+// returned does not indicate whether or not the update succeeded, only whether or not the update was
+// successfully started. Use GetUpdateProgress to check the progress of the update.
 func (lc *LocalClient) InstallUpdate(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/update/install", http.StatusAccepted, nil)
 	return err
 }
 
+// GetUpdateProgress returns a log of the currently-in-progress self-update, as a slice of
+// ipnstate.UpdateProgress structs, each containing a log line and the current status of the update
+// as of that log line. Calling this endpoint when a self-update is not in progress returns an empty
+// slice.
 func (lc *LocalClient) GetUpdateProgress(ctx context.Context) ([]ipnstate.UpdateProgress, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/update/progress")
 	if err != nil {
