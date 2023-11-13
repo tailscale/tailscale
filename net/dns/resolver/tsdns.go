@@ -71,8 +71,11 @@ type Config struct {
 	// Queries only match the most specific suffix.
 	// To register a "default route", add an entry for ".".
 	Routes map[dnsname.FQDN][]*dnstype.Resolver
-	// LocalHosts is a map of FQDNs to corresponding IPs.
+	// Hosts is a map of FQDNs to corresponding IPs.
 	Hosts map[dnsname.FQDN][]netip.Addr
+	// Suffixes is a map of FQDNs to corresponding IPs that should match all
+	// subdomains and the suffix itself.
+	Suffixes map[dnsname.FQDN][]netip.Addr
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
@@ -195,8 +198,11 @@ type Resolver struct {
 	// mu guards the following fields from being updated while used.
 	mu           sync.Mutex
 	localDomains []dnsname.FQDN
-	hostToIP     map[dnsname.FQDN][]netip.Addr
-	ipToHost     map[netip.Addr]dnsname.FQDN
+	// hostToIP maps a single FQDN to one or more IPs.
+	hostToIP map[dnsname.FQDN][]netip.Addr
+	// suffixes maps and FQDN and all subdomains to one or more IPs.
+	suffixes map[dnsname.FQDN][]netip.Addr
+	ipToHost map[netip.Addr]dnsname.FQDN
 }
 
 type ForwardLinkSelector interface {
@@ -246,6 +252,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
+	r.suffixes = cfg.Suffixes
 	return nil
 }
 
@@ -596,11 +603,25 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 
 	r.mu.Lock()
 	hosts := r.hostToIP
+	suffixes := r.suffixes
 	localDomains := r.localDomains
 	r.mu.Unlock()
 
-	addrs, found := hosts[domain]
-	if !found {
+	addrs, ok := hosts[domain]
+	if !ok {
+		// Look for a matching suffix in suffixes. This implementation prefers
+		// the case where the number of domain labels is typically few, and the
+		// list of suffix candidates to match is arbitrarily sized.
+		d := domain.WithTrailingDot()
+		for ix := strings.IndexRune(d, '.'); ix >= 0; ix = strings.IndexRune(d, '.') {
+			d = d[ix+1:]
+			if addrs, ok = suffixes[dnsname.FQDN(d)]; ok {
+				break
+			}
+		}
+	}
+
+	if !ok {
 		for _, suffix := range localDomains {
 			if suffix.Contains(domain) {
 				// We are authoritative for the queried domain.

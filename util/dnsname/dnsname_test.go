@@ -210,6 +210,92 @@ func TestValidHostname(t *testing.T) {
 	}
 }
 
+func TestNewFQDN(t *testing.T) {
+	tests := []struct {
+		in         string
+		want       FQDN
+		wantErr    bool
+		wantLabels int
+	}{
+		{"", ".", false, 0},
+		{".", ".", false, 0},
+		{".foo.com", ".foo.com.", false, 3},
+		{"foo.com.", "foo.com.", false, 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			got, err := NewFQDN(test.in)
+			if got != test.want {
+				t.Errorf("NewFQDN(%q) got %q, want %q", test.in, got, test.want)
+			}
+			if (err != nil) != test.wantErr {
+				t.Errorf("NewFQDN(%q) err %v, wantErr=%v", test.in, err, test.wantErr)
+			}
+			if err != nil {
+				return
+			}
+
+			gotDot := got.WithTrailingDot()
+			if gotDot != string(test.want) {
+				t.Errorf("NewFQDN(%q).WithTrailingDot() got %q, want %q", test.in, gotDot, test.want)
+			}
+			gotNoDot := got.WithoutTrailingDot()
+			wantNoDot := string(test.want)[:len(test.want)-1]
+			if gotNoDot != wantNoDot {
+				t.Errorf("NewFQDN(%q).WithoutTrailingDot() got %q, want %q", test.in, gotNoDot, wantNoDot)
+			}
+
+			if gotLabels := got.NumLabels(); gotLabels != test.wantLabels {
+				t.Errorf("NewFQDN(%q).NumLabels() got %v, want %v", test.in, gotLabels, test.wantLabels)
+			}
+		})
+	}
+}
+
+func TestToFQDNSuffix(t *testing.T) {
+	tests := []struct {
+		in         string
+		want       FQDN
+		wantErr    bool
+		wantLabels int
+	}{
+		{"", ".", false, 0},
+		{".", ".", false, 0},
+		{".foo.com", ".foo.com.", false, 3},
+		{"foo.com.", ".foo.com.", false, 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			got, err := ToFQDNSuffix(test.in)
+			if got != test.want {
+				t.Errorf("ToFQDNSuffix(%q) got %q, want %q", test.in, got, test.want)
+			}
+			if (err != nil) != test.wantErr {
+				t.Errorf("ToFQDNSuffix(%q) err %v, wantErr=%v", test.in, err, test.wantErr)
+			}
+			if err != nil {
+				return
+			}
+
+			gotDot := got.WithTrailingDot()
+			if gotDot != string(test.want) {
+				t.Errorf("ToFQDNSuffix(%q).WithTrailingDot() got %q, want %q", test.in, gotDot, test.want)
+			}
+			gotNoDot := got.WithoutTrailingDot()
+			wantNoDot := string(test.want)[:len(test.want)-1]
+			if gotNoDot != wantNoDot {
+				t.Errorf("ToFQDNSuffix(%q).WithoutTrailingDot() got %q, want %q", test.in, gotNoDot, wantNoDot)
+			}
+
+			if gotLabels := got.NumLabels(); gotLabels != test.wantLabels {
+				t.Errorf("ToFQDNSuffix(%q).NumLabels() got %v, want %v", test.in, gotLabels, test.wantLabels)
+			}
+		})
+	}
+}
+
 var sinkFQDN FQDN
 
 func BenchmarkToFQDN(b *testing.B) {

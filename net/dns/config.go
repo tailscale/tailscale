@@ -41,6 +41,14 @@ type Config struct {
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
 	Hosts map[dnsname.FQDN][]netip.Addr
+	// Suffixes maps DNS FQDNs and all subdomains to their IPs, which can be a
+	// mix of IPv4 and IPv6.
+	// Queries matching entries in Suffixes are resolved locally by
+	// 100.100.100.100 without leaving the machine.
+	// Adding an entry to Suffixes merely creates the record. If you want
+	// it to resolve, you also need to add appropriate routes to
+	// Routes.
+	Suffixes map[dnsname.FQDN][]netip.Addr
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool

@@ -32,8 +32,11 @@ import (
 )
 
 var (
-	testipv4 = netip.MustParseAddr("1.2.3.4")
-	testipv6 = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+	testipv4     = netip.MustParseAddr("1.2.3.4")
+	testipv6     = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+	testipv4alt1 = netip.MustParseAddr("2.2.3.4")
+	testipv4alt2 = netip.MustParseAddr("12.2.3.4")
+	testipv4alt3 = netip.MustParseAddr("21.2.3.4")
 
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
@@ -43,8 +46,13 @@ var (
 
 var dnsCfg = Config{
 	Hosts: map[dnsname.FQDN][]netip.Addr{
-		"test1.ipn.dev.": {testipv4},
-		"test2.ipn.dev.": {testipv6},
+		"test1.ipn.dev.":          {testipv4},
+		"test2.ipn.dev.":          {testipv6},
+		"nonwild.subdomain.test.": {testipv4alt1},
+	},
+	Suffixes: map[dnsname.FQDN][]netip.Addr{
+		"domain.test.":     {testipv4alt2},
+		"sub.domain.test.": {testipv4alt3},
 	},
 	LocalDomains: []dnsname.FQDN{"ipn.dev.", "3.2.1.in-addr.arpa.", "1.0.0.0.ip6.arpa."},
 }
@@ -361,6 +369,11 @@ func TestResolveLocal(t *testing.T) {
 		// suffixes are currently hard-coded and not plumbed via the netmap)
 		{"via_form3_dec_example.com", dnsname.FQDN("1-2-3-4-via-1.example.com."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
 		{"via_form3_dec_examplets.net", dnsname.FQDN("1-2-3-4-via-1.examplets.net."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+
+		// subdomain entry for app connectors
+		{"subdomain", dnsname.FQDN(".domain.test."), dns.TypeA, testipv4alt2, dns.RCodeSuccess},
+		{"exact subdomain", dnsname.FQDN("deep.sub.domain.test."), dns.TypeA, testipv4alt3, dns.RCodeSuccess},
+		{"priority subdomain", dnsname.FQDN("priority.sub.domain.test."), dns.TypeA, testipv4alt3, dns.RCodeSuccess},
 	}
 
 	for _, tt := range tests {
@@ -374,6 +387,14 @@ func TestResolveLocal(t *testing.T) {
 				t.Errorf("ip = %v; want %v", ip, tt.ip)
 			}
 		})
+	}
+
+	// Wilcard paths should have 0 allocs
+	allocs := testing.AllocsPerRun(1000, func() {
+		r.resolveLocal(dnsname.FQDN(".domain.test."), dns.TypeA)
+	})
+	if allocs > 0 {
+		t.Errorf("allocs per run = %v; want 0", allocs)
 	}
 }
 

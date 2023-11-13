@@ -3491,11 +3491,22 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			// Ignore.
 			continue
 		}
-		fqdn, err := dnsname.ToFQDN(rec.Name)
+		// If the name has a leading dot, but is not exactly '.'.
+		var isSuffix bool
+		// Assume upstream provides either a suffix or an FQDN that are
+		// respectively well formed.
+		if len(rec.Name) > 1 && rec.Name[0] == '.' {
+			isSuffix = true
+		}
+		fqdn, err := dnsname.NewFQDN(rec.Name)
 		if err != nil {
 			continue
 		}
-		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
+		if isSuffix {
+			mak.Set(&dcfg.Suffixes, fqdn, append(dcfg.Suffixes[fqdn], ip))
+		} else {
+			dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
+		}
 	}
 
 	if !prefs.CorpDNS() {
