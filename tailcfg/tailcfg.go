@@ -2123,6 +2123,10 @@ const (
 	// fixed port.
 	NodeAttrRandomizeClientPort NodeCapability = "randomize-client-port"
 
+	// NodeAttrSilentDisco makes the client suppress disco heartbeats to its
+	// peers.
+	NodeAttrSilentDisco NodeCapability = "silent-disco"
+
 	// NodeAttrOneCGNATEnable makes the client prefer one big CGNAT /10 route
 	// rather than a /32 per peer. At most one of this or
 	// NodeAttrOneCGNATDisable may be set; if neither are, it's automatic.

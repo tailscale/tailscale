@@ -440,6 +440,13 @@ func (de *endpoint) heartbeat() {
 	de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 }
 
+// setHeartbeatDisabled sets heartbeatDisabled to the provided value.
+func (de *endpoint) setHeartbeatDisabled(v bool) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	de.heartbeatDisabled = v
+}
+
 // wantFullPingLocked reports whether we should ping to all our peers looking for
 // a better path.
 //
