@@ -128,11 +128,13 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 		TokenURL:     tsBaseURL + "/api/v2/oauth/token",
 	}
 	tsClient := tailscale.NewClient("-", nil)
+	tsClient.BaseURL = tsBaseURL
 	tsClient.HTTPClient = credentials.Client(context.Background())
 
 	s := &tsnet.Server{
-		Hostname: hostname,
-		Logf:     zlog.Named("tailscaled").Debugf,
+		Hostname:   hostname,
+		Logf:       zlog.Named("tailscaled").Debugf,
+		ControlURL: tsBaseURL,
 	}
 	if kubeSecret != "" {
 		st, err := kubestore.New(logger.Discard, kubeSecret)
