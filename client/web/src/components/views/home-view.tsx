@@ -57,6 +57,14 @@ export default function HomeView({
         className="mb-3"
         title="Tailscale SSH server"
         body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
+        badge={
+          node.RunningSSHServer
+            ? {
+                text: "Running",
+                icon: <div className="w-2 h-2 bg-emerald-500 rounded-full" />,
+              }
+            : undefined
+        }
       />
       <SettingsCard
         link="/serve"
@@ -71,11 +79,16 @@ function SettingsCard({
   title,
   link,
   body,
+  badge,
   className,
 }: {
   title: string
   link: string
   body: string
+  badge?: {
+    text: string
+    icon?: JSX.Element
+  }
   className?: string
 }) {
   return (
@@ -87,9 +100,19 @@ function SettingsCard({
       )}
     >
       <div>
-        <p className="text-neutral-800 font-medium leading-tight mb-2">
-          {title}
-        </p>
+        <div className="flex gap-2">
+          <p className="text-neutral-800 font-medium leading-tight mb-2">
+            {title}
+          </p>
+          {badge && (
+            <div className="h-5 px-2 bg-stone-100 rounded-full flex items-center gap-2">
+              {badge.icon}
+              <div className="text-neutral-500 text-xs font-medium">
+                {badge.text}
+              </div>
+            </div>
+          )}
+        </div>
         <p className="text-neutral-500 text-sm leading-tight">{body}</p>
       </div>
       <div>

@@ -5,6 +5,7 @@ import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
 import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
+import SSHView from "src/components/views/ssh-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
@@ -31,7 +32,7 @@ function WebClient({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const { data, refreshData, updateNode } = useNodeData()
+  const { data, refreshData, updateNode, updatePrefs } = useNodeData()
   useEffect(() => {
     refreshData()
   }, [auth, refreshData])
@@ -72,7 +73,13 @@ function WebClient({
             <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
           </Route>
           <Route path="/subnets">{/* TODO */}Subnet router</Route>
-          <Route path="/ssh">{/* TODO */}Tailscale SSH server</Route>
+          <Route path="/ssh">
+            <SSHView
+              readonly={!auth.canManageNode}
+              runningSSH={data.RunningSSHServer}
+              updatePrefs={updatePrefs}
+            />
+          </Route>
           <Route path="/serve">{/* TODO */}Share local content</Route>
           <Route>
             <h2 className="mt-8">Page not found</h2>
