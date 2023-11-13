@@ -46,7 +46,7 @@ export default function DeviceDetailsView({
             </button>
           </div>
         </div>
-        {!node.ClientVersion.RunningLatest && (
+        {!node.ClientVersion.RunningLatest && !readonly && (
           <UpdateAvailableNotification details={node.ClientVersion} />
         )}
         <div className="card">
