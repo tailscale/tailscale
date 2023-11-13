@@ -16,7 +16,7 @@ export default function DeviceDetailsView({
   const [, setLocation] = useLocation()
 
   return (
-    <div>
+    <>
       <h1 className="mb-10">Device details</h1>
       <div className="flex flex-col gap-4">
         <div className="card">
@@ -127,6 +127,6 @@ export default function DeviceDetailsView({
           in the admin console.
         </p>
       </div>
-    </div>
+    </>
   )
 }

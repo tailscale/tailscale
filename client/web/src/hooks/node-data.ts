@@ -27,6 +27,7 @@ export type NodeData = {
   TailnetName: string
   IsTagged: boolean
   Tags: string[]
+  RunningSSHServer: boolean
 
   DebugMode: "" | "login" | "full" // empty when not running in any debug mode
 }
@@ -50,6 +51,11 @@ export type NodeUpdate = {
   AdvertiseExitNode?: boolean
   Reauthenticate?: boolean
   ForceLogout?: boolean
+}
+
+export type PrefsUpdate = {
+  RunSSHSet?: boolean
+  RunSSH?: boolean
 }
 
 // useNodeData returns basic data about the current node.
@@ -110,11 +116,42 @@ export default function useNodeData() {
           refreshData()
         })
         .catch((err) => {
+          setIsPosting(false)
           alert("Failed operation: " + err.message)
           throw err
         })
     },
     [data]
+  )
+
+  const updatePrefs = useCallback(
+    (p: PrefsUpdate) => {
+      setIsPosting(true)
+      if (data) {
+        const optimisticUpdates = data
+        if (p.RunSSHSet) {
+          optimisticUpdates.RunningSSHServer = Boolean(p.RunSSH)
+        }
+        // Reflect the pref change immediatley on the frontend,
+        // then make the prefs PATCH. If the request fails,
+        // data will be updated to it's previous value in
+        // onComplete below.
+        setData(optimisticUpdates)
+      }
+
+      const onComplete = () => {
+        setIsPosting(false)
+        refreshData() // refresh data after PATCH finishes
+      }
+
+      return apiFetch("/local/v0/prefs", "PATCH", p)
+        .then(onComplete)
+        .catch(() => {
+          onComplete()
+          alert("Failed to update prefs")
+        })
+    },
+    [setIsPosting, refreshData, setData, data]
   )
 
   useEffect(
@@ -136,5 +173,5 @@ export default function useNodeData() {
     []
   )
 
-  return { data, refreshData, updateNode, isPosting }
+  return { data, refreshData, updateNode, updatePrefs, isPosting }
 }
