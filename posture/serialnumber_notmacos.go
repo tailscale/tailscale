@@ -8,13 +8,11 @@
 package posture
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/digitalocean/go-smbios/smbios"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/multierr"
 )
 
 // getByteFromSmbiosStructure retrieves a 8-bit unsigned integer at the given specOffset.
@@ -31,17 +29,17 @@ func getByteFromSmbiosStructure(s *smbios.Structure, specOffset int) uint8 {
 
 // getStringFromSmbiosStructure retrieves a string at the given specOffset.
 // Returns an empty string if no string was present.
-func getStringFromSmbiosStructure(s *smbios.Structure, specOffset int) (string, error) {
+func getStringFromSmbiosStructure(s *smbios.Structure, specOffset int) string {
 	index := getByteFromSmbiosStructure(s, specOffset)
 
 	if index == 0 || int(index) > len(s.Strings) {
-		return "", errors.New("specified offset does not exist in smbios structure")
+		return ""
 	}
 
 	str := s.Strings[index-1]
 	trimmed := strings.TrimSpace(str)
 
-	return trimmed, nil
+	return trimmed
 }
 
 // Product Table (Type 1) structure
@@ -71,31 +69,6 @@ func init() {
 		validTables = append(validTables, table)
 	}
 	numOfTables = len(validTables)
-
-}
-
-// serialFromSmbiosStructure extracts a serial number from a product,
-// baseboard or chassis SMBIOS table.
-func serialFromSmbiosStructure(s *smbios.Structure) (string, error) {
-	id := s.Header.Type
-	if (id != productID) && (id != baseboardID) && (id != chassisID) {
-		return "", fmt.Errorf(
-			"cannot get serial table type %d, supported tables are %v",
-			id,
-			validTables,
-		)
-	}
-
-	serial, err := getStringFromSmbiosStructure(s, serialNumberOffset)
-	if err != nil {
-		return "", fmt.Errorf(
-			"failed to get serial from %s table: %w",
-			idToTableName[int(s.Header.Type)],
-			err,
-		)
-	}
-
-	return serial, nil
 }
 
 func GetSerialNumbers(logf logger.Logf) ([]string, error) {
@@ -114,22 +87,17 @@ func GetSerialNumbers(logf logger.Logf) ([]string, error) {
 	}
 
 	serials := make([]string, 0, numOfTables)
-	errs := make([]error, 0, numOfTables)
 
 	for _, s := range ss {
 		switch s.Header.Type {
 		case productID, baseboardID, chassisID:
-			serial, err := serialFromSmbiosStructure(s)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
+			serial := getStringFromSmbiosStructure(s, serialNumberOffset)
 
-			serials = append(serials, serial)
+			if serial != "" {
+				serials = append(serials, serial)
+			}
 		}
 	}
-
-	err = multierr.New(errs...)
 
 	// if there were no serial numbers, check if any errors were
 	// returned and combine them.

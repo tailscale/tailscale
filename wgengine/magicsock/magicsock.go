@@ -139,6 +139,8 @@ type Conn struct {
 	// logging.
 	noV4, noV6 atomic.Bool
 
+	silentDiscoOn atomic.Bool // whether silent disco is enabled
+
 	// noV4Send is whether IPv4 UDP is known to be unable to transmit
 	// at all. This could happen if the socket is in an invalid state
 	// (as can happen on darwin after a network link status change).
@@ -1797,8 +1799,29 @@ type debugFlags struct {
 }
 
 func (c *Conn) debugFlagsLocked() (f debugFlags) {
-	f.heartbeatDisabled = debugEnableSilentDisco() // TODO(bradfitz): controlknobs too, later
+	f.heartbeatDisabled = debugEnableSilentDisco() || c.silentDiscoOn.Load()
 	return
+}
+
+// SetSilentDisco toggles silent disco based on v.
+func (c *Conn) SetSilentDisco(v bool) {
+	old := c.silentDiscoOn.Swap(v)
+	if old == v {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.peerMap.forEachEndpoint(func(ep *endpoint) {
+		ep.setHeartbeatDisabled(v)
+	})
+}
+
+// SilentDisco returns true if silent disco is enabled, otherwise false.
+func (c *Conn) SilentDisco() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	flags := c.debugFlagsLocked()
+	return flags.heartbeatDisabled
 }
 
 // SetNetworkMap is called when the control client gets a new network

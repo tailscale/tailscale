@@ -410,14 +410,27 @@ func TestAuthorizeRequest(t *testing.T) {
 }
 
 func TestServeAuth(t *testing.T) {
-	user := &tailcfg.UserProfile{ID: tailcfg.UserID(1)}
+	user := &tailcfg.UserProfile{LoginName: "user@example.com", ID: tailcfg.UserID(1)}
 	self := &ipnstate.PeerStatus{
 		ID:           "self",
 		UserID:       user.ID,
 		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.1.2.3")},
 	}
-	remoteNode := &apitype.WhoIsResponse{Node: &tailcfg.Node{ID: 1}, UserProfile: user}
 	remoteIP := "100.100.100.101"
+	remoteNode := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name:      "nodey",
+			ID:        1,
+			Addresses: []netip.Prefix{netip.MustParsePrefix(remoteIP + "/32")},
+		},
+		UserProfile: user,
+	}
+	vi := &viewerIdentity{
+		LoginName:     user.LoginName,
+		NodeName:      remoteNode.Node.Name,
+		NodeIP:        remoteIP,
+		ProfilePicURL: user.ProfilePicURL,
+	}
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
@@ -481,7 +494,7 @@ func TestServeAuth(t *testing.T) {
 			name:          "no-session",
 			path:          "/api/auth",
 			wantStatus:    http.StatusOK,
-			wantResp:      &authResponse{OK: false, AuthNeeded: tailscaleAuth},
+			wantResp:      &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi},
 			wantNewCookie: false,
 			wantSession:   nil,
 		},
@@ -506,7 +519,7 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{OK: false, AuthNeeded: tailscaleAuth},
+			wantResp:   &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
@@ -554,7 +567,7 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{OK: true},
+			wantResp:   &authResponse{CanManageNode: true, ViewerIdentity: vi},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,

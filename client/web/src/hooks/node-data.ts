@@ -23,6 +23,7 @@ export type NodeData = {
   IPNVersion: string
   ClientVersion: ClientVersion
   URLPrefix: string
+  DomainName: string
   TailnetName: string
   IsTagged: boolean
   Tags: string[]

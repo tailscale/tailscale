@@ -67,8 +67,9 @@ func (id ClientID) partialSuffix() string {
 
 // ManagerOptions are options to configure the [Manager].
 type ManagerOptions struct {
-	Logf  logger.Logf
-	Clock tstime.DefaultClock
+	Logf  logger.Logf         // may be nil
+	Clock tstime.DefaultClock // may be nil
+	State ipn.StateStore      // may be nil
 
 	// Dir is the directory to store received files.
 	// This main either be the final location for the files

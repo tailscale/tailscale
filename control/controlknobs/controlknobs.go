@@ -52,6 +52,10 @@ type Knobs struct {
 	// DisableDNSForwarderTCPRetries is whether the DNS forwarder should
 	// skip retrying truncated queries over TCP.
 	DisableDNSForwarderTCPRetries atomic.Bool
+
+	// SilentDisco is whether the node should suppress disco heartbeats to its
+	// peers.
+	SilentDisco atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -74,6 +78,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		forceBackgroundSTUN           = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
 		peerMTUEnable                 = has(tailcfg.NodeAttrPeerMTUEnable)
 		dnsForwarderDisableTCPRetries = has(tailcfg.NodeAttrDNSForwarderDisableTCPRetries)
+		silentDisco                   = has(tailcfg.NodeAttrSilentDisco)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -91,6 +96,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 	k.PeerMTUEnable.Store(peerMTUEnable)
 	k.DisableDNSForwarderTCPRetries.Store(dnsForwarderDisableTCPRetries)
+	k.SilentDisco.Store(silentDisco)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -109,5 +115,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"DisableDeltaUpdates":           k.DisableDeltaUpdates.Load(),
 		"PeerMTUEnable":                 k.PeerMTUEnable.Load(),
 		"DisableDNSForwarderTCPRetries": k.DisableDNSForwarderTCPRetries.Load(),
+		"SilentDisco":                   k.SilentDisco.Load(),
 	}
 }

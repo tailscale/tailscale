@@ -92,7 +92,7 @@ require (
 	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
 	honnef.co/go/tools v0.4.6
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
-	inet.af/tcpproxy v0.0.0-20221017015627-91f861402626
+	inet.af/tcpproxy v0.0.0-20231102063150-2862066fc2a9
 	inet.af/wf v0.0.0-20221017222439-36129f591884
 	k8s.io/api v0.28.2
 	k8s.io/apimachinery v0.28.2

@@ -12,10 +12,12 @@ export default function ExitNodeSelector({
   className,
   node,
   updateNode,
+  disabled,
 }: {
   className?: string
   node: NodeData
   updateNode: (update: NodeUpdate) => Promise<void> | undefined
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState<boolean>(false)
   const [selected, setSelected] = useState(
@@ -78,12 +80,14 @@ export default function ExitNodeSelector({
         )}
       >
         <button
-          className={cx("flex-1 px-2 py-1.5 rounded-[1px] cursor-pointer", {
+          className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
             "bg-white hover:bg-stone-100": none,
             "bg-amber-600 hover:bg-orange-400": advertising,
             "bg-indigo-500 hover:bg-indigo-400": using,
+            "cursor-not-allowed": disabled,
           })}
           onClick={() => setOpen(!open)}
+          disabled={disabled}
         >
           <p
             className={cx(

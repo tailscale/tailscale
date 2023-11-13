@@ -6,10 +6,12 @@ import { ReactComponent as ArrowRight } from "src/icons/arrow-right.svg"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { Link } from "wouter"
 
-export default function ManagementClientView({
+export default function HomeView({
+  readonly,
   node,
   updateNode,
 }: {
+  readonly: boolean
   node: NodeData
   updateNode: (update: NodeUpdate) => Promise<void> | undefined
 }) {
@@ -34,6 +36,7 @@ export default function ManagementClientView({
           className="mb-5"
           node={node}
           updateNode={updateNode}
+          disabled={readonly}
         />
         <Link
           className="text-indigo-500 font-medium leading-snug"
