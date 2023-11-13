@@ -636,7 +636,7 @@ const discoPingSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen 
 // is the desired disco message size, including all disco headers but excluding IP/UDP
 // headers.
 //
-// The caller (startPingLocked) should've already recorded the ping in
+// The caller (startDiscoPingLocked) should've already recorded the ping in
 // sentPing and set up the timer.
 //
 // The caller should use de.discoKey as the discoKey argument.
