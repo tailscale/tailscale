@@ -290,9 +290,9 @@ func (c *Auto) cancelMapCtxLocked() {
 	}
 }
 
-// restartMap cancels the existing mapPoll and liteUpdates, and then starts a
+// RestartMap cancels the existing mapPoll and liteUpdates, and then starts a
 // new one.
-func (c *Auto) restartMap() {
+func (c *Auto) RestartMap() {
 	c.mu.Lock()
 	c.cancelMapCtxLocked()
 	synced := c.inMapPoll
@@ -397,7 +397,7 @@ func (c *Auto) authRoutine() {
 		c.mu.Unlock()
 
 		c.sendStatus("authRoutine-success", nil, "", nil)
-		c.restartMap()
+		c.RestartMap()
 		bo.BackOff(ctx, nil)
 	}
 }

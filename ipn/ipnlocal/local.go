@@ -3085,6 +3085,17 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.authReconfig()
 	}
 
+	// Control collects posture identity from a client when a map poll is
+	// established.  While most real clients will have this set via MDM, during
+	// testing someone might just run `tailscale set --posture-checking=true`,
+	// and we'd like them to start seeing their serial number in control
+	// immediately. To do that, if posture checking is getting enabled, we
+	// re-start the map poll. Not great, but I guess better than asking clients
+	// to restart the client when they set --posture-checking=true.
+	if !oldp.PostureChecking() && newp.PostureChecking {
+		b.ccAuto.RestartMap()
+	}
+
 	b.send(ipn.Notify{Prefs: &prefs})
 	return prefs
 }
