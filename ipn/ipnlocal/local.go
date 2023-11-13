@@ -3491,7 +3491,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			// Ignore.
 			continue
 		}
-		fqdn, err := dnsname.ToFQDN(rec.Name)
+		fqdn, err := dnsname.NewFQDN(rec.Name)
 		if err != nil {
 			continue
 		}

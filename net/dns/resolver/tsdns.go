@@ -36,6 +36,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
@@ -71,7 +72,11 @@ type Config struct {
 	// Queries only match the most specific suffix.
 	// To register a "default route", add an entry for ".".
 	Routes map[dnsname.FQDN][]*dnstype.Resolver
-	// LocalHosts is a map of FQDNs to corresponding IPs.
+	// Hosts maps either domain names or wildcards to IP(s).
+	// A domain name map key would be "record.foo.com.".
+	// If the map key begins with a dot (e.g. ".foo.com.") then it's considered a wildcard,
+	// matching *.foo.com. "foo.com" would not get matched with ".foo.com" since the label "foo"
+	// would be stripped before looking for a match.
 	Hosts map[dnsname.FQDN][]netip.Addr
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
@@ -196,6 +201,7 @@ type Resolver struct {
 	mu           sync.Mutex
 	localDomains []dnsname.FQDN
 	hostToIP     map[dnsname.FQDN][]netip.Addr
+	wildcards    map[dnsname.FQDN][]netip.Addr
 	ipToHost     map[netip.Addr]dnsname.FQDN
 }
 
@@ -246,6 +252,15 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
+
+	// Extract wildcard hosts
+	var keys map[dnsname.FQDN][]netip.Addr
+	for k, v := range r.hostToIP {
+		if strings.HasPrefix(string(k), ".") {
+			mak.Set(&keys, k, v)
+		}
+	}
+	r.wildcards = keys
 	return nil
 }
 
@@ -596,11 +611,24 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 
 	r.mu.Lock()
 	hosts := r.hostToIP
+	wildcards := r.wildcards
 	localDomains := r.localDomains
 	r.mu.Unlock()
 
-	addrs, found := hosts[domain]
-	if !found {
+	addrs, ok := hosts[domain]
+	if !ok {
+		// Look for segment in map when '.' is found
+		d := domain.WithTrailingDot()
+		for ix := strings.IndexRune(d, '.'); ix >= 0; ix = strings.IndexRune(d, '.') {
+			h := dnsname.FQDN(d[ix:]) // include the dot
+			d = d[ix+1:]
+			if addrs, ok = wildcards[h]; ok {
+				break
+			}
+		}
+	}
+
+	if !ok {
 		for _, suffix := range localDomains {
 			if suffix.Contains(domain) {
 				// We are authoritative for the queried domain.

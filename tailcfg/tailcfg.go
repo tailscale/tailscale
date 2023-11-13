@@ -120,7 +120,9 @@ type CapabilityVersion int
 //   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
 //   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
 //   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
-const CurrentCapabilityVersion CapabilityVersion = 79
+//   - 80: 2023-10-16: wildcards are supported as entries in Config.Hosts
+
+const CurrentCapabilityVersion CapabilityVersion = 80
 
 type StableID string
 
