@@ -442,7 +442,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		fatalf("%s", err)
 	}
 
-	if len(prefs.AdvertiseRoutes) > 0 {
+	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise {
 		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
 		//  into a single HTTP req.
 		if err := localClient.CheckIPForwarding(ctx); err != nil {
