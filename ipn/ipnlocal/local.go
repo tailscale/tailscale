@@ -3906,7 +3906,8 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		if err != nil {
 			b.logf("failed to discover interface ips: %v", err)
 		}
-		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		switch runtime.GOOS {
+		case "linux", "windows", "darwin", "ios":
 			rs.LocalRoutes = internalIPs // unconditionally allow access to guest VM networks
 			if prefs.ExitNodeAllowLANAccess() {
 				rs.LocalRoutes = append(rs.LocalRoutes, externalIPs...)
@@ -3916,6 +3917,10 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 				rs.Routes = append(rs.Routes, externalIPs...)
 			}
 			b.logf("allowing exit node access to local IPs: %v", rs.LocalRoutes)
+		default:
+			if prefs.ExitNodeAllowLANAccess() {
+				b.logf("warning: ExitNodeAllowLANAccess has no effect on " + runtime.GOOS)
+			}
 		}
 	}
 
