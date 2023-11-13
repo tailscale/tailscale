@@ -3728,6 +3728,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		taildrop: taildrop.ManagerOptions{
 			Logf:             b.logf,
 			Clock:            tstime.DefaultClock{Clock: b.clock},
+			State:            b.store,
 			Dir:              fileRoot,
 			DirectFileMode:   b.directFileRoot != "",
 			AvoidFinalRename: !b.directFileDoFinalRename,
