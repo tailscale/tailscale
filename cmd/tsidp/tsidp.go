@@ -82,19 +82,30 @@ type idpServer struct {
 	lazySigningKey lazy.SyncValue[*signingKey]
 	lazySigner     lazy.SyncValue[jose.Signer]
 
-	mu sync.Mutex // guards the fields below
-
+	mu          sync.Mutex // guards the fields below
 	code        map[string]*authRequest
 	accessToken map[string]*authRequest
 }
 
 type authRequest struct {
-	forNodeID   string // string form nodeid:abcd
-	nonce       string
+	// requesterNodeID is the node who requested the auth (say synology), not the node
+	// who is being authenticated.
+	// String form of tailcfg.NodeID
+	requesterNodeID string
+
+	// nonce presented in the request.
+	nonce string
+
+	// redirectURI is the redirect_uri presented in the request.
 	redirectURI string
 
+	// remoteUser is the user who is being authenticated.
 	remoteUser *apitype.WhoIsResponse
-	validTill  time.Time
+
+	// validTill is the time until which the token is valid.
+	// As of 2023-11-14, it is 5 minutes.
+	// TODO: add routine to delete expired tokens.
+	validTill time.Time
 }
 
 func (s *idpServer) Register(mux *http.ServeMux) {
@@ -119,10 +130,10 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	uq := r.URL.Query()
 	code := rands.HexString(32)
 	ar := &authRequest{
-		forNodeID:   nodeID,
-		nonce:       uq.Get("nonce"),
-		remoteUser:  who,
-		redirectURI: uq.Get("redirect_uri"),
+		requesterNodeID: nodeID,
+		nonce:           uq.Get("nonce"),
+		remoteUser:      who,
+		redirectURI:     uq.Get("redirect_uri"),
 	}
 
 	s.mu.Lock()
@@ -173,7 +184,7 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: invalid token", http.StatusBadRequest)
 		return
 	}
-	if ar.forNodeID != who.Node.ID.String() {
+	if ar.requesterNodeID != who.Node.ID.String() {
 		http.Error(w, "tsidp: token for different node", http.StatusForbidden)
 		return
 	}
@@ -240,7 +251,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: code not found", http.StatusBadRequest)
 		return
 	}
-	if ar.forNodeID != caller.Node.ID.String() {
+	if ar.requesterNodeID != caller.Node.ID.String() {
 		http.Error(w, "tsidp: token for different node", http.StatusForbidden)
 		return
 	}
