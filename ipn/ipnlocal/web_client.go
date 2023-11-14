@@ -79,8 +79,9 @@ func (b *LocalBackend) WebClientShutdown() {
 	b.mu.Lock()
 	server := b.webClient.server
 	b.webClient.server = nil
-	for _, ln := range b.webClientListeners {
+	for ap, ln := range b.webClientListeners {
 		ln.Close()
+		delete(b.webClientListeners, ap)
 	}
 	b.mu.Unlock() // release lock before shutdown
 	if server != nil {
