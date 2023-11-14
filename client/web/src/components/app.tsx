@@ -59,8 +59,8 @@ function WebClient({
   ) : (
     // Otherwise render the new web client.
     <>
-      <Header node={data} auth={auth} newSession={newSession} />
       <Router base={data.URLPrefix}>
+        <Header node={data} auth={auth} newSession={newSession} />
         <Switch>
           <Route path="/">
             <HomeView
