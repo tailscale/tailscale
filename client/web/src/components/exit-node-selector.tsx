@@ -115,15 +115,17 @@ export default function ExitNodeSelector({
         </button>
         {(advertising || using) && (
           <button
-            className={cx("px-3 py-2 rounded-sm text-white cursor-pointer", {
+            className={cx("px-3 py-2 rounded-sm text-white", {
               "bg-orange-400": advertising,
               "bg-indigo-400": using,
+              "cursor-not-allowed": disabled,
             })}
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
               handleSelect(noExitNode)
             }}
+            disabled={disabled}
           >
             Disable
           </button>
