@@ -567,8 +567,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		ID:               st.Self.ID,
 		Status:           st.BackendState,
 		DeviceName:       strings.Split(st.Self.DNSName, ".")[0],
-		TailnetName:      st.CurrentTailnet.MagicDNSSuffix,
-		DomainName:       st.CurrentTailnet.Name,
 		OS:               st.Self.OS,
 		IPNVersion:       strings.Split(st.Version, "-")[0],
 		Profile:          st.User[st.Self.UserID],
@@ -593,6 +591,10 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		if data.IP != "" && data.IPv6 != "" {
 			break
 		}
+	}
+	if st.CurrentTailnet != nil {
+		data.TailnetName = st.CurrentTailnet.MagicDNSSuffix
+		data.DomainName = st.CurrentTailnet.Name
 	}
 	if st.Self.Tags != nil {
 		data.Tags = st.Self.Tags.AsSlice()
