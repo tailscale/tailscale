@@ -217,3 +217,10 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 
 	return nextExpiry
 }
+
+// ControlNow estimates the current time on the control server, calculated as
+// localNow + the delta between local and control server clocks as recorded
+// when the LocalBackend last received a time message from the control server.
+func (b *LocalBackend) ControlNow(localNow time.Time) time.Time {
+	return localNow.Add(b.em.clockDelta.Load())
+}
