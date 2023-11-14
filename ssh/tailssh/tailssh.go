@@ -109,6 +109,9 @@ func init() {
 			lb:             lb,
 			logf:           logf,
 			tailscaledPath: tsd,
+			timeNow: func() time.Time {
+				return lb.ControlNow(time.Now())
+			},
 		}
 
 		return srv, nil
