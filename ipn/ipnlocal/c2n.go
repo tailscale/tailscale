@@ -280,7 +280,7 @@ func handleC2NUpdatePost(b *LocalBackend, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cmd := exec.Command(cmdTS, "update", "--yes")
+	cmd := tailscaleUpdateCmd(cmdTS)
 	buf := new(bytes.Buffer)
 	cmd.Stdout = buf
 	cmd.Stderr = buf
@@ -410,6 +410,20 @@ func findCmdTailscale() (string, error) {
 		return ts, nil
 	}
 	return "", errors.New("tailscale executable not found in expected place")
+}
+
+func tailscaleUpdateCmd(cmdTS string) *exec.Cmd {
+	if runtime.GOOS != "linux" {
+		return exec.Command(cmdTS, "update", "--yes")
+	}
+	if _, err := exec.LookPath("systemd-run"); err != nil {
+		return exec.Command(cmdTS, "update", "--yes")
+	}
+	// When systemd-run is available, use it to run the update command. This
+	// creates a new temporary unit separate from the tailscaled unit. When
+	// tailscaled is restarted during the update, systemd won't kill this
+	// temporary update unit, which could cause unexpected breakage.
+	return exec.Command("systemd-run", "--wait", "--pipe", "--collect", cmdTS, "update", "--yes")
 }
 
 func regularFileExists(path string) bool {
