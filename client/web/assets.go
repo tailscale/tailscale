@@ -4,6 +4,7 @@
 package web
 
 import (
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -22,7 +23,19 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 		cleanup := startDevServer()
 		return devServerProxy(), cleanup
 	}
-	return http.FileServer(http.FS(prebuilt.FS())), nil
+
+	fsys := prebuilt.FS()
+	fileserver := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := fs.Stat(fsys, strings.TrimPrefix(r.URL.Path, "/"))
+		if os.IsNotExist(err) {
+			// rewrite request to just fetch /index.html and let
+			// the frontend router handle it.
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+		}
+		fileserver.ServeHTTP(w, r)
+	}), nil
 }
 
 // startDevServer starts the JS dev server that does on-demand rebuilding
