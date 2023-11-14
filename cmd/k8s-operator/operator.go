@@ -41,6 +41,12 @@ import (
 	"tailscale.com/version"
 )
 
+const (
+	leaderElectionLock = "tailscale-operator"
+)
+
+type tsSetupFunc func() tsSetup
+
 func main() {
 	// Required to use our client API. We're fine with the instability since the
 	// client lives in the same repo as this code.
@@ -203,7 +209,11 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	nsFilter := cache.ByObject{
 		Field: client.InNamespace(tsNamespace).AsSelector(),
 	}
-	mgr, err := manager.New(restConfig, manager.Options{
+	mgr, err := manager.New(c.restConfig, manager.Options{
+		LeaderElectionNamespace:       "kube-system",
+		LeaderElection:                true,
+		LeaderElectionReleaseOnCancel: true,
+		LeaderElectionID:              leaderElectionLock,
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:      nsFilter,

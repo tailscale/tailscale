@@ -58,3 +58,31 @@ roleRef:
   kind: Role
   name: operator
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tailscale-operator-leaderelection
+  namespace: kube-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["tailscale-operator"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tailscale-operator-leaderelection
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  name: operator
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: tailscale-operator-leaderelection
+  apiGroup: rbac.authorization.k8s.io
