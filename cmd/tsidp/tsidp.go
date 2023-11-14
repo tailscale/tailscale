@@ -191,6 +191,9 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 	ui.Email = ar.who.UserProfile.LoginName
 	ui.Picture = ar.who.UserProfile.ProfilePicURL
 
+	// TODO(maisem): not sure if this is the right thing to do
+	ui.UserName, _, _ = strings.Cut(ar.who.UserProfile.LoginName, "@")
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(ui); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -198,10 +201,11 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 type userInfo struct {
-	Sub     string `json:"sub"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-	Picture string `json:"picture"`
+	Sub      string `json:"sub"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Picture  string `json:"picture"`
+	UserName string `json:"username"`
 }
 
 func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
@@ -244,8 +248,17 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := ar.who
+
+	// TODO(maisem): not sure if this is the right thing to do
+	userName, _, _ := strings.Cut(ar.who.UserProfile.LoginName, "@")
 	n := who.Node.View()
+	if n.IsTagged() {
+		http.Error(w, "tsidp: tagged nodes not supported", http.StatusBadRequest)
+		return
+	}
+
 	now := time.Now()
+	_, tcd, _ := strings.Cut(n.Name(), ".")
 	tsClaims := tailscaleClaims{
 		Claims: jwt.Claims{
 			Audience:  jwt.Audience{"unused"},
@@ -254,24 +267,17 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    s.serverURL,
 			NotBefore: jwt.NewNumericDate(now),
+			Subject:   n.User().String(),
 		},
 		Nonce:     ar.nonce,
 		Key:       n.Key(),
 		Addresses: n.Addresses(),
 		NodeID:    n.ID(),
 		NodeName:  n.Name(),
-	}
-
-	_, tcd, _ := strings.Cut(n.Name(), ".")
-	tsClaims.Tailnet = tcd
-
-	if n.IsTagged() {
-		tsClaims.Subject = n.ID().String()
-		tsClaims.Tags = n.Tags().AsSlice()
-	} else {
-		tsClaims.Subject = n.User().String()
-		tsClaims.UserID = n.User()
-		tsClaims.User = who.UserProfile.LoginName
+		Tailnet:   tcd,
+		UserID:    n.User(),
+		Email:     who.UserProfile.LoginName,
+		UserName:  userName,
 	}
 
 	// Create an OIDC token using this issuer's signer.
@@ -415,9 +421,11 @@ type tailscaleClaims struct {
 	// Tags is the list of tags the node is tagged with prefixed with the Tailnet name.
 	Tags []string `json:"tags,omitempty"` // the tags on the node (like alice.github:tag:foo or example.com:tag:foo)
 
-	// User is the emailish of the user prefixed with the Tailnet name.
-	User   string         `json:"user,omitempty"` // user emailish (like alice.github:alice@github or example.com:bob@example.com)
-	UserID tailcfg.UserID `json:"uid,omitempty"`  // user legacy id
+	// Email is the emailish of the user prefixed with the Tailnet name.
+	Email  string         `json:"email,omitempty"` // user emailish (like alice.github:alice@github or example.com:bob@example.com)
+	UserID tailcfg.UserID `json:"uid,omitempty"`   // user legacy id
+
+	UserName string `json:"username,omitempty"` // user name
 }
 
 var (
