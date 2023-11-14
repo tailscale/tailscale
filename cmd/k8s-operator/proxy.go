@@ -16,13 +16,12 @@ import (
 	"os"
 	"strings"
 
-	"go.uber.org/zap"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -80,20 +79,23 @@ func parseAPIProxyMode() apiServerProxyMode {
 	return apiserverProxyModeDisabled
 }
 
+// TODO: cleanup, return errors etc
 // maybeLaunchAPIServerProxy launches the auth proxy, which is a small HTTP server
 // that authenticates requests using the Tailscale LocalAPI and then proxies
 // them to the kube-apiserver.
-func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server, mode apiServerProxyMode) {
-	if mode == apiserverProxyModeDisabled {
-		return
+func maybeConfigureAPIServerProxy(c managerConfig, mgr manager.Manager) error {
+	if c.apiServerProxyMode == apiserverProxyModeDisabled {
+		return nil
 	}
-	startlog := zlog.Named("launchAPIProxy")
-	if mode == apiserverProxyModeNoAuth {
-		restConfig = rest.AnonymousClientConfig(restConfig)
+	startlog := mgr.GetLogger().WithName("lauchAPIProxy")
+	startlog.Info("configuring api-server proxy")
+	restConfig := c.restConfig
+	if c.apiServerProxyMode == apiserverProxyModeNoAuth {
+		restConfig = rest.AnonymousClientConfig(c.restConfig)
 	}
 	cfg, err := restConfig.TransportConfig()
 	if err != nil {
-		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
+		return fmt.Errorf("error retrieving transport config: %v", err)
 	}
 
 	// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -101,15 +103,38 @@ func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config,
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig, err = transport.TLSConfigFor(cfg)
 	if err != nil {
-		startlog.Fatalf("could not get transport.TLSConfigFor(): %v", err)
+		return fmt.Errorf("error getting transport config: %v", err)
 	}
 	tr.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
 
 	rt, err := transport.HTTPWrappersForConfig(cfg, tr)
 	if err != nil {
-		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
+		return fmt.Errorf("error getting http wrapper: %v", err)
 	}
-	go runAPIServerProxy(s, rt, zlog.Named("apiserver-proxy").Infof, mode)
+	pr := &proxyRunnable{
+		ts:   c.ts,
+		rt:   rt,
+		logf: mgr.GetLogger().WithName("proxyRunnable").Info,
+		mode: c.apiServerProxyMode,
+	}
+	if err := mgr.Add(pr); err != nil {
+		return fmt.Errorf("error adding proxy runnable:%v", err)
+	}
+	return nil
+}
+
+var _ manager.LeaderElectionRunnable = &proxyRunnable{}
+var _ manager.Runnable = &proxyRunnable{}
+
+type proxyRunnable struct {
+	ts   tsSetupFunc
+	rt   http.RoundTripper
+	mode apiServerProxyMode
+	logf logger.Logf
+}
+
+func (pr *proxyRunnable) NeedLeaderElection() bool {
+	return true
 }
 
 // apiserverProxy is an http.Handler that authenticates requests using the Tailscale
@@ -145,25 +170,31 @@ func (h *apiserverProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //     are passed through to the Kubernetes API.
 //
 // It never returns.
-func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, mode apiServerProxyMode) {
-	if mode == apiserverProxyModeDisabled {
-		return
+// func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, mode apiServerProxyMode) {
+func (p *proxyRunnable) Start(ctx context.Context) error {
+	p.logf("starting proxy runnable")
+	if p.mode == apiserverProxyModeDisabled {
+		return nil
 	}
-	ln, err := s.Listen("tcp", ":443")
+	server := p.ts().server
+	ln, err := server.Listen("tcp", ":443")
 	if err != nil {
 		log.Fatalf("could not listen on :443: %v", err)
 	}
+	p.logf("listening on", "addr", ln.Addr())
 	u, err := url.Parse(fmt.Sprintf("https://%s:%s", os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")))
 	if err != nil {
 		log.Fatalf("runAPIServerProxy: failed to parse URL %v", err)
 	}
+	p.logf("will be forwarding requests to", "url", u)
 
-	lc, err := s.LocalClient()
+	lc, err := server.LocalClient()
 	if err != nil {
 		log.Fatalf("could not get local client: %v", err)
 	}
+
 	ap := &apiserverProxy{
-		logf: logf,
+		logf: p.logf,
 		lc:   lc,
 		rp: &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
@@ -171,7 +202,7 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 
 				r.Out.URL.Scheme = u.Scheme
 				r.Out.URL.Host = u.Host
-				if mode == apiserverProxyModeNoAuth {
+				if p.mode == apiserverProxyModeNoAuth {
 					// If we are not providing authentication, then we are just
 					// proxying to the Kubernetes API, so we don't need to do
 					// anything else.
@@ -199,8 +230,10 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 				if err := addImpersonationHeaders(r.Out); err != nil {
 					panic("failed to add impersonation headers: " + err.Error())
 				}
+				p.logf("will be forwarding with headers", "user", r.Out.Header.Get("Impersonate-User"))
+				p.logf("will be forwarding with headers", "group", r.Out.Header.Get("Impersonate-Group"))
 			},
-			Transport: rt,
+			Transport: p.rt,
 		},
 	}
 	hs := &http.Server{
@@ -213,9 +246,12 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		Handler:      ap,
 	}
+	p.logf("about to serve TLS")
 	if err := hs.ServeTLS(ln, "", ""); err != nil {
-		log.Fatalf("runAPIServerProxy: failed to serve %v", err)
+		p.logf("error serving: %v", err)
+		return fmt.Errorf("runAPIServerProxy: failed to serve %v", err)
 	}
+	return nil
 }
 
 const capabilityName = "https://tailscale.com/cap/kubernetes"

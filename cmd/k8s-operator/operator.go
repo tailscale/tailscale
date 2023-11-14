@@ -37,6 +37,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
@@ -83,123 +84,158 @@ func main() {
 		hostinfo.SetApp("k8s-operator-proxy")
 	}
 
-	s, tsClient := initTSNet(zlog)
-	defer s.Close()
 	restConfig := config.GetConfigOrDie()
-	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
+
+	c := managerConfig{
+		apiServerProxyMode: mode,
+		tsNamespace:        tsNamespace,
+		restConfig:         restConfig,
+		zlog:               zlog,
+		tsFirewallMode:     tsFirewallMode,
+		proxyImage:         image,
+		priorityClassName:  priorityClassName,
+		tags:               tags,
+		ts:                 initTSNet(zlog),
+	}
+
+	runReconcilers(c)
+}
+
+type managerConfig struct {
+	// apiserver proxy mode
+	apiServerProxyMode apiServerProxyMode
+	tsNamespace        string
+	restConfig         *rest.Config
+	zlog               *zap.SugaredLogger
+	tsFirewallMode     string
+	proxyImage         string
+	priorityClassName  string
+	tags               string
+	ts                 tsSetupFunc
+}
+
+type tsSetup struct {
+	server *tsnet.Server
+	client *tailscale.Client
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
-	var (
-		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
-		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
-		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
-		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
-	)
-	startlog := zlog.Named("startup")
-	if clientIDPath == "" || clientSecretPath == "" {
-		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
-	}
-	clientID, err := os.ReadFile(clientIDPath)
-	if err != nil {
-		startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
-	}
-	clientSecret, err := os.ReadFile(clientSecretPath)
-	if err != nil {
-		startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
-	}
-	credentials := clientcredentials.Config{
-		ClientID:     string(clientID),
-		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
-	}
-	tsClient := tailscale.NewClient("-", nil)
-	tsClient.HTTPClient = credentials.Client(context.Background())
-
-	s := &tsnet.Server{
-		Hostname: hostname,
-		Logf:     zlog.Named("tailscaled").Debugf,
-	}
-	if kubeSecret != "" {
-		st, err := kubestore.New(logger.Discard, kubeSecret)
-		if err != nil {
-			startlog.Fatalf("creating kube store: %v", err)
+func initTSNet(zlog *zap.SugaredLogger) tsSetupFunc {
+	ts := lazy.SyncFunc(func() tsSetup {
+		var (
+			clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
+			clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
+			hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
+			kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
+			operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		)
+		startlog := zlog.Named("startup")
+		if clientIDPath == "" || clientSecretPath == "" {
+			startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
 		}
-		s.Store = st
-	}
-	if err := s.Start(); err != nil {
-		startlog.Fatalf("starting tailscale server: %v", err)
-	}
-	lc, err := s.LocalClient()
-	if err != nil {
-		startlog.Fatalf("getting local client: %v", err)
-	}
-
-	ctx := context.Background()
-	loginDone := false
-	machineAuthShown := false
-waitOnline:
-	for {
-		startlog.Debugf("querying tailscaled status")
-		st, err := lc.StatusWithoutPeers(ctx)
+		clientID, err := os.ReadFile(clientIDPath)
 		if err != nil {
-			startlog.Fatalf("getting status: %v", err)
+			startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
 		}
-		switch st.BackendState {
-		case "Running":
-			break waitOnline
-		case "NeedsLogin":
-			if loginDone {
-				break
-			}
-			caps := tailscale.KeyCapabilities{
-				Devices: tailscale.KeyDeviceCapabilities{
-					Create: tailscale.KeyDeviceCreateCapabilities{
-						Reusable:      false,
-						Preauthorized: true,
-						Tags:          strings.Split(operatorTags, ","),
-					},
-				},
-			}
-			authkey, _, err := tsClient.CreateKey(ctx, caps)
+		clientSecret, err := os.ReadFile(clientSecretPath)
+		if err != nil {
+			startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
+		}
+		credentials := clientcredentials.Config{
+			ClientID:     string(clientID),
+			ClientSecret: string(clientSecret),
+			TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
+		}
+		tsClient := tailscale.NewClient("-", nil)
+		tsClient.HTTPClient = credentials.Client(context.Background())
+
+		s := &tsnet.Server{
+			Hostname: hostname,
+			Logf:     zlog.Named("tailscaled").Debugf,
+		}
+		if kubeSecret != "" {
+			st, err := kubestore.New(logger.Discard, kubeSecret)
 			if err != nil {
-				startlog.Fatalf("creating operator authkey: %v", err)
+				startlog.Fatalf("creating kube store: %v", err)
 			}
-			if err := lc.Start(ctx, ipn.Options{
-				AuthKey: authkey,
-			}); err != nil {
-				startlog.Fatalf("starting tailscale: %v", err)
-			}
-			if err := lc.StartLoginInteractive(ctx); err != nil {
-				startlog.Fatalf("starting login: %v", err)
-			}
-			startlog.Debugf("requested login by authkey")
-			loginDone = true
-		case "NeedsMachineAuth":
-			if !machineAuthShown {
-				startlog.Infof("Machine approval required, please visit the admin panel to approve")
-				machineAuthShown = true
-			}
-		default:
-			startlog.Debugf("waiting for tailscale to start: %v", st.BackendState)
+			s.Store = st
 		}
-		time.Sleep(time.Second)
-	}
-	return s, tsClient
+		if err := s.Start(); err != nil {
+			startlog.Fatalf("starting tailscale server: %v", err)
+		}
+		lc, err := s.LocalClient()
+		if err != nil {
+			startlog.Fatalf("getting local client: %v", err)
+		}
+
+		ctx := context.Background()
+		loginDone := false
+		machineAuthShown := false
+	waitOnline:
+		for {
+			startlog.Debugf("querying tailscaled status")
+			st, err := lc.StatusWithoutPeers(ctx)
+			if err != nil {
+				startlog.Fatalf("getting status: %v", err)
+			}
+			switch st.BackendState {
+			case "Running":
+				break waitOnline
+			case "NeedsLogin":
+				if loginDone {
+					break
+				}
+				caps := tailscale.KeyCapabilities{
+					Devices: tailscale.KeyDeviceCapabilities{
+						Create: tailscale.KeyDeviceCreateCapabilities{
+							Reusable:      false,
+							Preauthorized: true,
+							Tags:          strings.Split(operatorTags, ","),
+						},
+					},
+				}
+				authkey, _, err := tsClient.CreateKey(ctx, caps)
+				if err != nil {
+					startlog.Fatalf("creating operator authkey: %v", err)
+				}
+				if err := lc.Start(ctx, ipn.Options{
+					AuthKey: authkey,
+				}); err != nil {
+					startlog.Fatalf("starting tailscale: %v", err)
+				}
+				if err := lc.StartLoginInteractive(ctx); err != nil {
+					startlog.Fatalf("starting login: %v", err)
+				}
+				startlog.Debugf("requested login by authkey")
+				loginDone = true
+			case "NeedsMachineAuth":
+				if !machineAuthShown {
+					startlog.Infof("Machine approval required, please visit the admin panel to approve")
+					machineAuthShown = true
+				}
+			default:
+				startlog.Debugf("waiting for tailscale to start: %v", st.BackendState)
+			}
+			time.Sleep(time.Second)
+		}
+		return tsSetup{
+			// TODO: server needs closing
+			server: s,
+			client: tsClient,
+		}
+	})
+	return ts
 }
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string) {
+func runReconcilers(c managerConfig) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
-	startlog := zlog.Named("startReconcilers")
+	startlog := c.zlog.Named("startReconcilers")
 	// For secrets and statefulsets, we only get permission to touch the objects
 	// in the controller's own namespace. This cannot be expressed by
 	// .Watches(...) below, instead you have to add a per-type field selector to
@@ -207,7 +243,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	// implicitly filter what parts of the world the builder code gets to see at
 	// all.
 	nsFilter := cache.ByObject{
-		Field: client.InNamespace(tsNamespace).AsSelector(),
+		Field: client.InNamespace(c.tsNamespace).AsSelector(),
 	}
 	mgr, err := manager.New(c.restConfig, manager.Options{
 		LeaderElectionNamespace:       "kube-system",
@@ -230,13 +266,12 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
-		tsnetServer:            s,
-		tsClient:               tsClient,
-		defaultTags:            strings.Split(tags, ","),
-		operatorNamespace:      tsNamespace,
-		proxyImage:             image,
-		proxyPriorityClassName: priorityClassName,
-		tsFirewallMode:         tsFirewallMode,
+		ts:                     c.ts,
+		defaultTags:            strings.Split(c.tags, ","),
+		operatorNamespace:      c.tsNamespace,
+		proxyImage:             c.proxyImage,
+		proxyPriorityClassName: c.priorityClassName,
+		tsFirewallMode:         c.tsFirewallMode,
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -247,7 +282,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		Complete(&ServiceReconciler{
 			ssr:                   ssr,
 			Client:                mgr.GetClient(),
-			logger:                zlog.Named("service-reconciler"),
+			logger:                c.zlog.Named("service-reconciler"),
 			isDefaultLoadBalancer: isDefaultLoadBalancer,
 			recorder:              eventRecorder,
 		})
@@ -265,12 +300,15 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			ssr:      ssr,
 			recorder: eventRecorder,
 			Client:   mgr.GetClient(),
-			logger:   zlog.Named("ingress-reconciler"),
+			logger:   c.zlog.Named("ingress-reconciler"),
 		})
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)
 	}
 
+	if err := maybeConfigureAPIServerProxy(c, mgr); err != nil {
+		startlog.Fatalf("error configuring api server proxy: %v", err)
+	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)

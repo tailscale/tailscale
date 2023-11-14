@@ -26,7 +26,6 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsnet"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -75,8 +74,7 @@ type tailscaleSTSConfig struct {
 
 type tailscaleSTSReconciler struct {
 	client.Client
-	tsnetServer            *tsnet.Server
-	tsClient               tsClient
+	ts                     tsSetupFunc
 	defaultTags            []string
 	operatorNamespace      string
 	proxyImage             string
@@ -93,7 +91,8 @@ func (sts tailscaleSTSReconciler) validate() error {
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
 func (a *tailscaleSTSReconciler) IsHTTPSEnabledOnTailnet() bool {
-	return len(a.tsnetServer.CertDomains()) > 0
+	server := a.ts().server
+	return len(server.CertDomains()) > 0
 }
 
 // Provision ensures that the StatefulSet for the given service is running and
@@ -151,8 +150,9 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
 	if id != "" {
+		client := a.ts().client
 		logger.Debugf("deleting device %s from control", string(id))
-		if err := a.tsClient.DeleteDevice(ctx, string(id)); err != nil {
+		if err := client.DeleteDevice(ctx, string(id)); err != nil {
 			errResp := &tailscale.ErrResponse{}
 			if ok := errors.As(err, errResp); ok && errResp.Status == http.StatusNotFound {
 				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
@@ -300,7 +300,9 @@ func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) 
 		},
 	}
 
-	key, _, err := a.tsClient.CreateKey(ctx, caps)
+	client := a.ts().client
+
+	key, _, err := client.CreateKey(ctx, caps)
 	if err != nil {
 		return "", err
 	}
