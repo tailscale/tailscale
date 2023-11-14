@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -36,6 +35,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
+	"tailscale.com/util/rands"
 )
 
 var (
@@ -123,7 +123,7 @@ func (s *idpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		uq := r.URL.Query()
-		code := must.Get(readHex())
+		code := rands.HexString(32)
 		ar := &authRequest{
 			nonce:       uq.Get("nonce"),
 			who:         who,
@@ -241,12 +241,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	jti, err := readHex()
-	if err != nil {
-		log.Printf("Error reading hex: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	jti := rands.HexString(32)
 	who := ar.who
 
 	// TODO(maisem): not sure if this is the right thing to do
@@ -288,12 +283,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	at, err := readHex()
-	if err != nil {
-		log.Printf("Error reading hex: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	at := rands.HexString(32)
 	s.mu.Lock()
 	ar.validTill = now.Add(5 * time.Minute)
 	mak.Set(&s.accessToken, at, ar)
@@ -490,14 +480,6 @@ func mustGenRSAKey(bits int) (kid uint64, k *rsa.PrivateKey) {
 	kid = must.Get(readUint64(crand.Reader))
 	k = must.Get(rsa.GenerateKey(crand.Reader, bits))
 	return
-}
-
-func readHex() (string, error) {
-	var proxyCred [16]byte
-	if _, err := crand.Read(proxyCred[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(proxyCred[:]), nil
 }
 
 // readUint64 reads from r until 8 bytes represent a non-zero uint64.
