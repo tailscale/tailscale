@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch, setUnraidCsrfToken } from "src/api"
+import { ExitNode } from "src/hooks/exit-nodes"
 import { VersionInfo } from "src/hooks/self-update"
 
 export type NodeData = {
@@ -28,6 +29,7 @@ export type NodeData = {
   IsTagged: boolean
   Tags: string[]
   RunningSSHServer: boolean
+  ExitNodeStatus?: ExitNode & { Online: boolean }
 }
 
 type NodeState =
@@ -52,6 +54,8 @@ export type NodeUpdate = {
 export type PrefsUpdate = {
   RunSSHSet?: boolean
   RunSSH?: boolean
+  ExitNodeIDSet?: boolean
+  ExitNodeID?: string
 }
 
 // useNodeData returns basic data about the current node.

@@ -55,6 +55,7 @@ function WebClient({
               readonly={!auth.canManageNode}
               node={data}
               updateNode={updateNode}
+              updatePrefs={updatePrefs}
             />
           </Route>
           <Route path="/details">
