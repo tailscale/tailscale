@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"tailscale.com/client/tailscale"
@@ -24,10 +25,12 @@ import (
 
 const webClientPort = web.ListenPort
 
-// webClient holds state for the web interface for managing
-// this tailscale instance. The web interface is not used by
-// default, but initialized by calling LocalBackend.WebClientInit.
+// webClient holds state for the web interface for managing this
+// tailscale instance. The web interface is not used by default,
+// but initialized by calling LocalBackend.WebClientGetOrInit.
 type webClient struct {
+	mu sync.Mutex // protects webClient fields
+
 	server *web.Server // or nil, initialized lazily
 
 	// lc optionally specifies a LocalClient to use to connect
@@ -40,51 +43,54 @@ type webClient struct {
 // Specifially, it sets b.web.lc to the provided LocalClient.
 // If provided as nil, b.web.lc is cleared out.
 func (b *LocalBackend) ConfigureWebClient(lc *tailscale.LocalClient) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.webClient.mu.Lock()
+	defer b.webClient.mu.Unlock()
 	b.webClient.lc = lc
 }
 
-// WebClientInit initializes the web interface for managing this
-// tailscaled instance.
-// If the web interface is already running, WebClientInit is a no-op.
-func (b *LocalBackend) WebClientInit() (err error) {
+// webClientGetOrInit gets or initializes the web server for managing
+// this tailscaled instance.
+// s is always non-nil if err is empty.
+func (b *LocalBackend) webClientGetOrInit() (s *web.Server, err error) {
 	if !b.ShouldRunWebClient() {
-		return errors.New("web client not enabled for this device")
+		return nil, errors.New("web client not enabled for this device")
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.webClient.mu.Lock()
+	defer b.webClient.mu.Unlock()
 	if b.webClient.server != nil {
-		return nil
+		return b.webClient.server, nil
 	}
 
-	b.logf("WebClientInit: initializing web ui")
+	b.logf("webClientGetOrInit: initializing web ui")
 	if b.webClient.server, err = web.NewServer(web.ServerOpts{
 		Mode:        web.ManageServerMode,
 		LocalClient: b.webClient.lc,
 		Logf:        b.logf,
 	}); err != nil {
-		return fmt.Errorf("web.NewServer: %w", err)
+		return nil, fmt.Errorf("web.NewServer: %w", err)
 	}
 
-	b.logf("WebClientInit: started web ui")
-	return nil
+	b.logf("webClientGetOrInit: started web ui")
+	return b.webClient.server, nil
 }
 
 // WebClientShutdown shuts down any running b.webClient servers and
 // clears out b.webClient state (besides the b.webClient.lc field,
 // which is left untouched because required for future web startups).
 // WebClientShutdown obtains the b.mu lock.
-func (b *LocalBackend) WebClientShutdown() {
+func (b *LocalBackend) webClientShutdown() {
 	b.mu.Lock()
-	server := b.webClient.server
-	b.webClient.server = nil
 	for ap, ln := range b.webClientListeners {
 		ln.Close()
 		delete(b.webClientListeners, ap)
 	}
-	b.mu.Unlock() // release lock before shutdown
+	b.mu.Unlock()
+
+	b.webClient.mu.Lock() // webClient struct uses its own mutext
+	server := b.webClient.server
+	b.webClient.server = nil
+	b.webClient.mu.Unlock() // release lock before shutdown
 	if server != nil {
 		server.Shutdown()
 		b.logf("WebClientShutdown: shut down web ui")
@@ -93,10 +99,11 @@ func (b *LocalBackend) WebClientShutdown() {
 
 // handleWebClientConn serves web client requests.
 func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
-	if err := b.WebClientInit(); err != nil {
+	webServer, err := b.webClientGetOrInit()
+	if err != nil {
 		return err
 	}
-	s := http.Server{Handler: b.webClient.server}
+	s := http.Server{Handler: webServer}
 	return s.Serve(netutil.NewOneConnListener(c, nil))
 }
 
