@@ -30,7 +30,7 @@ func main() {
 
 	// Serve the Tailscale web client.
 	ws, err := web.NewServer(web.ServerOpts{
-		Mode:        web.LegacyServerMode,
+		Mode:        web.LoginServerMode,
 		LocalClient: lc,
 	})
 	if err != nil {

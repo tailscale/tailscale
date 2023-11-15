@@ -28,8 +28,6 @@ export type NodeData = {
   IsTagged: boolean
   Tags: string[]
   RunningSSHServer: boolean
-
-  DebugMode: "" | "login" | "full" // empty when not running in any debug mode
 }
 
 type NodeState =

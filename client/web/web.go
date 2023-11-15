@@ -92,10 +92,6 @@ const (
 	// the source's Tailscale identity. If the source browser does not have
 	// a valid session, a readonly version of the app is displayed.
 	ManageServerMode ServerMode = "manage"
-
-	// LegacyServerMode serves the legacy web client, visible to users
-	// prior to release of tailscale/corp#14335.
-	LegacyServerMode ServerMode = "legacy"
 )
 
 var (
@@ -133,7 +129,7 @@ type ServerOpts struct {
 // and not the lifespan of the web server.
 func NewServer(opts ServerOpts) (s *Server, err error) {
 	switch opts.Mode {
-	case LoginServerMode, ManageServerMode, LegacyServerMode:
+	case LoginServerMode, ManageServerMode:
 		// valid types
 	case "":
 		return nil, fmt.Errorf("must specify a Mode")
@@ -544,8 +540,6 @@ type nodeData struct {
 	ClientVersion *tailcfg.ClientVersion
 
 	LicensesURL string
-
-	DebugMode string // empty when not running in any debug mode
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -558,12 +552,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	var debugMode string
-	if s.mode == ManageServerMode {
-		debugMode = "full"
-	} else if s.mode == LoginServerMode {
-		debugMode = "login"
 	}
 	data := &nodeData{
 		ID:               st.Self.ID,
@@ -582,7 +570,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
 		LicensesURL:      licenses.LicensesURL(),
-		DebugMode:        debugMode, // TODO(sonia,will): just pass back s.mode directly?
 	}
 	cv, err := s.lc.CheckUpdate(r.Context())
 	if err != nil {

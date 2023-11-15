@@ -90,12 +90,10 @@ func runWeb(ctx context.Context, args []string) error {
 		selfIP = st.Self.TailscaleIPs[0]
 	}
 
-	cliServerMode := web.LegacyServerMode
 	var existingWebClient bool
 	if prefs, err := localClient.GetPrefs(ctx); err == nil {
 		existingWebClient = prefs.RunWebClient
 	}
-	cliServerMode = web.LoginServerMode
 	if !existingWebClient {
 		// Also start full client in tailscaled.
 		log.Printf("starting tailscaled web client at %s:%d\n", selfIP.String(), web.ListenPort)
@@ -105,7 +103,7 @@ func runWeb(ctx context.Context, args []string) error {
 	}
 
 	webServer, err := web.NewServer(web.ServerOpts{
-		Mode:        cliServerMode,
+		Mode:        web.LoginServerMode,
 		CGIMode:     webArgs.cgi,
 		PathPrefix:  webArgs.prefix,
 		LocalClient: &localClient,
