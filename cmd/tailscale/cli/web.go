@@ -21,7 +21,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/web"
 	"tailscale.com/ipn"
-	"tailscale.com/tailcfg"
 	"tailscale.com/util/cmpx"
 )
 
@@ -85,11 +84,9 @@ func runWeb(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
-	var hasPreviewCap bool
 	var selfIP netip.Addr
 	st, err := localClient.StatusWithoutPeers(ctx)
 	if err == nil && st.Self != nil && len(st.Self.TailscaleIPs) > 0 {
-		hasPreviewCap = st.Self.HasCap(tailcfg.CapabilityPreviewWebClient)
 		selfIP = st.Self.TailscaleIPs[0]
 	}
 
@@ -98,14 +95,12 @@ func runWeb(ctx context.Context, args []string) error {
 	if prefs, err := localClient.GetPrefs(ctx); err == nil {
 		existingWebClient = prefs.RunWebClient
 	}
-	if hasPreviewCap {
-		cliServerMode = web.LoginServerMode
-		if !existingWebClient {
-			// Also start full client in tailscaled.
-			log.Printf("starting tailscaled web client at %s:%d\n", selfIP.String(), web.ListenPort)
-			if err := setRunWebClient(ctx, true); err != nil {
-				return fmt.Errorf("starting web client in tailscaled: %w", err)
-			}
+	cliServerMode = web.LoginServerMode
+	if !existingWebClient {
+		// Also start full client in tailscaled.
+		log.Printf("starting tailscaled web client at %s:%d\n", selfIP.String(), web.ListenPort)
+		if err := setRunWebClient(ctx, true); err != nil {
+			return fmt.Errorf("starting web client in tailscaled: %w", err)
 		}
 	}
 
@@ -124,7 +119,7 @@ func runWeb(ctx context.Context, args []string) error {
 		case <-ctx.Done():
 			// Shutdown the server.
 			webServer.Shutdown()
-			if hasPreviewCap && !webArgs.cgi && !existingWebClient {
+			if !webArgs.cgi && !existingWebClient {
 				log.Println("stopping tailscaled web client")
 				// When not in cgi mode, shut down the tailscaled
 				// web client on cli termination.
