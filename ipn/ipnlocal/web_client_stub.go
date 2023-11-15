@@ -16,7 +16,7 @@ const webClientPort = 5252
 
 type webClient struct{}
 
-func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {}
+func (b *LocalBackend) ConfigureWebClient(lc *tailscale.LocalClient) {}
 
 func (b *LocalBackend) WebClientInit() error {
 	return errors.New("not implemented")
