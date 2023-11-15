@@ -449,7 +449,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	var setEnabled func(bool)
 	switch component {
 	case "magicsock":
-		setEnabled = b.magicConn().SetDebugLoggingEnabled
+		setEnabled = b.MagicConn().SetDebugLoggingEnabled
 	case "sockstats":
 		if b.sockstatLogger != nil {
 			setEnabled = func(v bool) {
@@ -1181,7 +1181,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		}
 
 		b.e.SetNetworkMap(st.NetMap)
-		b.magicConn().SetDERPMap(st.NetMap.DERPMap)
+		b.MagicConn().SetDERPMap(st.NetMap.DERPMap)
 
 		// Update our cached DERP map
 		dnsfallback.UpdateCache(st.NetMap.DERPMap, b.logf)
@@ -1204,7 +1204,7 @@ var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
 func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
-	if !b.magicConn().UpdateNetmapDelta(muts) {
+	if !b.MagicConn().UpdateNetmapDelta(muts) {
 		return false
 	}
 
@@ -1624,7 +1624,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		})
 	}
 
-	discoPublic := b.magicConn().DiscoPublicKey()
+	discoPublic := b.MagicConn().DiscoPublicKey()
 
 	var err error
 
@@ -1703,7 +1703,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	cc.SetTKAHead(tkaHead)
 
-	b.magicConn().SetNetInfoCallback(b.setNetInfo)
+	b.MagicConn().SetNetInfoCallback(b.setNetInfo)
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
@@ -2241,7 +2241,7 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	nm := b.netMap
 	b.e.SetNetworkMap(nm)
 	if nm != nil {
-		b.magicConn().SetDERPMap(nm.DERPMap)
+		b.MagicConn().SetDERPMap(nm.DERPMap)
 	}
 	b.setNetMapLocked(nm)
 }
@@ -3071,7 +3071,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	}
 
 	if netMap != nil {
-		b.magicConn().SetDERPMap(netMap.DERPMap)
+		b.MagicConn().SetDERPMap(netMap.DERPMap)
 	}
 
 	if !oldp.WantRunning() && newp.WantRunning {
@@ -4378,7 +4378,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.capFileSharing = fs
 
-	b.magicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
+	b.MagicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
 
 	b.setDebugLogsByCapabilityLocked(nm)
 
@@ -5073,12 +5073,12 @@ func peerCanProxyDNS(p tailcfg.NodeView) bool {
 }
 
 func (b *LocalBackend) DebugRebind() error {
-	b.magicConn().Rebind()
+	b.MagicConn().Rebind()
 	return nil
 }
 
 func (b *LocalBackend) DebugReSTUN() error {
-	b.magicConn().ReSTUN("explicit-debug")
+	b.MagicConn().ReSTUN("explicit-debug")
 	return nil
 }
 
@@ -5087,7 +5087,8 @@ func (b *LocalBackend) ControlKnobs() *controlknobs.Knobs {
 	return b.sys.ControlKnobs()
 }
 
-func (b *LocalBackend) magicConn() *magicsock.Conn {
+// MagicConn returns the backend's *magicsock.Conn.
+func (b *LocalBackend) MagicConn() *magicsock.Conn {
 	return b.sys.MagicSock.Get()
 }
 
@@ -5532,7 +5533,7 @@ func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr
 	}
 	peer := pip.Node
 
-	chs, err := b.magicConn().GetEndpointChanges(peer)
+	chs, err := b.MagicConn().GetEndpointChanges(peer)
 	if err != nil {
 		return nil, fmt.Errorf("getting endpoint changes: %w", err)
 	}
@@ -5549,7 +5550,7 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 }
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
-	return b.magicConn().DebugBreakDERPConns()
+	return b.MagicConn().DebugBreakDERPConns()
 }
 
 func (b *LocalBackend) pushSelfUpdateProgress(up ipnstate.UpdateProgress) {

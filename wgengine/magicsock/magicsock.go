@@ -270,6 +270,7 @@ type Conn struct {
 	privateKey       key.NodePrivate               // WireGuard private key for this node
 	everHadKey       bool                          // whether we ever had a non-zero private key
 	myDerp           int                           // nearest DERP region ID; 0 means none/unknown
+	homeless         bool                          // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
 	derpStarted      chan struct{}                 // closed on first connection to DERP; for tests & cleaner Close
 	activeDerp       map[int]activeDerp            // DERP regionID -> connection to a node in that region
 	prevDerp         map[int]*syncs.WaitGroupChan
@@ -2202,7 +2203,7 @@ func (c *Conn) goroutinesRunningLocked() bool {
 }
 
 func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
-	if c.networkDown() {
+	if c.networkDown() || c.homeless {
 		return false
 	}
 	if len(c.peerSet) == 0 || c.privateKey.IsZero() {
@@ -2684,6 +2685,24 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 // Nil may be specified to disable statistics gathering.
 func (c *Conn) SetStatistics(stats *connstats.Statistics) {
 	c.stats.Store(stats)
+}
+
+// SetHomeless sets whether magicsock should idle harder and not have a DERP
+// home connection active and not search for its nearest DERP home. In this
+// homeless mode, the node is unreachable by others.
+func (c *Conn) SetHomeless(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.homeless = v
+
+	if v && c.myDerp != 0 {
+		oldHome := c.myDerp
+		c.myDerp = 0
+		c.closeDerpLocked(oldHome, "set-homeless")
+	}
+	if !v {
+		go c.updateEndpoints("set-homeless-disabled")
+	}
 }
 
 const (

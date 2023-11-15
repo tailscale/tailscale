@@ -564,6 +564,10 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	switch action {
+	case "derp-set-homeless":
+		h.b.MagicConn().SetHomeless(true)
+	case "derp-unset-homeless":
+		h.b.MagicConn().SetHomeless(false)
 	case "rebind":
 		err = h.b.DebugRebind()
 	case "restun":
