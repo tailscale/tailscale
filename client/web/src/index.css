@@ -260,3 +260,23 @@ html {
   background-color: #b22d30;
   border-color: #b22d30;
 }
+
+/**
+  * .spinner creates a circular animated spinner, most often used to indicate a
+  * loading state. The .spinner element must define a width, height, and
+  * border-width for the spinner to apply.
+  */
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  @apply border-transparent border-t-current border-l-current rounded-full;
+  animation: spin 700ms linear infinite;
+}

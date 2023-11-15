@@ -541,6 +541,8 @@ type nodeData struct {
 	AdvertiseRoutes   string
 	RunningSSHServer  bool
 
+	ClientVersion *tailcfg.ClientVersion
+
 	LicensesURL string
 
 	DebugMode string // empty when not running in any debug mode
@@ -581,6 +583,12 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
 		LicensesURL:      licenses.LicensesURL(),
 		DebugMode:        debugMode, // TODO(sonia,will): just pass back s.mode directly?
+	}
+	cv, err := s.lc.CheckUpdate(r.Context())
+	if err != nil {
+		s.logf("could not check for updates: %v", err)
+	} else {
+		data.ClientVersion = cv
 	}
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {
@@ -807,6 +815,9 @@ func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) 
 var localapiAllowlist = []string{
 	"/v0/logout",
 	"/v0/prefs",
+	"/v0/update/check",
+	"/v0/update/install",
+	"/v0/update/progress",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.

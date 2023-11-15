@@ -1394,6 +1394,21 @@ func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt)
 	}, nil
 }
 
+// CheckUpdate returns a tailcfg.ClientVersion indicating whether or not an update is available
+// to be installed via the LocalAPI. In case the LocalAPI can't install updates, it returns a
+// ClientVersion that says that we are up to date.
+func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/update/check")
+	if err != nil {
+		return nil, err
+	}
+	cv, err := decodeJSON[tailcfg.ClientVersion](body)
+	if err != nil {
+		return nil, err
+	}
+	return &cv, nil
+}
+
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
 // It's returned by LocalClient.WatchIPNBus.
 //

@@ -1,6 +1,7 @@
 import cx from "classnames"
 import React from "react"
 import { apiFetch } from "src/api"
+import { UpdateAvailableNotification } from "src/components/update-available"
 import { NodeData } from "src/hooks/node-data"
 import { useLocation } from "wouter"
 import ACLTag from "../acl-tag"
@@ -45,6 +46,11 @@ export default function DeviceDetailsView({
             </button>
           </div>
         </div>
+        {node.ClientVersion &&
+          !node.ClientVersion.RunningLatest &&
+          !readonly && (
+            <UpdateAvailableNotification details={node.ClientVersion} />
+          )}
         <div className="card">
           <h2 className="mb-2">General</h2>
           <table>

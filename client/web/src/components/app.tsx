@@ -6,6 +6,7 @@ import HomeView from "src/components/views/home-view"
 import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
 import SSHView from "src/components/views/ssh-view"
+import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
@@ -81,6 +82,12 @@ function WebClient({
             />
           </Route>
           <Route path="/serve">{/* TODO */}Share local content</Route>
+          <Route path="/update">
+            <UpdatingView
+              versionInfo={data.ClientVersion}
+              currentVersion={data.IPNVersion}
+            />
+          </Route>
           <Route>
             <h2 className="mt-8">Page not found</h2>
           </Route>
@@ -112,7 +119,7 @@ function Header({
         </div>
         <LoginToggle node={node} auth={auth} newSession={newSession} />
       </div>
-      {loc !== "/" && (
+      {loc !== "/" && loc !== "/update" && (
         <Link
           to="/"
           className="text-indigo-500 font-medium leading-snug block mb-[10px]"
