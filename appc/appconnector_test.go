@@ -5,6 +5,7 @@ package appc
 
 import (
 	"net/netip"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -32,6 +33,21 @@ func TestUpdateDomains(t *testing.T) {
 	a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
 	if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestDomainRoutes(t *testing.T) {
+	rc := &routeCollector{}
+	a := NewAppConnector(t.Logf, rc)
+	a.UpdateDomains([]string{"example.com"})
+	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+
+	want := map[string][]netip.Addr{
+		"example.com": {netip.MustParseAddr("192.0.0.8")},
+	}
+
+	if got := a.DomainRoutes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DomainRoutes: got %v, want %v", got, want)
 	}
 }
 
