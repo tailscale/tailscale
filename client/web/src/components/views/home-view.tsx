@@ -1,7 +1,7 @@
 import cx from "classnames"
 import React from "react"
 import ExitNodeSelector from "src/components/exit-node-selector"
-import { NodeData, NodeUpdate } from "src/hooks/node-data"
+import { NodeData, NodeUpdate, PrefsUpdate } from "src/hooks/node-data"
 import { ReactComponent as ArrowRight } from "src/icons/arrow-right.svg"
 import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { Link } from "wouter"
@@ -10,10 +10,12 @@ export default function HomeView({
   readonly,
   node,
   updateNode,
+  updatePrefs,
 }: {
   readonly: boolean
   node: NodeData
   updateNode: (update: NodeUpdate) => Promise<void> | undefined
+  updatePrefs: (p: PrefsUpdate) => Promise<void>
 }) {
   return (
     <div className="mb-12 w-full">
@@ -36,6 +38,7 @@ export default function HomeView({
           className="mb-5"
           node={node}
           updateNode={updateNode}
+          updatePrefs={updatePrefs}
           disabled={readonly}
         />
         <Link

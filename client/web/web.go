@@ -528,6 +528,9 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
+	case path == "/exit-nodes" && r.Method == httpm.GET:
+		s.serveGetExitNodes(w, r)
+		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
 		return
@@ -560,6 +563,7 @@ type nodeData struct {
 	UnraidToken string
 	URLPrefix   string // if set, the URL prefix the client is served behind
 
+	ExitNodeStatus    *exitNodeWithStatus
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
 	RunningSSHServer  bool
@@ -634,7 +638,60 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 			data.AdvertiseRoutes += r.String()
 		}
 	}
+	if e := st.ExitNodeStatus; e != nil {
+		data.ExitNodeStatus = &exitNodeWithStatus{
+			exitNode: exitNode{ID: e.ID},
+			Online:   e.Online,
+		}
+		for _, ps := range st.Peer {
+			if ps.ID == e.ID {
+				data.ExitNodeStatus.Name = ps.DNSName
+				data.ExitNodeStatus.Location = ps.Location
+				break
+			}
+		}
+		if data.ExitNodeStatus.Name == "" {
+			// Falling back to TailscaleIP/StableNodeID when the peer
+			// is no longer included in status.
+			if len(e.TailscaleIPs) > 0 {
+				data.ExitNodeStatus.Name = e.TailscaleIPs[0].Addr().String()
+			} else {
+				data.ExitNodeStatus.Name = string(e.ID)
+			}
+		}
+	}
 	writeJSON(w, *data)
+}
+
+type exitNode struct {
+	ID       tailcfg.StableNodeID
+	Name     string
+	Location *tailcfg.Location
+}
+
+type exitNodeWithStatus struct {
+	exitNode
+	Online bool
+}
+
+func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
+	st, err := s.lc.Status(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var exitNodes []*exitNode
+	for _, ps := range st.Peer {
+		if !ps.ExitNodeOption {
+			continue
+		}
+		exitNodes = append(exitNodes, &exitNode{
+			ID:       ps.ID,
+			Name:     ps.DNSName,
+			Location: ps.Location,
+		})
+	}
+	writeJSON(w, exitNodes)
 }
 
 type nodeUpdate struct {
