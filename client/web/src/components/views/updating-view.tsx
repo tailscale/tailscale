@@ -15,13 +15,16 @@ import { Link } from "wouter"
  * the update is in-progress, failed, or completed.
  */
 export function UpdatingView({
-  cv,
+  versionInfo,
   currentVersion,
 }: {
-  cv: VersionInfo
+  versionInfo?: VersionInfo
   currentVersion: string
 }) {
-  const { updateState, updateLog } = useInstallUpdate(currentVersion, cv)
+  const { updateState, updateLog } = useInstallUpdate(
+    currentVersion,
+    versionInfo
+  )
   return (
     <>
       <div className="flex-1 flex flex-col justify-center items-center text-center mt-56">
@@ -40,8 +43,10 @@ export function UpdatingView({
             <h1 className="text-2xl m-3">Update complete!</h1>
             <p className="text-gray-400">
               You updated Tailscale
-              {cv.LatestVersion ? ` to ${cv.LatestVersion}` : null}.{" "}
-              <ChangelogText version={cv.LatestVersion} />
+              {versionInfo && versionInfo.LatestVersion
+                ? ` to ${versionInfo.LatestVersion}`
+                : null}
+              . <ChangelogText version={versionInfo?.LatestVersion} />
             </p>
             <Link className="button button-blue text-sm m-3" to="/">
               Log in to access
@@ -65,7 +70,10 @@ export function UpdatingView({
             <XCircleIcon />
             <h1 className="text-2xl m-3">Update failed</h1>
             <p className="text-gray-400">
-              Update{cv.LatestVersion ? ` to ${cv.LatestVersion}` : null}{" "}
+              Update
+              {versionInfo && versionInfo.LatestVersion
+                ? ` to ${versionInfo.LatestVersion}`
+                : null}{" "}
               failed.
             </p>
             <Link className="button button-blue text-sm m-3" to="/">

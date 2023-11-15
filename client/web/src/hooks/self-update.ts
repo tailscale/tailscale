@@ -25,7 +25,14 @@ export enum UpdateState {
 
 // useInstallUpdate initiates and tracks a Tailscale self-update via the LocalAPI,
 // and returns state messages showing the progress of the update.
-export function useInstallUpdate(currentVersion: string, cv: VersionInfo) {
+export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
+  if (!cv) {
+    return {
+      updateState: UpdateState.UpToDate,
+      updateLog: "",
+    }
+  }
+
   const [updateState, setUpdateState] = useState<UpdateState>(
     cv.RunningLatest ? UpdateState.UpToDate : UpdateState.Available
   )

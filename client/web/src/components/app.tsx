@@ -84,7 +84,7 @@ function WebClient({
           <Route path="/serve">{/* TODO */}Share local content</Route>
           <Route path="/update">
             <UpdatingView
-              cv={data.ClientVersion}
+              versionInfo={data.ClientVersion}
               currentVersion={data.IPNVersion}
             />
           </Route>

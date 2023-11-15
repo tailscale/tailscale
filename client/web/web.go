@@ -541,7 +541,7 @@ type nodeData struct {
 	AdvertiseRoutes   string
 	RunningSSHServer  bool
 
-	ClientVersion tailcfg.ClientVersion
+	ClientVersion *tailcfg.ClientVersion
 
 	LicensesURL string
 
@@ -558,12 +558,6 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	cv, err := s.lc.CheckUpdate(r.Context())
-	if err != nil {
-		s.logf("could not check for updates: %v", err)
-		// In case update check fails, just say we're up to date
-		cv = &tailcfg.ClientVersion{RunningLatest: true}
 	}
 	var debugMode string
 	if s.mode == ManageServerMode {
@@ -591,7 +585,12 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
 		LicensesURL:      licenses.LicensesURL(),
 		DebugMode:        debugMode, // TODO(sonia,will): just pass back s.mode directly?
-		ClientVersion:    *cv,
+	}
+	cv, err := s.lc.CheckUpdate(r.Context())
+	if err != nil {
+		s.logf("could not check for updates: %v", err)
+	} else {
+		data.ClientVersion = cv
 	}
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {

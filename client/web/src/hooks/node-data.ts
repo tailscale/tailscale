@@ -21,7 +21,7 @@ export type NodeData = {
   IsUnraid: boolean
   UnraidToken: string
   IPNVersion: string
-  ClientVersion: VersionInfo
+  ClientVersion?: VersionInfo
   URLPrefix: string
   DomainName: string
   TailnetName: string
