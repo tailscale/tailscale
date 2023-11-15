@@ -778,7 +778,7 @@ func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Req
 		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
-	h.ps.b.magicConn().ServeHTTPDebug(w, r)
+	h.ps.b.MagicConn().ServeHTTPDebug(w, r)
 }
 
 func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Request) {

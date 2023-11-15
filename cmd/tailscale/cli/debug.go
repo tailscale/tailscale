@@ -130,6 +130,16 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "force a magicsock rebind",
 		},
 		{
+			Name:      "derp-set-homeless",
+			Exec:      localAPIAction("derp-set-homeless"),
+			ShortHelp: "enable DERP homeless mode (breaks reachablility)",
+		},
+		{
+			Name:      "derp-unset-homeless",
+			Exec:      localAPIAction("derp-unset-homeless"),
+			ShortHelp: "disable DERP homeless mode",
+		},
+		{
 			Name:      "break-tcp-conns",
 			Exec:      localAPIAction("break-tcp-conns"),
 			ShortHelp: "break any open TCP connections from the daemon",

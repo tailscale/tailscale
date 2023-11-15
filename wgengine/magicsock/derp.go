@@ -144,6 +144,10 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		health.SetMagicSockDERPHome(0)
 		return false
 	}
+	if c.homeless {
+		c.myDerp = 0
+		return false
+	}
 	if derpNum == c.myDerp {
 		// No change.
 		return true
