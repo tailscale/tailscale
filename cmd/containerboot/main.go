@@ -69,6 +69,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -186,9 +187,8 @@ func main() {
 		log.Fatalf("failed to bring up tailscale: %v", err)
 	}
 	killTailscaled := func() {
-		shutdownErr := daemonProcess.Signal(unix.SIGTERM)
-		if shutdownErr != nil {
-			log.Fatalf("error shutting tailscaled down: %v", shutdownErr)
+		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
+			log.Fatalf("error shutting tailscaled down: %v", err)
 		}
 	}
 	defer killTailscaled()
@@ -320,11 +320,14 @@ authLoop:
 			n, err := w.Next()
 			if err != nil {
 				errChan <- err
+				break
 			} else {
 				notifyChan <- n
 			}
 		}
 	}()
+	var wg sync.WaitGroup
+runLoop:
 	for {
 		select {
 		case <-ctx.Done():
@@ -333,7 +336,7 @@ authLoop:
 			// kill tailscaled and let reaper clean up child
 			// processes.
 			killTailscaled()
-			return
+			break runLoop
 		case err := <-errChan:
 			log.Fatalf("failed to read from tailscaled: %v", err)
 		case n := <-notifyChan:
@@ -386,11 +389,12 @@ authLoop:
 					log.Println("Startup complete, waiting for shutdown signal")
 					startupTasksDone = true
 
-					// Reap all processes, since we are PID1 and need to collect zombies. We can
-					// only start doing this once we've stopped shelling out to things
-					// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
-					// and wedge bringup.
+					// 		// Reap all processes, since we are PID1 and need to collect zombies. We can
+					// 		// only start doing this once we've stopped shelling out to things
+					// 		// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
+					// 		// and wedge bringup.
 					reaper := func() {
+						defer wg.Done()
 						for {
 							var status unix.WaitStatus
 							pid, err := unix.Wait4(-1, &status, 0, nil)
@@ -407,11 +411,13 @@ authLoop:
 						}
 
 					}
+					wg.Add(1)
 					go reaper()
 				}
 			}
 		}
 	}
+	wg.Wait()
 }
 
 // watchServeConfigChanges watches path for changes, and when it sees one, reads
@@ -490,8 +496,6 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 
 func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, *os.Process, error) {
 	args := tailscaledArgs(cfg)
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, unix.SIGTERM, unix.SIGINT)
 	// tailscaled runs without context, since it needs to persist
 	// beyond the startup timeout in ctx.
 	cmd := exec.Command("tailscaled", args...)
