@@ -113,7 +113,7 @@ func (e *AppConnector) DomainRoutes() map[string][]netip.Addr {
 
 	drCopy := make(map[string][]netip.Addr)
 	for k, v := range e.domains {
-		copy(drCopy[k], v)
+		drCopy[k] = append(drCopy[k], v...)
 	}
 
 	return drCopy
