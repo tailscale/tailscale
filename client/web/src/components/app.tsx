@@ -3,7 +3,6 @@ import React, { useEffect } from "react"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
-import LegacyClientView from "src/components/views/legacy-client-view"
 import LoginClientView from "src/components/views/login-client-view"
 import SSHView from "src/components/views/ssh-view"
 import { UpdatingView } from "src/components/views/updating-view"
@@ -46,17 +45,6 @@ function WebClient({
       data={data}
       onLoginClick={() => updateNode({ Reauthenticate: true })}
     />
-  ) : data.DebugMode !== "full" && data.DebugMode !== "login" ? (
-    // Render legacy client interface.
-    <>
-      <LegacyClientView
-        data={data}
-        refreshData={refreshData}
-        updateNode={updateNode}
-      />
-      {/* TODO: add license to new client */}
-      <Footer licensesURL={data.LicensesURL} />
-    </>
   ) : (
     // Otherwise render the new web client.
     <>
