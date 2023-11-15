@@ -7,13 +7,15 @@
 package clientupdate
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/authenticode"
 )
 
@@ -39,13 +41,14 @@ func launchTailscaleAsGUIUser(exePath string) error {
 
 	var token windows.Token
 	if u, err := user.Current(); err == nil && u.Name == "SYSTEM" {
-		sessionID := winutil.WTSGetActiveConsoleSessionId()
-		if sessionID != 0xFFFFFFFF {
-			if err := windows.WTSQueryUserToken(sessionID, &token); err != nil {
-				return err
-			}
-			defer token.Close()
+		sessionID, err := wtsGetActiveSessionID()
+		if err != nil {
+			return fmt.Errorf("wtsGetActiveSessionID(): %w", err)
 		}
+		if err := windows.WTSQueryUserToken(sessionID, &token); err != nil {
+			return fmt.Errorf("WTSQueryUserToken (0x%x): %w", sessionID, err)
+		}
+		defer token.Close()
 	}
 
 	cmd := exec.Command(exePath)
@@ -54,4 +57,28 @@ func launchTailscaleAsGUIUser(exePath string) error {
 		HideWindow: true,
 	}
 	return cmd.Start()
+}
+
+func wtsGetActiveSessionID() (uint32, error) {
+	var (
+		sessionInfo *windows.WTS_SESSION_INFO
+		count       uint32 = 0
+	)
+
+	const WTS_CURRENT_SERVER_HANDLE = 0
+	if err := windows.WTSEnumerateSessions(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessionInfo, &count); err != nil {
+		return 0, fmt.Errorf("WTSEnumerateSessions: %w", err)
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessionInfo)))
+
+	current := unsafe.Pointer(sessionInfo)
+	for i := uint32(0); i < count; i++ {
+		session := (*windows.WTS_SESSION_INFO)(current)
+		if session.State == windows.WTSActive {
+			return session.SessionID, nil
+		}
+		current = unsafe.Add(current, unsafe.Sizeof(windows.WTS_SESSION_INFO{}))
+	}
+
+	return 0, errors.New("no active desktop sessions found")
 }
