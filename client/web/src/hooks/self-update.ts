@@ -32,9 +32,12 @@ export function useInstallUpdate(currentVersion: string, cv: VersionInfo) {
 
   const [updateLog, setUpdateLog] = useState<string>("")
 
-  const appendUpdateLog = useCallback((msg: string) => {
-    setUpdateLog(updateLog + msg + "\n")
-  }, [updateLog, setUpdateLog])
+  const appendUpdateLog = useCallback(
+    (msg: string) => {
+      setUpdateLog(updateLog + msg + "\n")
+    },
+    [updateLog, setUpdateLog]
+  )
 
   useEffect(() => {
     if (updateState !== UpdateState.Available) {

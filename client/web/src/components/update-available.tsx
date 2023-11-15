@@ -31,7 +31,7 @@ export function UpdateAvailableNotification({
 
 // isStableTrack takes a Tailscale version string
 // of form X.Y.Z (or vX.Y.Z) and returns whether
-// it is a stable release (even value of Y) 
+// it is a stable release (even value of Y)
 // or unstable (odd value of Y).
 // eg. isStableTrack("1.48.0") === true
 // eg. isStableTrack("1.49.112") === false

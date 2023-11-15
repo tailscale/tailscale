@@ -1,13 +1,13 @@
 import React from "react"
+import { ChangelogText } from "src/components/update-available"
 import {
-  VersionInfo,
   UpdateState,
   useInstallUpdate,
+  VersionInfo,
 } from "src/hooks/self-update"
 import { ReactComponent as CheckCircleIcon } from "src/icons/check-circle.svg"
 import { ReactComponent as XCircleIcon } from "src/icons/x-circle.svg"
 import Spinner from "src/ui/spinner"
-import { ChangelogText } from "src/components/update-available"
 import { Link } from "wouter"
 
 /**
@@ -52,8 +52,8 @@ export function UpdatingView({
             <CheckCircleIcon />
             <h1 className="text-2xl m-3">Up to date!</h1>
             <p className="text-gray-400">
-              You are already running Tailscale {currentVersion}, which is the newest
-              version available.
+              You are already running Tailscale {currentVersion}, which is the
+              newest version available.
             </p>
             <Link className="button button-blue text-sm m-3" to="/">
               Return
