@@ -656,7 +656,7 @@ func (b *LocalBackend) Shutdown() {
 		b.debugSink = nil
 	}
 	b.mu.Unlock()
-	b.WebClientShutdown()
+	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {
 		b.sockstatLogger.Shutdown()
@@ -4252,7 +4252,7 @@ func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs
 	shouldRun := prefs.Valid() && prefs.RunWebClient()
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
-		go b.WebClientShutdown() // stop web client
+		go b.webClientShutdown() // stop web client
 	}
 }
 

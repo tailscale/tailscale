@@ -18,11 +18,11 @@ type webClient struct{}
 
 func (b *LocalBackend) ConfigureWebClient(lc *tailscale.LocalClient) {}
 
-func (b *LocalBackend) WebClientInit() error {
+func (b *LocalBackend) webClientGetOrInit() error {
 	return errors.New("not implemented")
 }
 
-func (b *LocalBackend) WebClientShutdown() {}
+func (b *LocalBackend) webClientShutdown() {}
 
 func (b *LocalBackend) handleWebClientConn(c net.Conn) error {
 	return errors.New("not implemented")
