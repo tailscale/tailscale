@@ -26,7 +26,7 @@ const webClientPort = web.ListenPort
 
 // webClient holds state for the web interface for managing
 // this tailscale instance. The web interface is not used by
-// default, but initialized by calling LocalBackend.WebOrInit.
+// default, but initialized by calling LocalBackend.WebClientInit.
 type webClient struct {
 	server *web.Server // or nil, initialized lazily
 
@@ -36,9 +36,10 @@ type webClient struct {
 	lc *tailscale.LocalClient
 }
 
-// SetWebLocalClient sets the b.web.lc function.
-// If lc is provided as nil, b.web.lc is cleared out.
-func (b *LocalBackend) SetWebLocalClient(lc *tailscale.LocalClient) {
+// ConfigureWebClient configures b.web prior to use.
+// Specifially, it sets b.web.lc to the provided LocalClient.
+// If provided as nil, b.web.lc is cleared out.
+func (b *LocalBackend) ConfigureWebClient(lc *tailscale.LocalClient) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.webClient.lc = lc
