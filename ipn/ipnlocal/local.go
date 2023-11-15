@@ -4249,7 +4249,7 @@ func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && en
 func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
 
 func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
-	shouldRun := prefs.Valid() && prefs.RunWebClient() && hasCapability(nm, tailcfg.CapabilityPreviewWebClient)
+	shouldRun := prefs.Valid() && prefs.RunWebClient()
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
 		go b.WebClientShutdown() // stop web client
