@@ -94,6 +94,7 @@ func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, 
 				b.logf("[unexpected] local-serve: no handler for %v to port %v", srcAddr, ap.Port())
 				conn.Close()
 			}
+			handler(conn)
 			return nil
 		},
 		bo: backoff.NewBackoff("serve-listener", logf, 30*time.Second),
