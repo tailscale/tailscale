@@ -2,7 +2,7 @@ import cx from "classnames"
 import React from "react"
 import { apiFetch } from "src/api"
 import { NodeData } from "src/hooks/node-data"
-import { UpdateAvailableNotification } from "src/ui/update-available"
+import { UpdateAvailableNotification } from "src/components/update-available"
 import { useLocation } from "wouter"
 import ACLTag from "../acl-tag"
 

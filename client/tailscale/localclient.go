@@ -1409,31 +1409,6 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
-// InstallUpdate initiates a self-update via the LocalAPI, if one is possible. Calling this endpoint
-// if we are already up to date, or if an update is already in progress, is a no-op. The error value
-// returned does not indicate whether or not the update succeeded, only whether or not the update was
-// successfully started. Use GetUpdateProgress to check the progress of the update.
-func (lc *LocalClient) InstallUpdate(ctx context.Context) error {
-	_, err := lc.send(ctx, "POST", "/localapi/v0/update/install", http.StatusAccepted, nil)
-	return err
-}
-
-// GetUpdateProgress returns a log of the currently-in-progress self-update, as a slice of
-// ipnstate.UpdateProgress structs, each containing a log line and the current status of the update
-// as of that log line. Calling this endpoint when a self-update is not in progress returns an empty
-// slice.
-func (lc *LocalClient) GetUpdateProgress(ctx context.Context) ([]ipnstate.UpdateProgress, error) {
-	body, err := lc.get200(ctx, "/localapi/v0/update/progress")
-	if err != nil {
-		return nil, err
-	}
-	st, err := decodeJSON[[]ipnstate.UpdateProgress](body)
-	if err != nil {
-		return nil, err
-	}
-	return st, nil
-}
-
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
 // It's returned by LocalClient.WatchIPNBus.
 //

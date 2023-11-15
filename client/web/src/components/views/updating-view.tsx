@@ -1,13 +1,13 @@
 import React from "react"
 import {
-  ClientVersion,
+  VersionInfo,
   UpdateState,
   useInstallUpdate,
 } from "src/hooks/self-update"
 import { ReactComponent as CheckCircleIcon } from "src/icons/check-circle.svg"
 import { ReactComponent as XCircleIcon } from "src/icons/x-circle.svg"
 import Spinner from "src/ui/spinner"
-import { ChangelogText } from "src/ui/update-available"
+import { ChangelogText } from "src/components/update-available"
 import { Link } from "wouter"
 
 /**
@@ -16,12 +16,12 @@ import { Link } from "wouter"
  */
 export function UpdatingView({
   cv,
-  current,
+  currentVersion,
 }: {
-  cv: ClientVersion
-  current: string
+  cv: VersionInfo
+  currentVersion: string
 }) {
-  const { updateState, updateLog } = useInstallUpdate(current, cv)
+  const { updateState, updateLog } = useInstallUpdate(currentVersion, cv)
   return (
     <>
       <div className="flex-1 flex flex-col justify-center items-center text-center mt-56">
@@ -52,7 +52,7 @@ export function UpdatingView({
             <CheckCircleIcon />
             <h1 className="text-2xl m-3">Up to date!</h1>
             <p className="text-gray-400">
-              You are already running Tailscale {current}, which is the newest
+              You are already running Tailscale {currentVersion}, which is the newest
               version available.
             </p>
             <Link className="button button-blue text-sm m-3" to="/">
@@ -60,12 +60,13 @@ export function UpdatingView({
             </Link>
           </>
         ) : (
+          /* TODO(naman,sonia): Figure out the body copy and design for this view. */
           <>
             <XCircleIcon />
             <h1 className="text-2xl m-3">Update failed</h1>
             <p className="text-gray-400">
               Update{cv.LatestVersion ? ` to ${cv.LatestVersion}` : null}{" "}
-              failed. TODO(naman): what now?
+              failed.
             </p>
             <Link className="button button-blue text-sm m-3" to="/">
               Return

@@ -505,22 +505,6 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
-	case path == "/update":
-		switch r.Method {
-		case httpm.POST:
-			s.serveSelfUpdate(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-		return
-	case path == "/update/progress":
-		switch r.Method {
-		case httpm.GET:
-			s.serveUpdateProgress(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
 		return
@@ -721,24 +705,6 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) serveSelfUpdate(w http.ResponseWriter, r *http.Request) {
-	if err := s.lc.InstallUpdate(r.Context()); err != nil {
-		log.Printf("%v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusAccepted)
-}
-
-func (s *Server) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
-	ups, err := s.lc.GetUpdateProgress(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	json.NewEncoder(w).Encode(ups)
-}
-
 func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {
 	if postData.ForceLogout {
 		if err := s.lc.Logout(ctx); err != nil {
@@ -848,6 +814,9 @@ func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) 
 var localapiAllowlist = []string{
 	"/v0/logout",
 	"/v0/prefs",
+	"/v0/update/check",
+	"/v0/update/install",
+	"/v0/update/progress",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.

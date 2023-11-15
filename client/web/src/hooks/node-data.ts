@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch, setUnraidCsrfToken } from "src/api"
-import { ClientVersion } from "src/hooks/self-update"
+import { VersionInfo } from "src/hooks/self-update"
 
 export type NodeData = {
   Profile: UserProfile
@@ -21,7 +21,7 @@ export type NodeData = {
   IsUnraid: boolean
   UnraidToken: string
   IPNVersion: string
-  ClientVersion: ClientVersion
+  ClientVersion: VersionInfo
   URLPrefix: string
   DomainName: string
   TailnetName: string

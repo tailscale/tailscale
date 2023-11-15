@@ -10,7 +10,7 @@ import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
-import { UpdatingView } from "./views/updating-view"
+import { UpdatingView } from "src/components/views/updating-view"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
@@ -83,7 +83,7 @@ function WebClient({
           </Route>
           <Route path="/serve">{/* TODO */}Share local content</Route>
           <Route path="/update">
-            <UpdatingView cv={data.ClientVersion} current={data.IPNVersion} />
+            <UpdatingView cv={data.ClientVersion} currentVersion={data.IPNVersion} />
           </Route>
           <Route>
             <h2 className="mt-8">Page not found</h2>

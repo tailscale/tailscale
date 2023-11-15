@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { apiFetch } from "src/api"
 
-// see tailcfg.ClientVersion
-export type ClientVersion = {
+// this type is deserialized from tailcfg.ClientVersion,
+// so it should not include fields not included in that type.
+export type VersionInfo = {
   RunningLatest: boolean
   LatestVersion?: string
 }
@@ -22,28 +23,31 @@ export enum UpdateState {
   Failed,
 }
 
-export function useInstallUpdate(currentVersion: string, cv: ClientVersion) {
+// useInstallUpdate initiates and tracks a Tailscale self-update via the LocalAPI,
+// and returns state messages showing the progress of the update.
+export function useInstallUpdate(currentVersion: string, cv: VersionInfo) {
   const [updateState, setUpdateState] = useState<UpdateState>(
     cv.RunningLatest ? UpdateState.UpToDate : UpdateState.Available
   )
 
   const [updateLog, setUpdateLog] = useState<string>("")
 
-  const appendUpdateLog = (msg: string) => {
+  const appendUpdateLog = useCallback((msg: string) => {
     setUpdateLog(updateLog + msg + "\n")
-  }
+  }, [updateLog, setUpdateLog])
 
   useEffect(() => {
     if (updateState !== UpdateState.Available) {
       // useEffect cleanup function
       return () => {}
     }
-    apiFetch("/update", "POST").catch((err) => {
-      console.log(err)
-      setUpdateState(UpdateState.Failed)
-    })
 
     setUpdateState(UpdateState.InProgress)
+
+    apiFetch("/local/v0/update/install", "POST").catch((err) => {
+      console.error(err)
+      setUpdateState(UpdateState.Failed)
+    })
 
     let tsAwayForPolls = 0
     let updateMessagesRead = 0
@@ -51,9 +55,13 @@ export function useInstallUpdate(currentVersion: string, cv: ClientVersion) {
     let timer = 0
 
     function poll() {
-      apiFetch("/update/progress", "GET")
+      apiFetch("/local/v0/update/progress", "GET")
         .then((res) => res.json())
         .then((res: UpdateProgress[]) => {
+          // res contains a list of UpdateProgresses that is strictly increasing
+          // in size, so updateMessagesRead keeps track (across calls of poll())
+          // of how many of those we have already read. This is why it is not
+          // initialized to zero here and we don't just use res.forEach()
           for (; updateMessagesRead < res.length; ++updateMessagesRead) {
             const up = res[updateMessagesRead]
             if (up.status === "UpdateFailed") {
@@ -84,6 +92,9 @@ export function useInstallUpdate(currentVersion: string, cv: ClientVersion) {
             if (up.message) appendUpdateLog("INFO: " + up.message)
           }
 
+          // If we have gone through the entire loop without returning out of the function,
+          // the update is still in progress. So we want to poll again for further status
+          // updates.
           timer = setTimeout(poll, 1000)
         })
         .catch((err) => {
@@ -108,7 +119,7 @@ export function useInstallUpdate(currentVersion: string, cv: ClientVersion) {
       if (timer) clearTimeout(timer)
       timer = 0
     }
-  }, [updateState])
+  }, [])
 
   return { updateState, updateLog }
 }
