@@ -905,7 +905,6 @@ func TestUpdatePrefs(t *testing.T) {
 				OperatorUserSet:           true,
 				RouteAllSet:               true,
 				RunSSHSet:                 true,
-				RunWebClientSet:           true,
 				ShieldsUpSet:              true,
 				WantRunningSet:            true,
 			},
