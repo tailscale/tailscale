@@ -4,6 +4,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -446,9 +447,11 @@ func TestServeAuth(t *testing.T) {
 	sixtyDaysAgo := timeNow.Add(-sessionCookieExpiry * 2)
 
 	s := &Server{
-		mode:    ManageServerMode,
-		lc:      &tailscale.LocalClient{Dial: lal.Dial},
-		timeNow: func() time.Time { return timeNow },
+		mode:        ManageServerMode,
+		lc:          &tailscale.LocalClient{Dial: lal.Dial},
+		timeNow:     func() time.Time { return timeNow },
+		newAuthURL:  mockNewAuthURL,
+		waitAuthURL: mockWaitAuthURL,
 	}
 
 	successCookie := "ts-cookie-success"
@@ -797,33 +800,24 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 		case "/localapi/v0/status":
 			writeJSON(w, ipnstate.Status{Self: self()})
 			return
-		case "/localapi/v0/debug-web-client": // used by TestServeTailscaleAuth
-			type reqData struct {
-				ID  string
-				Src tailcfg.NodeID
-			}
-			var data reqData
-			if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-				http.Error(w, "invalid JSON body", http.StatusBadRequest)
-				return
-			}
-			if data.Src == 0 {
-				http.Error(w, "missing Src node", http.StatusBadRequest)
-				return
-			}
-			var resp *tailcfg.WebClientAuthResponse
-			if data.ID == "" {
-				resp = &tailcfg.WebClientAuthResponse{ID: testAuthPath, URL: testControlURL + testAuthPath}
-			} else if data.ID == testAuthPathSuccess {
-				resp = &tailcfg.WebClientAuthResponse{Complete: true}
-			} else if data.ID == testAuthPathError {
-				http.Error(w, "authenticated as wrong user", http.StatusUnauthorized)
-				return
-			}
-			writeJSON(w, resp)
-			return
 		default:
 			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)
 		}
 	})}
+}
+
+func mockNewAuthURL(_ context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
+	// Create new dummy auth URL.
+	return &tailcfg.WebClientAuthResponse{ID: testAuthPath, URL: testControlURL + testAuthPath}, nil
+}
+
+func mockWaitAuthURL(_ context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
+	switch id {
+	case testAuthPathSuccess: // successful auth URL
+		return &tailcfg.WebClientAuthResponse{Complete: true}, nil
+	case testAuthPathError: // error auth URL
+		return nil, errors.New("authenticated as wrong user")
+	default:
+		return nil, errors.New("unknown id")
+	}
 }

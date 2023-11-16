@@ -7,8 +7,10 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -19,6 +21,7 @@ import (
 	"tailscale.com/client/web"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
@@ -67,6 +70,8 @@ func (b *LocalBackend) webClientGetOrInit() (s *web.Server, err error) {
 		Mode:        web.ManageServerMode,
 		LocalClient: b.webClient.lc,
 		Logf:        b.logf,
+		NewAuthURL:  b.newWebClientAuthURL,
+		WaitAuthURL: b.waitWebClientAuthURL,
 	}); err != nil {
 		return nil, fmt.Errorf("web.NewServer: %w", err)
 	}
@@ -143,4 +148,58 @@ func (b *LocalBackend) newWebClientListener(ctx context.Context, ap netip.AddrPo
 		handler: b.handleWebClientConn,
 		bo:      backoff.NewBackoff("webclient-listener", logf, 30*time.Second),
 	}
+}
+
+// newWebClientAuthURL talks to the control server to create a new auth
+// URL that can be used to validate a browser session to manage this
+// tailscaled instance via the web client.
+func (b *LocalBackend) newWebClientAuthURL(ctx context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
+	return b.doWebClientNoiseRequest(ctx, "", src)
+}
+
+// waitWebClientAuthURL connects to the control server and blocks
+// until the associated auth URL has been completed by its user,
+// or until ctx is canceled.
+func (b *LocalBackend) waitWebClientAuthURL(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
+	return b.doWebClientNoiseRequest(ctx, id, src)
+}
+
+// doWebClientNoiseRequest handles making the "/machine/webclient"
+// noise requests to the control server for web client user auth.
+//
+// It either creates a new control auth URL or waits for an existing
+// one to be completed, based on the presence or absence of the
+// provided id value.
+func (b *LocalBackend) doWebClientNoiseRequest(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
+	nm := b.NetMap()
+	if nm == nil || !nm.SelfNode.Valid() {
+		return nil, errors.New("[unexpected] no self node")
+	}
+	dst := nm.SelfNode.ID()
+	var noiseURL string
+	if id != "" {
+		noiseURL = fmt.Sprintf("https://unused/machine/webclient/wait/%d/to/%d/%s", src, dst, id)
+	} else {
+		noiseURL = fmt.Sprintf("https://unused/machine/webclient/init/%d/to/%d", src, dst)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", noiseURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.DoNoiseRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed request: %s", body)
+	}
+	var authResp *tailcfg.WebClientAuthResponse
+	if err := json.Unmarshal(body, &authResp); err != nil {
+		return nil, err
+	}
+	return authResp, nil
 }

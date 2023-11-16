@@ -86,7 +86,6 @@ var handler = map[string]localAPIHandler{
 	"debug-peer-endpoint-changes": (*Handler).serveDebugPeerEndpointChanges,
 	"debug-capture":               (*Handler).serveDebugCapture,
 	"debug-log":                   (*Handler).serveDebugLog,
-	"debug-web-client":            (*Handler).serveDebugWebClient,
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
@@ -2298,65 +2297,6 @@ func (h *Handler) serveQueryFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-// serveDebugWebClient is for use by the web client to communicate with
-// the control server for browser auth sessions.
-//
-// This is an unsupported localapi endpoint and restricted to flagged
-// domains on the control side. TODO(tailscale/#14335): Rename this handler.
-func (h *Handler) serveDebugWebClient(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "access denied", http.StatusForbidden)
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
-		return
-	}
-
-	type reqData struct {
-		ID  string
-		Src tailcfg.NodeID
-	}
-	var data reqData
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "invalid JSON body", 400)
-		return
-	}
-	nm := h.b.NetMap()
-	if nm == nil || !nm.SelfNode.Valid() {
-		http.Error(w, "[unexpected] no self node", 400)
-		return
-	}
-	dst := nm.SelfNode.ID()
-
-	var noiseURL string
-	if data.ID != "" {
-		noiseURL = fmt.Sprintf("https://unused/machine/webclient/wait/%d/to/%d/%s", data.Src, dst, data.ID)
-	} else {
-		noiseURL = fmt.Sprintf("https://unused/machine/webclient/init/%d/to/%d", data.Src, dst)
-	}
-
-	req, err := http.NewRequestWithContext(r.Context(), "POST", noiseURL, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.b.DoNoiseRequest(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, string(body), resp.StatusCode)
-		return
-	}
-	w.Write(body)
-	w.Header().Set("Content-Type", "application/json")
 }
 
 func defBool(a string, def bool) bool {
