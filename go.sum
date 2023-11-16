@@ -884,8 +884,8 @@ github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89 h1:7xU7AFQE83h0wz/
 github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89/go.mod h1:OGMqrTzDqmJkGumUTtOv44Rp3/4xS+QFbE8Rn0AGlaU=
 github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85 h1:zrsUcqrG2uQSPhaUPjUQwozcRdDdSxxqhNgNZ3drZFk=
 github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85/go.mod h1:NzVQi3Mleb+qzq8VmcWpSkcSYxXIg0DkI6XDzpVkhJ0=
-github.com/tailscale/web-client-prebuilt v0.0.0-20231114171715-25f8d12b3c2d h1:6bpLeKxSPVTwxzoy+0SrDLEaa60G6jnGqgLAcdDhkDg=
-github.com/tailscale/web-client-prebuilt v0.0.0-20231114171715-25f8d12b3c2d/go.mod h1:agQPE6y6ldqCOui2gkIh7ZMztTkIQKH049tv8siLuNQ=
+github.com/tailscale/web-client-prebuilt v0.0.0-20231116165222-f819c0d50978 h1:qcDQ02doxKZ2/sUGDM0idC21mKP3G1TEC5IqlsECzv0=
+github.com/tailscale/web-client-prebuilt v0.0.0-20231116165222-f819c0d50978/go.mod h1:agQPE6y6ldqCOui2gkIh7ZMztTkIQKH049tv8siLuNQ=
 github.com/tailscale/wireguard-go v0.0.0-20231101022006-db7604d1aa90 h1:lMGYrokOq9NKDw1UMBH7AsS4boZ41jcduvYaRIdedhE=
 github.com/tailscale/wireguard-go v0.0.0-20231101022006-db7604d1aa90/go.mod h1:BOm5fXUBFM+m9woLNBoxI9TaBXXhGNP50LX/TGIvGb4=
 github.com/tc-hib/winres v0.2.1 h1:YDE0FiP0VmtRaDn7+aaChp1KiF4owBiJa5l964l5ujA=
