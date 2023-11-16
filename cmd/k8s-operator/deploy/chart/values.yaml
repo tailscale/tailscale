@@ -15,11 +15,29 @@ operatorConfig:
     # used.
     tag: ""
     digest: ""
+    pullPolicy: Always
   logging: "info"
   hostname: "tailscale-operator"
   nodeSelector:
     kubernetes.io/os: linux
 
+  resources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+  podAnnotations: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  podSecurityContext: {}
+
+  securityContext: {}
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.
@@ -43,3 +61,5 @@ proxyConfig:
 # https://tailscale.com/kb/1236/kubernetes-operator/#accessing-the-kubernetes-control-plane-using-an-api-server-proxy
 apiServerProxyConfig:
   mode: "false" # "true", "false", "noauth"
+
+imagePullSecrets: []
