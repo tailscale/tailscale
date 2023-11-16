@@ -37,6 +37,7 @@ var (
 	lastMapPollEndedAt      time.Time
 	lastStreamedMapResponse time.Time
 	derpHomeRegion          int
+	derpHomeless            bool
 	derpRegionConnected     = map[int]bool{}
 	derpRegionHealthProblem = map[int]string{}
 	derpRegionLastFrame     = map[int]time.Time{}
@@ -315,10 +316,14 @@ func GetInPollNetMap() bool {
 }
 
 // SetMagicSockDERPHome notes what magicsock's view of its home DERP is.
-func SetMagicSockDERPHome(region int) {
+//
+// The homeless parameter is whether magicsock is running in DERP-disconnected
+// mode, without discovering and maintaining a connection to its home DERP.
+func SetMagicSockDERPHome(region int, homeless bool) {
 	mu.Lock()
 	defer mu.Unlock()
 	derpHomeRegion = region
+	derpHomeless = homeless
 	selfCheckLocked()
 }
 
@@ -447,15 +452,17 @@ func overallErrorLocked() error {
 	if d := now.Sub(lastStreamedMapResponse).Round(time.Second); d > tooIdle {
 		return fmt.Errorf("no map response in %v", d)
 	}
-	rid := derpHomeRegion
-	if rid == 0 {
-		return errors.New("no DERP home")
-	}
-	if !derpRegionConnected[rid] {
-		return fmt.Errorf("not connected to home DERP region %v", rid)
-	}
-	if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
-		return fmt.Errorf("haven't heard from home DERP region %v in %v", rid, d)
+	if !derpHomeless {
+		rid := derpHomeRegion
+		if rid == 0 {
+			return errors.New("no DERP home")
+		}
+		if !derpRegionConnected[rid] {
+			return fmt.Errorf("not connected to home DERP region %v", rid)
+		}
+		if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
+			return fmt.Errorf("haven't heard from home DERP region %v in %v", rid, d)
+		}
 	}
 	if udp4Unbound {
 		return errors.New("no udp4 bind")
