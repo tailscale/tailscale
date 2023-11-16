@@ -349,6 +349,10 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 		// TODO(soniaappasamy): we may want a minimal node data response here
 		s.serveGetNodeData(w, r)
 		return
+	case httpm.POST:
+		// TODO(will): refactor to expose only a dedicated login method
+		s.servePostNodeUpdate(w, r)
+		return
 	}
 	http.Error(w, "invalid endpoint", http.StatusNotFound)
 	return
