@@ -3,6 +3,18 @@
 @tailwind utilities;
 
 @layer base {
+  @font-face {
+    font-family: "Inter";
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+    src: url("./assets/fonts/Inter.var.latin.woff2") format("woff2-variations");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC,
+      U+02BB-02BC, U+2000-206F, U+2122, U+2190-2199, U+2212, U+2215, U+FEFF,
+      U+FFFD, U+E06B-E080, U+02E2, U+02E2, U+02B0, U+1D34, U+1D57, U+1D40,
+      U+207F, U+1D3A, U+1D48, U+1D30, U+02B3, U+1D3F;
+  }
+
   h1 {
     @apply text-neutral-800 text-[22px] font-medium leading-[30.80px];
   }

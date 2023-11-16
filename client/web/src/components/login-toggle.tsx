@@ -1,10 +1,10 @@
 import cx from "classnames"
 import React, { useCallback, useEffect, useState } from "react"
+import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
+import { ReactComponent as Eye } from "src/assets/icons/eye.svg"
+import { ReactComponent as User } from "src/assets/icons/user.svg"
 import { AuthResponse, AuthType } from "src/hooks/auth"
 import { NodeData } from "src/hooks/node-data"
-import { ReactComponent as ChevronDown } from "src/icons/chevron-down.svg"
-import { ReactComponent as Eye } from "src/icons/eye.svg"
-import { ReactComponent as User } from "src/icons/user.svg"
 import Popover from "src/ui/popover"
 import ProfilePic from "src/ui/profile-pic"
 
