@@ -108,6 +108,10 @@ type Server struct {
 	// If empty, the Tailscale default is used.
 	ControlURL string
 
+	// RunWebClient, if true, runs a client for managing this node over
+	// its Tailscale interface on port 5252.
+	RunWebClient bool
+
 	// Port is the UDP port to listen on for WireGuard and peer-to-peer
 	// traffic. If zero, a port is automatically selected. Leave this
 	// field at zero unless you know what you are doing.
@@ -575,6 +579,7 @@ func (s *Server) start() (reterr error) {
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
 	prefs.ControlURL = s.ControlURL
+	prefs.RunWebClient = s.RunWebClient
 	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
@@ -603,6 +608,7 @@ func (s *Server) start() (reterr error) {
 	s.localAPIListener = lal
 	s.localClient = &tailscale.LocalClient{Dial: lal.Dial}
 	s.localAPIServer = &http.Server{Handler: lah}
+	s.lb.ConfigureWebClient(s.localClient)
 	go func() {
 		if err := s.localAPIServer.Serve(lal); err != nil {
 			logf("localapi serve error: %v", err)
