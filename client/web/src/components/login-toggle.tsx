@@ -1,5 +1,5 @@
 import cx from "classnames"
-import React, { useCallback, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { AuthResponse, AuthType } from "src/hooks/auth"
 import { NodeData } from "src/hooks/node-data"
 import { ReactComponent as ChevronDown } from "src/icons/chevron-down.svg"
@@ -81,6 +81,49 @@ function LoginPopoverContent({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
+  /**
+   * canConnectOverTS indicates whether the current viewer
+   * is able to hit the node's web client that's being served
+   * at http://${node.IP}:5252. If false, this means that the
+   * viewer must connect to the correct tailnet before being
+   * able to sign in.
+   */
+  const [canConnectOverTS, setCanConnectOverTS] = useState<boolean>(false)
+  const [isRunningCheck, setIsRunningCheck] = useState<boolean>(false)
+
+  const checkTSConnection = useCallback(() => {
+    if (auth.viewerIdentity) {
+      setCanConnectOverTS(true) // already connected over ts
+      return
+    }
+    // Otherwise, test connection to the ts IP.
+    if (isRunningCheck) {
+      return // already checking
+    }
+    setIsRunningCheck(true)
+    fetch(`http://${node.IP}:5252/ok`, { mode: "no-cors" })
+      .then(() => {
+        setIsRunningCheck(false)
+        setCanConnectOverTS(true)
+      })
+      .catch(() => setIsRunningCheck(false))
+  }, [
+    auth.viewerIdentity,
+    isRunningCheck,
+    setCanConnectOverTS,
+    setIsRunningCheck,
+  ])
+
+  /**
+   * Checking connection for first time on page load.
+   *
+   * While not connected, we check again whenever the mouse
+   * enters the popover component, to pick up on the user
+   * leaving to turn on Tailscale then returning to the view.
+   * See `onMouseEnter` on the div below.
+   */
+  useEffect(() => checkTSConnection(), [])
+
   const handleSignInClick = useCallback(() => {
     if (auth.viewerIdentity) {
       newSession()
@@ -93,7 +136,7 @@ function LoginPopoverContent({
   }, [node.IP, auth.viewerIdentity, newSession])
 
   return (
-    <>
+    <div onMouseEnter={!canConnectOverTS ? checkTSConnection : undefined}>
       <div className="text-black text-sm font-medium leading-tight">
         {!auth.canManageNode ? "Viewing" : "Managing"}
         {auth.viewerIdentity && ` as ${auth.viewerIdentity.loginName}`}
@@ -117,9 +160,15 @@ function LoginPopoverContent({
             <button
               className={cx(
                 "w-full px-3 py-2 bg-indigo-500 rounded shadow text-center text-white text-sm font-medium mt-2",
-                { "mb-2": auth.viewerIdentity }
+                {
+                  "mb-2": auth.viewerIdentity,
+                  "cursor-not-allowed": !canConnectOverTS,
+                }
               )}
               onClick={handleSignInClick}
+              // TODO: add some helper info when disabled
+              // due to needing to connect to TS
+              disabled={!canConnectOverTS}
             >
               {auth.viewerIdentity ? "Sign in to confirm identity" : "Sign in"}
             </button>
@@ -144,6 +193,6 @@ function LoginPopoverContent({
           </div>
         </>
       )}
-    </>
+    </div>
   )
 }
