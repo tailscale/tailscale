@@ -41,6 +41,7 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -236,6 +237,8 @@ type certStore interface {
 
 var errCertExpired = errors.New("cert expired")
 
+var testX509Roots *x509.CertPool // set non-nil by tests
+
 func (b *LocalBackend) getCertStore() (certStore, error) {
 	switch b.store.(type) {
 	case *store.FileStore:
@@ -252,7 +255,10 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return certFileStore{dir: dir}, nil
+	if testX509Roots != nil && !testenv.InTest() {
+		panic("use of test hook outside of tests")
+	}
+	return certFileStore{dir: dir, testRoots: testX509Roots}, nil
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
