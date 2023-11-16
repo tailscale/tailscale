@@ -75,3 +75,26 @@ type C2NAppConnectorDomainRoutesResponse struct {
 	// to a list of resolved IP addresses.
 	Domains map[string][]netip.Addr
 }
+
+// C2NTLSCertInfo describes the state of a cached TLS certificate.
+type C2NTLSCertInfo struct {
+	// Valid means that the node has a cached and valid (not expired)
+	// certificate.
+	Valid bool `json:",omitempty"`
+	// Error is the error string if the certificate is not valid. If error is
+	// non-empty, the other booleans below might say why.
+	Error string `json:",omitempty"`
+
+	// Missing is whether the error string indicates a missing certificate
+	// that's never been fetched or isn't on disk.
+	Missing bool `json:",omitempty"`
+
+	// Expired is whether the error string indicates an expired certificate.
+	Expired bool `json:",omitempty"`
+
+	NotBefore string `json:",omitempty"` // RFC3339, if Valid
+	NotAfter  string `json:",omitempty"` // RFC3339, if Valid
+
+	// TODO(bradfitz): add fields for whether an ACME fetch is currently in
+	// process and when it started, etc.
+}
