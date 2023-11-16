@@ -137,7 +137,7 @@ function LoginPopoverContent({
 
   return (
     <div onMouseEnter={!canConnectOverTS ? checkTSConnection : undefined}>
-      <div className="text-black text-sm font-medium leading-tight">
+      <div className="text-black text-sm font-medium leading-tight mb-1">
         {!auth.canManageNode ? "Viewing" : "Managing"}
         {auth.viewerIdentity && ` as ${auth.viewerIdentity.loginName}`}
       </div>
@@ -181,7 +181,7 @@ function LoginPopoverContent({
         ))}
       {auth.viewerIdentity && (
         <>
-          <hr />
+          <hr className="my-2" />
           <div className="flex items-center">
             <User className="flex-shrink-0" />
             <p className="text-neutral-500 text-xs ml-2">
