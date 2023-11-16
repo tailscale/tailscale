@@ -71,6 +71,13 @@ type Server struct {
 	// The map provides a lookup of the session by cookie value
 	// (browserSession.ID => browserSession).
 	browserSessions sync.Map
+
+	// newAuthURL creates a new auth URL that can be used to validate
+	// a browser session to manage this web client.
+	newAuthURL func(ctx context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
+	// waitWebClientAuthURL blocks until the associated auth URL has
+	// been completed by its user, or until ctx is canceled.
+	waitAuthURL func(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
 }
 
 // ServerMode specifies the mode of a running web.Server.
@@ -121,6 +128,20 @@ type ServerOpts struct {
 	// Logf optionally provides a logger function.
 	// log.Printf is used as default.
 	Logf logger.Logf
+
+	// The following two fields are required and used exclusively
+	// in ManageServerMode to facilitate the control server login
+	// check step for authorizing browser sessions.
+
+	// NewAuthURL should be provided as a function that generates
+	// a new tailcfg.WebClientAuthResponse.
+	// This field is required for ManageServerMode mode.
+	NewAuthURL func(ctx context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
+	// WaitAuthURL should be provided as a function that blocks until
+	// the associated tailcfg.WebClientAuthResponse has been marked
+	// as completed.
+	// This field is required for ManageServerMode mode.
+	WaitAuthURL func(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
 }
 
 // NewServer constructs a new Tailscale web client server.
@@ -140,13 +161,23 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
 	s = &Server{
-		mode:       opts.Mode,
-		logf:       opts.Logf,
-		devMode:    envknob.Bool("TS_DEBUG_WEB_CLIENT_DEV"),
-		lc:         opts.LocalClient,
-		cgiMode:    opts.CGIMode,
-		pathPrefix: opts.PathPrefix,
-		timeNow:    opts.TimeNow,
+		mode:        opts.Mode,
+		logf:        opts.Logf,
+		devMode:     envknob.Bool("TS_DEBUG_WEB_CLIENT_DEV"),
+		lc:          opts.LocalClient,
+		cgiMode:     opts.CGIMode,
+		pathPrefix:  opts.PathPrefix,
+		timeNow:     opts.TimeNow,
+		newAuthURL:  opts.NewAuthURL,
+		waitAuthURL: opts.WaitAuthURL,
+	}
+	if s.mode == ManageServerMode {
+		if opts.NewAuthURL == nil {
+			return nil, fmt.Errorf("must provide a NewAuthURL implementation")
+		}
+		if opts.WaitAuthURL == nil {
+			return nil, fmt.Errorf("must provide WaitAuthURL implementation")
+		}
 	}
 	if s.timeNow == nil {
 		s.timeNow = time.Now

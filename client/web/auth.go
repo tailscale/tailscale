@@ -4,14 +4,10 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -152,7 +148,7 @@ func (s *Server) getSession(r *http.Request) (*browserSession, *apitype.WhoIsRes
 // and stores it back to the session cache. Creating of a new session includes
 // generating a new auth URL from the control server.
 func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*browserSession, error) {
-	d, err := s.getOrAwaitAuth(ctx, "", src.Node.ID)
+	a, err := s.newAuthURL(ctx, src.Node.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,8 +160,8 @@ func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*b
 		ID:      sid,
 		SrcNode: src.Node.ID,
 		SrcUser: src.UserProfile.ID,
-		AuthID:  d.ID,
-		AuthURL: d.URL,
+		AuthID:  a.ID,
+		AuthURL: a.URL,
 		Created: s.timeNow(),
 	}
 	s.browserSessions.Store(sid, session)
@@ -179,7 +175,7 @@ func (s *Server) awaitUserAuth(ctx context.Context, session *browserSession) err
 	if session.isAuthorized(s.timeNow()) {
 		return nil // already authorized
 	}
-	d, err := s.getOrAwaitAuth(ctx, session.AuthID, session.SrcNode)
+	a, err := s.waitAuthURL(ctx, session.AuthID, session.SrcNode)
 	if err != nil {
 		// Clean up the session. Doing this on any error from control
 		// server to avoid the user getting stuck with a bad session
@@ -187,50 +183,11 @@ func (s *Server) awaitUserAuth(ctx context.Context, session *browserSession) err
 		s.browserSessions.Delete(session.ID)
 		return err
 	}
-	if d.Complete {
-		session.Authenticated = d.Complete
+	if a.Complete {
+		session.Authenticated = a.Complete
 		s.browserSessions.Store(session.ID, session)
 	}
 	return nil
-}
-
-// getOrAwaitAuth connects to the control server for user auth,
-// with the following behavior:
-//
-//  1. If authID is provided empty, a new auth URL is created on the control
-//     server and reported back here, which can then be used to redirect the
-//     user on the frontend.
-//  2. If authID is provided non-empty, the connection to control blocks until
-//     the user has completed authenticating the associated auth URL,
-//     or until ctx is canceled.
-func (s *Server) getOrAwaitAuth(ctx context.Context, authID string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
-	type data struct {
-		ID  string
-		Src tailcfg.NodeID
-	}
-	var b bytes.Buffer
-	if err := json.NewEncoder(&b).Encode(data{ID: authID, Src: src}); err != nil {
-		return nil, err
-	}
-	url := "http://" + apitype.LocalAPIHost + "/localapi/v0/debug-web-client"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, &b)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.lc.DoLocalRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed request: %s", body)
-	}
-	var authResp *tailcfg.WebClientAuthResponse
-	if err := json.Unmarshal(body, &authResp); err != nil {
-		return nil, err
-	}
-	return authResp, nil
 }
 
 func (s *Server) newSessionID() (string, error) {
