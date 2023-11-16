@@ -1,5 +1,6 @@
 import cx from "classnames"
 import React, { useEffect } from "react"
+import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
@@ -8,7 +9,6 @@ import SSHView from "src/components/views/ssh-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
-import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {

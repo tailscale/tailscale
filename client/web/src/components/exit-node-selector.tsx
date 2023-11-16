@@ -1,5 +1,7 @@
 import cx from "classnames"
-import { default as React, useCallback, useMemo, useState } from "react"
+import React, { useCallback, useMemo, useState } from "react"
+import { ReactComponent as Check } from "src/assets/icons/check.svg"
+import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
 import useExitNodes, {
   ExitNode,
   noExitNode,
@@ -7,8 +9,6 @@ import useExitNodes, {
   trimDNSSuffix,
 } from "src/hooks/exit-nodes"
 import { NodeData, NodeUpdate, PrefsUpdate } from "src/hooks/node-data"
-import { ReactComponent as Check } from "src/icons/check.svg"
-import { ReactComponent as ChevronDown } from "src/icons/chevron-down.svg"
 import Popover from "src/ui/popover"
 import SearchInput from "src/ui/search-input"
 

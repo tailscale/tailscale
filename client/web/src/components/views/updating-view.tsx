@@ -1,12 +1,12 @@
 import React from "react"
+import { ReactComponent as CheckCircleIcon } from "src/assets/icons/check-circle.svg"
+import { ReactComponent as XCircleIcon } from "src/assets/icons/x-circle.svg"
 import { ChangelogText } from "src/components/update-available"
 import {
   UpdateState,
   useInstallUpdate,
   VersionInfo,
 } from "src/hooks/self-update"
-import { ReactComponent as CheckCircleIcon } from "src/icons/check-circle.svg"
-import { ReactComponent as XCircleIcon } from "src/icons/x-circle.svg"
 import Spinner from "src/ui/spinner"
 import { Link } from "wouter"
 

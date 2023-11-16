@@ -1,6 +1,6 @@
 import cx from "classnames"
 import React, { forwardRef, InputHTMLAttributes } from "react"
-import { ReactComponent as Search } from "src/icons/search.svg"
+import { ReactComponent as Search } from "src/assets/icons/search.svg"
 
 type Props = {
   className?: string

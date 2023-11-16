@@ -1,9 +1,9 @@
 import cx from "classnames"
 import React from "react"
+import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
+import { ReactComponent as ConnectedDeviceIcon } from "src/assets/icons/connected-device.svg"
 import ExitNodeSelector from "src/components/exit-node-selector"
 import { NodeData, NodeUpdate, PrefsUpdate } from "src/hooks/node-data"
-import { ReactComponent as ArrowRight } from "src/icons/arrow-right.svg"
-import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { Link } from "wouter"
 
 export default function HomeView({

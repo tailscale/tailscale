@@ -1,7 +1,7 @@
 import React, { useCallback } from "react"
 import { apiFetch } from "src/api"
+import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import { NodeData } from "src/hooks/node-data"
-import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 
 /**
  * LoginView is rendered when the client is not authenticated
