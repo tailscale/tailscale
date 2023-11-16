@@ -239,13 +239,21 @@ func (de *endpoint) initFakeUDPAddr() {
 func (de *endpoint) noteRecvActivity(ipp netip.AddrPort) {
 	now := mono.Now()
 
-	// TODO(raggi): this probably applies relatively equally well to disco
-	// managed endpoints, but that would be a less conservative change.
 	if de.isWireguardOnly {
 		de.mu.Lock()
 		de.bestAddr.AddrPort = ipp
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
+		de.mu.Unlock()
+	} else {
+		// TODO(jwhited): subject to change as part of silent disco effort.
+		// Necessary when heartbeat is disabled for the endpoint, otherwise we
+		// kick off discovery disco pings every trustUDPAddrDuration and mirror
+		// to DERP.
+		de.mu.Lock()
+		if de.heartbeatDisabled && de.bestAddr.AddrPort == ipp {
+			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		}
 		de.mu.Unlock()
 	}
 
