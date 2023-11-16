@@ -13,6 +13,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/winutil"
 )
 
 // GetConnIdentity extracts the identity information from the connection
@@ -64,7 +65,28 @@ func (t *token) IsAdministrator() (bool, error) {
 		return false, err
 	}
 
-	return t.t.IsMember(baSID)
+	isMember, err := t.t.IsMember(baSID)
+	if err != nil {
+		return false, err
+	}
+	if isMember {
+		return true, nil
+	}
+
+	isLimited, err := winutil.IsTokenLimited(t.t)
+	if err != nil || !isLimited {
+		return false, err
+	}
+
+	// Try to obtain a linked token, and if present, check it.
+	// (This should be the elevated token associated with limited UAC accounts.)
+	linkedToken, err := t.t.GetLinkedToken()
+	if err != nil {
+		return false, err
+	}
+	defer linkedToken.Close()
+
+	return linkedToken.IsMember(baSID)
 }
 
 func (t *token) IsElevated() bool {

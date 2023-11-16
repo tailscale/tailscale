@@ -1,156 +1,139 @@
-import React from "react"
-import { Footer, Header, IP, State } from "src/components/legacy"
+import cx from "classnames"
+import React, { useEffect } from "react"
+import LoginToggle from "src/components/login-toggle"
+import DeviceDetailsView from "src/components/views/device-details-view"
+import HomeView from "src/components/views/home-view"
+import LoginClientView from "src/components/views/login-client-view"
+import SSHView from "src/components/views/ssh-view"
+import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
-import { ReactComponent as ConnectedDeviceIcon } from "src/icons/connected-device.svg"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
-import { ReactComponent as TailscaleLogo } from "src/icons/tailscale-logo.svg"
+import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
-  // TODO(sonia): use isPosting value from useNodeData
-  // to fill loading states.
-  const { data, refreshData, updateNode } = useNodeData()
-
-  if (!data) {
-    // TODO(sonia): add a loading view
-    return <div className="text-center py-14">Loading...</div>
-  }
-
-  const needsLogin = data?.Status === "NeedsLogin" || data?.Status === "NoState"
-
-  return !needsLogin &&
-    (data.DebugMode === "login" || data.DebugMode === "full") ? (
-    <WebClient {...data} />
-  ) : (
-    // Legacy client UI
-    <div className="py-14">
-      <main className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
-        <Header data={data} refreshData={refreshData} updateNode={updateNode} />
-        <IP data={data} />
-        <State data={data} updateNode={updateNode} />
-      </main>
-      <Footer licensesURL={data.LicensesURL} />
-    </div>
-  )
-}
-
-function WebClient(props: NodeData) {
-  const { data: auth, loading: loadingAuth, waitOnAuth } = useAuth()
-
-  if (loadingAuth) {
-    return <div className="text-center py-14">Loading...</div>
-  }
+  const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <div className="flex flex-col items-center min-w-sm max-w-lg mx-auto py-10">
-      {props.DebugMode === "full" && auth?.ok ? (
-        <ManagementView {...props} />
+    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
+      {loadingAuth || !auth ? (
+        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
-        <ReadonlyView data={props} auth={auth} waitOnAuth={waitOnAuth} />
+        <WebClient auth={auth} newSession={newSession} />
       )}
-      <Footer className="mt-20" licensesURL={props.LicensesURL} />
-    </div>
+    </main>
   )
 }
 
-function ReadonlyView({
-  data,
+function WebClient({
   auth,
-  waitOnAuth,
+  newSession,
 }: {
-  data: NodeData
-  auth?: AuthResponse
-  waitOnAuth: () => Promise<void>
+  auth: AuthResponse
+  newSession: () => Promise<void>
 }) {
-  return (
+  const { data, refreshData, updateNode, updatePrefs } = useNodeData()
+  useEffect(() => {
+    refreshData()
+  }, [auth, refreshData])
+
+  return !data ? (
+    <div className="text-center py-14">Loading...</div>
+  ) : data.Status === "NeedsLogin" || data.Status === "NoState" ? (
+    // Client not on a tailnet, render login.
+    <LoginClientView
+      data={data}
+      onLoginClick={() => updateNode({ Reauthenticate: true })}
+    />
+  ) : (
+    // Otherwise render the new web client.
     <>
-      <div className="pb-52 mx-auto">
-        <TailscaleLogo />
-      </div>
-      <div className="w-full p-4 bg-stone-50 rounded-3xl border border-gray-200 flex flex-col gap-4">
-        <div className="flex gap-2.5">
-          <ProfilePic url={data.Profile.ProfilePicURL} />
-          <div className="font-medium">
-            <div className="text-neutral-500 text-xs uppercase tracking-wide">
-              Owned by
-            </div>
-            <div className="text-neutral-800 text-sm leading-tight">
-              {/* TODO(sonia): support tagged node profile view more eloquently */}
-              {data.Profile.LoginName}
-            </div>
-          </div>
-        </div>
-        <div className="px-5 py-4 bg-white rounded-lg border border-gray-200 justify-between items-center flex">
-          <div className="flex gap-3">
-            <ConnectedDeviceIcon />
-            <div className="text-neutral-800">
-              <div className="text-lg font-medium leading-[25.20px]">
-                {data.DeviceName}
-              </div>
-              <div className="text-sm leading-tight">{data.IP}</div>
-            </div>
-          </div>
-          {data.DebugMode === "full" && (
-            <button
-              className="button button-blue ml-6"
-              onClick={() => {
-                window.open(auth?.authUrl, "_blank")
-                waitOnAuth()
-              }}
-            >
-              Access
-            </button>
-          )}
-        </div>
-      </div>
+      <Router base={data.URLPrefix}>
+        <Header node={data} auth={auth} newSession={newSession} />
+        <Switch>
+          <Route path="/">
+            <HomeView
+              readonly={!auth.canManageNode}
+              node={data}
+              updateNode={updateNode}
+            />
+          </Route>
+          <Route path="/details">
+            <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
+          </Route>
+          <Route path="/subnets">{/* TODO */}Subnet router</Route>
+          <Route path="/ssh">
+            <SSHView
+              readonly={!auth.canManageNode}
+              runningSSH={data.RunningSSHServer}
+              updatePrefs={updatePrefs}
+            />
+          </Route>
+          <Route path="/serve">{/* TODO */}Share local content</Route>
+          <Route path="/update">
+            <UpdatingView
+              versionInfo={data.ClientVersion}
+              currentVersion={data.IPNVersion}
+            />
+          </Route>
+          <Route>
+            <h2 className="mt-8">Page not found</h2>
+          </Route>
+        </Switch>
+      </Router>
     </>
   )
 }
 
-function ManagementView(props: NodeData) {
+function Header({
+  node,
+  auth,
+  newSession,
+}: {
+  node: NodeData
+  auth: AuthResponse
+  newSession: () => Promise<void>
+}) {
+  const [loc] = useLocation()
+
   return (
-    <div className="px-5">
+    <>
       <div className="flex justify-between mb-12">
-        <TailscaleIcon />
-        <div className="flex">
-          <p className="mr-2">{props.Profile.LoginName}</p>
-          {/* TODO(sonia): support tagged node profile view more eloquently */}
-          <ProfilePic url={props.Profile.ProfilePicURL} />
-        </div>
-      </div>
-      <p className="tracking-wide uppercase text-gray-600 pb-3">This device</p>
-      <div className="-mx-5 border rounded-md px-5 py-4 bg-white">
-        <div className="flex justify-between items-center text-lg">
-          <div className="flex items-center">
-            <ConnectedDeviceIcon />
-            <p className="font-medium ml-3">{props.DeviceName}</p>
+        <div className="flex gap-3">
+          <TailscaleIcon />
+          <div className="inline text-neutral-800 text-lg font-medium leading-snug">
+            {node.DomainName}
           </div>
-          <p className="tracking-widest">{props.IP}</p>
         </div>
+        <LoginToggle node={node} auth={auth} newSession={newSession} />
       </div>
-      <p className="text-gray-500 pt-2">
-        Tailscale is up and running. You can connect to this device from devices
-        in your tailnet by using its name or IP address.
-      </p>
-      <button className="button button-blue mt-6">Advertise exit node</button>
-    </div>
+      {loc !== "/" && loc !== "/update" && (
+        <Link
+          to="/"
+          className="text-indigo-500 font-medium leading-snug block mb-[10px]"
+        >
+          &larr; Back to {node.DeviceName}
+        </Link>
+      )}
+    </>
   )
 }
 
-function ProfilePic({ url }: { url: string }) {
+function Footer({
+  licensesURL,
+  className,
+}: {
+  licensesURL: string
+  className?: string
+}) {
   return (
-    <div className="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
-      {url ? (
-        <div
-          className="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
-          style={{
-            backgroundImage: `url(${url})`,
-            backgroundSize: "cover",
-          }}
-        />
-      ) : (
-        <div className="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed" />
-      )}
-    </div>
+    <footer className={cx("container max-w-lg mx-auto text-center", className)}>
+      <a
+        className="text-xs text-gray-500 hover:text-gray-600"
+        href={licensesURL}
+      >
+        Open Source Licenses
+      </a>
+    </footer>
   )
 }

@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"go4.org/netipx"
+	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/appc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -30,6 +33,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -1142,6 +1146,109 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 	}
 }
 
+func TestOfferingAppConnector(t *testing.T) {
+	b := newTestBackend(t)
+	if b.OfferingAppConnector() {
+		t.Fatal("unexpected offering app connector")
+	}
+	b.appConnector = appc.NewAppConnector(t.Logf, nil)
+	if !b.OfferingAppConnector() {
+		t.Fatal("unexpected not offering app connector")
+	}
+}
+
+func TestRouteAdvertiser(t *testing.T) {
+	b := newTestBackend(t)
+	testPrefix := netip.MustParsePrefix("192.0.0.8/32")
+
+	ra := appc.RouteAdvertiser(b)
+	must.Do(ra.AdvertiseRoute(testPrefix))
+
+	routes := b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+}
+
+func TestObserveDNSResponse(t *testing.T) {
+	b := newTestBackend(t)
+
+	// ensure no error when no app connector is configured
+	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+
+	rc := &routeCollector{}
+	b.appConnector = appc.NewAppConnector(t.Logf, rc)
+	b.appConnector.UpdateDomains([]string{"example.com"})
+
+	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
+	if !slices.Equal(rc.routes, wantRoutes) {
+		t.Fatalf("got routes %v, want %v", rc.routes, wantRoutes)
+	}
+}
+
+func TestReconfigureAppConnector(t *testing.T) {
+	b := newTestBackend(t)
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	if b.appConnector != nil {
+		t.Fatal("unexpected app connector")
+	}
+
+	b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{
+				Advertise: true,
+			},
+		},
+		AppConnectorSet: true,
+	})
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	if b.appConnector == nil {
+		t.Fatal("expected app connector")
+	}
+
+	appCfg := `{
+		"name": "example",
+		"domains": ["example.com"],
+		"connectors": ["tag:example"]
+	}`
+
+	b.netMap.SelfNode = (&tailcfg.Node{
+		Name: "example.ts.net",
+		Tags: []string{"tag:example"},
+		CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+			"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
+		}),
+	}).View()
+
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+
+	want := []string{"example.com"}
+	if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {
+		t.Fatalf("got domains %v, want %v", b.appConnector.Domains(), want)
+	}
+	if v, _ := b.hostinfo.AppConnector.Get(); !v {
+		t.Fatalf("expected app connector service")
+	}
+
+	// disable the connector in order to assert that the service is removed
+	b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{
+				Advertise: false,
+			},
+		},
+		AppConnectorSet: true,
+	})
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	if b.appConnector != nil {
+		t.Fatal("expected no app connector")
+	}
+	if v, _ := b.hostinfo.AppConnector.Get(); v {
+		t.Fatalf("expected no app connector service")
+	}
+}
+
 func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
 	if a == nil && b == nil {
 		return true
@@ -1175,4 +1282,51 @@ func routesEqual(t *testing.T, a, b map[dnsname.FQDN][]*dnstype.Resolver) bool {
 		}
 	}
 	return true
+}
+
+// dnsResponse is a test helper that creates a DNS response buffer for the given domain and address
+func dnsResponse(domain, address string) []byte {
+	addr := netip.MustParseAddr(address)
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+	b.EnableCompression()
+	b.StartAnswers()
+	switch addr.BitLen() {
+	case 32:
+		b.AResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName(domain),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+				TTL:   0,
+			},
+			dnsmessage.AResource{
+				A: addr.As4(),
+			},
+		)
+	case 128:
+		b.AAAAResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName(domain),
+				Type:  dnsmessage.TypeAAAA,
+				Class: dnsmessage.ClassINET,
+				TTL:   0,
+			},
+			dnsmessage.AAAAResource{
+				AAAA: addr.As16(),
+			},
+		)
+	default:
+		panic("invalid address length")
+	}
+	return must.Get(b.Finish())
+}
+
+// routeCollector is a test helper that collects the list of routes advertised
+type routeCollector struct {
+	routes []netip.Prefix
+}
+
+func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
+	rc.routes = append(rc.routes, pfx)
+	return nil
 }

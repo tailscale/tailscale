@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/util/must"
@@ -72,6 +74,8 @@ func TestDeleter(t *testing.T) {
 	m.opts.Logf = t.Logf
 	m.opts.Clock = tstime.DefaultClock{Clock: clock}
 	m.opts.Dir = dir
+	m.opts.State = must.Get(mem.New(nil, ""))
+	must.Do(m.opts.State.WriteState(ipn.TaildropReceivedKey, []byte{1}))
 	fd.Init(&m, eventHook)
 	defer fd.Shutdown()
 	insert := func(name string) {
@@ -85,8 +89,8 @@ func TestDeleter(t *testing.T) {
 		fd.Remove(name)
 	}
 
-	checkEvents("start init")
-	checkEvents("end init", "start waitAndDelete")
+	checkEvents("start full-scan")
+	checkEvents("end full-scan", "start waitAndDelete")
 	checkDirectory("foo.partial", "bar.partial", "buzz.deleted")
 
 	advance(deleteDelay / 2)
@@ -133,4 +137,16 @@ func TestDeleter(t *testing.T) {
 	checkEvents("start waitAndDelete")
 	remove("wuzz.partial")
 	checkEvents("end waitAndDelete")
+}
+
+// Test that the asynchronous full scan of the taildrop directory does not occur
+// on a cold start if taildrop has never received any files.
+func TestDeleterInitWithoutTaildrop(t *testing.T) {
+	var m Manager
+	var fd fileDeleter
+	m.opts.Logf = t.Logf
+	m.opts.Dir = t.TempDir()
+	m.opts.State = must.Get(mem.New(nil, ""))
+	fd.Init(&m, func(event string) { t.Errorf("unexpected event: %v", event) })
+	fd.Shutdown()
 }

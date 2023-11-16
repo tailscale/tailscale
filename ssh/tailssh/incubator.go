@@ -465,6 +465,12 @@ func (ss *sshSession) launchProcess() error {
 		ss.logf("starting non-pty command: %+v", cmd.Args)
 		return ss.startWithStdPipes()
 	}
+
+	if sshDisablePTY() {
+		ss.logf("pty support disabled by envknob")
+		return errors.New("pty support disabled by envknob")
+	}
+
 	ss.ptyReq = &ptyReq
 	pty, tty, err := ss.startWithPTY()
 	if err != nil {

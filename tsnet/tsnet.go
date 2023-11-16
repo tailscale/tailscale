@@ -1009,6 +1009,9 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	if srvConfig == nil {
 		srvConfig = &ipn.ServeConfig{}
 	}
+	if len(st.CertDomains) == 0 {
+		return nil, errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https")
+	}
 	domain := st.CertDomains[0]
 	hp := ipn.HostPort(domain + ":" + portStr)
 	if !srvConfig.AllowFunnel[hp] {

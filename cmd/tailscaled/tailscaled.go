@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -84,20 +85,6 @@ func defaultTunName() string {
 			// Try TUN, but fall back to userspace networking if needed.
 			// See https://github.com/tailscale/tailscale-synology/issues/35
 			return "tailscale0,userspace-networking"
-		case distro.Gokrazy:
-			// Gokrazy doesn't yet work in tun mode because the whole
-			// Gokrazy thing is no C code, and Tailscale currently
-			// depends on the iptables binary for Linux's
-			// wgengine/router.
-			// But on Gokrazy there's no legacy iptables, so we could use netlink
-			// to program nft-iptables directly. It just isn't done yet;
-			// see https://github.com/tailscale/tailscale/issues/391
-			//
-			// But Gokrazy does have the tun module built-in, so users
-			// can still run --tun=tailscale0 if they wish, if they
-			// arrange for iptables to be present or run in "tailscale
-			// up --netfilter-mode=off" mode, perhaps. Untested.
-			return "userspace-networking"
 		}
 
 	}
@@ -569,6 +556,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
+	lb.ConfigureWebClient(&tailscale.LocalClient{Socket: args.socketpath, UseSocketOnly: args.socketpath != ""})
 	configureTaildrop(logf, lb)
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)

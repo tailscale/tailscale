@@ -481,7 +481,7 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 // control server, and keeping the netmap up to date.
 func (c *Auto) mapRoutine() {
 	defer close(c.mapDone)
-	mrs := &mapRoutineState{
+	mrs := mapRoutineState{
 		c:  c,
 		bo: backoff.NewBackoff("mapRoutine", c.logf, 30*time.Second),
 	}

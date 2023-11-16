@@ -14,8 +14,7 @@ import (
 )
 
 var (
-	addr    = flag.String("addr", "localhost:8060", "address of Tailscale web client")
-	devMode = flag.Bool("dev", false, "run web client in dev mode")
+	addr = flag.String("addr", "localhost:8060", "address of Tailscale web client")
 )
 
 func main() {
@@ -30,11 +29,14 @@ func main() {
 	}
 
 	// Serve the Tailscale web client.
-	ws, cleanup := web.NewServer(web.ServerOpts{
-		DevMode:     *devMode,
+	ws, err := web.NewServer(web.ServerOpts{
+		Mode:        web.LoginServerMode,
 		LocalClient: lc,
 	})
-	defer cleanup()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ws.Shutdown()
 	log.Printf("Serving Tailscale web client on http://%s", *addr)
 	if err := http.ListenAndServe(*addr, ws); err != nil {
 		if err != http.ErrServerClosed {

@@ -2,6 +2,138 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  h1 {
+    @apply text-neutral-800 text-[22px] font-medium leading-[30.80px];
+  }
+
+  h2 {
+    @apply text-neutral-500 text-sm font-medium uppercase leading-tight tracking-wide;
+  }
+}
+
+@layer components {
+  .card {
+    @apply p-5 bg-white rounded-lg border border-gray-200;
+  }
+  .card h1 {
+    @apply text-neutral-800 text-lg font-medium leading-snug;
+  }
+  .card h2 {
+    @apply text-neutral-500 text-xs font-semibold uppercase tracking-wide;
+  }
+  .card tbody {
+    @apply flex flex-col gap-2;
+  }
+  .card td:first-child {
+    @apply w-40 text-neutral-500 text-sm leading-tight flex-shrink-0;
+  }
+  .card td:last-child {
+    @apply text-neutral-800 text-sm leading-tight;
+  }
+
+  .description {
+    @apply text-neutral-500 leading-snug
+  }
+
+  /**
+   * .toggle applies "Toggle" UI styles to input[type="checkbox"] form elements.
+   * You can use the -large and -small modifiers for size variants.
+   */
+  .toggle {
+    @apply appearance-none relative w-10 h-5 rounded-full bg-neutral-300 cursor-pointer;
+    transition: background-color 200ms ease-in-out;
+  }
+
+  .toggle:disabled {
+    @apply bg-neutral-200;
+    @apply cursor-not-allowed;
+  }
+
+  .toggle:checked {
+    @apply bg-indigo-500;
+  }
+
+  .toggle:checked:disabled {
+    @apply bg-indigo-300;
+  }
+
+  .toggle:focus {
+    @apply outline-none ring;
+  }
+
+  .toggle::after {
+    @apply absolute bg-white rounded-full will-change-[width];
+    @apply w-3.5 h-3.5 m-[0.1875rem] translate-x-0;
+    content: " ";
+    transition: width 200ms ease, transform 200ms ease;
+  }
+
+  .toggle:checked::after {
+    @apply translate-x-5;
+  }
+
+  .toggle:checked:disabled::after {
+    @apply bg-indigo-50;
+  }
+
+  .toggle:enabled:active::after {
+    @apply w-[1.125rem];
+  }
+
+  .toggle:checked:enabled:active::after {
+    @apply w-[1.125rem] translate-x-3.5;
+  }
+
+  .toggle-large {
+    @apply w-12 h-6;
+  }
+
+  .toggle-large::after {
+    @apply m-1 w-4 h-4;
+  }
+
+  .toggle-large:checked::after {
+    @apply translate-x-6;
+  }
+
+  .toggle-large:enabled:active::after {
+    @apply w-6;
+  }
+
+  .toggle-large:checked:enabled:active::after {
+    @apply w-6 translate-x-4;
+  }
+
+  .toggle-small {
+    @apply w-6 h-3;
+  }
+
+  .toggle-small:focus {
+    /**
+     * We disable ring for .toggle-small because it is a
+     * small, inline element.
+     */
+    @apply outline-none shadow-none;
+  }
+
+  .toggle-small::after {
+    @apply w-2 h-2 m-0.5;
+  }
+
+  .toggle-small:checked::after {
+    @apply translate-x-3;
+  }
+
+  .toggle-small:enabled:active::after {
+    @apply w-[0.675rem];
+  }
+
+  .toggle-small:checked:enabled:active::after {
+    @apply w-[0.675rem] translate-x-[0.55rem];
+  }
+}
+
 /**
  * Non-Tailwind styles begin here.
  */
@@ -127,4 +259,24 @@ html {
 .button-red:enabled:hover {
   background-color: #b22d30;
   border-color: #b22d30;
+}
+
+/**
+  * .spinner creates a circular animated spinner, most often used to indicate a
+  * loading state. The .spinner element must define a width, height, and
+  * border-width for the spinner to apply.
+  */
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  @apply border-transparent border-t-current border-l-current rounded-full;
+  animation: spin 700ms linear infinite;
 }

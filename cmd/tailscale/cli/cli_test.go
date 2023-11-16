@@ -810,6 +810,9 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "Egg":
 			// Not applicable.
 			continue
+		case "RunWebClient":
+			// TODO(tailscale/corp#14335): Currently behind a feature flag.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}
@@ -890,6 +893,7 @@ func TestUpdatePrefs(t *testing.T) {
 				AdvertiseRoutesSet:        true,
 				AdvertiseTagsSet:          true,
 				AllowSingleHostsSet:       true,
+				AppConnectorSet:           true,
 				ControlURLSet:             true,
 				CorpDNSSet:                true,
 				ExitNodeAllowLANAccessSet: true,
@@ -1127,6 +1131,49 @@ func TestUpdatePrefs(t *testing.T) {
 			},
 			wantJustEditMP: nil,
 			env:            upCheckEnv{backendState: "Running"},
+		},
+		{
+			name:  "advertise_connector",
+			flags: []string{"--advertise-connector"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				AppConnectorSet: true,
+				WantRunningSet:  true,
+			},
+			env: upCheckEnv{backendState: "Running"},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if !newPrefs.AppConnector.Advertise {
+					t.Errorf("prefs.AppConnector.Advertise not set")
+				}
+			},
+		},
+		{
+			name:  "no_advertise_connector",
+			flags: []string{"--advertise-connector=false"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				AppConnector: ipn.AppConnectorPrefs{
+					Advertise: true,
+				},
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				AppConnectorSet: true,
+				WantRunningSet:  true,
+			},
+			env: upCheckEnv{backendState: "Running"},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if newPrefs.AppConnector.Advertise {
+					t.Errorf("prefs.AppConnector.Advertise not unset")
+				}
+			},
 		},
 	}
 	for _, tt := range tests {

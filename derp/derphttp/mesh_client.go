@@ -14,25 +14,40 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// RunWatchConnectionLoop loops until ctx is done, sending WatchConnectionChanges and subscribing to
-// connection changes.
+var retryInterval = 5 * time.Second
+
+// testHookWatchLookConnectResult, if non-nil for tests, is called by RunWatchConnectionLoop
+// with the connect result. If it returns false, the loop ends.
+var testHookWatchLookConnectResult func(connectError error, wasSelfConnect bool) (keepRunning bool)
+
+// RunWatchConnectionLoop loops until ctx is done, sending
+// WatchConnectionChanges and subscribing to connection changes.
 //
-// If the server's public key is ignoreServerKey, RunWatchConnectionLoop returns.
+// If the server's public key is ignoreServerKey, RunWatchConnectionLoop
+// returns.
 //
 // Otherwise, the add and remove funcs are called as clients come & go.
 //
-// infoLogf, if non-nil, is the logger to write periodic status
-// updates about how many peers are on the server. Error log output is
-// set to the c's logger, regardless of infoLogf's value.
+// infoLogf, if non-nil, is the logger to write periodic status updates about
+// how many peers are on the server. Error log output is set to the c's logger,
+// regardless of infoLogf's value.
 //
-// To force RunWatchConnectionLoop to return quickly, its ctx needs to
-// be closed, and c itself needs to be closed.
+// To force RunWatchConnectionLoop to return quickly, its ctx needs to be
+// closed, and c itself needs to be closed.
+//
+// It is a fatal error to call this on an already-started Client withoutq having
+// initialized Client.WatchConnectionChanges to true.
 func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key.NodePublic, infoLogf logger.Logf, add func(key.NodePublic, netip.AddrPort), remove func(key.NodePublic)) {
+	if !c.WatchConnectionChanges {
+		if c.isStarted() {
+			panic("invalid use of RunWatchConnectionLoop on already-started Client without setting Client.RunWatchConnectionLoop")
+		}
+		c.WatchConnectionChanges = true
+	}
 	if infoLogf == nil {
 		infoLogf = logger.Discard
 	}
 	logf := c.logf
-	const retryInterval = 5 * time.Second
 	const statusInterval = 10 * time.Second
 	var (
 		mu              sync.Mutex
@@ -101,15 +116,21 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	for ctx.Err() == nil {
-		err := c.WatchConnectionChanges()
+		// Make sure we're connected before calling s.ServerPublicKey.
+		_, _, err := c.connect(ctx, "RunWatchConnectionLoop")
 		if err != nil {
-			clear()
-			logf("WatchConnectionChanges: %v", err)
+			if f := testHookWatchLookConnectResult; f != nil && !f(err, false) {
+				return
+			}
+			logf("mesh connect: %v", err)
 			sleep(retryInterval)
 			continue
 		}
-
-		if c.ServerPublicKey() == ignoreServerKey {
+		selfConnect := c.ServerPublicKey() == ignoreServerKey
+		if f := testHookWatchLookConnectResult; f != nil && !f(err, selfConnect) {
+			return
+		}
+		if selfConnect {
 			logf("detected self-connect; ignoring host")
 			return
 		}

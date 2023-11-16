@@ -18,6 +18,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strconv"
@@ -26,10 +27,12 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
@@ -50,6 +53,7 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osdiag"
+	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
@@ -71,6 +75,7 @@ var handler = map[string]localAPIHandler{
 	// without a trailing slash:
 	"bugreport":                   (*Handler).serveBugReport,
 	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
+	"check-udp-gro-forwarding":    (*Handler).serveCheckUDPGROForwarding,
 	"check-prefs":                 (*Handler).serveCheckPrefs,
 	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
 	"debug":                       (*Handler).serveDebug,
@@ -121,6 +126,9 @@ var handler = map[string]localAPIHandler{
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
 	"query-feature":               (*Handler).serveQueryFeature,
+	"update/check":                (*Handler).serveUpdateCheck,
+	"update/install":              (*Handler).serveUpdateInstall,
+	"update/progress":             (*Handler).serveUpdateProgress,
 }
 
 var (
@@ -158,16 +166,12 @@ type Handler struct {
 	// cert fetching access.
 	PermitCert bool
 
-	// CallerIsLocalAdmin is whether the this handler is being invoked as a
-	// result of a LocalAPI call from a user who is a local admin of the current
-	// machine.
-	//
-	// As of 2023-10-26 it is only populated on Windows.
-	//
-	// It can be used to to restrict some LocalAPI operations which should only
-	// be run by an admin and not unprivileged users in a computing environment
-	// managed by IT admins.
-	CallerIsLocalAdmin bool
+	// ConnIdentity is the identity of the client connected to the Handler.
+	ConnIdentity *ipnauth.ConnIdentity
+
+	// Test-only override for connIsLocalAdmin method. If non-nil,
+	// connIsLocalAdmin returns this value.
+	testConnIsLocalAdmin *bool
 
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
@@ -920,8 +924,8 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 		// require a local admin when setting a path handler
 		// TODO: roll-up this Windows-specific check into either PermitWrite
 		// or a global admin escalation check.
-		if shouldDenyServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h) {
-			http.Error(w, "must be a Windows local admin to serve a path", http.StatusUnauthorized)
+		if err := authorizeServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h); err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
 
@@ -940,14 +944,106 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func shouldDenyServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) bool {
-	if goos != "windows" {
-		return false
+func authorizeServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) error {
+	switch goos {
+	case "windows", "linux", "darwin":
+	default:
+		return nil
+	}
+	// Only check for local admin on tailscaled-on-mac (based on "sudo"
+	// permissions). On sandboxed variants (MacSys and AppStore), tailscaled
+	// cannot serve files outside of the sandbox and this check is not
+	// relevant.
+	if goos == "darwin" && version.IsSandboxedMacOS() {
+		return nil
 	}
 	if !configIn.HasPathHandler() {
+		return nil
+	}
+	if h.connIsLocalAdmin() {
+		return nil
+	}
+	switch goos {
+	case "windows":
+		return errors.New("must be a Windows local admin to serve a path")
+	case "linux", "darwin":
+		return errors.New("must be root, or be an operator and able to run 'sudo tailscale' to serve a path")
+	default:
+		// We filter goos at the start of the func, this default case
+		// should never happen.
+		panic("unreachable")
+	}
+
+}
+
+// connIsLocalAdmin reports whether the connected client has administrative
+// access to the local machine, for whatever that means with respect to the
+// current OS.
+//
+// This is useful because tailscaled itself always runs with elevated rights:
+// we want to avoid privilege escalation for certain mutative operations.
+func (h *Handler) connIsLocalAdmin() bool {
+	if h.testConnIsLocalAdmin != nil {
+		return *h.testConnIsLocalAdmin
+	}
+	if h.ConnIdentity == nil {
+		h.logf("[unexpected] missing ConnIdentity in LocalAPI Handler")
 		return false
 	}
-	return !h.CallerIsLocalAdmin
+	switch runtime.GOOS {
+	case "windows":
+		tok, err := h.ConnIdentity.WindowsToken()
+		if err != nil {
+			if !errors.Is(err, ipnauth.ErrNotImplemented) {
+				h.logf("ipnauth.ConnIdentity.WindowsToken() error: %v", err)
+			}
+			return false
+		}
+		defer tok.Close()
+
+		return tok.IsElevated()
+
+	case "darwin":
+		// Unknown, or at least unchecked on sandboxed macOS variants. Err on
+		// the side of less permissions.
+		//
+		// authorizeServeConfigForGOOSAndUserContext should not call
+		// connIsLocalAdmin on sandboxed variants anyway.
+		if version.IsSandboxedMacOS() {
+			return false
+		}
+		// This is a standalone tailscaled setup, use the same logic as on
+		// Linux.
+		fallthrough
+	case "linux":
+		uid, ok := h.ConnIdentity.Creds().UserID()
+		if !ok {
+			return false
+		}
+		// root is always admin.
+		if uid == "0" {
+			return true
+		}
+		// if non-root, must be operator AND able to execute "sudo tailscale".
+		operatorUID := h.b.OperatorUserID()
+		if operatorUID != "" && uid != operatorUID {
+			return false
+		}
+		u, err := osuser.LookupByUID(uid)
+		if err != nil {
+			return false
+		}
+		// Short timeout just in case sudo hands for some reason.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "sudo", "--other-user="+u.Name, "--list", "tailscale").Run(); err != nil {
+			return false
+		}
+		return true
+
+	default:
+		return false
+	}
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
@@ -957,6 +1053,23 @@ func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request)
 	}
 	var warning string
 	if err := h.b.CheckIPForwarding(); err != nil {
+		warning = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warning string
+	}{
+		Warning: warning,
+	})
+}
+
+func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "UDP GRO forwarding check access denied", http.StatusForbidden)
+		return
+	}
+	var warning string
+	if err := h.b.CheckUDPGROForwarding(); err != nil {
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1048,7 +1161,6 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a flusher", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 
 	var mask ipn.NotifyWatchOpt
 	if s := r.FormValue("mask"); s != "" {
@@ -1059,6 +1171,16 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
+	// Users with only read access must request private key filtering. If they
+	// don't filter out private keys, require write access.
+	if (mask & ipn.NotifyNoPrivateKeys) == 0 {
+		if !h.PermitWrite {
+			http.Error(w, "watch IPN bus access denied, must set ipn.NotifyNoPrivateKeys when not running as admin/root or operator", http.StatusForbidden)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()
 	h.b.WatchNotifications(ctx, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
 		js, err := json.Marshal(roNotify)
@@ -1676,8 +1798,8 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitRead {
-		http.Error(w, "lock status access denied", http.StatusForbidden)
+	if !h.PermitWrite {
+		http.Error(w, "lock sign access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.POST {
@@ -2298,6 +2420,75 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveUpdateCheck returns the ClientVersion from Status, which contains
+// information on whether an update is available, and if so, what version,
+// *if* we support auto-updates on this platform. If we don't, this endpoint
+// always returns a ClientVersion saying we're running the newest version.
+// Effectively, it tells us whether serveUpdateInstall will be able to install
+// an update for us.
+func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	_, err := clientupdate.NewUpdater(clientupdate.Arguments{
+		ForAutoUpdate: true,
+	})
+
+	if err != nil {
+		// if we don't support auto-update, just say that we're up to date
+		if errors.Is(err, errors.ErrUnsupported) {
+			json.NewEncoder(w).Encode(tailcfg.ClientVersion{RunningLatest: true})
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	cv := h.b.StatusWithoutPeers().ClientVersion
+	// ipnstate.Status documentation notes that ClientVersion may be nil on some
+	// platforms where this information is unavailable. In that case, return a
+	// ClientVersion that says we're up to date, since we have no information on
+	// whether an update is possible.
+	if cv == nil {
+		cv = &tailcfg.ClientVersion{RunningLatest: true}
+	}
+
+	json.NewEncoder(w).Encode(cv)
+}
+
+// serveUpdateInstall sends a request to the LocalBackend to start a Tailscale
+// self-update. A successful response does not indicate whether the update
+// succeeded, only that the request was accepted. Clients should use
+// serveUpdateProgress after pinging this endpoint to check how the update is
+// going.
+func (h *Handler) serveUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+
+	go h.b.DoSelfUpdate()
+}
+
+// serveUpdateProgress returns the status of an in-progress Tailscale self-update.
+// This is provided as a slice of ipnstate.UpdateProgress structs with various
+// log messages in order from oldest to newest. If an update is not in progress,
+// the returned slice will be empty.
+func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ups := h.b.GetSelfUpdateProgress()
+
+	json.NewEncoder(w).Encode(ups)
 }
 
 var (

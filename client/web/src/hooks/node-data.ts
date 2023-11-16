@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch, setUnraidCsrfToken } from "src/api"
+import { VersionInfo } from "src/hooks/self-update"
 
 export type NodeData = {
   Profile: UserProfile
-  Status: string
+  Status: NodeState
   DeviceName: string
+  OS: string
   IP: string
+  IPv6: string
+  ID: string
+  KeyExpiry: string
+  KeyExpired: boolean
   AdvertiseExitNode: boolean
   AdvertiseRoutes: string
   LicensesURL: string
@@ -15,9 +21,22 @@ export type NodeData = {
   IsUnraid: boolean
   UnraidToken: string
   IPNVersion: string
-
-  DebugMode: "" | "login" | "full" // empty when not running in any debug mode
+  ClientVersion?: VersionInfo
+  URLPrefix: string
+  DomainName: string
+  TailnetName: string
+  IsTagged: boolean
+  Tags: string[]
+  RunningSSHServer: boolean
 }
+
+type NodeState =
+  | "NoState"
+  | "NeedsLogin"
+  | "NeedsMachineAuth"
+  | "Stopped"
+  | "Starting"
+  | "Running"
 
 export type UserProfile = {
   LoginName: string
@@ -30,6 +49,11 @@ export type NodeUpdate = {
   AdvertiseExitNode?: boolean
   Reauthenticate?: boolean
   ForceLogout?: boolean
+}
+
+export type PrefsUpdate = {
+  RunSSHSet?: boolean
+  RunSSH?: boolean
 }
 
 // useNodeData returns basic data about the current node.
@@ -75,7 +99,7 @@ export default function useNodeData() {
             : data.AdvertiseExitNode,
       }
 
-      apiFetch("/data", "POST", update, { up: "true" })
+      return apiFetch("/data", "POST", update, { up: "true" })
         .then((r) => r.json())
         .then((r) => {
           setIsPosting(false)
@@ -89,9 +113,43 @@ export default function useNodeData() {
           }
           refreshData()
         })
-        .catch((err) => alert("Failed operation: " + err.message))
+        .catch((err) => {
+          setIsPosting(false)
+          alert("Failed operation: " + err.message)
+          throw err
+        })
     },
     [data]
+  )
+
+  const updatePrefs = useCallback(
+    (p: PrefsUpdate) => {
+      setIsPosting(true)
+      if (data) {
+        const optimisticUpdates = data
+        if (p.RunSSHSet) {
+          optimisticUpdates.RunningSSHServer = Boolean(p.RunSSH)
+        }
+        // Reflect the pref change immediatley on the frontend,
+        // then make the prefs PATCH. If the request fails,
+        // data will be updated to it's previous value in
+        // onComplete below.
+        setData(optimisticUpdates)
+      }
+
+      const onComplete = () => {
+        setIsPosting(false)
+        refreshData() // refresh data after PATCH finishes
+      }
+
+      return apiFetch("/local/v0/prefs", "PATCH", p)
+        .then(onComplete)
+        .catch(() => {
+          onComplete()
+          alert("Failed to update prefs")
+        })
+    },
+    [setIsPosting, refreshData, setData, data]
   )
 
   useEffect(
@@ -113,5 +171,5 @@ export default function useNodeData() {
     []
   )
 
-  return { data, refreshData, updateNode, isPosting }
+  return { data, refreshData, updateNode, updatePrefs, isPosting }
 }

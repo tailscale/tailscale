@@ -1,7 +1,7 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
-apiVersion: v1
+apiVersion: v2
 name: tailscale-operator
 description: A Helm chart for Tailscale Kubernetes operator
 home: https://github.com/tailscale/tailscale

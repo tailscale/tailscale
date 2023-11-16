@@ -735,6 +735,8 @@ func (l *Logger) Write(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
+	inLen := len(buf) // length as provided to us, before modifications to downstream writers
+
 	level, buf := parseAndRemoveLogLevel(buf)
 	if l.stderr != nil && l.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&l.stderrLevel) {
 		if buf[len(buf)-1] == '\n' {
@@ -752,7 +754,7 @@ func (l *Logger) Write(buf []byte) (int, error) {
 
 	b := l.encodeLocked(buf, level)
 	_, err := l.sendLocked(b)
-	return len(buf), err
+	return inLen, err
 }
 
 var (

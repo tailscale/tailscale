@@ -36,6 +36,7 @@ type ConfigVAlpha struct {
 
 	PostureChecking opt.Bool         `json:",omitempty"`
 	RunSSHServer    opt.Bool         `json:",omitempty"` // Tailscale SSH
+	RunWebClient    opt.Bool         `json:",omitempty"`
 	ShieldsUp       opt.Bool         `json:",omitempty"`
 	AutoUpdate      *AutoUpdatePrefs `json:",omitempty"`
 	ServeConfigTemp *ServeConfig     `json:",omitempty"` // TODO(bradfitz,maisem): make separate stable type for this
@@ -112,6 +113,10 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.RunSSHServer != "" {
 		mp.RunSSH = c.RunSSHServer.EqualBool(true)
 		mp.RunSSHSet = true
+	}
+	if c.RunWebClient != "" {
+		mp.RunWebClient = c.RunWebClient.EqualBool(true)
+		mp.RunWebClientSet = true
 	}
 	if c.ShieldsUp != "" {
 		mp.ShieldsUp = c.ShieldsUp.EqualBool(true)

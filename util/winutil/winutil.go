@@ -8,9 +8,16 @@ import (
 	"os/user"
 )
 
-// RegBase is the registry path inside HKEY_LOCAL_MACHINE where registry settings
-// are stored. This constant is a non-empty string only when GOOS=windows.
-const RegBase = regBase
+const (
+	// RegBase is the registry path inside HKEY_LOCAL_MACHINE where registry settings
+	// are stored. This constant is a non-empty string only when GOOS=windows.
+	RegBase = regBase
+
+	// RegPolicyBase is the registry path inside HKEY_LOCAL_MACHINE where registry
+	// policies are stored. This constant is a non-empty string only when
+	// GOOS=windows.
+	RegPolicyBase = regPolicyBase
+)
 
 // GetPolicyString looks up a registry value in the local machine's path for
 // system policies, or returns empty string and the error.

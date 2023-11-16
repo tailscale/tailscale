@@ -73,7 +73,7 @@ func ImportAliasCheck(t testing.TB, relDir string) {
 		t.Logf("ignoring error: %v, %s", err, matches)
 		return
 	}
-	badRx := regexp.MustCompile(`^([^:]+:\d+):\s+"golang.org/x/exp/(slices|maps)"`)
+	badRx := regexp.MustCompile(`^([^:]+:\d+):\s+"golang\.org/x/exp/(slices|maps)"`)
 	if s := strings.TrimSpace(string(matches)); s != "" {
 		for _, line := range strings.Split(s, "\n") {
 			if m := badRx.FindStringSubmatch(line); m != nil {

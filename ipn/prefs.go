@@ -112,6 +112,11 @@ type Prefs struct {
 	// policies as configured by the Tailnet's admin(s).
 	RunSSH bool
 
+	// RunWebClient bool is whether this node should run a web client,
+	// permitting access to peers according to the
+	// policies as configured by the Tailnet's admin(s).
+	RunWebClient bool
+
 	// WantRunning indicates whether networking should be active on
 	// this node.
 	WantRunning bool
@@ -200,6 +205,10 @@ type Prefs struct {
 	// AutoUpdatePrefs docs for more details.
 	AutoUpdate AutoUpdatePrefs
 
+	// AppConnector sets the app connector preferences for the node agent. See
+	// AppConnectorPrefs docs for more details.
+	AppConnector AppConnectorPrefs
+
 	// PostureChecking enables the collection of information used for device
 	// posture checks.
 	PostureChecking bool
@@ -224,6 +233,13 @@ type AutoUpdatePrefs struct {
 	Apply bool
 }
 
+// AppConnectorPrefs are the app connector settings for the node agent.
+type AppConnectorPrefs struct {
+	// Advertise specifies whether the app connector subsystem is advertising
+	// this node as a connector.
+	Advertise bool
+}
+
 // MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
 type MaskedPrefs struct {
 	Prefs
@@ -236,6 +252,7 @@ type MaskedPrefs struct {
 	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
 	CorpDNSSet                bool `json:",omitempty"`
 	RunSSHSet                 bool `json:",omitempty"`
+	RunWebClientSet           bool `json:",omitempty"`
 	WantRunningSet            bool `json:",omitempty"`
 	LoggedOutSet              bool `json:",omitempty"`
 	ShieldsUpSet              bool `json:",omitempty"`
@@ -250,6 +267,7 @@ type MaskedPrefs struct {
 	OperatorUserSet           bool `json:",omitempty"`
 	ProfileNameSet            bool `json:",omitempty"`
 	AutoUpdateSet             bool `json:",omitempty"`
+	AppConnectorSet           bool `json:",omitempty"`
 	PostureCheckingSet        bool `json:",omitempty"`
 }
 
@@ -350,6 +368,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.RunSSH {
 		sb.WriteString("ssh=true ")
 	}
+	if p.RunWebClient {
+		sb.WriteString("webclient=true ")
+	}
 	if p.LoggedOut {
 		sb.WriteString("loggedout=true ")
 	}
@@ -389,6 +410,7 @@ func (p *Prefs) pretty(goos string) string {
 		fmt.Fprintf(&sb, "op=%q ", p.OperatorUser)
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
+	sb.WriteString(p.AppConnector.Pretty())
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -431,6 +453,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
+		p.RunWebClient == p2.RunWebClient &&
 		p.WantRunning == p2.WantRunning &&
 		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
@@ -445,6 +468,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate == p2.AutoUpdate &&
+		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking
 }
 
@@ -456,6 +480,13 @@ func (au AutoUpdatePrefs) Pretty() string {
 		return "update=check "
 	}
 	return "update=off "
+}
+
+func (ap AppConnectorPrefs) Pretty() string {
+	if ap.Advertise {
+		return "appconnector=advertise "
+	}
+	return ""
 }
 
 func compareIPNets(a, b []netip.Prefix) bool {
@@ -689,6 +720,18 @@ func (p PrefsView) ShouldSSHBeRunning() bool {
 // the prefs.
 func (p *Prefs) ShouldSSHBeRunning() bool {
 	return p.WantRunning && p.RunSSH
+}
+
+// ShouldWebClientBeRunning reports whether the web client server should be running based on
+// the prefs.
+func (p PrefsView) ShouldWebClientBeRunning() bool {
+	return p.Valid() && p.ж.ShouldWebClientBeRunning()
+}
+
+// ShouldWebClientBeRunning reports whether the web client server should be running based on
+// the prefs.
+func (p *Prefs) ShouldWebClientBeRunning() bool {
+	return p.WantRunning && p.RunWebClient
 }
 
 // PrefsFromBytes deserializes Prefs from a JSON blob.

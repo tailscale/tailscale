@@ -38,6 +38,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	RunSSH                 bool
+	RunWebClient           bool
 	WantRunning            bool
 	LoggedOut              bool
 	ShieldsUp              bool
@@ -52,6 +53,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	OperatorUser           string
 	ProfileName            string
 	AutoUpdate             AutoUpdatePrefs
+	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	Persist                *persist.Persist
 }{})

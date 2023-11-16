@@ -56,6 +56,7 @@ require (
 	github.com/pkg/sftp v1.13.6
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/common v0.44.0
+	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tailscale/certstore v0.1.1-0.20231020161753-77811a65f4ff
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
@@ -65,8 +66,8 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
-	github.com/tailscale/web-client-prebuilt v0.0.0-20230919211114-7bcd7bca7bc5
-	github.com/tailscale/wireguard-go v0.0.0-20230929223258-2f6748dc88e7
+	github.com/tailscale/web-client-prebuilt v0.0.0-20231114171715-25f8d12b3c2d
+	github.com/tailscale/wireguard-go v0.0.0-20231101022006-db7604d1aa90
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
@@ -88,10 +89,11 @@ require (
 	golang.org/x/tools v0.13.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
+	gopkg.in/square/go-jose.v2 v2.6.0
 	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
 	honnef.co/go/tools v0.4.6
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
-	inet.af/tcpproxy v0.0.0-20221017015627-91f861402626
+	inet.af/tcpproxy v0.0.0-20231102063150-2862066fc2a9
 	inet.af/wf v0.0.0-20221017222439-36129f591884
 	k8s.io/api v0.28.2
 	k8s.io/apimachinery v0.28.2
@@ -166,7 +168,7 @@ require (
 	github.com/denis-tingaikin/go-header v0.4.3 // indirect
 	github.com/docker/cli v24.0.6+incompatible // indirect
 	github.com/docker/distribution v2.8.2+incompatible // indirect
-	github.com/docker/docker v24.0.6+incompatible // indirect
+	github.com/docker/docker v24.0.7+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.8.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect

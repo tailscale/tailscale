@@ -1,4 +1,5 @@
 let csrfToken: string
+let synoToken: string | undefined // required for synology API requests
 let unraidCsrfToken: string | undefined // required for unraid POST requests (#8062)
 
 // apiFetch wraps the standard JS fetch function with csrf header
@@ -9,15 +10,19 @@ let unraidCsrfToken: string | undefined // required for unraid POST requests (#8
 // (i.e. provide `/data` rather than `api/data`).
 export function apiFetch(
   endpoint: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH",
   body?: any,
   params?: Record<string, string>
 ): Promise<Response> {
   const urlParams = new URLSearchParams(window.location.search)
   const nextParams = new URLSearchParams(params)
-  const token = urlParams.get("SynoToken")
-  if (token) {
-    nextParams.set("SynoToken", token)
+  if (synoToken) {
+    nextParams.set("SynoToken", synoToken)
+  } else {
+    const token = urlParams.get("SynoToken")
+    if (token) {
+      nextParams.set("SynoToken", token)
+    }
   }
   const search = nextParams.toString()
   const url = `api${endpoint}${search ? `?${search}` : ""}`
@@ -60,6 +65,10 @@ function updateCsrfToken(r: Response) {
   if (tok) {
     csrfToken = tok
   }
+}
+
+export function setSynoToken(token?: string) {
+  synoToken = token
 }
 
 export function setUnraidCsrfToken(token?: string) {

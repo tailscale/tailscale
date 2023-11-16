@@ -175,6 +175,13 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			return up.updateLinuxBinary, true
 		case distro.Alpine:
 			return up.updateAlpineLike, true
+		case distro.Unraid:
+			// Unraid runs from memory, updates must be installed via the Unraid
+			// plugin manager to be persistent.
+			// TODO(awly): implement Unraid updates using the 'plugin' CLI.
+			return nil, false
+		case distro.QNAP:
+			return up.updateQNAP, true
 		}
 		switch {
 		case haveExecutable("pacman"):
@@ -237,10 +244,10 @@ func Update(args Arguments) error {
 func (up *Updater) confirm(ver string) bool {
 	switch cmpver.Compare(version.Short(), ver) {
 	case 0:
-		up.Logf("already running %v; no update needed", ver)
+		up.Logf("already running %v version %v; no update needed", up.track, ver)
 		return false
 	case 1:
-		up.Logf("installed version %v is newer than the latest available version %v; no update needed", version.Short(), ver)
+		up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.track, version.Short(), ver)
 		return false
 	}
 	if up.Confirm != nil {
@@ -254,6 +261,9 @@ const synoinfoConfPath = "/etc/synoinfo.conf"
 func (up *Updater) updateSynology() error {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Synology is not supported")
+	}
+	if err := requireRoot(); err != nil {
+		return err
 	}
 
 	// Get the latest version and list of SPKs from pkgs.tailscale.com.
@@ -272,13 +282,11 @@ func (up *Updater) updateSynology() error {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
 	}
 
-	if err := requireRoot(); err != nil {
-		return err
-	}
 	if !up.confirm(latest.SPKsVersion) {
 		return nil
 	}
 
+	up.cleanupOldDownloads(filepath.Join(os.TempDir(), "tailscale-update*", "*.spk"))
 	// Download the SPK into a temporary directory.
 	spkDir, err := os.MkdirTemp("", "tailscale-update")
 	if err != nil {
@@ -407,17 +415,25 @@ func (up *Updater) updateDebLike() error {
 		// we're not updating them:
 		"-o", "APT::Get::List-Cleanup=0",
 	)
-	cmd.Stdout = up.Stdout
-	cmd.Stderr = up.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("apt-get update failed: %w; output:\n%s", err, out)
 	}
 
-	cmd = exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver)
-	cmd.Stdout = up.Stdout
-	cmd.Stderr = up.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	for i := 0; i < 2; i++ {
+		out, err := exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver).CombinedOutput()
+		if err != nil {
+			if !bytes.Contains(out, []byte(`dpkg was interrupted`)) {
+				return fmt.Errorf("apt-get install failed: %w; output:\n%s", err, out)
+			}
+			up.Logf("apt-get install failed: %s; output:\n%s", err, out)
+			up.Logf("running dpkg --configure tailscale")
+			out, err = exec.Command("dpkg", "--force-confdef,downgrade", "--configure", "tailscale").CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("dpkg --configure tailscale failed: %w; output:\n%s", err, out)
+			}
+			continue
+		}
+		break
 	}
 
 	return nil
@@ -600,11 +616,11 @@ func (up *Updater) updateAlpineLike() (err error) {
 
 	out, err := exec.Command("apk", "update").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed refresh apk repository indexes: %w, output: %q", err, out)
+		return fmt.Errorf("failed refresh apk repository indexes: %w, output:\n%s", err, out)
 	}
 	out, err = exec.Command("apk", "info", "tailscale").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed checking apk for latest tailscale version: %w, output: %q", err, out)
+		return fmt.Errorf("failed checking apk for latest tailscale version: %w, output:\n%s", err, out)
 	}
 	ver, err := parseAlpinePackageVersion(out)
 	if err != nil {
@@ -652,7 +668,7 @@ func (up *Updater) updateMacAppStore() error {
 
 	out, err := exec.Command("open", "https://apps.apple.com/us/app/tailscale/id1475387142").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("can't open the Tailscale page in App Store: %w, output: %q", err, string(out))
+		return fmt.Errorf("can't open the Tailscale page in App Store: %w, output:\n%s", err, string(out))
 	}
 	return nil
 }
@@ -707,6 +723,15 @@ func (up *Updater) updateWindows() error {
 		up.Logf("success.")
 		return nil
 	}
+
+	if !winutil.IsCurrentProcessElevated() {
+		return errors.New(`update must be run as Administrator
+
+you can run the command prompt as Administrator one of these ways:
+* right-click cmd.exe, select 'Run as administrator'
+* press Windows+x, then press a
+* press Windows+r, type in "cmd", then press Ctrl+Shift+Enter`)
+	}
 	ver, err := requestedTailscaleVersion(up.Version, up.track)
 	if err != nil {
 		return err
@@ -714,10 +739,6 @@ func (up *Updater) updateWindows() error {
 	arch := runtime.GOARCH
 	if arch == "386" {
 		arch = "x86"
-	}
-
-	if !winutil.IsCurrentProcessElevated() {
-		return errors.New("must be run as Administrator")
 	}
 	if !up.confirm(ver) {
 		return nil
@@ -733,6 +754,7 @@ func (up *Updater) updateWindows() error {
 	if err := os.MkdirAll(msiDir, 0700); err != nil {
 		return err
 	}
+	up.cleanupOldDownloads(filepath.Join(msiDir, "*.msi"))
 	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
 	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
@@ -821,6 +843,30 @@ func (up *Updater) installMSI(msi string) error {
 	return err
 }
 
+// cleanupOldDownloads removes all files matching glob (see filepath.Glob).
+// Only regular files are removed, so the glob must match specific files and
+// not directories.
+func (up *Updater) cleanupOldDownloads(glob string) {
+	matches, err := filepath.Glob(glob)
+	if err != nil {
+		up.Logf("cleaning up old downloads: %v", err)
+		return
+	}
+	for _, m := range matches {
+		s, err := os.Lstat(m)
+		if err != nil {
+			up.Logf("cleaning up old downloads: %v", err)
+			continue
+		}
+		if !s.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(m); err != nil {
+			up.Logf("cleaning up old downloads: %v", err)
+		}
+	}
+}
+
 func msiUUIDForVersion(ver string) string {
 	arch := runtime.GOARCH
 	if arch == "386" {
@@ -889,33 +935,39 @@ func (up *Updater) updateFreeBSD() (err error) {
 
 	out, err := exec.Command("pkg", "update").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed refresh pkg repository indexes: %w, output: %q", err, out)
+		return fmt.Errorf("failed refresh pkg repository indexes: %w, output:\n%s", err, out)
 	}
 	out, err = exec.Command("pkg", "rquery", "%v", "tailscale").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed checking pkg for latest tailscale version: %w, output: %q", err, out)
+		return fmt.Errorf("failed checking pkg for latest tailscale version: %w, output:\n%s", err, out)
 	}
 	ver := string(bytes.TrimSpace(out))
 	if !up.confirm(ver) {
 		return nil
 	}
 
-	cmd := exec.Command("pkg", "upgrade", "tailscale")
+	cmd := exec.Command("pkg", "upgrade", "-y", "tailscale")
 	cmd.Stdout = up.Stdout
 	cmd.Stderr = up.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed tailscale update using pkg: %w", err)
 	}
+
+	// pkg does not automatically restart services after upgrade.
+	out, err = exec.Command("service", "tailscaled", "restart").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to restart tailscaled after update: %w, output:\n%s", err, out)
+	}
 	return nil
 }
 
 func (up *Updater) updateLinuxBinary() error {
-	ver, err := requestedTailscaleVersion(up.Version, up.track)
-	if err != nil {
-		return err
-	}
 	// Root is needed to overwrite binaries and restart systemd unit.
 	if err := requireRoot(); err != nil {
+		return err
+	}
+	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	if err != nil {
 		return err
 	}
 	if !up.confirm(ver) {
@@ -1022,6 +1074,77 @@ func (up *Updater) unpackLinuxTarball(path string) error {
 		return err
 	}
 	up.Logf("Updated %s", tailscaled)
+	return nil
+}
+
+func (up *Updater) updateQNAP() (err error) {
+	if up.Version != "" {
+		return errors.New("installing a specific version on QNAP is not supported")
+	}
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf(`%w; you can try updating using "qpkg_cli --add Tailscale"`, err)
+		}
+	}()
+
+	out, err := exec.Command("qpkg_cli", "--upgradable", "Tailscale").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to check if Tailscale is upgradable using qpkg_cli: %w, output: %q", err, out)
+	}
+
+	// Output should look like this:
+	//
+	// $ qpkg_cli -G Tailscale
+	// [Tailscale]
+	// upgradeStatus = 1
+	statusRe := regexp.MustCompile(`upgradeStatus = (\d)`)
+	m := statusRe.FindStringSubmatch(string(out))
+	if len(m) < 2 {
+		return fmt.Errorf("failed to check if Tailscale is upgradable using qpkg_cli, output: %q", out)
+	}
+	status, err := strconv.Atoi(m[1])
+	if err != nil {
+		return fmt.Errorf("cannot parse upgradeStatus from qpkg_cli output %q: %w", out, err)
+	}
+	// Possible status values:
+	//  0:can upgrade
+	//  1:can not upgrade
+	//  2:error
+	//  3:can not get rss information
+	//  4:qpkg not found
+	//  5:qpkg not installed
+	//
+	// We want status 0.
+	switch status {
+	case 0: // proceed with upgrade
+	case 1:
+		up.Logf("no update available")
+		return nil
+	case 2, 3, 4:
+		return fmt.Errorf("failed to check update status with qpkg_cli (upgradeStatus = %d)", status)
+	case 5:
+		return errors.New("Tailscale was not found in the QNAP App Center")
+	default:
+		return fmt.Errorf("failed to check update status with qpkg_cli (upgradeStatus = %d)", status)
+	}
+
+	// There doesn't seem to be a way to fetch what the available upgrade
+	// version is. Use the generic "latest" version in confirmation prompt.
+	if up.Confirm != nil && !up.Confirm("latest") {
+		return nil
+	}
+
+	up.Logf("c2n: running qpkg_cli --add Tailscale")
+	cmd := exec.Command("qpkg_cli", "--add", "Tailscale")
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed tailscale update using qpkg_cli: %w", err)
+	}
 	return nil
 }
 

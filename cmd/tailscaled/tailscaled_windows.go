@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -299,6 +300,14 @@ func beWindowsSubprocess() bool {
 		}
 	}()
 
+	// Pre-load wintun.dll using a fully-qualified path so that wintun-go
+	// loads our copy and not some (possibly outdated) copy dropped in system32.
+	// (OSS Issue #10023)
+	fqWintunPath := fullyQualifiedWintunPath(log.Printf)
+	if _, err := windows.LoadDLL(fqWintunPath); err != nil {
+		log.Printf("Error pre-loading \"%s\": %v", fqWintunPath, err)
+	}
+
 	sys := new(tsd.System)
 	netMon, err := netmon.New(log.Printf)
 	if err != nil {
@@ -507,7 +516,7 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 }
 
 func uninstallWinTun(logf logger.Logf) {
-	dll := windows.NewLazyDLL("wintun.dll")
+	dll := windows.NewLazyDLL(fullyQualifiedWintunPath(logf))
 	if err := dll.Load(); err != nil {
 		logf("Cannot load wintun.dll for uninstall: %v", err)
 		return
@@ -516,4 +525,16 @@ func uninstallWinTun(logf logger.Logf) {
 	logf("Removing wintun driver...")
 	err := wintun.Uninstall()
 	logf("Uninstall: %v", err)
+}
+
+func fullyQualifiedWintunPath(logf logger.Logf) string {
+	var dir string
+	imgName, err := winutil.ProcessImageName(windows.CurrentProcess())
+	if err != nil {
+		logf("ProcessImageName failed: %v", err)
+	} else {
+		dir = filepath.Dir(imgName)
+	}
+
+	return filepath.Join(dir, "wintun.dll")
 }
