@@ -20,7 +20,7 @@ var (
 func main() {
 	flag.Parse()
 
-	s := new(tsnet.Server)
+	s := &tsnet.Server{RunWebClient: true}
 	defer s.Close()
 
 	lc, err := s.LocalClient()
