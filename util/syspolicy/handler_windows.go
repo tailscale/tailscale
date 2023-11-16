@@ -12,7 +12,7 @@ import (
 type windowsHandler struct{}
 
 func init() {
-	RegisterHandler(windowsHandler{})
+	RegisterHandler(NewCachingHandler(windowsHandler{}))
 }
 
 func (windowsHandler) ReadString(key string) (string, error) {
