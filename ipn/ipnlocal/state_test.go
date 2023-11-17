@@ -923,7 +923,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 
 			LegacyFrontendPrivateMachineKey: key.NewMachine(),
 		},
-	}).View(), "")
+	}).View(), ipn.NetworkProfile{})
 	if p := b.pm.CurrentPrefs().Persist(); !p.Valid() || p.PrivateNodeKey().IsZero() {
 		t.Fatalf("PrivateNodeKey not set")
 	}
