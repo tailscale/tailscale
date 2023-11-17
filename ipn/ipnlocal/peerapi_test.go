@@ -657,7 +657,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 			netip.MustParsePrefix("0.0.0.0/0"),
 			netip.MustParsePrefix("::/0"),
 		},
-	}).View(), "")
+	}).View(), ipn.NetworkProfile{})
 	if !h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly not offering exit node")
 	}

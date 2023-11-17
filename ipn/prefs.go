@@ -790,6 +790,23 @@ type ProfileID string
 // tests.
 type WindowsUserID string
 
+// NetworkProfile is a subset of netmap.NetworkMap
+// that should be saved with each user profile.
+type NetworkProfile struct {
+	MagicDNSName string
+	DomainName   string
+}
+
+// RequiresBackfill returns whether this object does not have all the data
+// expected. This is because this struct is a later addition to LoginProfile and
+// this method can be checked to see if it's been backfilled to the current
+// expectation or not. Note that for now, it just checks if the struct is empty.
+// In the future, if we have new optional fields, this method can be changed to
+// do more explicit checks to return whether it's apt for a backfill or not.
+func (n NetworkProfile) RequiresBackfill() bool {
+	return n == NetworkProfile{}
+}
+
 // LoginProfile represents a single login profile as managed
 // by the ProfileManager.
 type LoginProfile struct {
@@ -804,13 +821,12 @@ type LoginProfile struct {
 	// It is filled in from the UserProfile.LoginName field.
 	Name string
 
-	// TailnetMagicDNSName is filled with the MagicDNS suffix for this
-	// profile's node (even if MagicDNS isn't necessarily in use).
-	// It will neither start nor end with a period.
+	// NetworkProfile is a subset of netmap.NetworkMap that we
+	// store to remember information about the tailnet that this
+	// profile was logged in with.
 	//
-	// TailnetMagicDNSName is only filled from 2023-09-09 forward,
-	// and will only get backfilled when a profile is the current profile.
-	TailnetMagicDNSName string
+	// This field was added on 2023-11-17.
+	NetworkProfile NetworkProfile
 
 	// Key is the StateKey under which the profile is stored.
 	// It is assigned once at profile creation time and never changes.
