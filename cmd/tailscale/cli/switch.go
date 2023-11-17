@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -25,10 +27,14 @@ var switchCmd = &ffcli.Command{
 	Exec: switchProfile,
 	UsageFunc: func(*ffcli.Command) string {
 		return `USAGE
-  switch <name>
+  switch <id>
   switch --list
 
-"tailscale switch" switches between logged in accounts.
+"tailscale switch" switches between logged in accounts. You can
+use the ID that's returned from 'tailnet switch -list'
+to pick which profile you want to switch to. Alternatively, you
+can use the Tailnet or the account names to switch as well.
+
 This command is currently in alpha and may change in the future.`
 	},
 }
@@ -42,12 +48,22 @@ func listProfiles(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	tw := tabwriter.NewWriter(os.Stdout, 2, 2, 2, ' ', 0)
+	defer tw.Flush()
+	printRow := func(vals ...string) {
+		fmt.Fprintln(tw, strings.Join(vals, "\t"))
+	}
+	printRow("ID", "Tailnet", "Account")
 	for _, prof := range all {
+		name := prof.Name
 		if prof.ID == curP.ID {
-			fmt.Printf("%s *\n", prof.Name)
-		} else {
-			fmt.Println(prof.Name)
+			name += "*"
 		}
+		printRow(
+			string(prof.ID),
+			prof.NetworkProfile.DomainName,
+			name,
+		)
 	}
 	return nil
 }
@@ -66,10 +82,28 @@ func switchProfile(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 	var profID ipn.ProfileID
+	// Allow matching by ID, Tailnet, or Account
+	// in that order.
 	for _, p := range all {
-		if p.Name == args[0] {
+		if p.ID == ipn.ProfileID(args[0]) {
 			profID = p.ID
 			break
+		}
+	}
+	if profID == "" {
+		for _, p := range all {
+			if p.NetworkProfile.DomainName == args[0] {
+				profID = p.ID
+				break
+			}
+		}
+	}
+	if profID == "" {
+		for _, p := range all {
+			if p.Name == args[0] {
+				profID = p.ID
+				break
+			}
 		}
 	}
 	if profID == "" {

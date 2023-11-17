@@ -177,6 +177,16 @@ func (nm *NetworkMap) MagicDNSSuffix() string {
 	return MagicDNSSuffixOfNodeName(nm.Name)
 }
 
+// DomainName returns the name of the NetworkMap's
+// current tailnet. If the map is nil, it returns
+// an empty string.
+func (nm *NetworkMap) DomainName() string {
+	if nm == nil {
+		return ""
+	}
+	return nm.Domain
+}
+
 // SelfCapabilities returns SelfNode.Capabilities if nm and nm.SelfNode are
 // non-nil. This is a method so we can use it in envknob/logknob without a
 // circular dependency.
