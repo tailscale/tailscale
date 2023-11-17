@@ -1,22 +1,45 @@
-import React from "react"
+import React, { useCallback } from "react"
+import { apiFetch } from "src/api"
 import { NodeData } from "src/hooks/node-data"
 import { ReactComponent as TailscaleIcon } from "src/icons/tailscale-icon.svg"
 
 /**
- * LoginClientView is rendered when the client is not authenticated
+ * LoginView is rendered when the client is not authenticated
  * to a tailnet.
  */
-export default function LoginClientView({
+export default function LoginView({
   data,
-  onLoginClick,
+  refreshData,
 }: {
   data: NodeData
-  onLoginClick: () => void
+  refreshData: () => void
 }) {
+  const login = useCallback(
+    (opt: TailscaleUpOptions) => {
+      tailscaleUp(opt).then(refreshData)
+    },
+    [refreshData]
+  )
+
   return (
     <div className="mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
       <TailscaleIcon className="my-2 mb-8" />
-      {data.IP ? (
+      {data.Status == "Stopped" ? (
+        <>
+          <div className="mb-6">
+            <h3 className="text-3xl font-semibold mb-3">Connect</h3>
+            <p className="text-gray-700">
+              Your device is disconnected from Tailscale.
+            </p>
+          </div>
+          <button
+            onClick={() => login({})}
+            className="button button-blue w-full mb-4"
+          >
+            Connect to Tailscale
+          </button>
+        </>
+      ) : data.IP ? (
         <>
           <div className="mb-6">
             <p className="text-gray-700">
@@ -33,7 +56,7 @@ export default function LoginClientView({
             </p>
           </div>
           <button
-            onClick={onLoginClick}
+            onClick={() => login({ Reauthenticate: true })}
             className="button button-blue w-full mb-4"
           >
             Reauthenticate
@@ -53,7 +76,7 @@ export default function LoginClientView({
             </p>
           </div>
           <button
-            onClick={onLoginClick}
+            onClick={() => login({ Reauthenticate: true })}
             className="button button-blue w-full mb-4"
           >
             Log In
@@ -62,4 +85,19 @@ export default function LoginClientView({
       )}
     </div>
   )
+}
+
+type TailscaleUpOptions = {
+  Reauthenticate?: boolean // force reauthentication
+}
+
+function tailscaleUp(options: TailscaleUpOptions) {
+  return apiFetch("/up", "POST", options)
+    .then((r) => r.json())
+    .then((d) => {
+      d.url && window.open(d.url, "_blank")
+    })
+    .catch((e) => {
+      console.error("Failed to login:", e)
+    })
 }

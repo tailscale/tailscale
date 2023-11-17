@@ -47,8 +47,6 @@ export type UserProfile = {
 export type NodeUpdate = {
   AdvertiseRoutes?: string
   AdvertiseExitNode?: boolean
-  Reauthenticate?: boolean
-  ForceLogout?: boolean
 }
 
 export type PrefsUpdate = {
@@ -106,10 +104,6 @@ export default function useNodeData() {
           const err = r["error"]
           if (err) {
             throw new Error(err)
-          }
-          const url = r["url"]
-          if (url) {
-            window.open(url, "_blank")
           }
           refreshData()
         })

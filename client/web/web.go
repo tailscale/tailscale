@@ -371,22 +371,14 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 // which protects the handler using gorilla csrf.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
-	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
-		http.Error(w, "invalid endpoint", http.StatusNotFound)
-		return
-	}
-	switch r.Method {
-	case httpm.GET:
-		// TODO(soniaappasamy): we may want a minimal node data response here
+	switch {
+	case r.URL.Path == "/api/data" && r.Method == httpm.GET:
 		s.serveGetNodeData(w, r)
-		return
-	case httpm.POST:
-		// TODO(will): refactor to expose only a dedicated login method
-		s.servePostNodeUpdate(w, r)
-		return
+	case r.URL.Path == "/api/up" && r.Method == httpm.POST:
+		s.serveTailscaleUp(w, r)
+	default:
+		http.Error(w, "invalid endpoint or method", http.StatusNotFound)
 	}
-	http.Error(w, "invalid endpoint", http.StatusNotFound)
-	return
 }
 
 type authType string
@@ -648,18 +640,10 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 type nodeUpdate struct {
 	AdvertiseRoutes   string
 	AdvertiseExitNode bool
-	Reauthenticate    bool
-	ForceLogout       bool
 }
 
 func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-
-	st, err := s.lc.Status(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	var postData nodeUpdate
 	type mi map[string]any
@@ -706,46 +690,30 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	var reauth, logout bool
-	if postData.Reauthenticate {
-		reauth = true
-	}
-	if postData.ForceLogout {
-		logout = true
-	}
-	s.logf("tailscaleUp(reauth=%v, logout=%v) ...", reauth, logout)
-	url, err := s.tailscaleUp(r.Context(), st, postData)
-	s.logf("tailscaleUp = (URL %v, %v)", url != "", err)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
-		return
-	}
-	if url != "" {
-		json.NewEncoder(w).Encode(mi{"url": url})
-	} else {
-		io.WriteString(w, "{}")
-	}
+	io.WriteString(w, "{}")
 }
 
-func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {
-	if postData.ForceLogout {
-		if err := s.lc.Logout(ctx); err != nil {
-			return "", fmt.Errorf("Logout error: %w", err)
-		}
-		return "", nil
-	}
-
+// tailscaleUp starts the daemon with the provided options.
+// If reauthentication has been requested, an authURL is returned to complete device registration.
+func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tailscaleUpOptions) (authURL string, retErr error) {
 	origAuthURL := st.AuthURL
 	isRunning := st.BackendState == ipn.Running.String()
 
-	forceReauth := postData.Reauthenticate
-	if !forceReauth {
-		if origAuthURL != "" {
+	if !opt.Reauthenticate {
+		switch {
+		case origAuthURL != "":
 			return origAuthURL, nil
-		}
-		if isRunning {
+		case isRunning:
 			return "", nil
+		case st.BackendState == ipn.Stopped.String():
+			// stopped and not reauthenticating, so just start running
+			_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					WantRunning: true,
+				},
+				WantRunningSet: true,
+			})
+			return "", err
 		}
 	}
 
@@ -767,7 +735,7 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 		if !isRunning {
 			s.lc.Start(ctx, ipn.Options{})
 		}
-		if forceReauth {
+		if opt.Reauthenticate {
 			s.lc.StartLoginInteractive(ctx)
 		}
 	}()
@@ -784,6 +752,47 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			return *url, nil
 		}
+	}
+}
+
+type tailscaleUpOptions struct {
+	// If true, force reauthentication of the client.
+	// Otherwise simply reconnect, the same as running `tailscale up`.
+	Reauthenticate bool
+}
+
+// serveTailscaleUp serves requests to /api/up.
+// If the user needs to authenticate, an authURL is provided in the response.
+func (s *Server) serveTailscaleUp(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	st, err := s.lc.Status(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var opt tailscaleUpOptions
+	type mi map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&opt); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	s.logf("tailscaleUp(reauth=%v) ...", opt.Reauthenticate)
+	url, err := s.tailscaleUp(r.Context(), st, opt)
+	s.logf("tailscaleUp = (URL %v, %v)", url != "", err)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		return
+	}
+	if url != "" {
+		json.NewEncoder(w).Encode(mi{"url": url})
+	} else {
+		io.WriteString(w, "{}")
 	}
 }
 
