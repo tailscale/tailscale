@@ -46,12 +46,13 @@ export default function HomeView({
         </Link>
       </div>
       <h2 className="mb-3">Settings</h2>
-      <SettingsCard
+      {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
+      {/* <SettingsCard
         link="/subnets"
         className="mb-3"
         title="Subnet router"
         body="Add devices to your tailnet without installing Tailscale on them."
-      />
+      /> */}
       <SettingsCard
         link="/ssh"
         className="mb-3"
@@ -66,11 +67,11 @@ export default function HomeView({
             : undefined
         }
       />
-      <SettingsCard
+      {/* <SettingsCard
         link="/serve"
         title="Share local content"
         body="Share local ports, services, and content to your Tailscale network or to the broader internet."
-      />
+      /> */}
     </div>
   )
 }
