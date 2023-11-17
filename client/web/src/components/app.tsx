@@ -3,7 +3,7 @@ import React, { useEffect } from "react"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
-import LoginClientView from "src/components/views/login-client-view"
+import LoginView from "src/components/views/login-view"
 import SSHView from "src/components/views/ssh-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
@@ -39,12 +39,11 @@ function WebClient({
 
   return !data ? (
     <div className="text-center py-14">Loading...</div>
-  ) : data.Status === "NeedsLogin" || data.Status === "NoState" ? (
+  ) : data.Status === "NeedsLogin" ||
+    data.Status === "NoState" ||
+    data.Status === "Stopped" ? (
     // Client not on a tailnet, render login.
-    <LoginClientView
-      data={data}
-      onLoginClick={() => updateNode({ Reauthenticate: true })}
-    />
+    <LoginView data={data} refreshData={refreshData} />
   ) : (
     // Otherwise render the new web client.
     <>
