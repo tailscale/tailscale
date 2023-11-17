@@ -13,12 +13,13 @@ import (
 // methods that involve getting a policy value.
 // For keys and the corresponding values, check policy_keys.go.
 type testHandler struct {
-	t   *testing.T
-	key Key
-	s   string
-	u64 uint64
-	b   bool
-	err error
+	t     *testing.T
+	key   Key
+	s     string
+	u64   uint64
+	b     bool
+	err   error
+	calls int // used for testing reads from cache vs. handler
 }
 
 var someOtherError = errors.New("error other than not found")
@@ -34,6 +35,7 @@ func (th *testHandler) ReadString(key string) (string, error) {
 	if key != string(th.key) {
 		th.t.Errorf("ReadString(%q) want %q", key, th.key)
 	}
+	th.calls++
 	return th.s, th.err
 }
 
@@ -41,6 +43,7 @@ func (th *testHandler) ReadUInt64(key string) (uint64, error) {
 	if key != string(th.key) {
 		th.t.Errorf("ReadUint64(%q) want %q", key, th.key)
 	}
+	th.calls++
 	return th.u64, th.err
 }
 
@@ -48,6 +51,7 @@ func (th *testHandler) ReadBoolean(key string) (bool, error) {
 	if key != string(th.key) {
 		th.t.Errorf("ReadBool(%q) want %q", key, th.key)
 	}
+	th.calls++
 	return th.b, th.err
 }
 
