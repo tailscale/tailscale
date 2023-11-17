@@ -4,6 +4,7 @@
 package set
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -110,5 +111,50 @@ func TestClone(t *testing.T) {
 	s.Add(100)
 	if s.Equal(s2) {
 		t.Error("clone is not distinct from original")
+	}
+}
+
+func TestSetJSONRoundTrip(t *testing.T) {
+	tests := []struct {
+		desc    string
+		strings Set[string]
+		ints    Set[int]
+	}{
+		{"empty", make(Set[string]), make(Set[int])},
+		{"nil", nil, nil},
+		{"one-item", SetOf([]string{"one"}), SetOf([]int{1})},
+		{"multiple-items", SetOf([]string{"one", "two", "three"}), SetOf([]int{1, 2, 3})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			t.Run("strings", func(t *testing.T) {
+				buf, err := json.Marshal(tt.strings)
+				if err != nil {
+					t.Fatalf("json.Marshal: %v", err)
+				}
+				t.Logf("marshaled: %s", buf)
+				var s Set[string]
+				if err := json.Unmarshal(buf, &s); err != nil {
+					t.Fatalf("json.Unmarshal: %v", err)
+				}
+				if !s.Equal(tt.strings) {
+					t.Errorf("set changed after JSON marshal/unmarshal, before: %v, after: %v", tt.strings, s)
+				}
+			})
+			t.Run("ints", func(t *testing.T) {
+				buf, err := json.Marshal(tt.ints)
+				if err != nil {
+					t.Fatalf("json.Marshal: %v", err)
+				}
+				t.Logf("marshaled: %s", buf)
+				var s Set[int]
+				if err := json.Unmarshal(buf, &s); err != nil {
+					t.Fatalf("json.Unmarshal: %v", err)
+				}
+				if !s.Equal(tt.ints) {
+					t.Errorf("set changed after JSON marshal/unmarshal, before: %v, after: %v", tt.ints, s)
+				}
+			})
+		})
 	}
 }

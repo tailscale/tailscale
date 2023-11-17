@@ -5,6 +5,7 @@
 package set
 
 import (
+	"encoding/json"
 	"maps"
 )
 
@@ -65,4 +66,17 @@ func (s Set[T]) Len() int { return len(s) }
 // Equal reports whether s is equal to other.
 func (s Set[T]) Equal(other Set[T]) bool {
 	return maps.Equal(s, other)
+}
+
+func (s Set[T]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.Slice())
+}
+
+func (s *Set[T]) UnmarshalJSON(buf []byte) error {
+	var ss []T
+	if err := json.Unmarshal(buf, &ss); err != nil {
+		return err
+	}
+	*s = SetOf(ss)
+	return nil
 }
