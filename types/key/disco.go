@@ -5,6 +5,8 @@ package key
 
 import (
 	"crypto/subtle"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 
 	"go4.org/mem"
@@ -140,6 +142,29 @@ func (k DiscoPublic) MarshalText() ([]byte, error) {
 // MarshalText implements encoding.TextUnmarshaler.
 func (k *DiscoPublic) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(discoPublicHexPrefix))
+}
+
+func (k DiscoPublic) Value() (driver.Value, error) {
+	return k.MarshalText()
+}
+
+func (k *DiscoPublic) Scan(value interface{}) error {
+	var val []byte
+	switch value.(type) {
+	case string:
+		val = []byte(value.(string))
+	case []byte:
+		val = value.([]byte)
+	default:
+		return errors.New("Incompatible type for DiscoPublic")
+	}
+
+	err := k.UnmarshalText(val)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 type DiscoShared struct {

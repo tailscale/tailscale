@@ -6,7 +6,9 @@ package key
 import (
 	"bytes"
 	"crypto/subtle"
+	"database/sql/driver"
 	"encoding/hex"
+	"errors"
 
 	"go4.org/mem"
 	"golang.org/x/crypto/curve25519"
@@ -261,4 +263,27 @@ func (k MachinePublic) MarshalText() ([]byte, error) {
 // MarshalText implements encoding.TextUnmarshaler.
 func (k *MachinePublic) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(machinePublicHexPrefix))
+}
+
+func (k MachinePublic) Value() (driver.Value, error) {
+	return k.MarshalText()
+}
+
+func (k *MachinePublic) Scan(value interface{}) error {
+	var val []byte
+	switch value.(type) {
+	case string:
+		val = []byte(value.(string))
+	case []byte:
+		val = value.([]byte)
+	default:
+		return errors.New("Incompatible type for MachinePublic")
+	}
+
+	err := k.UnmarshalText(val)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

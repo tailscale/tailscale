@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/subtle"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -378,4 +379,27 @@ func (k NodePublic) WireGuardGoString() string {
 	b[second+2] = b64(((k.k[30] << 4) | (k.k[31] >> 4)) & 63)
 	b[second+3] = b64((k.k[31] << 2) & 63)
 	return string(b)
+}
+
+func (k NodePublic) Value() (driver.Value, error) {
+	return k.MarshalText()
+}
+
+func (k *NodePublic) Scan(value interface{}) error {
+	var val []byte
+	switch value.(type) {
+	case string:
+		val = []byte(value.(string))
+	case []byte:
+		val = value.([]byte)
+	default:
+		return errors.New("Incompatible type for NodePublic")
+	}
+
+	err := k.UnmarshalText(val)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
