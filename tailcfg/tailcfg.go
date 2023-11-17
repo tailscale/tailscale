@@ -121,7 +121,8 @@ type CapabilityVersion int
 //   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
 //   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
 //   - 80: 2023-11-16: can handle c2n GET /tls-cert-status
-const CurrentCapabilityVersion CapabilityVersion = 80
+//   - 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
+const CurrentCapabilityVersion CapabilityVersion = 81
 
 type StableID string
 
@@ -1797,7 +1798,33 @@ type MapResponse struct {
 	// Note that this package's type, due its use of a slice and omitempty, is
 	// unable to marshal a zero-length non-nil slice. The control server needs
 	// to marshal this type using a separate type. See MapResponse docs.
+	//
+	// See PacketFilters for the newer way to send PacketFilter updates.
 	PacketFilter []FilterRule `json:",omitempty"`
+
+	// PacketFilters encodes incremental packet filter updates to the client
+	// without having to send the entire packet filter on any changes as
+	// required by the older PacketFilter (singular) field above. The map keys
+	// are server-assigned arbitrary strings. The map values are the new rules
+	// for that key, or nil to delete it. The client then concatenates all the
+	// rules together to generate the final packet filter. Because the
+	// FilterRules can only match or not match, the ordering of filter rules
+	// doesn't matter. (That said, the client generates the file merged packet
+	// filter rules by concananting all the packet filter rules sorted by the
+	// map key name. But it does so for stability and testability, not
+	// correctness. If something needs to rely on that property, something has
+	// gone wrong.)
+	//
+	// If the server sends a non-nil PacketFilter (above), that is equivalent to
+	// a named packet filter with the key "base". It is valid for the server to
+	// send both PacketFilter and PacketFilters in the same MapResponse or
+	// alternate between them within a session. The PacketFilter is applied
+	// first (if set) and then the PacketFilters.
+	//
+	// As a special case, the map key "*" with a value of nil means to clear all
+	// prior named packet filters (including any implicit "base") before
+	// processing the other map entries.
+	PacketFilters map[string][]FilterRule `json:",omitempty"`
 
 	// UserProfiles are the user profiles of nodes in the network.
 	// As as of 1.1.541 (mapver 5), this contains new or updated

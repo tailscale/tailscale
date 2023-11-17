@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
@@ -27,6 +28,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpx"
+	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -75,7 +77,8 @@ type mapSession struct {
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
-	lastPacketFilterRules  views.Slice[tailcfg.FilterRule]
+	lastPacketFilterRules  views.Slice[tailcfg.FilterRule] // concatenation of all namedPacketFilters
+	namedPacketFilters     map[string]views.Slice[tailcfg.FilterRule]
 	lastParsedPacketFilter []filter.Match
 	lastSSHPolicy          *tailcfg.SSHPolicy
 	collectServices        bool
@@ -259,10 +262,39 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		ms.lastDERPMap = dm
 	}
 
+	var packetFilterChanged bool
+	// Older way, one big blob:
 	if pf := resp.PacketFilter; pf != nil {
+		packetFilterChanged = true
+		mak.Set(&ms.namedPacketFilters, "base", views.SliceOf(pf))
+	}
+	// Newer way, named chunks:
+	if m := resp.PacketFilters; m != nil {
+		packetFilterChanged = true
+		if v, ok := m["*"]; ok && v == nil {
+			ms.namedPacketFilters = nil
+		}
+		for k, v := range m {
+			if k == "*" {
+				continue
+			}
+			if v != nil {
+				mak.Set(&ms.namedPacketFilters, k, views.SliceOf(v))
+			} else {
+				delete(ms.namedPacketFilters, k)
+			}
+		}
+	}
+	if packetFilterChanged {
+		keys := xmaps.Keys(ms.namedPacketFilters)
+		sort.Strings(keys)
+		var concat []tailcfg.FilterRule
+		for _, v := range keys {
+			concat = ms.namedPacketFilters[v].AppendTo(concat)
+		}
+		ms.lastPacketFilterRules = views.SliceOf(concat)
 		var err error
-		ms.lastPacketFilterRules = views.SliceOf(pf)
-		ms.lastParsedPacketFilter, err = filter.MatchesFromFilterRules(pf)
+		ms.lastParsedPacketFilter, err = filter.MatchesFromFilterRules(concat)
 		if err != nil {
 			ms.logf("parsePacketFilter: %v", err)
 		}
