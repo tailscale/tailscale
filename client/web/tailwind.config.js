@@ -1,9 +1,8 @@
+const plugin = require("tailwindcss/plugin")
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     fontFamily: {
       sans: [
@@ -32,6 +31,16 @@ module.exports = {
     },
     extend: {},
   },
-  plugins: [],
+  plugins: [
+    plugin(function ({ addVariant }) {
+      addVariant("state-open", [
+        '&[data-state="open"]',
+        '[data-state="open"] &',
+      ])
+      addVariant("state-closed", [
+        '&[data-state="closed"]',
+        '[data-state="closed"] &',
+      ])
+    }),
+  ],
 }
-

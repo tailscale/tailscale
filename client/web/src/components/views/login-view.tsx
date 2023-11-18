@@ -1,7 +1,9 @@
-import React, { useCallback } from "react"
+import React, { useCallback, useState } from "react"
 import { apiFetch } from "src/api"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import { NodeData } from "src/hooks/node-data"
+import Collapsible from "src/ui/collapsible"
+import Input from "src/ui/input"
 
 /**
  * LoginView is rendered when the client is not authenticated
@@ -14,6 +16,9 @@ export default function LoginView({
   data: NodeData
   refreshData: () => void
 }) {
+  const [controlURL, setControlURL] = useState<string>("")
+  const [authKey, setAuthKey] = useState<string>("")
+
   const login = useCallback(
     (opt: TailscaleUpOptions) => {
       tailscaleUp(opt).then(refreshData)
@@ -76,11 +81,44 @@ export default function LoginView({
             </p>
           </div>
           <button
-            onClick={() => login({ Reauthenticate: true })}
+            onClick={() =>
+              login({
+                Reauthenticate: true,
+                ControlURL: controlURL,
+                AuthKey: authKey,
+              })
+            }
             className="button button-blue w-full mb-4"
           >
             Log In
           </button>
+          <Collapsible trigger="Advanced options">
+            <h4 className="font-medium mb-1 mt-2">Auth Key</h4>
+            <p className="text-sm text-gray-500">
+              Connect with a pre-authenticated key.{" "}
+              <a
+                href="https://tailscale.com/kb/1085/auth-keys/"
+                className="link"
+                target="_blank"
+              >
+                Learn more &rarr;
+              </a>
+            </p>
+            <Input
+              className="mt-2"
+              value={authKey}
+              onChange={(e) => setAuthKey(e.target.value)}
+              placeholder="tskey-auth-XXX"
+            />
+            <h4 className="font-medium mt-3 mb-1">Server URL</h4>
+            <p className="text-sm text-gray-500">Base URL of control server.</p>
+            <Input
+              className="mt-2"
+              value={controlURL}
+              onChange={(e) => setControlURL(e.target.value)}
+              placeholder="https://login.tailscale.com/"
+            />
+          </Collapsible>
         </>
       )}
     </div>
@@ -89,6 +127,8 @@ export default function LoginView({
 
 type TailscaleUpOptions = {
   Reauthenticate?: boolean // force reauthentication
+  ControlURL?: string
+  AuthKey?: string
 }
 
 function tailscaleUp(options: TailscaleUpOptions) {

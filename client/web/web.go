@@ -790,10 +790,18 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tails
 
 	go func() {
 		if !isRunning {
-			s.lc.Start(ctx, ipn.Options{})
+			ipnOptions := ipn.Options{AuthKey: opt.AuthKey}
+			if opt.ControlURL != "" {
+				ipnOptions.UpdatePrefs = &ipn.Prefs{ControlURL: opt.ControlURL}
+			}
+			if err := s.lc.Start(ctx, ipnOptions); err != nil {
+				s.logf("start: %v", err)
+			}
 		}
 		if opt.Reauthenticate {
-			s.lc.StartLoginInteractive(ctx)
+			if err := s.lc.StartLoginInteractive(ctx); err != nil {
+				s.logf("startLogin: %v", err)
+			}
 		}
 	}()
 
@@ -801,6 +809,9 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tails
 		n, err := watcher.Next()
 		if err != nil {
 			return "", err
+		}
+		if n.State != nil && *n.State == ipn.Running {
+			return "", nil
 		}
 		if n.ErrMessage != nil {
 			msg := *n.ErrMessage
@@ -816,6 +827,9 @@ type tailscaleUpOptions struct {
 	// If true, force reauthentication of the client.
 	// Otherwise simply reconnect, the same as running `tailscale up`.
 	Reauthenticate bool
+
+	ControlURL string
+	AuthKey    string
 }
 
 // serveTailscaleUp serves requests to /api/up.
