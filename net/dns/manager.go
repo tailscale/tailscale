@@ -228,7 +228,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// This bool is used in a couple of places below to implement this
 	// workaround.
 	isWindows := runtime.GOOS == "windows"
-	if cfg.singleResolverSet() != nil && m.os.SupportsSplitDNS() && !isWindows {
+	if len(cfg.singleResolverSet()) > 0 && m.os.SupportsSplitDNS() && !isWindows {
 		// Split DNS configuration requested, where all split domains
 		// go to the same resolvers. We can let the OS do it.
 		ocfg.Nameservers = toIPsOnly(cfg.singleResolverSet())
