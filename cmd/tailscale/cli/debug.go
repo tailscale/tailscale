@@ -189,6 +189,7 @@ var debugCmd = &ffcli.Command{
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
 				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
+				fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 				return fs
 			})(),
 		},
@@ -416,6 +417,7 @@ var watchIPNArgs struct {
 	netmap         bool
 	initial        bool
 	showPrivateKey bool
+	count          int
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
@@ -431,8 +433,8 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		return err
 	}
 	defer watcher.Close()
-	printf("Connected.\n")
-	for {
+	fmt.Fprintf(os.Stderr, "Connected.\n")
+	for seen := 0; watchIPNArgs.count == 0 || seen < watchIPNArgs.count; seen++ {
 		n, err := watcher.Next()
 		if err != nil {
 			return err
@@ -441,8 +443,9 @@ func runWatchIPN(ctx context.Context, args []string) error {
 			n.NetMap = nil
 		}
 		j, _ := json.MarshalIndent(n, "", "\t")
-		printf("%s\n", j)
+		fmt.Printf("%s\n", j)
 	}
+	return nil
 }
 
 func runDERPMap(ctx context.Context, args []string) error {
