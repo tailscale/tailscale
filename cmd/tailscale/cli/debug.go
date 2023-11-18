@@ -194,6 +194,16 @@ var debugCmd = &ffcli.Command{
 			})(),
 		},
 		{
+			Name:      "netmap",
+			Exec:      runNetmap,
+			ShortHelp: "print the current network map",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("netmap")
+				fs.BoolVar(&netmapArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
+				return fs
+			})(),
+		},
+		{
 			Name:      "via",
 			Exec:      runVia,
 			ShortHelp: "convert between site-specific IPv4 CIDRs and IPv6 'via' routes",
@@ -445,6 +455,33 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		j, _ := json.MarshalIndent(n, "", "\t")
 		fmt.Printf("%s\n", j)
 	}
+	return nil
+}
+
+var netmapArgs struct {
+	showPrivateKey bool
+}
+
+func runNetmap(ctx context.Context, args []string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var mask ipn.NotifyWatchOpt = ipn.NotifyInitialNetMap
+	if !netmapArgs.showPrivateKey {
+		mask |= ipn.NotifyNoPrivateKeys
+	}
+	watcher, err := localClient.WatchIPNBus(ctx, mask)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+
+	n, err := watcher.Next()
+	if err != nil {
+		return err
+	}
+	j, _ := json.MarshalIndent(n.NetMap, "", "\t")
+	fmt.Printf("%s\n", j)
 	return nil
 }
 
