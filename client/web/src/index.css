@@ -45,7 +45,7 @@
   }
 
   .description {
-    @apply text-neutral-500 leading-snug
+    @apply text-neutral-500 leading-snug;
   }
 
   /**
@@ -143,6 +143,48 @@
 
   .toggle-small:checked:enabled:active::after {
     @apply w-[0.675rem] translate-x-[0.55rem];
+  }
+
+  /**
+   * .input defines default text input field styling. These styles should
+   * correspond to .button, sharing a similar height and rounding, since .input
+   * and .button are commonly used together.
+   */
+
+  .input,
+  .input-wrapper {
+    @apply appearance-none leading-tight rounded-md bg-white border border-gray-300 hover:border-gray-400 transition-colors w-full h-input;
+  }
+
+  .input {
+    @apply px-3;
+  }
+
+  .input::placeholder,
+  .input-wrapper::placeholder {
+    @apply text-gray-400;
+  }
+
+  .input:disabled,
+  .input-wrapper:disabled {
+    @apply border-gray-300;
+    @apply bg-gray-0;
+    @apply cursor-not-allowed;
+  }
+
+  .input:focus,
+  .input-wrapper:focus-within {
+    @apply outline-none ring border-gray-400;
+  }
+
+  .input-error {
+    @apply border-red-200;
+  }
+}
+
+@layer utilities {
+  .h-input {
+    @apply h-[2.375rem];
   }
 }
 

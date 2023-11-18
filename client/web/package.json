@@ -9,6 +9,7 @@
   "private": true,
   "dependencies": {
     "@radix-ui/react-popover": "^1.0.6",
+    "@radix-ui/react-collapsible": "^1.0.3",
     "classnames": "^2.3.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
