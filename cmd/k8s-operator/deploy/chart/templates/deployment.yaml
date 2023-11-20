@@ -29,7 +29,7 @@ spec:
       serviceAccountName: operator
       {{- with .Values.operatorConfig.podSecurityContext }}
       securityContext:
-        {{- toYaml .Values.operatorConfig.podSecurityContext | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
       - name: oauth
