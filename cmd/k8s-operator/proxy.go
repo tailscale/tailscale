@@ -23,7 +23,6 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
-	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 )
@@ -109,21 +108,21 @@ func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config,
 	if err != nil {
 		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
 	}
-	go runAPIServerProxy(s, rt, zlog.Named("apiserver-proxy").Infof, mode)
+	go runAPIServerProxy(s, rt, zlog.Named("apiserver-proxy"), mode)
 }
 
 // apiserverProxy is an http.Handler that authenticates requests using the Tailscale
 // LocalAPI and then proxies them to the Kubernetes API.
 type apiserverProxy struct {
-	logf logger.Logf
-	lc   *tailscale.LocalClient
-	rp   *httputil.ReverseProxy
+	log *zap.SugaredLogger
+	lc  *tailscale.LocalClient
+	rp  *httputil.ReverseProxy
 }
 
 func (h *apiserverProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	who, err := h.lc.WhoIs(r.Context(), r.RemoteAddr)
 	if err != nil {
-		h.logf("failed to authenticate caller: %v", err)
+		h.log.Errorf("failed to authenticate caller: %v", err)
 		http.Error(w, "failed to authenticate caller", http.StatusInternalServerError)
 		return
 	}
@@ -145,7 +144,7 @@ func (h *apiserverProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //     are passed through to the Kubernetes API.
 //
 // It never returns.
-func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, mode apiServerProxyMode) {
+func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLogger, mode apiServerProxyMode) {
 	if mode == apiserverProxyModeDisabled {
 		return
 	}
@@ -163,8 +162,8 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 		log.Fatalf("could not get local client: %v", err)
 	}
 	ap := &apiserverProxy{
-		logf: logf,
-		lc:   lc,
+		log: log,
+		lc:  lc,
 		rp: &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
 				// Replace the URL with the Kubernetes APIServer.
@@ -196,7 +195,7 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 				}
 
 				// Now add the impersonation headers that we want.
-				if err := addImpersonationHeaders(r.Out); err != nil {
+				if err := addImpersonationHeaders(r.Out, log); err != nil {
 					panic("failed to add impersonation headers: " + err.Error())
 				}
 			},
@@ -213,6 +212,7 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, 
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		Handler:      ap,
 	}
+	log.Infof("listening on %s", ln.Addr())
 	if err := hs.ServeTLS(ln, "", ""); err != nil {
 		log.Fatalf("runAPIServerProxy: failed to serve %v", err)
 	}
@@ -235,7 +235,8 @@ type impersonateRule struct {
 // addImpersonationHeaders adds the appropriate headers to r to impersonate the
 // caller when proxying to the Kubernetes API. It uses the WhoIsResponse stashed
 // in the context by the apiserverProxy.
-func addImpersonationHeaders(r *http.Request) error {
+func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
+	log = log.With("remote", r.RemoteAddr)
 	who := whoIsFromRequest(r)
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)
 	if err != nil {
@@ -253,21 +254,26 @@ func addImpersonationHeaders(r *http.Request) error {
 			}
 			r.Header.Add("Impersonate-Group", group)
 			groupsAdded.Add(group)
+			log.Debugf("adding group impersonation header for user group %s", group)
 		}
 	}
 
 	if !who.Node.IsTagged() {
 		r.Header.Set("Impersonate-User", who.UserProfile.LoginName)
+		log.Debugf("adding user impersonation header for user %s", who.UserProfile.LoginName)
 		return nil
 	}
 	// "Impersonate-Group" requires "Impersonate-User" to be set, so we set it
 	// to the node FQDN for tagged nodes.
-	r.Header.Set("Impersonate-User", strings.TrimSuffix(who.Node.Name, "."))
+	nodeName := strings.TrimSuffix(who.Node.Name, ".")
+	r.Header.Set("Impersonate-User", nodeName)
+	log.Debugf("adding user impersonation header for node name %s", nodeName)
 
 	// For legacy behavior (before caps), set the groups to the nodes tags.
 	if groupsAdded.Slice().Len() == 0 {
 		for _, tag := range who.Node.Tags {
 			r.Header.Add("Impersonate-Group", tag)
+			log.Debugf("adding group impersonation header for node tag %s", tag)
 		}
 	}
 	return nil
