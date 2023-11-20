@@ -64,6 +64,7 @@ jobs:
       matrix:
         include:
           - goarch: amd64
+            coverflags: "-coverprofile=/tmp/coverage.out"
           - goarch: amd64
             buildflags: "-race"
             shard: '1/3'
@@ -118,10 +119,15 @@ jobs:
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
+      run: NOBASHDEBUG=true PATH=$PWD/tool:$PATH /tmp/testwrapper ${{matrix.coverflags}} ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
         TS_TEST_SHARD: ${{ matrix.shard }}
+    - name: Publish to coveralls.io
+      if: matrix.coverflags != '' # only publish results if we've tracked coverage
+      uses: shogo82148/actions-goveralls@v1
+      with:
+        path-to-profile: /tmp/coverage.out
     - name: bench all
       run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:

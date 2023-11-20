@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-if [[ "${CI:-}" == "true" ]]; then
+if [[ "${CI:-}" == "true" && "${NOBASHDEBUG:-}" != "true" ]]; then
     set -x
 fi
 
