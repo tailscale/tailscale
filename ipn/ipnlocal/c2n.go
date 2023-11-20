@@ -395,12 +395,17 @@ func findCmdTailscale() (string, error) {
 		if self == "/usr/local/sbin/tailscaled" || self == "/usr/local/bin/tailscaled" {
 			ts = "/usr/local/bin/tailscale"
 		}
-		if distro.Get() == distro.QNAP {
+		switch distro.Get() {
+		case distro.QNAP:
 			// The volume under /share/ where qpkg are installed is not
 			// predictable. But the rest of the path is.
 			ok, err := filepath.Match("/share/*/.qpkg/Tailscale/tailscaled", self)
 			if err == nil && ok {
 				ts = filepath.Join(filepath.Dir(self), "tailscale")
+			}
+		case distro.Unraid:
+			if self == "/usr/local/emhttp/plugins/tailscale/bin/tailscaled" {
+				ts = "/usr/local/emhttp/plugins/tailscale/bin/tailscale"
 			}
 		}
 	case "windows":
