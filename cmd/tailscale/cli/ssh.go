@@ -171,10 +171,17 @@ func genKnownHosts(st *ipnstate.Status) []byte {
 			if strings.ContainsAny(hostKey, "\n\r") { // invalid
 				continue
 			}
-			fmt.Fprintf(&buf, "%s %s\n", ps.DNSName, hostKey)
+			fmt.Fprintf(&buf, "%s %s\n", sshCanonicalizeHost(ps.DNSName), hostKey)
 		}
 	}
 	return buf.Bytes()
+}
+
+// sshCanonicalizeHost returns host in a format compatible with
+// OpenSSH's CanonicalizeHostname which trims the trailing dot.
+// https://github.com/openssh/openssh-portable/blob/c52db0114826d73eff6cdbf205e9c1fa4f7ca6c6/ssh.c#L505-L515C16
+func sshCanonicalizeHost(host string) string {
+	return strings.TrimSuffix(host, ".")
 }
 
 // nodeDNSNameFromArg returns the PeerStatus.DNSName value from a peer
