@@ -128,6 +128,13 @@ jobs:
       uses: shogo82148/actions-goveralls@v1
       with:
         path-to-profile: /tmp/coverage.out
+    - name: upload test output
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-test-attempts.json
+        path: test_attempts.json
+    - name: remove upload test output
+      run: rm test_attempts.json
     - name: bench all
       run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
