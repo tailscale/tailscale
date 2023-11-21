@@ -97,6 +97,7 @@ require (
 	inet.af/wf v0.0.0-20221017222439-36129f591884
 	k8s.io/api v0.28.2
 	k8s.io/apimachinery v0.28.2
+	k8s.io/apiserver v0.28.2
 	k8s.io/client-go v0.28.2
 	nhooyr.io/websocket v1.8.7
 	sigs.k8s.io/controller-runtime v0.16.2

@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
@@ -176,10 +177,39 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 	return true, nil
 }
 
+// maxStatefulSetNameLength is maximum length the StatefulSet name can
+// have to NOT result in a too long value for controller-revision-hash
+// label value (see https://github.com/kubernetes/kubernetes/issues/64023).
+// controller-revision-hash label value consists of StatefulSet's name + hyphen + revision hash.
+// Maximum label value length is 63 chars. Length of revision hash is 10 chars.
+// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+// https://github.com/kubernetes/kubernetes/blob/v1.28.4/pkg/controller/history/controller_history.go#L90-L104
+const maxStatefulSetNameLength = 63 - 10 - 1
+
+// statefulSetNameBase accepts name of parent resource and returns a string in
+// form ts-<portion-of-parentname>- that, when passed to Kubernetes name
+// generation will NOT result in a StatefulSet name longer than 52 chars.
+// This is done because of https://github.com/kubernetes/kubernetes/issues/64023.
+func statefulSetNameBase(parent string) string {
+
+	base := fmt.Sprintf("ts-%s-", parent)
+
+	// Calculate what length name GenerateName returns for this base.
+	generator := names.SimpleNameGenerator
+	generatedName := generator.GenerateName(base)
+
+	if excess := len(generatedName) - maxStatefulSetNameLength; excess > 0 {
+		base = base[:len(base)-excess-1] // take extra char off to make space for hyphen
+		base = base + "-"                // re-instate hyphen
+	}
+	return base
+}
+
 func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
+	nameBase := statefulSetNameBase(sts.ParentResourceName)
 	hsvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "ts-" + sts.ParentResourceName + "-",
+			GenerateName: nameBase,
 			Namespace:    a.operatorNamespace,
 			Labels:       sts.ChildResourceLabels,
 		},
