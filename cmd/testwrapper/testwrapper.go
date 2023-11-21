@@ -38,12 +38,12 @@ const (
 )
 
 type testAttempt struct {
-	pkg           string // "tailscale.com/types/key"
-	testName      string // "TestFoo"
-	outcome       string // "pass", "fail", "skip"
+	pkg           string // "tailscale.com/types/key" `json:",inline"`
+	testName      string // "TestFoo" `json:",inline"`
+	outcome       string // "pass", "fail", "skip" `json:",omitempty"`
 	logs          bytes.Buffer
-	isMarkedFlaky bool   // set if the test is marked as flaky
-	issueURL      string // set if the test is marked as flaky
+	isMarkedFlaky bool   // set if the test is marked as flaky `json:",omitempty"`
+	issueURL      string // set if the test is marked as flaky `json:",omitempty"`
 
 	pkgFinished bool
 }
@@ -201,6 +201,12 @@ func main() {
 		return
 	}
 
+	f, err := os.Create("test_attempts.json")
+	if err != nil {
+		log.Printf("error creating test attempt json file: %v", err)
+	}
+	defer f.Close()
+
 	ctx := context.Background()
 	type nextRun struct {
 		tests   []*packageTests
@@ -319,6 +325,11 @@ func main() {
 					toRetry[tr.pkg] = append(toRetry[tr.pkg], tr)
 				} else {
 					failed = true
+				}
+				testAttemptJson, _ := json.Marshal(tr)
+				_, err := f.Write(testAttemptJson)
+				if err != nil {
+					log.Printf("error appending to test attempt json file: %v", err)
 				}
 			}
 			if failed {
