@@ -3313,16 +3313,18 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		return
 	}
 
+	// Geometric cost, assumes that the number of advertised tags is small
+	selfHasTag := func(attrTags []string) bool {
+		return nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
+			return slices.Contains(attrTags, tag)
+		})
+	}
+
 	var domains []string
 	for _, attr := range attrs {
-		// Geometric cost, assumes that the number of advertised tags is small
-		if !nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
-			return slices.Contains(attr.Connectors, tag)
-		}) {
-			continue
+		if slices.Contains(attr.Connectors, "*") || selfHasTag(attr.Connectors) {
+			domains = append(domains, attr.Domains...)
 		}
-
-		domains = append(domains, attr.Domains...)
 	}
 	slices.Sort(domains)
 	slices.Compact(domains)
