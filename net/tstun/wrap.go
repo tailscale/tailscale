@@ -855,6 +855,25 @@ func (t *Wrapper) IdleDuration() time.Duration {
 	return mono.Since(t.lastActivityAtomic.LoadAtomic())
 }
 
+func parsedEqual(a, b *packet.Parsed) bool {
+	if a.Dst != b.Dst {
+		return false
+	}
+	if a.IPProto != b.IPProto {
+		return false
+	}
+	if a.Src != b.Src {
+		return false
+	}
+	if a.IPVersion != b.IPVersion {
+		return false
+	}
+	if a.TCPFlags != b.TCPFlags {
+		return false
+	}
+	return true
+}
+
 func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	if !t.started.Load() {
 		<-t.startCh
@@ -880,6 +899,9 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	metricPacketOut.Add(int64(len(res.data)))
 
 	var buffsPos int
+	var prevResp filter.Response
+	prevPacket := parsedPacketPool.Get().(*packet.Parsed)
+	defer parsedPacketPool.Put(prevPacket)
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	captHook := t.captureHook.Load()
@@ -896,10 +918,14 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			captHook(capture.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
 		}
 		if !t.disableFilter {
-			response := t.filterPacketOutboundToWireGuard(p)
-			if response != filter.Accept {
-				metricPacketOutDrop.Add(1)
-				continue
+			if prevResp != filter.Accept || !parsedEqual(p, prevPacket) {
+				*prevPacket = *p
+				response := t.filterPacketOutboundToWireGuard(p)
+				prevResp = response
+				if response != filter.Accept {
+					metricPacketOutDrop.Add(1)
+					continue
+				}
 			}
 		}
 		n := copy(buffs[buffsPos][offset:], p.Buffer())
@@ -1060,6 +1086,9 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	metricPacketIn.Add(int64(len(buffs)))
 	i := 0
+	var prevResp filter.Response
+	prevPacket := parsedPacketPool.Get().(*packet.Parsed)
+	defer parsedPacketPool.Put(prevPacket)
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	captHook := t.captureHook.Load()
@@ -1067,12 +1096,23 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		p.Decode(buff[offset:])
 		t.dnat(p)
 		if !t.disableFilter {
-			if t.filterPacketInboundFromWireGuard(p, captHook) != filter.Accept {
-				metricPacketInDrop.Add(1)
+			if prevResp != filter.Accept || !parsedEqual(p, prevPacket) {
+				*prevPacket = *p
+				response := t.filterPacketInboundFromWireGuard(p, captHook)
+				prevResp = response
+				if response != filter.Accept {
+					metricPacketInDrop.Add(1)
+				} else {
+					buffs[i] = buff
+					i++
+				}
 			} else {
 				buffs[i] = buff
 				i++
 			}
+		} else {
+			buffs[i] = buff
+			i++
 		}
 	}
 	if t.disableFilter {
