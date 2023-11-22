@@ -81,7 +81,8 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
 	targetIP := a.tailnetTargetAnnotation(svc)
-	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" {
+	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
+	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" && targetFQDN == "" {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
@@ -187,6 +188,14 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.TailnetTargetIP = ip
 		a.managedEgressProxies.Add(svc.UID)
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
+	} else if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+		fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]
+		if !strings.HasSuffix(fqdn, ".") {
+			fqdn = fqdn + "."
+		}
+		sts.TailnetTargetFQDN = fqdn
+		a.managedEgressProxies.Add(svc.UID)
+		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 	}
 	a.mu.Unlock()
 
@@ -195,7 +204,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
-	if sts.TailnetTargetIP != "" {
+	if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" {
 		// TODO (irbekrm): cluster.local is the default DNS name, but
 		// can be changed by users. Make this configurable or figure out
 		// how to discover the DNS name from within operator
