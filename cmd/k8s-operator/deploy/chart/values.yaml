@@ -4,9 +4,9 @@
 # Operator oauth credentials. If set a Kubernetes Secret with the provided
 # values will be created in the operator namespace. If unset a Secret named
 # operator-oauth must be precreated.
-# oauth:
-#   clientId: ""
-#   clientSecret: ""
+oauth: {}
+  # clientId: ""
+  # clientSecret: ""
 
 operatorConfig:
   image:
@@ -15,11 +15,23 @@ operatorConfig:
     # used.
     tag: ""
     digest: ""
+    pullPolicy: Always
   logging: "info"
   hostname: "tailscale-operator"
   nodeSelector:
     kubernetes.io/os: linux
 
+  resources: {}
+
+  podAnnotations: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  podSecurityContext: {}
+
+  securityContext: {}
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.
@@ -43,3 +55,5 @@ proxyConfig:
 # https://tailscale.com/kb/1236/kubernetes-operator/#accessing-the-kubernetes-control-plane-using-an-api-server-proxy
 apiServerProxyConfig:
   mode: "false" # "true", "false", "noauth"
+
+imagePullSecrets: []
