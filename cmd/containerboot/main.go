@@ -13,7 +13,7 @@
 //
 //   - TS_AUTHKEY: the authkey to use for login.
 //   - TS_HOSTNAME: the hostname to request for the node.
-//   - TS_ROUTES: subnet routes to advertise.
+//   - TS_ROUTES: subnet routes to advertise. To accept routes, use TS_EXTRA_ARGS to pass in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
