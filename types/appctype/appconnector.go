@@ -67,6 +67,7 @@ type AppConnectorAttr struct {
 	// Domains can be of the form: example.com, or *.example.com.
 	Domains []string `json:"domains,omitempty"`
 	// Connectors enumerates the app connectors which service these domains.
-	// These can be any target type supported by Tailscale's ACL language.
+	// These can either be "*" to match any advertising connector, or a
+	// tag of the form tag:<tag-name>.
 	Connectors []string `json:"connectors,omitempty"`
 }
