@@ -46,7 +46,8 @@ const (
 	AnnotationHostname           = "tailscale.com/hostname"
 	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
-	AnnotationTailnetTargetFQDN  = "tailscale.com/tailnet-fqdn"
+	//MagicDNS name of tailnet node.
+	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"

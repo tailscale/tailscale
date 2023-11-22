@@ -1349,3 +1349,30 @@ func (c *fakeTSClient) Deleted() []string {
 	defer c.Unlock()
 	return c.deleted
 }
+
+func Test_isMagicDNSName(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{
+			in:   "foo.tail4567.ts.net",
+			want: true,
+		},
+		{
+			in:   "foo.tail4567.ts.net.",
+			want: true,
+		},
+		{
+			in:   "foo.tail4567",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := isMagicDNSName(tt.in); got != tt.want {
+				t.Errorf("isMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}

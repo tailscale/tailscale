@@ -19,7 +19,7 @@
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination defined by an IP.
 //   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
-//     destination defined by an FQDN.
+//     destination defined by a MagicDNS name.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
 //   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
 //   - TS_USERSPACE: run with userspace networking (the default)
@@ -129,6 +129,9 @@ func main() {
 	}
 	if cfg.TailnetTargetFQDN != "" && cfg.UserspaceMode {
 		log.Fatal("TS_TAILNET_TARGET_FQDN is not supported with TS_USERSPACE")
+	}
+	if cfg.TailnetTargetFQDN != "" && cfg.TailnetTargetIP != "" {
+		log.Fatal("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
 	}
 
 	if !cfg.UserspaceMode {
@@ -378,11 +381,11 @@ runLoop:
 						}
 					}
 					if !nodeFound {
-						log.Print("Destination node not found in netmap")
+						log.Printf("Tailscale node %q not found; it either does not exist, or not reachable because of ACLs", cfg.TailnetTargetFQDN)
 						break
 					}
 					egressAddrs = node.Addresses().AsSlice()
-					currentEgressIPs = deephash.Hash(&egressAddrs)
+					newCurentEgressIPs = deephash.Hash(&egressAddrs)
 					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
 					if egressIPsHaveChanged && len(egressAddrs) > 0 {
 						for _, egressAddr := range egressAddrs {
@@ -398,6 +401,7 @@ runLoop:
 							}
 						}
 					}
+					currentEgressIPs = newCurentEgressIPs
 				}
 				if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
 					log.Printf("Installing proxy rules")
@@ -837,8 +841,9 @@ type settings struct {
 	// non-Tailscale traffic should be proxied. This is typically a
 	// Tailscale IP.
 	TailnetTargetIP string
-	// TailnetTargetFQDN is an FQDN to which all incoming non-Tailscale
-	// traffic should be proxied. This should be a Tailnet node FQDN.
+	// TailnetTargetFQDN is an MagicDNS name to which all incoming
+	// non-Tailscale traffic should be proxied. This must be a full Tailnet
+	// node FQDN.
 	TailnetTargetFQDN  string
 	ServeConfigPath    string
 	DaemonExtraArgs    string
