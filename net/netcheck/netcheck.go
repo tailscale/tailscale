@@ -812,7 +812,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		c.curState = nil
 	}()
 
-	if runtime.GOOS == "js" {
+	if runtime.GOOS == "js" || runtime.GOOS == "tamago" {
 		if err := c.runHTTPOnlyChecks(ctx, last, rs, dm); err != nil {
 			return nil, err
 		}
