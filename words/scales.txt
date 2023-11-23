@@ -320,3 +320,5 @@ vimba
 wahoo
 zebra
 coelacanth
+gila
+monster
