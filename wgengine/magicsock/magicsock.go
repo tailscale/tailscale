@@ -290,6 +290,10 @@ type Conn struct {
 
 	// wgPinger is the WireGuard only pinger used for latency measurements.
 	wgPinger lazy.SyncValue[*ping.Pinger]
+
+	// onPortUpdate is called with the new port when magicsock rebinds to
+	// a new port.
+	onPortUpdate func(port uint16, network string)
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -355,6 +359,10 @@ type Options struct {
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
 	ControlKnobs *controlknobs.Knobs
+
+	// OnPortUpdate is called with the new port when magicsock rebinds to
+	// a new port.
+	OnPortUpdate func(port uint16, network string)
 }
 
 func (o *Options) logf() logger.Logf {
@@ -427,6 +435,7 @@ func NewConn(opts Options) (*Conn, error) {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	}
 	c.netMon = opts.NetMon
+	c.onPortUpdate = opts.OnPortUpdate
 
 	if err := c.rebind(keepCurrentPort); err != nil {
 		return nil, err
@@ -2341,6 +2350,19 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if err != nil {
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
+		}
+		if c.onPortUpdate != nil {
+			_, gotPortStr, err := net.SplitHostPort(pconn.LocalAddr().String())
+			if err != nil {
+				c.logf("could not parse port from %s: %w", pconn.LocalAddr().String(), err)
+			} else {
+				gotPort, err := strconv.ParseUint(gotPortStr, 10, 16)
+				if err != nil {
+					c.logf("could not parse port from %s: %w", gotPort, err)
+				} else {
+					c.onPortUpdate(uint16(gotPort), network)
+				}
+			}
 		}
 		trySetSocketBuffer(pconn, c.logf)
 

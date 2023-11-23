@@ -102,6 +102,10 @@ func hasDefaultRoute(routes []netip.Prefix) bool {
 	return false
 }
 
+func (r *winRouter) UpdateMagicsockPort(_ uint16, _ string) error {
+	return nil
+}
+
 func (r *winRouter) Close() error {
 	r.firewall.clear()
 

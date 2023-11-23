@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -236,7 +237,7 @@ func (i *iptablesRunner) AddBase(tunname string) error {
 	return nil
 }
 
-// addBase4 adds some basic IPv6 processing rules to be
+// addBase4 adds some basic IPv4 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase4(tunname string) error {
 	// Only allow CGNAT range traffic to come from tailscale0. There
@@ -311,7 +312,7 @@ func (i *iptablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	return table.Append("mangle", "FORWARD", "-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
 }
 
-// addBase6 adds some basic IPv4 processing rules to be
+// addBase6 adds some basic IPv6 processing rules to be
 // supplemented by later calls to other helpers.
 func (i *iptablesRunner) addBase6(tunname string) error {
 	// TODO: only allow traffic from Tailscale's ULA range to come
@@ -434,6 +435,50 @@ func (i *iptablesRunner) DelSNATRule() error {
 			return fmt.Errorf("deleting %v in nat/ts-postrouting: %w", args, err)
 		}
 	}
+	return nil
+}
+
+func buildMagicsockPortRule(port uint16) []string {
+	return []string{"-p", "udp", "--dport", strconv.FormatUint(uint64(port), 10), "-j", "ACCEPT"}
+}
+
+func (i *iptablesRunner) AddMagicsockPortRule(port uint16, network string) error {
+	var ipt iptablesInterface
+	switch network {
+	case "udp4":
+		ipt = i.ipt4
+	case "udp6":
+		ipt = i.ipt6
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	args := buildMagicsockPortRule(port)
+
+	if err := ipt.Append("filter", "ts-input", args...); err != nil {
+		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
+	}
+
+	return nil
+}
+
+func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error {
+	var ipt iptablesInterface
+	switch network {
+	case "udp4":
+		ipt = i.ipt4
+	case "udp6":
+		ipt = i.ipt6
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	args := buildMagicsockPortRule(port)
+
+	if err := ipt.Delete("filter", "ts-input", args...); err != nil {
+		return fmt.Errorf("removing %v in filter/ts-input: %w", args, err)
+	}
+
 	return nil
 }
 

@@ -196,6 +196,10 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	return reterr
 }
 
+func (r *userspaceBSDRouter) UpdateMagicsockPort(_ uint16, _ string) error {
+	return nil
+}
+
 func (r *userspaceBSDRouter) Close() error {
 	return nil
 }

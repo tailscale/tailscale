@@ -606,6 +606,50 @@ func (n *fakeIPTablesRunner) DelSNATRule() error {
 	return nil
 }
 
+func buildMagicsockPortRule(port uint16) string {
+	return fmt.Sprintf("-p udp --dport %v -j ACCEPT", port)
+}
+
+func (n *fakeIPTablesRunner) AddMagicsockPortRule(port uint16, network string) error {
+	var ipt map[string][]string
+	switch network {
+	case "udp4":
+		ipt = n.ipt4
+	case "udp6":
+		ipt = n.ipt6
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	rule := buildMagicsockPortRule(port)
+
+	if err := appendRule(n, ipt, "filter/ts-input", rule); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (n *fakeIPTablesRunner) DelMagicsockPortRule(port uint16, network string) error {
+	var ipt map[string][]string
+	switch network {
+	case "udp4":
+		ipt = n.ipt4
+	case "udp6":
+		ipt = n.ipt6
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	rule := buildMagicsockPortRule(port)
+
+	if err := deleteRule(n, ipt, "filter/ts-input", rule); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (n *fakeIPTablesRunner) HasIPV6() bool    { return true }
 func (n *fakeIPTablesRunner) HasIPV6NAT() bool { return true }
 

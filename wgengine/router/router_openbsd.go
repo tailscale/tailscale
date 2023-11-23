@@ -228,6 +228,10 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	return errq
 }
 
+func (r *openbsdRouter) UpdateMagicsockPort(_ uint16, _ string) error {
+	return nil
+}
+
 func (r *openbsdRouter) Close() error {
 	cleanup(r.logf, r.tunname)
 	return nil
