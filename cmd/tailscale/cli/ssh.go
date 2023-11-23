@@ -103,6 +103,7 @@ func runSSH(ctx context.Context, args []string) error {
 		"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHostsFile),
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking yes",
+		"-o", "CanonicalizeHostname no", // https://github.com/tailscale/tailscale/issues/10348
 	)
 
 	// TODO(bradfitz): nc is currently broken on macOS:
