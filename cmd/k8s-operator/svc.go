@@ -81,7 +81,8 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
 	targetIP := a.tailnetTargetAnnotation(svc)
-	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" {
+	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
+	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" && targetFQDN == "" {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
@@ -139,12 +140,18 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
-	// run for proxy config related validations here as opposed to running
-	// them earlier. This is to prevent cleanup etc being blocked on a
-	// misconfigured proxy param
+	// Run for proxy config related validations here as opposed to running
+	// them earlier. This is to prevent cleanup being blocked on a
+	// misconfigured proxy param.
 	if err := a.ssr.validate(); err != nil {
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid config: %v", err)
 		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDCONFIG", msg)
+		a.logger.Error(msg)
+		return nil
+	}
+	if violations := validateService(svc); len(violations) > 0 {
+		msg := fmt.Sprintf("unable to provision proxy resources: invalid Service: %s", strings.Join(violations, ", "))
+		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVCICE", msg)
 		a.logger.Error(msg)
 		return nil
 	}
@@ -187,6 +194,14 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.TailnetTargetIP = ip
 		a.managedEgressProxies.Add(svc.UID)
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
+	} else if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+		fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]
+		if !strings.HasSuffix(fqdn, ".") {
+			fqdn = fqdn + "."
+		}
+		sts.TailnetTargetFQDN = fqdn
+		a.managedEgressProxies.Add(svc.UID)
+		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 	}
 	a.mu.Unlock()
 
@@ -195,7 +210,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
-	if sts.TailnetTargetIP != "" {
+	if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" {
 		// TODO (irbekrm): cluster.local is the default DNS name, but
 		// can be changed by users. Make this configurable or figure out
 		// how to discover the DNS name from within operator
@@ -252,6 +267,19 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to update service status: %w", err)
 	}
 	return nil
+}
+
+func validateService(svc *corev1.Service) []string {
+	violations := make([]string, 0)
+	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
+		violations = append(violations, "only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN)
+	}
+	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+		if !isMagicDNSName(fqdn) {
+			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
+		}
+	}
+	return violations
 }
 
 func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {

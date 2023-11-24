@@ -17,7 +17,9 @@
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
-//     destination.
+//     destination defined by an IP.
+//   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
+//     destination defined by a MagicDNS name.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
 //   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
 //   - TS_USERSPACE: run with userspace networking (the default)
@@ -78,6 +80,7 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
@@ -96,24 +99,25 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	cfg := &settings{
-		AuthKey:         defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:        defaultEnv("TS_HOSTNAME", ""),
-		Routes:          defaultEnv("TS_ROUTES", ""),
-		ServeConfigPath: defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
-		TailnetTargetIP: defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:       defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:    os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:   defaultBool("TS_USERSPACE", true),
-		StateDir:        defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:       defaultBool("TS_ACCEPT_DNS", false),
-		KubeSecret:      defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:  defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
-		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		AuthKey:           defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:          defaultEnv("TS_HOSTNAME", ""),
+		Routes:            defaultEnv("TS_ROUTES", ""),
+		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
+		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
+		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:   defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:         defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:      os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:     defaultBool("TS_USERSPACE", true),
+		StateDir:          defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:         defaultBool("TS_ACCEPT_DNS", false),
+		KubeSecret:        defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		SOCKSProxyAddr:    defaultEnv("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:     defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:            defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:          defaultBool("TS_AUTH_ONCE", false),
+		Root:              defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
@@ -123,13 +127,19 @@ func main() {
 	if cfg.TailnetTargetIP != "" && cfg.UserspaceMode {
 		log.Fatal("TS_TAILNET_TARGET_IP is not supported with TS_USERSPACE")
 	}
+	if cfg.TailnetTargetFQDN != "" && cfg.UserspaceMode {
+		log.Fatal("TS_TAILNET_TARGET_FQDN is not supported with TS_USERSPACE")
+	}
+	if cfg.TailnetTargetFQDN != "" && cfg.TailnetTargetIP != "" {
+		log.Fatal("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
+	}
 
 	if !cfg.UserspaceMode {
 		if err := ensureTunFile(cfg.Root); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
-		if cfg.ProxyTo != "" || cfg.Routes != "" || cfg.TailnetTargetIP != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.TailnetTargetIP, cfg.Routes); err != nil {
+		if cfg.ProxyTo != "" || cfg.Routes != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
+			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -294,11 +304,13 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != ""
+		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != ""
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
+
+		currentEgressIPs deephash.Sum
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
@@ -352,6 +364,45 @@ runLoop:
 				addrs := n.NetMap.SelfNode.Addresses().AsSlice()
 				newCurrentIPs := deephash.Hash(&addrs)
 				ipsHaveChanged := newCurrentIPs != currentIPs
+
+				if cfg.TailnetTargetFQDN != "" {
+					var (
+						egressAddrs          []netip.Prefix
+						newCurentEgressIPs   deephash.Sum
+						egressIPsHaveChanged bool
+						node                 tailcfg.NodeView
+						nodeFound            bool
+					)
+					for _, n := range n.NetMap.Peers {
+						if strings.EqualFold(n.Name(), cfg.TailnetTargetFQDN) {
+							node = n
+							nodeFound = true
+							break
+						}
+					}
+					if !nodeFound {
+						log.Printf("Tailscale node %q not found; it either does not exist, or not reachable because of ACLs", cfg.TailnetTargetFQDN)
+						break
+					}
+					egressAddrs = node.Addresses().AsSlice()
+					newCurentEgressIPs = deephash.Hash(&egressAddrs)
+					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
+					if egressIPsHaveChanged && len(egressAddrs) > 0 {
+						for _, egressAddr := range egressAddrs {
+							ea := egressAddr.Addr()
+							// TODO (irbekrm): make it work for IPv6 too.
+							if ea.Is6() {
+								log.Println("Not installing egress forwarding rules for IPv6 as this is currently not supported")
+								continue
+							}
+							log.Printf("Installing forwarding rules for destination %v", ea.String())
+							if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
+								log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+							}
+						}
+					}
+					currentEgressIPs = newCurentEgressIPs
+				}
 				if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
 					log.Printf("Installing proxy rules")
 					if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
@@ -369,6 +420,7 @@ runLoop:
 					}
 				}
 				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) > 0 {
+					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
 					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
 						log.Fatalf("installing egress proxy rules: %v", err)
 					}
@@ -389,10 +441,10 @@ runLoop:
 					log.Println("Startup complete, waiting for shutdown signal")
 					startupTasksDone = true
 
-					// 		// Reap all processes, since we are PID1 and need to collect zombies. We can
-					// 		// only start doing this once we've stopped shelling out to things
-					// 		// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
-					// 		// and wedge bringup.
+					// Reap all processes, since we are PID1 and need to collect zombies. We can
+					// only start doing this once we've stopped shelling out to things
+					// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
+					// and wedge bringup.
 					reaper := func() {
 						defer wg.Done()
 						for {
@@ -644,7 +696,7 @@ func ensureTunFile(root string) error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, routes string) error {
+func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTargetFQDN, routes string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
@@ -669,6 +721,11 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, routes string
 		} else {
 			v6Forwarding = true
 		}
+	}
+	// Currently we only proxy traffic to the IPv4 address of the tailnet
+	// target.
+	if tailnetTargetFQDN != "" {
+		v4Forwarding = true
 	}
 	if routes != "" {
 		for _, route := range strings.Split(routes, ",") {
@@ -781,9 +838,13 @@ type settings struct {
 	// is done. This is typically a locally reachable IP.
 	ProxyTo string
 	// TailnetTargetIP is the destination IP to which all incoming
-	// non-Tailscale traffic should be proxied. If empty, no
-	// proxying is done. This is typically a Tailscale IP.
-	TailnetTargetIP    string
+	// non-Tailscale traffic should be proxied. This is typically a
+	// Tailscale IP.
+	TailnetTargetIP string
+	// TailnetTargetFQDN is an MagicDNS name to which all incoming
+	// non-Tailscale traffic should be proxied. This must be a full Tailnet
+	// node FQDN.
+	TailnetTargetFQDN  string
 	ServeConfigPath    string
 	DaemonExtraArgs    string
 	ExtraArgs          string

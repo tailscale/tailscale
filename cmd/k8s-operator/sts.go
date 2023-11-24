@@ -47,15 +47,18 @@ const (
 	AnnotationHostname           = "tailscale.com/hostname"
 	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
+	//MagicDNS name of tailnet node.
+	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
 
 	// Annotations set by the operator on pods to trigger restarts when the
-	// hostname or IP changes.
-	podAnnotationLastSetClusterIP       = "tailscale.com/operator-last-set-cluster-ip"
-	podAnnotationLastSetHostname        = "tailscale.com/operator-last-set-hostname"
-	podAnnotationLastSetTailnetTargetIP = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
+	// hostname, IP or FQDN changes.
+	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
+	podAnnotationLastSetHostname          = "tailscale.com/operator-last-set-hostname"
+	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
+	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
 )
 
 type tailscaleSTSConfig struct {
@@ -69,6 +72,9 @@ type tailscaleSTSConfig struct {
 
 	// Tailscale IP of a Tailscale service we are setting up egress for
 	TailnetTargetIP string
+
+	// Tailscale FQDN of a Tailscale service we are setting up egress for
+	TailnetTargetFQDN string
 
 	Hostname string
 	Tags     []string // if empty, use defaultTags
@@ -382,7 +388,11 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_TAILNET_TARGET_IP",
 			Value: sts.TailnetTargetIP,
 		})
-
+	} else if sts.TailnetTargetFQDN != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_TAILNET_TARGET_FQDN",
+			Value: sts.TailnetTargetFQDN,
+		})
 	} else if sts.ServeConfig != nil {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_SERVE_CONFIG",
@@ -437,6 +447,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	}
 	if sts.TailnetTargetIP != "" {
 		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetIP] = sts.TailnetTargetIP
+	}
+	if sts.TailnetTargetFQDN != "" {
+		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetFQDN] = sts.TailnetTargetFQDN
 	}
 	ss.Spec.Template.Labels = map[string]string{
 		"app": sts.ParentResourceUID,
