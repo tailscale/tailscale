@@ -437,18 +437,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		fatalf("%s", err)
 	}
 
-	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise {
-		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
-		//  into a single HTTP req.
-		if err := localClient.CheckIPForwarding(ctx); err != nil {
-			warnf("%v", err)
-		}
-		if runtime.GOOS == "linux" {
-			if err := localClient.CheckUDPGROForwarding(ctx); err != nil {
-				warnf("%v", err)
-			}
-		}
-	}
+	warnOnAdvertiseRouts(ctx, prefs)
 
 	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
@@ -1158,4 +1147,19 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 		return "", err
 	}
 	return authkey, nil
+}
+
+func warnOnAdvertiseRouts(ctx context.Context, prefs *ipn.Prefs) {
+	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise {
+		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
+		//  into a single HTTP req.
+		if err := localClient.CheckIPForwarding(ctx); err != nil {
+			warnf("%v", err)
+		}
+		if runtime.GOOS == "linux" {
+			if err := localClient.CheckUDPGROForwarding(ctx); err != nil {
+				warnf("%v", err)
+			}
+		}
+	}
 }
