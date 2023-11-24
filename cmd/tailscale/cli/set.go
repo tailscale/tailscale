@@ -135,6 +135,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 
+	warnOnAdvertiseRouts(ctx, &maskedPrefs.Prefs)
 	var advertiseExitNodeSet, advertiseRoutesSet bool
 	setFlagSet.Visit(func(f *flag.Flag) {
 		updateMaskedPrefsFromUpOrSetFlag(maskedPrefs, f.Name)
