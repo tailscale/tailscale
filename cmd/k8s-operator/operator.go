@@ -95,6 +95,7 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		tsBaseURL        = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
 	)
 	startlog := zlog.Named("startup")
 	if clientIDPath == "" || clientSecretPath == "" {
@@ -111,14 +112,16 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	credentials := clientcredentials.Config{
 		ClientID:     string(clientID),
 		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
+		TokenURL:     tsBaseURL + "/api/v2/oauth/token",
 	}
 	tsClient := tailscale.NewClient("-", nil)
+	tsClient.BaseURL = tsBaseURL
 	tsClient.HTTPClient = credentials.Client(context.Background())
 
 	s := &tsnet.Server{
-		Hostname: hostname,
-		Logf:     zlog.Named("tailscaled").Debugf,
+		Hostname:   hostname,
+		Logf:       zlog.Named("tailscaled").Debugf,
+		ControlURL: tsBaseURL,
 	}
 	if kubeSecret != "" {
 		st, err := kubestore.New(logger.Discard, kubeSecret)

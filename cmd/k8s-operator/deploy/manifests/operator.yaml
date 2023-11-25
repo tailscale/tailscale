@@ -155,6 +155,8 @@ spec:
               value: "false"
             - name: PROXY_FIREWALL_MODE
               value: auto
+            - name: TAILSCALE_BASE_URL
+              value: https://login.tailscale.com
           volumeMounts:
           - name: oauth
             mountPath: /oauth
