@@ -184,6 +184,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
 	}
+	log.Printf("XXXXXXXXXXXXXXXX %d", tstun.DefaultTUNMTU())
 	linkEP := channel.New(512, uint32(tstun.DefaultTUNMTU()), "")
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)

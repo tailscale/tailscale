@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/netip"
 	"os"
 	"reflect"
@@ -1048,6 +1049,8 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 
 	if t.PostFilterPacketInboundFromWireGaurd != nil {
 		if res := t.PostFilterPacketInboundFromWireGaurd(p, t); res.IsDrop() {
+			log.Printf("DDDDDDDDDDDDDDDDD %s transportlen=%d flags=%x", p.String(), len(p.Transport()), p.TCPFlags)
+			log.Printf("%s", packet.Hexdump(p.Transport()))
 			return res
 		}
 	}
