@@ -41,6 +41,8 @@ type Dialer struct {
 	// If nil, it's not used.
 	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
 
+	UserDialCustomResolver func(string) (netip.Addr, error)
+
 	peerClientOnce sync.Once
 	peerClient     *http.Client
 
@@ -239,11 +241,20 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 		return ipp, err
 	}
 
+	// Try tsdns resolver next to resolve SplitDNS
+	host, port, err := splitHostPort(addr)
+	if d.UserDialCustomResolver != nil {
+		ip, err := d.UserDialCustomResolver(host)
+		if err == nil {
+			ipp := netip.AddrPortFrom(ip, port)
+			return ipp, err
+		}
+	}
+
 	// Otherwise, hit the network.
 
 	// TODO(bradfitz): wire up net/dnscache too.
 
-	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
 		return netip.AddrPort{}, err

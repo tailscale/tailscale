@@ -701,7 +701,7 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	ctx, cancel := context.WithTimeout(ctx, tcpQueryTimeout)
 	defer cancel()
 
-	conn, err := f.dialer.SystemDial(ctx, tcpFam, ipp.String())
+	conn, err := f.dialer.UserDial(ctx, tcpFam, ipp.String())
 	if err != nil {
 		return nil, err
 	}

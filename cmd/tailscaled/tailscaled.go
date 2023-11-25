@@ -512,6 +512,27 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
+		dialer.UserDialCustomResolver = func(host string) (netip.Addr, error) {
+			var r net.Resolver
+			r.PreferGo = true
+			r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return &dns.Quad100conn{
+					Ctx:        ctx,
+					DnsManager: sys.DNSManager.Get(),
+				}, nil
+			}
+
+			ips, err := r.LookupIP(ctx, "ip4", host)
+			if err != nil {
+				return netip.Addr{}, err
+			}
+			if len(ips) == 0 {
+				return netip.Addr{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+			}
+			ip, _ := netip.AddrFromSlice(ips[0])
+			return ip, nil
+		}
+
 		var addrs []string
 		if httpProxyListener != nil {
 			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
