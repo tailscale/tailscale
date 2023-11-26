@@ -438,10 +438,19 @@ func (i *iptablesRunner) DelSNATRule() error {
 	return nil
 }
 
+// buildMagicsockPortRule generates the string slice containing the arguments
+// to describe a rule accepting traffic on a particular port to iptables. It is
+// separated out here to avoid repetition in AddMagicsockPortRule and
+// RemoveMagicsockPortRule, since it is important that the same rule is passed
+// to Append() and Delete().
 func buildMagicsockPortRule(port uint16) []string {
 	return []string{"-p", "udp", "--dport", strconv.FormatUint(uint64(port), 10), "-j", "ACCEPT"}
 }
 
+// AddMagicsockPortRule adds a rule to iptables to allow incoming traffic on
+// the specified UDP port, so magicsock can accept incoming connections.
+// network must be either "udp4" or "udp6" - this determines whether the rule
+// is added for IPv4 or IPv6.
 func (i *iptablesRunner) AddMagicsockPortRule(port uint16, network string) error {
 	var ipt iptablesInterface
 	switch network {
@@ -462,6 +471,10 @@ func (i *iptablesRunner) AddMagicsockPortRule(port uint16, network string) error
 	return nil
 }
 
+// DelMagicsockPortRule removes a rule added by AddMagicsockPortRule to accept
+// incoming traffic on a particular UDP port.
+// network must be either "udp4" or "udp6" - this determines whether the rule
+// is removed for IPv4 or IPv6.
 func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error {
 	var ipt iptablesInterface
 	switch network {

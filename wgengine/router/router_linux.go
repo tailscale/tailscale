@@ -63,8 +63,8 @@ type linuxRouter struct {
 	nfr linuxfw.NetfilterRunner
 	cmd commandRunner
 
-	magicsockPort4 uint16
-	magicsockPort6 uint16
+	magicsockPortV4 uint16
+	magicsockPortV6 uint16
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor) (Router, error) {
@@ -386,12 +386,12 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 	var magicsockPort *uint16
 	switch network {
 	case "udp4":
-		magicsockPort = &r.magicsockPort4
+		magicsockPort = &r.magicsockPortV4
 	case "udp6":
 		if !r.nfr.HasIPV6() {
 			return nil
 		}
-		magicsockPort = &r.magicsockPort6
+		magicsockPort = &r.magicsockPortV6
 	default:
 		return fmt.Errorf("unsupported network %s", network)
 	}
@@ -481,13 +481,13 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
-			if r.magicsockPort4 != 0 {
-				if err := r.nfr.AddMagicsockPortRule(r.magicsockPort4, "udp4"); err != nil {
+			if r.magicsockPortV4 != 0 {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
 					return err
 				}
 			}
-			if r.magicsockPort6 != 0 && r.nfr.HasIPV6() {
-				if err := r.nfr.AddMagicsockPortRule(r.magicsockPort6, "udp6"); err != nil {
+			if r.magicsockPortV6 != 0 && r.nfr.HasIPV6() {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return err
 				}
 			}
@@ -521,13 +521,13 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
-			if r.magicsockPort4 != 0 {
-				if err := r.nfr.AddMagicsockPortRule(r.magicsockPort4, "udp4"); err != nil {
+			if r.magicsockPortV4 != 0 {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
 					return err
 				}
 			}
-			if r.magicsockPort6 != 0 && r.nfr.HasIPV6() {
-				if err := r.nfr.AddMagicsockPortRule(r.magicsockPort6, "udp6"); err != nil {
+			if r.magicsockPortV6 != 0 && r.nfr.HasIPV6() {
+				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return err
 				}
 			}

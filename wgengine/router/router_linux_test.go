@@ -606,10 +606,15 @@ func (n *fakeIPTablesRunner) DelSNATRule() error {
 	return nil
 }
 
+// buildMagicsockPortRule builds a fake rule to use in AddMagicsockPortRule and
+// DelMagicsockPortRule below.
 func buildMagicsockPortRule(port uint16) string {
 	return fmt.Sprintf("-p udp --dport %v -j ACCEPT", port)
 }
 
+// AddMagicsockPortRule implements the NetfilterRunner interface, but stores
+// rules in fakeIPTablesRunner's internal maps rather than actually calling out
+// to iptables. This is mainly to test the linux router implementation.
 func (n *fakeIPTablesRunner) AddMagicsockPortRule(port uint16, network string) error {
 	var ipt map[string][]string
 	switch network {
@@ -630,6 +635,9 @@ func (n *fakeIPTablesRunner) AddMagicsockPortRule(port uint16, network string) e
 	return nil
 }
 
+// DelMagicsockPortRule implements the NetfilterRunner interface, but removes
+// rules from fakeIPTablesRunner's internal maps rather than actually calling
+// out to iptables. This is mainly to test the linux router implementation.
 func (n *fakeIPTablesRunner) DelMagicsockPortRule(port uint16, network string) error {
 	var ipt map[string][]string
 	switch network {

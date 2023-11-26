@@ -1285,7 +1285,7 @@ func addAcceptOutgoingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 }
 
 // createAcceptOnPortRule creates a rule to accept incoming packets to
-// a given destination port.
+// a given destination UDP port.
 func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
 	portBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, port)
@@ -1316,6 +1316,8 @@ func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port u
 	}
 }
 
+// addAcceptOnPortRule adds a rule to accept incoming packets to
+// a given destination UDP port.
 func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
 	rule := createAcceptOnPortRule(table, chain, port)
 	_ = conn.AddRule(rule)
@@ -1327,10 +1329,11 @@ func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nfta
 	return nil
 }
 
+// addAcceptOnPortRule removes a rule to accept incoming packets to
+// a given destination UDP port.
 func removeAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
 	rule := createAcceptOnPortRule(table, chain, port)
 	rule, err := findRule(conn, rule)
-
 	if err != nil {
 		return fmt.Errorf("find rule: %v", err)
 	}
@@ -1344,6 +1347,10 @@ func removeAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *n
 	return nil
 }
 
+// AddMagicsockPortRule adds a rule to nftables to allow incoming traffic on
+// the specified UDP port, so magicsock can accept incoming connections.
+// network must be either "udp4" or "udp6" - this determines whether the rule
+// is added for IPv4 or IPv6.
 func (n *nftablesRunner) AddMagicsockPortRule(port uint16, network string) error {
 	var filterTable *nftables.Table
 	switch network {
@@ -1368,6 +1375,10 @@ func (n *nftablesRunner) AddMagicsockPortRule(port uint16, network string) error
 	return nil
 }
 
+// DelMagicsockPortRule removes a rule added by AddMagicsockPortRule to accept
+// incoming traffic on a particular UDP port.
+// network must be either "udp4" or "udp6" - this determines whether the rule
+// is removed for IPv4 or IPv6.
 func (n *nftablesRunner) DelMagicsockPortRule(port uint16, network string) error {
 	var filterTable *nftables.Table
 	switch network {
