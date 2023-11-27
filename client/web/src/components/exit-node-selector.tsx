@@ -1,5 +1,5 @@
 import cx from "classnames"
-import React, { useCallback, useMemo, useState } from "react"
+import React, { useCallback, useMemo, useRef, useState } from "react"
 import { ReactComponent as Check } from "src/assets/icons/check.svg"
 import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
 import useExitNodes, {
@@ -212,6 +212,7 @@ function ExitNodeSelectorInner({
 }) {
   const [filter, setFilter] = useState<string>("")
   const { data: exitNodes } = useExitNodes(node.TailnetName, filter)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const hasNodes = useMemo(
     () => exitNodes.find((n) => n.nodes.length > 0),
@@ -228,10 +229,17 @@ function ExitNodeSelectorInner({
         autoCapitalize="off"
         placeholder="Search exit nodes…"
         value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+        onChange={(e) => {
+          // Jump list to top when search value changes.
+          listRef.current?.scrollTo(0, 0)
+          setFilter(e.target.value)
+        }}
       />
       {/* TODO(sonia): use loading spinner when loading useExitNodes */}
-      <div className="pt-1 border-t border-gray-200 max-h-64 overflow-y-scroll">
+      <div
+        ref={listRef}
+        className="pt-1 border-t border-gray-200 max-h-64 overflow-y-scroll"
+      >
         {hasNodes ? (
           exitNodes.map(
             (group) =>
