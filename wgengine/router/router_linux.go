@@ -483,12 +483,12 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			}
 			if r.magicsockPortV4 != 0 {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
-					return err
+					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
 			if r.magicsockPortV6 != 0 && r.nfr.HasIPV6() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
-					return err
+					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
 			}
 			r.snatSubnetRoutes = false
@@ -523,12 +523,12 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			}
 			if r.magicsockPortV4 != 0 {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV4, "udp4"); err != nil {
-					return err
+					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
 			if r.magicsockPortV6 != 0 && r.nfr.HasIPV6() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
-					return err
+					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
 			}
 			r.snatSubnetRoutes = false

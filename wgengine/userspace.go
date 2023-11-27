@@ -327,7 +327,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	onPortUpdate := func(port uint16, network string) {
 		e.logf("onPortUpdate(port=%v, network=%s)", port, network)
 
-		e.router.UpdateMagicsockPort(port, network)
+		if err := e.router.UpdateMagicsockPort(port, network); err != nil {
+			e.logf("UpdateMagicsockPort(port=%v, network=%s) failed: %w", port, network, err)
+		}
 	}
 	magicsockOpts := magicsock.Options{
 		Logf:             logf,
