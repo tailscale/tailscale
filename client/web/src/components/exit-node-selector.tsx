@@ -11,21 +11,19 @@ import useExitNodes, {
   runAsExitNode,
   trimDNSSuffix,
 } from "src/hooks/exit-nodes"
-import { NodeData, NodeUpdate, PrefsUpdate } from "src/hooks/node-data"
+import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import Popover from "src/ui/popover"
 import SearchInput from "src/ui/search-input"
 
 export default function ExitNodeSelector({
   className,
   node,
-  updateNode,
-  updatePrefs,
+  nodeUpdaters,
   disabled,
 }: {
   className?: string
   node: NodeData
-  updateNode: (update: NodeUpdate) => Promise<void> | undefined
-  updatePrefs: (p: PrefsUpdate) => Promise<void>
+  nodeUpdaters: NodeUpdaters
   disabled?: boolean
 }) {
   const [open, setOpen] = useState<boolean>(false)
@@ -37,48 +35,11 @@ export default function ExitNodeSelector({
       if (n.ID === selected.ID) {
         return // no update
       }
-
       const old = selected
       setSelected(n) // optimistic UI update
-      const reset = () => setSelected(old)
-
-      switch (n.ID) {
-        case noExitNode.ID: {
-          if (old === runAsExitNode) {
-            // stop advertising as exit node
-            updateNode({ AdvertiseExitNode: false })?.catch(reset)
-          } else {
-            // stop using exit node
-            updatePrefs({ ExitNodeIDSet: true, ExitNodeID: "" }).catch(reset)
-          }
-          break
-        }
-        case runAsExitNode.ID: {
-          const update = () =>
-            updateNode({ AdvertiseExitNode: true })?.catch(reset)
-          if (old !== noExitNode) {
-            // stop using exit node first
-            updatePrefs({ ExitNodeIDSet: true, ExitNodeID: "" })
-              .catch(reset)
-              .then(update)
-          } else {
-            update()
-          }
-          break
-        }
-        default: {
-          const update = () =>
-            updatePrefs({ ExitNodeIDSet: true, ExitNodeID: n.ID }).catch(reset)
-          if (old === runAsExitNode) {
-            // stop advertising as exit node first
-            updateNode({ AdvertiseExitNode: false })?.catch(reset).then(update)
-          } else {
-            update()
-          }
-        }
-      }
+      nodeUpdaters.postExitNode(n).catch(() => setSelected(old))
     },
-    [selected, updateNode, updatePrefs]
+    [nodeUpdaters, selected]
   )
 
   const [
@@ -186,12 +147,12 @@ export default function ExitNodeSelector({
 }
 
 function toSelectedExitNode(data: NodeData): ExitNode {
-  if (data.AdvertiseExitNode) {
+  if (data.AdvertisingExitNode) {
     return runAsExitNode
   }
-  if (data.ExitNodeStatus) {
+  if (data.UsingExitNode) {
     // TODO(sonia): also use online status
-    const node = { ...data.ExitNodeStatus }
+    const node = { ...data.UsingExitNode }
     if (node.Location) {
       // For mullvad nodes, use location as name.
       node.Name = `${node.Location.Country}: ${node.Location.City}`

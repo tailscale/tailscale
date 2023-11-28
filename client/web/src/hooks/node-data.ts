@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { apiFetch, setUnraidCsrfToken } from "src/api"
-import { ExitNode } from "src/hooks/exit-nodes"
+import { ExitNode, noExitNode, runAsExitNode } from "src/hooks/exit-nodes"
 import { VersionInfo } from "src/hooks/self-update"
 
 export type NodeData = {
@@ -16,8 +16,9 @@ export type NodeData = {
   ID: string
   KeyExpiry: string
   KeyExpired: boolean
-  AdvertiseExitNode: boolean
-  AdvertiseRoutes: string
+  UsingExitNode?: ExitNode
+  AdvertisingExitNode: boolean
+  AdvertisedRoutes?: SubnetRoute[]
   LicensesURL: string
   TUNMode: boolean
   IsSynology: boolean
@@ -32,7 +33,6 @@ export type NodeData = {
   IsTagged: boolean
   Tags: string[]
   RunningSSHServer: boolean
-  ExitNodeStatus?: ExitNode & { Online: boolean }
 }
 
 type NodeState =
@@ -49,16 +49,45 @@ export type UserProfile = {
   ProfilePicURL: string
 }
 
-export type NodeUpdate = {
-  AdvertiseRoutes?: string
-  AdvertiseExitNode?: boolean
+export type SubnetRoute = {
+  Route: string
+  Approved: boolean
 }
 
-export type PrefsUpdate = {
+/**
+ * NodeUpdaters provides a set of mutation functions for a node.
+ *
+ * These functions handle both making the requested change, as well as
+ * refreshing the app's node data state upon completion to reflect any
+ * relevant changes in the UI.
+ */
+export type NodeUpdaters = {
+  /**
+   * patchPrefs updates node preferences.
+   * Only provided preferences will be updated.
+   * Similar to running the tailscale set command in the CLI.
+   */
+  patchPrefs: (d: PrefsPATCHData) => Promise<void>
+  /**
+   * postExitNode updates the node's status as either using or
+   * running as an exit node.
+   */
+  postExitNode: (d: ExitNode) => Promise<void>
+  /**
+   * postSubnetRoutes updates the node's advertised subnet routes.
+   */
+  postSubnetRoutes: (d: string[]) => Promise<void>
+}
+
+type PrefsPATCHData = {
   RunSSHSet?: boolean
   RunSSH?: boolean
-  ExitNodeIDSet?: boolean
-  ExitNodeID?: string
+}
+
+type RoutesPOSTData = {
+  UseExitNode?: string
+  AdvertiseExitNode?: boolean
+  AdvertiseRoutes?: string[]
 }
 
 // useNodeData returns basic data about the current node.
@@ -78,58 +107,13 @@ export default function useNodeData() {
     [setData]
   )
 
-  const updateNode = useCallback(
-    (update: NodeUpdate) => {
-      // The contents of this function are mostly copied over
-      // from the legacy client's web.html file.
-      // It makes all data updates through one API endpoint.
-      // As we build out the web client in React,
-      // this endpoint will eventually be deprecated.
-
-      if (isPosting || !data) {
-        return
-      }
-      setIsPosting(true)
-
-      update = {
-        ...update,
-        // Default to current data value for any unset fields.
-        AdvertiseRoutes:
-          update.AdvertiseRoutes !== undefined
-            ? update.AdvertiseRoutes
-            : data.AdvertiseRoutes,
-        AdvertiseExitNode:
-          update.AdvertiseExitNode !== undefined
-            ? update.AdvertiseExitNode
-            : data.AdvertiseExitNode,
-      }
-
-      return apiFetch("/data", "POST", update, { up: "true" })
-        .then((r) => r.json())
-        .then((r) => {
-          setIsPosting(false)
-          const err = r["error"]
-          if (err) {
-            throw new Error(err)
-          }
-          refreshData()
-        })
-        .catch((err) => {
-          setIsPosting(false)
-          alert("Failed operation: " + err.message)
-          throw err
-        })
-    },
-    [data, isPosting, refreshData]
-  )
-
-  const updatePrefs = useCallback(
-    (p: PrefsUpdate) => {
+  const prefsPATCH = useCallback(
+    (d: PrefsPATCHData) => {
       setIsPosting(true)
       if (data) {
         const optimisticUpdates = data
-        if (p.RunSSHSet) {
-          optimisticUpdates.RunningSSHServer = Boolean(p.RunSSH)
+        if (d.RunSSHSet) {
+          optimisticUpdates.RunningSSHServer = Boolean(d.RunSSH)
         }
         // Reflect the pref change immediatley on the frontend,
         // then make the prefs PATCH. If the request fails,
@@ -143,14 +127,34 @@ export default function useNodeData() {
         refreshData() // refresh data after PATCH finishes
       }
 
-      return apiFetch("/local/v0/prefs", "PATCH", p)
+      return apiFetch("/local/v0/prefs", "PATCH", d)
         .then(onComplete)
-        .catch(() => {
+        .catch((err) => {
           onComplete()
           alert("Failed to update prefs")
+          throw err
         })
     },
     [setIsPosting, refreshData, setData, data]
+  )
+
+  const routesPOST = useCallback(
+    (d: RoutesPOSTData) => {
+      setIsPosting(true)
+      const onComplete = () => {
+        setIsPosting(false)
+        refreshData() // refresh data after POST finishes
+      }
+
+      return apiFetch("/routes", "POST", d)
+        .then(onComplete)
+        .catch((err) => {
+          onComplete()
+          alert("Failed to update routes")
+          throw err
+        })
+    },
+    [setIsPosting, refreshData]
   )
 
   useEffect(
@@ -172,5 +176,33 @@ export default function useNodeData() {
     [refreshData]
   )
 
-  return { data, refreshData, updateNode, updatePrefs, isPosting }
+  const nodeUpdaters: NodeUpdaters = useMemo(
+    () => ({
+      patchPrefs: prefsPATCH,
+      postExitNode: (node) =>
+        routesPOST({
+          AdvertiseExitNode: node.ID === runAsExitNode.ID,
+          UseExitNode:
+            node.ID === noExitNode.ID || node.ID === runAsExitNode.ID
+              ? undefined
+              : node.ID,
+          AdvertiseRoutes: data?.AdvertisedRoutes?.map((r) => r.Route), // unchanged
+        }),
+      postSubnetRoutes: (routes) =>
+        routesPOST({
+          AdvertiseRoutes: routes,
+          AdvertiseExitNode: data?.AdvertisingExitNode, // unchanged
+          UseExitNode: data?.UsingExitNode?.ID, // unchanged
+        }),
+    }),
+    [
+      data?.AdvertisingExitNode,
+      data?.AdvertisedRoutes,
+      data?.UsingExitNode?.ID,
+      prefsPATCH,
+      routesPOST,
+    ]
+  )
+
+  return { data, refreshData, nodeUpdaters, isPosting }
 }

@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
-import { PrefsUpdate } from "src/hooks/node-data"
+import { NodeUpdaters } from "src/hooks/node-data"
 import Toggle from "src/ui/toggle"
 
 export default function SSHView({
   readonly,
   runningSSH,
-  updatePrefs,
+  nodeUpdaters,
 }: {
   readonly: boolean
   runningSSH: boolean
-  updatePrefs: (p: PrefsUpdate) => Promise<void>
+  nodeUpdaters: NodeUpdaters
 }) {
   return (
     <>
@@ -32,7 +32,9 @@ export default function SSHView({
       <div className="-mx-5 px-4 py-3 bg-white rounded-lg border border-gray-200 flex gap-2.5 mb-3">
         <Toggle
           checked={runningSSH}
-          onChange={() => updatePrefs({ RunSSHSet: true, RunSSH: !runningSSH })}
+          onChange={() =>
+            nodeUpdaters.patchPrefs({ RunSSHSet: true, RunSSH: !runningSSH })
+          }
           disabled={readonly}
         />
         <div className="text-black text-sm font-medium leading-tight">

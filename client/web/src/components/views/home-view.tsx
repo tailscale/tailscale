@@ -6,19 +6,17 @@ import React from "react"
 import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
 import { ReactComponent as ConnectedDeviceIcon } from "src/assets/icons/connected-device.svg"
 import ExitNodeSelector from "src/components/exit-node-selector"
-import { NodeData, NodeUpdate, PrefsUpdate } from "src/hooks/node-data"
+import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import { Link } from "wouter"
 
 export default function HomeView({
   readonly,
   node,
-  updateNode,
-  updatePrefs,
+  nodeUpdaters,
 }: {
   readonly: boolean
   node: NodeData
-  updateNode: (update: NodeUpdate) => Promise<void> | undefined
-  updatePrefs: (p: PrefsUpdate) => Promise<void>
+  nodeUpdaters: NodeUpdaters
 }) {
   return (
     <div className="mb-12 w-full">
@@ -40,8 +38,7 @@ export default function HomeView({
         <ExitNodeSelector
           className="mb-5"
           node={node}
-          updateNode={updateNode}
-          updatePrefs={updatePrefs}
+          nodeUpdaters={nodeUpdaters}
           disabled={readonly}
         />
         <Link
@@ -52,13 +49,12 @@ export default function HomeView({
         </Link>
       </div>
       <h2 className="mb-3">Settings</h2>
-      {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
-      {/* <SettingsCard
+      <SettingsCard
         link="/subnets"
         className="mb-3"
         title="Subnet router"
         body="Add devices to your tailnet without installing Tailscale on them."
-      /> */}
+      />
       <SettingsCard
         link="/ssh"
         className="mb-3"
@@ -73,6 +69,7 @@ export default function HomeView({
             : undefined
         }
       />
+      {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
       {/* <SettingsCard
         link="/serve"
         title="Share local content"

@@ -8,6 +8,7 @@ export type ExitNode = {
   ID: string
   Name: string
   Location?: ExitNodeLocation
+  Online?: boolean
 }
 
 type ExitNodeLocation = {
@@ -87,9 +88,8 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
         return // not possible, doing this for type safety
       }
       nodes.push({
-        ID: bestNode.ID,
+        ...bestNode,
         Name: name(bestNode.Location),
-        Location: bestNode.Location,
       })
     }
 
