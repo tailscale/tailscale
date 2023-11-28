@@ -8,6 +8,7 @@ import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
 import LoginView from "src/components/views/login-view"
 import SSHView from "src/components/views/ssh-view"
+import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
@@ -34,7 +35,7 @@ function WebClient({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const { data, refreshData, updateNode, updatePrefs } = useNodeData()
+  const { data, refreshData, nodeUpdaters } = useNodeData()
   useEffect(() => {
     refreshData()
   }, [auth, refreshData])
@@ -56,19 +57,24 @@ function WebClient({
             <HomeView
               readonly={!auth.canManageNode}
               node={data}
-              updateNode={updateNode}
-              updatePrefs={updatePrefs}
+              nodeUpdaters={nodeUpdaters}
             />
           </Route>
           <Route path="/details">
             <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
           </Route>
-          <Route path="/subnets">{/* TODO */}Subnet router</Route>
+          <Route path="/subnets">
+            <SubnetRouterView
+              readonly={!auth.canManageNode}
+              node={data}
+              nodeUpdaters={nodeUpdaters}
+            />
+          </Route>
           <Route path="/ssh">
             <SSHView
               readonly={!auth.canManageNode}
               runningSSH={data.RunningSSHServer}
-              updatePrefs={updatePrefs}
+              nodeUpdaters={nodeUpdaters}
             />
           </Route>
           <Route path="/serve">{/* TODO */}Share local content</Route>

@@ -513,18 +513,14 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
-	case path == "/data":
-		switch r.Method {
-		case httpm.GET:
-			s.serveGetNodeData(w, r)
-		case httpm.POST:
-			s.servePostNodeUpdate(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
+	case path == "/data" && r.Method == httpm.GET:
+		s.serveGetNodeData(w, r)
 		return
 	case path == "/exit-nodes" && r.Method == httpm.GET:
 		s.serveGetExitNodes(w, r)
+		return
+	case path == "/routes" && r.Method == httpm.POST:
+		s.servePostRoutes(w, r)
 		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
@@ -558,14 +554,19 @@ type nodeData struct {
 	UnraidToken string
 	URLPrefix   string // if set, the URL prefix the client is served behind
 
-	ExitNodeStatus    *exitNodeWithStatus
-	AdvertiseExitNode bool
-	AdvertiseRoutes   string
-	RunningSSHServer  bool
+	UsingExitNode       *exitNode
+	AdvertisingExitNode bool
+	AdvertisedRoutes    []subnetRoute // excludes exit node routes
+	RunningSSHServer    bool
 
 	ClientVersion *tailcfg.ClientVersion
 
 	LicensesURL string
+}
+
+type subnetRoute struct {
+	Route    string
+	Approved bool // approved by control server
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -623,35 +624,44 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	if st.Self.KeyExpiry != nil {
 		data.KeyExpiry = st.Self.KeyExpiry.Format(time.RFC3339)
 	}
+
+	routeApproved := func(route netip.Prefix) bool {
+		if st.Self == nil || st.Self.AllowedIPs == nil {
+			return false
+		}
+		return st.Self.AllowedIPs.ContainsFunc(func(p netip.Prefix) bool {
+			return p == route
+		})
+	}
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
-			data.AdvertiseExitNode = true
+			data.AdvertisingExitNode = true
 		} else {
-			if data.AdvertiseRoutes != "" {
-				data.AdvertiseRoutes += ","
-			}
-			data.AdvertiseRoutes += r.String()
+			data.AdvertisedRoutes = append(data.AdvertisedRoutes, subnetRoute{
+				Route:    r.String(),
+				Approved: routeApproved(r),
+			})
 		}
 	}
 	if e := st.ExitNodeStatus; e != nil {
-		data.ExitNodeStatus = &exitNodeWithStatus{
-			exitNode: exitNode{ID: e.ID},
-			Online:   e.Online,
+		data.UsingExitNode = &exitNode{
+			ID:     e.ID,
+			Online: e.Online,
 		}
 		for _, ps := range st.Peer {
 			if ps.ID == e.ID {
-				data.ExitNodeStatus.Name = ps.DNSName
-				data.ExitNodeStatus.Location = ps.Location
+				data.UsingExitNode.Name = ps.DNSName
+				data.UsingExitNode.Location = ps.Location
 				break
 			}
 		}
-		if data.ExitNodeStatus.Name == "" {
+		if data.UsingExitNode.Name == "" {
 			// Falling back to TailscaleIP/StableNodeID when the peer
 			// is no longer included in status.
 			if len(e.TailscaleIPs) > 0 {
-				data.ExitNodeStatus.Name = e.TailscaleIPs[0].Addr().String()
+				data.UsingExitNode.Name = e.TailscaleIPs[0].Addr().String()
 			} else {
-				data.ExitNodeStatus.Name = string(e.ID)
+				data.UsingExitNode.Name = string(e.ID)
 			}
 		}
 	}
@@ -662,11 +672,7 @@ type exitNode struct {
 	ID       tailcfg.StableNodeID
 	Name     string
 	Location *tailcfg.Location
-}
-
-type exitNodeWithStatus struct {
-	exitNode
-	Online bool
+	Online   bool
 }
 
 func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
@@ -689,60 +695,69 @@ func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, exitNodes)
 }
 
-type nodeUpdate struct {
-	AdvertiseRoutes   string
+type postRoutesRequest struct {
+	UseExitNode       tailcfg.StableNodeID
+	AdvertiseRoutes   []string
 	AdvertiseExitNode bool
 }
 
-func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	var postData nodeUpdate
-	type mi map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&postData); err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+	var data postRoutesRequest
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	prefs, err := s.lc.GetPrefs(r.Context())
+	oldPrefs, err := s.lc.GetPrefs(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	isCurrentlyExitNode := slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV4) || slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV6)
+	// Calculate routes.
+	routesStr := strings.Join(data.AdvertiseRoutes, ",")
+	routes, err := netutil.CalcAdvertiseRoutes(routesStr, data.AdvertiseExitNode)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	if postData.AdvertiseExitNode != isCurrentlyExitNode {
-		if postData.AdvertiseExitNode {
+	hasExitNodeRoute := func(all []netip.Prefix) bool {
+		return slices.Contains(all, exitNodeRouteV4) ||
+			slices.Contains(all, exitNodeRouteV6)
+	}
+
+	if !data.UseExitNode.IsZero() && hasExitNodeRoute(routes) {
+		http.Error(w, "cannot use and advertise exit node at same time", http.StatusBadRequest)
+		return
+	}
+
+	// Make prefs update.
+	p := &ipn.MaskedPrefs{
+		AdvertiseRoutesSet: true,
+		ExitNodeIDSet:      true,
+		Prefs: ipn.Prefs{
+			ExitNodeID:      data.UseExitNode,
+			AdvertiseRoutes: routes,
+		},
+	}
+	if _, err := s.lc.EditPrefs(r.Context(), p); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Report metrics.
+	if data.AdvertiseExitNode != hasExitNodeRoute(oldPrefs.AdvertiseRoutes) {
+		if data.AdvertiseExitNode {
 			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_enable", 1)
 		} else {
 			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_disable", 1)
 		}
 	}
 
-	routes, err := netutil.CalcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
-		return
-	}
-	mp := &ipn.MaskedPrefs{
-		AdvertiseRoutesSet: true,
-		WantRunningSet:     true,
-	}
-	mp.Prefs.WantRunning = true
-	mp.Prefs.AdvertiseRoutes = routes
-	s.logf("Doing edit: %v", mp.Pretty())
-
-	if _, err := s.lc.EditPrefs(r.Context(), mp); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, "{}")
+	w.WriteHeader(http.StatusOK)
 }
 
 // tailscaleUp starts the daemon with the provided options.
