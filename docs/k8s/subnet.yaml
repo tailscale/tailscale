@@ -4,7 +4,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: subnet-router
-  namespace: tailscale-system
   labels:
     app: tailscale
 spec:
