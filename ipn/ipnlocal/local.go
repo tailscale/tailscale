@@ -3970,6 +3970,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// properly. This exists as an optimization to control to program fewer DNS
 	// records that have ingress enabled but are not actually being used.
 	hi.WireIngress = b.wantIngressLocked()
+	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 }
 
 // enterState transitions the backend into newState, updating internal
