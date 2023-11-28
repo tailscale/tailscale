@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React from "react"
 import { ReactComponent as CheckCircleIcon } from "src/assets/icons/check-circle.svg"
 import { ReactComponent as XCircleIcon } from "src/assets/icons/x-circle.svg"

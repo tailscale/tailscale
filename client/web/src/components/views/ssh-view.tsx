@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React from "react"
 import { PrefsUpdate } from "src/hooks/node-data"
 import Toggle from "src/ui/toggle"

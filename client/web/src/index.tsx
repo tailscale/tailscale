@@ -1,3 +1,13 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+// Preserved js license comment for web client app.
+/**
+ * @license
+ * Copyright (c) Tailscale Inc & AUTHORS
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 import React from "react"
 import { createRoot } from "react-dom/client"
 import App from "src/components/app"

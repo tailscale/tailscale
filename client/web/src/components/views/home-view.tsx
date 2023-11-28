@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import cx from "classnames"
 import React from "react"
 import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
