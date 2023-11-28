@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import { Terminal, ITerminalOptions } from "xterm"
 import { FitAddon } from "xterm-addon-fit"
 import { WebLinksAddon } from "xterm-addon-web-links"

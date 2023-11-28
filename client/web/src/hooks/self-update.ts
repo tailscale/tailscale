@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch } from "src/api"
 

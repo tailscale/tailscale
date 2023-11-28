@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import cx from "classnames"
 import React, { useEffect } from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"

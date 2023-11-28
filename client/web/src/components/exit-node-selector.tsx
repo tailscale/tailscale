@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import cx from "classnames"
 import React, { useCallback, useMemo, useRef, useState } from "react"
 import { ReactComponent as Check } from "src/assets/icons/check.svg"
