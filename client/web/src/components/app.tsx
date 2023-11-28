@@ -1,7 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import cx from "classnames"
 import React, { useEffect } from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
@@ -119,24 +118,5 @@ function Header({
         </Link>
       )}
     </>
-  )
-}
-
-function Footer({
-  licensesURL,
-  className,
-}: {
-  licensesURL: string
-  className?: string
-}) {
-  return (
-    <footer className={cx("container max-w-lg mx-auto text-center", className)}>
-      <a
-        className="text-xs text-gray-500 hover:text-gray-600"
-        href={licensesURL}
-      >
-        Open Source Licenses
-      </a>
-    </footer>
   )
 }

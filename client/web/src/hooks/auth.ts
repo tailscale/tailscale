@@ -65,17 +65,18 @@ export default function useAuth() {
       .catch((error) => {
         console.error(error)
       })
-  }, [])
+  }, [loadAuth])
 
   useEffect(() => {
     loadAuth().then((d) => {
       if (
         !d.canManageNode &&
-        new URLSearchParams(window.location.search).get("check") == "now"
+        new URLSearchParams(window.location.search).get("check") === "now"
       ) {
         newSession()
       }
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return {

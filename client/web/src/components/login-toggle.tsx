@@ -110,12 +110,7 @@ function LoginPopoverContent({
         setCanConnectOverTS(true)
       })
       .catch(() => setIsRunningCheck(false))
-  }, [
-    auth.viewerIdentity,
-    isRunningCheck,
-    setCanConnectOverTS,
-    setIsRunningCheck,
-  ])
+  }, [auth.viewerIdentity, isRunningCheck, node.IP])
 
   /**
    * Checking connection for first time on page load.
@@ -125,6 +120,7 @@ function LoginPopoverContent({
    * leaving to turn on Tailscale then returning to the view.
    * See `onMouseEnter` on the div below.
    */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => checkTSConnection(), [])
 
   const handleSignInClick = useCallback(() => {
@@ -145,7 +141,7 @@ function LoginPopoverContent({
         {auth.viewerIdentity && ` as ${auth.viewerIdentity.loginName}`}
       </div>
       {!auth.canManageNode &&
-        (!auth.viewerIdentity || auth.authNeeded == AuthType.tailscale ? (
+        (!auth.viewerIdentity || auth.authNeeded === AuthType.tailscale ? (
           <>
             <p className="text-neutral-500 text-xs">
               {auth.viewerIdentity ? (

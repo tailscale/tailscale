@@ -78,7 +78,7 @@ export default function ExitNodeSelector({
         }
       }
     },
-    [setOpen, selected, setSelected]
+    [selected, updateNode, updatePrefs]
   )
 
   const [
@@ -261,7 +261,7 @@ function ExitNodeSelectorInner({
                       key={`${n.ID}-${n.Name}`}
                       node={n}
                       onSelect={() => onSelect(n)}
-                      isSelected={selected.ID == n.ID}
+                      isSelected={selected.ID === n.ID}
                     />
                   ))}
                 </div>
@@ -309,7 +309,7 @@ function ExitNodeSelectorItem({
 
 function CountryFlag({ code }: { code: string }) {
   return (
-    countryFlags[code.toLowerCase()] || (
+    <>{countryFlags[code.toLowerCase()]}</> || (
       <span className="font-medium text-gray-500 text-xs">
         {code.toUpperCase()}
       </span>

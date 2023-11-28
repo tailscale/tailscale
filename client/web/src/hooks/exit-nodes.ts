@@ -71,6 +71,8 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
     }
   }, [data, tailnetName])
 
+  const hasFilter = Boolean(filter)
+
   const mullvadNodesSorted = useMemo(() => {
     const nodes: ExitNode[] = []
 
@@ -91,7 +93,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
       })
     }
 
-    if (!Boolean(filter)) {
+    if (!hasFilter) {
       // When nothing is searched, only show a single best-matching
       // exit node per-country.
       //
@@ -121,7 +123,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
     }
 
     return nodes.sort(compareByName)
-  }, [locationNodesMap, Boolean(filter)])
+  }, [hasFilter, locationNodesMap])
 
   // Ordered and filtered grouping of exit nodes.
   const exitNodeGroups = useMemo(() => {
@@ -165,7 +167,7 @@ function highestPriorityNode(nodes: ExitNode[]): ExitNode | undefined {
 
 // compareName compares two exit nodes alphabetically by name.
 function compareByName(a: ExitNode, b: ExitNode): number {
-  if (a.Location && b.Location && a.Location.Country == b.Location.Country) {
+  if (a.Location && b.Location && a.Location.Country === b.Location.Country) {
     // Always put "<Country>: Best Match" node at top of country list.
     if (a.Name.includes(": Best Match")) {
       return -1
