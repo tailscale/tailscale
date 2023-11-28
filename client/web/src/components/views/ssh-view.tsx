@@ -24,6 +24,7 @@ export default function SSHView({
           href="https://tailscale.com/kb/1193/tailscale-ssh/"
           className="text-indigo-700"
           target="_blank"
+          rel="noreferrer"
         >
           Learn more &rarr;
         </a>
@@ -44,6 +45,7 @@ export default function SSHView({
           href="https://login.tailscale.com/admin/acls/"
           className="text-indigo-700"
           target="_blank"
+          rel="noreferrer"
         >
           tailnet policy file
         </a>{" "}

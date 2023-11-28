@@ -125,6 +125,7 @@ export default function DeviceDetailsView({
             // TODO: pipe control serve url from backend
             href="https://login.tailscale.com/admin"
             target="_blank"
+            rel="noreferrer"
             className="text-indigo-700 text-sm"
           >
             this device’s page

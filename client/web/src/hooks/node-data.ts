@@ -120,7 +120,7 @@ export default function useNodeData() {
           throw err
         })
     },
-    [data]
+    [data, isPosting, refreshData]
   )
 
   const updatePrefs = useCallback(
@@ -169,7 +169,7 @@ export default function useNodeData() {
       }
     },
     // Run once.
-    []
+    [refreshData]
   )
 
   return { data, refreshData, updateNode, updatePrefs, isPosting }

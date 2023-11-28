@@ -29,15 +29,8 @@ export enum UpdateState {
 // useInstallUpdate initiates and tracks a Tailscale self-update via the LocalAPI,
 // and returns state messages showing the progress of the update.
 export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
-  if (!cv) {
-    return {
-      updateState: UpdateState.UpToDate,
-      updateLog: "",
-    }
-  }
-
   const [updateState, setUpdateState] = useState<UpdateState>(
-    cv.RunningLatest ? UpdateState.UpToDate : UpdateState.Available
+    cv?.RunningLatest ? UpdateState.UpToDate : UpdateState.Available
   )
 
   const [updateLog, setUpdateLog] = useState<string>("")
@@ -132,7 +125,10 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
       if (timer) clearTimeout(timer)
       timer = 0
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { updateState, updateLog }
+  return !cv
+    ? { updateState: UpdateState.UpToDate, updateLog: "" }
+    : { updateState, updateLog }
 }
