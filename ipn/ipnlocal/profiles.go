@@ -207,10 +207,11 @@ func init() {
 // It also saves the prefs to the StateStore. It stores a copy of the
 // provided prefs, which may be accessed via CurrentPrefs.
 //
-// NetworkProfile stores additional information about the tailnet the user
-// is logged into so that we can keep track of things like their domain name
-// across user switches to disambiguate the same account but a different tailnet.
-func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile) error {
+// If tailnetMagicDNSName is provided non-empty, it will be used to
+// enrich the profile with the tailnet's MagicDNS name. The MagicDNS
+// name cannot be pulled from prefsIn directly because it is not saved
+// on ipn.Prefs (since it's not a field that is configurable by nodes).
+func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, tailnetMagicDNSName string) error {
 	prefs := prefsIn.AsStruct()
 	newPersist := prefs.Persist
 	if newPersist == nil || newPersist.NodeID == "" || newPersist.UserProfile.LoginName == "" {
@@ -254,7 +255,9 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 	cp.ControlURL = prefs.ControlURL
 	cp.UserProfile = newPersist.UserProfile
 	cp.NodeID = newPersist.NodeID
-	cp.NetworkProfile = np
+	if tailnetMagicDNSName != "" {
+		cp.TailnetMagicDNSName = tailnetMagicDNSName
+	}
 	pm.knownProfiles[cp.ID] = cp
 	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {
@@ -598,7 +601,7 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 		return fmt.Errorf("load legacy prefs: %w", err)
 	}
 	pm.dlogf("loaded legacy preferences; sentinel=%q", sentinel)
-	if err := pm.SetPrefs(prefs, ipn.NetworkProfile{}); err != nil {
+	if err := pm.SetPrefs(prefs, ""); err != nil {
 		metricMigrationError.Add(1)
 		return fmt.Errorf("migrating _daemon profile: %w", err)
 	}
@@ -606,12 +609,6 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 	pm.dlogf("completed legacy preferences migration with sentinel=%q", sentinel)
 	metricMigrationSuccess.Add(1)
 	return nil
-}
-
-func (pm *profileManager) requiresBackfill() bool {
-	return pm != nil &&
-		pm.currentProfile != nil &&
-		pm.currentProfile.NetworkProfile.RequiresBackfill()
 }
 
 var (
