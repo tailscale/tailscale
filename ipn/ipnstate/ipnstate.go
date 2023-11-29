@@ -208,7 +208,7 @@ type PeerStatus struct {
 	// It has the form "host.<MagicDNSSuffix>."
 	DNSName string
 	OS      string // HostInfo.OS
-	UserID  tailcfg.UserID
+	UserID  tailcfg.UserID `json:",string"`
 
 	// AltSharerUserID is the user who shared this node
 	// if it's different than UserID. Otherwise it's zero.
