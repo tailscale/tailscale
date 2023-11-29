@@ -88,6 +88,7 @@ import (
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
@@ -1311,6 +1312,24 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 // setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
 func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
+		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
+		changed := prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
+		prefs.ExitNodeID = exitNodeID
+		prefs.ExitNodeIP = netip.Addr{}
+		return changed
+	}
+
+	oldExitNodeID := prefs.ExitNodeID
+	if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
+		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
+		if exitNodeIP.IsValid() && err == nil {
+			prefsChanged = prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP
+			prefs.ExitNodeID = ""
+			prefs.ExitNodeIP = exitNodeIP
+		}
+	}
+
 	if nm == nil {
 		// No netmap, can't resolve anything.
 		return false
@@ -1338,7 +1357,7 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) 
 			// reference it directly for next time.
 			prefs.ExitNodeID = peer.StableID()
 			prefs.ExitNodeIP = netip.Addr{}
-			return true
+			return oldExitNodeID != prefs.ExitNodeID
 		}
 	}
 
