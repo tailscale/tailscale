@@ -900,6 +900,10 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 		v := n.PrimaryRoutes()
 		ps.PrimaryRoutes = &v
 	}
+	if n.AllowedIPs().Len() != 0 {
+		v := n.AllowedIPs()
+		ps.AllowedIPs = &v
+	}
 
 	if n.Expired() {
 		ps.Expired = true
