@@ -570,7 +570,7 @@ func (p *Prefs) AdminPageURL() string {
 		// TODO(crawshaw): In future release, make this https://console.tailscale.com
 		url = "https://login.tailscale.com"
 	}
-	return url + "/admin/machines"
+	return url + "/admin"
 }
 
 // AdvertisesExitNode reports whether p is advertising both the v4 and

@@ -1,4 +1,6 @@
-import cx from "classnames"
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React, { useEffect } from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
@@ -6,6 +8,7 @@ import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
 import LoginView from "src/components/views/login-view"
 import SSHView from "src/components/views/ssh-view"
+import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
@@ -32,7 +35,7 @@ function WebClient({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const { data, refreshData, updateNode, updatePrefs } = useNodeData()
+  const { data, refreshData, nodeUpdaters } = useNodeData()
   useEffect(() => {
     refreshData()
   }, [auth, refreshData])
@@ -54,19 +57,24 @@ function WebClient({
             <HomeView
               readonly={!auth.canManageNode}
               node={data}
-              updateNode={updateNode}
-              updatePrefs={updatePrefs}
+              nodeUpdaters={nodeUpdaters}
             />
           </Route>
           <Route path="/details">
             <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
           </Route>
-          <Route path="/subnets">{/* TODO */}Subnet router</Route>
+          <Route path="/subnets">
+            <SubnetRouterView
+              readonly={!auth.canManageNode}
+              node={data}
+              nodeUpdaters={nodeUpdaters}
+            />
+          </Route>
           <Route path="/ssh">
             <SSHView
               readonly={!auth.canManageNode}
-              runningSSH={data.RunningSSHServer}
-              updatePrefs={updatePrefs}
+              node={data}
+              nodeUpdaters={nodeUpdaters}
             />
           </Route>
           <Route path="/serve">{/* TODO */}Share local content</Route>
@@ -116,24 +124,5 @@ function Header({
         </Link>
       )}
     </>
-  )
-}
-
-function Footer({
-  licensesURL,
-  className,
-}: {
-  licensesURL: string
-  className?: string
-}) {
-  return (
-    <footer className={cx("container max-w-lg mx-auto text-center", className)}>
-      <a
-        className="text-xs text-gray-500 hover:text-gray-600"
-        href={licensesURL}
-      >
-        Open Source Licenses
-      </a>
-    </footer>
   )
 }

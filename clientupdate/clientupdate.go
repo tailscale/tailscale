@@ -176,10 +176,7 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 		case distro.Alpine:
 			return up.updateAlpineLike, true
 		case distro.Unraid:
-			// Unraid runs from memory, updates must be installed via the Unraid
-			// plugin manager to be persistent.
-			// TODO(awly): implement Unraid updates using the 'plugin' CLI.
-			return nil, false
+			return up.updateUnraid, true
 		case distro.QNAP:
 			return up.updateQNAP, true
 		}
@@ -1146,6 +1143,64 @@ func (up *Updater) updateQNAP() (err error) {
 		return fmt.Errorf("failed tailscale update using qpkg_cli: %w", err)
 	}
 	return nil
+}
+
+func (up *Updater) updateUnraid() (err error) {
+	if up.Version != "" {
+		return errors.New("installing a specific version on Unraid is not supported")
+	}
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf(`%w; you can try updating using "plugin check tailscale.plg && plugin update tailscale.plg"`, err)
+		}
+	}()
+
+	// We need to run `plugin check` for the latest tailscale.plg to get
+	// downloaded. Unfortunately, the output of this command does not contain
+	// the latest tailscale version available. So we'll parse the downloaded
+	// tailscale.plg file manually below.
+	out, err := exec.Command("plugin", "check", "tailscale.plg").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to check if Tailscale plugin is upgradable: %w, output: %q", err, out)
+	}
+
+	// Note: 'plugin check' downloads plugins to /tmp/plugins.
+	// The installed .plg files are in /boot/config/plugins/, but the pending
+	// ones are in /tmp/plugins. We should parse the pending file downloaded by
+	// 'plugin check'.
+	latest, err := parseUnraidPluginVersion("/tmp/plugins/tailscale.plg")
+	if err != nil {
+		return fmt.Errorf("failed to find latest Tailscale version in /boot/config/plugins/tailscale.plg: %w", err)
+	}
+	if !up.confirm(latest) {
+		return nil
+	}
+
+	up.Logf("c2n: running 'plugin update tailscale.plg'")
+	cmd := exec.Command("plugin", "update", "tailscale.plg")
+	cmd.Stdout = up.Stdout
+	cmd.Stderr = up.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed tailscale plugin update: %w", err)
+	}
+	return nil
+}
+
+func parseUnraidPluginVersion(plgPath string) (string, error) {
+	plg, err := os.ReadFile(plgPath)
+	if err != nil {
+		return "", err
+	}
+	re := regexp.MustCompile(`<FILE Name="/boot/config/plugins/tailscale/tailscale_(\d+\.\d+\.\d+)_[a-z0-9]+.tgz">`)
+	match := re.FindStringSubmatch(string(plg))
+	if len(match) < 2 {
+		return "", errors.New("version not found in plg file")
+	}
+	return match[1], nil
 }
 
 func writeFile(r io.Reader, path string, perm os.FileMode) error {

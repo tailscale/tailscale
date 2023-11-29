@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import * as Primitive from "@radix-ui/react-collapsible"
 import React, { useState } from "react"
 import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"

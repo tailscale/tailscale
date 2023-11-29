@@ -35,6 +35,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -1329,4 +1330,273 @@ type routeCollector struct {
 func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
 	rc.routes = append(rc.routes, pfx)
 	return nil
+}
+
+type mockSyspolicyHandler struct {
+	t             *testing.T
+	key           syspolicy.Key
+	s             string
+	exitNodeIDKey bool
+	exitNodeIPKey bool
+	exitNodeID    string
+	exitNodeIP    string
+}
+
+func (h *mockSyspolicyHandler) ReadString(key string) (string, error) {
+	if h.exitNodeIDKey && key == string(syspolicy.ExitNodeID) {
+		return h.exitNodeID, nil
+	}
+	if h.exitNodeIPKey && key == string(syspolicy.ExitNodeIP) {
+		return h.exitNodeIP, nil
+	}
+	return "", syspolicy.ErrNoSuchKey
+}
+
+func (h *mockSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
+	h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
+	return 0, syspolicy.ErrNoSuchKey
+}
+
+func (h *mockSyspolicyHandler) ReadBoolean(key string) (bool, error) {
+	h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
+	return false, syspolicy.ErrNoSuchKey
+}
+
+func TestSetExitNodeIDPolicy(t *testing.T) {
+	pfx := netip.MustParsePrefix
+	tests := []struct {
+		name           string
+		exitNodeIPKey  bool
+		exitNodeIDKey  bool
+		exitNodeID     string
+		exitNodeIP     string
+		prefs          *ipn.Prefs
+		exitNodeIPWant string
+		exitNodeIDWant string
+		prefsChanged   bool
+		nm             *netmap.NetworkMap
+	}{
+		{
+			name:           "ExitNodeID key is set",
+			exitNodeIDKey:  true,
+			exitNodeID:     "123",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+		},
+		{
+			name:           "ExitNodeID key not set",
+			exitNodeIDKey:  true,
+			exitNodeIDWant: "",
+			prefsChanged:   false,
+		},
+		{
+			name:           "ExitNodeID key set, ExitNodeIP preference set",
+			exitNodeIDKey:  true,
+			exitNodeID:     "123",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+		},
+		{
+			name:           "ExitNodeID key not set, ExitNodeIP key set",
+			exitNodeIPKey:  true,
+			exitNodeIP:     "127.0.0.1",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPWant: "127.0.0.1",
+			prefsChanged:   false,
+		},
+		{
+			name:           "ExitNodeIP key set, existing ExitNodeIP pref",
+			exitNodeIPKey:  true,
+			exitNodeIP:     "127.0.0.1",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPWant: "127.0.0.1",
+			prefsChanged:   false,
+		},
+		{
+			name:           "existing preferences match policy",
+			exitNodeIDKey:  true,
+			exitNodeID:     "123",
+			prefs:          &ipn.Prefs{ExitNodeID: tailcfg.StableNodeID("123")},
+			exitNodeIDWant: "123",
+			prefsChanged:   false,
+		},
+		{
+			name:           "ExitNodeIP set if net map does not have corresponding node",
+			exitNodeIPKey:  true,
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIP:     "127.0.0.1",
+			exitNodeIPWant: "127.0.0.1",
+			prefsChanged:   false,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name: "a.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100.0.0.201/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+		{
+			name:           "ExitNodeIP cleared if net map has corresponding node - policy matches prefs",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPKey:  true,
+			exitNodeIP:     "127.0.0.1",
+			exitNodeIPWant: "",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name:     "a.tailnet",
+						StableID: tailcfg.StableNodeID("123"),
+						Addresses: []netip.Prefix{
+							pfx("127.0.0.1/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+		{
+			name:           "ExitNodeIP cleared if net map has corresponding node - no policy set",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPWant: "",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name:     "a.tailnet",
+						StableID: tailcfg.StableNodeID("123"),
+						Addresses: []netip.Prefix{
+							pfx("127.0.0.1/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+		{
+			name:           "ExitNodeIP cleared if net map has corresponding node - different exit node IP in policy",
+			exitNodeIPKey:  true,
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIP:     "100.64.5.6",
+			exitNodeIPWant: "",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name:     "a.tailnet",
+						StableID: tailcfg.StableNodeID("123"),
+						Addresses: []netip.Prefix{
+							pfx("100.64.5.6/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			b := newTestBackend(t)
+			syspolicy.SetHandlerForTest(t, &mockSyspolicyHandler{
+				t:             t,
+				exitNodeID:    test.exitNodeID,
+				exitNodeIP:    test.exitNodeIP,
+				exitNodeIDKey: test.exitNodeIDKey,
+				exitNodeIPKey: test.exitNodeIPKey,
+			})
+			if test.nm == nil {
+				test.nm = new(netmap.NetworkMap)
+			}
+			if test.prefs == nil {
+				test.prefs = ipn.NewPrefs()
+			}
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+			pm.prefs = test.prefs.View()
+			b.netMap = test.nm
+			b.pm = pm
+			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm)
+			b.SetPrefs(pm.CurrentPrefs().AsStruct())
+			if test.exitNodeIDKey {
+				got := b.pm.prefs.ExitNodeID()
+				if got != tailcfg.StableNodeID(test.exitNodeIDWant) {
+					t.Errorf("got %v want %v", got, test.exitNodeIDWant)
+				}
+			}
+			if test.exitNodeIPKey {
+				got := b.pm.prefs.ExitNodeIP()
+				if test.exitNodeIPWant == "" {
+					if got.String() != "invalid IP" {
+						t.Errorf("got %v want invalid IP", got)
+					}
+				} else if got.String() != test.exitNodeIPWant {
+					t.Errorf("got %v want %v", got, test.exitNodeIPWant)
+				}
+			}
+
+			if changed != test.prefsChanged {
+				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
+			}
+		})
+	}
 }

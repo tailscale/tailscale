@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import { useEffect, useMemo, useState } from "react"
 import { apiFetch } from "src/api"
 
@@ -5,6 +8,7 @@ export type ExitNode = {
   ID: string
   Name: string
   Location?: ExitNodeLocation
+  Online?: boolean
 }
 
 type ExitNodeLocation = {
@@ -68,6 +72,8 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
     }
   }, [data, tailnetName])
 
+  const hasFilter = Boolean(filter)
+
   const mullvadNodesSorted = useMemo(() => {
     const nodes: ExitNode[] = []
 
@@ -82,13 +88,12 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
         return // not possible, doing this for type safety
       }
       nodes.push({
-        ID: bestNode.ID,
+        ...bestNode,
         Name: name(bestNode.Location),
-        Location: bestNode.Location,
       })
     }
 
-    if (!Boolean(filter)) {
+    if (!hasFilter) {
       // When nothing is searched, only show a single best-matching
       // exit node per-country.
       //
@@ -118,7 +123,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
     }
 
     return nodes.sort(compareByName)
-  }, [locationNodesMap, Boolean(filter)])
+  }, [hasFilter, locationNodesMap])
 
   // Ordered and filtered grouping of exit nodes.
   const exitNodeGroups = useMemo(() => {
@@ -162,7 +167,7 @@ function highestPriorityNode(nodes: ExitNode[]): ExitNode | undefined {
 
 // compareName compares two exit nodes alphabetically by name.
 function compareByName(a: ExitNode, b: ExitNode): number {
-  if (a.Location && b.Location && a.Location.Country == b.Location.Country) {
+  if (a.Location && b.Location && a.Location.Country === b.Location.Country) {
     // Always put "<Country>: Best Match" node at top of country list.
     if (a.Name.includes(": Best Match")) {
       return -1

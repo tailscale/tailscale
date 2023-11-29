@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 import cx from "classnames"
 import React, { ReactNode } from "react"

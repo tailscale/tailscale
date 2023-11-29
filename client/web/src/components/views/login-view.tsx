@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React, { useCallback, useState } from "react"
 import { apiFetch } from "src/api"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
@@ -29,7 +32,7 @@ export default function LoginView({
   return (
     <div className="mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
       <TailscaleIcon className="my-2 mb-8" />
-      {data.Status == "Stopped" ? (
+      {data.Status === "Stopped" ? (
         <>
           <div className="mb-6">
             <h3 className="text-3xl font-semibold mb-3">Connect</h3>
@@ -54,6 +57,7 @@ export default function LoginView({
                 href="https://tailscale.com/kb/1028/key-expiry"
                 className="link"
                 target="_blank"
+                rel="noreferrer"
               >
                 learn more
               </a>
@@ -74,7 +78,12 @@ export default function LoginView({
             <p className="text-gray-700">
               Get started by logging in to your Tailscale network.
               Or,&nbsp;learn&nbsp;more at{" "}
-              <a href="https://tailscale.com/" className="link" target="_blank">
+              <a
+                href="https://tailscale.com/"
+                className="link"
+                target="_blank"
+                rel="noreferrer"
+              >
                 tailscale.com
               </a>
               .
@@ -100,6 +109,7 @@ export default function LoginView({
                 href="https://tailscale.com/kb/1085/auth-keys/"
                 className="link"
                 target="_blank"
+                rel="noreferrer"
               >
                 Learn more &rarr;
               </a>

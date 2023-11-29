@@ -1,10 +1,14 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import cx from "classnames"
 import React from "react"
 import { apiFetch } from "src/api"
+import ACLTag from "src/components/acl-tag"
+import * as Control from "src/components/control-components"
 import { UpdateAvailableNotification } from "src/components/update-available"
 import { NodeData } from "src/hooks/node-data"
 import { useLocation } from "wouter"
-import ACLTag from "../acl-tag"
 
 export default function DeviceDetailsView({
   readonly,
@@ -60,7 +64,7 @@ export default function DeviceDetailsView({
                 <td className="flex gap-1 flex-wrap">
                   {node.IsTagged
                     ? node.Tags.map((t) => <ACLTag key={t} tag={t} />)
-                    : node.Profile.DisplayName}
+                    : node.Profile?.DisplayName}
                 </td>
               </tr>
               <tr>
@@ -116,18 +120,16 @@ export default function DeviceDetailsView({
             </tbody>
           </table>
         </div>
-        <p className="text-neutral-500 text-sm leading-tight text-center">
+        <Control.AdminContainer
+          className="text-neutral-500 text-sm leading-tight text-center"
+          node={node}
+        >
           Want even more details? Visit{" "}
-          <a
-            // TODO: pipe control serve url from backend
-            href="https://login.tailscale.com/admin"
-            target="_blank"
-            className="text-indigo-700 text-sm"
-          >
+          <Control.AdminLink node={node} path={`/machines/${node.IP}`}>
             this device’s page
-          </a>{" "}
+          </Control.AdminLink>{" "}
           in the admin console.
-        </p>
+        </Control.AdminContainer>
       </div>
     </>
   )

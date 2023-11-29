@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
@@ -167,7 +168,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t, tailnetNodes, func() *ipnstate.PeerStatus { return selfNode })
+	localapi := mockLocalAPI(t, tailnetNodes, func() *ipnstate.PeerStatus { return selfNode }, nil)
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -334,6 +335,7 @@ func TestAuthorizeRequest(t *testing.T) {
 	localapi := mockLocalAPI(t,
 		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
 		func() *ipnstate.PeerStatus { return self },
+		nil,
 	)
 	defer localapi.Close()
 	go localapi.Serve(lal)
@@ -433,11 +435,16 @@ func TestServeAuth(t *testing.T) {
 		ProfilePicURL: user.ProfilePicURL,
 	}
 
+	testControlURL := &defaultControlURL
+
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
 	localapi := mockLocalAPI(t,
 		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
 		func() *ipnstate.PeerStatus { return self },
+		func() *ipn.Prefs {
+			return &ipn.Prefs{ControlURL: *testControlURL}
+		},
 	)
 	defer localapi.Close()
 	go localapi.Serve(lal)
@@ -461,7 +468,7 @@ func TestServeAuth(t *testing.T) {
 		SrcUser: user.ID,
 		Created: oneHourAgo,
 		AuthID:  testAuthPathSuccess,
-		AuthURL: testControlURL + testAuthPathSuccess,
+		AuthURL: *testControlURL + testAuthPathSuccess,
 	})
 	failureCookie := "ts-cookie-failure"
 	s.browserSessions.Store(failureCookie, &browserSession{
@@ -470,7 +477,7 @@ func TestServeAuth(t *testing.T) {
 		SrcUser: user.ID,
 		Created: oneHourAgo,
 		AuthID:  testAuthPathError,
-		AuthURL: testControlURL + testAuthPathError,
+		AuthURL: *testControlURL + testAuthPathError,
 	})
 	expiredCookie := "ts-cookie-expired"
 	s.browserSessions.Store(expiredCookie, &browserSession{
@@ -479,12 +486,13 @@ func TestServeAuth(t *testing.T) {
 		SrcUser: user.ID,
 		Created: sixtyDaysAgo,
 		AuthID:  "/a/old-auth-url",
-		AuthURL: testControlURL + "/a/old-auth-url",
+		AuthURL: *testControlURL + "/a/old-auth-url",
 	})
 
 	tests := []struct {
 		name string
 
+		controlURL    string          // if empty, defaultControlURL is used
 		cookie        string          // cookie attached to request
 		wantNewCookie bool            // want new cookie generated during request
 		wantSession   *browserSession // session associated w/ cookie after request
@@ -505,7 +513,7 @@ func TestServeAuth(t *testing.T) {
 			name:          "new-session",
 			path:          "/api/auth/session/new",
 			wantStatus:    http.StatusOK,
-			wantResp:      &newSessionAuthResponse{AuthURL: testControlURL + testAuthPath},
+			wantResp:      &newSessionAuthResponse{AuthURL: *testControlURL + testAuthPath},
 			wantNewCookie: true,
 			wantSession: &browserSession{
 				ID:            "GENERATED_ID", // gets swapped for newly created ID by test
@@ -513,7 +521,7 @@ func TestServeAuth(t *testing.T) {
 				SrcUser:       user.ID,
 				Created:       timeNow,
 				AuthID:        testAuthPath,
-				AuthURL:       testControlURL + testAuthPath,
+				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
 			},
 		},
@@ -529,7 +537,7 @@ func TestServeAuth(t *testing.T) {
 				SrcUser:       user.ID,
 				Created:       oneHourAgo,
 				AuthID:        testAuthPathSuccess,
-				AuthURL:       testControlURL + testAuthPathSuccess,
+				AuthURL:       *testControlURL + testAuthPathSuccess,
 				Authenticated: false,
 			},
 		},
@@ -538,14 +546,14 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth/session/new", // should not create new session
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &newSessionAuthResponse{AuthURL: testControlURL + testAuthPathSuccess},
+			wantResp:   &newSessionAuthResponse{AuthURL: *testControlURL + testAuthPathSuccess},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
 				SrcUser:       user.ID,
 				Created:       oneHourAgo,
 				AuthID:        testAuthPathSuccess,
-				AuthURL:       testControlURL + testAuthPathSuccess,
+				AuthURL:       *testControlURL + testAuthPathSuccess,
 				Authenticated: false,
 			},
 		},
@@ -561,7 +569,7 @@ func TestServeAuth(t *testing.T) {
 				SrcUser:       user.ID,
 				Created:       oneHourAgo,
 				AuthID:        testAuthPathSuccess,
-				AuthURL:       testControlURL + testAuthPathSuccess,
+				AuthURL:       *testControlURL + testAuthPathSuccess,
 				Authenticated: true,
 			},
 		},
@@ -577,7 +585,7 @@ func TestServeAuth(t *testing.T) {
 				SrcUser:       user.ID,
 				Created:       oneHourAgo,
 				AuthID:        testAuthPathSuccess,
-				AuthURL:       testControlURL + testAuthPathSuccess,
+				AuthURL:       *testControlURL + testAuthPathSuccess,
 				Authenticated: true,
 			},
 		},
@@ -594,7 +602,7 @@ func TestServeAuth(t *testing.T) {
 			path:          "/api/auth/session/new",
 			cookie:        failureCookie,
 			wantStatus:    http.StatusOK,
-			wantResp:      &newSessionAuthResponse{AuthURL: testControlURL + testAuthPath},
+			wantResp:      &newSessionAuthResponse{AuthURL: *testControlURL + testAuthPath},
 			wantNewCookie: true,
 			wantSession: &browserSession{
 				ID:            "GENERATED_ID",
@@ -602,7 +610,7 @@ func TestServeAuth(t *testing.T) {
 				SrcUser:       user.ID,
 				Created:       timeNow,
 				AuthID:        testAuthPath,
-				AuthURL:       testControlURL + testAuthPath,
+				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
 			},
 		},
@@ -611,7 +619,7 @@ func TestServeAuth(t *testing.T) {
 			path:          "/api/auth/session/new",
 			cookie:        expiredCookie,
 			wantStatus:    http.StatusOK,
-			wantResp:      &newSessionAuthResponse{AuthURL: testControlURL + testAuthPath},
+			wantResp:      &newSessionAuthResponse{AuthURL: *testControlURL + testAuthPath},
 			wantNewCookie: true,
 			wantSession: &browserSession{
 				ID:            "GENERATED_ID",
@@ -619,13 +627,34 @@ func TestServeAuth(t *testing.T) {
 				SrcUser:       user.ID,
 				Created:       timeNow,
 				AuthID:        testAuthPath,
-				AuthURL:       testControlURL + testAuthPath,
+				AuthURL:       *testControlURL + testAuthPath,
 				Authenticated: false,
+			},
+		},
+		{
+			name:          "control-server-no-check-mode",
+			controlURL:    "http://alternate-server.com/",
+			path:          "/api/auth/session/new",
+			wantStatus:    http.StatusOK,
+			wantResp:      &newSessionAuthResponse{},
+			wantNewCookie: true,
+			wantSession: &browserSession{
+				ID:            "GENERATED_ID", // gets swapped for newly created ID by test
+				SrcNode:       remoteNode.Node.ID,
+				SrcUser:       user.ID,
+				Created:       timeNow,
+				Authenticated: true,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.controlURL != "" {
+				testControlURL = &tt.controlURL
+			} else {
+				testControlURL = &defaultControlURL
+			}
+
 			r := httptest.NewRequest("GET", "http://100.1.2.3:5252"+tt.path, nil)
 			r.RemoteAddr = remoteIP
 			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
@@ -694,7 +723,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t, nil, func() *ipnstate.PeerStatus { return self })
+	localapi := mockLocalAPI(t, nil, func() *ipnstate.PeerStatus { return self }, nil)
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -771,7 +800,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 }
 
 var (
-	testControlURL      = "http://localhost:8080"
+	defaultControlURL   = "https://controlplane.tailscale.com"
 	testAuthPath        = "/a/12345"
 	testAuthPathSuccess = "/a/will-succeed"
 	testAuthPathError   = "/a/will-error"
@@ -783,7 +812,7 @@ var (
 // self accepts a function that resolves to a self node status,
 // so that tests may swap out the /localapi/v0/status response
 // as desired.
-func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self func() *ipnstate.PeerStatus) *http.Server {
+func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self func() *ipnstate.PeerStatus, prefs func() *ipn.Prefs) *http.Server {
 	return &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/localapi/v0/whois":
@@ -800,6 +829,9 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 		case "/localapi/v0/status":
 			writeJSON(w, ipnstate.Status{Self: self()})
 			return
+		case "/localapi/v0/prefs":
+			writeJSON(w, prefs())
+			return
 		default:
 			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)
 		}
@@ -808,7 +840,7 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 
 func mockNewAuthURL(_ context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
 	// Create new dummy auth URL.
-	return &tailcfg.WebClientAuthResponse{ID: testAuthPath, URL: testControlURL + testAuthPath}, nil
+	return &tailcfg.WebClientAuthResponse{ID: testAuthPath, URL: defaultControlURL + testAuthPath}, nil
 }
 
 func mockWaitAuthURL(_ context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {

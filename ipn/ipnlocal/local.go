@@ -88,6 +88,7 @@ import (
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
@@ -729,6 +730,13 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.AuthURL = b.authURLSticky
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
+			if cv := b.lastClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+				if cv.UrgentSecurityUpdate {
+					s.Health = append(s.Health, fmt.Sprintf("Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+				} else {
+					s.Health = append(s.Health, fmt.Sprintf("Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+				}
+			}
 		}
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
@@ -892,6 +900,10 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	if n.PrimaryRoutes().Len() != 0 {
 		v := n.PrimaryRoutes()
 		ps.PrimaryRoutes = &v
+	}
+	if n.AllowedIPs().Len() != 0 {
+		v := n.AllowedIPs()
+		ps.AllowedIPs = &v
 	}
 
 	if n.Expired() {
@@ -1300,6 +1312,24 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 // setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
 func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
+		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
+		changed := prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
+		prefs.ExitNodeID = exitNodeID
+		prefs.ExitNodeIP = netip.Addr{}
+		return changed
+	}
+
+	oldExitNodeID := prefs.ExitNodeID
+	if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
+		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
+		if exitNodeIP.IsValid() && err == nil {
+			prefsChanged = prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP
+			prefs.ExitNodeID = ""
+			prefs.ExitNodeIP = exitNodeIP
+		}
+	}
+
 	if nm == nil {
 		// No netmap, can't resolve anything.
 		return false
@@ -1327,7 +1357,7 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) 
 			// reference it directly for next time.
 			prefs.ExitNodeID = peer.StableID()
 			prefs.ExitNodeIP = netip.Addr{}
-			return true
+			return oldExitNodeID != prefs.ExitNodeID
 		}
 	}
 
@@ -3993,6 +4023,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// properly. This exists as an optimization to control to program fewer DNS
 	// records that have ingress enabled but are not actually being used.
 	hi.WireIngress = b.wantIngressLocked()
+	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 }
 
 // enterState transitions the backend into newState, updating internal

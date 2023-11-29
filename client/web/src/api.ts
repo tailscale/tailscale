@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 let csrfToken: string
 let synoToken: string | undefined // required for synology API requests
 let unraidCsrfToken: string | undefined // required for unraid POST requests (#8062)

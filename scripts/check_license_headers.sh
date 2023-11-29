@@ -26,7 +26,7 @@ if [ $# != 1 ]; then
 fi
 
 fail=0
-for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
+for file in $(find $1 \( -name '*.go' -or -name '*.tsx' -or -name '*.ts' -not -name '*.config.ts' \) -not -path '*/.git/*' -not -path '*/node_modules/*'); do
     case $file in
         $1/tempfork/*)
             # Skip, tempfork of third-party code
