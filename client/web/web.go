@@ -561,7 +561,8 @@ type nodeData struct {
 
 	ClientVersion *tailcfg.ClientVersion
 
-	LicensesURL string
+	ControlAdminURL string
+	LicensesURL     string
 }
 
 type subnetRoute struct {
@@ -596,8 +597,10 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
+		ControlAdminURL:  prefs.AdminPageURL(),
 		LicensesURL:      licenses.LicensesURL(),
 	}
+
 	cv, err := s.lc.CheckUpdate(r.Context())
 	if err != nil {
 		s.logf("could not check for updates: %v", err)

@@ -5,6 +5,7 @@ import React, { useMemo, useState } from "react"
 import { ReactComponent as CheckCircle } from "src/assets/icons/check-circle.svg"
 import { ReactComponent as Clock } from "src/assets/icons/clock.svg"
 import { ReactComponent as Plus } from "src/assets/icons/plus.svg"
+import * as Control from "src/components/control-components"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import Button from "src/ui/button"
 import Input from "src/ui/input"
@@ -122,18 +123,16 @@ export default function SubnetRouterView({
                 </div>
               ))}
             </div>
-            <div className="mt-3 w-full text-center text-neutral-500 text-sm leading-tight">
+            <Control.AdminContainer
+              className="mt-3 w-full text-center text-neutral-500 text-sm leading-tight"
+              node={node}
+            >
               To approve routes, in the admin console go to{" "}
-              <a
-                href={`https://login.tailscale.com/admin/machines/${node.IP}`}
-                className="text-indigo-700"
-                target="_blank"
-                rel="noreferrer"
-              >
+              <Control.AdminLink node={node} path={`/machines/${node.IP}`}>
                 the machine’s route settings
-              </a>
+              </Control.AdminLink>
               .
-            </div>
+            </Control.AdminContainer>
           </>
         ) : (
           <div className="px-5 py-4 bg-stone-50 rounded-lg border border-gray-200 text-center text-neutral-500">

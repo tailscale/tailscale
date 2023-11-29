@@ -73,7 +73,7 @@ function WebClient({
           <Route path="/ssh">
             <SSHView
               readonly={!auth.canManageNode}
-              runningSSH={data.RunningSSHServer}
+              node={data}
               nodeUpdaters={nodeUpdaters}
             />
           </Route>

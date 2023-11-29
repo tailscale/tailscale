@@ -19,7 +19,6 @@ export type NodeData = {
   UsingExitNode?: ExitNode
   AdvertisingExitNode: boolean
   AdvertisedRoutes?: SubnetRoute[]
-  LicensesURL: string
   TUNMode: boolean
   IsSynology: boolean
   DSMVersion: number
@@ -33,6 +32,8 @@ export type NodeData = {
   IsTagged: boolean
   Tags: string[]
   RunningSSHServer: boolean
+  ControlAdminURL: string
+  LicensesURL: string
 }
 
 type NodeState =
@@ -204,5 +205,10 @@ export default function useNodeData() {
     ]
   )
 
-  return { data, refreshData, nodeUpdaters, isPosting }
+  return {
+    data: { ...data, ControlAdminURL: "somehting.com" },
+    refreshData,
+    nodeUpdaters,
+    isPosting,
+  }
 }
