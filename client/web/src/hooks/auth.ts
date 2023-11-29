@@ -58,10 +58,10 @@ export default function useAuth() {
       .then((d) => {
         if (d.authUrl) {
           window.open(d.authUrl, "_blank")
-          // refresh data when auth complete
-          apiFetch("/auth/session/wait", "GET").then(() => loadAuth())
+          return apiFetch("/auth/session/wait", "GET")
         }
       })
+      .then(() => loadAuth())
       .catch((error) => {
         console.error(error)
       })
