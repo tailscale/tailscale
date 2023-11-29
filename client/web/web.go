@@ -327,22 +327,17 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 // errors to the ResponseWriter itself.
 func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
 	if s.mode == ManageServerMode { // client using tailscale auth
-		_, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+		session, _, err := s.getSession(r)
 		switch {
-		case err != nil:
+		case errors.Is(err, errNotUsingTailscale):
 			// All requests must be made over tailscale.
 			http.Error(w, "must access over tailscale", http.StatusUnauthorized)
 			return false
 		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
-			// Readonly endpoint allowed without browser session.
+			// Readonly endpoint allowed without valid browser session.
 			return true
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
-			//
-			// TODO(sonia): s.getSession calls whois again,
-			// should try and use the above call instead of running another
-			// localapi request.
-			session, _, err := s.getSession(r)
 			if err != nil || !session.isAuthorized(s.timeNow()) {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
