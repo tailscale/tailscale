@@ -205,10 +205,5 @@ export default function useNodeData() {
     ]
   )
 
-  return {
-    data: { ...data, ControlAdminURL: "somehting.com" },
-    refreshData,
-    nodeUpdaters,
-    isPosting,
-  }
+  return { data, refreshData, nodeUpdaters, isPosting }
 }
