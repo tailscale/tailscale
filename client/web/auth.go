@@ -178,7 +178,7 @@ func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*b
 	return session, nil
 }
 
-// controlSupportsCheckMode returns whether the current control server supports web client check mode.
+// controlSupportsCheckMode returns whether the current control server supports web client check mode, to verify a user's identity.
 // We assume that only "tailscale.com" control servers support check mode.
 // This allows the web client to be used with non-standard control servers.
 // If an error occurs getting the control URL, this method returns true to fail closed.
