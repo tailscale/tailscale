@@ -59,5 +59,11 @@
   "prettier": {
     "semi": false,
     "printWidth": 80
+  },
+  "postcss": {
+    "plugins": {
+      "tailwindcss": {},
+      "autoprefixer": {}
+    }
   }
 }
