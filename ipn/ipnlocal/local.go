@@ -729,6 +729,13 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.AuthURL = b.authURLSticky
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
+			if cv := b.lastClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+				if cv.UrgentSecurityUpdate {
+					s.Health = append(s.Health, fmt.Sprintf("Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+				} else {
+					s.Health = append(s.Health, fmt.Sprintf("Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+				}
+			}
 		}
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
