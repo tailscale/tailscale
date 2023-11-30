@@ -33,37 +33,44 @@ export default function HomeView({
           </div>
           <p className="text-gray-800 text-lg leading-[25.20px]">{node.IP}</p>
         </div>
-        <ExitNodeSelector
-          className="mb-5"
-          node={node}
-          nodeUpdaters={nodeUpdaters}
-          disabled={readonly}
-        />
+        {(node.Features["advertise-exit-node"] ||
+          node.Features["use-exit-node"]) && (
+          <ExitNodeSelector
+            className="mb-5"
+            node={node}
+            nodeUpdaters={nodeUpdaters}
+            disabled={readonly}
+          />
+        )}
         <Link className="text-blue-500 font-medium leading-snug" to="/details">
           View device details &rarr;
         </Link>
       </div>
       <h2 className="mb-3">Settings</h2>
-      <SettingsCard
-        link="/subnets"
-        className="mb-3"
-        title="Subnet router"
-        body="Add devices to your tailnet without installing Tailscale on them."
-      />
-      <SettingsCard
-        link="/ssh"
-        className="mb-3"
-        title="Tailscale SSH server"
-        body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
-        badge={
-          node.RunningSSHServer
-            ? {
-                text: "Running",
-                icon: <div className="w-2 h-2 bg-emerald-500 rounded-full" />,
-              }
-            : undefined
-        }
-      />
+      {node.Features["advertise-routes"] && (
+        <SettingsCard
+          link="/subnets"
+          className="mb-3"
+          title="Subnet router"
+          body="Add devices to your tailnet without installing Tailscale on them."
+        />
+      )}
+      {node.Features["ssh"] && (
+        <SettingsCard
+          link="/ssh"
+          className="mb-3"
+          title="Tailscale SSH server"
+          body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
+          badge={
+            node.RunningSSHServer
+              ? {
+                  text: "Running",
+                  icon: <div className="w-2 h-2 bg-emerald-500 rounded-full" />,
+                }
+              : undefined
+          }
+        />
+      )}
       {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
       {/* <SettingsCard
         link="/serve"

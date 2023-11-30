@@ -24,6 +24,7 @@ import (
 	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -563,6 +564,15 @@ type nodeData struct {
 
 	ControlAdminURL string
 	LicensesURL     string
+
+	// Features is the set of available features for use on the
+	// current platform. e.g. "ssh", "advertise-exit-node", etc.
+	// Map value is true if the given feature key is available.
+	//
+	// See web.availableFeatures func for population of this field.
+	// Contents are expected to match values defined in node-data.ts
+	// on the frontend.
+	Features map[string]bool
 }
 
 type subnetRoute struct {
@@ -599,6 +609,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
 		ControlAdminURL:  prefs.AdminPageURL(),
 		LicensesURL:      licenses.LicensesURL(),
+		Features:         availableFeatures(),
 	}
 
 	cv, err := s.lc.CheckUpdate(r.Context())
@@ -669,6 +680,16 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, *data)
+}
+
+func availableFeatures() map[string]bool {
+	return map[string]bool{
+		"advertise-exit-node": true,                            // available on all platforms
+		"advertise-routes":    true,                            // available on all platforms
+		"use-exit-node":       distro.Get() != distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
+		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
+		"auto-update":         clientupdate.CanAutoUpdate(),
+	}
 }
 
 type exitNode struct {

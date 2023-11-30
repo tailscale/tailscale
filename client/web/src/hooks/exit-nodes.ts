@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { apiFetch } from "src/api"
+import { NodeData } from "src/hooks/node-data"
 
 export type ExitNode = {
   ID: string
@@ -28,7 +29,7 @@ export type ExitNodeGroup = {
   nodes: ExitNode[]
 }
 
-export default function useExitNodes(tailnetName: string, filter?: string) {
+export default function useExitNodes(node: NodeData, filter?: string) {
   const [data, setData] = useState<ExitNode[]>([])
 
   useEffect(() => {
@@ -47,6 +48,14 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
     let tailnetNodes: ExitNode[] = []
     const locationNodes = new Map<CountryCode, Map<CityCode, ExitNode[]>>()
 
+    if (!node.Features["use-exit-node"]) {
+      // early-return
+      return {
+        tailnetNodesSorted: tailnetNodes,
+        locationNodesMap: locationNodes,
+      }
+    }
+
     data?.forEach((n) => {
       const loc = n.Location
       if (!loc) {
@@ -55,7 +64,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
         // Only Mullvad exit nodes have locations filled.
         tailnetNodes.push({
           ...n,
-          Name: trimDNSSuffix(n.Name, tailnetName),
+          Name: trimDNSSuffix(n.Name, node.TailnetName),
         })
         return
       }
@@ -70,12 +79,15 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
       tailnetNodesSorted: tailnetNodes.sort(compareByName),
       locationNodesMap: locationNodes,
     }
-  }, [data, tailnetName])
+  }, [data, node.Features, node.TailnetName])
 
   const hasFilter = Boolean(filter)
 
   const mullvadNodesSorted = useMemo(() => {
     const nodes: ExitNode[] = []
+    if (!node.Features["use-exit-node"]) {
+      return nodes // early-return
+    }
 
     // addBestMatchNode adds the node with the "higest priority"
     // match from a list of exit node `options` to `nodes`.
@@ -123,14 +135,27 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
     }
 
     return nodes.sort(compareByName)
-  }, [hasFilter, locationNodesMap])
+  }, [hasFilter, locationNodesMap, node.Features])
 
   // Ordered and filtered grouping of exit nodes.
   const exitNodeGroups = useMemo(() => {
     const filterLower = !filter ? undefined : filter.toLowerCase()
 
+    const selfGroup = {
+      id: "self",
+      name: undefined,
+      nodes: filter
+        ? []
+        : !node.Features["advertise-exit-node"]
+        ? [noExitNode] // don't show "runAsExitNode" option
+        : [noExitNode, runAsExitNode],
+    }
+
+    if (!node.Features["use-exit-node"]) {
+      return [selfGroup]
+    }
     return [
-      { id: "self", nodes: filter ? [] : [noExitNode, runAsExitNode] },
+      selfGroup,
       {
         id: "tailnet",
         nodes: filterLower
@@ -149,7 +174,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
           : mullvadNodesSorted,
       },
     ]
-  }, [tailnetNodesSorted, mullvadNodesSorted, filter])
+  }, [filter, node.Features, tailnetNodesSorted, mullvadNodesSorted])
 
   return { data: exitNodeGroups }
 }

@@ -50,9 +50,10 @@ export default function DeviceDetailsView({
             </button>
           </div>
         </div>
-        {node.ClientVersion &&
-          !node.ClientVersion.RunningLatest &&
-          !readonly && (
+        {node.Features["auto-update"] &&
+          !readonly &&
+          node.ClientVersion &&
+          !node.ClientVersion.RunningLatest && (
             <UpdateAvailableNotification details={node.ClientVersion} />
           )}
         <div className="-mx-5 card">
