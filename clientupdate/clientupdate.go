@@ -765,6 +765,7 @@ you can run the command prompt as Administrator one of these ways:
 	up.Logf("authenticode verification succeeded")
 
 	up.Logf("making tailscale.exe copy to switch to...")
+	up.cleanupOldDownloads(filepath.Join(os.TempDir(), "tailscale-updater-*.exe"))
 	selfOrig, selfCopy, err := makeSelfCopy()
 	if err != nil {
 		return err
