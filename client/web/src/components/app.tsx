@@ -11,7 +11,11 @@ import SSHView from "src/components/views/ssh-view"
 import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, { NodeData } from "src/hooks/node-data"
+import useNodeData, {
+  Feature,
+  featureDescription,
+  NodeData,
+} from "src/hooks/node-data"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
@@ -63,33 +67,63 @@ function WebClient({
           <Route path="/details">
             <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
           </Route>
-          <Route path="/subnets">
+          <FeatureRoute path="/subnets" feature="advertise-routes" node={data}>
             <SubnetRouterView
               readonly={!auth.canManageNode}
               node={data}
               nodeUpdaters={nodeUpdaters}
             />
-          </Route>
-          <Route path="/ssh">
+          </FeatureRoute>
+          <FeatureRoute path="/ssh" feature="ssh" node={data}>
             <SSHView
               readonly={!auth.canManageNode}
               node={data}
               nodeUpdaters={nodeUpdaters}
             />
-          </Route>
+          </FeatureRoute>
           <Route path="/serve">{/* TODO */}Share local content</Route>
-          <Route path="/update">
+          <FeatureRoute path="/update" feature="auto-update" node={data}>
             <UpdatingView
               versionInfo={data.ClientVersion}
               currentVersion={data.IPNVersion}
             />
-          </Route>
+          </FeatureRoute>
           <Route>
             <h2 className="mt-8">Page not found</h2>
           </Route>
         </Switch>
       </Router>
     </>
+  )
+}
+
+/**
+ * FeatureRoute renders a Route component,
+ * but only displays the child view if the specified feature is
+ * available for use on this node's platform. If not available,
+ * a not allowed view is rendered instead.
+ */
+function FeatureRoute({
+  path,
+  node,
+  feature,
+  children,
+}: {
+  path: string
+  node: NodeData // TODO: once we have swr, just call useNodeData within FeatureView
+  feature: Feature
+  children: React.ReactNode
+}) {
+  return (
+    <Route path={path}>
+      {!node.Features[feature] ? (
+        <h2 className="mt-8">
+          {featureDescription(feature)} not available on this device.
+        </h2>
+      ) : (
+        children
+      )}
+    </Route>
   )
 }
 

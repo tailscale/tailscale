@@ -175,7 +175,7 @@ function ExitNodeSelectorInner({
   onSelect: (node: ExitNode) => void
 }) {
   const [filter, setFilter] = useState<string>("")
-  const { data: exitNodes } = useExitNodes(node.TailnetName, filter)
+  const { data: exitNodes } = useExitNodes(node, filter)
   const listRef = useRef<HTMLDivElement>(null)
 
   const hasNodes = useMemo(

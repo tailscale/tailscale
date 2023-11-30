@@ -222,6 +222,13 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 	return nil, false
 }
 
+// CanAutoUpdate reports whether auto-updating via the clientupdate package
+// is supported for the current os/distro.
+func CanAutoUpdate() bool {
+	_, canAutoUpdate := (&Updater{}).getUpdateFunction()
+	return canAutoUpdate
+}
+
 // Update runs a single update attempt using the platform-specific mechanism.
 //
 // On Windows, this copies the calling binary and re-executes it to apply the

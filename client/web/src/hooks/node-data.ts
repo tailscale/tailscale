@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { apiFetch, setUnraidCsrfToken } from "src/api"
 import { ExitNode, noExitNode, runAsExitNode } from "src/hooks/exit-nodes"
 import { VersionInfo } from "src/hooks/self-update"
+import { assertNever } from "src/util"
 
 export type NodeData = {
   Profile: UserProfile
@@ -34,6 +35,7 @@ export type NodeData = {
   RunningSSHServer: boolean
   ControlAdminURL: string
   LicensesURL: string
+  Features: { [key in Feature]: boolean } // value is true if given feature is available on this client
 }
 
 type NodeState =
@@ -53,6 +55,30 @@ export type UserProfile = {
 export type SubnetRoute = {
   Route: string
   Approved: boolean
+}
+
+export type Feature =
+  | "advertise-exit-node"
+  | "advertise-routes"
+  | "use-exit-node"
+  | "ssh"
+  | "auto-update"
+
+export const featureDescription = (f: Feature) => {
+  switch (f) {
+    case "advertise-exit-node":
+      return "Advertising as an exit node"
+    case "advertise-routes":
+      return "Advertising subnet routes"
+    case "use-exit-node":
+      return "Using an exit node"
+    case "ssh":
+      return "Running a Tailscale SSH server"
+    case "auto-update":
+      return "Auto updating client versions"
+    default:
+      assertNever(f)
+  }
 }
 
 /**

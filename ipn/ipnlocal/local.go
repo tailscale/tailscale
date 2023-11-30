@@ -2893,27 +2893,11 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 	if !p.RunSSH {
 		return nil
 	}
-	switch runtime.GOOS {
-	case "linux":
-		if distro.Get() == distro.Synology && !envknob.UseWIPCode() {
-			return errors.New("The Tailscale SSH server does not run on Synology.")
-		}
-		if distro.Get() == distro.QNAP && !envknob.UseWIPCode() {
-			return errors.New("The Tailscale SSH server does not run on QNAP.")
-		}
-		b.updateSELinuxHealthWarning()
-		// otherwise okay
-	case "darwin":
-		// okay only in tailscaled mode for now.
-		if version.IsSandboxedMacOS() {
-			return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
-		}
-	case "freebsd", "openbsd":
-	default:
-		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
+	if err := envknob.CanRunTailscaleSSH(); err != nil {
+		return err
 	}
-	if !envknob.CanSSHD() {
-		return errors.New("The Tailscale SSH server has been administratively disabled.")
+	if runtime.GOOS == "linux" {
+		b.updateSELinuxHealthWarning()
 	}
 	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
 		return nil
