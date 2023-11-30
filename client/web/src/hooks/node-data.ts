@@ -36,6 +36,7 @@ export type NodeData = {
   ControlAdminURL: string
   LicensesURL: string
   Features: { [key in Feature]: boolean } // value is true if given feature is available on this client
+  ACLAllowsAnyIncomingTraffic: boolean
 }
 
 type NodeState =

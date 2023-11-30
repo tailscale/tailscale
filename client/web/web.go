@@ -562,6 +562,9 @@ type nodeData struct {
 
 	ClientVersion *tailcfg.ClientVersion
 
+	// whether tailnet ACLs allow access to port 5252 on this device
+	ACLAllowsAnyIncomingTraffic bool
+
 	ControlAdminURL string
 	LicensesURL     string
 
@@ -591,6 +594,11 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	filterRules, err := s.lc.DebugPacketFilterRules(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := &nodeData{
 		ID:               st.Self.ID,
 		Status:           st.BackendState,
@@ -610,6 +618,8 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		ControlAdminURL:  prefs.AdminPageURL(),
 		LicensesURL:      licenses.LicensesURL(),
 		Features:         availableFeatures(),
+
+		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
 
 	cv, err := s.lc.CheckUpdate(r.Context())
@@ -690,6 +700,20 @@ func availableFeatures() map[string]bool {
 		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
 		"auto-update":         clientupdate.CanAutoUpdate(),
 	}
+}
+
+// aclsAllowAccess returns whether tailnet ACLs (as expressed in the provided filter rules)
+// permit any devices to access the local web client.
+// This does not currently check whether a specific device can connect, just any device.
+func (s *Server) aclsAllowAccess(rules []tailcfg.FilterRule) bool {
+	for _, rule := range rules {
+		for _, dp := range rule.DstPorts {
+			if dp.Ports.Contains(ListenPort) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type exitNode struct {

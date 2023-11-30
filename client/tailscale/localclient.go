@@ -1332,6 +1332,15 @@ func (lc *LocalClient) DebugDERPRegion(ctx context.Context, regionIDOrCode strin
 	return decodeJSON[*ipnstate.DebugDERPRegionReport](body)
 }
 
+// DebugPacketFilterRules returns the packet filter rules for the current device.
+func (lc *LocalClient) DebugPacketFilterRules(ctx context.Context) ([]tailcfg.FilterRule, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-packet-filter-rules", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[[]tailcfg.FilterRule](body)
+}
+
 // DebugSetExpireIn marks the current node key to expire in d.
 //
 // This is meant primarily for debug and testing.
