@@ -8,6 +8,7 @@ import { ReactComponent as Eye } from "src/assets/icons/eye.svg"
 import { ReactComponent as User } from "src/assets/icons/user.svg"
 import { AuthResponse, AuthType } from "src/hooks/auth"
 import { NodeData } from "src/hooks/node-data"
+import Button from "src/ui/button"
 import Popover from "src/ui/popover"
 import ProfilePic from "src/ui/profile-pic"
 
@@ -140,44 +141,68 @@ function LoginPopoverContent({
         {!auth.canManageNode ? "Viewing" : "Managing"}
         {auth.viewerIdentity && ` as ${auth.viewerIdentity.loginName}`}
       </div>
-      {!auth.canManageNode &&
-        (!auth.viewerIdentity || auth.authNeeded === AuthType.tailscale ? (
-          <>
-            <p className="text-gray-500 text-xs">
-              {auth.viewerIdentity ? (
+      {!auth.canManageNode && (
+        <>
+          {!auth.viewerIdentity ? (
+            // User is not connected over Tailscale.
+            // These states are only possible on the login client.
+            <>
+              {!canConnectOverTS ? (
                 <>
-                  To make changes, sign in to confirm your identity. This extra
-                  step helps us keep your device secure.
+                  <p className="text-gray-500 text-xs">
+                    {!node.ACLAllowsAnyIncomingTraffic ? (
+                      // Tailnet ACLs don't allow access.
+                      <>
+                        The current tailnet policy file does not allow
+                        connecting to this device.
+                      </>
+                    ) : (
+                      // ACLs allow access, but user can't connect.
+                      <>
+                        Cannot access this device's Tailscale IP. Make sure you
+                        are connected to your tailnet, and that your policy file
+                        allows access.
+                      </>
+                    )}{" "}
+                    <a
+                      href="https://tailscale.com/s/web-client-connection"
+                      className="text-blue-700"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Learn more &rarr;
+                    </a>
+                  </p>
                 </>
               ) : (
+                // User can connect to Tailcale IP; sign in when ready.
                 <>
-                  You can see most of this device's details. To make changes,
-                  you need to sign in.
+                  <p className="text-gray-500 text-xs">
+                    You can see most of this device's details. To make changes,
+                    you need to sign in.
+                  </p>
+                  <SignInButton auth={auth} onClick={handleSignInClick} />
                 </>
               )}
+            </>
+          ) : auth.authNeeded === AuthType.tailscale ? (
+            // User is connected over Tailscale, but needs to complete check mode.
+            <>
+              <p className="text-gray-500 text-xs">
+                To make changes, sign in to confirm your identity. This extra
+                step helps us keep your device secure.
+              </p>
+              <SignInButton auth={auth} onClick={handleSignInClick} />
+            </>
+          ) : (
+            // User is connected over tailscale, but doesn't have permission to manage.
+            <p className="text-gray-500 text-xs">
+              You don’t have permission to make changes to this device, but you
+              can view most of its details.
             </p>
-            <button
-              className={cx(
-                "w-full px-3 py-2 bg-blue-500 rounded shadow text-center text-white text-sm font-medium mt-2",
-                {
-                  "mb-2": auth.viewerIdentity,
-                  "cursor-not-allowed": !canConnectOverTS,
-                }
-              )}
-              onClick={handleSignInClick}
-              // TODO: add some helper info when disabled
-              // due to needing to connect to TS
-              disabled={!canConnectOverTS}
-            >
-              {auth.viewerIdentity ? "Sign in to confirm identity" : "Sign in"}
-            </button>
-          </>
-        ) : (
-          <p className="text-gray-500 text-xs">
-            You don’t have permission to make changes to this device, but you
-            can view most of its details.
-          </p>
-        ))}
+          )}
+        </>
+      )}
       {auth.viewerIdentity && (
         <>
           <hr className="my-2" />
@@ -193,5 +218,24 @@ function LoginPopoverContent({
         </>
       )}
     </div>
+  )
+}
+
+function SignInButton({
+  auth,
+  onClick,
+}: {
+  auth: AuthResponse
+  onClick: () => void
+}) {
+  return (
+    <Button
+      className={cx("w-full text-sm mt-2", {
+        "mb-2": auth.viewerIdentity,
+      })}
+      onClick={onClick}
+    >
+      {auth.viewerIdentity ? "Sign in to confirm identity" : "Sign in"}
+    </Button>
   )
 }
