@@ -35,7 +35,7 @@ export default function SubnetRouterView({
         Add devices to your tailnet without installing Tailscale.{" "}
         <a
           href="https://tailscale.com/kb/1019/subnets/"
-          className="text-indigo-700"
+          className="text-blue-700"
           target="_blank"
           rel="noreferrer"
         >
@@ -52,7 +52,7 @@ export default function SubnetRouterView({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
           />
-          <p className="my-2 h-6 text-neutral-500 text-sm leading-tight">
+          <p className="my-2 h-6 text-gray-500 text-sm leading-tight">
             Add multiple routes by providing a comma-separated list.
           </p>
           <Button
@@ -87,7 +87,7 @@ export default function SubnetRouterView({
                   className="flex justify-between items-center pb-2.5 mb-2.5 border-b border-b-gray-200 last:pb-0 last:mb-0 last:border-b-0"
                   key={r.Route}
                 >
-                  <div className="text-neutral-800 leading-snug">{r.Route}</div>
+                  <div className="text-gray-800 leading-snug">{r.Route}</div>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1.5">
                       {r.Approved ? (
@@ -100,7 +100,7 @@ export default function SubnetRouterView({
                           Approved
                         </div>
                       ) : (
-                        <div className="text-neutral-500 text-sm leading-tight">
+                        <div className="text-gray-500 text-sm leading-tight">
                           Pending approval
                         </div>
                       )}
@@ -124,7 +124,7 @@ export default function SubnetRouterView({
               ))}
             </div>
             <Control.AdminContainer
-              className="mt-3 w-full text-center text-neutral-500 text-sm leading-tight"
+              className="mt-3 w-full text-center text-gray-500 text-sm leading-tight"
               node={node}
             >
               To approve routes, in the admin console go to{" "}
@@ -135,7 +135,7 @@ export default function SubnetRouterView({
             </Control.AdminContainer>
           </>
         ) : (
-          <div className="px-5 py-4 bg-stone-50 rounded-lg border border-gray-200 text-center text-neutral-500">
+          <div className="px-5 py-4 bg-stone-50 rounded-lg border border-gray-200 text-center text-gray-500">
             Not advertising any routes
           </div>
         )}
