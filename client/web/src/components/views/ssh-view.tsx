@@ -23,7 +23,7 @@ export default function SSHView({
         your tailnet to SSH into it.{" "}
         <a
           href="https://tailscale.com/kb/1193/tailscale-ssh/"
-          className="text-indigo-700"
+          className="text-blue-700"
           target="_blank"
           rel="noreferrer"
         >
@@ -46,7 +46,7 @@ export default function SSHView({
         </div>
       </div>
       <Control.AdminContainer
-        className="text-neutral-500 text-sm leading-tight"
+        className="text-gray-500 text-sm leading-tight"
         node={node}
       >
         Remember to make sure that the{" "}

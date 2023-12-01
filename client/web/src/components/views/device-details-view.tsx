@@ -23,7 +23,7 @@ export default function DeviceDetailsView({
     <>
       <h1 className="mb-10">Device details</h1>
       <div className="flex flex-col gap-4">
-        <div className="card">
+        <div className="-mx-5 card">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h1>{node.DeviceName}</h1>
@@ -36,7 +36,7 @@ export default function DeviceDetailsView({
             </div>
             <button
               className={cx(
-                "px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-neutral-800 text-sm font-medium",
+                "px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-gray-800 text-sm font-medium",
                 { "cursor-not-allowed": readonly }
               )}
               onClick={() =>
@@ -55,7 +55,7 @@ export default function DeviceDetailsView({
           !readonly && (
             <UpdateAvailableNotification details={node.ClientVersion} />
           )}
-        <div className="card">
+        <div className="-mx-5 card">
           <h2 className="mb-2">General</h2>
           <table>
             <tbody>
@@ -95,7 +95,7 @@ export default function DeviceDetailsView({
             </tbody>
           </table>
         </div>
-        <div className="card">
+        <div className="-mx-5 card">
           <h2 className="mb-2">Addresses</h2>
           <table>
             <tbody>
@@ -121,7 +121,7 @@ export default function DeviceDetailsView({
           </table>
         </div>
         <Control.AdminContainer
-          className="text-neutral-500 text-sm leading-tight text-center"
+          className="text-gray-500 text-sm leading-tight text-center"
           node={node}
         >
           Want even more details? Visit{" "}

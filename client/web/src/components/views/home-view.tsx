@@ -28,12 +28,10 @@ export default function HomeView({
             <div className="ml-3">
               <h1>{node.DeviceName}</h1>
               {/* TODO(sonia): display actual status */}
-              <p className="text-neutral-500 text-sm">Connected</p>
+              <p className="text-gray-500 text-sm">Connected</p>
             </div>
           </div>
-          <p className="text-neutral-800 text-lg leading-[25.20px]">
-            {node.IP}
-          </p>
+          <p className="text-gray-800 text-lg leading-[25.20px]">{node.IP}</p>
         </div>
         <ExitNodeSelector
           className="mb-5"
@@ -41,10 +39,7 @@ export default function HomeView({
           nodeUpdaters={nodeUpdaters}
           disabled={readonly}
         />
-        <Link
-          className="text-indigo-500 font-medium leading-snug"
-          to="/details"
-        >
+        <Link className="text-blue-500 font-medium leading-snug" to="/details">
           View device details &rarr;
         </Link>
       </div>
@@ -105,19 +100,19 @@ function SettingsCard({
     >
       <div>
         <div className="flex gap-2">
-          <p className="text-neutral-800 font-medium leading-tight mb-2">
+          <p className="text-gray-800 font-medium leading-tight mb-2">
             {title}
           </p>
           {badge && (
             <div className="h-5 px-2 bg-stone-100 rounded-full flex items-center gap-2">
               {badge.icon}
-              <div className="text-neutral-500 text-xs font-medium">
+              <div className="text-gray-500 text-xs font-medium">
                 {badge.text}
               </div>
             </div>
           )}
         </div>
-        <p className="text-neutral-500 text-sm leading-tight">{body}</p>
+        <p className="text-gray-500 text-sm leading-tight">{body}</p>
       </div>
       <div>
         <ArrowRight className="ml-3" />

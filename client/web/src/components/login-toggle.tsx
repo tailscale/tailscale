@@ -143,7 +143,7 @@ function LoginPopoverContent({
       {!auth.canManageNode &&
         (!auth.viewerIdentity || auth.authNeeded === AuthType.tailscale ? (
           <>
-            <p className="text-neutral-500 text-xs">
+            <p className="text-gray-500 text-xs">
               {auth.viewerIdentity ? (
                 <>
                   To make changes, sign in to confirm your identity. This extra
@@ -158,7 +158,7 @@ function LoginPopoverContent({
             </p>
             <button
               className={cx(
-                "w-full px-3 py-2 bg-indigo-500 rounded shadow text-center text-white text-sm font-medium mt-2",
+                "w-full px-3 py-2 bg-blue-500 rounded shadow text-center text-white text-sm font-medium mt-2",
                 {
                   "mb-2": auth.viewerIdentity,
                   "cursor-not-allowed": !canConnectOverTS,
@@ -173,7 +173,7 @@ function LoginPopoverContent({
             </button>
           </>
         ) : (
-          <p className="text-neutral-500 text-xs">
+          <p className="text-gray-500 text-xs">
             You don’t have permission to make changes to this device, but you
             can view most of its details.
           </p>
@@ -183,7 +183,7 @@ function LoginPopoverContent({
           <hr className="my-2" />
           <div className="flex items-center">
             <User className="flex-shrink-0" />
-            <p className="text-neutral-500 text-xs ml-2">
+            <p className="text-gray-500 text-xs ml-2">
               We recognize you because you are accessing this page from{" "}
               <span className="font-medium">
                 {auth.viewerIdentity.nodeName || auth.viewerIdentity.nodeIP}

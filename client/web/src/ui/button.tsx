@@ -16,9 +16,9 @@ export default function Button(props: Props) {
       className={cx(
         "px-3 py-2 rounded shadow justify-center items-center gap-2.5 inline-flex font-medium",
         {
-          "bg-indigo-500 text-white": intent === "primary" && !disabled,
-          "bg-indigo-400 text-indigo-200": intent === "primary" && disabled,
-          "bg-stone-50 shadow border border-stone-200 text-neutral-800":
+          "bg-blue-500 text-white": intent === "primary" && !disabled,
+          "bg-blue-400 text-blue-200": intent === "primary" && disabled,
+          "bg-stone-50 shadow border border-stone-200 text-gray-800":
             intent === "secondary",
           "cursor-not-allowed": disabled,
         },

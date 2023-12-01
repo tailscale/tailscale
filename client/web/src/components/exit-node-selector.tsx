@@ -78,7 +78,7 @@ export default function ExitNodeSelector({
           {
             "border-gray-200": none,
             "bg-amber-600 border-amber-600": advertising,
-            "bg-indigo-500 border-indigo-500": using,
+            "bg-blue-500 border-blue-500": using,
           },
           className
         )}
@@ -87,7 +87,7 @@ export default function ExitNodeSelector({
           className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
             "bg-white hover:bg-stone-100": none,
             "bg-amber-600 hover:bg-orange-400": advertising,
-            "bg-indigo-500 hover:bg-indigo-400": using,
+            "bg-blue-500 hover:bg-blue-400": using,
             "cursor-not-allowed": disabled,
           })}
           onClick={() => setOpen(!open)}
@@ -95,7 +95,7 @@ export default function ExitNodeSelector({
         >
           <p
             className={cx(
-              "text-neutral-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
+              "text-gray-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
               { "bg-opacity-70 text-white": advertising || using }
             )}
           >
@@ -103,7 +103,7 @@ export default function ExitNodeSelector({
           </p>
           <div className="flex items-center">
             <p
-              className={cx("text-neutral-800", {
+              className={cx("text-gray-800", {
                 "text-white": advertising || using,
               })}
             >
@@ -128,7 +128,7 @@ export default function ExitNodeSelector({
           <button
             className={cx("px-3 py-2 rounded-sm text-white", {
               "bg-orange-400": advertising,
-              "bg-indigo-400": using,
+              "bg-blue-400": using,
               "cursor-not-allowed": disabled,
             })}
             onClick={(e) => {
@@ -213,7 +213,7 @@ function ExitNodeSelectorInner({
                   className="pb-1 mb-1 border-b last:border-b-0 last:mb-0"
                 >
                   {group.name && (
-                    <div className="px-4 py-2 text-neutral-500 text-xs font-medium uppercase tracking-wide">
+                    <div className="px-4 py-2 text-gray-500 text-xs font-medium uppercase tracking-wide">
                       {group.name}
                     </div>
                   )}

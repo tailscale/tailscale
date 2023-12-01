@@ -102,14 +102,17 @@ function Header({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const [loc] = useLocation()
+  const [loc, setLocation] = useLocation()
 
   return (
     <>
       <div className="flex justify-between mb-12">
         <div className="flex gap-3">
-          <TailscaleIcon />
-          <div className="inline text-neutral-800 text-lg font-medium leading-snug">
+          <TailscaleIcon
+            className="cursor-pointer"
+            onClick={() => setLocation("/")}
+          />
+          <div className="inline text-gray-800 text-lg font-medium leading-snug">
             {node.DomainName}
           </div>
         </div>
@@ -118,7 +121,7 @@ function Header({
       {loc !== "/" && loc !== "/update" && (
         <Link
           to="/"
-          className="text-indigo-500 font-medium leading-snug block mb-[10px]"
+          className="text-blue-500 font-medium leading-snug block mb-[10px]"
         >
           &larr; Back to {node.DeviceName}
         </Link>
