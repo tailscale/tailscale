@@ -37,7 +37,7 @@ export default function LoginToggle({
       {!auth.canManageNode ? (
         <button
           className={cx(
-            "pl-3 py-1 bg-zinc-800 rounded-full flex justify-start items-center",
+            "pl-3 py-1 bg-gray-700 rounded-full flex justify-start items-center h-[34px]",
             { "pr-1": auth.viewerIdentity, "pr-3": !auth.viewerIdentity }
           )}
           onClick={() => setOpen(!open)}
@@ -56,10 +56,10 @@ export default function LoginToggle({
       ) : (
         <div
           className={cx(
-            "w-[34px] h-[34px] p-1 rounded-full items-center inline-flex",
+            "w-[34px] h-[34px] p-1 rounded-full justify-center items-center inline-flex",
             {
               "bg-transparent": !open,
-              "bg-neutral-300": open,
+              "bg-gray-300": open,
             }
           )}
         >

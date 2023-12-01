@@ -140,7 +140,7 @@ function Header({
 
   return (
     <>
-      <div className="flex justify-between mb-12">
+      <div className="flex justify-between items-center mb-12">
         <div className="flex gap-3">
           <TailscaleIcon
             className="cursor-pointer"
