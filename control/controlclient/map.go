@@ -83,6 +83,7 @@ type mapSession struct {
 	lastSSHPolicy          *tailcfg.SSHPolicy
 	collectServices        bool
 	lastDomain             string
+	lastDisplayName        string
 	lastDomainAuditLogID   string
 	lastHealth             []string
 	lastPopBrowserURL      string
@@ -311,6 +312,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.Domain != "" {
 		ms.lastDomain = resp.Domain
+	}
+	if resp.DisplayName != "" {
+		ms.lastDisplayName = resp.DisplayName
 	}
 	if resp.DomainDataPlaneAuditLogID != "" {
 		ms.lastDomainAuditLogID = resp.DomainDataPlaneAuditLogID
@@ -756,6 +760,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		Peers:             peerViews,
 		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfile),
 		Domain:            ms.lastDomain,
+		DisplayName:       ms.lastDisplayName,
 		DomainAuditLogID:  ms.lastDomainAuditLogID,
 		DNS:               *ms.lastDNSConfig,
 		PacketFilter:      ms.lastParsedPacketFilter,

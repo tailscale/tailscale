@@ -581,6 +581,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 	if err := b.pm.SetPrefs(newPrefs.View(), ipn.NetworkProfile{
 		MagicDNSName: b.netMap.MagicDNSSuffix(),
 		DomainName:   b.netMap.DomainName(),
+		DisplayName:  b.netMap.GetDisplayName(),
 	}); err != nil {
 		return fmt.Errorf("saving prefs: %w", err)
 	}

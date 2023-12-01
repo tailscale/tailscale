@@ -608,10 +608,10 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 	return nil
 }
 
-func (pm *profileManager) requiresBackfill() bool {
+func (pm *profileManager) requiresBackfill(np ipn.NetworkProfile) bool {
 	return pm != nil &&
 		pm.currentProfile != nil &&
-		pm.currentProfile.NetworkProfile.RequiresBackfill()
+		pm.currentProfile.NetworkProfile.RequiresBackfill(np)
 }
 
 var (

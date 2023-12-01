@@ -68,6 +68,8 @@ type NetworkMap struct {
 
 	// Domain is the current Tailnet name.
 	Domain string
+	// DisplayName is the user editable version of the Domain.
+	DisplayName string `json:",omitempty"`
 
 	// DomainAuditLogID is an audit log ID provided by control and
 	// only populated if the domain opts into data-plane audit logging.
@@ -185,6 +187,15 @@ func (nm *NetworkMap) DomainName() string {
 		return ""
 	}
 	return nm.Domain
+}
+
+// DisplayName returns the name of the NetworkMap's current tailnet user
+// editable display name. If the map is nil, it returns an empty string.
+func (nm *NetworkMap) GetDisplayName() string {
+	if nm == nil {
+		return ""
+	}
+	return nm.DisplayName
 }
 
 // SelfCapabilities returns SelfNode.Capabilities if nm and nm.SelfNode are

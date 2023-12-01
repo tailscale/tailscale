@@ -1119,17 +1119,22 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	// Until recently, we did not store the account's tailnet name. So check if this is the case,
 	// and backfill it on incoming status update.
-	if b.pm.requiresBackfill() && st.NetMap != nil && st.NetMap.Domain != "" {
-		prefsChanged = true
+	var np ipn.NetworkProfile
+	if st.NetMap != nil {
+		np = ipn.NetworkProfile{
+			MagicDNSName: st.NetMap.MagicDNSSuffix(),
+			DomainName:   st.NetMap.DomainName(),
+			DisplayName:  st.NetMap.GetDisplayName(),
+		}
+		if b.pm.requiresBackfill(np) {
+			prefsChanged = true
+		}
 	}
 
 	// Perform all mutations of prefs based on the netmap here.
 	if prefsChanged {
 		// Prefs will be written out if stale; this is not safe unless locked or cloned.
-		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
-			MagicDNSName: st.NetMap.MagicDNSSuffix(),
-			DomainName:   st.NetMap.DomainName(),
-		}); err != nil {
+		if err := b.pm.SetPrefs(prefs.View(), np); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
 	}
@@ -1188,6 +1193,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			if err := b.pm.SetPrefs(p, ipn.NetworkProfile{
 				MagicDNSName: st.NetMap.MagicDNSSuffix(),
 				DomainName:   st.NetMap.DomainName(),
+				DisplayName:  st.NetMap.GetDisplayName(),
 			}); err != nil {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
@@ -1618,6 +1624,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		if err := b.pm.SetPrefs(pv, ipn.NetworkProfile{
 			MagicDNSName: b.netMap.MagicDNSSuffix(),
 			DomainName:   b.netMap.DomainName(),
+			DisplayName:  b.netMap.GetDisplayName(),
 		}); err != nil {
 			b.logf("failed to save UpdatePrefs state: %v", err)
 		}
@@ -2527,6 +2534,7 @@ func (b *LocalBackend) migrateStateLocked(prefs *ipn.Prefs) (err error) {
 		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
 			MagicDNSName: b.netMap.MagicDNSSuffix(),
 			DomainName:   b.netMap.DomainName(),
+			DisplayName:  b.netMap.GetDisplayName(),
 		}); err != nil {
 			return fmt.Errorf("store.WriteState: %v", err)
 		}
@@ -3111,6 +3119,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if err := b.pm.SetPrefs(prefs, ipn.NetworkProfile{
 		MagicDNSName: b.netMap.MagicDNSSuffix(),
 		DomainName:   b.netMap.DomainName(),
+		DisplayName:  b.netMap.GetDisplayName(),
 	}); err != nil {
 		b.logf("failed to save new controlclient state: %v", err)
 	}

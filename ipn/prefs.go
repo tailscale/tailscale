@@ -795,16 +795,14 @@ type WindowsUserID string
 type NetworkProfile struct {
 	MagicDNSName string
 	DomainName   string
+	DisplayName  string
 }
 
-// RequiresBackfill returns whether this object does not have all the data
-// expected. This is because this struct is a later addition to LoginProfile and
-// this method can be checked to see if it's been backfilled to the current
-// expectation or not. Note that for now, it just checks if the struct is empty.
-// In the future, if we have new optional fields, this method can be changed to
-// do more explicit checks to return whether it's apt for a backfill or not.
-func (n NetworkProfile) RequiresBackfill() bool {
-	return n == NetworkProfile{}
+// RequiresBackfill returns whether the new NetworkProfile has changed
+// from the already existing one and therefore requires updating the
+// local storage.
+func (n NetworkProfile) RequiresBackfill(np NetworkProfile) bool {
+	return n != np
 }
 
 // LoginProfile represents a single login profile as managed

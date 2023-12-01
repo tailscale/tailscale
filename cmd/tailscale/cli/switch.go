@@ -59,9 +59,13 @@ func listProfiles(ctx context.Context) error {
 		if prof.ID == curP.ID {
 			name += "*"
 		}
+		tailnet := prof.NetworkProfile.DomainName
+		if prof.NetworkProfile.DisplayName != "" {
+			tailnet = prof.NetworkProfile.DisplayName
+		}
 		printRow(
 			string(prof.ID),
-			prof.NetworkProfile.DomainName,
+			tailnet,
 			name,
 		)
 	}

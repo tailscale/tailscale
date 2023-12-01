@@ -1782,6 +1782,9 @@ type MapResponse struct {
 	// If empty, the value is unchanged.
 	Domain string `json:",omitempty"`
 
+	// DisplayName is the user editable version of the Domain.
+	DisplayName string `json:",omitempty"`
+
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.
 	// If unset, the most recent non-empty MapResponse value in
