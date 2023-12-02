@@ -60,7 +60,7 @@ require (
 	github.com/prometheus/common v0.44.0
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/tailscale/certstore v0.1.1-0.20231020161753-77811a65f4ff
+	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/golang-x-crypto v0.0.0-20230713185742-f0b76a10a08e
@@ -85,7 +85,7 @@ require (
 	golang.org/x/net v0.18.0
 	golang.org/x/oauth2 v0.12.0
 	golang.org/x/sync v0.5.0
-	golang.org/x/sys v0.14.0
+	golang.org/x/sys v0.15.0
 	golang.org/x/term v0.14.0
 	golang.org/x/time v0.3.0
 	golang.org/x/tools v0.15.0
