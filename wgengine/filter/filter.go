@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tailscale/art"
 	"go4.org/netipx"
 	"tailscale.com/envknob"
 	"tailscale.com/net/flowtrack"
@@ -26,16 +27,16 @@ import (
 // Filter is a stateful packet filter.
 type Filter struct {
 	logf logger.Logf
-	// local is the set of IPs prefixes that we know to be "local" to
-	// this node. All packets coming in over tailscale must have a
-	// destination within local, regardless of the policy filter
+	// localContains tests where an IP is in the set of IPs prefixes that we
+	// know to be "local" to this node. All packets coming in over tailscale
+	// must have a destination within local, regardless of the policy filter
 	// below.
-	local *netipx.IPSet
+	localContains func(netip.Addr) bool
 
-	// logIPs is the set of IPs that are allowed to appear in flow
-	// logs. If a packet is to or from an IP not in logIPs, it will
-	// never be logged.
-	logIPs *netipx.IPSet
+	// logIPsContains tests whether an IP is in the set of IPs that are allowed
+	// to appear in flow logs. If a packet is to or from an IP not in logIPs, it
+	// will never be logged.
+	logIPsContains func(netip.Addr) bool
 
 	// matches4 and matches6 are lists of match->action rules
 	// applied to all packets arriving over tailscale
@@ -167,6 +168,8 @@ func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStat
 	return f
 }
 
+var useART = envknob.RegisterBool("TS_DEBUG_FILTER_USE_ART")
+
 // New creates a new packet filter. The filter enforces that incoming
 // packets must be destined to an IP in localNets, and must be allowed
 // by matches. If shareStateWith is non-nil, the returned filter
@@ -182,16 +185,34 @@ func New(matches []Match, localNets *netipx.IPSet, logIPs *netipx.IPSet, shareSt
 		}
 	}
 	f := &Filter{
-		logf:     logf,
-		matches4: matchesFamily(matches, netip.Addr.Is4),
-		matches6: matchesFamily(matches, netip.Addr.Is6),
-		cap4:     capMatchesFunc(matches, netip.Addr.Is4),
-		cap6:     capMatchesFunc(matches, netip.Addr.Is6),
-		local:    localNets,
-		logIPs:   logIPs,
-		state:    state,
+		logf:           logf,
+		matches4:       matchesFamily(matches, netip.Addr.Is4),
+		matches6:       matchesFamily(matches, netip.Addr.Is6),
+		cap4:           capMatchesFunc(matches, netip.Addr.Is4),
+		cap6:           capMatchesFunc(matches, netip.Addr.Is6),
+		localContains:  localNets.Contains,
+		logIPsContains: logIPs.Contains,
+		state:          state,
+	}
+	if useART() {
+		f.localContains = containsFuncForART(localNets)
+		f.logIPsContains = containsFuncForART(logIPs)
 	}
 	return f
+}
+
+func containsFuncForART(s *netipx.IPSet) func(netip.Addr) bool {
+	if s == nil {
+		return func(netip.Addr) bool { return false }
+	}
+	t := &art.Table[struct{}]{}
+	for _, p := range s.Prefixes() {
+		t.Insert(p, struct{}{})
+	}
+	return func(ip netip.Addr) bool {
+		_, ok := t.Get(ip)
+		return ok
+	}
 }
 
 // matchesFamily returns the subset of ms for which keep(srcNet.IP)
@@ -410,7 +431,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local.Contains(q.Dst.Addr()) {
+	if !f.localContains(q.Dst.Addr()) {
 		return Drop, "destination not allowed"
 	}
 
@@ -470,7 +491,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local.Contains(q.Dst.Addr()) {
+	if !f.localContains(q.Dst.Addr()) {
 		return Drop, "destination not allowed"
 	}
 
@@ -596,7 +617,7 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 
 // loggingAllowed reports whether p can appear in logs at all.
 func (f *Filter) loggingAllowed(p *packet.Parsed) bool {
-	return f.logIPs.Contains(p.Src.Addr()) && f.logIPs.Contains(p.Dst.Addr())
+	return f.logIPsContains(p.Src.Addr()) && f.logIPsContains(p.Dst.Addr())
 }
 
 // omitDropLogging reports whether packet p, which has already been
