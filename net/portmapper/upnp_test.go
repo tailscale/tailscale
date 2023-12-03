@@ -38,6 +38,133 @@ const (
 
 	// Huawei, https://github.com/tailscale/tailscale/issues/6320
 	huaweiUPnPDisco = "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nDATE: Fri, 25 Nov 2022 07:04:37 GMT\r\nEXT:\r\nLOCATION: http://192.168.1.1:49652/49652gatedesc.xml\r\nOPT: \"http://schemas.upnp.org/upnp/1/0/\"; ns=01\r\n01-NLS: ce8dd8b0-732d-11be-a4a1-a2b26c8915fb\r\nSERVER: Linux/4.4.240, UPnP/1.0, Portable SDK for UPnP devices/1.12.1\r\nX-User-Agent: UPnP/1.0 DLNADOC/1.50\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\nUSN: uuid:00e0fc37-2525-2828-2500-0C31DCD93368::urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n"
+
+	// Mikrotik CHR v7.10, https://github.com/tailscale/tailscale/issues/8364
+	mikrotikRootDescXML = `<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>
+    <friendlyName>MikroTik Router</friendlyName>
+    <manufacturer>MikroTik</manufacturer>
+    <manufacturerURL>https://www.mikrotik.com/</manufacturerURL>
+    <modelName>Router OS</modelName>
+    <UDN>uuid:UUID-MIKROTIK-INTERNET-GATEWAY-DEVICE-</UDN>
+    <iconList>
+      <icon>
+        <mimetype>image/gif</mimetype>
+        <width>16</width>
+        <height>16</height>
+        <depth>8</depth>
+        <url>/logo16.gif</url>
+      </icon>
+      <icon>
+        <mimetype>image/gif</mimetype>
+        <width>32</width>
+        <height>32</height>
+        <depth>8</depth>
+        <url>/logo32.gif</url>
+      </icon>
+      <icon>
+        <mimetype>image/gif</mimetype>
+        <width>48</width>
+        <height>48</height>
+        <depth>8</depth>
+        <url>/logo48.gif</url>
+      </icon>
+    </iconList>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-microsoft-com:service:OSInfo:1</serviceType>
+        <serviceId>urn:microsoft-com:serviceId:OSInfo1</serviceId>
+        <SCPDURL>/osinfo.xml</SCPDURL>
+        <controlURL>/upnp/control/oqjsxqshhz/osinfo</controlURL>
+        <eventSubURL>/upnp/event/cwzcyndrjf/osinfo</eventSubURL>
+      </service>
+    </serviceList>
+    <deviceList>
+      <device>
+        <deviceType>urn:schemas-upnp-org:device:WANDevice:1</deviceType>
+        <friendlyName>WAN Device</friendlyName>
+        <manufacturer>MikroTik</manufacturer>
+        <manufacturerURL>https://www.mikrotik.com/</manufacturerURL>
+        <modelName>Router OS</modelName>
+        <UDN>uuid:UUID-MIKROTIK-WAN-DEVICE--1</UDN>
+        <serviceList>
+          <service>
+            <serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType>
+            <serviceId>urn:upnp-org:serviceId:WANCommonIFC1</serviceId>
+            <SCPDURL>/wancommonifc-1.xml</SCPDURL>
+            <controlURL>/upnp/control/ivvmxhunyq/wancommonifc-1</controlURL>
+            <eventSubURL>/upnp/event/mkjzdqvryf/wancommonifc-1</eventSubURL>
+          </service>
+        </serviceList>
+        <deviceList>
+          <device>
+            <deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType>
+            <friendlyName>WAN Connection Device</friendlyName>
+            <manufacturer>MikroTik</manufacturer>
+            <manufacturerURL>https://www.mikrotik.com/</manufacturerURL>
+            <modelName>Router OS</modelName>
+            <UDN>uuid:UUID-MIKROTIK-WAN-CONNECTION-DEVICE--1</UDN>
+            <serviceList>
+              <service>
+                <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>
+                <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>
+                <SCPDURL>/wanipconn-1.xml</SCPDURL>
+                <controlURL>/upnp/control/yomkmsnooi/wanipconn-1</controlURL>
+                <eventSubURL>/upnp/event/veeabhzzva/wanipconn-1</eventSubURL>
+              </service>
+            </serviceList>
+          </device>
+        </deviceList>
+      </device>
+      <device>
+        <deviceType>urn:schemas-upnp-org:device:WANDevice:1</deviceType>
+        <friendlyName>WAN Device</friendlyName>
+        <manufacturer>MikroTik</manufacturer>
+        <manufacturerURL>https://www.mikrotik.com/</manufacturerURL>
+        <modelName>Router OS</modelName>
+        <UDN>uuid:UUID-MIKROTIK-WAN-DEVICE--7</UDN>
+        <serviceList>
+          <service>
+            <serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType>
+            <serviceId>urn:upnp-org:serviceId:WANCommonIFC1</serviceId>
+            <SCPDURL>/wancommonifc-7.xml</SCPDURL>
+            <controlURL>/upnp/control/vzcyyzzttz/wancommonifc-7</controlURL>
+            <eventSubURL>/upnp/event/womwbqtbkq/wancommonifc-7</eventSubURL>
+          </service>
+        </serviceList>
+        <deviceList>
+          <device>
+            <deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType>
+            <friendlyName>WAN Connection Device</friendlyName>
+            <manufacturer>MikroTik</manufacturer>
+            <manufacturerURL>https://www.mikrotik.com/</manufacturerURL>
+            <modelName>Router OS</modelName>
+            <UDN>uuid:UUID-MIKROTIK-WAN-CONNECTION-DEVICE--7</UDN>
+            <serviceList>
+              <service>
+                <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>
+                <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>
+                <SCPDURL>/wanipconn-7.xml</SCPDURL>
+                <controlURL>/upnp/control/xstnsgeuyh/wanipconn-7</controlURL>
+                <eventSubURL>/upnp/event/rscixkusbs/wanipconn-7</eventSubURL>
+              </service>
+            </serviceList>
+          </device>
+        </deviceList>
+      </device>
+    </deviceList>
+    <disabledForTestPresentationURL>http://10.0.0.1/</disabledForTestPresentationURL>
+    <presentationURL>http://127.0.0.1/</presentationURL>
+  </device>
+  <disabledForTestURLBase>http://10.0.0.1:2828</disabledForTestURLBase>
+</root>
+`
 )
 
 func TestParseUPnPDiscoResponse(t *testing.T) {
@@ -99,6 +226,12 @@ func TestGetUPnPClient(t *testing.T) {
 			"*internetgateway2.WANIPConnection1",
 			"saw UPnP type WANIPConnection1 at http://127.0.0.1:NNN/rootDesc.xml; FreeBSD router (FreeBSD)\n",
 		},
+		{
+			"mikrotik",
+			mikrotikRootDescXML,
+			"*internetgateway2.WANIPConnection1",
+			"saw UPnP type WANIPConnection1 at http://127.0.0.1:NNN/rootDesc.xml; MikroTik Router (MikroTik)\n",
+		},
 		// TODO(bradfitz): find a PPP one in the wild
 	}
 	for _, tt := range tests {
@@ -139,11 +272,7 @@ func TestGetUPnPPortMapping(t *testing.T) {
 	}
 	defer igd.Close()
 
-	c := newTestClient(t, igd)
-	t.Logf("Listening on upnp=%v", c.testUPnPPort)
-	defer c.Close()
-
-	c.debug.VerboseLogs = true
+	rootDesc := ""
 
 	// This is a very basic fake UPnP server handler.
 	var sawRequestWithLease atomic.Bool
@@ -151,8 +280,8 @@ func TestGetUPnPPortMapping(t *testing.T) {
 		t.Logf("got UPnP request %s %s", r.Method, r.URL.Path)
 		switch r.URL.Path {
 		case "/rootDesc.xml":
-			io.WriteString(w, testRootDesc)
-		case "/ctl/IPConn":
+			io.WriteString(w, rootDesc)
+		case "/ctl/IPConn", "/upnp/control/yomkmsnooi/wanipconn-1":
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Errorf("error reading request body: %v", err)
@@ -223,31 +352,43 @@ func TestGetUPnPPortMapping(t *testing.T) {
 	}))
 
 	ctx := context.Background()
-	res, err := c.Probe(ctx)
-	if err != nil {
-		t.Fatalf("Probe: %v", err)
-	}
-	if !res.UPnP {
-		t.Errorf("didn't detect UPnP")
-	}
 
-	gw, myIP, ok := c.gatewayAndSelfIP()
-	if !ok {
-		t.Fatalf("could not get gateway and self IP")
-	}
-	t.Logf("gw=%v myIP=%v", gw, myIP)
+	rootDescsToTest := []string{testRootDesc, mikrotikRootDescXML}
 
-	ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
-	if !ok {
-		t.Fatal("could not get UPnP port mapping")
+	for _, rootDesc = range rootDescsToTest {
+		c := newTestClient(t, igd)
+		t.Logf("Listening on upnp=%v", c.testUPnPPort)
+		defer c.Close()
+
+		c.debug.VerboseLogs = true
+
+		sawRequestWithLease.Store(false)
+		res, err := c.Probe(ctx)
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if !res.UPnP {
+			t.Errorf("didn't detect UPnP")
+		}
+
+		gw, myIP, ok := c.gatewayAndSelfIP()
+		if !ok {
+			t.Fatalf("could not get gateway and self IP")
+		}
+		t.Logf("gw=%v myIP=%v", gw, myIP)
+
+		ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+		if !ok {
+			t.Fatal("could not get UPnP port mapping")
+		}
+		if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+			t.Errorf("bad external address; got %v want %v", got, want)
+		}
+		if !sawRequestWithLease.Load() {
+			t.Errorf("wanted request with lease, but didn't see one")
+		}
+		t.Logf("external IP: %v", ext)
 	}
-	if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
-		t.Errorf("bad external address; got %v want %v", got, want)
-	}
-	if !sawRequestWithLease.Load() {
-		t.Errorf("wanted request with lease, but didn't see one")
-	}
-	t.Logf("external IP: %v", ext)
 }
 
 const testRootDesc = `<?xml version="1.0"?>
