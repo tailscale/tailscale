@@ -89,7 +89,7 @@ function WebClient({
             />
           </FeatureRoute>
           <Route>
-            <h2 className="mt-8">Page not found</h2>
+            <div className="mt-8 card">Page not found</div>
           </Route>
         </Switch>
       </Router>
@@ -117,9 +117,9 @@ function FeatureRoute({
   return (
     <Route path={path}>
       {!node.Features[feature] ? (
-        <h2 className="mt-8">
+        <div className="mt-8 card">
           {featureDescription(feature)} not available on this device.
-        </h2>
+        </div>
       ) : (
         children
       )}
