@@ -222,8 +222,10 @@ export function trimDNSSuffix(s: string, tailnetDNSName: string): string {
   return s
 }
 
-export const noExitNode: ExitNode = { ID: "NONE", Name: "None" }
+// Neither of these are really "online", but setting this makes them selectable.
+export const noExitNode: ExitNode = { ID: "NONE", Name: "None", Online: true }
 export const runAsExitNode: ExitNode = {
   ID: "RUNNING",
   Name: "Run as exit node…",
+  Online: true,
 }
