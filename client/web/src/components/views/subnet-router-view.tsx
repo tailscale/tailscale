@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import React, { useMemo, useState } from "react"
+import React, { useCallback, useMemo, useState } from "react"
 import { ReactComponent as CheckCircle } from "src/assets/icons/check-circle.svg"
 import { ReactComponent as Clock } from "src/assets/icons/clock.svg"
 import { ReactComponent as Plus } from "src/assets/icons/plus.svg"
@@ -19,15 +19,20 @@ export default function SubnetRouterView({
   node: NodeData
   nodeUpdaters: NodeUpdaters
 }) {
-  const [advertisedRoutes, hasUnapprovedRoutes] = useMemo(() => {
+  const [advertisedRoutes, hasRoutes, hasUnapprovedRoutes] = useMemo(() => {
     const routes = node.AdvertisedRoutes || []
-    return [routes, routes.find((r) => !r.Approved)]
+    return [routes, routes.length > 0, routes.find((r) => !r.Approved)]
   }, [node.AdvertisedRoutes])
 
   const [inputOpen, setInputOpen] = useState<boolean>(
     advertisedRoutes.length === 0 && !readonly
   )
   const [inputText, setInputText] = useState<string>("")
+
+  const resetInput = useCallback(() => {
+    setInputText("")
+    setInputOpen(false)
+  }, [])
 
   return (
     <>
@@ -59,23 +64,23 @@ export default function SubnetRouterView({
             <p className="my-2 h-6 text-gray-500 text-sm leading-tight">
               Add multiple routes by providing a comma-separated list.
             </p>
-            <Button
-              intent="primary"
-              onClick={() =>
-                nodeUpdaters
-                  .postSubnetRoutes([
-                    ...advertisedRoutes.map((r) => r.Route),
-                    ...inputText.split(","),
-                  ])
-                  .then(() => {
-                    setInputText("")
-                    setInputOpen(false)
-                  })
-              }
-              disabled={!inputText}
-            >
-              Advertise routes
-            </Button>
+            <div className="flex gap-3">
+              <Button
+                intent="primary"
+                onClick={() =>
+                  nodeUpdaters
+                    .postSubnetRoutes([
+                      ...advertisedRoutes.map((r) => r.Route),
+                      ...inputText.split(","),
+                    ])
+                    .then(resetInput)
+                }
+                disabled={!inputText}
+              >
+                Advertise {hasRoutes && "new "}routes
+              </Button>
+              {hasRoutes && <Button onClick={resetInput}>Cancel</Button>}
+            </div>
           </div>
         ) : (
           <Button
@@ -83,11 +88,11 @@ export default function SubnetRouterView({
             prefixIcon={<Plus />}
             onClick={() => setInputOpen(true)}
           >
-            Advertise new route
+            Advertise new routes
           </Button>
         ))}
       <div className="-mx-5 mt-10">
-        {advertisedRoutes.length > 0 ? (
+        {hasRoutes ? (
           <>
             <div className="px-5 py-3 bg-white rounded-lg border border-gray-200">
               {advertisedRoutes.map((r) => (
