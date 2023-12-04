@@ -4,7 +4,7 @@
 import cx from "classnames"
 import React, { useMemo } from "react"
 import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
-import { ReactComponent as ConnectedDeviceIcon } from "src/assets/icons/connected-device.svg"
+import { ReactComponent as Machine } from "src/assets/icons/machine.svg"
 import ExitNodeSelector from "src/components/exit-node-selector"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import { pluralize } from "src/util"
@@ -33,11 +33,20 @@ export default function HomeView({
       <div className="-mx-5 card mb-9">
         <div className="flex justify-between items-center text-lg mb-5">
           <div className="flex items-center">
-            <ConnectedDeviceIcon />
+            <div className="w-10 h-10 bg-gray-100 rounded-full justify-center items-center inline-flex">
+              <Machine />
+            </div>
             <div className="ml-3">
               <h1>{node.DeviceName}</h1>
-              {/* TODO(sonia): display actual status */}
-              <p className="text-gray-500 text-sm">Connected</p>
+              <p className="text-gray-500 text-sm leading-[18.20px] flex items-center gap-2">
+                <span
+                  className={cx("w-2 h-2 inline-block rounded-full", {
+                    "bg-green-300": node.Status === "Running",
+                    "bg-gray-300": node.Status !== "Running",
+                  })}
+                />
+                {node.Status === "Running" ? "Connected" : "Offline"}
+              </p>
             </div>
           </div>
           <p className="text-gray-800 text-lg leading-[25.20px]">{node.IP}</p>
