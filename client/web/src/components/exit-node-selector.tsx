@@ -46,11 +46,13 @@ export default function ExitNodeSelector({
     none, // not using exit nodes
     advertising, // advertising as exit node
     using, // using another exit node
+    offline, // selected exit node node is offline
   ] = useMemo(
     () => [
       selected.ID === noExitNode.ID,
       selected.ID === runAsExitNode.ID,
       selected.ID !== noExitNode.ID && selected.ID !== runAsExitNode.ID,
+      !selected.Online,
     ],
     [selected]
   )
@@ -74,74 +76,91 @@ export default function ExitNodeSelector({
     >
       <div
         className={cx(
-          "p-1.5 rounded-md border flex items-stretch gap-1.5",
+          "rounded-md",
           {
-            "border-gray-200": none,
-            "bg-amber-600 border-amber-600": advertising,
-            "bg-blue-500 border-blue-500": using,
+            "bg-red-600": offline,
           },
           className
         )}
       >
-        <button
-          className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
-            "bg-white": none,
-            "hover:bg-gray-100": none && !disabled,
-            "bg-orange-600": advertising,
-            "hover:bg-orange-400": advertising && !disabled,
-            "bg-blue-500": using,
-            "hover:bg-blue-400": using && !disabled,
+        <div
+          className={cx("p-1.5 rounded-md border flex items-stretch gap-1.5", {
+            "border-gray-200": none,
+            "bg-yellow-300 border-yellow-300": advertising && !offline,
+            "bg-blue-500 border-blue-500": using && !offline,
+            "bg-red-500 border-red-500": offline,
           })}
-          onClick={() => setOpen(!open)}
-          disabled={disabled}
         >
-          <p
-            className={cx(
-              "text-gray-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
-              { "bg-opacity-70 text-white": advertising || using }
-            )}
-          >
-            Exit node
-          </p>
-          <div className="flex items-center">
-            <p
-              className={cx("text-gray-800", {
-                "text-white": advertising || using,
-              })}
-            >
-              {selected.Location && (
-                <>
-                  <CountryFlag code={selected.Location.CountryCode} />{" "}
-                </>
-              )}
-              {selected === runAsExitNode
-                ? "Running as exit node"
-                : selected.Name}
-            </p>
-            {!disabled && (
-              <ChevronDown
-                className={cx("ml-1", {
-                  "stroke-gray-800": none,
-                  "stroke-white": advertising || using,
-                })}
-              />
-            )}
-          </div>
-        </button>
-        {!disabled && (advertising || using) && (
           <button
-            className={cx("px-3 py-2 rounded-sm text-white", {
-              "bg-orange-400": advertising,
-              "bg-blue-400": using,
+            className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
+              "bg-white": none,
+              "hover:bg-gray-100": none && !disabled,
+              "bg-yellow-300": advertising && !offline,
+              "hover:bg-yellow-200": advertising && !offline && !disabled,
+              "bg-blue-500": using && !offline,
+              "hover:bg-blue-400": using && !offline && !disabled,
+              "bg-red-500": offline,
+              "hover:bg-red-400": offline && !disabled,
             })}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              handleSelect(noExitNode)
-            }}
+            onClick={() => setOpen(!open)}
+            disabled={disabled}
           >
-            Disable
+            <p
+              className={cx(
+                "text-gray-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
+                { "bg-opacity-70 text-white": advertising || using }
+              )}
+            >
+              Exit node{offline && " offline"}
+            </p>
+            <div className="flex items-center">
+              <p
+                className={cx("text-gray-800", {
+                  "text-white": advertising || using,
+                })}
+              >
+                {selected.Location && (
+                  <>
+                    <CountryFlag code={selected.Location.CountryCode} />{" "}
+                  </>
+                )}
+                {selected === runAsExitNode
+                  ? "Running as exit node"
+                  : selected.Name}
+              </p>
+              {!disabled && (
+                <ChevronDown
+                  className={cx("ml-1", {
+                    "stroke-gray-800": none,
+                    "stroke-white": advertising || using,
+                  })}
+                />
+              )}
+            </div>
           </button>
+          {!disabled && (advertising || using) && (
+            <button
+              className={cx("px-3 py-2 rounded-sm text-white", {
+                "bg-yellow-200": advertising && !offline,
+                "bg-blue-400": using && !offline,
+                "bg-red-400": offline,
+              })}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                handleSelect(noExitNode)
+              }}
+            >
+              Disable
+            </button>
+          )}
+        </div>
+        {offline && (
+          <p className="text-white p-3">
+            The selected exit node is currently offline. Your internet traffic
+            is blocked until you disable the exit node or select a different
+            one.
+          </p>
         )}
       </div>
     </Popover>
@@ -254,10 +273,16 @@ function ExitNodeSelectorItem({
   return (
     <button
       key={node.ID}
-      className="w-full px-4 py-2 flex justify-between items-center cursor-pointer hover:bg-gray-100"
+      className={cx(
+        "w-full px-4 py-2 flex justify-between items-center cursor-pointer hover:bg-gray-100",
+        {
+          "text-gray-400 cursor-not-allowed": !node.Online,
+        }
+      )}
       onClick={onSelect}
+      disabled={!node.Online}
     >
-      <div>
+      <div className="w-full">
         {node.Location && (
           <>
             <CountryFlag code={node.Location.CountryCode} />{" "}
@@ -265,7 +290,8 @@ function ExitNodeSelectorItem({
         )}
         <span className="leading-snug">{node.Name}</span>
       </div>
-      {isSelected && <Check />}
+      {node.Online || <span className="leading-snug">Offline</span>}
+      {isSelected && <Check className="ml-1" />}
     </button>
   )
 }

@@ -738,6 +738,7 @@ func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
 			ID:       ps.ID,
 			Name:     ps.DNSName,
 			Location: ps.Location,
+			Online:   ps.Online,
 		})
 	}
 	writeJSON(w, exitNodes)
