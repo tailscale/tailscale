@@ -153,10 +153,7 @@ function Header({
         <LoginToggle node={node} auth={auth} newSession={newSession} />
       </div>
       {loc !== "/" && loc !== "/update" && (
-        <Link
-          to="/"
-          className="text-blue-500 font-medium leading-snug block mb-[10px]"
-        >
+        <Link to="/" className="link font-medium block mb-[10px]">
           &larr; Back to {node.DeviceName}
         </Link>
       )}

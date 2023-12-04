@@ -8,6 +8,7 @@ import ACLTag from "src/components/acl-tag"
 import * as Control from "src/components/control-components"
 import { UpdateAvailableNotification } from "src/components/update-available"
 import { NodeData } from "src/hooks/node-data"
+import Button from "src/ui/button"
 import { useLocation } from "wouter"
 
 export default function DeviceDetailsView({
@@ -34,20 +35,18 @@ export default function DeviceDetailsView({
                 })}
               />
             </div>
-            <button
-              className={cx(
-                "px-3 py-2 bg-stone-50 rounded shadow border border-stone-200 text-gray-800 text-sm font-medium",
-                { "cursor-not-allowed": readonly }
-              )}
-              onClick={() =>
-                apiFetch("/local/v0/logout", "POST")
-                  .then(() => setLocation("/"))
-                  .catch((err) => alert("Logout failed: " + err.message))
-              }
-              disabled={readonly}
-            >
-              Disconnect…
-            </button>
+            {!readonly && (
+              <Button
+                sizeVariant="small"
+                onClick={() =>
+                  apiFetch("/local/v0/logout", "POST")
+                    .then(() => setLocation("/"))
+                    .catch((err) => alert("Logout failed: " + err.message))
+                }
+              >
+                Disconnect…
+              </Button>
+            )}
           </div>
         </div>
         {node.Features["auto-update"] &&

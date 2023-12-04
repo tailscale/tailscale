@@ -85,10 +85,12 @@ export default function ExitNodeSelector({
       >
         <button
           className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
-            "bg-white hover:bg-stone-100": none,
-            "bg-amber-600 hover:bg-orange-400": advertising,
-            "bg-blue-500 hover:bg-blue-400": using,
-            "cursor-not-allowed": disabled,
+            "bg-white": none,
+            "hover:bg-gray-100": none && !disabled,
+            "bg-orange-600": advertising,
+            "hover:bg-orange-400": advertising && !disabled,
+            "bg-blue-500": using,
+            "hover:bg-blue-400": using && !disabled,
           })}
           onClick={() => setOpen(!open)}
           disabled={disabled}
@@ -116,27 +118,27 @@ export default function ExitNodeSelector({
                 ? "Running as exit node"
                 : selected.Name}
             </p>
-            <ChevronDown
-              className={cx("ml-1", {
-                "stroke-neutral-800": none,
-                "stroke-white": advertising || using,
-              })}
-            />
+            {!disabled && (
+              <ChevronDown
+                className={cx("ml-1", {
+                  "stroke-gray-800": none,
+                  "stroke-white": advertising || using,
+                })}
+              />
+            )}
           </div>
         </button>
-        {(advertising || using) && (
+        {!disabled && (advertising || using) && (
           <button
             className={cx("px-3 py-2 rounded-sm text-white", {
               "bg-orange-400": advertising,
               "bg-blue-400": using,
-              "cursor-not-allowed": disabled,
             })}
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
               handleSelect(noExitNode)
             }}
-            disabled={disabled}
           >
             Disable
           </button>
@@ -252,7 +254,7 @@ function ExitNodeSelectorItem({
   return (
     <button
       key={node.ID}
-      className="w-full px-4 py-2 flex justify-between items-center cursor-pointer hover:bg-stone-100"
+      className="w-full px-4 py-2 flex justify-between items-center cursor-pointer hover:bg-gray-100"
       onClick={onSelect}
     >
       <div>

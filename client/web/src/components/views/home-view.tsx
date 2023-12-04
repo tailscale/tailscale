@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import cx from "classnames"
-import React from "react"
+import React, { useMemo } from "react"
 import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
 import { ReactComponent as ConnectedDeviceIcon } from "src/assets/icons/connected-device.svg"
 import ExitNodeSelector from "src/components/exit-node-selector"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
-import { Link } from "wouter"
+import { pluralize } from "src/util"
+import { Link, useLocation } from "wouter"
 
 export default function HomeView({
   readonly,
@@ -18,6 +19,14 @@ export default function HomeView({
   node: NodeData
   nodeUpdaters: NodeUpdaters
 }) {
+  const [allSubnetRoutes, pendingSubnetRoutes] = useMemo(
+    () => [
+      node.AdvertisedRoutes?.length,
+      node.AdvertisedRoutes?.filter((r) => !r.Approved).length,
+    ],
+    [node.AdvertisedRoutes]
+  )
+
   return (
     <div className="mb-12 w-full">
       <h2 className="mb-3">This device</h2>
@@ -42,41 +51,63 @@ export default function HomeView({
             disabled={readonly}
           />
         )}
-        <Link className="text-blue-500 font-medium leading-snug" to="/details">
+        <Link className="link font-medium" to="/details">
           View device details &rarr;
         </Link>
       </div>
       <h2 className="mb-3">Settings</h2>
-      {node.Features["advertise-routes"] && (
-        <SettingsCard
-          link="/subnets"
-          className="mb-3"
-          title="Subnet router"
-          body="Add devices to your tailnet without installing Tailscale on them."
-        />
-      )}
-      {node.Features["ssh"] && (
-        <SettingsCard
-          link="/ssh"
-          className="mb-3"
-          title="Tailscale SSH server"
-          body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
-          badge={
-            node.RunningSSHServer
-              ? {
-                  text: "Running",
-                  icon: <div className="w-2 h-2 bg-emerald-500 rounded-full" />,
-                }
-              : undefined
-          }
-        />
-      )}
-      {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
-      {/* <SettingsCard
+      <div className="grid gap-3">
+        {node.Features["advertise-routes"] && (
+          <SettingsCard
+            link="/subnets"
+            title="Subnet router"
+            body="Add devices to your tailnet without installing Tailscale on them."
+            badge={
+              allSubnetRoutes
+                ? {
+                    text: `${allSubnetRoutes} ${pluralize(
+                      "route",
+                      "routes",
+                      allSubnetRoutes
+                    )}`,
+                  }
+                : undefined
+            }
+            footer={
+              pendingSubnetRoutes
+                ? `${pendingSubnetRoutes} ${pluralize(
+                    "route",
+                    "routes",
+                    pendingSubnetRoutes
+                  )} pending approval`
+                : undefined
+            }
+          />
+        )}
+        {node.Features["ssh"] && (
+          <SettingsCard
+            link="/ssh"
+            title="Tailscale SSH server"
+            body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
+            badge={
+              node.RunningSSHServer
+                ? {
+                    text: "Running",
+                    icon: (
+                      <div className="w-2 h-2 bg-emerald-500 rounded-full" />
+                    ),
+                  }
+                : undefined
+            }
+          />
+        )}
+        {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
+        {/* <SettingsCard
         link="/serve"
         title="Share local content"
         body="Share local ports, services, and content to your Tailscale network or to the broader internet."
       /> */}
+      </div>
     </div>
   )
 }
@@ -86,6 +117,7 @@ function SettingsCard({
   link,
   body,
   badge,
+  footer,
   className,
 }: {
   title: string
@@ -95,35 +127,43 @@ function SettingsCard({
     text: string
     icon?: JSX.Element
   }
+  footer?: string
   className?: string
 }) {
+  const [, setLocation] = useLocation()
+
   return (
-    <Link
-      to={link}
-      className={cx(
-        "-mx-5 card flex justify-between items-center cursor-pointer",
-        className
-      )}
+    <button
+      className={cx("-mx-5 card cursor-pointer", className)}
+      onClick={() => setLocation(link)}
     >
-      <div>
-        <div className="flex gap-2">
-          <p className="text-gray-800 font-medium leading-tight mb-2">
-            {title}
-          </p>
-          {badge && (
-            <div className="h-5 px-2 bg-stone-100 rounded-full flex items-center gap-2">
-              {badge.icon}
-              <div className="text-gray-500 text-xs font-medium">
-                {badge.text}
+      <div className="flex justify-between items-center">
+        <div>
+          <div className="flex gap-2">
+            <p className="text-gray-800 font-medium leading-tight mb-2">
+              {title}
+            </p>
+            {badge && (
+              <div className="h-5 px-2 bg-gray-100 rounded-full flex items-center gap-2">
+                {badge.icon}
+                <div className="text-gray-500 text-xs font-medium">
+                  {badge.text}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+          <p className="text-gray-500 text-sm leading-tight">{body}</p>
         </div>
-        <p className="text-gray-500 text-sm leading-tight">{body}</p>
+        <div>
+          <ArrowRight className="ml-3" />
+        </div>
       </div>
-      <div>
-        <ArrowRight className="ml-3" />
-      </div>
-    </Link>
+      {footer && (
+        <>
+          <hr className="my-3" />
+          <div className="text-gray-500 text-sm leading-tight">{footer}</div>
+        </>
+      )}
+    </button>
   )
 }

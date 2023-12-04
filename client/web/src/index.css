@@ -175,14 +175,20 @@
   .card h2 {
     @apply text-gray-500 text-xs font-semibold uppercase tracking-wide;
   }
+  .card table {
+    @apply w-full;
+  }
   .card tbody {
     @apply flex flex-col gap-2;
   }
+  .card tr {
+    @apply grid grid-flow-col grid-cols-3 gap-2;
+  }
   .card td:first-child {
-    @apply w-40 text-gray-500 text-sm leading-tight flex-shrink-0;
+    @apply text-gray-500 text-sm leading-tight truncate;
   }
   .card td:last-child {
-    @apply text-gray-800 text-sm leading-tight;
+    @apply col-span-2 text-gray-800 text-sm leading-tight truncate;
   }
 
   .description {
@@ -287,6 +293,39 @@
   }
 
   /**
+   * .button encapsulates all the base button styles we use across the app.
+   */
+
+  .button {
+    @apply relative inline-flex flex-nowrap items-center justify-center font-medium py-2 px-4 rounded-md border border-transparent text-center whitespace-nowrap;
+    transition-property: background-color, border-color, color, box-shadow;
+    transition-duration: 120ms;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  }
+  .button:focus-visible {
+    @apply outline-none ring;
+  }
+  .button:disabled {
+    @apply pointer-events-none select-none;
+  }
+
+  .button-group {
+    @apply whitespace-nowrap;
+  }
+
+  .button-group .button {
+    @apply min-w-[60px];
+  }
+
+  .button-group .button:not(:first-child) {
+    @apply rounded-l-none;
+  }
+
+  .button-group .button:not(:last-child) {
+    @apply rounded-r-none border-r-0;
+  }
+
+  /**
    * .input defines default text input field styling. These styles should
    * correspond to .button, sharing a similar height and rounding, since .input
    * and .button are commonly used together.
@@ -321,157 +360,108 @@
   .input-error {
     @apply border-red-200;
   }
+
+  /**
+   * .loading-dots creates a set of three dots that pulse for indicating loading
+   * states where a more horizontal appearance is helpful.
+   */
+
+  .loading-dots {
+    @apply inline-flex items-center;
+  }
+
+  .loading-dots span {
+    @apply inline-block w-[0.35rem] h-[0.35rem] rounded-full bg-current mx-[0.15em];
+    animation-name: loading-dots-blink;
+    animation-duration: 1.4s;
+    animation-iteration-count: infinite;
+    animation-fill-mode: both;
+  }
+
+  .loading-dots span:nth-child(2) {
+    animation-delay: 200ms;
+  }
+
+  .loading-dots span:nth-child(3) {
+    animation-delay: 400ms;
+  }
+
+  @keyframes loading-dots-blink {
+    0% {
+      opacity: 0.2;
+    }
+    20% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.2;
+    }
+  }
+
+  /**
+  * .spinner creates a circular animated spinner, most often used to indicate a
+  * loading state. The .spinner element must define a width, height, and
+  * border-width for the spinner to apply.
+  */
+
+  @keyframes spin {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spinner {
+    @apply border-transparent border-t-current border-l-current rounded-full;
+    animation: spin 700ms linear infinite;
+  }
+
+  /**
+   * .link applies standard styling to links across the app. By default we unstyle
+   * all anchor tags. While this might sound crazy for a website, it's _very_
+   * helpful in an app, since anchor tags can be used to wrap buttons, icons,
+   * and all manner of UI component. As a result, all anchor tags intended to look
+   * like links should have a .link class.
+   */
+
+  .link {
+    @apply text-text-primary;
+  }
+
+  .link:hover,
+  .link:active {
+    @apply text-blue-700;
+  }
+
+  .link-destructive {
+    @apply text-text-danger;
+  }
+
+  .link-destructive:hover,
+  .link-destructive:active {
+    @apply text-red-700;
+  }
+
+  .link-fade {
+  }
+
+  .link-fade:hover {
+    @apply opacity-75;
+  }
+
+  .link-underline {
+    @apply underline;
+  }
+
+  .link-underline:hover {
+    @apply opacity-75;
+  }
 }
 
 @layer utilities {
   .h-input {
     @apply h-[2.375rem];
   }
-}
-
-/**
- * Non-Tailwind styles begin here.
- */
-
-.bg-gray-0 {
-  --tw-bg-opacity: 1;
-  background-color: rgba(250, 249, 248, var(--tw-bg-opacity));
-}
-
-.bg-gray-50 {
-  --tw-bg-opacity: 1;
-  background-color: rgba(249, 247, 246, var(--tw-bg-opacity));
-}
-
-html {
-  letter-spacing: -0.015em;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-.link {
-  --text-opacity: 1;
-  color: #4b70cc;
-  color: rgba(75, 112, 204, var(--text-opacity));
-}
-
-.link:hover,
-.link:active {
-  --text-opacity: 1;
-  color: #19224a;
-  color: rgba(25, 34, 74, var(--text-opacity));
-}
-
-.link-underline {
-  text-decoration: underline;
-}
-
-.link-underline:hover,
-.link-underline:active {
-  text-decoration: none;
-}
-
-.link-muted {
-  /* same as text-gray-500 */
-  --tw-text-opacity: 1;
-  color: rgba(112, 110, 109, var(--tw-text-opacity));
-}
-
-.link-muted:hover,
-.link-muted:active {
-  /* same as text-gray-500 */
-  --tw-text-opacity: 1;
-  color: rgba(68, 67, 66, var(--tw-text-opacity));
-}
-
-.button {
-  font-weight: 500;
-  padding-top: 0.45rem;
-  padding-bottom: 0.45rem;
-  padding-left: 1rem;
-  padding-right: 1rem;
-  border-radius: 0.375rem;
-  border-width: 1px;
-  border-color: transparent;
-  transition-property: background-color, border-color, color, box-shadow;
-  transition-duration: 120ms;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
-  min-width: 80px;
-}
-
-.button:focus {
-  outline: 0;
-  box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
-}
-
-.button:disabled {
-  cursor: not-allowed;
-  -webkit-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-}
-
-.button-blue {
-  --bg-opacity: 1;
-  background-color: #4b70cc;
-  background-color: rgba(75, 112, 204, var(--bg-opacity));
-  --border-opacity: 1;
-  border-color: #4b70cc;
-  border-color: rgba(75, 112, 204, var(--border-opacity));
-  --text-opacity: 1;
-  color: #fff;
-  color: rgba(255, 255, 255, var(--text-opacity));
-}
-
-.button-blue:enabled:hover {
-  --bg-opacity: 1;
-  background-color: #3f5db3;
-  background-color: rgba(63, 93, 179, var(--bg-opacity));
-  --border-opacity: 1;
-  border-color: #3f5db3;
-  border-color: rgba(63, 93, 179, var(--border-opacity));
-}
-
-.button-blue:disabled {
-  --text-opacity: 1;
-  color: #cedefd;
-  color: rgba(206, 222, 253, var(--text-opacity));
-  --bg-opacity: 1;
-  background-color: #6c94ec;
-  background-color: rgba(108, 148, 236, var(--bg-opacity));
-  --border-opacity: 1;
-  border-color: #6c94ec;
-  border-color: rgba(108, 148, 236, var(--border-opacity));
-}
-
-.button-red {
-  background-color: #d04841;
-  border-color: #d04841;
-  color: #fff;
-}
-
-.button-red:enabled:hover {
-  background-color: #b22d30;
-  border-color: #b22d30;
-}
-
-/**
-  * .spinner creates a circular animated spinner, most often used to indicate a
-  * loading state. The .spinner element must define a width, height, and
-  * border-width for the spinner to apply.
-  */
-
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-.spinner {
-  @apply border-transparent border-t-current border-l-current rounded-full;
-  animation: spin 700ms linear infinite;
 }

@@ -230,9 +230,11 @@ function SignInButton({
 }) {
   return (
     <Button
-      className={cx("w-full text-sm mt-2", {
+      className={cx("text-center w-full mt-2", {
         "mb-2": auth.viewerIdentity,
       })}
+      intent="primary"
+      sizeVariant="small"
       onClick={onClick}
     >
       {auth.viewerIdentity ? "Sign in to confirm identity" : "Sign in"}
