@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React, { useCallback, useState } from "react"
-import { apiFetch } from "src/api"
+import { apiFetch, incrementMetric } from "src/api"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import { NodeData } from "src/hooks/node-data"
 import Button from "src/ui/button"
@@ -25,7 +25,10 @@ export default function LoginView({
 
   const login = useCallback(
     (opt: TailscaleUpOptions) => {
-      tailscaleUp(opt).then(refreshData)
+      tailscaleUp(opt).then(() => {
+        incrementMetric("web_client_node_connect")
+        refreshData()
+      })
     },
     [refreshData]
   )

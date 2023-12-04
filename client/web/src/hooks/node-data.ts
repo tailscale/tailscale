@@ -148,9 +148,20 @@ export default function useNodeData() {
         setIsPosting(false)
         mutate() // refresh data after PATCH finishes
       }
+      const updateMetrics = () => {
+        // only update metrics if values have changed
+        if (data?.RunningSSHServer !== d.RunSSH) {
+          incrementMetric(
+            d.RunSSH ? "web_client_ssh_enable" : "web_client_ssh_disable"
+          )
+        }
+      }
 
       return apiFetch("/local/v0/prefs", "PATCH", d)
-        .then(onComplete)
+        .then(() => {
+          updateMetrics()
+          onComplete()
+        })
         .catch((err) => {
           onComplete()
           alert("Failed to update prefs")
@@ -176,6 +187,14 @@ export default function useNodeData() {
               : "web_client_advertise_exitnode_disable"
           )
         }
+        // useExitNode is the ID of the exit node to use
+        if (data?.UsingExitNode?.ID !== d.UseExitNode) {
+          incrementMetric(
+            d.UseExitNode
+              ? "web_client_use_exitnode_enable"
+              : "web_client_use_exitnode_disable"
+          )
+        }
       }
 
       return apiFetch("/routes", "POST", d)
@@ -189,7 +208,7 @@ export default function useNodeData() {
           throw err
         })
     },
-    [mutate, data?.AdvertisingExitNode]
+    [mutate, data?.AdvertisingExitNode, data?.UsingExitNode?.ID]
   )
 
   const nodeUpdaters: NodeUpdaters = useMemo(
@@ -209,7 +228,7 @@ export default function useNodeData() {
           AdvertiseRoutes: routes,
           AdvertiseExitNode: data?.AdvertisingExitNode, // unchanged
           UseExitNode: data?.UsingExitNode?.ID, // unchanged
-        }),
+        }).then(() => incrementMetric("web_client_advertise_routes_change")),
     }),
     [
       data?.AdvertisingExitNode,
