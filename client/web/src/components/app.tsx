@@ -22,7 +22,7 @@ export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
+    <main className="min-w-sm max-w-lg mx-auto py-4 md:py-14 px-5">
       {loadingAuth || !auth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
@@ -140,7 +140,7 @@ function Header({
 
   return (
     <>
-      <div className="flex justify-between items-center mb-12">
+      <div className="flex justify-between items-center mb-9 md:mb-12">
         <div className="flex gap-3">
           <TailscaleIcon
             className="cursor-pointer"
