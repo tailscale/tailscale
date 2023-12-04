@@ -129,9 +129,14 @@ function LoginPopoverContent({
       newSession()
     } else {
       // Must be connected over Tailscale to log in.
-      // If not already connected, reroute to the Tailscale IP
-      // before sending user through check mode.
-      window.location.href = `http://${node.IP}:5252/?check=now`
+      // Send user to Tailscale IP and start check mode
+      const manageURL = `http://${node.IP}:5252/?check=now`
+      if (window.self !== window.top) {
+        // if we're inside an iframe, open management client in new window
+        window.open(manageURL, "_blank")
+      } else {
+        window.location.href = manageURL
+      }
     }
   }, [node.IP, auth.viewerIdentity, newSession])
 
