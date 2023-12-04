@@ -27,4 +27,4 @@ jobs:
         ./tool/go generate tailscale.com/cmd/k8s-operator
         echo
         echo
-        git diff --name-only --exit-code || (echo "Static manifests for Tailscale Kubernetes operator are out of date. Please run 'go generate tailscale.com/cmd/k8s-operator and commit the diff.'."; exit 1)
+        git diff --name-only --exit-code || (echo "Static manifests for Tailscale Kubernetes operator are out of date. Please run 'go generate tailscale.com/cmd/k8s-operator' and commit the diff."; exit 1)

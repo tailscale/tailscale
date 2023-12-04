@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	goyaml "github.com/go-yaml/yaml"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -23,14 +23,14 @@ func main() {
 	cmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
 		"--namespace=tailscale")
 	cmd.Dir = repoRoot
-	out := bytes.NewBuffer([]byte{})
-	cmd.Stdout = out
+	var out bytes.Buffer
+	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("error templating helm manifests: %v", err)
 	}
 
-	final := bytes.NewBuffer([]byte{})
+	var final bytes.Buffer
 
 	templatePath := filepath.Join(repoRoot, "cmd/k8s-operator/deploy/manifests/templates")
 	fileInfos, err := os.ReadDir(templatePath)
@@ -44,7 +44,7 @@ func main() {
 		}
 		final.Write(templateBytes)
 	}
-	decoder := goyaml.NewDecoder(out)
+	decoder := yaml.NewDecoder(&out)
 	for {
 		var document any
 		err := decoder.Decode(&document)
@@ -55,7 +55,7 @@ func main() {
 			log.Fatalf("failed read from input data: %v", err)
 		}
 
-		bytes, err := goyaml.Marshal(document)
+		bytes, err := yaml.Marshal(document)
 		if err != nil {
 			log.Fatalf("failed to marshal YAML document: %v", err)
 		}
@@ -65,7 +65,7 @@ func main() {
 		if _, err = final.Write(bytes); err != nil {
 			log.Fatalf("error marshaling yaml: %v", err)
 		}
-		fmt.Fprint(final, "---\n")
+		fmt.Fprint(&final, "---\n")
 	}
 	finalString, _ := strings.CutSuffix(final.String(), "---\n")
 	if err := os.WriteFile(filepath.Join(repoRoot, "cmd/k8s-operator/deploy/manifests/operator.yaml"), []byte(finalString), 0664); err != nil {
