@@ -76,6 +76,7 @@ type Config struct {
 	SubnetRoutes     []netip.Prefix         // subnets being advertised to other Tailscale nodes
 	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
 	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules
+	NetfilterKind    string                 // what kind of netfilter to use (nftables, iptables)
 }
 
 func (a *Config) Equal(b *Config) bool {

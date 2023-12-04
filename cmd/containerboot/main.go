@@ -91,7 +91,7 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 	if defaultBool("TS_TEST_FAKE_NETFILTER", false) {
 		return linuxfw.NewFakeIPTablesRunner(), nil
 	}
-	return linuxfw.New(logf)
+	return linuxfw.New(logf, "")
 }
 
 func main() {

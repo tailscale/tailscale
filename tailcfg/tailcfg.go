@@ -2171,6 +2171,16 @@ const (
 	// NodeAttrDNSForwarderDisableTCPRetries disables retrying truncated
 	// DNS queries over TCP if the response is truncated.
 	NodeAttrDNSForwarderDisableTCPRetries NodeCapability = "dns-forwarder-disable-tcp-retries"
+
+	// NodeAttrLinuxMustUseIPTables forces Linux clients to use iptables for
+	// netfilter management.
+	// This cannot be set simultaneously with NodeAttrLinuxMustUseNfTables.
+	NodeAttrLinuxMustUseIPTables NodeCapability = "linux-netfilter?v=iptables"
+
+	// NodeAttrLinuxMustUseNfTables forces Linux clients to use nftables for
+	// netfilter management.
+	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
+	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
 )
 
 // SetDNSRequest is a request to add a DNS record.

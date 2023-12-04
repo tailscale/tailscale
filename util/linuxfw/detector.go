@@ -12,7 +12,7 @@ import (
 	"tailscale.com/version/distro"
 )
 
-func detectFirewallMode(logf logger.Logf) FirewallMode {
+func detectFirewallMode(logf logger.Logf, prefHint string) FirewallMode {
 	if distro.Get() == distro.Gokrazy {
 		// Reduce startup logging on gokrazy. There's no way to do iptables on
 		// gokrazy anyway.
@@ -21,18 +21,24 @@ func detectFirewallMode(logf logger.Logf) FirewallMode {
 		return FirewallModeNfTables
 	}
 
-	envMode := envknob.String("TS_DEBUG_FIREWALL_MODE")
+	mode := envknob.String("TS_DEBUG_FIREWALL_MODE")
+	// If the envknob isn't set, fall back to the pref suggested by c2n or
+	// nodeattrs.
+	if mode == "" {
+		mode = prefHint
+		logf("using firewall mode pref %s", prefHint)
+	} else if prefHint != "" {
+		logf("TS_DEBUG_FIREWALL_MODE set, overriding firewall mode from %s to %s", prefHint, mode)
+	}
 	// We now use iptables as default and have "auto" and "nftables" as
 	// options for people to test further.
-	switch envMode {
+	switch mode {
 	case "auto":
 		return pickFirewallModeFromInstalledRules(logf, linuxFWDetector{})
 	case "nftables":
-		logf("envknob TS_DEBUG_FIREWALL_MODE=nftables set")
 		hostinfo.SetFirewallMode("nft-forced")
 		return FirewallModeNfTables
 	case "iptables":
-		logf("envknob TS_DEBUG_FIREWALL_MODE=iptables set")
 		hostinfo.SetFirewallMode("ipt-forced")
 	default:
 		logf("default choosing iptables")

@@ -511,10 +511,13 @@ type NetfilterRunner interface {
 	ClampMSSToPMTU(tun string, addr netip.Addr) error
 }
 
-// New creates a NetfilterRunner using either nftables or iptables.
-// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
-func New(logf logger.Logf) (NetfilterRunner, error) {
-	mode := detectFirewallMode(logf)
+// New creates a NetfilterRunner, auto-detecting whether to use
+// nftables or iptables.
+// As nftables is still experimental, iptables will be used unless
+// either the TS_DEBUG_FIREWALL_MODE environment variable, or the prefHint
+// parameter, is set to one of "nftables" or "auto".
+func New(logf logger.Logf, prefHint string) (NetfilterRunner, error) {
+	mode := detectFirewallMode(logf, prefHint)
 	switch mode {
 	case FirewallModeIPTables:
 		return newIPTablesRunner(logf)

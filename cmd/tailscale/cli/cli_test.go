@@ -813,6 +813,10 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "RunWebClient":
 			// TODO(tailscale/corp#14335): Currently behind a feature flag.
 			continue
+		case "NetfilterKind":
+			// Handled by TS_DEBUG_FIREWALL_MODE env var, we don't want to have
+			// a CLI flag for this. The Pref is used by c2n.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

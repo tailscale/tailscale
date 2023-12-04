@@ -47,6 +47,7 @@ type linuxRouter struct {
 	localRoutes      map[netip.Prefix]bool
 	snatSubnetRoutes bool
 	netfilterMode    preftype.NetfilterMode
+	netfilterKind    string
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -326,11 +327,38 @@ func (r *linuxRouter) Close() error {
 	return nil
 }
 
+// setupNetfilter initializes the NetfilterRunner in r.nfr. It expects r.nfr
+// to be nil, or the current netfilter to be set to netfilterOff.
+// kind should be either a linuxfw.FirewallMode, or the empty string for auto.
+func (r *linuxRouter) setupNetfilter(kind string) error {
+	r.netfilterKind = kind
+
+	var err error
+	r.nfr, err = linuxfw.New(r.logf, r.netfilterKind)
+	if err != nil {
+		return fmt.Errorf("could not create new netfilter: %w", err)
+	}
+
+	return nil
+}
+
 // Set implements the Router interface.
 func (r *linuxRouter) Set(cfg *Config) error {
 	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
+	}
+
+	if cfg.NetfilterKind != r.netfilterKind {
+		if err := r.setNetfilterMode(netfilterOff); err != nil {
+			err = fmt.Errorf("could not disable existing netfilter: %w", err)
+			errs = append(errs, err)
+		} else {
+			r.nfr = nil
+			if err := r.setupNetfilter(cfg.NetfilterKind); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
@@ -383,7 +411,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 
 	if r.nfr == nil {
 		var err error
-		r.nfr, err = linuxfw.New(r.logf)
+		r.nfr, err = linuxfw.New(r.logf, r.netfilterKind)
 		if err != nil {
 			return err
 		}
