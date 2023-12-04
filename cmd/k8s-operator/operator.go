@@ -42,6 +42,8 @@ import (
 	"tailscale.com/version"
 )
 
+//go:generate go run tailscale.com/cmd/k8s-operator/generate
+
 func main() {
 	// Required to use our client API. We're fine with the instability since the
 	// client lives in the same repo as this code.
