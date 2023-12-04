@@ -24,7 +24,7 @@ export default function Collapsible(props: CollapsibleProps) {
         onOpenChange?.(open)
       }}
     >
-      <Primitive.Trigger className="inline-flex items-center text-gray-600 cursor-pointer hover:bg-stone-100 rounded text-sm font-medium pr-3 py-1 transition-colors">
+      <Primitive.Trigger className="inline-flex items-center text-gray-600 cursor-pointer hover:bg-gray-100 rounded text-sm font-medium pr-3 py-1 transition-colors">
         <span className="ml-2 mr-1.5 group-hover:text-gray-500 -rotate-90 state-open:rotate-0">
           <ChevronDown strokeWidth={3} className="stroke-gray-400 w-4" />
         </span>

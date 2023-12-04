@@ -5,6 +5,7 @@ import React, { useCallback, useState } from "react"
 import { apiFetch } from "src/api"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import { NodeData } from "src/hooks/node-data"
+import Button from "src/ui/button"
 import Collapsible from "src/ui/collapsible"
 import Input from "src/ui/input"
 
@@ -40,12 +41,13 @@ export default function LoginView({
               Your device is disconnected from Tailscale.
             </p>
           </div>
-          <button
+          <Button
             onClick={() => login({})}
-            className="button button-blue w-full mb-4"
+            className="w-full mb-4"
+            intent="primary"
           >
             Connect to Tailscale
-          </button>
+          </Button>
         </>
       ) : data.IP ? (
         <>
@@ -64,12 +66,13 @@ export default function LoginView({
               .
             </p>
           </div>
-          <button
+          <Button
             onClick={() => login({ Reauthenticate: true })}
-            className="button button-blue w-full mb-4"
+            className="w-full mb-4"
+            intent="primary"
           >
             Reauthenticate
-          </button>
+          </Button>
         </>
       ) : (
         <>
@@ -89,7 +92,7 @@ export default function LoginView({
               .
             </p>
           </div>
-          <button
+          <Button
             onClick={() =>
               login({
                 Reauthenticate: true,
@@ -97,10 +100,11 @@ export default function LoginView({
                 AuthKey: authKey,
               })
             }
-            className="button button-blue w-full mb-4"
+            className="w-full mb-4"
+            intent="primary"
           >
             Log In
-          </button>
+          </Button>
           <Collapsible trigger="Advanced options">
             <h4 className="font-medium mb-1 mt-2">Auth Key</h4>
             <p className="text-sm text-gray-500">

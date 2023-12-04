@@ -19,10 +19,11 @@ export default function SubnetRouterView({
   node: NodeData
   nodeUpdaters: NodeUpdaters
 }) {
-  const advertisedRoutes = useMemo(
-    () => node.AdvertisedRoutes || [],
-    [node.AdvertisedRoutes]
-  )
+  const [advertisedRoutes, hasUnapprovedRoutes] = useMemo(() => {
+    const routes = node.AdvertisedRoutes || []
+    return [routes, routes.find((r) => !r.Approved)]
+  }, [node.AdvertisedRoutes])
+
   const [inputOpen, setInputOpen] = useState<boolean>(
     advertisedRoutes.length === 0 && !readonly
   )
@@ -42,42 +43,49 @@ export default function SubnetRouterView({
           Learn more &rarr;
         </a>
       </p>
-      {inputOpen ? (
-        <div className="-mx-5 card shadow">
-          <p className="font-medium leading-snug mb-3">Advertise new routes</p>
-          <Input
-            type="text"
-            className="text-sm"
-            placeholder="192.168.0.0/24"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-          />
-          <p className="my-2 h-6 text-gray-500 text-sm leading-tight">
-            Add multiple routes by providing a comma-separated list.
-          </p>
+      {!readonly &&
+        (inputOpen ? (
+          <div className="-mx-5 card shadow">
+            <p className="font-medium leading-snug mb-3">
+              Advertise new routes
+            </p>
+            <Input
+              type="text"
+              className="text-sm"
+              placeholder="192.168.0.0/24"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+            />
+            <p className="my-2 h-6 text-gray-500 text-sm leading-tight">
+              Add multiple routes by providing a comma-separated list.
+            </p>
+            <Button
+              intent="primary"
+              onClick={() =>
+                nodeUpdaters
+                  .postSubnetRoutes([
+                    ...advertisedRoutes.map((r) => r.Route),
+                    ...inputText.split(","),
+                  ])
+                  .then(() => {
+                    setInputText("")
+                    setInputOpen(false)
+                  })
+              }
+              disabled={!inputText}
+            >
+              Advertise routes
+            </Button>
+          </div>
+        ) : (
           <Button
-            onClick={() =>
-              nodeUpdaters
-                .postSubnetRoutes([
-                  ...advertisedRoutes.map((r) => r.Route),
-                  ...inputText.split(","),
-                ])
-                .then(() => {
-                  setInputText("")
-                  setInputOpen(false)
-                })
-            }
-            disabled={readonly || !inputText}
+            intent="primary"
+            prefixIcon={<Plus />}
+            onClick={() => setInputOpen(true)}
           >
-            Advertise routes
+            Advertise new route
           </Button>
-        </div>
-      ) : (
-        <Button onClick={() => setInputOpen(true)} disabled={readonly}>
-          <Plus />
-          Advertise new route
-        </Button>
-      )}
+        ))}
       <div className="-mx-5 mt-10">
         {advertisedRoutes.length > 0 ? (
           <>
@@ -96,7 +104,7 @@ export default function SubnetRouterView({
                         <Clock className="w-4 h-4" />
                       )}
                       {r.Approved ? (
-                        <div className="text-emerald-800 text-sm leading-tight">
+                        <div className="text-green-500 text-sm leading-tight">
                           Approved
                         </div>
                       ) : (
@@ -105,37 +113,39 @@ export default function SubnetRouterView({
                         </div>
                       )}
                     </div>
-                    <Button
-                      intent="secondary"
-                      className="text-sm font-medium"
-                      onClick={() =>
-                        nodeUpdaters.postSubnetRoutes(
-                          advertisedRoutes
-                            .map((it) => it.Route)
-                            .filter((it) => it !== r.Route)
-                        )
-                      }
-                      disabled={readonly}
-                    >
-                      Stop advertising…
-                    </Button>
+                    {!readonly && (
+                      <Button
+                        sizeVariant="small"
+                        onClick={() =>
+                          nodeUpdaters.postSubnetRoutes(
+                            advertisedRoutes
+                              .map((it) => it.Route)
+                              .filter((it) => it !== r.Route)
+                          )
+                        }
+                      >
+                        Stop advertising…
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
-            <Control.AdminContainer
-              className="mt-3 w-full text-center text-gray-500 text-sm leading-tight"
-              node={node}
-            >
-              To approve routes, in the admin console go to{" "}
-              <Control.AdminLink node={node} path={`/machines/${node.IP}`}>
-                the machine’s route settings
-              </Control.AdminLink>
-              .
-            </Control.AdminContainer>
+            {hasUnapprovedRoutes && (
+              <Control.AdminContainer
+                className="mt-3 w-full text-center text-gray-500 text-sm leading-tight"
+                node={node}
+              >
+                To approve routes, in the admin console go to{" "}
+                <Control.AdminLink node={node} path={`/machines/${node.IP}`}>
+                  the machine’s route settings
+                </Control.AdminLink>
+                .
+              </Control.AdminContainer>
+            )}
           </>
         ) : (
-          <div className="px-5 py-4 bg-stone-50 rounded-lg border border-gray-200 text-center text-gray-500">
+          <div className="px-5 py-4 bg-gray-50 rounded-lg border border-gray-200 text-center text-gray-500">
             Not advertising any routes
           </div>
         )}

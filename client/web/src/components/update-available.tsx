@@ -3,13 +3,16 @@
 
 import React from "react"
 import { VersionInfo } from "src/hooks/self-update"
-import { Link } from "wouter"
+import Button from "src/ui/button"
+import { useLocation } from "wouter"
 
 export function UpdateAvailableNotification({
   details,
 }: {
   details: VersionInfo
 }) {
+  const [, setLocation] = useLocation()
+
   return (
     <div className="card">
       <h2 className="mb-2">
@@ -22,12 +25,13 @@ export function UpdateAvailableNotification({
           : "A new update"}{" "}
         is now available. <ChangelogText version={details.LatestVersion} />
       </p>
-      <Link
-        className="button button-blue mt-3 text-sm inline-block"
-        to="/update"
+      <Button
+        className="mt-3 inline-block"
+        sizeVariant="small"
+        onClick={() => setLocation("/update")}
       >
         Update now
-      </Link>
+      </Button>
     </div>
   )
 }
