@@ -45,6 +45,8 @@ func IsLoginServerSynonym(val any) bool {
 }
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
+// When you add a Pref to this struct, remember to add a corresponding
+// field in MaskedPrefs, and check your field for equality in Prefs.Equals().
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	//
@@ -213,6 +215,11 @@ type Prefs struct {
 	// posture checks.
 	PostureChecking bool
 
+	// NetfilterKind specifies what netfilter implementation to use.
+	//
+	// Linux-only.
+	NetfilterKind string
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -241,6 +248,9 @@ type AppConnectorPrefs struct {
 }
 
 // MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
+// Make sure that the bool you add here maintains the same ordering of fields
+// as the Prefs struct, because the ApplyEdits() function below relies on this
+// ordering to be the same.
 type MaskedPrefs struct {
 	Prefs
 
@@ -269,6 +279,7 @@ type MaskedPrefs struct {
 	AutoUpdateSet             bool `json:",omitempty"`
 	AppConnectorSet           bool `json:",omitempty"`
 	PostureCheckingSet        bool `json:",omitempty"`
+	NetfilterKindSet          bool `json:",omitempty"`
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -409,6 +420,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.OperatorUser != "" {
 		fmt.Fprintf(&sb, "op=%q ", p.OperatorUser)
 	}
+	if p.NetfilterKind != "" {
+		fmt.Fprintf(&sb, "netfilterKind=%s ", p.NetfilterKind)
+	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
 	if p.Persist != nil {
@@ -468,7 +482,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate == p2.AutoUpdate &&
 		p.AppConnector == p2.AppConnector &&
-		p.PostureChecking == p2.PostureChecking
+		p.PostureChecking == p2.PostureChecking &&
+		p.NetfilterKind == p2.NetfilterKind
 }
 
 func (au AutoUpdatePrefs) Pretty() string {

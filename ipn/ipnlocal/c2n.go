@@ -69,6 +69,9 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 
 	// App Connectors.
 	req("GET /appconnector/routes"): handleC2NAppConnectorDomainRoutesGet,
+
+	// Linux netfilter.
+	req("POST /netfilter-kind"): handleC2NSetNetfilterKind,
 }
 
 type c2nHandler func(*LocalBackend, http.ResponseWriter, *http.Request)
@@ -220,6 +223,32 @@ func handleC2NAppConnectorDomainRoutesGet(b *LocalBackend, w http.ResponseWriter
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+
+func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	b.logf("c2n: POST /netfilter-kind received")
+
+	if version.OS() != "linux" {
+		http.Error(w, "netfilter kind only settable on linux", http.StatusNotImplemented)
+	}
+
+	kind := r.FormValue("kind")
+	b.logf("c2n: switching netfilter to %s", kind)
+
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		NetfilterKindSet: true,
+		Prefs: ipn.Prefs{
+			NetfilterKind: kind,
+		},
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	b.authReconfig()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func handleC2NUpdateGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

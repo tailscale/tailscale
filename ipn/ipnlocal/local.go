@@ -271,6 +271,9 @@ type LocalBackend struct {
 	currentUser         ipnauth.WindowsToken
 	selfUpdateProgress  []ipnstate.UpdateProgress
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
+	// capForcedNetfilter is the netfilter that control instructs Linux clients
+	// to use, unless overridden locally.
+	capForcedNetfilter string
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -3901,12 +3904,21 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		singleRouteThreshold = 1
 	}
 
+	netfilterKind := b.capForcedNetfilter
+	if prefs.NetfilterKind() != "" {
+		if b.capForcedNetfilter != "" {
+			b.logf("nodeattr netfilter preference %s overridden by c2n pref %s", b.capForcedNetfilter, prefs.NetfilterKind())
+		}
+		netfilterKind = prefs.NetfilterKind()
+	}
+
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
 		SNATSubnetRoutes: !prefs.NoSNAT(),
 		NetfilterMode:    prefs.NetfilterMode(),
 		Routes:           peerRoutes(b.logf, cfg.Peers, singleRouteThreshold),
+		NetfilterKind:    netfilterKind,
 	}
 
 	if distro.Get() == distro.Synology {
@@ -4415,6 +4427,14 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		osshare.SetFileSharingEnabled(fs, b.logf)
 	}
 	b.capFileSharing = fs
+
+	if hasCapability(nm, tailcfg.NodeAttrLinuxMustUseIPTables) {
+		b.capForcedNetfilter = "iptables"
+	} else if hasCapability(nm, tailcfg.NodeAttrLinuxMustUseNfTables) {
+		b.capForcedNetfilter = "nftables"
+	} else {
+		b.capForcedNetfilter = "" // empty string means client can auto-detect
+	}
 
 	b.MagicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
 

@@ -60,6 +60,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AutoUpdate",
 		"AppConnector",
 		"PostureChecking",
+		"NetfilterKind",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
@@ -327,6 +328,16 @@ func TestPrefsEqual(t *testing.T) {
 			&Prefs{PostureChecking: false},
 			false,
 		},
+		{
+			&Prefs{NetfilterKind: "iptables"},
+			&Prefs{NetfilterKind: "iptables"},
+			true,
+		},
+		{
+			&Prefs{NetfilterKind: "nftables"},
+			&Prefs{NetfilterKind: ""},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equals(tt.b)
@@ -541,6 +552,20 @@ func TestPrefsPretty(t *testing.T) {
 				AppConnector: AppConnectorPrefs{
 					Advertise: false,
 				},
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				NetfilterKind: "iptables",
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off netfilterKind=iptables update=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				NetfilterKind: "",
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
