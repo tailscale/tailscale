@@ -33,8 +33,7 @@ export default function useExitNodes(node: NodeData, filter?: string) {
   const [data, setData] = useState<ExitNode[]>([])
 
   useEffect(() => {
-    apiFetch("/exit-nodes", "GET")
-      .then((r) => r.json())
+    apiFetch<ExitNode[]>("/exit-nodes", "GET")
       .then((r) => setData(r))
       .catch((err) => {
         alert("Failed operation: " + err.message)

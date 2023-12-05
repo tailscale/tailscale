@@ -146,8 +146,7 @@ type TailscaleUpOptions = {
 }
 
 function tailscaleUp(options: TailscaleUpOptions) {
-  return apiFetch("/up", "POST", options)
-    .then((r) => r.json())
+  return apiFetch<{ url?: string }>("/up", "POST", options)
     .then((d) => {
       d.url && window.open(d.url, "_blank")
     })

@@ -61,9 +61,8 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
     let timer: NodeJS.Timeout | undefined
 
     function poll() {
-      apiFetch("/local/v0/update/progress", "GET")
-        .then((res) => res.json())
-        .then((res: UpdateProgress[]) => {
+      apiFetch<UpdateProgress[]>("/local/v0/update/progress", "GET")
+        .then((res) => {
           // res contains a list of UpdateProgresses that is strictly increasing
           // in size, so updateMessagesRead keeps track (across calls of poll())
           // of how many of those we have already read. This is why it is not
