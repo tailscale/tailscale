@@ -10,6 +10,11 @@ export function assertNever(a: never): never {
 }
 
 /**
+ * noop is an empty function for use as a default value.
+ */
+export function noop() {}
+
+/**
  * pluralize is a very simple function that returns either
  * the singular or plural form of a string based on the given
  * quantity.
@@ -18,4 +23,22 @@ export function assertNever(a: never): never {
  */
 export function pluralize(signular: string, plural: string, qty: number) {
   return qty === 1 ? signular : plural
+}
+
+/**
+ * isTailscaleIPv6 returns true when the ip matches
+ * Tailnet's IPv6 format.
+ */
+export function isTailscaleIPv6(ip: string): boolean {
+  return ip.startsWith("fd7a:115c:a1e0")
+}
+
+/**
+ * isPromise returns whether the current value is a promise.
+ */
+export function isPromise<T = unknown>(val: unknown): val is Promise<T> {
+  if (!val) {
+    return false
+  }
+  return typeof val === "object" && "then" in val
 }
