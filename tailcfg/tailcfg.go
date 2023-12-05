@@ -122,7 +122,8 @@ type CapabilityVersion int
 //   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
 //   - 80: 2023-11-16: can handle c2n GET /tls-cert-status
 //   - 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
-const CurrentCapabilityVersion CapabilityVersion = 81
+//   - 82: 2023-12-01: Client understands NodeAttrLinuxMustUseIPTables, NodeAttrLinuxMustUseNfTables, c2n /netfilter-kind
+const CurrentCapabilityVersion CapabilityVersion = 82
 
 type StableID string
 
