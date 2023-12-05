@@ -1230,6 +1230,42 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	b.authReconfig()
 }
 
+type preferencePolicyInfo struct {
+	key syspolicy.Key
+	get func(ipn.PrefsView) bool
+	set func(*ipn.Prefs, bool)
+}
+
+var preferencePolicies = []preferencePolicyInfo{
+	{
+		key: syspolicy.EnableIncomingConnections,
+		// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
+		// backend), so this has to convert between the two conventions.
+		get: func(p ipn.PrefsView) bool { return !p.ShieldsUp() },
+		set: func(p *ipn.Prefs, v bool) { p.ShieldsUp = !v },
+	},
+	{
+		key: syspolicy.EnableServerMode,
+		get: func(p ipn.PrefsView) bool { return p.ForceDaemon() },
+		set: func(p *ipn.Prefs, v bool) { p.ForceDaemon = v },
+	},
+	{
+		key: syspolicy.ExitNodeAllowLANAccess,
+		get: func(p ipn.PrefsView) bool { return p.ExitNodeAllowLANAccess() },
+		set: func(p *ipn.Prefs, v bool) { p.ExitNodeAllowLANAccess = v },
+	},
+	{
+		key: syspolicy.EnableTailscaleDNS,
+		get: func(p ipn.PrefsView) bool { return p.CorpDNS() },
+		set: func(p *ipn.Prefs, v bool) { p.CorpDNS = v },
+	},
+	{
+		key: syspolicy.EnableTailscaleSubnets,
+		get: func(p ipn.PrefsView) bool { return p.RouteAll() },
+		set: func(p *ipn.Prefs, v bool) { p.RouteAll = v },
+	},
+}
+
 // applySysPolicy overwrites configured preferences with policies that may be
 // configured by the system administrator in an OS-specific way.
 func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
@@ -1238,21 +1274,14 @@ func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
 		anyChange = true
 	}
 
-	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
-	// backend), so this has to convert between the two conventions.
-	if shieldsUp, err := syspolicy.GetPreferenceOption(syspolicy.EnableIncomingConnections); err == nil {
-		newVal := !shieldsUp.ShouldEnable(!prefs.ShieldsUp)
-		if prefs.ShieldsUp != newVal {
-			prefs.ShieldsUp = newVal
-			anyChange = true
-		}
-	}
-
-	if forceDaemon, err := syspolicy.GetPreferenceOption(syspolicy.EnableServerMode); err == nil {
-		newVal := forceDaemon.ShouldEnable(prefs.ForceDaemon)
-		if prefs.ForceDaemon != newVal {
-			prefs.ForceDaemon = newVal
-			anyChange = true
+	for _, opt := range preferencePolicies {
+		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
+			curVal := opt.get(prefs.View())
+			newVal := po.ShouldEnable(curVal)
+			if curVal != newVal {
+				opt.set(prefs, newVal)
+				anyChange = true
+			}
 		}
 	}
 
