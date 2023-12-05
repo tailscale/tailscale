@@ -5,6 +5,7 @@ package ipnlocal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -1332,6 +1333,34 @@ func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
 	return nil
 }
 
+type errorSyspolicyHandler struct {
+	t         *testing.T
+	err       error
+	key       syspolicy.Key
+	allowKeys map[syspolicy.Key]*string
+}
+
+func (h *errorSyspolicyHandler) ReadString(key string) (string, error) {
+	sk := syspolicy.Key(key)
+	if _, ok := h.allowKeys[sk]; !ok {
+		h.t.Errorf("ReadString: %q is not in list of permitted keys", h.key)
+	}
+	if sk == h.key {
+		return "", h.err
+	}
+	return "", syspolicy.ErrNoSuchKey
+}
+
+func (h *errorSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
+	h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
+	return 0, syspolicy.ErrNoSuchKey
+}
+
+func (h *errorSyspolicyHandler) ReadBoolean(key string) (bool, error) {
+	h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
+	return false, syspolicy.ErrNoSuchKey
+}
+
 type mockSyspolicyHandler struct {
 	t *testing.T
 	// stringPolicies is the collection of policies that we expect to see
@@ -1625,28 +1654,40 @@ func TestApplySysPolicy(t *testing.T) {
 		{
 			name: "prefs set without policies",
 			prefs: ipn.Prefs{
-				ControlURL:  "1",
-				ShieldsUp:   true,
-				ForceDaemon: true,
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                true,
+				RouteAll:               true,
 			},
 			wantPrefs: ipn.Prefs{
-				ControlURL:  "1",
-				ShieldsUp:   true,
-				ForceDaemon: true,
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                true,
+				RouteAll:               true,
 			},
 		},
 		{
 			name: "empty prefs with policies",
 			wantPrefs: ipn.Prefs{
-				ControlURL:  "1",
-				ShieldsUp:   true,
-				ForceDaemon: true,
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                true,
+				RouteAll:               true,
 			},
 			wantAnyChange: true,
 			stringPolicies: map[syspolicy.Key]string{
 				syspolicy.ControlURL:                "1",
 				syspolicy.EnableIncomingConnections: "never",
 				syspolicy.EnableServerMode:          "always",
+				syspolicy.ExitNodeAllowLANAccess:    "always",
+				syspolicy.EnableTailscaleDNS:        "always",
+				syspolicy.EnableTailscaleSubnets:    "always",
 			},
 		},
 		{
@@ -1665,42 +1706,63 @@ func TestApplySysPolicy(t *testing.T) {
 				syspolicy.ControlURL:                "1",
 				syspolicy.EnableIncomingConnections: "never",
 				syspolicy.EnableServerMode:          "always",
+				syspolicy.ExitNodeAllowLANAccess:    "never",
+				syspolicy.EnableTailscaleDNS:        "never",
+				syspolicy.EnableTailscaleSubnets:    "never",
 			},
 		},
 		{
 			name: "prefs set with conflicting policies",
 			prefs: ipn.Prefs{
-				ControlURL:  "1",
-				ShieldsUp:   true,
-				ForceDaemon: true,
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: false,
+				CorpDNS:                true,
+				RouteAll:               false,
 			},
 			wantPrefs: ipn.Prefs{
-				ControlURL:  "2",
-				ShieldsUp:   false,
-				ForceDaemon: false,
+				ControlURL:             "2",
+				ShieldsUp:              false,
+				ForceDaemon:            false,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                false,
+				RouteAll:               true,
 			},
 			wantAnyChange: true,
 			stringPolicies: map[syspolicy.Key]string{
 				syspolicy.ControlURL:                "2",
 				syspolicy.EnableIncomingConnections: "always",
 				syspolicy.EnableServerMode:          "never",
+				syspolicy.ExitNodeAllowLANAccess:    "always",
+				syspolicy.EnableTailscaleDNS:        "never",
+				syspolicy.EnableTailscaleSubnets:    "always",
 			},
 		},
 		{
 			name: "prefs set with neutral policies",
 			prefs: ipn.Prefs{
-				ControlURL:  "1",
-				ShieldsUp:   true,
-				ForceDaemon: true,
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: false,
+				CorpDNS:                true,
+				RouteAll:               true,
 			},
 			wantPrefs: ipn.Prefs{
-				ControlURL:  "1",
-				ShieldsUp:   true,
-				ForceDaemon: true,
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: false,
+				CorpDNS:                true,
+				RouteAll:               true,
 			},
 			stringPolicies: map[syspolicy.Key]string{
 				syspolicy.EnableIncomingConnections: "user-decides",
 				syspolicy.EnableServerMode:          "user-decides",
+				syspolicy.ExitNodeAllowLANAccess:    "user-decides",
+				syspolicy.EnableTailscaleDNS:        "user-decides",
+				syspolicy.EnableTailscaleSubnets:    "user-decides",
 			},
 		},
 		{
@@ -1713,78 +1775,21 @@ func TestApplySysPolicy(t *testing.T) {
 				syspolicy.ControlURL: "set",
 			},
 		},
-		{
-			name: "always incoming connections",
-			prefs: ipn.Prefs{
-				ShieldsUp: true,
-			},
-			wantPrefs: ipn.Prefs{
-				ShieldsUp: false,
-			},
-			wantAnyChange: true,
-			stringPolicies: map[syspolicy.Key]string{
-				syspolicy.EnableIncomingConnections: "always",
-			},
-		},
-		{
-			name: "never incoming connections",
-			prefs: ipn.Prefs{
-				ShieldsUp: false,
-			},
-			wantPrefs: ipn.Prefs{
-				ShieldsUp: true,
-			},
-			wantAnyChange: true,
-			stringPolicies: map[syspolicy.Key]string{
-				syspolicy.EnableIncomingConnections: "never",
-			},
-		},
-		{
-			name: "always server mode",
-			prefs: ipn.Prefs{
-				ForceDaemon: false,
-			},
-			wantPrefs: ipn.Prefs{
-				ForceDaemon: true,
-			},
-			wantAnyChange: true,
-			stringPolicies: map[syspolicy.Key]string{
-				syspolicy.EnableServerMode: "always",
-			},
-		},
-		{
-			name: "never server mode",
-			prefs: ipn.Prefs{
-				ForceDaemon: true,
-			},
-			wantPrefs: ipn.Prefs{
-				ForceDaemon: false,
-			},
-			wantAnyChange: true,
-			stringPolicies: map[syspolicy.Key]string{
-				syspolicy.EnableServerMode: "never",
-			},
-		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Run("unit", func(t *testing.T) {
-				// Be strict when testing the func directly.
-				msh := &mockSyspolicyHandler{
-					t: t,
-					stringPolicies: map[syspolicy.Key]*string{
-						syspolicy.ControlURL:                nil,
-						syspolicy.EnableIncomingConnections: nil,
-						syspolicy.EnableServerMode:          nil,
-					},
-					failUnknownPolicies: true,
-				}
-				for p, v := range tt.stringPolicies {
-					v := v // construct a unique pointer for each policy value
-					msh.stringPolicies[p] = &v
-				}
-				syspolicy.SetHandlerForTest(t, msh)
+			msh := &mockSyspolicyHandler{
+				t:              t,
+				stringPolicies: make(map[syspolicy.Key]*string, len(tt.stringPolicies)),
+			}
+			for p, v := range tt.stringPolicies {
+				v := v // construct a unique pointer for each policy value
+				msh.stringPolicies[p] = &v
+			}
+			syspolicy.SetHandlerForTest(t, msh)
 
+			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
 
 				gotAnyChange := applySysPolicy(prefs)
@@ -1802,16 +1807,6 @@ func TestApplySysPolicy(t *testing.T) {
 					t.Errorf("prefs=%v, want %v", prefs.Pretty(), tt.wantPrefs.Pretty())
 				}
 			})
-			// Create a more relaxed syspolicy for integration tests.
-			msh := &mockSyspolicyHandler{
-				t:              t,
-				stringPolicies: make(map[syspolicy.Key]*string, len(tt.stringPolicies)),
-			}
-			for p, v := range tt.stringPolicies {
-				v := v // construct a unique pointer for each policy value
-				msh.stringPolicies[p] = &v
-			}
-			syspolicy.SetHandlerForTest(t, msh)
 
 			t.Run("set prefs", func(t *testing.T) {
 
@@ -1848,6 +1843,139 @@ func TestApplySysPolicy(t *testing.T) {
 					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), wantPrefs.Pretty())
 				}
 			})
+		})
+	}
+}
+
+func TestPreferencePolicyInfo(t *testing.T) {
+	tests := []struct {
+		name         string
+		initialValue bool
+		wantValue    bool
+		wantChange   bool
+		policyValue  string
+		policyError  error
+	}{
+		{
+			name:         "force enable modify",
+			initialValue: false,
+			wantValue:    true,
+			wantChange:   true,
+			policyValue:  "always",
+		},
+		{
+			name:         "force enable unchanged",
+			initialValue: true,
+			wantValue:    true,
+			policyValue:  "always",
+		},
+		{
+			name:         "force disable modify",
+			initialValue: true,
+			wantValue:    false,
+			wantChange:   true,
+			policyValue:  "never",
+		},
+		{
+			name:         "force disable unchanged",
+			initialValue: false,
+			wantValue:    false,
+			policyValue:  "never",
+		},
+		{
+			name:         "unforced enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyValue:  "user-decides",
+		},
+		{
+			name:         "unforced disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyValue:  "user-decides",
+		},
+		{
+			name:         "blank enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyValue:  "",
+		},
+		{
+			name:         "blank disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyValue:  "",
+		},
+		{
+			name:         "unset enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyError:  syspolicy.ErrNoSuchKey,
+		},
+		{
+			name:         "unset disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyError:  syspolicy.ErrNoSuchKey,
+		},
+		{
+			name:         "error enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyError:  errors.New("test error"),
+		},
+		{
+			name:         "error disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyError:  errors.New("test error"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, pp := range preferencePolicies {
+				t.Run(string(pp.key), func(t *testing.T) {
+					var h syspolicy.Handler
+
+					allPolicies := make(map[syspolicy.Key]*string, len(preferencePolicies)+1)
+					allPolicies[syspolicy.ControlURL] = nil
+					for _, pp := range preferencePolicies {
+						allPolicies[pp.key] = nil
+					}
+
+					if tt.policyError != nil {
+						h = &errorSyspolicyHandler{
+							t:         t,
+							err:       tt.policyError,
+							key:       pp.key,
+							allowKeys: allPolicies,
+						}
+					} else {
+						msh := &mockSyspolicyHandler{
+							t:                   t,
+							stringPolicies:      allPolicies,
+							failUnknownPolicies: true,
+						}
+						msh.stringPolicies[pp.key] = &tt.policyValue
+						h = msh
+					}
+					syspolicy.SetHandlerForTest(t, h)
+
+					prefs := defaultPrefs.AsStruct()
+					pp.set(prefs, tt.initialValue)
+
+					gotAnyChange := applySysPolicy(prefs)
+
+					if gotAnyChange != tt.wantChange {
+						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)
+					}
+					got := pp.get(prefs.View())
+					if got != tt.wantValue {
+						t.Errorf("pref=%v, want %v", got, tt.wantValue)
+					}
+				})
+			}
 		})
 	}
 }
