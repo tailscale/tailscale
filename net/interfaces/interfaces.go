@@ -557,6 +557,15 @@ func LikelyHomeRouterIP() (gateway, myIP netip.Addr, ok bool) {
 			// always return an IPv4 address.
 			return
 		}
+
+		// If this prefix ("interface") doesn't contain the gateway,
+		// then we skip it; this can happen if we have multiple valid
+		// interfaces and the interface with the route to the internet
+		// is ordered after another valid+running interface.
+		if !pfx.Contains(gateway) {
+			return
+		}
+
 		if gateway.IsPrivate() && ip.IsPrivate() {
 			myIP = ip
 			ok = true
