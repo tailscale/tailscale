@@ -999,9 +999,6 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		defer k.Unlock()
 		for k, v := range k.secret {
 			v := base64.StdEncoding.EncodeToString([]byte(v))
-			if err != nil {
-				panic("encode failed")
-			}
 			ret["data"][k] = v
 		}
 		if err := json.NewEncoder(w).Encode(ret); err != nil {

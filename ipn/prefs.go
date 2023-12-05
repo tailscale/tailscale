@@ -444,8 +444,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		return false
 	}
 
-	return p != nil && p2 != nil &&
-		p.ControlURL == p2.ControlURL &&
+	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
