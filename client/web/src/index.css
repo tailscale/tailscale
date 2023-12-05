@@ -188,7 +188,7 @@
     @apply text-gray-500 text-sm leading-tight truncate;
   }
   .card td:last-child {
-    @apply col-span-2 text-gray-800 text-sm leading-tight truncate;
+    @apply col-span-2 text-gray-800 text-sm leading-tight;
   }
 
   .description {

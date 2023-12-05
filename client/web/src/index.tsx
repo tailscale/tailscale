@@ -11,6 +11,7 @@
 import React from "react"
 import { createRoot } from "react-dom/client"
 import App from "src/components/app"
+import ToastProvider from "src/ui/toaster"
 
 declare var window: any
 // This is used to determine if the react client is built.
@@ -25,6 +26,8 @@ const root = createRoot(rootEl)
 
 root.render(
   <React.StrictMode>
-    <App />
+    <ToastProvider>
+      <App />
+    </ToastProvider>
   </React.StrictMode>
 )

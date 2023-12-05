@@ -5,9 +5,10 @@ import cx from "classnames"
 import React, { useMemo } from "react"
 import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
 import { ReactComponent as Machine } from "src/assets/icons/machine.svg"
+import AddressCard from "src/components/address-copy-card"
 import ExitNodeSelector from "src/components/exit-node-selector"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
-import { pluralize } from "src/util"
+import { pluralize } from "src/utils/util"
 import { Link, useLocation } from "wouter"
 
 export default function HomeView({
@@ -49,7 +50,13 @@ export default function HomeView({
               </p>
             </div>
           </div>
-          <p className="text-gray-800 text-lg leading-[25.20px]">{node.IP}</p>
+          <AddressCard
+            triggerClassName="text-gray-800 text-lg leading-[25.20px]"
+            v4Address={node.IPv4}
+            v6Address={node.IPv6}
+            shortDomain={node.DeviceName}
+            fullDomain={`${node.DeviceName}.${node.TailnetName}`}
+          />
         </div>
         {(node.Features["advertise-exit-node"] ||
           node.Features["use-exit-node"]) && (

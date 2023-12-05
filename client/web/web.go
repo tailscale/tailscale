@@ -536,7 +536,7 @@ type nodeData struct {
 	DeviceName  string
 	TailnetName string // TLS cert name
 	DomainName  string
-	IP          string // IPv4
+	IPv4        string
 	IPv6        string
 	OS          string
 	IPNVersion  string
@@ -630,11 +630,11 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {
-			data.IP = ip.String()
+			data.IPv4 = ip.String()
 		} else if ip.Is6() {
 			data.IPv6 = ip.String()
 		}
-		if data.IP != "" && data.IPv6 != "" {
+		if data.IPv4 != "" && data.IPv6 != "" {
 			break
 		}
 	}

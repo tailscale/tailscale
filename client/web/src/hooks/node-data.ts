@@ -2,18 +2,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { apiFetch, setUnraidCsrfToken } from "src/api"
+import { apiFetch, incrementMetric, setUnraidCsrfToken } from "src/api"
 import { ExitNode, noExitNode, runAsExitNode } from "src/hooks/exit-nodes"
 import { VersionInfo } from "src/hooks/self-update"
-import { assertNever } from "src/util"
-import { incrementMetric, MetricName } from "src/api"
+import { assertNever } from "src/utils/util"
 
 export type NodeData = {
   Profile: UserProfile
   Status: NodeState
   DeviceName: string
   OS: string
-  IP: string
+  IPv4: string
   IPv6: string
   ID: string
   KeyExpiry: string
@@ -177,7 +176,11 @@ export default function useNodeData() {
       const updateMetrics = () => {
         // only update metrics if values have changed
         if (data?.AdvertisingExitNode !== d.AdvertiseExitNode) {
-          incrementMetric(d.AdvertiseExitNode ? "web_client_advertise_exitnode_enable" : "web_client_advertise_exitnode_disable")
+          incrementMetric(
+            d.AdvertiseExitNode
+              ? "web_client_advertise_exitnode_enable"
+              : "web_client_advertise_exitnode_disable"
+          )
         }
       }
 

@@ -142,7 +142,7 @@ export default function SubnetRouterView({
                 node={node}
               >
                 To approve routes, in the admin console go to{" "}
-                <Control.AdminLink node={node} path={`/machines/${node.IP}`}>
+                <Control.AdminLink node={node} path={`/machines/${node.IPv4}`}>
                   the machine’s route settings
                 </Control.AdminLink>
                 .

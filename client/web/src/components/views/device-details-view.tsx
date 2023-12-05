@@ -6,9 +6,11 @@ import React from "react"
 import { apiFetch } from "src/api"
 import ACLTag from "src/components/acl-tag"
 import * as Control from "src/components/control-components"
+import NiceIP from "src/components/nice-ip"
 import { UpdateAvailableNotification } from "src/components/update-available"
 import { NodeData } from "src/hooks/node-data"
 import Button from "src/ui/button"
+import QuickCopy from "src/ui/quick-copy"
 import { useLocation } from "wouter"
 
 export default function DeviceDetailsView({
@@ -69,7 +71,14 @@ export default function DeviceDetailsView({
               </tr>
               <tr>
                 <td>Machine name</td>
-                <td>{node.DeviceName}</td>
+                <td>
+                  <QuickCopy
+                    primaryActionValue={node.DeviceName}
+                    primaryActionSubject="machine name"
+                  >
+                    {node.DeviceName}
+                  </QuickCopy>
+                </td>
               </tr>
               <tr>
                 <td>OS</td>
@@ -77,7 +86,14 @@ export default function DeviceDetailsView({
               </tr>
               <tr>
                 <td>ID</td>
-                <td>{node.ID}</td>
+                <td>
+                  <QuickCopy
+                    primaryActionValue={node.ID}
+                    primaryActionSubject="ID"
+                  >
+                    {node.ID}
+                  </QuickCopy>
+                </td>
               </tr>
               <tr>
                 <td>Tailscale version</td>
@@ -101,20 +117,46 @@ export default function DeviceDetailsView({
             <tbody>
               <tr>
                 <td>Tailscale IPv4</td>
-                <td>{node.IP}</td>
+                <td>
+                  <QuickCopy
+                    primaryActionValue={node.IPv4}
+                    primaryActionSubject="IPv4 address"
+                  >
+                    {node.IPv4}
+                  </QuickCopy>
+                </td>
               </tr>
               <tr>
                 <td>Tailscale IPv6</td>
-                <td>{node.IPv6}</td>
+                <td>
+                  <QuickCopy
+                    primaryActionValue={node.IPv6}
+                    primaryActionSubject="IPv6 address"
+                  >
+                    <NiceIP ip={node.IPv6} />
+                  </QuickCopy>
+                </td>
               </tr>
               <tr>
                 <td>Short domain</td>
-                <td>{node.DeviceName}</td>
+                <td>
+                  <QuickCopy
+                    primaryActionValue={node.DeviceName}
+                    primaryActionSubject="short domain"
+                  >
+                    {node.DeviceName}
+                  </QuickCopy>
+                </td>
               </tr>
               <tr>
                 <td>Full domain</td>
                 <td>
-                  {node.DeviceName}.{node.TailnetName}
+                  <QuickCopy
+                    primaryActionValue={`${node.DeviceName}.${node.TailnetName}`}
+                    primaryActionSubject="full domain"
+                  >
+                    {node.DeviceName}.{node.TailnetName}
+                  </QuickCopy>
                 </td>
               </tr>
             </tbody>
@@ -125,7 +167,7 @@ export default function DeviceDetailsView({
           node={node}
         >
           Want even more details? Visit{" "}
-          <Control.AdminLink node={node} path={`/machines/${node.IP}`}>
+          <Control.AdminLink node={node} path={`/machines/${node.IPv4}`}>
             this device’s page
           </Control.AdminLink>{" "}
           in the admin console.
