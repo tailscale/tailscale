@@ -11,6 +11,8 @@
 import React from "react"
 import { createRoot } from "react-dom/client"
 import App from "src/components/app"
+import { SWRConfig } from "swr"
+import { apiFetch } from "./api"
 
 declare var window: any
 // This is used to determine if the react client is built.
@@ -25,6 +27,19 @@ const root = createRoot(rootEl)
 
 root.render(
   <React.StrictMode>
-    <App />
+    <SWRConfig
+      value={{
+        fetcher: apiFetch,
+        onError: (err, _) => {
+          // TODO: toast on error instead?
+          if (err.message) {
+            alert(`Request failed: ${err.message}`)
+          }
+          console.error(err)
+        },
+      }}
+    >
+      <App />
+    </SWRConfig>
   </React.StrictMode>
 )

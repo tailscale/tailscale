@@ -1,8 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { useCallback, useEffect, useState } from "react"
-import { apiFetch, setSynoToken } from "src/api"
+import { useEffect } from "react"
+import { getAuthSessionNew, setSynoToken } from "src/api"
+import useSWR from "swr"
 
 export enum AuthType {
   synology = "synology",
@@ -23,57 +24,29 @@ export type AuthResponse = {
 // useAuth reports and refreshes Tailscale auth status
 // for the web client.
 export default function useAuth() {
-  const [data, setData] = useState<AuthResponse>()
-  const [loading, setLoading] = useState<boolean>(true)
+  const { data, isLoading, mutate } = useSWR<AuthResponse>("/auth")
 
-  const loadAuth = useCallback(() => {
-    setLoading(true)
-    return apiFetch("/auth", "GET")
-      .then((r) => r.json())
-      .then((d) => {
-        setData(d)
-        switch ((d as AuthResponse).authNeeded) {
-          case AuthType.synology:
-            fetch("/webman/login.cgi")
-              .then((r) => r.json())
-              .then((a) => {
-                setSynoToken(a.SynoToken)
-                setLoading(false)
-              })
-            break
-          default:
-            setLoading(false)
-        }
-        return d
-      })
-      .catch((error) => {
-        setLoading(false)
-        console.error(error)
-      })
-  }, [])
+  useEffect(() => {
+    if (data?.authNeeded === AuthType.synology) {
+      fetch("/webman/login.cgi")
+        .then((r) => r.json())
+        .then((a) => {
+          setSynoToken(a.SynoToken)
+          // Refresh auth reponse once synology
+          // auth completed.
+          mutate()
+        })
+    }
+  })
 
-  const newSession = useCallback(() => {
-    return apiFetch("/auth/session/new", "GET")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.authUrl) {
-          window.open(d.authUrl, "_blank")
-          return apiFetch("/auth/session/wait", "GET")
-        }
-      })
-      .then(() => loadAuth())
-      .catch((error) => {
-        console.error(error)
-      })
-  }, [loadAuth])
-
+  // TODO
   useEffect(() => {
     loadAuth().then((d) => {
       if (
         !d.canManageNode &&
         new URLSearchParams(window.location.search).get("check") === "now"
       ) {
-        newSession()
+        getAuthSessionNew()
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -81,7 +54,6 @@ export default function useAuth() {
 
   return {
     data,
-    loading,
-    newSession,
+    loading: isLoading || data?.authNeeded === AuthType.synology,
   }
 }

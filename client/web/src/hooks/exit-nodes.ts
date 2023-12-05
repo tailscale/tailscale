@@ -1,8 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { useEffect, useMemo, useState } from "react"
-import { apiFetch } from "src/api"
+import { useMemo } from "react"
+import { NodeData } from "src/hooks/node-data"
+import useSWR from "swr"
 
 export type ExitNode = {
   ID: string
@@ -28,17 +29,19 @@ export type ExitNodeGroup = {
   nodes: ExitNode[]
 }
 
-export default function useExitNodes(tailnetName: string, filter?: string) {
-  const [data, setData] = useState<ExitNode[]>([])
+export default function useExitNodes(filter?: string) {
+  const { data: node } = useSWR<NodeData>("/data")
+  const { data } = useSWR<ExitNode[]>("/exit-nodes") // TODO: PIPE BACK ERRORS, MAYBE SWR HAS SOMETHING GOOD
+  // const [data, setData] = useState<ExitNode[]>([])
 
-  useEffect(() => {
-    apiFetch("/exit-nodes", "GET")
-      .then((r) => r.json())
-      .then((r) => setData(r))
-      .catch((err) => {
-        alert("Failed operation: " + err.message)
-      })
-  }, [])
+  // useEffect(() => {
+  //   apiFetch("/exit-nodes", "GET")
+  //     .then((r) => r.json())
+  //     .then((r) => setData(r))
+  //     .catch((err) => {
+  //       alert("Failed operation: " + err.message)
+  //     })
+  // }, [])
 
   const { tailnetNodesSorted, locationNodesMap } = useMemo(() => {
     // First going through exit nodes and splitting them into two groups:
@@ -55,7 +58,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
         // Only Mullvad exit nodes have locations filled.
         tailnetNodes.push({
           ...n,
-          Name: trimDNSSuffix(n.Name, tailnetName),
+          Name: trimDNSSuffix(n.Name, node?.TailnetName || ""),
         })
         return
       }
@@ -70,7 +73,7 @@ export default function useExitNodes(tailnetName: string, filter?: string) {
       tailnetNodesSorted: tailnetNodes.sort(compareByName),
       locationNodesMap: locationNodes,
     }
-  }, [data, tailnetName])
+  }, [data, node?.TailnetName])
 
   const hasFilter = Boolean(filter)
 

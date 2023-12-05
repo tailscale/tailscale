@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React, { useEffect } from "react"
+import { getAuthSessionNew } from "src/api"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
@@ -12,29 +13,24 @@ import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
 import useNodeData, { NodeData } from "src/hooks/node-data"
+import { useSWRConfig } from "swr"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
-  const { data: auth, loading: loadingAuth, newSession } = useAuth()
+  const { data: auth, loading: loadingAuth } = useAuth()
 
   return (
     <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
       {loadingAuth || !auth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
-        <WebClient auth={auth} newSession={newSession} />
+        <WebClient auth={auth} />
       )}
     </main>
   )
 }
 
-function WebClient({
-  auth,
-  newSession,
-}: {
-  auth: AuthResponse
-  newSession: () => Promise<void>
-}) {
+function WebClient({ auth }: { auth: AuthResponse }) {
   const { data, refreshData, nodeUpdaters } = useNodeData()
   useEffect(() => {
     refreshData()
@@ -51,7 +47,7 @@ function WebClient({
     // Otherwise render the new web client.
     <>
       <Router base={data.URLPrefix}>
-        <Header node={data} auth={auth} newSession={newSession} />
+        <Header node={data} auth={auth} />
         <Switch>
           <Route path="/">
             <HomeView
@@ -93,15 +89,8 @@ function WebClient({
   )
 }
 
-function Header({
-  node,
-  auth,
-  newSession,
-}: {
-  node: NodeData
-  auth: AuthResponse
-  newSession: () => Promise<void>
-}) {
+function Header({ node, auth }: { node: NodeData; auth: AuthResponse }) {
+  const { mutate } = useSWRConfig()
   const [loc] = useLocation()
 
   return (
@@ -113,7 +102,11 @@ function Header({
             {node.DomainName}
           </div>
         </div>
-        <LoginToggle node={node} auth={auth} newSession={newSession} />
+        <LoginToggle
+          node={node}
+          auth={auth}
+          newSession={() => getAuthSessionNew().then(() => mutate("/data"))}
+        />
       </div>
       {loc !== "/" && loc !== "/update" && (
         <Link

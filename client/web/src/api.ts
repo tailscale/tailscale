@@ -11,14 +11,12 @@ let unraidCsrfToken: string | undefined // required for unraid POST requests (#8
 // apiFetch adds the `api` prefix to the request URL,
 // so endpoint should be provided without the `api` prefix
 // (i.e. provide `/data` rather than `api/data`).
-export function apiFetch(
+export function apiFetch<T>(
   endpoint: string,
-  method: "GET" | "POST" | "PATCH",
-  body?: any,
-  params?: Record<string, string>
-): Promise<Response> {
+  init?: RequestInit | undefined
+): Promise<T> {
   const urlParams = new URLSearchParams(window.location.search)
-  const nextParams = new URLSearchParams(params)
+  const nextParams = new URLSearchParams()
   if (synoToken) {
     nextParams.set("SynoToken", synoToken)
   } else {
@@ -31,36 +29,43 @@ export function apiFetch(
   const url = `api${endpoint}${search ? `?${search}` : ""}`
 
   var contentType: string
-  if (unraidCsrfToken && method === "POST") {
+  if (unraidCsrfToken && init?.method === "POST") {
     const params = new URLSearchParams()
     params.append("csrf_token", unraidCsrfToken)
-    if (body) {
-      params.append("ts_data", JSON.stringify(body))
+    if (init.body) {
+      params.append("ts_data", init.body.toString())
     }
-    body = params.toString()
+    init.body = params.toString()
     contentType = "application/x-www-form-urlencoded;charset=UTF-8"
   } else {
-    body = body ? JSON.stringify(body) : undefined
     contentType = "application/json"
   }
 
   return fetch(url, {
-    method: method,
+    ...init,
     headers: {
       Accept: "application/json",
       "Content-Type": contentType,
       "X-CSRF-Token": csrfToken,
     },
-    body,
-  }).then((r) => {
-    updateCsrfToken(r)
-    if (!r.ok) {
-      return r.text().then((err) => {
-        throw new Error(err)
-      })
-    }
-    return r
   })
+    .then((r) => {
+      updateCsrfToken(r)
+      if (!r.ok) {
+        return r.text().then((err) => {
+          throw new Error(err)
+        })
+      }
+      return r
+    })
+    .then((r) => r.json())
+    .then((r) => {
+      // TODO: MAYBE SET USING TOKEN HEADER
+      if (r.IsUnraid && r.UnraidToken) {
+        setUnraidCsrfToken(r.UnraidToken)
+      }
+      return r
+    })
 }
 
 function updateCsrfToken(r: Response) {
@@ -76,4 +81,37 @@ export function setSynoToken(token?: string) {
 
 export function setUnraidCsrfToken(token?: string) {
   unraidCsrfToken = token
+}
+
+/**
+ * Some fetch wrappers.
+ */
+
+export async function getAuthSessionNew(): Promise<void> {
+  const d = await apiFetch<{ authUrl: string }>("/auth/session/new", {
+    method: "GET",
+  })
+  if (d.authUrl) {
+    window.open(d.authUrl, "_blank")
+    await apiFetch("/auth/session/wait", { method: "GET" })
+  }
+  // todo: still need catch for these, not using swr
+}
+
+type PatchLocalPrefsData = {
+  RunSSHSet?: boolean
+  RunSSH?: boolean
+}
+
+export async function patchLocalPrefs(p: PatchLocalPrefsData): Promise<void> {
+  return apiFetch("/local/v0/prefs", {
+    method: "PATCH",
+    body: JSON.stringify(p), // todo: annoying to do this for all...
+  })
+  // .then(onComplete)
+  // .catch((err) => {
+  //   onComplete()
+  //   alert("Failed to update prefs")
+  //   throw err
+  // })
 }

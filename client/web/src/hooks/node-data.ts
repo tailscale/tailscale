@@ -1,10 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { apiFetch, setUnraidCsrfToken } from "src/api"
+import { useCallback, useMemo, useState } from "react"
+import { apiFetch } from "src/api"
 import { ExitNode, noExitNode, runAsExitNode } from "src/hooks/exit-nodes"
 import { VersionInfo } from "src/hooks/self-update"
+import useSWR from "swr"
 
 export type NodeData = {
   Profile: UserProfile
@@ -93,20 +94,9 @@ type RoutesPOSTData = {
 
 // useNodeData returns basic data about the current node.
 export default function useNodeData() {
-  const [data, setData] = useState<NodeData>()
+  const { data, mutate } = useSWR<NodeData>("/data") // TODO: USE GLOBAL MUTATE!!!
+  // const [data, setData] = useState<NodeData>()
   const [isPosting, setIsPosting] = useState<boolean>(false)
-
-  const refreshData = useCallback(
-    () =>
-      apiFetch("/data", "GET")
-        .then((r) => r.json())
-        .then((d: NodeData) => {
-          setData(d)
-          setUnraidCsrfToken(d.IsUnraid ? d.UnraidToken : undefined)
-        })
-        .catch((error) => console.error(error)),
-    [setData]
-  )
 
   const prefsPATCH = useCallback(
     (d: PrefsPATCHData) => {
@@ -120,12 +110,12 @@ export default function useNodeData() {
         // then make the prefs PATCH. If the request fails,
         // data will be updated to it's previous value in
         // onComplete below.
-        setData(optimisticUpdates)
+        mutate(optimisticUpdates, { revalidate: false })
       }
 
       const onComplete = () => {
         setIsPosting(false)
-        refreshData() // refresh data after PATCH finishes
+        mutate() // refresh data after PATCH finishes
       }
 
       return apiFetch("/local/v0/prefs", "PATCH", d)
@@ -136,7 +126,7 @@ export default function useNodeData() {
           throw err
         })
     },
-    [setIsPosting, refreshData, setData, data]
+    [data, mutate]
   )
 
   const routesPOST = useCallback(
@@ -144,7 +134,7 @@ export default function useNodeData() {
       setIsPosting(true)
       const onComplete = () => {
         setIsPosting(false)
-        refreshData() // refresh data after POST finishes
+        mutate() // refresh data after POST finishes
       }
 
       return apiFetch("/routes", "POST", d)
@@ -155,27 +145,27 @@ export default function useNodeData() {
           throw err
         })
     },
-    [setIsPosting, refreshData]
+    [setIsPosting, mutate]
   )
 
-  useEffect(
-    () => {
-      // Initial data load.
-      refreshData()
+  // useEffect(
+  //   () => {
+  //     // Initial data load.
+  //     refreshData()
 
-      // Refresh on browser tab focus.
-      const onVisibilityChange = () => {
-        document.visibilityState === "visible" && refreshData()
-      }
-      window.addEventListener("visibilitychange", onVisibilityChange)
-      return () => {
-        // Cleanup browser tab listener.
-        window.removeEventListener("visibilitychange", onVisibilityChange)
-      }
-    },
-    // Run once.
-    [refreshData]
-  )
+  //     // Refresh on browser tab focus.
+  //     const onVisibilityChange = () => {
+  //       document.visibilityState === "visible" && refreshData()
+  //     }
+  //     window.addEventListener("visibilitychange", onVisibilityChange)
+  //     return () => {
+  //       // Cleanup browser tab listener.
+  //       window.removeEventListener("visibilitychange", onVisibilityChange)
+  //     }
+  //   },
+  //   // Run once.
+  //   [refreshData]
+  // )
 
   const nodeUpdaters: NodeUpdaters = useMemo(
     () => ({

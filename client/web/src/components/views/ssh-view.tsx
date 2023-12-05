@@ -6,6 +6,7 @@ import * as Control from "src/components/control-components"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import Toggle from "src/ui/toggle"
 
+// todo: htis fist
 export default function SSHView({
   readonly,
   node,
