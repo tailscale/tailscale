@@ -21,8 +21,8 @@ const (
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
-	EnableTailscaleDNS        Key = "EnableTailscaleDNSSettings"
-	EnableTailscaleSubnets    Key = "EnableTailscaleSubnets"
+	EnableTailscaleDNS        Key = "UseTailscaleDNSSettings"
+	EnableTailscaleSubnets    Key = "UseTailscaleSubnets"
 
 	// Keys with a string value that controls visibility: "show", "hide".
 	// The default is "show" unless otherwise stated.
