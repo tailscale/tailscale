@@ -405,6 +405,12 @@ func (r *linuxRouter) Set(cfg *Config) error {
 
 // UpdateMagicsockPort implements the Router interface.
 func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
+	if r.nfr == nil {
+		if err := r.setupNetfilter(r.netfilterKind); err != nil {
+			return fmt.Errorf("could not setup netfilter: %w", err)
+		}
+	}
+
 	var magicsockPort *uint16
 	switch network {
 	case "udp4":
