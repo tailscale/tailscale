@@ -162,16 +162,50 @@ export default function DeviceDetailsView({
             </tbody>
           </table>
         </div>
-        <Control.AdminContainer
-          className="text-gray-500 text-sm leading-tight text-center"
-          node={node}
-        >
-          Want even more details? Visit{" "}
-          <Control.AdminLink node={node} path={`/machines/${node.IPv4}`}>
-            this device’s page
-          </Control.AdminLink>{" "}
-          in the admin console.
-        </Control.AdminContainer>
+        <footer className="text-gray-500 text-sm leading-tight text-center">
+          <Control.AdminContainer node={node}>
+            Want even more details? Visit{" "}
+            <Control.AdminLink node={node} path={`/machines/${node.IPv4}`}>
+              this device’s page
+            </Control.AdminLink>{" "}
+            in the admin console.
+          </Control.AdminContainer>
+          <p className="mt-12">
+            <a
+              className="link"
+              href={node.LicensesURL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Acknowledgements
+            </a>{" "}
+            ·{" "}
+            <a
+              className="link"
+              href="https://tailscale.com/privacy-policy/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Privacy Policy
+            </a>{" "}
+            ·{" "}
+            <a
+              className="link"
+              href="https://tailscale.com/terms/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Terms of Service
+            </a>
+          </p>
+          <p className="my-2">
+            WireGuard is a registered trademark of Jason A. Donenfeld.
+          </p>
+          <p>
+            © {new Date().getFullYear()} Tailscale Inc. All rights reserved.
+            Tailscale is a registered trademark of Tailscale Inc.
+          </p>
+        </footer>
       </div>
     </>
   )
