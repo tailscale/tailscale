@@ -1,6 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+import { SWRConfiguration } from "swr"
+
+export const swrConfig: SWRConfiguration = {
+  fetcher: (url: string) => apiFetch(url, "GET"),
+  onError: (err, _) => console.error(err),
+}
+
 let csrfToken: string
 let synoToken: string | undefined // required for synology API requests
 let unraidCsrfToken: string | undefined // required for unraid POST requests (#8062)
@@ -11,14 +18,13 @@ let unraidCsrfToken: string | undefined // required for unraid POST requests (#8
 // apiFetch adds the `api` prefix to the request URL,
 // so endpoint should be provided without the `api` prefix
 // (i.e. provide `/data` rather than `api/data`).
-export function apiFetch(
+export function apiFetch<T>(
   endpoint: string,
   method: "GET" | "POST" | "PATCH",
-  body?: any,
-  params?: Record<string, string>
-): Promise<Response> {
+  body?: any
+): Promise<T> {
   const urlParams = new URLSearchParams(window.location.search)
-  const nextParams = new URLSearchParams(params)
+  const nextParams = new URLSearchParams()
   if (synoToken) {
     nextParams.set("SynoToken", synoToken)
   } else {
@@ -51,16 +57,22 @@ export function apiFetch(
       "Content-Type": contentType,
       "X-CSRF-Token": csrfToken,
     },
-    body,
-  }).then((r) => {
-    updateCsrfToken(r)
-    if (!r.ok) {
-      return r.text().then((err) => {
-        throw new Error(err)
-      })
-    }
-    return r
+    body: body,
   })
+    .then((r) => {
+      updateCsrfToken(r)
+      if (!r.ok) {
+        return r.text().then((err) => {
+          throw new Error(err)
+        })
+      }
+      return r
+    })
+    .then((r) => {
+      if (r.headers.get("Content-Type") === "application/json") {
+        return r.json()
+      }
+    })
 }
 
 function updateCsrfToken(r: Response) {
