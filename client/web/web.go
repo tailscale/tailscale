@@ -24,6 +24,7 @@ import (
 	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -327,22 +328,17 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 // errors to the ResponseWriter itself.
 func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
 	if s.mode == ManageServerMode { // client using tailscale auth
-		_, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+		session, _, err := s.getSession(r)
 		switch {
-		case err != nil:
+		case errors.Is(err, errNotUsingTailscale):
 			// All requests must be made over tailscale.
 			http.Error(w, "must access over tailscale", http.StatusUnauthorized)
 			return false
 		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
-			// Readonly endpoint allowed without browser session.
+			// Readonly endpoint allowed without valid browser session.
 			return true
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
-			//
-			// TODO(sonia): s.getSession calls whois again,
-			// should try and use the above call instead of running another
-			// localapi request.
-			session, _, err := s.getSession(r)
 			if err != nil || !session.isAuthorized(s.timeNow()) {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
@@ -518,18 +514,14 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
-	case path == "/data":
-		switch r.Method {
-		case httpm.GET:
-			s.serveGetNodeData(w, r)
-		case httpm.POST:
-			s.servePostNodeUpdate(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
+	case path == "/data" && r.Method == httpm.GET:
+		s.serveGetNodeData(w, r)
 		return
 	case path == "/exit-nodes" && r.Method == httpm.GET:
 		s.serveGetExitNodes(w, r)
+		return
+	case path == "/routes" && r.Method == httpm.POST:
+		s.servePostRoutes(w, r)
 		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
@@ -563,14 +555,32 @@ type nodeData struct {
 	UnraidToken string
 	URLPrefix   string // if set, the URL prefix the client is served behind
 
-	ExitNodeStatus    *exitNodeWithStatus
-	AdvertiseExitNode bool
-	AdvertiseRoutes   string
-	RunningSSHServer  bool
+	UsingExitNode       *exitNode
+	AdvertisingExitNode bool
+	AdvertisedRoutes    []subnetRoute // excludes exit node routes
+	RunningSSHServer    bool
 
 	ClientVersion *tailcfg.ClientVersion
 
-	LicensesURL string
+	// whether tailnet ACLs allow access to port 5252 on this device
+	ACLAllowsAnyIncomingTraffic bool
+
+	ControlAdminURL string
+	LicensesURL     string
+
+	// Features is the set of available features for use on the
+	// current platform. e.g. "ssh", "advertise-exit-node", etc.
+	// Map value is true if the given feature key is available.
+	//
+	// See web.availableFeatures func for population of this field.
+	// Contents are expected to match values defined in node-data.ts
+	// on the frontend.
+	Features map[string]bool
+}
+
+type subnetRoute struct {
+	Route    string
+	Approved bool // approved by control server
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -580,6 +590,11 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefs, err := s.lc.GetPrefs(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	filterRules, err := s.lc.DebugPacketFilterRules(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -600,8 +615,13 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
+		ControlAdminURL:  prefs.AdminPageURL(),
 		LicensesURL:      licenses.LicensesURL(),
+		Features:         availableFeatures(),
+
+		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
+
 	cv, err := s.lc.CheckUpdate(r.Context())
 	if err != nil {
 		s.logf("could not check for updates: %v", err)
@@ -628,50 +648,79 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	if st.Self.KeyExpiry != nil {
 		data.KeyExpiry = st.Self.KeyExpiry.Format(time.RFC3339)
 	}
+
+	routeApproved := func(route netip.Prefix) bool {
+		if st.Self == nil || st.Self.AllowedIPs == nil {
+			return false
+		}
+		return st.Self.AllowedIPs.ContainsFunc(func(p netip.Prefix) bool {
+			return p == route
+		})
+	}
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
-			data.AdvertiseExitNode = true
+			data.AdvertisingExitNode = true
 		} else {
-			if data.AdvertiseRoutes != "" {
-				data.AdvertiseRoutes += ","
-			}
-			data.AdvertiseRoutes += r.String()
+			data.AdvertisedRoutes = append(data.AdvertisedRoutes, subnetRoute{
+				Route:    r.String(),
+				Approved: routeApproved(r),
+			})
 		}
 	}
 	if e := st.ExitNodeStatus; e != nil {
-		data.ExitNodeStatus = &exitNodeWithStatus{
-			exitNode: exitNode{ID: e.ID},
-			Online:   e.Online,
+		data.UsingExitNode = &exitNode{
+			ID:     e.ID,
+			Online: e.Online,
 		}
 		for _, ps := range st.Peer {
 			if ps.ID == e.ID {
-				data.ExitNodeStatus.Name = ps.DNSName
-				data.ExitNodeStatus.Location = ps.Location
+				data.UsingExitNode.Name = ps.DNSName
+				data.UsingExitNode.Location = ps.Location
 				break
 			}
 		}
-		if data.ExitNodeStatus.Name == "" {
+		if data.UsingExitNode.Name == "" {
 			// Falling back to TailscaleIP/StableNodeID when the peer
 			// is no longer included in status.
 			if len(e.TailscaleIPs) > 0 {
-				data.ExitNodeStatus.Name = e.TailscaleIPs[0].Addr().String()
+				data.UsingExitNode.Name = e.TailscaleIPs[0].Addr().String()
 			} else {
-				data.ExitNodeStatus.Name = string(e.ID)
+				data.UsingExitNode.Name = string(e.ID)
 			}
 		}
 	}
 	writeJSON(w, *data)
 }
 
+func availableFeatures() map[string]bool {
+	return map[string]bool{
+		"advertise-exit-node": true,                            // available on all platforms
+		"advertise-routes":    true,                            // available on all platforms
+		"use-exit-node":       distro.Get() != distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
+		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
+		"auto-update":         clientupdate.CanAutoUpdate(),
+	}
+}
+
+// aclsAllowAccess returns whether tailnet ACLs (as expressed in the provided filter rules)
+// permit any devices to access the local web client.
+// This does not currently check whether a specific device can connect, just any device.
+func (s *Server) aclsAllowAccess(rules []tailcfg.FilterRule) bool {
+	for _, rule := range rules {
+		for _, dp := range rule.DstPorts {
+			if dp.Ports.Contains(ListenPort) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type exitNode struct {
 	ID       tailcfg.StableNodeID
 	Name     string
 	Location *tailcfg.Location
-}
-
-type exitNodeWithStatus struct {
-	exitNode
-	Online bool
+	Online   bool
 }
 
 func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
@@ -689,65 +738,60 @@ func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
 			ID:       ps.ID,
 			Name:     ps.DNSName,
 			Location: ps.Location,
+			Online:   ps.Online,
 		})
 	}
 	writeJSON(w, exitNodes)
 }
 
-type nodeUpdate struct {
-	AdvertiseRoutes   string
+type postRoutesRequest struct {
+	UseExitNode       tailcfg.StableNodeID
+	AdvertiseRoutes   []string
 	AdvertiseExitNode bool
 }
 
-func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	var postData nodeUpdate
-	type mi map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&postData); err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+	var data postRoutesRequest
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	prefs, err := s.lc.GetPrefs(r.Context())
+	// Calculate routes.
+	routesStr := strings.Join(data.AdvertiseRoutes, ",")
+	routes, err := netutil.CalcAdvertiseRoutes(routesStr, data.AdvertiseExitNode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	isCurrentlyExitNode := slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV4) || slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV6)
-
-	if postData.AdvertiseExitNode != isCurrentlyExitNode {
-		if postData.AdvertiseExitNode {
-			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_enable", 1)
-		} else {
-			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_disable", 1)
-		}
+	hasExitNodeRoute := func(all []netip.Prefix) bool {
+		return slices.Contains(all, exitNodeRouteV4) ||
+			slices.Contains(all, exitNodeRouteV6)
 	}
 
-	routes, err := netutil.CalcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+	if !data.UseExitNode.IsZero() && hasExitNodeRoute(routes) {
+		http.Error(w, "cannot use and advertise exit node at same time", http.StatusBadRequest)
 		return
 	}
-	mp := &ipn.MaskedPrefs{
+
+	// Make prefs update.
+	p := &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
-		WantRunningSet:     true,
+		ExitNodeIDSet:      true,
+		Prefs: ipn.Prefs{
+			ExitNodeID:      data.UseExitNode,
+			AdvertiseRoutes: routes,
+		},
 	}
-	mp.Prefs.WantRunning = true
-	mp.Prefs.AdvertiseRoutes = routes
-	s.logf("Doing edit: %v", mp.Pretty())
-
-	if _, err := s.lc.EditPrefs(r.Context(), mp); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+	if _, err := s.lc.EditPrefs(r.Context(), p); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, "{}")
+	w.WriteHeader(http.StatusOK)
 }
 
 // tailscaleUp starts the daemon with the provided options.
@@ -920,6 +964,7 @@ var localapiAllowlist = []string{
 	"/v0/update/check",
 	"/v0/update/install",
 	"/v0/update/progress",
+	"/v0/upload-client-metrics",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.

@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 let csrfToken: string
 let synoToken: string | undefined // required for synology API requests
 let unraidCsrfToken: string | undefined // required for unraid POST requests (#8062)
@@ -74,3 +77,30 @@ export function setSynoToken(token?: string) {
 export function setUnraidCsrfToken(token?: string) {
   unraidCsrfToken = token
 }
+
+// incrementMetric hits the client metrics local API endpoint to
+// increment the given counter metric by one.
+export function incrementMetric(metricName: MetricName) {
+  const postData : MetricsPOSTData[] = [{
+    Name: metricName,
+    Type: "counter",
+    Value: 1
+  }]
+
+  apiFetch("/local/v0/upload-client-metrics", "POST", postData)
+  .catch((error) => {
+    console.error(error)
+  })
+}
+
+type MetricsPOSTData = {
+  Name: MetricName
+  Type: MetricType
+  Value: number
+}
+
+type MetricType = "counter" | "gauge"
+
+export type MetricName =
+  | "web_client_advertise_exitnode_enable"
+  | "web_client_advertise_exitnode_disable"

@@ -1,5 +1,8 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import cx from "classnames"
-import React, { useCallback, useMemo, useState } from "react"
+import React, { useCallback, useMemo, useRef, useState } from "react"
 import { ReactComponent as Check } from "src/assets/icons/check.svg"
 import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
 import useExitNodes, {
@@ -8,21 +11,19 @@ import useExitNodes, {
   runAsExitNode,
   trimDNSSuffix,
 } from "src/hooks/exit-nodes"
-import { NodeData, NodeUpdate, PrefsUpdate } from "src/hooks/node-data"
+import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import Popover from "src/ui/popover"
 import SearchInput from "src/ui/search-input"
 
 export default function ExitNodeSelector({
   className,
   node,
-  updateNode,
-  updatePrefs,
+  nodeUpdaters,
   disabled,
 }: {
   className?: string
   node: NodeData
-  updateNode: (update: NodeUpdate) => Promise<void> | undefined
-  updatePrefs: (p: PrefsUpdate) => Promise<void>
+  nodeUpdaters: NodeUpdaters
   disabled?: boolean
 }) {
   const [open, setOpen] = useState<boolean>(false)
@@ -34,59 +35,24 @@ export default function ExitNodeSelector({
       if (n.ID === selected.ID) {
         return // no update
       }
-
       const old = selected
       setSelected(n) // optimistic UI update
-      const reset = () => setSelected(old)
-
-      switch (n.ID) {
-        case noExitNode.ID: {
-          if (old === runAsExitNode) {
-            // stop advertising as exit node
-            updateNode({ AdvertiseExitNode: false })?.catch(reset)
-          } else {
-            // stop using exit node
-            updatePrefs({ ExitNodeIDSet: true, ExitNodeID: "" }).catch(reset)
-          }
-          break
-        }
-        case runAsExitNode.ID: {
-          const update = () =>
-            updateNode({ AdvertiseExitNode: true })?.catch(reset)
-          if (old !== noExitNode) {
-            // stop using exit node first
-            updatePrefs({ ExitNodeIDSet: true, ExitNodeID: "" })
-              .catch(reset)
-              .then(update)
-          } else {
-            update()
-          }
-          break
-        }
-        default: {
-          const update = () =>
-            updatePrefs({ ExitNodeIDSet: true, ExitNodeID: n.ID }).catch(reset)
-          if (old === runAsExitNode) {
-            // stop advertising as exit node first
-            updateNode({ AdvertiseExitNode: false })?.catch(reset).then(update)
-          } else {
-            update()
-          }
-        }
-      }
+      nodeUpdaters.postExitNode(n).catch(() => setSelected(old))
     },
-    [setOpen, selected, setSelected]
+    [nodeUpdaters, selected]
   )
 
   const [
     none, // not using exit nodes
     advertising, // advertising as exit node
     using, // using another exit node
+    offline, // selected exit node node is offline
   ] = useMemo(
     () => [
       selected.ID === noExitNode.ID,
       selected.ID === runAsExitNode.ID,
       selected.ID !== noExitNode.ID && selected.ID !== runAsExitNode.ID,
+      !selected.Online,
     ],
     [selected]
   )
@@ -110,72 +76,91 @@ export default function ExitNodeSelector({
     >
       <div
         className={cx(
-          "p-1.5 rounded-md border flex items-stretch gap-1.5",
+          "rounded-md",
           {
-            "border-gray-200": none,
-            "bg-amber-600 border-amber-600": advertising,
-            "bg-indigo-500 border-indigo-500": using,
+            "bg-red-600": offline,
           },
           className
         )}
       >
-        <button
-          className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
-            "bg-white hover:bg-stone-100": none,
-            "bg-amber-600 hover:bg-orange-400": advertising,
-            "bg-indigo-500 hover:bg-indigo-400": using,
-            "cursor-not-allowed": disabled,
+        <div
+          className={cx("p-1.5 rounded-md border flex items-stretch gap-1.5", {
+            "border-gray-200": none,
+            "bg-yellow-300 border-yellow-300": advertising && !offline,
+            "bg-blue-500 border-blue-500": using && !offline,
+            "bg-red-500 border-red-500": offline,
           })}
-          onClick={() => setOpen(!open)}
-          disabled={disabled}
         >
-          <p
-            className={cx(
-              "text-neutral-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
-              { "bg-opacity-70 text-white": advertising || using }
-            )}
-          >
-            Exit node
-          </p>
-          <div className="flex items-center">
-            <p
-              className={cx("text-neutral-800", {
-                "text-white": advertising || using,
-              })}
-            >
-              {selected.Location && (
-                <>
-                  <CountryFlag code={selected.Location.CountryCode} />{" "}
-                </>
-              )}
-              {selected === runAsExitNode
-                ? "Running as exit node"
-                : selected.Name}
-            </p>
-            <ChevronDown
-              className={cx("ml-1", {
-                "stroke-neutral-800": none,
-                "stroke-white": advertising || using,
-              })}
-            />
-          </div>
-        </button>
-        {(advertising || using) && (
           <button
-            className={cx("px-3 py-2 rounded-sm text-white", {
-              "bg-orange-400": advertising,
-              "bg-indigo-400": using,
-              "cursor-not-allowed": disabled,
+            className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
+              "bg-white": none,
+              "hover:bg-gray-100": none && !disabled,
+              "bg-yellow-300": advertising && !offline,
+              "hover:bg-yellow-200": advertising && !offline && !disabled,
+              "bg-blue-500": using && !offline,
+              "hover:bg-blue-400": using && !offline && !disabled,
+              "bg-red-500": offline,
+              "hover:bg-red-400": offline && !disabled,
             })}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              handleSelect(noExitNode)
-            }}
+            onClick={() => setOpen(!open)}
             disabled={disabled}
           >
-            Disable
+            <p
+              className={cx(
+                "text-gray-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
+                { "bg-opacity-70 text-white": advertising || using }
+              )}
+            >
+              Exit node{offline && " offline"}
+            </p>
+            <div className="flex items-center">
+              <p
+                className={cx("text-gray-800", {
+                  "text-white": advertising || using,
+                })}
+              >
+                {selected.Location && (
+                  <>
+                    <CountryFlag code={selected.Location.CountryCode} />{" "}
+                  </>
+                )}
+                {selected === runAsExitNode
+                  ? "Running as exit node"
+                  : selected.Name}
+              </p>
+              {!disabled && (
+                <ChevronDown
+                  className={cx("ml-1", {
+                    "stroke-gray-800": none,
+                    "stroke-white": advertising || using,
+                  })}
+                />
+              )}
+            </div>
           </button>
+          {!disabled && (advertising || using) && (
+            <button
+              className={cx("px-3 py-2 rounded-sm text-white", {
+                "bg-yellow-200": advertising && !offline,
+                "bg-blue-400": using && !offline,
+                "bg-red-400": offline,
+              })}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                handleSelect(noExitNode)
+              }}
+            >
+              Disable
+            </button>
+          )}
+        </div>
+        {offline && (
+          <p className="text-white p-3">
+            The selected exit node is currently offline. Your internet traffic
+            is blocked until you disable the exit node or select a different
+            one.
+          </p>
         )}
       </div>
     </Popover>
@@ -183,12 +168,12 @@ export default function ExitNodeSelector({
 }
 
 function toSelectedExitNode(data: NodeData): ExitNode {
-  if (data.AdvertiseExitNode) {
+  if (data.AdvertisingExitNode) {
     return runAsExitNode
   }
-  if (data.ExitNodeStatus) {
+  if (data.UsingExitNode) {
     // TODO(sonia): also use online status
-    const node = { ...data.ExitNodeStatus }
+    const node = { ...data.UsingExitNode }
     if (node.Location) {
       // For mullvad nodes, use location as name.
       node.Name = `${node.Location.Country}: ${node.Location.City}`
@@ -211,7 +196,8 @@ function ExitNodeSelectorInner({
   onSelect: (node: ExitNode) => void
 }) {
   const [filter, setFilter] = useState<string>("")
-  const { data: exitNodes } = useExitNodes(node.TailnetName, filter)
+  const { data: exitNodes } = useExitNodes(node, filter)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const hasNodes = useMemo(
     () => exitNodes.find((n) => n.nodes.length > 0),
@@ -228,10 +214,17 @@ function ExitNodeSelectorInner({
         autoCapitalize="off"
         placeholder="Search exit nodes…"
         value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+        onChange={(e) => {
+          // Jump list to top when search value changes.
+          listRef.current?.scrollTo(0, 0)
+          setFilter(e.target.value)
+        }}
       />
       {/* TODO(sonia): use loading spinner when loading useExitNodes */}
-      <div className="pt-1 border-t border-gray-200 max-h-64 overflow-y-scroll">
+      <div
+        ref={listRef}
+        className="pt-1 border-t border-gray-200 max-h-64 overflow-y-scroll"
+      >
         {hasNodes ? (
           exitNodes.map(
             (group) =>
@@ -241,7 +234,7 @@ function ExitNodeSelectorInner({
                   className="pb-1 mb-1 border-b last:border-b-0 last:mb-0"
                 >
                   {group.name && (
-                    <div className="px-4 py-2 text-neutral-500 text-xs font-medium uppercase tracking-wide">
+                    <div className="px-4 py-2 text-gray-500 text-xs font-medium uppercase tracking-wide">
                       {group.name}
                     </div>
                   )}
@@ -250,7 +243,7 @@ function ExitNodeSelectorInner({
                       key={`${n.ID}-${n.Name}`}
                       node={n}
                       onSelect={() => onSelect(n)}
-                      isSelected={selected.ID == n.ID}
+                      isSelected={selected.ID === n.ID}
                     />
                   ))}
                 </div>
@@ -280,10 +273,16 @@ function ExitNodeSelectorItem({
   return (
     <button
       key={node.ID}
-      className="w-full px-4 py-2 flex justify-between items-center cursor-pointer hover:bg-stone-100"
+      className={cx(
+        "w-full px-4 py-2 flex justify-between items-center cursor-pointer hover:bg-gray-100",
+        {
+          "text-gray-400 cursor-not-allowed": !node.Online,
+        }
+      )}
       onClick={onSelect}
+      disabled={!node.Online}
     >
-      <div>
+      <div className="w-full">
         {node.Location && (
           <>
             <CountryFlag code={node.Location.CountryCode} />{" "}
@@ -291,14 +290,15 @@ function ExitNodeSelectorItem({
         )}
         <span className="leading-snug">{node.Name}</span>
       </div>
-      {isSelected && <Check />}
+      {node.Online || <span className="leading-snug">Offline</span>}
+      {isSelected && <Check className="ml-1" />}
     </button>
   )
 }
 
 function CountryFlag({ code }: { code: string }) {
   return (
-    countryFlags[code.toLowerCase()] || (
+    <>{countryFlags[code.toLowerCase()]}</> || (
       <span className="font-medium text-gray-500 text-xs">
         {code.toUpperCase()}
       </span>

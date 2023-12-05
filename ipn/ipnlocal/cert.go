@@ -594,7 +594,7 @@ func acmeKey(cs certStore) (crypto.Signer, error) {
 			return nil, errors.New("acme/autocert: invalid account key found in cache")
 		}
 		return parsePrivateKey(priv.Bytes)
-	} else if err != nil && !errors.Is(err, ipn.ErrStateNotExist) {
+	} else if !errors.Is(err, ipn.ErrStateNotExist) {
 		return nil, err
 	}
 

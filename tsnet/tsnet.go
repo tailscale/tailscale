@@ -1122,6 +1122,35 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 	return ln, nil
 }
 
+// CapturePcap can be called by the application code compiled with tsnet to save a pcap
+// of packets which the netstack within tsnet sees. This is expected to be useful during
+// debugging, probably not useful for production.
+//
+// Packets will be written to the pcap until the process exits. The pcap needs a Lua dissector
+// to be installed in WireShark in order to decode properly: wgengine/capture/ts-dissector.lua
+// in this repository.
+// https://tailscale.com/kb/1023/troubleshooting/#can-i-examine-network-traffic-inside-the-encrypted-tunnel
+func (s *Server) CapturePcap(ctx context.Context, pcapFile string) error {
+	stream, err := s.localClient.StreamDebugCapture(ctx)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(pcapFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		stream.Close()
+		return err
+	}
+
+	go func(stream io.ReadCloser, f *os.File) {
+		defer stream.Close()
+		defer f.Close()
+		_, _ = io.Copy(f, stream)
+	}(stream, f)
+
+	return nil
+}
+
 type listenKey struct {
 	network string
 	host    netip.Addr // or zero value for unspecified

@@ -1,4 +1,6 @@
-import cx from "classnames"
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React, { useEffect } from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
@@ -6,16 +8,21 @@ import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
 import LoginView from "src/components/views/login-view"
 import SSHView from "src/components/views/ssh-view"
+import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, { NodeData } from "src/hooks/node-data"
+import useNodeData, {
+  Feature,
+  featureDescription,
+  NodeData,
+} from "src/hooks/node-data"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
+    <main className="min-w-sm max-w-lg mx-auto py-4 md:py-14 px-5">
       {loadingAuth || !auth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
@@ -32,7 +39,7 @@ function WebClient({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const { data, refreshData, updateNode, updatePrefs } = useNodeData()
+  const { data, refreshData, nodeUpdaters } = useNodeData()
   useEffect(() => {
     refreshData()
   }, [auth, refreshData])
@@ -54,34 +61,69 @@ function WebClient({
             <HomeView
               readonly={!auth.canManageNode}
               node={data}
-              updateNode={updateNode}
-              updatePrefs={updatePrefs}
+              nodeUpdaters={nodeUpdaters}
             />
           </Route>
           <Route path="/details">
             <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
           </Route>
-          <Route path="/subnets">{/* TODO */}Subnet router</Route>
-          <Route path="/ssh">
+          <FeatureRoute path="/subnets" feature="advertise-routes" node={data}>
+            <SubnetRouterView
+              readonly={!auth.canManageNode}
+              node={data}
+              nodeUpdaters={nodeUpdaters}
+            />
+          </FeatureRoute>
+          <FeatureRoute path="/ssh" feature="ssh" node={data}>
             <SSHView
               readonly={!auth.canManageNode}
-              runningSSH={data.RunningSSHServer}
-              updatePrefs={updatePrefs}
+              node={data}
+              nodeUpdaters={nodeUpdaters}
             />
-          </Route>
+          </FeatureRoute>
           <Route path="/serve">{/* TODO */}Share local content</Route>
-          <Route path="/update">
+          <FeatureRoute path="/update" feature="auto-update" node={data}>
             <UpdatingView
               versionInfo={data.ClientVersion}
               currentVersion={data.IPNVersion}
             />
-          </Route>
+          </FeatureRoute>
           <Route>
-            <h2 className="mt-8">Page not found</h2>
+            <div className="mt-8 card">Page not found</div>
           </Route>
         </Switch>
       </Router>
     </>
+  )
+}
+
+/**
+ * FeatureRoute renders a Route component,
+ * but only displays the child view if the specified feature is
+ * available for use on this node's platform. If not available,
+ * a not allowed view is rendered instead.
+ */
+function FeatureRoute({
+  path,
+  node,
+  feature,
+  children,
+}: {
+  path: string
+  node: NodeData // TODO: once we have swr, just call useNodeData within FeatureView
+  feature: Feature
+  children: React.ReactNode
+}) {
+  return (
+    <Route path={path}>
+      {!node.Features[feature] ? (
+        <div className="mt-8 card">
+          {featureDescription(feature)} not available on this device.
+        </div>
+      ) : (
+        children
+      )}
+    </Route>
   )
 }
 
@@ -94,46 +136,27 @@ function Header({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const [loc] = useLocation()
+  const [loc, setLocation] = useLocation()
 
   return (
     <>
-      <div className="flex justify-between mb-12">
+      <div className="flex justify-between items-center mb-9 md:mb-12">
         <div className="flex gap-3">
-          <TailscaleIcon />
-          <div className="inline text-neutral-800 text-lg font-medium leading-snug">
+          <TailscaleIcon
+            className="cursor-pointer"
+            onClick={() => setLocation("/")}
+          />
+          <div className="inline text-gray-800 text-lg font-medium leading-snug">
             {node.DomainName}
           </div>
         </div>
         <LoginToggle node={node} auth={auth} newSession={newSession} />
       </div>
       {loc !== "/" && loc !== "/update" && (
-        <Link
-          to="/"
-          className="text-indigo-500 font-medium leading-snug block mb-[10px]"
-        >
+        <Link to="/" className="link font-medium block mb-[10px]">
           &larr; Back to {node.DeviceName}
         </Link>
       )}
     </>
-  )
-}
-
-function Footer({
-  licensesURL,
-  className,
-}: {
-  licensesURL: string
-  className?: string
-}) {
-  return (
-    <footer className={cx("container max-w-lg mx-auto text-center", className)}>
-      <a
-        className="text-xs text-gray-500 hover:text-gray-600"
-        href={licensesURL}
-      >
-        Open Source Licenses
-      </a>
-    </footer>
   )
 }

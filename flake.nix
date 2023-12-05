@@ -51,12 +51,12 @@
     # flake at".
     #
     # This is currently unfortunately brittle, because we have to
-    # specify vendorSha256, and that sha changes any time we alter
+    # specify vendorHash, and that sha changes any time we alter
     # go.mod. We don't want to force a nix dependency on everyone
     # hacking on Tailscale, so this flake is likely to have broken
     # builds periodically until someone comes through and manually
     # fixes them up. I sure wish there was a way to express "please
-    # just trust the local go.mod, vendorSha256 has no benefit here",
+    # just trust the local go.mod, vendorHash has no benefit here",
     # but alas.
     #
     # So really, this flake is for tailscale devs to dogfood with, if
@@ -66,7 +66,7 @@
       name = "tailscale";
 
       src = ./.;
-      vendorSha256 = pkgs.lib.fileContents ./go.mod.sri;
+      vendorHash = pkgs.lib.fileContents ./go.mod.sri;
       nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.makeWrapper ];
       ldflags = ["-X tailscale.com/version.gitCommitStamp=${tailscaleRev}"];
       CGO_ENABLED = 0;
@@ -120,4 +120,4 @@
   in
     flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
 }
-# nix-direnv cache busting line: sha256-J81eU0mtO3sIcT9OClnuMP+oybGUfysZtIJUvg41U1E=
+# nix-direnv cache busting line: sha256-jCCMSQ/Yca/NT5qNrjDE91/5ilqCwJZyFu5ALoZ888M=

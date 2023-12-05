@@ -32,7 +32,12 @@ var updateCmd = &ffcli.Command{
 		//  - Arch (and other pacman-based distros)
 		//  - Alpine (and other apk-based distros)
 		//  - FreeBSD (and other pkg-based distros)
-		if distro.Get() != distro.Arch && distro.Get() != distro.Alpine && runtime.GOOS != "freebsd" {
+		//  - Unraid/QNAP/Synology
+		if distro.Get() != distro.Arch &&
+			distro.Get() != distro.Alpine &&
+			distro.Get() != distro.QNAP &&
+			distro.Get() != distro.Synology &&
+			runtime.GOOS != "freebsd" {
 			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
 			fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
 		}

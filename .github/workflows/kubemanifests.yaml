@@ -22,3 +22,9 @@ jobs:
         eval `./tool/go run ./cmd/mkversion`
         ./tool/helm package --app-version="${VERSION_SHORT}" --version=${VERSION_SHORT} './cmd/k8s-operator/deploy/chart'
         ./tool/helm lint "tailscale-operator-${VERSION_SHORT}.tgz"
+    - name: Verify that static manifests are up to date
+      run: |
+        ./tool/go generate tailscale.com/cmd/k8s-operator
+        echo
+        echo
+        git diff --name-only --exit-code || (echo "Static manifests for Tailscale Kubernetes operator are out of date. Please run 'go generate tailscale.com/cmd/k8s-operator' and commit the diff."; exit 1)

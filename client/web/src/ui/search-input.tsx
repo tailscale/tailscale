@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import cx from "classnames"
 import React, { forwardRef, InputHTMLAttributes } from "react"
 import { ReactComponent as Search } from "src/assets/icons/search.svg"

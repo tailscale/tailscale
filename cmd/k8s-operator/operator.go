@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -40,6 +41,8 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
+
+//go:generate go run tailscale.com/cmd/k8s-operator/generate
 
 func main() {
 	// Required to use our client API. We're fine with the instability since the
@@ -321,4 +324,11 @@ func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 		},
 	}
 
+}
+
+// isMagicDNSName reports whether name is a full tailnet node FQDN (with or
+// without final dot).
+func isMagicDNSName(name string) bool {
+	validMagicDNSName := regexp.MustCompile(`^[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.ts\.net\.?$`)
+	return validMagicDNSName.MatchString(name)
 }

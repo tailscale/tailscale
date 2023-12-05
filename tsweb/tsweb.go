@@ -177,8 +177,7 @@ type ReturnHandler interface {
 type HandlerOptions struct {
 	QuietLoggingIfSuccessful bool // if set, do not log successfully handled HTTP requests (200 and 304 status codes)
 	Logf                     logger.Logf
-	Now                      func() time.Time              // if nil, defaults to time.Now
-	GenerateRequestID        func(*http.Request) RequestID // if nil, no request IDs are generated
+	Now                      func() time.Time // if nil, defaults to time.Now
 
 	// If non-nil, StatusCodeCounters maintains counters
 	// of status codes for handled responses.
@@ -203,6 +202,13 @@ type ErrorHandlerFunc func(http.ResponseWriter, *http.Request, HTTPError)
 // appropriate signature, ReturnHandlerFunc(f) is a ReturnHandler that
 // calls f.
 type ReturnHandlerFunc func(http.ResponseWriter, *http.Request) error
+
+// A Middleware is a function that wraps an http.Handler to extend or modify
+// its behaviour.
+//
+// The implementation of the wrapper is responsible for delegating its input
+// request to the underlying handler, if appropriate.
+type Middleware func(h http.Handler) http.Handler
 
 // ServeHTTPReturn calls f(w, r).
 func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) error {
@@ -240,6 +246,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestURI: r.URL.RequestURI(),
 		UserAgent:  r.UserAgent(),
 		Referer:    r.Referer(),
+		RequestID:  RequestIDFromContext(r.Context()),
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
@@ -275,11 +282,6 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		msg.Code = 499 // nginx convention: Client Closed Request
 		msg.Err = context.Canceled.Error()
 	case hErrOK:
-		if hErr.RequestID == "" && h.opts.GenerateRequestID != nil {
-			hErr.RequestID = h.opts.GenerateRequestID(r)
-		}
-		msg.RequestID = hErr.RequestID
-
 		// Handler asked us to send an error. Do so, if we haven't
 		// already sent a response.
 		msg.Err = hErr.Msg
@@ -310,17 +312,15 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			lw.WriteHeader(msg.Code)
 			fmt.Fprintln(lw, hErr.Msg)
-			if hErr.RequestID != "" {
-				fmt.Fprintln(lw, hErr.RequestID)
+			if msg.RequestID != "" {
+				fmt.Fprintln(lw, msg.RequestID)
 			}
 		}
 	case err != nil:
 		const internalServerError = "internal server error"
-
 		errorMessage := internalServerError
-		if h.opts.GenerateRequestID != nil {
-			msg.RequestID = h.opts.GenerateRequestID(r)
-			errorMessage = errorMessage + "\n" + string(msg.RequestID)
+		if msg.RequestID != "" {
+			errorMessage += "\n" + string(msg.RequestID)
 		}
 		// Handler returned a generic error. Serve an internal server
 		// error, if necessary.
@@ -422,45 +422,18 @@ func (l loggingResponseWriter) Flush() {
 	f.Flush()
 }
 
-// RequestID is an opaque identifier for a HTTP request, used to correlate
-// user-visible errors with backend server logs. If present in a HTTPError, the
-// RequestID will be printed alongside the message text and logged in the
-// AccessLogRecord. If an HTTPError has no RequestID (or a non-HTTPError error
-// is returned), but the StdHandler has a RequestID generator function, then a
-// RequestID will be generated before responding to the client and logging the
-// error.
-//
-// In the event that there is no ErrorHandlerFunc and a non-HTTPError is
-// returned to a StdHandler, the response body will be formatted like
-// "internal server error\n{RequestID}\n".
-//
-// There is no particular format required for a RequestID, but ideally it should
-// be obvious to an end-user that it is something to record for support
-// purposes. One possible example for a RequestID format is:
-// REQ-{server identifier}-{timestamp}-{random hex string}.
-type RequestID string
-
 // HTTPError is an error with embedded HTTP response information.
 //
 // It is the error type to be (optionally) used by Handler.ServeHTTPReturn.
 type HTTPError struct {
-	Code      int         // HTTP response code to send to client; 0 means 500
-	Msg       string      // Response body to send to client
-	Err       error       // Detailed error to log on the server
-	RequestID RequestID   // Optional identifier to connect client-visible errors with server logs
-	Header    http.Header // Optional set of HTTP headers to set in the response
+	Code   int         // HTTP response code to send to client; 0 means 500
+	Msg    string      // Response body to send to client
+	Err    error       // Detailed error to log on the server
+	Header http.Header // Optional set of HTTP headers to set in the response
 }
 
 // Error implements the error interface.
-func (e HTTPError) Error() string {
-	if e.RequestID != "" {
-		return fmt.Sprintf("httperror{%d, %q, %v, RequestID=%q}", e.Code, e.Msg, e.Err, e.RequestID)
-	} else {
-		// Backwards compatibility
-		return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err)
-	}
-}
-
+func (e HTTPError) Error() string { return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err) }
 func (e HTTPError) Unwrap() error { return e.Err }
 
 // Error returns an HTTPError containing the given information.
@@ -502,8 +475,8 @@ func BrowserHeaderHandler(h http.Handler) http.Handler {
 // BrowserHeaderHandlerFunc wraps the provided http.HandlerFunc with a call to
 // AddBrowserHeaders.
 func BrowserHeaderHandlerFunc(h http.HandlerFunc) http.HandlerFunc {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		AddBrowserHeaders(w)
 		h.ServeHTTP(w, r)
-	})
+	}
 }

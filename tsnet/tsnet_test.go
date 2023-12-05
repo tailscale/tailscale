@@ -691,3 +691,56 @@ func TestFallbackTCPHandler(t *testing.T) {
 		t.Errorf("s1TcpConnCount = %d, want %d", got, 1)
 	}
 }
+
+func TestCapturePcap(t *testing.T) {
+	const timeLimit = 120
+	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	s1Pcap := filepath.Join(dir, "s1.pcap")
+	s2Pcap := filepath.Join(dir, "s2.pcap")
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	s1.CapturePcap(ctx, s1Pcap)
+	s2.CapturePcap(ctx, s2Pcap)
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// send a packet which both nodes will capture
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	fileSize := func(name string) int64 {
+		fi, err := os.Stat(name)
+		if err != nil {
+			return 0
+		}
+		return fi.Size()
+	}
+
+	const pcapHeaderSize = 24
+
+	// there is a lag before the io.Copy writes a packet to the pcap files
+	for i := 0; i < (timeLimit * 10); i++ {
+		time.Sleep(100 * time.Millisecond)
+		if (fileSize(s1Pcap) > pcapHeaderSize) && (fileSize(s2Pcap) > pcapHeaderSize) {
+			break
+		}
+	}
+
+	if got := fileSize(s1Pcap); got <= pcapHeaderSize {
+		t.Errorf("s1 pcap file size = %d, want > pcapHeaderSize(%d)", got, pcapHeaderSize)
+	}
+	if got := fileSize(s2Pcap); got <= pcapHeaderSize {
+		t.Errorf("s2 pcap file size = %d, want > pcapHeaderSize(%d)", got, pcapHeaderSize)
+	}
+}

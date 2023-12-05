@@ -23,6 +23,7 @@ func TestConfigEqual(t *testing.T) {
 	testedFields := []string{
 		"LocalAddrs", "Routes", "LocalRoutes", "NewMTU",
 		"SubnetRoutes", "SNATSubnetRoutes", "NetfilterMode",
+		"NetfilterKind",
 	}
 	configType := reflect.TypeOf(Config{})
 	configFields := []string{}
