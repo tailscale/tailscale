@@ -6,6 +6,7 @@ import { apiFetch, setUnraidCsrfToken } from "src/api"
 import { ExitNode, noExitNode, runAsExitNode } from "src/hooks/exit-nodes"
 import { VersionInfo } from "src/hooks/self-update"
 import { assertNever } from "src/util"
+import { incrementMetric, MetricName } from "src/api"
 
 export type NodeData = {
   Profile: UserProfile
@@ -173,16 +174,25 @@ export default function useNodeData() {
         setIsPosting(false)
         refreshData() // refresh data after POST finishes
       }
+      const updateMetrics = () => {
+        // only update metrics if values have changed
+        if (data?.AdvertisingExitNode !== d.AdvertiseExitNode) {
+          incrementMetric(d.AdvertiseExitNode ? "web_client_advertise_exitnode_enable" : "web_client_advertise_exitnode_disable")
+        }
+      }
 
       return apiFetch("/routes", "POST", d)
-        .then(onComplete)
+        .then(() => {
+          updateMetrics()
+          onComplete()
+        })
         .catch((err) => {
           onComplete()
           alert("Failed to update routes")
           throw err
         })
     },
-    [setIsPosting, refreshData]
+    [setIsPosting, refreshData, data?.AdvertisingExitNode]
   )
 
   useEffect(

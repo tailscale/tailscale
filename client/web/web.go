@@ -759,12 +759,6 @@ func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oldPrefs, err := s.lc.GetPrefs(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	// Calculate routes.
 	routesStr := strings.Join(data.AdvertiseRoutes, ",")
 	routes, err := netutil.CalcAdvertiseRoutes(routesStr, data.AdvertiseExitNode)
@@ -795,15 +789,6 @@ func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.lc.EditPrefs(r.Context(), p); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// Report metrics.
-	if data.AdvertiseExitNode != hasExitNodeRoute(oldPrefs.AdvertiseRoutes) {
-		if data.AdvertiseExitNode {
-			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_enable", 1)
-		} else {
-			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_disable", 1)
-		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -979,6 +964,7 @@ var localapiAllowlist = []string{
 	"/v0/update/check",
 	"/v0/update/install",
 	"/v0/update/progress",
+	"/v0/upload-client-metrics",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.
