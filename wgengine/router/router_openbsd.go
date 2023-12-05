@@ -228,6 +228,13 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	return errq
 }
 
+// UpdateMagicsockPort implements the Router interface. This implementation
+// does nothing and returns nil because this router does not currently need
+// to know what the magicsock UDP port is.
+func (r *openbsdRouter) UpdateMagicsockPort(_ uint16, _ string) error {
+	return nil
+}
+
 func (r *openbsdRouter) Close() error {
 	cleanup(r.logf, r.tunname)
 	return nil
