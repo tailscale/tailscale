@@ -710,9 +710,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.persist = persist.View()
 	c.mu.Unlock()
 
-	if err != nil {
-		return regen, "", nil, err
-	}
 	if ctx.Err() != nil {
 		return regen, "", nil, ctx.Err()
 	}
