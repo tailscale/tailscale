@@ -693,7 +693,6 @@ const (
 var (
 	verifyAuthenticode          func(string) error // or nil on non-Windows
 	markTempFileFunc            func(string) error // or nil on non-Windows
-	launchTailscaleAsWinGUIUser func(string) error // or nil on non-Windows
 )
 
 func (up *Updater) updateWindows() error {
@@ -711,16 +710,6 @@ func (up *Updater) updateWindows() error {
 		up.Logf("installing %v ...", msi)
 		if err := up.installMSI(msi); err != nil {
 			up.Logf("MSI install failed: %v", err)
-			return err
-		}
-		up.Logf("relaunching tailscale-ipn.exe...")
-		exePath := os.Getenv(winExePathEnv)
-		if exePath == "" {
-			up.Logf("env var %q not passed to installer binary copy", winExePathEnv)
-			return fmt.Errorf("env var %q not passed to installer binary copy", winExePathEnv)
-		}
-		if err := launchTailscaleAsWinGUIUser(exePath); err != nil {
-			up.Logf("Failed to re-launch tailscale after update: %v", err)
 			return err
 		}
 
@@ -820,9 +809,7 @@ func (up *Updater) switchOutputToFile() (io.Closer, error) {
 func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
-		// TS_NOLAUNCH: don't automatically launch the app after install.
-		// We will launch it explicitly as the current GUI user afterwards.
-		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn", "TS_NOLAUNCH=true")
+		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
 		cmd.Dir = filepath.Dir(msi)
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
