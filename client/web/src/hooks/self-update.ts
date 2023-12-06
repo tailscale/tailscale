@@ -58,7 +58,7 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
     let tsAwayForPolls = 0
     let updateMessagesRead = 0
 
-    let timer = 0
+    let timer: NodeJS.Timeout | undefined
 
     function poll() {
       apiFetch("/local/v0/update/progress", "GET")
@@ -123,7 +123,7 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
     // useEffect cleanup function
     return () => {
       if (timer) clearTimeout(timer)
-      timer = 0
+      timer = undefined
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
