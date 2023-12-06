@@ -81,16 +81,19 @@ export function setUnraidCsrfToken(token?: string) {
 // incrementMetric hits the client metrics local API endpoint to
 // increment the given counter metric by one.
 export function incrementMetric(metricName: MetricName) {
-  const postData : MetricsPOSTData[] = [{
-    Name: metricName,
-    Type: "counter",
-    Value: 1
-  }]
+  const postData: MetricsPOSTData[] = [
+    {
+      Name: metricName,
+      Type: "counter",
+      Value: 1,
+    },
+  ]
 
-  apiFetch("/local/v0/upload-client-metrics", "POST", postData)
-  .catch((error) => {
-    console.error(error)
-  })
+  apiFetch("/local/v0/upload-client-metrics", "POST", postData).catch(
+    (error) => {
+      console.error(error)
+    }
+  )
 }
 
 type MetricsPOSTData = {
