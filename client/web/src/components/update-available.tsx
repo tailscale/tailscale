@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
-import { VersionInfo } from "src/hooks/self-update"
+import { VersionInfo } from "src/types"
 import Button from "src/ui/button"
 import { useLocation } from "wouter"
 

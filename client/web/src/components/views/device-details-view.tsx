@@ -3,12 +3,12 @@
 
 import cx from "classnames"
 import React from "react"
-import { apiFetch, incrementMetric } from "src/api"
+import { useAPI } from "src/api"
 import ACLTag from "src/components/acl-tag"
 import * as Control from "src/components/control-components"
 import NiceIP from "src/components/nice-ip"
 import { UpdateAvailableNotification } from "src/components/update-available"
-import { NodeData } from "src/hooks/node-data"
+import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import QuickCopy from "src/ui/quick-copy"
 import { useLocation } from "wouter"
@@ -20,6 +20,7 @@ export default function DeviceDetailsView({
   readonly: boolean
   node: NodeData
 }) {
+  const api = useAPI()
   const [, setLocation] = useLocation()
 
   return (
@@ -40,13 +41,9 @@ export default function DeviceDetailsView({
             {!readonly && (
               <Button
                 sizeVariant="small"
-                onClick={() => {
-                  // increment metrics before logout as we don't gracefully handle disconnect currently
-                  incrementMetric("web_client_node_disconnect")
-                  apiFetch("/local/v0/logout", "POST")
-                    .then(() => setLocation("/"))
-                    .catch((err) => alert("Logout failed: " + err.message))
-                }}
+                onClick={() =>
+                  api({ action: "logout" }).then(() => setLocation("/"))
+                }
               >
                 Disconnect…
               </Button>

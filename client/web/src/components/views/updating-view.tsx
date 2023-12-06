@@ -5,11 +5,8 @@ import React from "react"
 import { ReactComponent as CheckCircleIcon } from "src/assets/icons/check-circle.svg"
 import { ReactComponent as XCircleIcon } from "src/assets/icons/x-circle.svg"
 import { ChangelogText } from "src/components/update-available"
-import {
-  UpdateState,
-  useInstallUpdate,
-  VersionInfo,
-} from "src/hooks/self-update"
+import { UpdateState, useInstallUpdate } from "src/hooks/self-update"
+import { VersionInfo } from "src/types"
 import Button from "src/ui/button"
 import Spinner from "src/ui/spinner"
 import { useLocation } from "wouter"

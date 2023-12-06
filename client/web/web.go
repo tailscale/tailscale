@@ -745,9 +745,11 @@ func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 type postRoutesRequest struct {
+	SetExitNode       bool // when set, UseExitNode and AdvertiseExitNode values are applied
+	SetRoutes         bool // when set, AdvertiseRoutes value is applied
 	UseExitNode       tailcfg.StableNodeID
-	AdvertiseRoutes   []string
 	AdvertiseExitNode bool
+	AdvertiseRoutes   []string
 }
 
 func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
@@ -757,6 +759,27 @@ func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	prefs, err := s.lc.GetPrefs(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var currNonExitRoutes []string
+	var currAdvertisingExitNode bool
+	for _, r := range prefs.AdvertiseRoutes {
+		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
+			currAdvertisingExitNode = true
+			continue
+		}
+		currNonExitRoutes = append(currNonExitRoutes, r.String())
+	}
+	// Set non-edited fields to their current values.
+	if data.SetExitNode {
+		data.AdvertiseRoutes = currNonExitRoutes
+	} else if data.SetRoutes {
+		data.AdvertiseExitNode = currAdvertisingExitNode
+		data.UseExitNode = prefs.ExitNodeID
 	}
 
 	// Calculate routes.

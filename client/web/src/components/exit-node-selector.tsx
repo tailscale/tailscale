@@ -2,32 +2,32 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import cx from "classnames"
-import React, { useCallback, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useAPI } from "src/api"
 import { ReactComponent as Check } from "src/assets/icons/check.svg"
 import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
 import useExitNodes, {
-  ExitNode,
   noExitNode,
   runAsExitNode,
   trimDNSSuffix,
 } from "src/hooks/exit-nodes"
-import { NodeData, NodeUpdaters } from "src/hooks/node-data"
+import { ExitNode, NodeData } from "src/types"
 import Popover from "src/ui/popover"
 import SearchInput from "src/ui/search-input"
 
 export default function ExitNodeSelector({
   className,
   node,
-  nodeUpdaters,
   disabled,
 }: {
   className?: string
   node: NodeData
-  nodeUpdaters: NodeUpdaters
   disabled?: boolean
 }) {
+  const api = useAPI()
   const [open, setOpen] = useState<boolean>(false)
   const [selected, setSelected] = useState<ExitNode>(toSelectedExitNode(node))
+  useEffect(() => setSelected(toSelectedExitNode(node)), [node])
 
   const handleSelect = useCallback(
     (n: ExitNode) => {
@@ -35,11 +35,9 @@ export default function ExitNodeSelector({
       if (n.ID === selected.ID) {
         return // no update
       }
-      const old = selected
-      setSelected(n) // optimistic UI update
-      nodeUpdaters.postExitNode(n).catch(() => setSelected(old))
+      api({ action: "update-exit-node", data: n })
     },
-    [nodeUpdaters, selected]
+    [api, selected]
   )
 
   const [

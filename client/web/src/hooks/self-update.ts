@@ -3,13 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch } from "src/api"
-
-// this type is deserialized from tailcfg.ClientVersion,
-// so it should not include fields not included in that type.
-export type VersionInfo = {
-  RunningLatest: boolean
-  LatestVersion?: string
-}
+import { VersionInfo } from "src/types"
 
 // see ipnstate.UpdateProgress
 export type UpdateProgress = {

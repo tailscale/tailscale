@@ -8,18 +8,16 @@ import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
 import { ReactComponent as Machine } from "src/assets/icons/machine.svg"
 import AddressCard from "src/components/address-copy-card"
 import ExitNodeSelector from "src/components/exit-node-selector"
-import { NodeData, NodeUpdaters } from "src/hooks/node-data"
+import { NodeData } from "src/types"
 import { pluralize } from "src/utils/util"
 import { Link, useLocation } from "wouter"
 
 export default function HomeView({
   readonly,
   node,
-  nodeUpdaters,
 }: {
   readonly: boolean
   node: NodeData
-  nodeUpdaters: NodeUpdaters
 }) {
   const [allSubnetRoutes, pendingSubnetRoutes] = useMemo(
     () => [
@@ -62,12 +60,7 @@ export default function HomeView({
         </div>
         {(node.Features["advertise-exit-node"] ||
           node.Features["use-exit-node"]) && (
-          <ExitNodeSelector
-            className="mb-5"
-            node={node}
-            nodeUpdaters={nodeUpdaters}
-            disabled={readonly}
-          />
+          <ExitNodeSelector className="mb-5" node={node} disabled={readonly} />
         )}
         <Link
           className="link font-medium"

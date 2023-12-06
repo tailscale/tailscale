@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
-import { NodeData } from "src/hooks/node-data"
+import { NodeData } from "src/types"
 
 /**
  * AdminContainer renders its contents only if the node's control
