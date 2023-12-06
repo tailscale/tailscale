@@ -1,44 +1,18 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { useEffect, useMemo, useState } from "react"
-import { apiFetch } from "src/api"
-import { NodeData } from "src/hooks/node-data"
-
-export type ExitNode = {
-  ID: string
-  Name: string
-  Location?: ExitNodeLocation
-  Online?: boolean
-}
-
-type ExitNodeLocation = {
-  Country: string
-  CountryCode: CountryCode
-  City: string
-  CityCode: CityCode
-  Priority: number
-}
-
-type CountryCode = string
-type CityCode = string
-
-export type ExitNodeGroup = {
-  id: string
-  name?: string
-  nodes: ExitNode[]
-}
+import { useMemo } from "react"
+import {
+  CityCode,
+  CountryCode,
+  ExitNode,
+  ExitNodeLocation,
+  NodeData,
+} from "src/types"
+import useSWR from "swr"
 
 export default function useExitNodes(node: NodeData, filter?: string) {
-  const [data, setData] = useState<ExitNode[]>([])
-
-  useEffect(() => {
-    apiFetch<ExitNode[]>("/exit-nodes", "GET")
-      .then((r) => setData(r))
-      .catch((err) => {
-        alert("Failed operation: " + err.message)
-      })
-  }, [])
+  const { data } = useSWR<ExitNode[]>("/exit-nodes")
 
   const { tailnetNodesSorted, locationNodesMap } = useMemo(() => {
     // First going through exit nodes and splitting them into two groups:

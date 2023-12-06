@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React, { useCallback, useMemo, useState } from "react"
+import { useAPI } from "src/api"
 import { ReactComponent as CheckCircle } from "src/assets/icons/check-circle.svg"
 import { ReactComponent as Clock } from "src/assets/icons/clock.svg"
 import { ReactComponent as Plus } from "src/assets/icons/plus.svg"
 import * as Control from "src/components/control-components"
-import { NodeData, NodeUpdaters } from "src/hooks/node-data"
+import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Card from "src/ui/card"
 import EmptyState from "src/ui/empty-state"
@@ -15,12 +16,11 @@ import Input from "src/ui/input"
 export default function SubnetRouterView({
   readonly,
   node,
-  nodeUpdaters,
 }: {
   readonly: boolean
   node: NodeData
-  nodeUpdaters: NodeUpdaters
 }) {
+  const api = useAPI()
   const [advertisedRoutes, hasRoutes, hasUnapprovedRoutes] = useMemo(() => {
     const routes = node.AdvertisedRoutes || []
     return [routes, routes.length > 0, routes.find((r) => !r.Approved)]
@@ -70,12 +70,15 @@ export default function SubnetRouterView({
               <Button
                 intent="primary"
                 onClick={() =>
-                  nodeUpdaters
-                    .postSubnetRoutes([
-                      ...advertisedRoutes.map((r) => r.Route),
-                      ...inputText.split(","),
-                    ])
-                    .then(resetInput)
+                  api({
+                    action: "update-routes",
+                    data: [
+                      ...advertisedRoutes,
+                      ...inputText
+                        .split(",")
+                        .map((r) => ({ Route: r, Approved: false })),
+                    ],
+                  }).then(resetInput)
                 }
                 disabled={!inputText}
               >
@@ -124,11 +127,12 @@ export default function SubnetRouterView({
                       <Button
                         sizeVariant="small"
                         onClick={() =>
-                          nodeUpdaters.postSubnetRoutes(
-                            advertisedRoutes
-                              .map((it) => it.Route)
-                              .filter((it) => it !== r.Route)
-                          )
+                          api({
+                            action: "update-routes",
+                            data: advertisedRoutes.filter(
+                              (it) => it.Route !== r.Route
+                            ),
+                          })
                         }
                       >
                         Stop advertising…

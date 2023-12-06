@@ -7,7 +7,7 @@ import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg
 import { ReactComponent as Eye } from "src/assets/icons/eye.svg"
 import { ReactComponent as User } from "src/assets/icons/user.svg"
 import { AuthResponse, AuthType } from "src/hooks/auth"
-import { NodeData } from "src/hooks/node-data"
+import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Popover from "src/ui/popover"
 import ProfilePic from "src/ui/profile-pic"

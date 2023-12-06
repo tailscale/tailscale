@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-import React, { useEffect } from "react"
+import React from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
@@ -11,12 +11,9 @@ import SSHView from "src/components/views/ssh-view"
 import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, {
-  Feature,
-  featureDescription,
-  NodeData,
-} from "src/hooks/node-data"
+import { Feature, featureDescription, NodeData } from "src/types"
 import LoadingDots from "src/ui/loading-dots"
+import useSWR from "swr"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
@@ -40,53 +37,38 @@ function WebClient({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const { data, refreshData, nodeUpdaters } = useNodeData()
-  useEffect(() => {
-    refreshData()
-  }, [auth, refreshData])
+  const { data: node } = useSWR<NodeData>("/data")
 
-  return !data ? (
+  return !node ? (
     <LoadingView />
-  ) : data.Status === "NeedsLogin" ||
-    data.Status === "NoState" ||
-    data.Status === "Stopped" ? (
+  ) : node.Status === "NeedsLogin" ||
+    node.Status === "NoState" ||
+    node.Status === "Stopped" ? (
     // Client not on a tailnet, render login.
-    <LoginView data={data} refreshData={refreshData} />
+    <LoginView data={node} />
   ) : (
     // Otherwise render the new web client.
     <>
-      <Router base={data.URLPrefix}>
-        <Header node={data} auth={auth} newSession={newSession} />
+      <Router base={node.URLPrefix}>
+        <Header node={node} auth={auth} newSession={newSession} />
         <Switch>
           <Route path="/">
-            <HomeView
-              readonly={!auth.canManageNode}
-              node={data}
-              nodeUpdaters={nodeUpdaters}
-            />
+            <HomeView readonly={!auth.canManageNode} node={node} />
           </Route>
           <Route path="/details">
-            <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
+            <DeviceDetailsView readonly={!auth.canManageNode} node={node} />
           </Route>
-          <FeatureRoute path="/subnets" feature="advertise-routes" node={data}>
-            <SubnetRouterView
-              readonly={!auth.canManageNode}
-              node={data}
-              nodeUpdaters={nodeUpdaters}
-            />
+          <FeatureRoute path="/subnets" feature="advertise-routes" node={node}>
+            <SubnetRouterView readonly={!auth.canManageNode} node={node} />
           </FeatureRoute>
-          <FeatureRoute path="/ssh" feature="ssh" node={data}>
-            <SSHView
-              readonly={!auth.canManageNode}
-              node={data}
-              nodeUpdaters={nodeUpdaters}
-            />
+          <FeatureRoute path="/ssh" feature="ssh" node={node}>
+            <SSHView readonly={!auth.canManageNode} node={node} />
           </FeatureRoute>
           <Route path="/serve">{/* TODO */}Share local content</Route>
-          <FeatureRoute path="/update" feature="auto-update" node={data}>
+          <FeatureRoute path="/update" feature="auto-update" node={node}>
             <UpdatingView
-              versionInfo={data.ClientVersion}
-              currentVersion={data.IPNVersion}
+              versionInfo={node.ClientVersion}
+              currentVersion={node.IPNVersion}
             />
           </FeatureRoute>
           <Route>
@@ -111,7 +93,7 @@ function FeatureRoute({
   children,
 }: {
   path: string
-  node: NodeData // TODO: once we have swr, just call useNodeData within FeatureView
+  node: NodeData
   feature: Feature
   children: React.ReactNode
 }) {

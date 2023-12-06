@@ -2,20 +2,21 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
+import { useAPI } from "src/api"
 import * as Control from "src/components/control-components"
-import { NodeData, NodeUpdaters } from "src/hooks/node-data"
+import { NodeData } from "src/types"
 import Card from "src/ui/card"
 import Toggle from "src/ui/toggle"
 
 export default function SSHView({
   readonly,
   node,
-  nodeUpdaters,
 }: {
   readonly: boolean
   node: NodeData
-  nodeUpdaters: NodeUpdaters
 }) {
+  const api = useAPI()
+
   return (
     <>
       <h1 className="mb-1">Tailscale SSH server</h1>
@@ -36,9 +37,12 @@ export default function SSHView({
           <Toggle
             checked={node.RunningSSHServer}
             onChange={() =>
-              nodeUpdaters.patchPrefs({
-                RunSSHSet: true,
-                RunSSH: !node.RunningSSHServer,
+              api({
+                action: "update-prefs",
+                data: {
+                  RunSSHSet: true,
+                  RunSSH: !node.RunningSSHServer,
+                },
               })
             }
             disabled={readonly}
