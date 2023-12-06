@@ -49,7 +49,7 @@ export default function LoginView({
             Connect to Tailscale
           </Button>
         </>
-      ) : data.IP ? (
+      ) : data.IPv4 ? (
         <>
           <div className="mb-6">
             <p className="text-gray-700">
