@@ -29,6 +29,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 // References:
@@ -44,7 +45,14 @@ type upnpMapping struct {
 	goodUntil  time.Time
 	renewAfter time.Time
 
-	// client is a connection to a upnp device, and may be reused across different UPnP mappings.
+	// rootDev is the UPnP root device, and may be reused across different
+	// UPnP mappings.
+	rootDev *goupnp.RootDevice
+	// loc is the location used to fetch the rootDev
+	loc *url.URL
+	// client is the most recent UPnP client used, and should only be used
+	// to release an existing mapping; new mappings should be selected from
+	// the rootDev on each attempt.
 	client upnpClient
 }
 
@@ -104,6 +112,7 @@ type upnpClient interface {
 
 	DeletePortMapping(ctx context.Context, remoteHost string, externalPort uint16, protocol string) error
 	GetExternalIPAddress(ctx context.Context) (externalIPAddress string, err error)
+	GetStatusInfo(ctx context.Context) (status string, lastConnError string, uptime uint32, err error)
 }
 
 // tsPortMappingDesc gets sent to UPnP clients as a human-readable label for the portmapping.
@@ -182,24 +191,21 @@ func addAnyPortMapping(
 	return externalPort, err
 }
 
-// getUPnPClient gets a client for interfacing with UPnP, ignoring the underlying protocol for
-// now.
+// getUPnPRootDevice fetches the UPnP root device given the discovery response,
+// ignoring the underlying protocol for now.
 // Adapted from https://github.com/huin/goupnp/blob/master/GUIDE.md.
 //
 // The gw is the detected gateway.
 //
 // The meta is the most recently parsed UDP discovery packet response
 // from the Internet Gateway Device.
-//
-// The provided ctx is not retained in the returned upnpClient, but
-// its associated HTTP client is (if set via goupnp.WithHTTPClient).
-func getUPnPClient(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw netip.Addr, meta uPnPDiscoResponse) (client upnpClient, err error) {
+func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw netip.Addr, meta uPnPDiscoResponse) (rootDev *goupnp.RootDevice, loc *url.URL, err error) {
 	if debug.DisableUPnP {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if meta.Location == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if debug.VerboseLogs {
@@ -207,12 +213,12 @@ func getUPnPClient(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw n
 	}
 	u, err := url.Parse(meta.Location)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ipp, err := netip.ParseAddrPort(u.Host)
 	if err != nil {
-		return nil, fmt.Errorf("unexpected host %q in %q", u.Host, meta.Location)
+		return nil, nil, fmt.Errorf("unexpected host %q in %q", u.Host, meta.Location)
 	}
 	if ipp.Addr() != gw {
 		// https://github.com/tailscale/tailscale/issues/5502
@@ -231,30 +237,150 @@ func getUPnPClient(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw n
 	// This part does a network fetch.
 	root, err := goupnp.DeviceByURL(ctx, u)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	return root, u, nil
+}
 
+// selectBestService picks the "best" service from the given UPnP root device
+// to use to create a port mapping.
+//
+// loc is the parsed location that was used to fetch the given RootDevice.
+//
+// The provided ctx is not retained in the returned upnpClient, but
+// its associated HTTP client is (if set via goupnp.WithHTTPClient).
+func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootDevice, loc *url.URL) (client upnpClient, err error) {
+	method := "none"
 	defer func() {
 		if client == nil {
 			return
 		}
-		logf("saw UPnP type %v at %v; %v (%v)",
+		logf("saw UPnP type %v at %v; %v (%v), method=%s",
 			strings.TrimPrefix(fmt.Sprintf("%T", client), "*internetgateway2."),
-			meta.Location, root.Device.FriendlyName, root.Device.Manufacturer)
+			loc, root.Device.FriendlyName, root.Device.Manufacturer,
+			method)
 	}()
 
-	// These parts don't do a network fetch.
-	// Pick the best service type available.
-	if cc, _ := internetgateway2.NewWANIPConnection2ClientsFromRootDevice(ctx, root, u); len(cc) > 0 {
-		return cc[0], nil
+	// First, get all available clients from the device, and append to our
+	// list of possible clients. Order matters here; we want to prefer
+	// WANIPConnection2 over WANIPConnection1 or WANPPPConnection.
+	wanIP2, _ := internetgateway2.NewWANIPConnection2ClientsFromRootDevice(ctx, root, loc)
+	wanIP1, _ := internetgateway2.NewWANIPConnection1ClientsFromRootDevice(ctx, root, loc)
+	wanPPP, _ := internetgateway2.NewWANPPPConnection1ClientsFromRootDevice(ctx, root, loc)
+
+	var clients []upnpClient
+	for _, v := range wanIP2 {
+		clients = append(clients, v)
 	}
-	if cc, _ := internetgateway2.NewWANIPConnection1ClientsFromRootDevice(ctx, root, u); len(cc) > 0 {
-		return cc[0], nil
+	for _, v := range wanIP1 {
+		clients = append(clients, v)
 	}
-	if cc, _ := internetgateway2.NewWANPPPConnection1ClientsFromRootDevice(ctx, root, u); len(cc) > 0 {
-		return cc[0], nil
+	for _, v := range wanPPP {
+		clients = append(clients, v)
 	}
-	return nil, nil
+
+	// If we have no clients, then return right now; if we only have one,
+	// just select and return it.
+	if len(clients) == 0 {
+		return nil, nil
+	}
+	if len(clients) == 1 {
+		method = "single"
+		metricUPnPSelectSingle.Add(1)
+		return clients[0], nil
+	}
+
+	metricUPnPSelectMultiple.Add(1)
+
+	// In order to maximize the chances that we find a valid UPnP device
+	// that can give us a port mapping, we check a few properties:
+	//	1. Whether the device is "online", as defined by GetStatusInfo
+	//	2. Whether the device has an external IP address, as defined by
+	//	   GetExternalIPAddress
+	//	3. Whether the device's external IP address is a public address
+	//	   or a private one.
+	//
+	// We prefer a device where all of the above is true, and fall back if
+	// none are found.
+	//
+	// In order to save on network requests, iterate through all devices
+	// and determine how many "points" they have based on the above
+	// criteria, but return immediately if we find one that meets all
+	// three.
+	var (
+		connected   = make(map[upnpClient]bool)
+		externalIPs map[upnpClient]netip.Addr
+	)
+	for _, svc := range clients {
+		isConnected := serviceIsConnected(ctx, logf, svc)
+		connected[svc] = isConnected
+
+		// Don't bother checking for an external IP if the device isn't
+		// connected; technically this could happen with a misbehaving
+		// device, but that seems unlikely.
+		if !isConnected {
+			continue
+		}
+
+		// Check if the device has an external IP address.
+		extIP, err := svc.GetExternalIPAddress(ctx)
+		if err != nil {
+			continue
+		}
+		externalIP, err := netip.ParseAddr(extIP)
+		if err != nil {
+			continue
+		}
+		mak.Set(&externalIPs, svc, externalIP)
+
+		// If we get here, this device has a non-private external IP
+		// and is up, so we can just return it.
+		if !externalIP.IsPrivate() {
+			method = "ext-public"
+			metricUPnPSelectExternalPublic.Add(1)
+			return svc, nil
+		}
+	}
+
+	// Okay, we have no devices that meet all the available options. Fall
+	// back to first checking for devices that are up and have a private
+	// external IP (order matters), and then devices that are up, and then
+	// just anything at all.
+	//
+	//	try=0	Up + private external IP
+	//	try=1	Up
+	for try := 0; try <= 1; try++ {
+		for _, svc := range clients {
+			if !connected[svc] {
+				continue
+			}
+			_, hasExtIP := externalIPs[svc]
+			if hasExtIP {
+				method = "ext-private"
+				metricUPnPSelectExternalPrivate.Add(1)
+				return svc, nil
+			} else if try == 1 {
+				method = "up"
+				metricUPnPSelectUp.Add(1)
+				return svc, nil
+			}
+		}
+	}
+
+	// Nothing is up, but we have something (length of clients checked
+	// above); just return the first one.
+	metricUPnPSelectNone.Add(1)
+	return clients[0], nil
+}
+
+// serviceIsConnected returns whether a given UPnP service is connected, based
+// on the NewConnectionStatus field returned from GetStatusInfo.
+func serviceIsConnected(ctx context.Context, logf logger.Logf, svc upnpClient) bool {
+	status, _ /* NewLastConnectionError */, _ /* NewUptime */, err := svc.GetStatusInfo(ctx)
+	if err != nil {
+		return false
+	}
+	return status == "Connected" || status == "Up"
 }
 
 func (c *Client) upnpHTTPClientLocked() *http.Client {
@@ -295,26 +421,37 @@ func (c *Client) getUPnPPortMapping(
 		internal: internal,
 	}
 
-	var client upnpClient
-	var err error
+	var (
+		rootDev *goupnp.RootDevice
+		loc     *url.URL
+		err     error
+	)
 	c.mu.Lock()
 	oldMapping, ok := c.mapping.(*upnpMapping)
 	meta := c.uPnPMeta
-	httpClient := c.upnpHTTPClientLocked()
+	ctx = goupnp.WithHTTPClient(ctx, c.upnpHTTPClientLocked())
 	c.mu.Unlock()
 	if ok && oldMapping != nil {
-		client = oldMapping.client
+		rootDev = oldMapping.rootDev
+		loc = oldMapping.loc
 	} else {
-		ctx := goupnp.WithHTTPClient(ctx, httpClient)
-		client, err = getUPnPClient(ctx, c.logf, c.debug, gw, meta)
+		rootDev, loc, err = getUPnPRootDevice(ctx, c.logf, c.debug, gw, meta)
 		if c.debug.VerboseLogs {
-			c.logf("getUPnPClient: %T, %v", client, err)
+			c.logf("getUPnPRootDevice: loc=%q err=%v", loc, err)
 		}
 		if err != nil {
 			return netip.AddrPort{}, false
 		}
 	}
-	if client == nil {
+	if rootDev == nil {
+		return netip.AddrPort{}, false
+	}
+
+	// Now that we have a root device, select the best mapping service from
+	// it. This makes network requests, and can vary from mapping to
+	// mapping if the upstream device's connection status changes.
+	client, err := selectBestService(ctx, c.logf, rootDev, loc)
+	if err != nil {
 		return netip.AddrPort{}, false
 	}
 
@@ -384,6 +521,8 @@ func (c *Client) getUPnPPortMapping(
 	d := time.Duration(pmpMapLifetimeSec) * time.Second
 	upnp.goodUntil = now.Add(d)
 	upnp.renewAfter = now.Add(d / 2)
+	upnp.rootDev = rootDev
+	upnp.loc = loc
 	upnp.client = client
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -471,7 +610,7 @@ func requestLogger(logf logger.Logf, client *http.Client) *http.Client {
 
 		resp, err := oldTransport.RoundTrip(req)
 		if err != nil {
-			logf("response[%d]: err=%v", err)
+			logf("response[%d]: err=%v", ctr, err)
 			return nil, err
 		}
 
@@ -480,7 +619,7 @@ func requestLogger(logf logger.Logf, client *http.Client) *http.Client {
 			body, err = io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
-				logf("response[%d]: %d bodyErr=%v", resp.StatusCode, err)
+				logf("response[%d]: %d bodyErr=%v", ctr, resp.StatusCode, err)
 				return nil, err
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(body))

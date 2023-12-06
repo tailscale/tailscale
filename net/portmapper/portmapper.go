@@ -1015,6 +1015,30 @@ var (
 	// received a UPnP response from a port other than the UPnP port.
 	metricUPnPResponseAlternatePort = clientmetric.NewCounter("portmap_upnp_response_alternate_port")
 
+	// metricUPnPSelectSingle counts the number of times that only a single
+	// UPnP device was available in selectBestService.
+	metricUPnPSelectSingle = clientmetric.NewCounter("portmap_upnp_select_single")
+
+	// metricUPnPSelectMultiple counts the number of times that we need to
+	// select from among multiple UPnP devices in selectBestService.
+	metricUPnPSelectMultiple = clientmetric.NewCounter("portmap_upnp_select_multiple")
+
+	// metricUPnPSelectExternalPublic counts the number of times that
+	// selectBestService picked a UPnP device with an external public IP.
+	metricUPnPSelectExternalPublic = clientmetric.NewCounter("portmap_upnp_select_external_public")
+
+	// metricUPnPSelectExternalPrivate counts the number of times that
+	// selectBestService picked a UPnP device with an external private IP.
+	metricUPnPSelectExternalPrivate = clientmetric.NewCounter("portmap_upnp_select_external_private")
+
+	// metricUPnPSelectUp counts the number of times that selectBestService
+	// picked a UPnP device that was up but with no external IP.
+	metricUPnPSelectUp = clientmetric.NewCounter("portmap_upnp_select_up")
+
+	// metricUPnPSelectNone counts the number of times that selectBestService
+	// picked a UPnP device that is not up.
+	metricUPnPSelectNone = clientmetric.NewCounter("portmap_upnp_select_none")
+
 	// metricUPnPParseErr counts the number of times we failed to parse a UPnP response.
 	metricUPnPParseErr = clientmetric.NewCounter("portmap_upnp_parse_err")
 
