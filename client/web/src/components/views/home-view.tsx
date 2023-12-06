@@ -33,7 +33,7 @@ export default function HomeView({
       <h2 className="mb-3">This device</h2>
       <div className="-mx-5 card mb-9">
         <div className="flex justify-between items-center text-lg mb-5">
-          <div className="flex items-center">
+          <Link className="flex items-center" to="/details">
             <div className="w-10 h-10 bg-gray-100 rounded-full justify-center items-center inline-flex">
               <Machine />
             </div>
@@ -49,9 +49,10 @@ export default function HomeView({
                 {node.Status === "Running" ? "Connected" : "Offline"}
               </p>
             </div>
-          </div>
+          </Link>
           <AddressCard
-            triggerClassName="text-gray-800 text-lg leading-[25.20px]"
+            className="-mr-2"
+            triggerClassName="relative text-gray-800 text-lg leading-[25.20px]"
             v4Address={node.IPv4}
             v6Address={node.IPv6}
             shortDomain={node.DeviceName}
@@ -150,7 +151,7 @@ function SettingsCard({
 
   return (
     <button
-      className={cx("-mx-5 card cursor-pointer", className)}
+      className={cx("-mx-5 card cursor-pointer", { "pb-4": footer }, className)}
       onClick={() => setLocation(link)}
     >
       <div className="flex justify-between items-center">
