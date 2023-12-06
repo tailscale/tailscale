@@ -205,10 +205,11 @@ function ExitNodeSelectorInner({
   )
 
   return (
-    <div className="w-[calc(var(--radix-popover-trigger-width)-16px)] py-1 rounded-lg shadow">
+    <div className="w-[calc(var(--radix-popover-trigger-width)-16px)] pb-1 rounded-lg shadow">
       <SearchInput
         name="exit-node-search"
-        inputClassName="w-full px-4 py-2"
+        inputClassName="w-full px-4 py-2 border-none rounded-b-none"
+        autoFocus
         autoCorrect="off"
         autoComplete="off"
         autoCapitalize="off"
@@ -231,7 +232,7 @@ function ExitNodeSelectorInner({
               group.nodes.length > 0 && (
                 <div
                   key={group.id}
-                  className="pb-1 mb-1 border-b last:border-b-0 last:mb-0"
+                  className="pb-1 mb-1 border-b last:border-b-0 border-gray-200 last:mb-0"
                 >
                   {group.name && (
                     <div className="px-4 py-2 text-gray-500 text-xs font-medium uppercase tracking-wide">
