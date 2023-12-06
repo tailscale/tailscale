@@ -4,6 +4,7 @@
 import React from "react"
 import * as Control from "src/components/control-components"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
+import Card from "src/ui/card"
 import Toggle from "src/ui/toggle"
 
 export default function SSHView({
@@ -30,23 +31,25 @@ export default function SSHView({
           Learn more &rarr;
         </a>
       </p>
-      <div className="-mx-5 px-4 py-3 bg-white rounded-lg border border-gray-200 flex gap-2.5 mb-3">
-        <Toggle
-          checked={node.RunningSSHServer}
-          onChange={() =>
-            nodeUpdaters.patchPrefs({
-              RunSSHSet: true,
-              RunSSH: !node.RunningSSHServer,
-            })
-          }
-          disabled={readonly}
-        />
-        <div className="text-black text-sm font-medium leading-tight">
-          Run Tailscale SSH server
-        </div>
-      </div>
+      <Card className="-mx-5 p-4">
+        <label className="flex gap-3 items-center">
+          <Toggle
+            checked={node.RunningSSHServer}
+            onChange={() =>
+              nodeUpdaters.patchPrefs({
+                RunSSHSet: true,
+                RunSSH: !node.RunningSSHServer,
+              })
+            }
+            disabled={readonly}
+          />
+          <div className="text-black text-sm font-medium leading-tight">
+            Run Tailscale SSH server
+          </div>
+        </label>
+      </Card>
       <Control.AdminContainer
-        className="text-gray-500 text-sm leading-tight"
+        className="text-gray-500 text-sm leading-tight mt-3"
         node={node}
       >
         Remember to make sure that the{" "}

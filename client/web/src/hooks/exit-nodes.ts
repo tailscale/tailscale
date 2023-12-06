@@ -226,6 +226,6 @@ export function trimDNSSuffix(s: string, tailnetDNSName: string): string {
 export const noExitNode: ExitNode = { ID: "NONE", Name: "None", Online: true }
 export const runAsExitNode: ExitNode = {
   ID: "RUNNING",
-  Name: "Run as exit node…",
+  Name: "Run as exit node",
   Online: true,
 }

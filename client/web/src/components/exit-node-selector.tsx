@@ -58,38 +58,38 @@ export default function ExitNodeSelector({
   )
 
   return (
-    <Popover
-      open={disabled ? false : open}
-      onOpenChange={setOpen}
-      side="bottom"
-      sideOffset={5}
-      align="start"
-      alignOffset={8}
-      content={
-        <ExitNodeSelectorInner
-          node={node}
-          selected={selected}
-          onSelect={handleSelect}
-        />
-      }
-      asChild
+    <div
+      className={cx(
+        "rounded-md",
+        {
+          "bg-red-600": offline,
+        },
+        className
+      )}
     >
       <div
-        className={cx(
-          "rounded-md",
-          {
-            "bg-red-600": offline,
-          },
-          className
-        )}
+        className={cx("p-1.5 rounded-md border flex items-stretch gap-1.5", {
+          "border-gray-200": none,
+          "bg-yellow-300 border-yellow-300": advertising && !offline,
+          "bg-blue-500 border-blue-500": using && !offline,
+          "bg-red-500 border-red-500": offline,
+        })}
       >
-        <div
-          className={cx("p-1.5 rounded-md border flex items-stretch gap-1.5", {
-            "border-gray-200": none,
-            "bg-yellow-300 border-yellow-300": advertising && !offline,
-            "bg-blue-500 border-blue-500": using && !offline,
-            "bg-red-500 border-red-500": offline,
-          })}
+        <Popover
+          open={disabled ? false : open}
+          onOpenChange={setOpen}
+          className="overflow-hidden"
+          side="bottom"
+          sideOffset={0}
+          align="start"
+          content={
+            <ExitNodeSelectorInner
+              node={node}
+              selected={selected}
+              onSelect={handleSelect}
+            />
+          }
+          asChild
         >
           <button
             className={cx("flex-1 px-2 py-1.5 rounded-[1px]", {
@@ -108,7 +108,7 @@ export default function ExitNodeSelector({
             <p
               className={cx(
                 "text-gray-500 text-xs text-left font-medium uppercase tracking-wide mb-1",
-                { "bg-opacity-70 text-white": advertising || using }
+                { "opacity-70 text-white": advertising || using }
               )}
             >
               Exit node{offline && " offline"}
@@ -138,32 +138,31 @@ export default function ExitNodeSelector({
               )}
             </div>
           </button>
-          {!disabled && (advertising || using) && (
-            <button
-              className={cx("px-3 py-2 rounded-sm text-white", {
-                "bg-yellow-200": advertising && !offline,
-                "bg-blue-400": using && !offline,
-                "bg-red-400": offline,
-              })}
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                handleSelect(noExitNode)
-              }}
-            >
-              Disable
-            </button>
-          )}
-        </div>
-        {offline && (
-          <p className="text-white p-3">
-            The selected exit node is currently offline. Your internet traffic
-            is blocked until you disable the exit node or select a different
-            one.
-          </p>
+        </Popover>
+        {!disabled && (advertising || using) && (
+          <button
+            className={cx("px-3 py-2 rounded-sm text-white", {
+              "hover:bg-yellow-200": advertising && !offline,
+              "hover:bg-blue-400": using && !offline,
+              "hover:bg-red-400": offline,
+            })}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              handleSelect(noExitNode)
+            }}
+          >
+            Disable
+          </button>
         )}
       </div>
-    </Popover>
+      {offline && (
+        <p className="text-white p-3">
+          The selected exit node is currently offline. Your internet traffic is
+          blocked until you disable the exit node or select a different one.
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -205,10 +204,11 @@ function ExitNodeSelectorInner({
   )
 
   return (
-    <div className="w-[calc(var(--radix-popover-trigger-width)-16px)] pb-1 rounded-lg shadow">
+    <div className="w-[var(--radix-popover-trigger-width)]">
       <SearchInput
         name="exit-node-search"
-        inputClassName="w-full px-4 py-2 border-none rounded-b-none"
+        className="px-2"
+        inputClassName="w-full py-3 !h-auto border-none rounded-b-none !ring-0"
         autoFocus
         autoCorrect="off"
         autoComplete="off"
@@ -224,7 +224,7 @@ function ExitNodeSelectorInner({
       {/* TODO(sonia): use loading spinner when loading useExitNodes */}
       <div
         ref={listRef}
-        className="pt-1 border-t border-gray-200 max-h-64 overflow-y-scroll"
+        className="pt-1 border-t border-gray-200 max-h-60 overflow-y-scroll"
       >
         {hasNodes ? (
           exitNodes.map(

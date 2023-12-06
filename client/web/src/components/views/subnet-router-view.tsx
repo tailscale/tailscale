@@ -8,6 +8,8 @@ import { ReactComponent as Plus } from "src/assets/icons/plus.svg"
 import * as Control from "src/components/control-components"
 import { NodeData, NodeUpdaters } from "src/hooks/node-data"
 import Button from "src/ui/button"
+import Card from "src/ui/card"
+import EmptyState from "src/ui/empty-state"
 import Input from "src/ui/input"
 
 export default function SubnetRouterView({
@@ -50,7 +52,7 @@ export default function SubnetRouterView({
       </p>
       {!readonly &&
         (inputOpen ? (
-          <div className="-mx-5 card shadow">
+          <div className="-mx-5 card !border-0 shadow-popover">
             <p className="font-medium leading-snug mb-3">
               Advertise new routes
             </p>
@@ -150,9 +152,9 @@ export default function SubnetRouterView({
             )}
           </>
         ) : (
-          <div className="px-5 py-4 bg-gray-50 rounded-lg border border-gray-200 text-center text-gray-500">
-            Not advertising any routes
-          </div>
+          <Card empty>
+            <EmptyState description="Not advertising any routes" />
+          </Card>
         )}
       </div>
     </>

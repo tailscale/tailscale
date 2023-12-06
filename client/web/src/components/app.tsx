@@ -22,7 +22,7 @@ export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-4 md:py-14 px-5">
+    <main className="min-w-sm max-w-lg mx-auto py-4 sm:py-14 px-5">
       {loadingAuth || !auth ? (
         <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
       ) : (
@@ -136,24 +136,21 @@ function Header({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const [loc, setLocation] = useLocation()
+  const [loc] = useLocation()
 
   return (
     <>
-      <div className="flex justify-between items-center mb-9 md:mb-12">
-        <div className="flex gap-3">
-          <TailscaleIcon
-            className="cursor-pointer"
-            onClick={() => setLocation("/")}
-          />
-          <div className="inline text-gray-800 text-lg font-medium leading-snug">
+      <div className="flex flex-wrap gap-4 justify-between items-center mb-9 md:mb-12">
+        <Link to="/" className="flex gap-3 overflow-hidden">
+          <TailscaleIcon />
+          <div className="inline text-gray-800 text-lg font-medium leading-snug truncate">
             {node.DomainName}
           </div>
-        </div>
+        </Link>
         <LoginToggle node={node} auth={auth} newSession={newSession} />
       </div>
       {loc !== "/" && loc !== "/update" && (
-        <Link to="/" className="link font-medium block mb-[10px]">
+        <Link to="/" className="link font-medium block mb-2">
           &larr; Back to {node.DeviceName}
         </Link>
       )}

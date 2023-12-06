@@ -21,12 +21,14 @@ export default function AddressCard({
   v6Address,
   shortDomain,
   fullDomain,
+  className,
   triggerClassName,
 }: {
   v4Address: string
   v6Address: string
   shortDomain?: string
   fullDomain?: string
+  className?: string
   triggerClassName?: string
 }) {
   const children = (
@@ -57,7 +59,7 @@ export default function AddressCard({
       <Primitive.Trigger asChild>
         <Button
           variant="minimal"
-          className="-ml-1 px-1 py-0 hover:!bg-transparent font-normal"
+          className={cx("-ml-1 px-1 py-0 font-normal", className)}
           suffixIcon={
             <ChevronDown className="w-5 h-5" stroke="#232222" /* gray-800 */ />
           }

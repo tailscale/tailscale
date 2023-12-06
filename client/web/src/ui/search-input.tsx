@@ -17,10 +17,10 @@ const SearchInput = forwardRef<HTMLInputElement, Props>((props, ref) => {
   const { className, inputClassName, ...rest } = props
   return (
     <div className={cx("relative", className)}>
-      <Search className="absolute w-[1.25em] h-full ml-2" />
+      <Search className="absolute text-gray-400 w-[1.25em] h-full ml-2" />
       <input
         type="text"
-        className={cx("input px-8", inputClassName)}
+        className={cx("input pl-9 pr-8", inputClassName)}
         ref={ref}
         {...rest}
       />

@@ -57,7 +57,7 @@ export default function LoginToggle({
       ) : (
         <div
           className={cx(
-            "w-[34px] h-[34px] p-1 rounded-full justify-center items-center inline-flex",
+            "w-[34px] h-[34px] p-1 rounded-full justify-center items-center inline-flex hover:bg-gray-300",
             {
               "bg-transparent": !open,
               "bg-gray-300": open,
