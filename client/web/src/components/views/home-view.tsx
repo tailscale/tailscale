@@ -3,7 +3,7 @@
 
 import cx from "classnames"
 import React, { useMemo } from "react"
-import { incrementMetric } from "src/api"
+import { apiFetch } from "src/api"
 import { ReactComponent as ArrowRight } from "src/assets/icons/arrow-right.svg"
 import { ReactComponent as Machine } from "src/assets/icons/machine.svg"
 import AddressCard from "src/components/address-copy-card"
@@ -68,7 +68,7 @@ export default function HomeView({
         <Link
           className="link font-medium"
           to="/details"
-          onClick={() => incrementMetric("web_client_device_details_click")}
+          onClick={() => apiFetch("/device-details-click", "POST")}
         >
           View device details &rarr;
         </Link>
