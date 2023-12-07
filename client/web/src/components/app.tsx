@@ -16,6 +16,7 @@ import useNodeData, {
   featureDescription,
   NodeData,
 } from "src/hooks/node-data"
+import LoadingDots from "src/ui/loading-dots"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
@@ -24,7 +25,7 @@ export default function App() {
   return (
     <main className="min-w-sm max-w-lg mx-auto py-4 sm:py-14 px-5">
       {loadingAuth || !auth ? (
-        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
+        <LoadingView />
       ) : (
         <WebClient auth={auth} newSession={newSession} />
       )}
@@ -45,7 +46,7 @@ function WebClient({
   }, [auth, refreshData])
 
   return !data ? (
-    <div className="text-center py-14">Loading...</div>
+    <LoadingView />
   ) : data.Status === "NeedsLogin" ||
     data.Status === "NoState" ||
     data.Status === "Stopped" ? (
@@ -155,5 +156,15 @@ function Header({
         </Link>
       )}
     </>
+  )
+}
+
+/**
+ * LoadingView fills its container with small animated loading dots
+ * in the center.
+ */
+export function LoadingView() {
+  return (
+    <LoadingDots className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
   )
 }
