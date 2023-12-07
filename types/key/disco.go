@@ -4,6 +4,7 @@
 package key
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"fmt"
 
@@ -125,6 +126,14 @@ func (k DiscoPublic) String() string {
 		panic(err)
 	}
 	return string(bs)
+}
+
+// Compare returns an integer comparing DiscoPublic k and l lexicographically.
+// The result will be 0 if k == l, -1 if k < l, and +1 if k > l. This is useful
+// for situations requiring only one node in a pair to perform some operation,
+// e.g. probing UDP path lifetime.
+func (k DiscoPublic) Compare(l DiscoPublic) int {
+	return bytes.Compare(k.k[:], l.k[:])
 }
 
 // AppendText implements encoding.TextAppender.
