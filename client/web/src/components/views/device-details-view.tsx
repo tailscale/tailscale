@@ -3,7 +3,7 @@
 
 import cx from "classnames"
 import React from "react"
-import { apiFetch } from "src/api"
+import { apiFetch, incrementMetric } from "src/api"
 import ACLTag from "src/components/acl-tag"
 import * as Control from "src/components/control-components"
 import NiceIP from "src/components/nice-ip"
@@ -40,11 +40,13 @@ export default function DeviceDetailsView({
             {!readonly && (
               <Button
                 sizeVariant="small"
-                onClick={() =>
+                onClick={() => {
+                  // increment metrics before logout as we don't gracefully handle disconnect currently
+                  incrementMetric("web_client_node_disconnect")
                   apiFetch("/local/v0/logout", "POST")
                     .then(() => setLocation("/"))
                     .catch((err) => alert("Logout failed: " + err.message))
-                }
+                }}
               >
                 Disconnect…
               </Button>
