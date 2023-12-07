@@ -18,7 +18,8 @@ const (
 
 	// Keys with a string value that specifies an option: "always", "never", "user-decides".
 	// The default is "user-decides" unless otherwise stated. Enforcement of
-	// these policies is typically performed in ipnlocal.applySysPolicy().
+	// these policies is typically performed in ipnlocal.applySysPolicy(). GUIs
+	// typically hide menu items related to policies that are enforced.
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
@@ -31,15 +32,23 @@ const (
 	// installed. Its value is "InstallUpdates" because of an awkwardly-named
 	// visibility option "ApplyUpdates" on MacOS.
 	ApplyUpdates Key = "InstallUpdates"
+	// EnableRunExitNode controls if the device acts as an exit node. Even when
+	// running as an exit node, the device must be approved by a tailnet
+	// administrator. Its name is slightly awkward because RunExitNodeVisibility
+	// predates this option but is preserved for backwards compatibility.
+	EnableRunExitNode Key = "AdvertiseExitNode"
 
 	// Keys with a string value that controls visibility: "show", "hide".
 	// The default is "show" unless otherwise stated. Enforcement of these
 	// policies is typically performed by the UI code for the relevant operating
 	// system.
-	AdminConsoleVisibility    Key = "AdminConsole"
-	NetworkDevicesVisibility  Key = "NetworkDevices"
-	TestMenuVisibility        Key = "TestMenu"
-	UpdateMenuVisibility      Key = "UpdateMenu"
+	AdminConsoleVisibility   Key = "AdminConsole"
+	NetworkDevicesVisibility Key = "NetworkDevices"
+	TestMenuVisibility       Key = "TestMenu"
+	UpdateMenuVisibility     Key = "UpdateMenu"
+	// RunExitNodeVisibility controls if the "run as exit node" menu item is
+	// visible, without controlling the setting itself. This is preserved for
+	// backwards compatibility but prefer EnableRunExitNode in new deployments.
 	RunExitNodeVisibility     Key = "RunExitNode"
 	PreferencesMenuVisibility Key = "PreferencesMenu"
 	ExitNodeMenuVisibility    Key = "ExitNodesPicker"
