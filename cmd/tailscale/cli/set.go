@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 	"tailscale.com/version"
 )
@@ -116,7 +117,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ForceDaemon:            setArgs.forceDaemon,
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
-				Apply: setArgs.updateApply,
+				Apply: opt.NewBool(setArgs.updateApply),
 			},
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
@@ -172,7 +173,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		// does not use clientupdate.
 		if version.IsMacSysExt() {
 			apply := "0"
-			if maskedPrefs.AutoUpdate.Apply {
+			if maskedPrefs.AutoUpdate.Apply.EqualBool(true) {
 				apply = "1"
 			}
 			out, err := exec.Command("defaults", "write", "io.tailscale.ipn.macsys", "SUAutomaticallyUpdate", apply).CombinedOutput()

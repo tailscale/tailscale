@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 )
 
@@ -26,6 +27,9 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 		case reflect.Bool:
 			return reflect.ValueOf(true)
 		case reflect.String:
+			if reflect.TypeOf(opt.Bool("")) == t {
+				return reflect.ValueOf("true").Convert(t)
+			}
 			return reflect.ValueOf("foo").Convert(t)
 		case reflect.Int64:
 			return reflect.ValueOf(int64(1))
