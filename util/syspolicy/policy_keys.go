@@ -24,6 +24,13 @@ const (
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"
 	EnableTailscaleDNS        Key = "UseTailscaleDNSSettings"
 	EnableTailscaleSubnets    Key = "UseTailscaleSubnets"
+	// CheckUpdates is the key to signal if the updater should periodically
+	// check for updates.
+	CheckUpdates Key = "CheckUpdates"
+	// ApplyUpdates is the key to signal if updates should be automatically
+	// installed. Its value is "InstallUpdates" because of an awkwardly-named
+	// visibility option "ApplyUpdates" on MacOS.
+	ApplyUpdates Key = "InstallUpdates"
 
 	// Keys with a string value that controls visibility: "show", "hide".
 	// The default is "show" unless otherwise stated. Enforcement of these
@@ -36,7 +43,11 @@ const (
 	RunExitNodeVisibility     Key = "RunExitNode"
 	PreferencesMenuVisibility Key = "PreferencesMenu"
 	ExitNodeMenuVisibility    Key = "ExitNodesPicker"
-	AutoUpdateVisibility      Key = "ApplyUpdates"
+	// AutoUpdateVisibility is the key to signal if the menu item for automatic
+	// installation of updates should be visible. It is only used by macsys
+	// installations and uses the Sparkle naming convention, even though it does
+	// not actually control updates, merely the UI for that setting.
+	AutoUpdateVisibility Key = "ApplyUpdates"
 
 	// Keys with a string value formatted for use with time.ParseDuration().
 	KeyExpirationNoticeTime Key = "KeyExpirationNotice" // default 24 hours
