@@ -37,7 +37,9 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tsnet"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
@@ -211,6 +213,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		Field: client.InNamespace(tsNamespace).AsSelector(),
 	}
 	mgr, err := manager.New(restConfig, manager.Options{
+		Scheme: tsapi.GlobalScheme,
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:      nsFilter,
@@ -224,6 +227,8 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
 	svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
+	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("subnetrouter"))
+
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
@@ -268,6 +273,20 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		startlog.Fatalf("could not create controller: %v", err)
 	}
 
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.Connector{}).
+		Watches(&appsv1.StatefulSet{}, connectorFilter).
+		Watches(&corev1.Secret{}, connectorFilter).
+		Complete(&ConnectorReconciler{
+			ssr:      ssr,
+			recorder: eventRecorder,
+			Client:   mgr.GetClient(),
+			logger:   zlog.Named("connector-reconciler"),
+			clock:    clock.RealClock{},
+		})
+	if err != nil {
+		startlog.Fatal("could not create connector reconciler: %v", err)
+	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
