@@ -3,6 +3,7 @@ on:
   pull_request:
    paths: 
    - './cmd/k8s-operator/'
+   - './k8s-operator/'
    - '.github/workflows/kubemanifests.yaml'
 
 # Cancel workflow run if there is a newer push to the same PR for which it is
@@ -24,7 +25,7 @@ jobs:
         ./tool/helm lint "tailscale-operator-${VERSION_SHORT}.tgz"
     - name: Verify that static manifests are up to date
       run: |
-        ./tool/go generate tailscale.com/cmd/k8s-operator
+        make kube-generate-all
         echo
         echo
-        git diff --name-only --exit-code || (echo "Static manifests for Tailscale Kubernetes operator are out of date. Please run 'go generate tailscale.com/cmd/k8s-operator' and commit the diff."; exit 1)
+        git diff --name-only --exit-code || (echo "Generated files for Tailscale Kubernetes operator are out of date. Please run 'make kube-generate-all' and commit the diff."; exit 1)

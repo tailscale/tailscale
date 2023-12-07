@@ -42,7 +42,11 @@ import (
 	"tailscale.com/version"
 )
 
+// Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
 //go:generate go run tailscale.com/cmd/k8s-operator/generate
+
+// Generate Connector CustomResourceDefinition yaml from its Go types.
+//go:generate go run  sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
 
 func main() {
 	// Required to use our client API. We're fine with the instability since the

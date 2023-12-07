@@ -52,15 +52,21 @@ for file in $(find $1 \( -name '*.go' -or -name '*.tsx' -or -name '*.ts' -not -n
         $1/util/winutil/testdata/testrestartableprocesses/main.go)
             # Subprocess test harness code
         ;;
+        *$1/k8s-operator/apis/v1alpha1/zz_generated.deepcopy.go)
+            # Generated kube deepcopy funcs file starts with a Go build tag + an empty line
+            header="$(head -5 $file | tail -n+3 )"
+        ;;
         *)
-            header="$(head -2 $file)"
+           header="$(head -2 $file)"
+        ;;
+    esac
+    if [ ! -z "$header" ]; then
             if ! check_file "$header"; then
                 fail=1
                 echo "${file#$1/} doesn't have the right copyright header:"
                 echo "$header" | sed -e 's/^/    /g'
             fi
-            ;;
-    esac
+    fi
 done
 
 if [ $fail -ne 0 ]; then
