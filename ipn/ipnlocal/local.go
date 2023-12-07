@@ -1264,6 +1264,16 @@ var preferencePolicies = []preferencePolicyInfo{
 		get: func(p ipn.PrefsView) bool { return p.RouteAll() },
 		set: func(p *ipn.Prefs, v bool) { p.RouteAll = v },
 	},
+	{
+		key: syspolicy.CheckUpdates,
+		get: func(p ipn.PrefsView) bool { return p.AutoUpdate().Check },
+		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Check = v },
+	},
+	{
+		key: syspolicy.ApplyUpdates,
+		get: func(p ipn.PrefsView) bool { return p.AutoUpdate().Apply },
+		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Apply = v },
+	},
 }
 
 // applySysPolicy overwrites configured preferences with policies that may be

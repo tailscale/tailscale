@@ -1775,6 +1775,82 @@ func TestApplySysPolicy(t *testing.T) {
 				syspolicy.ControlURL: "set",
 			},
 		},
+		{
+			name: "enable AutoUpdate apply does not unset check",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: true,
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ApplyUpdates: "always",
+			},
+		},
+		{
+			name: "disable AutoUpdate apply does not unset check",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: true,
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ApplyUpdates: "never",
+			},
+		},
+		{
+			name: "enable AutoUpdate check does not unset apply",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: false,
+					Apply: true,
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: true,
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.CheckUpdates: "always",
+			},
+		},
+		{
+			name: "disable AutoUpdate check does not unset apply",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: true,
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: false,
+					Apply: true,
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.CheckUpdates: "never",
+			},
+		},
 	}
 
 	for _, tt := range tests {
