@@ -1274,6 +1274,11 @@ var preferencePolicies = []preferencePolicyInfo{
 		get: func(p ipn.PrefsView) bool { return p.AutoUpdate().Apply },
 		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Apply = v },
 	},
+	{
+		key: syspolicy.EnableRunExitNode,
+		get: func(p ipn.PrefsView) bool { return p.AdvertisesExitNode() },
+		set: func(p *ipn.Prefs, v bool) { p.SetAdvertiseExitNode(v) },
+	},
 }
 
 // applySysPolicy overwrites configured preferences with policies that may be
