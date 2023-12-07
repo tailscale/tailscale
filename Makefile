@@ -9,6 +9,9 @@ vet: ## Run go vet
 tidy: ## Run go mod tidy
 	./tool/go mod tidy
 
+lint: ## Run golangci-lint
+	./tool/go run github.com/golangci/golangci-lint/cmd/golangci-lint run
+
 updatedeps: ## Update depaware deps
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
 	# it finds in its $$PATH is the right one.

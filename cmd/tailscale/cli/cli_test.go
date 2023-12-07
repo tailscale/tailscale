@@ -1328,7 +1328,9 @@ func TestParseNLArgs(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			keys, disablements, err := parseNLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
-			if !reflect.DeepEqual(err, tc.wantErr) {
+			if (tc.wantErr == nil && err != nil) ||
+				(tc.wantErr != nil && err == nil) ||
+				(tc.wantErr != nil && err != nil && tc.wantErr.Error() != err.Error()) {
 				t.Fatalf("parseNLArgs(%v).err = %v, want %v", tc.input, err, tc.wantErr)
 			}
 
