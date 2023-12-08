@@ -494,11 +494,19 @@ func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) 
 		}
 		// Set the cookie on browser.
 		http.SetCookie(w, &http.Cookie{
-			Name:    sessionCookieName,
-			Value:   session.ID,
-			Raw:     session.ID,
-			Path:    "/",
-			Expires: session.expires(),
+			Name:     sessionCookieName,
+			Value:    session.ID,
+			Raw:      session.ID,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+			Expires:  session.expires(),
+			// We can't set Secure to true because we serve over HTTP
+			// (but only on Tailscale IPs, hence over encrypted
+			// connections that a LAN-local attacker cannot sniff).
+			// In the future, we could support HTTPS requests using
+			// the full MagicDNS hostname, and could set this.
+			// Secure:  true,
 		})
 	}
 
