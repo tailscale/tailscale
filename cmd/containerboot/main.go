@@ -208,6 +208,24 @@ func main() {
 		log.Fatalf("failed to watch tailscaled for updates: %v", err)
 	}
 
+	// Now that we've started tailscaled, we can symlink the socket to the
+	// default location if needed.
+	const defaultTailscaledSocketPath = "/var/run/tailscale/tailscaled.sock"
+	if cfg.Socket != "" && cfg.Socket != defaultTailscaledSocketPath {
+		// If we were given a socket path, symlink it to the default location so
+		// that the CLI can find it without any extra flags.
+		// See #6849.
+
+		dir := filepath.Dir(defaultTailscaledSocketPath)
+		err := os.MkdirAll(dir, 0700)
+		if err == nil {
+			err = syscall.Symlink(cfg.Socket, defaultTailscaledSocketPath)
+		}
+		if err != nil {
+			log.Printf("[warning] failed to symlink socket: %v\n\tTo interact with the Tailscale CLI please use `tailscale --socket=%q`", err, cfg.Socket)
+		}
+	}
+
 	// Because we're still shelling out to `tailscale up` to get access to its
 	// flag parser, we have to stop watching the IPN bus so that we can block on
 	// the subcommand without stalling anything. Then once it's done, we resume
