@@ -406,7 +406,7 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 
 	session, whois, err := s.getSession(r)
 	switch {
-	case err != nil && errors.Is(err, errNotUsingTailscale):
+	case s.mode == LoginServerMode || errors.Is(err, errNotUsingTailscale):
 		// not using tailscale, so perform platform auth
 		switch distro.Get() {
 		case distro.Synology:
