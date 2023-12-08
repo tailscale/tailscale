@@ -601,11 +601,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	filterRules, err := s.lc.DebugPacketFilterRules(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	filterRules, _ := s.lc.DebugPacketFilterRules(r.Context())
 	data := &nodeData{
 		ID:               st.Self.ID,
 		Status:           st.BackendState,
