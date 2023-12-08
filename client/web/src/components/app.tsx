@@ -73,6 +73,11 @@ function WebClient({
               currentVersion={node.IPNVersion}
             />
           </FeatureRoute>
+          <Route path="/disconnected">
+            <Card className="mt-8">
+              <EmptyState description="You have been disconnected" />
+            </Card>
+          </Route>
           <Route>
             <Card className="mt-8">
               <EmptyState description="Page not found" />
@@ -128,6 +133,11 @@ function Header({
   newSession: () => Promise<void>
 }) {
   const [loc] = useLocation()
+
+  if (loc === "/disconnected") {
+    // No header on view presented after logout.
+    return null
+  }
 
   return (
     <>

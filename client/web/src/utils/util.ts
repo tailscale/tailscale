@@ -15,6 +15,13 @@ export function assertNever(a: never): never {
 export function noop() {}
 
 /**
+ * isObject checks if a value is an object.
+ */
+export function isObject(val: unknown): val is object {
+  return Boolean(val && typeof val === "object" && val.constructor === Object)
+}
+
+/**
  * pluralize is a very simple function that returns either
  * the singular or plural form of a string based on the given
  * quantity.

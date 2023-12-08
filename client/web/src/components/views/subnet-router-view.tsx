@@ -11,6 +11,7 @@ import * as Control from "src/components/control-components"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Card from "src/ui/card"
+import Dialog from "src/ui/dialog"
 import EmptyState from "src/ui/empty-state"
 import Input from "src/ui/input"
 
@@ -139,9 +140,8 @@ export default function SubnetRouterView({
                       )}
                     </div>
                     {!readonly && (
-                      <Button
-                        sizeVariant="small"
-                        onClick={() =>
+                      <StopAdvertisingDialog
+                        onSubmit={() =>
                           api({
                             action: "update-routes",
                             data: advertisedRoutes.filter(
@@ -149,9 +149,7 @@ export default function SubnetRouterView({
                             ),
                           })
                         }
-                      >
-                        Stop advertising…
-                      </Button>
+                      />
                     )}
                   </div>
                 </div>
@@ -177,5 +175,24 @@ export default function SubnetRouterView({
         )}
       </div>
     </>
+  )
+}
+
+function StopAdvertisingDialog({ onSubmit }: { onSubmit: () => void }) {
+  return (
+    <Dialog
+      className="max-w-md"
+      title="Stop advertising route"
+      trigger={<Button sizeVariant="small">Stop advertising…</Button>}
+    >
+      <Dialog.Form
+        cancelButton
+        submitButton="Stop advertising"
+        destructive
+        onSubmit={onSubmit}
+      >
+        Any active connections between devices over this route will be broken.
+      </Dialog.Form>
+    </Dialog>
   )
 }

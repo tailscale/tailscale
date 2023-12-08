@@ -11,6 +11,7 @@ import { UpdateAvailableNotification } from "src/components/update-available"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Card from "src/ui/card"
+import Dialog from "src/ui/dialog"
 import QuickCopy from "src/ui/quick-copy"
 import { useLocation } from "wouter"
 
@@ -21,9 +22,6 @@ export default function DeviceDetailsView({
   readonly: boolean
   node: NodeData
 }) {
-  const api = useAPI()
-  const [, setLocation] = useLocation()
-
   return (
     <>
       <h1 className="mb-10">Device details</h1>
@@ -39,16 +37,7 @@ export default function DeviceDetailsView({
                 })}
               />
             </div>
-            {!readonly && (
-              <Button
-                sizeVariant="small"
-                onClick={() =>
-                  api({ action: "logout" }).then(() => setLocation("/"))
-                }
-              >
-                Disconnect…
-              </Button>
-            )}
+            {!readonly && <DisconnectDialog />}
           </div>
         </Card>
         {node.Features["auto-update"] &&
@@ -208,5 +197,35 @@ export default function DeviceDetailsView({
         </footer>
       </div>
     </>
+  )
+}
+
+function DisconnectDialog() {
+  const api = useAPI()
+  const [, setLocation] = useLocation()
+
+  return (
+    <Dialog
+      className="max-w-md"
+      title="Disconnect"
+      trigger={<Button sizeVariant="small">Disconnect…</Button>}
+    >
+      <Dialog.Form
+        cancelButton
+        submitButton="Disconnect"
+        destructive
+        onSubmit={() => {
+          api({ action: "logout" })
+          setLocation("/disconnected")
+        }}
+      >
+        You are about to disconnect this device from your tailnet. To reconnect,
+        you will be required to re-authenticate this device.
+        <p className="mt-4 text-sm text-text-muted">
+          Your connection to this web interface will end as soon as you click
+          disconnect.
+        </p>
+      </Dialog.Form>
+    </Dialog>
   )
 }
