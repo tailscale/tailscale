@@ -166,28 +166,25 @@
 }
 
 @layer components {
-  .card {
-    @apply p-5 bg-white rounded-lg border border-gray-200;
-  }
-  .card h1 {
+  .details-card h1 {
     @apply text-gray-800 text-lg font-medium leading-snug;
   }
-  .card h2 {
+  .details-card h2 {
     @apply text-gray-500 text-xs font-semibold uppercase tracking-wide;
   }
-  .card table {
+  .details-card table {
     @apply w-full;
   }
-  .card tbody {
+  .details-card tbody {
     @apply flex flex-col gap-2;
   }
-  .card tr {
+  .details-card tr {
     @apply grid grid-flow-col grid-cols-3 gap-2;
   }
-  .card td:first-child {
+  .details-card td:first-child {
     @apply text-gray-500 text-sm leading-tight truncate;
   }
-  .card td:last-child {
+  .details-card td:last-child {
     @apply col-span-2 text-gray-800 text-sm leading-tight;
   }
 

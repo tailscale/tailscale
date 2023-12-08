@@ -4,6 +4,7 @@
 import React from "react"
 import { VersionInfo } from "src/types"
 import Button from "src/ui/button"
+import Card from "src/ui/card"
 import { useLocation } from "wouter"
 
 export function UpdateAvailableNotification({
@@ -14,7 +15,7 @@ export function UpdateAvailableNotification({
   const [, setLocation] = useLocation()
 
   return (
-    <div className="card">
+    <Card>
       <h2 className="mb-2">
         Update available{" "}
         {details.LatestVersion && `(v${details.LatestVersion})`}
@@ -32,7 +33,7 @@ export function UpdateAvailableNotification({
       >
         Update now
       </Button>
-    </div>
+    </Card>
   )
 }
 
