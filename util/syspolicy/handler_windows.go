@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	windowsErrors = clientmetric.NewCounter("windows_mdm_setting_errors")
-	windowsAny    = clientmetric.NewGauge("windows_mdm_setting_any")
+	windowsErrors = clientmetric.NewCounter("windows_syspolicy_errors")
+	windowsAny    = clientmetric.NewGauge("windows_syspolicy_any")
 )
 
 type windowsHandler struct{}
@@ -54,7 +54,7 @@ func init() {
 			if !l.isSet(k) {
 				continue
 			}
-			clientmetric.NewGauge(fmt.Sprintf("windows_mdm_setting_%s", k)).Set(1)
+			clientmetric.NewGauge(fmt.Sprintf("windows_syspolicy_%s", k)).Set(1)
 			anySet = true
 		}
 	}
