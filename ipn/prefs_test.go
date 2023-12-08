@@ -761,6 +761,42 @@ func TestMaskedPrefsPretty(t *testing.T) {
 			},
 			want: `MaskedPrefs{ExitNodeIP=100.102.104.105}`,
 		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: true, ApplySet: false},
+			},
+			want: `MaskedPrefs{AutoUpdate={Check=true}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: true},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: true, ApplySet: true},
+			},
+			want: `MaskedPrefs{AutoUpdate={Check=true Apply=true}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: true},
+			},
+			want: `MaskedPrefs{AutoUpdate={Apply=false}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: true},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: false},
+			},
+			want: `MaskedPrefs{}`,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.m.Pretty()

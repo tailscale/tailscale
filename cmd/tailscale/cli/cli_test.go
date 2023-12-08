@@ -786,7 +786,7 @@ func TestPrefFlagMapping(t *testing.T) {
 	prefHasFlag := map[string]bool{}
 	for _, pv := range prefsOfFlag {
 		for _, pref := range pv {
-			prefHasFlag[pref] = true
+			prefHasFlag[strings.Split(pref, ".")[0]] = true
 		}
 	}
 

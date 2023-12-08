@@ -718,8 +718,8 @@ func init() {
 	addPrefFlagMapping("ssh", "RunSSH")
 	addPrefFlagMapping("webclient", "RunWebClient")
 	addPrefFlagMapping("nickname", "ProfileName")
-	addPrefFlagMapping("update-check", "AutoUpdate")
-	addPrefFlagMapping("auto-update", "AutoUpdate")
+	addPrefFlagMapping("update-check", "AutoUpdate.Check")
+	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
 }
@@ -728,9 +728,14 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefsOfFlag[flagName] = prefNames
 	prefType := reflect.TypeOf(ipn.Prefs{})
 	for _, pref := range prefNames {
-		// Crash at runtime if there's a typo in the prefName.
-		if _, ok := prefType.FieldByName(pref); !ok {
-			panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+		t := prefType
+		for _, name := range strings.Split(pref, ".") {
+			// Crash at runtime if there's a typo in the prefName.
+			f, ok := t.FieldByName(name)
+			if !ok {
+				panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+			}
+			t = f.Type
 		}
 	}
 }
@@ -751,7 +756,11 @@ func updateMaskedPrefsFromUpOrSetFlag(mp *ipn.MaskedPrefs, flagName string) {
 	}
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
-			reflect.ValueOf(mp).Elem().FieldByName(pref + "Set").SetBool(true)
+			f := reflect.ValueOf(mp).Elem()
+			for _, name := range strings.Split(pref, ".") {
+				f = f.FieldByName(name + "Set")
+			}
+			f.SetBool(true)
 		}
 		return
 	}

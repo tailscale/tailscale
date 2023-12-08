@@ -167,7 +167,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return err
 		}
 	}
-	if maskedPrefs.AutoUpdateSet {
+	if maskedPrefs.AutoUpdateSet.ApplySet {
 		// On macsys, tailscaled will set the Sparkle auto-update setting. It
 		// does not use clientupdate.
 		if version.IsMacSysExt() {
