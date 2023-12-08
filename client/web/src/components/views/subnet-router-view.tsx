@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+import cx from "classnames"
 import React, { useCallback, useMemo, useState } from "react"
 import { useAPI } from "src/api"
 import { ReactComponent as CheckCircle } from "src/assets/icons/check-circle.svg"
@@ -21,6 +22,7 @@ export default function SubnetRouterView({
   node: NodeData
 }) {
   const api = useAPI()
+
   const [advertisedRoutes, hasRoutes, hasUnapprovedRoutes] = useMemo(() => {
     const routes = node.AdvertisedRoutes || []
     return [routes, routes.length > 0, routes.find((r) => !r.Approved)]
@@ -30,9 +32,11 @@ export default function SubnetRouterView({
     advertisedRoutes.length === 0 && !readonly
   )
   const [inputText, setInputText] = useState<string>("")
+  const [postError, setPostError] = useState<string>()
 
   const resetInput = useCallback(() => {
     setInputText("")
+    setPostError("")
     setInputOpen(false)
   }, [])
 
@@ -52,7 +56,7 @@ export default function SubnetRouterView({
       </p>
       {!readonly &&
         (inputOpen ? (
-          <div className="-mx-5 card !border-0 shadow-popover">
+          <Card noPadding className="-mx-5 p-5 !border-0 shadow-popover">
             <p className="font-medium leading-snug mb-3">
               Advertise new routes
             </p>
@@ -61,10 +65,19 @@ export default function SubnetRouterView({
               className="text-sm"
               placeholder="192.168.0.0/24"
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => {
+                setPostError("")
+                setInputText(e.target.value)
+              }}
             />
-            <p className="my-2 h-6 text-gray-500 text-sm leading-tight">
-              Add multiple routes by providing a comma-separated list.
+            <p
+              className={cx("my-2 h-6 text-sm leading-tight", {
+                "text-gray-500": !postError,
+                "text-red-400": postError,
+              })}
+            >
+              {postError ||
+                "Add multiple routes by providing a comma-separated list."}
             </p>
             <div className="flex gap-3">
               <Button
@@ -78,15 +91,17 @@ export default function SubnetRouterView({
                         .split(",")
                         .map((r) => ({ Route: r, Approved: false })),
                     ],
-                  }).then(resetInput)
+                  })
+                    .then(resetInput)
+                    .catch((err: Error) => setPostError(err.message))
                 }
-                disabled={!inputText}
+                disabled={!inputText || postError !== ""}
               >
                 Advertise {hasRoutes && "new "}routes
               </Button>
               {hasRoutes && <Button onClick={resetInput}>Cancel</Button>}
             </div>
-          </div>
+          </Card>
         ) : (
           <Button
             intent="primary"
@@ -99,7 +114,7 @@ export default function SubnetRouterView({
       <div className="-mx-5 mt-10">
         {hasRoutes ? (
           <>
-            <div className="px-5 py-3 bg-white rounded-lg border border-gray-200">
+            <Card noPadding className="px-5 py-3">
               {advertisedRoutes.map((r) => (
                 <div
                   className="flex justify-between items-center pb-2.5 mb-2.5 border-b border-b-gray-200 last:pb-0 last:mb-0 last:border-b-0"
@@ -141,7 +156,7 @@ export default function SubnetRouterView({
                   </div>
                 </div>
               ))}
-            </div>
+            </Card>
             {hasUnapprovedRoutes && (
               <Control.AdminContainer
                 className="mt-3 w-full text-center text-gray-500 text-sm leading-tight"

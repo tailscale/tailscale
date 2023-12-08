@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+import cx from "classnames"
 import React from "react"
 import { useAPI } from "src/api"
 import * as Control from "src/components/control-components"
@@ -32,36 +33,49 @@ export default function SSHView({
           Learn more &rarr;
         </a>
       </p>
-      <Card className="-mx-5 p-4">
-        <label className="flex gap-3 items-center">
-          <Toggle
-            checked={node.RunningSSHServer}
-            onChange={() =>
-              api({
-                action: "update-prefs",
-                data: {
-                  RunSSHSet: true,
-                  RunSSH: !node.RunningSSHServer,
-                },
-              })
-            }
-            disabled={readonly}
-          />
-          <div className="text-black text-sm font-medium leading-tight">
-            Run Tailscale SSH server
+      <Card noPadding className="-mx-5 p-5">
+        {!readonly ? (
+          <label className="flex gap-3 items-center">
+            <Toggle
+              checked={node.RunningSSHServer}
+              onChange={() =>
+                api({
+                  action: "update-prefs",
+                  data: {
+                    RunSSHSet: true,
+                    RunSSH: !node.RunningSSHServer,
+                  },
+                })
+              }
+            />
+            <div className="text-black text-sm font-medium leading-tight">
+              Run Tailscale SSH server
+            </div>
+          </label>
+        ) : (
+          <div className="inline-flex items-center gap-3">
+            <span
+              className={cx("w-2 h-2 rounded-full", {
+                "bg-green-300": node.RunningSSHServer,
+                "bg-gray-300": !node.RunningSSHServer,
+              })}
+            />
+            {node.RunningSSHServer ? "Running" : "Not running"}
           </div>
-        </label>
+        )}
       </Card>
-      <Control.AdminContainer
-        className="text-gray-500 text-sm leading-tight mt-3"
-        node={node}
-      >
-        Remember to make sure that the{" "}
-        <Control.AdminLink node={node} path="/acls">
-          tailnet policy file
-        </Control.AdminLink>{" "}
-        allows other devices to SSH into this device.
-      </Control.AdminContainer>
+      {node.RunningSSHServer && (
+        <Control.AdminContainer
+          className="text-gray-500 text-sm leading-tight mt-3"
+          node={node}
+        >
+          Remember to make sure that the{" "}
+          <Control.AdminLink node={node} path="/acls">
+            tailnet policy file
+          </Control.AdminLink>{" "}
+          allows other devices to SSH into this device.
+        </Control.AdminContainer>
+      )}
     </>
   )
 }

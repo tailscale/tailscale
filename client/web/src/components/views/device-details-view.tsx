@@ -10,6 +10,7 @@ import NiceIP from "src/components/nice-ip"
 import { UpdateAvailableNotification } from "src/components/update-available"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
+import Card from "src/ui/card"
 import QuickCopy from "src/ui/quick-copy"
 import { useLocation } from "wouter"
 
@@ -27,7 +28,7 @@ export default function DeviceDetailsView({
     <>
       <h1 className="mb-10">Device details</h1>
       <div className="flex flex-col gap-4">
-        <div className="-mx-5 card">
+        <Card noPadding className="-mx-5 p-5 details-card">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h1>{node.DeviceName}</h1>
@@ -49,14 +50,14 @@ export default function DeviceDetailsView({
               </Button>
             )}
           </div>
-        </div>
+        </Card>
         {node.Features["auto-update"] &&
           !readonly &&
           node.ClientVersion &&
           !node.ClientVersion.RunningLatest && (
             <UpdateAvailableNotification details={node.ClientVersion} />
           )}
-        <div className="-mx-5 card">
+        <Card noPadding className="-mx-5 p-5 details-card">
           <h2 className="mb-2">General</h2>
           <table>
             <tbody>
@@ -109,8 +110,8 @@ export default function DeviceDetailsView({
               </tr>
             </tbody>
           </table>
-        </div>
-        <div className="-mx-5 card">
+        </Card>
+        <Card noPadding className="-mx-5 p-5 details-card">
           <h2 className="mb-2">Addresses</h2>
           <table>
             <tbody>
@@ -160,7 +161,7 @@ export default function DeviceDetailsView({
               </tr>
             </tbody>
           </table>
-        </div>
+        </Card>
         <footer className="text-gray-500 text-sm leading-tight text-center">
           <Control.AdminContainer node={node}>
             Want even more details? Visit{" "}
