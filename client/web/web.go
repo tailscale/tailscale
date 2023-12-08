@@ -276,9 +276,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.apiHandler.ServeHTTP(w, r)
 		return
 	}
-	if !s.devMode {
-		s.lc.IncrementCounter(r.Context(), "web_client_page_load", 1)
-	}
 	s.assetsHandler.ServeHTTP(w, r)
 }
 
@@ -328,7 +325,7 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 // errors to the ResponseWriter itself.
 func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
 	if s.mode == ManageServerMode { // client using tailscale auth
-		session, _, err := s.getSession(r)
+		session, _, _, err := s.getSession(r)
 		switch {
 		case errors.Is(err, errNotUsingTailscale):
 			// All requests must be made over tailscale.
@@ -404,7 +401,7 @@ type viewerIdentity struct {
 func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	var resp authResponse
 
-	session, whois, err := s.getSession(r)
+	session, whois, status, err := s.getSession(r)
 	switch {
 	case s.mode == LoginServerMode || errors.Is(err, errNotUsingTailscale):
 		// not using tailscale, so perform platform auth
@@ -426,18 +423,28 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		default:
 			// no additional auth for this distro
 		}
-	case err != nil && (errors.Is(err, errNotOwner) ||
-		errors.Is(err, errNotUsingTailscale) ||
-		errors.Is(err, errTaggedLocalSource) ||
-		errors.Is(err, errTaggedRemoteSource)):
-		// These cases are all restricted to the readonly view.
-		// No auth action to take.
+	case err != nil && errors.Is(err, errNotOwner):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_not_owner", 1)
+		resp.AuthNeeded = ""
+	case err != nil && errors.Is(err, errTaggedLocalSource):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local_tag", 1)
+		resp.AuthNeeded = ""
+	case err != nil && errors.Is(err, errTaggedRemoteSource):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote_tag", 1)
 		resp.AuthNeeded = ""
 	case err != nil && !errors.Is(err, errNoSession):
 		// Any other error.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	case session.isAuthorized(s.timeNow()):
+		if whois.Node.StableID == status.Self.ID {
+			s.lc.IncrementCounter(r.Context(), "web_client_managing_local", 1)
+		} else {
+			s.lc.IncrementCounter(r.Context(), "web_client_managing_remote", 1)
+		}
 		resp.CanManageNode = true
 		resp.AuthNeeded = ""
 	default:
@@ -463,7 +470,7 @@ type newSessionAuthResponse struct {
 
 // serveAPIAuthSessionNew handles requests to the /api/auth/session/new endpoint.
 func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) {
-	session, whois, err := s.getSession(r)
+	session, whois, _, err := s.getSession(r)
 	if err != nil && !errors.Is(err, errNoSession) {
 		// Source associated with request not allowed to create
 		// a session for this web client.
@@ -493,7 +500,7 @@ func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) 
 
 // serveAPIAuthSessionWait handles requests to the /api/auth/session/wait endpoint.
 func (s *Server) serveAPIAuthSessionWait(w http.ResponseWriter, r *http.Request) {
-	session, _, err := s.getSession(r)
+	session, _, _, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return

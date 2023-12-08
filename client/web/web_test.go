@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t, tailnetNodes, func() *ipnstate.PeerStatus { return selfNode }, nil)
+	localapi := mockLocalAPI(t, tailnetNodes, func() *ipnstate.PeerStatus { return selfNode }, nil, nil)
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -305,7 +306,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 			if tt.cookie != "" {
 				r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
 			}
-			session, _, err := s.getSession(r)
+			session, _, _, err := s.getSession(r)
 			if !errors.Is(err, tt.wantError) {
 				t.Errorf("wrong error; want=%v, got=%v", tt.wantError, err)
 			}
@@ -335,6 +336,7 @@ func TestAuthorizeRequest(t *testing.T) {
 	localapi := mockLocalAPI(t,
 		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
 		func() *ipnstate.PeerStatus { return self },
+		nil,
 		nil,
 	)
 	defer localapi.Close()
@@ -445,6 +447,7 @@ func TestServeAuth(t *testing.T) {
 		func() *ipn.Prefs {
 			return &ipn.Prefs{ControlURL: *testControlURL}
 		},
+		nil,
 	)
 	defer localapi.Close()
 	go localapi.Serve(lal)
@@ -713,6 +716,175 @@ func TestServeAuth(t *testing.T) {
 	}
 }
 
+// TestServeAPIAuthMetricLogging specifically tests metric logging in the serveAPIAuth function.
+// For each given test case, we assert that the local API received a request to log the expected metric.
+func TestServeAPIAuthMetricLogging(t *testing.T) {
+	user := &tailcfg.UserProfile{LoginName: "user@example.com", ID: tailcfg.UserID(1)}
+	otherUser := &tailcfg.UserProfile{LoginName: "user2@example.com", ID: tailcfg.UserID(2)}
+	self := &ipnstate.PeerStatus{
+		ID:           "self",
+		UserID:       user.ID,
+		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.1.2.3")},
+	}
+	remoteIP := "100.100.100.101"
+	remoteNode := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name:      "remote-managed",
+			ID:        1,
+			Addresses: []netip.Prefix{netip.MustParsePrefix(remoteIP + "/32")},
+		},
+		UserProfile: user,
+	}
+	remoteTaggedIP := "100.123.100.213"
+	remoteTaggedNode := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name:      "remote-tagged",
+			ID:        2,
+			Addresses: []netip.Prefix{netip.MustParsePrefix(remoteTaggedIP + "/32")},
+			Tags:      []string{"dev-machine"},
+		},
+		UserProfile: user,
+	}
+	localIP := "100.1.2.3"
+	localNode := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name:      "local-managed",
+			ID:        3,
+			StableID:  "self",
+			Addresses: []netip.Prefix{netip.MustParsePrefix(localIP + "/32")},
+		},
+		UserProfile: user,
+	}
+	localTaggedIP := "100.1.2.133"
+	localTaggedNode := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name:      "local-tagged",
+			ID:        4,
+			StableID:  "self",
+			Addresses: []netip.Prefix{netip.MustParsePrefix(localTaggedIP + "/32")},
+			Tags:      []string{"prod-machine"},
+		},
+		UserProfile: user,
+	}
+	otherIP := "100.100.2.3"
+	otherNode := &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name:      "other-node",
+			ID:        5,
+			Addresses: []netip.Prefix{netip.MustParsePrefix(otherIP + "/32")},
+		},
+		UserProfile: otherUser,
+	}
+
+	testControlURL := &defaultControlURL
+	var loggedMetrics []string
+
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+	localapi := mockLocalAPI(t,
+		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode, localIP: localNode, otherIP: otherNode, localTaggedIP: localTaggedNode, remoteTaggedIP: remoteTaggedNode},
+		func() *ipnstate.PeerStatus { return self },
+		func() *ipn.Prefs {
+			return &ipn.Prefs{ControlURL: *testControlURL}
+		},
+		func(metricName string) {
+			loggedMetrics = append(loggedMetrics, metricName)
+		},
+	)
+	defer localapi.Close()
+	go localapi.Serve(lal)
+
+	timeNow := time.Now()
+	oneHourAgo := timeNow.Add(-time.Hour)
+
+	s := &Server{
+		mode:        ManageServerMode,
+		lc:          &tailscale.LocalClient{Dial: lal.Dial},
+		timeNow:     func() time.Time { return timeNow },
+		newAuthURL:  mockNewAuthURL,
+		waitAuthURL: mockWaitAuthURL,
+	}
+
+	remoteNodeCookie := "ts-cookie-remote-node"
+	s.browserSessions.Store(remoteNodeCookie, &browserSession{
+		ID:            remoteNodeCookie,
+		SrcNode:       remoteNode.Node.ID,
+		SrcUser:       user.ID,
+		Created:       oneHourAgo,
+		AuthID:        testAuthPathSuccess,
+		AuthURL:       *testControlURL + testAuthPathSuccess,
+		Authenticated: true,
+	})
+	localNodeCookie := "ts-cookie-local-node"
+	s.browserSessions.Store(localNodeCookie, &browserSession{
+		ID:            localNodeCookie,
+		SrcNode:       localNode.Node.ID,
+		SrcUser:       user.ID,
+		Created:       oneHourAgo,
+		AuthID:        testAuthPathSuccess,
+		AuthURL:       *testControlURL + testAuthPathSuccess,
+		Authenticated: true,
+	})
+
+	tests := []struct {
+		name       string
+		cookie     string // cookie attached to request
+		remoteAddr string // remote address to hit
+
+		wantLoggedMetric string // expected metric to be logged
+	}{
+		{
+			name:             "managing-remote",
+			cookie:           remoteNodeCookie,
+			remoteAddr:       remoteIP,
+			wantLoggedMetric: "web_client_managing_remote",
+		},
+		{
+			name:             "managing-local",
+			cookie:           localNodeCookie,
+			remoteAddr:       localIP,
+			wantLoggedMetric: "web_client_managing_local",
+		},
+		{
+			name:             "viewing-not-owner",
+			cookie:           remoteNodeCookie,
+			remoteAddr:       otherIP,
+			wantLoggedMetric: "web_client_viewing_not_owner",
+		},
+		{
+			name:             "viewing-local-tagged",
+			cookie:           localNodeCookie,
+			remoteAddr:       localTaggedIP,
+			wantLoggedMetric: "web_client_viewing_local_tag",
+		},
+		{
+			name:             "viewing-remote-tagged",
+			cookie:           remoteNodeCookie,
+			remoteAddr:       remoteTaggedIP,
+			wantLoggedMetric: "web_client_viewing_remote_tag",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testControlURL = &defaultControlURL
+
+			r := httptest.NewRequest("GET", "http://100.1.2.3:5252/api/auth", nil)
+			r.RemoteAddr = tt.remoteAddr
+			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tt.cookie})
+			w := httptest.NewRecorder()
+			s.serveAPIAuth(w, r)
+
+			if !slices.Contains(loggedMetrics, tt.wantLoggedMetric) {
+				t.Errorf("expected logged metrics to contain: '%s' but was: '%v'", tt.wantLoggedMetric, loggedMetrics)
+			}
+			loggedMetrics = []string{}
+
+			res := w.Result()
+			defer res.Body.Close()
+		})
+	}
+}
+
 func TestRequireTailscaleIP(t *testing.T) {
 	self := &ipnstate.PeerStatus{
 		TailscaleIPs: []netip.Addr{
@@ -723,7 +895,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t, nil, func() *ipnstate.PeerStatus { return self }, nil)
+	localapi := mockLocalAPI(t, nil, func() *ipnstate.PeerStatus { return self }, nil, nil)
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -812,7 +984,7 @@ var (
 // self accepts a function that resolves to a self node status,
 // so that tests may swap out the /localapi/v0/status response
 // as desired.
-func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self func() *ipnstate.PeerStatus, prefs func() *ipn.Prefs) *http.Server {
+func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self func() *ipnstate.PeerStatus, prefs func() *ipn.Prefs, metricCapture func(string)) *http.Server {
 	return &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/localapi/v0/whois":
@@ -831,6 +1003,19 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 			return
 		case "/localapi/v0/prefs":
 			writeJSON(w, prefs())
+			return
+		case "/localapi/v0/upload-client-metrics":
+			type metricName struct {
+				Name string `json:"name"`
+			}
+
+			var metricNames []metricName
+			if err := json.NewDecoder(r.Body).Decode(&metricNames); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			metricCapture(metricNames[0].Name)
+			writeJSON(w, struct{}{})
 			return
 		default:
 			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)
