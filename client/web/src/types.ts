@@ -15,6 +15,7 @@ export type NodeData = {
   KeyExpired: boolean
   UsingExitNode?: ExitNode
   AdvertisingExitNode: boolean
+  AdvertisingExitNodeApproved: boolean
   AdvertisedRoutes?: SubnetRoute[]
   TUNMode: boolean
   IsSynology: boolean
