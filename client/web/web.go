@@ -227,7 +227,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler := s.serve
 
 	// if path prefix is defined, strip it from requests.
-	if s.pathPrefix != "" {
+	if s.cgiMode && s.pathPrefix != "" {
 		handler = enforcePrefix(s.pathPrefix, handler)
 	}
 
