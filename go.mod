@@ -2,8 +2,6 @@ module tailscale.com
 
 go 1.21
 
-replace github.com/studio-b12/gowebdav => github.com/tailscale/gowebdav v0.0.0-20231208202531-58cd579ae190
-
 require (
 	filippo.io/mkcert v1.4.4
 	github.com/akutz/memconn v0.1.0
@@ -63,12 +61,12 @@ require (
 	github.com/prometheus/common v0.44.0
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/studio-b12/gowebdav v0.9.0
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/golang-x-crypto v0.0.0-20230713185742-f0b76a10a08e
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
+	github.com/tailscale/gowebdav v0.0.0-20231208202531-58cd579ae190
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85

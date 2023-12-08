@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/studio-b12/gowebdav"
+	"github.com/tailscale/gowebdav"
 	"golang.org/x/net/webdav"
 	"tailscale.com/tailfs/shared"
 	"tailscale.com/types/logger"

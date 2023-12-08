@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/studio-b12/gowebdav"
+	"github.com/tailscale/gowebdav"
 	"golang.org/x/net/webdav"
 	"tailscale.com/connlistener"
 	"tailscale.com/tailfs/compositefs"
