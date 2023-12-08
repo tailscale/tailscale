@@ -34,6 +34,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -707,7 +708,7 @@ func availableFeatures() map[string]bool {
 		"advertise-routes":    true,                            // available on all platforms
 		"use-exit-node":       distro.Get() != distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
 		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
-		"auto-update":         clientupdate.CanAutoUpdate(),
+		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
 	}
 }
 
