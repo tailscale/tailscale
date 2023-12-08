@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailfs"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -446,6 +447,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
+		conf.SetSubsystem(tailfs.Serve(e.logf))
 	}
 
 	e.logf("Engine created.")

@@ -44,6 +44,10 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
+const (
+	tailfsPrefix = "/v0/tailfs"
+)
+
 var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
 
 // addH2C is non-nil on platforms where we want to add H2C
@@ -204,6 +208,10 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		peerNode:   peerNode,
 		peerUser:   peerUser,
 	}
+	tailfs, found := pln.lb.sys.TailfsForRemote.GetOK()
+	if found {
+		h.tailfsHandler = tailfs.Handler()
+	}
 	httpServer := &http.Server{
 		Handler: h,
 	}
@@ -215,12 +223,13 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 
 // peerAPIHandler serves the PeerAPI for a source specific client.
 type peerAPIHandler struct {
-	ps         *peerAPIServer
-	remoteAddr netip.AddrPort
-	isSelf     bool                // whether peerNode is owned by same user as this node
-	selfNode   tailcfg.NodeView    // this node; always non-nil
-	peerNode   tailcfg.NodeView    // peerNode is who's making the request
-	peerUser   tailcfg.UserProfile // profile of peerNode
+	ps            *peerAPIServer
+	remoteAddr    netip.AddrPort
+	isSelf        bool                // whether peerNode is owned by same user as this node
+	selfNode      tailcfg.NodeView    // this node; always non-nil
+	peerNode      tailcfg.NodeView    // peerNode is who's making the request
+	peerUser      tailcfg.UserProfile // profile of peerNode
+	tailfsHandler http.Handler
 }
 
 func (h *peerAPIHandler) logf(format string, a ...any) {
@@ -319,6 +328,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/dns-query") {
 		metricDNSCalls.Add(1)
 		h.handleDNSQuery(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, tailfsPrefix) {
+		h.handleServeTailfs(w, r)
 		return
 	}
 	switch r.URL.Path {
@@ -1085,6 +1098,18 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 	j = append(j, '\n')
 	w.Write(j)
 	return nil
+}
+
+func (h *peerAPIHandler) handleServeTailfs(w http.ResponseWriter, r *http.Request) {
+	if !h.isSelf {
+		http.Error(w, "tailfs not allowed", http.StatusForbidden)
+		return
+	}
+	if h.tailfsHandler == nil {
+		http.Error(w, "tailfs not enabled", http.StatusNotFound)
+	}
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailfsPrefix)
+	h.tailfsHandler.ServeHTTP(w, r)
 }
 
 // newFakePeerAPIListener creates a new net.Listener that acts like

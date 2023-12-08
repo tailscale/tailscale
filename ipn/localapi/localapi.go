@@ -18,6 +18,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -106,6 +107,7 @@ var handler = map[string]localAPIHandler{
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
+	"shares":                      (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
 	"tka/init":                    (*Handler).serveTKAInit,
@@ -2426,6 +2428,82 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(ups)
 }
+
+func (h *Handler) serveShare(w http.ResponseWriter, r *http.Request) {
+
+}
+
+func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "PUT":
+		var share apitype.ShareInfo
+		err := json.NewDecoder(r.Body).Decode(&share)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fi, err := os.Stat(share.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !fi.IsDir() {
+			http.Error(w, "not a directory", http.StatusBadRequest)
+			return
+		}
+		tailfsSharesMu.Lock()
+		defer tailfsSharesMu.Unlock()
+		tailfsShares[share.Name] = share.Path
+		err = h.b.TailfsAddShare(share.Name, share.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	case "DELETE":
+		var share apitype.ShareInfo
+		err := json.NewDecoder(r.Body).Decode(&share)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		tailfsSharesMu.Lock()
+		defer tailfsSharesMu.Unlock()
+		_, shareExists := tailfsShares[share.Name]
+		if !shareExists {
+			http.Error(w, "share does not exist", http.StatusNotFound)
+			return
+		}
+		delete(tailfsShares, share.Name)
+		err = h.b.TailfsRemoveShare(share.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case "GET":
+		var shares []*apitype.ShareInfo
+		tailfsSharesMu.Lock()
+		defer tailfsSharesMu.Unlock()
+		for name, path := range tailfsShares {
+			shares = append(shares, &apitype.ShareInfo{
+				Name: name,
+				Path: path,
+			})
+		}
+		err := json.NewEncoder(w).Encode(shares)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+	}
+}
+
+// TODO(oxtoacart): need to remember share settings across runs somehow
+var tailfsShares = make(map[string]string)
+var tailfsSharesMu sync.Mutex
 
 var (
 	metricInvalidRequests = clientmetric.NewCounter("localapi_invalid_requests")

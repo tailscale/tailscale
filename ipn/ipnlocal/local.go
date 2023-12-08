@@ -286,6 +286,8 @@ type LocalBackend struct {
 	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
+	tailfsListeners map[netip.AddrPort]*localListener // listeners for tailfs traffic
+
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
@@ -3276,6 +3278,24 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	if dst.Port() == webClientPort && b.ShouldRunWebClient() {
 		return b.handleWebClientConn, opts
 	}
+	// TODO(oxtoacart): add b.ShouldRunTailfsInternal()
+	if dst.Port() == TailfsInternalPort {
+		fs, ok := b.sys.TailfsForLocal.GetOK()
+		if ok {
+			return func(conn net.Conn) error {
+				return fs.HandleConn(conn, conn.RemoteAddr())
+			}, opts
+		}
+	}
+	// TODO(oxtoacart): add b.ShouldRunTailfsExternal()
+	if dst.Port() == TailfsInternalPort {
+		fs, ok := b.sys.TailfsForRemote.GetOK()
+		if ok {
+			return func(conn net.Conn) error {
+				return fs.HandleConn(conn, conn.RemoteAddr())
+			}, opts
+		}
+	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
 		return func(c net.Conn) error {
 			b.handlePeerAPIConn(src, dst, c)
@@ -4562,20 +4582,60 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 		b.peers = nil
 		return
 	}
+
 	// First pass, mark everything unwanted.
 	for k := range b.peers {
 		b.peers[k] = tailcfg.NodeView{}
 	}
+
 	// Second pass, add everything wanted.
+	tailfsRemotes := make(map[string]string, len(nm.Peers))
 	for _, p := range nm.Peers {
+		// TODO(oxtoacart): is this really the best place to do this?
 		mak.Set(&b.peers, p.ID(), p)
+		// TODO(oxtoacart): for now, we only show peers that are logged in as
+		// ourselves. In the future, we'll open this up more broadly and will
+		// need to figure out how to filter out peers who are not logged in as
+		// the current user.
+		if nm.SelfNode.User() == p.User() {
+			url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailfsPrefix[1:])
+			tailfsRemotes[p.DisplayName(false)] = url
+		}
 	}
+	if fs, ok := b.sys.TailfsForLocal.GetOK(); ok {
+		fs.SetRemotes(b.netMap.Domain, tailfsRemotes, &tailfsTransport{b: b})
+	}
+
 	// Third pass, remove deleted things.
-	for k, v := range b.peers {
-		if !v.Valid() {
+	for k, p := range b.peers {
+		if !p.Valid() {
 			delete(b.peers, k)
 		}
 	}
+}
+
+// tailfsTransport is an http.RoundTripper that uses the latest value of
+// b.Dialer().PeerAPITransport() for each round trip and imposes a short
+// dial timeout to avoid hanging on connecting to offline/unreachable hosts.
+type tailfsTransport struct {
+	b *LocalBackend
+}
+
+func (t *tailfsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.b.logf("ZZZZ round trippin!")
+	// dialTimeout is fairly aggressive to avoid hangs on contact
+	// offline/unreachable hosts
+	dialTimeout := 1 * time.Second // TODO(oxtoacart): tune this
+
+	tr := t.b.Dialer().PeerAPITransport().Clone()
+	dialContext := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		t.b.logf("ZZZZ dialin with context!")
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+		return dialContext(ctxWithTimeout, network, addr)
+	}
+	return tr.RoundTrip(req)
 }
 
 // setDebugLogsByCapabilityLocked sets debug logging based on the self node's
@@ -4650,6 +4710,11 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		}
 	}
 
+	// TODO(oxtoacart): allow enabling/disabling Tailfs
+	if !b.sys.IsNetstack() {
+		b.updateTailfsListenersLocked()
+	}
+
 	b.reloadServeConfigLocked(prefs)
 	if b.serveConfig.Valid() {
 		servePorts := make([]uint16, 0, 3)
@@ -4675,6 +4740,9 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		go b.doSetHostinfoFilterServices()
 	}
 
+	// // TODO(oxtoacart): make this configurable/enableable
+	// // TODO(oxtoacart): also, prevent port 8081 from being used for anything else
+	// handlePorts = append(handlePorts, 8081)
 	b.setTCPPortsIntercepted(handlePorts)
 }
 

@@ -125,6 +125,7 @@ change in the future.
 			versionCmd,
 			webCmd,
 			fileCmd,
+			shareCmd,
 			bugReportCmd,
 			certCmd,
 			netlockCmd,

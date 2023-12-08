@@ -51,6 +51,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
+	"tailscale.com/tailfs"
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
@@ -397,6 +398,7 @@ func run() error {
 		debugMux = newDebugMux()
 	}
 
+	sys.TailfsForRemote.Set(tailfs.Serve(logf))
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
 
@@ -717,6 +719,7 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
+	tfs, _ := sys.TailfsForLocal.GetOK()
 	return netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -724,6 +727,7 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		sys.Dialer.Get(),
 		sys.DNSManager.Get(),
 		sys.ProxyMapper(),
+		tfs,
 	)
 }
 

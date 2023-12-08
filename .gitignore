@@ -42,3 +42,5 @@ client/web/build/assets
 
 /gocross
 /dist
+/tailscale
+/tailscaled

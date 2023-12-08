@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -37,16 +38,18 @@ import (
 
 // System contains all the subsystems of a Tailscale node (tailscaled, etc.)
 type System struct {
-	Dialer         SubSystem[*tsdial.Dialer]
-	DNSManager     SubSystem[*dns.Manager] // can get its *resolver.Resolver from DNSManager.Resolver
-	Engine         SubSystem[wgengine.Engine]
-	NetMon         SubSystem[*netmon.Monitor]
-	MagicSock      SubSystem[*magicsock.Conn]
-	NetstackRouter SubSystem[bool] // using Netstack at all (either entirely or at least for subnets)
-	Router         SubSystem[router.Router]
-	Tun            SubSystem[*tstun.Wrapper]
-	StateStore     SubSystem[ipn.StateStore]
-	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
+	Dialer          SubSystem[*tsdial.Dialer]
+	DNSManager      SubSystem[*dns.Manager] // can get its *resolver.Resolver from DNSManager.Resolver
+	Engine          SubSystem[wgengine.Engine]
+	NetMon          SubSystem[*netmon.Monitor]
+	MagicSock       SubSystem[*magicsock.Conn]
+	NetstackRouter  SubSystem[bool] // using Netstack at all (either entirely or at least for subnets)
+	Router          SubSystem[router.Router]
+	Tun             SubSystem[*tstun.Wrapper]
+	StateStore      SubSystem[ipn.StateStore]
+	Netstack        SubSystem[NetstackImpl] // actually a *netstack.Impl
+	TailfsForLocal  SubSystem[tailfs.FileSystem]
+	TailfsForRemote SubSystem[tailfs.FileSystem]
 
 	// InitialConfig is initial server config, if any.
 	// It is nil if the node is not in declarative mode.
@@ -98,6 +101,8 @@ func (s *System) Set(v any) {
 		s.StateStore.Set(v)
 	case NetstackImpl:
 		s.Netstack.Set(v)
+	case tailfs.FileSystem:
+		s.TailfsForLocal.Set(v)
 	default:
 		panic(fmt.Sprintf("unknown type %T", v))
 	}

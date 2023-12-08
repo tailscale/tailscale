@@ -1418,6 +1418,33 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
+func (lc *LocalClient) ShareAdd(ctx context.Context, name, path string) error {
+	req := apitype.ShareInfo{
+		Name: name,
+		Path: path,
+	}
+	_, err := lc.send(ctx, "PUT", "/localapi/v0/shares", http.StatusCreated, jsonBody(req))
+	return err
+}
+
+func (lc *LocalClient) ShareRemove(ctx context.Context, name string) error {
+	req := apitype.ShareInfo{
+		Name: name,
+	}
+	_, err := lc.send(ctx, "DELETE", "/localapi/v0/shares", http.StatusNoContent, jsonBody(req))
+	return err
+}
+
+func (lc *LocalClient) ShareList(ctx context.Context) ([]*apitype.ShareInfo, error) {
+	result, err := lc.get200(ctx, "/localapi/v0/shares")
+	if err != nil {
+		return nil, err
+	}
+	var shares []*apitype.ShareInfo
+	err = json.Unmarshal(result, &shares)
+	return shares, err
+}
+
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
 // It's returned by LocalClient.WatchIPNBus.
 //

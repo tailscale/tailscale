@@ -803,7 +803,7 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 
 // tests LocalBackend.updateNetmapDeltaLocked
 func TestUpdateNetmapDelta(t *testing.T) {
-	var b LocalBackend
+	b := newTestLocalBackend(t)
 	if b.updateNetmapDeltaLocked(nil) {
 		t.Errorf("updateNetmapDeltaLocked() = true, want false with nil netmap")
 	}

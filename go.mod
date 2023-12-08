@@ -2,6 +2,8 @@ module tailscale.com
 
 go 1.21
 
+replace github.com/studio-b12/gowebdav => github.com/tailscale/gowebdav v0.0.0-20231208202531-58cd579ae190
+
 require (
 	filippo.io/mkcert v1.4.4
 	github.com/akutz/memconn v0.1.0
@@ -41,6 +43,7 @@ require (
 	github.com/iancoleman/strcase v0.3.0
 	github.com/illarion/gonotify v1.0.1
 	github.com/insomniacslk/dhcp v0.0.0-20230908212754-65c27093e38a
+	github.com/jellydator/ttlcache/v3 v3.1.0
 	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86
 	github.com/jsimonetti/rtnetlink v1.3.5
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
@@ -60,6 +63,7 @@ require (
 	github.com/prometheus/common v0.44.0
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	github.com/studio-b12/gowebdav v0.9.0
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
@@ -79,14 +83,14 @@ require (
 	go.uber.org/zap v1.26.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
 	go4.org/netipx v0.0.0-20230824141953-6213f710f925
-	golang.org/x/crypto v0.15.0
+	golang.org/x/crypto v0.16.0
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9
 	golang.org/x/mod v0.14.0
-	golang.org/x/net v0.18.0
+	golang.org/x/net v0.19.0
 	golang.org/x/oauth2 v0.12.0
 	golang.org/x/sync v0.5.0
 	golang.org/x/sys v0.15.0
-	golang.org/x/term v0.14.0
+	golang.org/x/term v0.15.0
 	golang.org/x/time v0.3.0
 	golang.org/x/tools v0.15.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
