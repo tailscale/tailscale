@@ -628,7 +628,17 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	report, err := c.netChecker.GetReport(ctx, dm)
+	report, err := c.netChecker.GetReport(ctx, dm, &netcheck.GetReportOpts{
+		// Pass information about the last time that we received a
+		// frame from a DERP server to our netchecker to help avoid
+		// flapping the home region while there's still active
+		// communication.
+		//
+		// NOTE(andrew-d): I don't love that we're depending on the
+		// health package here, but I'd rather do that and not store
+		// the exact same state in two different places.
+		GetLastDERPActivity: health.GetDERPRegionReceivedTime,
+	})
 	if err != nil {
 		return nil, err
 	}

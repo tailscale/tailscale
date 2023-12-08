@@ -360,11 +360,22 @@ func SetDERPRegionHealth(region int, problem string) {
 	selfCheckLocked()
 }
 
+// NoteDERPRegionReceivedFrame is called to note that a frame was received from
+// the given DERP region at the current time.
 func NoteDERPRegionReceivedFrame(region int) {
 	mu.Lock()
 	defer mu.Unlock()
 	derpRegionLastFrame[region] = time.Now()
 	selfCheckLocked()
+}
+
+// GetDERPRegionReceivedTime returns the last time that a frame was received
+// from the given DERP region, or the zero time if no communication with that
+// region has occurred.
+func GetDERPRegionReceivedTime(region int) time.Time {
+	mu.Lock()
+	defer mu.Unlock()
+	return derpRegionLastFrame[region]
 }
 
 // state is an ipn.State.String() value: "Running", "Stopped", "NeedsLogin", etc.
