@@ -523,6 +523,8 @@ func nodeMight4(n *tailcfg.DERPNode) bool {
 // reportState holds the state for a single invocation of Client.GetReport.
 type reportState struct {
 	c           *Client
+	start       time.Time
+	opts        *GetReportOpts
 	hairTX      stun.TxID
 	gotHairSTUN chan netip.AddrPort
 	hairTimeout chan struct{} // closed on timeout
@@ -736,10 +738,32 @@ func newReport() *Report {
 	}
 }
 
-// GetReport gets a report.
+// GetReportOpts contains options that can be passed to GetReport. Unless
+// specified, all fields are optional and can be left as their zero value.
+type GetReportOpts struct {
+	// GetLastDERPActivity is a callback that, if provided, should return
+	// the absolute time that the calling code last communicated with a
+	// given DERP region. This is used to assist in avoiding PreferredDERP
+	// ("home DERP") flaps.
+	//
+	// If no communication with that region has occurred, or it occurred
+	// too far in the past, this function should return the zero time.
+	GetLastDERPActivity func(int) time.Time
+}
+
+// getLastDERPActivity calls o.GetLastDERPActivity if both o and
+// o.GetLastDERPActivity are non-nil; otherwise it returns the zero time.
+func (o *GetReportOpts) getLastDERPActivity(region int) time.Time {
+	if o == nil || o.GetLastDERPActivity == nil {
+		return time.Time{}
+	}
+	return o.GetLastDERPActivity(region)
+}
+
+// GetReport gets a report. The 'opts' argument is optional and can be nil.
 //
 // It may not be called concurrently with itself.
-func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report, reterr error) {
+func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetReportOpts) (_ *Report, reterr error) {
 	defer func() {
 		if reterr != nil {
 			metricNumGetReportError.Add(1)
@@ -763,8 +787,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		c.mu.Unlock()
 		return nil, errors.New("invalid concurrent call to GetReport")
 	}
+	now := c.timeNow()
 	rs := &reportState{
 		c:           c,
+		start:       now,
+		opts:        opts,
 		report:      newReport(),
 		inFlight:    map[stun.TxID]func(netip.AddrPort){},
 		hairTX:      stun.NewTxID(), // random payload
@@ -782,8 +809,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	if last != nil {
 		preferredDERP = last.PreferredDERP
 	}
-
-	now := c.timeNow()
 
 	doFull := false
 	if c.nextFull || now.Sub(c.lastFull) > 5*time.Minute {
@@ -1022,7 +1047,7 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	report := rs.report.Clone()
 	rs.mu.Unlock()
 
-	c.addReportHistoryAndSetPreferredDERP(report, dm.View())
+	c.addReportHistoryAndSetPreferredDERP(rs, report, dm.View())
 	c.logConciseReport(report, dm)
 
 	return report
@@ -1363,11 +1388,15 @@ const (
 	// node is near region 1 @ 4ms and region 2 @ 5ms, region 1 getting
 	// 5ms slower would cause a flap).
 	preferredDERPAbsoluteDiff = 10 * time.Millisecond
+	// preferredDERPFrameTime is the time which, if a DERP frame has been
+	// received within that period, we treat that region as being present
+	// even without receiving a STUN response.
+	preferredDERPFrameTime = 2 * time.Second
 )
 
 // addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
 // and mutates r.PreferredDERP to contain the best recent one.
-func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPMapView) {
+func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report, dm tailcfg.DERPMapView) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1441,7 +1470,23 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPM
 	// still accessible and one of the conditions below is true.
 	keepOld := false
 	changingPreferred := prevDERP != 0 && r.PreferredDERP != prevDERP
-	oldRegionIsAccessible := oldRegionCurLatency != 0
+
+	// See if we've heard from our previous preferred DERP (other than via
+	// the STUN probe) since we started the netcheck, or in the past 2s, as
+	// another signal for "this region is still working".
+	heardFromOldRegionRecently := false
+	if changingPreferred {
+		if lastHeard := rs.opts.getLastDERPActivity(prevDERP); !lastHeard.IsZero() {
+			now := c.timeNow()
+
+			heardFromOldRegionRecently = lastHeard.After(rs.start)
+			heardFromOldRegionRecently = heardFromOldRegionRecently || lastHeard.After(now.Add(-preferredDERPFrameTime))
+		}
+	}
+
+	// The old region is accessible if we've heard from it via a non-STUN
+	// mechanism, or have a latency (and thus heard back via STUN).
+	oldRegionIsAccessible := oldRegionCurLatency != 0 || heardFromOldRegionRecently
 	if changingPreferred && oldRegionIsAccessible {
 		// bestAny < any other value, so oldRegionCurLatency - bestAny >= 0
 		if oldRegionCurLatency-bestAny < preferredDERPAbsoluteDiff {
