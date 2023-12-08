@@ -400,11 +400,22 @@ type viewerIdentity struct {
 // and returns an authResponse indicating the current auth state and any steps the user needs to take.
 func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	var resp authResponse
+	session, whois, status, sErr := s.getSession(r)
 
-	session, whois, status, err := s.getSession(r)
-	switch {
-	case s.mode == LoginServerMode || errors.Is(err, errNotUsingTailscale):
-		// not using tailscale, so perform platform auth
+	if whois != nil {
+		resp.ViewerIdentity = &viewerIdentity{
+			LoginName:     whois.UserProfile.LoginName,
+			NodeName:      whois.Node.Name,
+			ProfilePicURL: whois.UserProfile.ProfilePicURL,
+		}
+		if addrs := whois.Node.Addresses; len(addrs) > 0 {
+			resp.ViewerIdentity.NodeIP = addrs[0].Addr().String()
+		}
+	}
+
+	// First verify platform auth.
+	// If platform auth is needed, this should happen first.
+	if s.mode == LoginServerMode {
 		switch distro.Get() {
 		case distro.Synology:
 			authorized, err := authorizeSynology(r)
@@ -414,6 +425,8 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 			}
 			if !authorized {
 				resp.AuthNeeded = synoAuth
+				writeJSON(w, resp)
+				return
 			}
 		case distro.QNAP:
 			if _, err := authorizeQNAP(r); err != nil {
@@ -423,21 +436,24 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		default:
 			// no additional auth for this distro
 		}
-	case err != nil && errors.Is(err, errNotOwner):
+	}
+
+	switch {
+	case sErr != nil && errors.Is(sErr, errNotOwner):
 		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_not_owner", 1)
 		resp.AuthNeeded = ""
-	case err != nil && errors.Is(err, errTaggedLocalSource):
+	case sErr != nil && errors.Is(sErr, errTaggedLocalSource):
 		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local_tag", 1)
 		resp.AuthNeeded = ""
-	case err != nil && errors.Is(err, errTaggedRemoteSource):
+	case sErr != nil && errors.Is(sErr, errTaggedRemoteSource):
 		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote_tag", 1)
 		resp.AuthNeeded = ""
-	case err != nil && !errors.Is(err, errNoSession):
+	case sErr != nil && !errors.Is(sErr, errNoSession):
 		// Any other error.
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, sErr.Error(), http.StatusInternalServerError)
 		return
 	case session.isAuthorized(s.timeNow()):
 		if whois.Node.StableID == status.Self.ID {
@@ -451,16 +467,6 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		resp.AuthNeeded = tailscaleAuth
 	}
 
-	if whois != nil {
-		resp.ViewerIdentity = &viewerIdentity{
-			LoginName:     whois.UserProfile.LoginName,
-			NodeName:      whois.Node.Name,
-			ProfilePicURL: whois.UserProfile.ProfilePicURL,
-		}
-		if addrs := whois.Node.Addresses; len(addrs) > 0 {
-			resp.ViewerIdentity.NodeIP = addrs[0].Addr().String()
-		}
-	}
 	writeJSON(w, resp)
 }
 
