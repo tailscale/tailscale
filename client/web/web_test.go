@@ -100,29 +100,44 @@ func TestServeAPI(t *testing.T) {
 	s := &Server{lc: &tailscale.LocalClient{Dial: lal.Dial}}
 
 	tests := []struct {
-		name       string
-		reqPath    string
-		wantResp   string
-		wantStatus int
+		name           string
+		reqMethod      string
+		reqPath        string
+		reqContentType string
+		wantResp       string
+		wantStatus     int
 	}{{
 		name:       "invalid_endpoint",
+		reqMethod:  httpm.POST,
 		reqPath:    "/not-an-endpoint",
 		wantResp:   "invalid endpoint",
 		wantStatus: http.StatusNotFound,
 	}, {
 		name:       "not_in_localapi_allowlist",
+		reqMethod:  httpm.POST,
 		reqPath:    "/local/v0/not-allowlisted",
 		wantResp:   "/v0/not-allowlisted not allowed from localapi proxy",
 		wantStatus: http.StatusForbidden,
 	}, {
 		name:       "in_localapi_allowlist",
+		reqMethod:  httpm.POST,
 		reqPath:    "/local/v0/logout",
 		wantResp:   "success", // Successfully allowed to hit localapi.
 		wantStatus: http.StatusOK,
+	}, {
+		name:           "patch_bad_contenttype",
+		reqMethod:      httpm.PATCH,
+		reqPath:        "/local/v0/prefs",
+		reqContentType: "multipart/form-data",
+		wantResp:       "invalid request",
+		wantStatus:     http.StatusBadRequest,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest("POST", "/api"+tt.reqPath, nil)
+			r := httptest.NewRequest(tt.reqMethod, "/api"+tt.reqPath, nil)
+			if tt.reqContentType != "" {
+				r.Header.Add("Content-Type", tt.reqContentType)
+			}
 			w := httptest.NewRecorder()
 
 			s.serveAPI(w, r)
