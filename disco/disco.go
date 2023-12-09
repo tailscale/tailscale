@@ -23,11 +23,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"go4.org/mem"
 	"net"
 	"net/netip"
-
-	"go4.org/mem"
 	"tailscale.com/types/key"
+	"time"
 )
 
 // Magic is the 6 byte header of all discovery messages.
@@ -193,7 +193,11 @@ type CallMeMaybe struct {
 const epLength = 16 + 2 // 16 byte IP address + 2 byte port
 
 func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
-	ret, p := appendMsgHeader(b, TypeCallMeMaybe, v0, epLength*len(m.MyNumber))
+	ret, p := appendMsgHeader(b, TypeCallMeMaybe, 1, 8+(epLength*len(m.MyNumber)))
+	t := time.Now().Unix()
+	fmt.Printf("JORDAN: putting timestamp %s in call-me-maybe\n", time.Unix(t, 0))
+	binary.BigEndian.PutUint64(p, uint64(t))
+	p = p[8:]
 	for _, ipp := range m.MyNumber {
 		a := ipp.Addr().As16()
 		copy(p[:], a[:])
@@ -205,7 +209,12 @@ func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
 
 func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 	m = new(CallMeMaybe)
-	if len(p)%epLength != 0 || ver != 0 || len(p) == 0 {
+	if ver == 1 {
+		u := binary.BigEndian.Uint64(p)
+		t := time.Unix(int64(u), 0)
+		fmt.Printf("JORDAN: call-me-maybe has timestamp: %s\n", t)
+		p = p[8:]
+	} else if len(p)%epLength != 0 || ver != 0 || len(p) == 0 {
 		return m, nil
 	}
 	m.MyNumber = make([]netip.AddrPort, 0, len(p)/epLength)
