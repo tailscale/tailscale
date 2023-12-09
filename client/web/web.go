@@ -26,6 +26,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/licenses"
@@ -440,6 +441,9 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case sErr != nil && errors.Is(sErr, errNotUsingTailscale):
+		// Restricted to the readonly view, no auth action to take.
+		resp.AuthNeeded = ""
 	case sErr != nil && errors.Is(sErr, errNotOwner):
 		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_not_owner", 1)
@@ -640,6 +644,12 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
 
+	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn && data.URLPrefix == "" {
+		// X-Ingress-Path is the path prefix in use for Home Assistant
+		// https://developers.home-assistant.io/docs/add-ons/presentation#ingress
+		data.URLPrefix = r.Header.Get("X-Ingress-Path")
+	}
+
 	cv, err := s.lc.CheckUpdate(r.Context())
 	if err != nil {
 		s.logf("could not check for updates: %v", err)
@@ -711,13 +721,21 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 }
 
 func availableFeatures() map[string]bool {
-	return map[string]bool{
+	features := map[string]bool{
 		"advertise-exit-node": true,                            // available on all platforms
 		"advertise-routes":    true,                            // available on all platforms
 		"use-exit-node":       distro.Get() != distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
 		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
 		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
 	}
+	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn {
+		// Setting SSH on Home Assistant causes trouble on startup
+		// (since the flag is not being passed to `tailscale up`).
+		// Although Tailscale SSH does work here,
+		// it's not terribly useful since it's running in a separate container.
+		features["ssh"] = false
+	}
+	return features
 }
 
 // aclsAllowAccess returns whether tailnet ACLs (as expressed in the provided filter rules)
