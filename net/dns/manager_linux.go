@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/godbus/dbus/v5"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
@@ -425,4 +424,15 @@ func dbusReadString(name, objectPath, iface, member string) (string, error) {
 		return s, nil
 	}
 	return result.String(), nil
+}
+
+func GetDnsMode() (string, error) {
+	var logf logger.Logf = log.Printf
+	var env newOSConfigEnv = newOSConfigEnv{}
+
+	// Call dnsMode and handle both returned values
+	ret, err := dnsMode(logf, env)
+
+	// Return the values received from dnsMode
+	return ret, err
 }
