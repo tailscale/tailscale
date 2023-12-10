@@ -428,7 +428,14 @@ func dbusReadString(name, objectPath, iface, member string) (string, error) {
 
 func GetDnsMode() (string, error) {
 	var logf logger.Logf = log.Printf
-	var env newOSConfigEnv = newOSConfigEnv{}
+	env := newOSConfigEnv{
+		fs:                directFS{},
+		dbusPing:          dbusPing,
+		dbusReadString:    dbusReadString,
+		nmIsUsingResolved: nmIsUsingResolved,
+		nmVersionBetween:  nmVersionBetween,
+		resolvconfStyle:   resolvconfStyle,
+	}
 
 	// Call dnsMode and handle both returned values
 	ret, err := dnsMode(logf, env)
