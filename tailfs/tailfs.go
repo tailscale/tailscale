@@ -15,6 +15,7 @@ import (
 	"github.com/tailscale/gowebdav"
 	"golang.org/x/net/webdav"
 	"tailscale.com/connlistener"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tailfs/compositefs"
 	"tailscale.com/tailfs/webdavfs"
 	"tailscale.com/types/logger"
@@ -28,6 +29,36 @@ const (
 	statCacheTTL = 10 * time.Second
 )
 
+// Share represents a folder that's shared with remote Tailfs nodes.
+type Share struct {
+	// Name is how this share appears on remote nodes.
+	Name string `json:"name"`
+	// Path is the path to the directory on this machine that's being shared.
+	Path string `json:"path"`
+	// Who is the UNIX or Windows username of the local account that owns this
+	// share. File read/write permissions are enforced based on this username.
+	Who string `json:"who"`
+	// Readers is a list of Tailscale principals that are allowed to read this
+	// share.
+	Readers []string `json:"readers,omitempty"`
+	// Writers is a list of Tailscale principals that are allowed to write to
+	// this share.
+	Writers []string `json:"writers,omitempty"`
+}
+
+// Principal represents a person or machine attempting to access a share.
+type Principal struct {
+	IsSelf bool
+	UID    tailcfg.UserID
+	Groups []string
+}
+
+type Handler interface {
+	// ServeHTTP is like the equivalent method from http.Handler but also
+	// accepts a Principal identifying the user making the request.
+	ServeHTTP(principal *Principal, w http.ResponseWriter, r *http.Request)
+}
+
 // FileSystem encapsulates a TailFS filesystem. TailFS provides a WebDAV
 // interface to a unified view of local directories and/or remote WebDAV
 // shares.
@@ -35,7 +66,7 @@ type FileSystem interface {
 	// HandleConn handles connections from local WebDAV clients
 	HandleConn(conn net.Conn, remoteAddr net.Addr) error
 
-	// Handler() returns an http.Handler that can be used to serve tailfs
+	// Handler() returns an http.Handler that can be used to serve tailfs to
 	Handler() http.Handler
 
 	// AddShare adds a named share on the local filesystem

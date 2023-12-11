@@ -208,9 +208,9 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		peerNode:   peerNode,
 		peerUser:   peerUser,
 	}
-	tailfs, found := pln.lb.sys.TailfsForRemote.GetOK()
+	tfs, found := pln.lb.sys.TailfsForRemote.GetOK()
 	if found {
-		h.tailfsHandler = tailfs.Handler()
+		h.tailfsHandler = tfs.Handler()
 	}
 	httpServer := &http.Server{
 		Handler: h,
