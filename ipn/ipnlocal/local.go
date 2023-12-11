@@ -4591,16 +4591,11 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 	// Second pass, add everything wanted.
 	tailfsRemotes := make(map[string]string, len(nm.Peers))
 	for _, p := range nm.Peers {
-		// TODO(oxtoacart): is this really the best place to do this?
 		mak.Set(&b.peers, p.ID(), p)
-		// TODO(oxtoacart): for now, we only show peers that are logged in as
-		// ourselves. In the future, we'll open this up more broadly and will
-		// need to figure out how to filter out peers who are not logged in as
-		// the current user.
-		if nm.SelfNode.User() == p.User() {
-			url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailfsPrefix[1:])
-			tailfsRemotes[p.DisplayName(false)] = url
-		}
+		// TODO(oxtoacart): need to figure out a performance and reliable way to only
+		// show the peers that have shares to which we have access
+		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailfsPrefix[1:])
+		tailfsRemotes[p.DisplayName(false)] = url
 	}
 	if fs, ok := b.sys.TailfsForLocal.GetOK(); ok {
 		fs.SetRemotes(b.netMap.Domain, tailfsRemotes, &tailfsTransport{b: b})

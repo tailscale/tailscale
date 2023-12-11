@@ -2429,10 +2429,7 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ups)
 }
 
-func (h *Handler) serveShare(w http.ResponseWriter, r *http.Request) {
-
-}
-
+// serveShares handles the management of tailfs shares.
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "PUT":
