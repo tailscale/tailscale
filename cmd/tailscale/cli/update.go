@@ -59,12 +59,9 @@ func runUpdate(ctx context.Context, args []string) error {
 	if updateArgs.version != "" && updateArgs.track != "" {
 		return errors.New("cannot specify both --version and --track")
 	}
-	ver := updateArgs.version
-	if updateArgs.track != "" {
-		ver = updateArgs.track
-	}
 	err := clientupdate.Update(clientupdate.Arguments{
-		Version: ver,
+		Version: updateArgs.version,
+		Track:   updateArgs.track,
 		Logf:    func(f string, a ...any) { printf(f+"\n", a...) },
 		Stdout:  Stdout,
 		Stderr:  Stderr,

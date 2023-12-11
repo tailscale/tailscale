@@ -63,16 +63,19 @@ func versionToTrack(v string) (string, error) {
 
 // Arguments contains arguments needed to run an update.
 type Arguments struct {
-	// Version can be a specific version number or one of the predefined track
-	// constants:
+	// Version is the specific version to install.
+	// Mutually exclusive with Track.
+	Version string
+	// Track is the release track to use:
 	//
 	//   - CurrentTrack will use the latest version from the same track as the
 	//     running binary
 	//   - StableTrack and UnstableTrack will use the latest versions of the
 	//     corresponding tracks
 	//
-	// Leaving this empty is the same as using CurrentTrack.
-	Version string
+	// Leaving this empty will use Version or fall back to CurrentTrack if both
+	// Track and Version are empty.
+	Track string
 	// Logf is a logger for update progress messages.
 	Logf logger.Logf
 	// Stdout and Stderr should be used for output instead of os.Stdout and
@@ -99,12 +102,20 @@ func (args Arguments) validate() error {
 	if args.Logf == nil {
 		return errors.New("missing Logf callback in Arguments")
 	}
+	if args.Version != "" && args.Track != "" {
+		return fmt.Errorf("only one of Version(%q) or Track(%q) can be set", args.Version, args.Track)
+	}
+	switch args.Track {
+	case StableTrack, UnstableTrack, CurrentTrack:
+		// All valid values.
+	default:
+		return fmt.Errorf("unsupported track %q", args.Track)
+	}
 	return nil
 }
 
 type Updater struct {
 	Arguments
-	track string
 	// Update is a platform-specific method that updates the installation. May be
 	// nil (not all platforms support updates from within Tailscale).
 	Update func() error
@@ -128,20 +139,18 @@ func NewUpdater(args Arguments) (*Updater, error) {
 	if args.ForAutoUpdate && !canAutoUpdate {
 		return nil, errors.ErrUnsupported
 	}
-	switch up.Version {
-	case StableTrack, UnstableTrack:
-		up.track = up.Version
-	case CurrentTrack:
-		if version.IsUnstableBuild() {
-			up.track = UnstableTrack
-		} else {
-			up.track = StableTrack
-		}
-	default:
-		var err error
-		up.track, err = versionToTrack(args.Version)
-		if err != nil {
-			return nil, err
+	if up.Track == CurrentTrack {
+		switch {
+		case up.Version != "":
+			var err error
+			up.Track, err = versionToTrack(args.Version)
+			if err != nil {
+				return nil, err
+			}
+		case version.IsUnstableBuild():
+			up.Track = UnstableTrack
+		default:
+			up.Track = StableTrack
 		}
 	}
 	if up.Arguments.PkgsAddr == "" {
@@ -248,10 +257,10 @@ func Update(args Arguments) error {
 func (up *Updater) confirm(ver string) bool {
 	switch cmpver.Compare(version.Short(), ver) {
 	case 0:
-		up.Logf("already running %v version %v; no update needed", up.track, ver)
+		up.Logf("already running %v version %v; no update needed", up.Track, ver)
 		return false
 	case 1:
-		up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.track, version.Short(), ver)
+		up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.Track, version.Short(), ver)
 		return false
 	}
 	if up.Confirm != nil {
@@ -277,7 +286,7 @@ func (up *Updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	latest, err := latestPackages(up.track)
+	latest, err := latestPackages(up.Track)
 	if err != nil {
 		return err
 	}
@@ -296,7 +305,7 @@ func (up *Updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	pkgsPath := fmt.Sprintf("%s/%s", up.track, spkName)
+	pkgsPath := fmt.Sprintf("%s/%s", up.Track, spkName)
 	spkPath := filepath.Join(spkDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, spkPath); err != nil {
 		return err
@@ -395,7 +404,7 @@ func (up *Updater) updateDebLike() error {
 		// instead.
 		return up.updateLinuxBinary()
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	ver, err := requestedTailscaleVersion(up.Version, up.Track)
 	if err != nil {
 		return err
 	}
@@ -403,10 +412,10 @@ func (up *Updater) updateDebLike() error {
 		return nil
 	}
 
-	if updated, err := updateDebianAptSourcesList(up.track); err != nil {
+	if updated, err := updateDebianAptSourcesList(up.Track); err != nil {
 		return err
 	} else if updated {
-		up.Logf("Updated %s to use the %s track", aptSourcesFile, up.track)
+		up.Logf("Updated %s to use the %s track", aptSourcesFile, up.Track)
 	}
 
 	cmd := exec.Command("apt-get", "update",
@@ -534,7 +543,7 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 			}
 		}()
 
-		ver, err := requestedTailscaleVersion(up.Version, up.track)
+		ver, err := requestedTailscaleVersion(up.Version, up.Track)
 		if err != nil {
 			return err
 		}
@@ -542,10 +551,10 @@ func (up *Updater) updateFedoraLike(packageManager string) func() error {
 			return nil
 		}
 
-		if updated, err := updateYUMRepoTrack(yumRepoConfigFile, up.track); err != nil {
+		if updated, err := updateYUMRepoTrack(yumRepoConfigFile, up.Track); err != nil {
 			return err
 		} else if updated {
-			up.Logf("Updated %s to use the %s track", yumRepoConfigFile, up.track)
+			up.Logf("Updated %s to use the %s track", yumRepoConfigFile, up.Track)
 		}
 
 		cmd := exec.Command(packageManager, "install", "--assumeyes", fmt.Sprintf("tailscale-%s-1", ver))
@@ -691,8 +700,8 @@ const (
 )
 
 var (
-	verifyAuthenticode          func(string) error // or nil on non-Windows
-	markTempFileFunc            func(string) error // or nil on non-Windows
+	verifyAuthenticode func(string) error // set non-nil only on Windows
+	markTempFileFunc   func(string) error // set non-nil only on Windows
 )
 
 func (up *Updater) updateWindows() error {
@@ -725,7 +734,7 @@ you can run the command prompt as Administrator one of these ways:
 * press Windows+x, then press a
 * press Windows+r, type in "cmd", then press Ctrl+Shift+Enter`)
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	ver, err := requestedTailscaleVersion(up.Version, up.Track)
 	if err != nil {
 		return err
 	}
@@ -748,7 +757,7 @@ you can run the command prompt as Administrator one of these ways:
 		return err
 	}
 	up.cleanupOldDownloads(filepath.Join(msiDir, "*.msi"))
-	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
+	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.Track, ver, arch)
 	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
 		return err
@@ -958,7 +967,7 @@ func (up *Updater) updateLinuxBinary() error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
-	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	ver, err := requestedTailscaleVersion(up.Version, up.Track)
 	if err != nil {
 		return err
 	}
@@ -999,7 +1008,7 @@ func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
 	if err := os.MkdirAll(dlDir, 0700); err != nil {
 		return "", err
 	}
-	pkgsPath := fmt.Sprintf("%s/tailscale_%s_%s.tgz", up.track, ver, runtime.GOARCH)
+	pkgsPath := fmt.Sprintf("%s/tailscale_%s_%s.tgz", up.Track, ver, runtime.GOARCH)
 	dlPath := filepath.Join(dlDir, path.Base(pkgsPath))
 	if err := up.downloadURLToFile(pkgsPath, dlPath); err != nil {
 		return "", err
