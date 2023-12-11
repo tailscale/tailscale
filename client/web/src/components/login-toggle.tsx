@@ -126,7 +126,14 @@ function LoginPopoverContent({
 
   const handleSignInClick = useCallback(() => {
     if (auth.viewerIdentity) {
-      newSession()
+      if (window.self !== window.top) {
+        // if we're inside an iframe, start session in new window
+        let url = new URL(window.location.href)
+        url.searchParams.set("check", "now")
+        window.open(url, "_blank")
+      } else {
+        newSession()
+      }
     } else {
       // Must be connected over Tailscale to log in.
       // Send user to Tailscale IP and start check mode
