@@ -106,9 +106,11 @@ function LoginPopoverContent({
     }
     setIsRunningCheck(true)
     fetch(`http://${node.IPv4}:5252/ok`, { mode: "no-cors" })
-      .then(() => {
+      .then((r) => {
+        if (r.ok) {
+          setCanConnectOverTS(true)
+        }
         setIsRunningCheck(false)
-        setCanConnectOverTS(true)
       })
       .catch(() => setIsRunningCheck(false))
   }, [auth.viewerIdentity, isRunningCheck, node.IPv4])
