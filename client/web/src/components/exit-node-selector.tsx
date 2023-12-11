@@ -14,6 +14,7 @@ import useExitNodes, {
 import { ExitNode, NodeData } from "src/types"
 import Popover from "src/ui/popover"
 import SearchInput from "src/ui/search-input"
+import { useSWRConfig } from "swr"
 
 export default function ExitNodeSelector({
   className,
@@ -27,7 +28,14 @@ export default function ExitNodeSelector({
   const api = useAPI()
   const [open, setOpen] = useState<boolean>(false)
   const [selected, setSelected] = useState<ExitNode>(toSelectedExitNode(node))
+  const [pending, setPending] = useState<boolean>(false)
+  const { mutate } = useSWRConfig() // allows for global mutation
   useEffect(() => setSelected(toSelectedExitNode(node)), [node])
+  useEffect(() => {
+    setPending(
+      node.AdvertisingExitNode && node.AdvertisingExitNodeApproved === false
+    )
+  }, [node])
 
   const handleSelect = useCallback(
     (n: ExitNode) => {
@@ -35,9 +43,18 @@ export default function ExitNodeSelector({
       if (n.ID === selected.ID) {
         return // no update
       }
+      // Eager clear of pending state to avoid UI oddities
+      if (n.ID !== runAsExitNode.ID) {
+        setPending(false)
+      }
       api({ action: "update-exit-node", data: n })
+
+      // refresh data after short timeout to pick up any pending approval updates
+      setTimeout(() => {
+        mutate("/data")
+      }, 1000)
     },
-    [api, selected]
+    [api, mutate, selected.ID]
   )
 
   const [
@@ -52,7 +69,7 @@ export default function ExitNodeSelector({
       selected.ID !== noExitNode.ID && selected.ID !== runAsExitNode.ID,
       !selected.Online,
     ],
-    [selected]
+    [selected.ID, selected.Online]
   )
 
   return (
@@ -61,6 +78,7 @@ export default function ExitNodeSelector({
         "rounded-md",
         {
           "bg-red-600": offline,
+          "bg-yellow-400": pending,
         },
         className
       )}
@@ -158,6 +176,12 @@ export default function ExitNodeSelector({
         <p className="text-white p-3">
           The selected exit node is currently offline. Your internet traffic is
           blocked until you disable the exit node or select a different one.
+        </p>
+      )}
+      {pending && (
+        <p className="text-white p-3">
+          Pending approval to run as exit node. This device won't be usable as
+          an exit node until then.
         </p>
       )}
     </div>

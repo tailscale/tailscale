@@ -92,7 +92,8 @@ export function useAPI() {
     <MutateDataType, FetchDataType = any>(
       key: string,
       fetch: Promise<FetchDataType>,
-      optimisticData: (current: MutateDataType) => MutateDataType
+      optimisticData: (current: MutateDataType) => MutateDataType,
+      revalidate?: boolean // optionally specify whether to run final revalidation (step 3)
     ): Promise<FetchDataType | undefined> => {
       const options: MutatorOptions = {
         /**
@@ -105,6 +106,7 @@ export function useAPI() {
          */
         populateCache: false,
         optimisticData,
+        revalidate: revalidate,
       }
       return mutate(key, fetch, options)
     },
@@ -226,8 +228,12 @@ export function useAPI() {
                 ...old,
                 UsingExitNode: Boolean(body.UseExitNode) ? t.data : undefined,
                 AdvertisingExitNode: Boolean(body.AdvertiseExitNode),
+                AdvertisingExitNodeApproved: Boolean(body.AdvertiseExitNode)
+                  ? true // gets updated in revalidation
+                  : old.AdvertisingExitNodeApproved,
               }
-            }
+            },
+            false // skip final revalidation
           )
             .then(() => metrics.forEach((m) => incrementMetric(m)))
             .catch(handlePostError("Failed to update exit node"))

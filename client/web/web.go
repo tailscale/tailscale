@@ -589,10 +589,11 @@ type nodeData struct {
 	UnraidToken string
 	URLPrefix   string // if set, the URL prefix the client is served behind
 
-	UsingExitNode       *exitNode
-	AdvertisingExitNode bool
-	AdvertisedRoutes    []subnetRoute // excludes exit node routes
-	RunningSSHServer    bool
+	UsingExitNode               *exitNode
+	AdvertisingExitNode         bool
+	AdvertisingExitNodeApproved bool          // whether running this node as an exit node has been approved by an admin
+	AdvertisedRoutes            []subnetRoute // excludes exit node routes
+	RunningSSHServer            bool
 
 	ClientVersion *tailcfg.ClientVersion
 
@@ -693,6 +694,8 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 			return p == route
 		})
 	}
+	data.AdvertisingExitNodeApproved = routeApproved(exitNodeRouteV4) || routeApproved(exitNodeRouteV6)
+
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
 			data.AdvertisingExitNode = true
