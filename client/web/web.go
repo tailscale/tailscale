@@ -253,7 +253,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if !s.devMode {
 			w.Header().Set("X-Frame-Options", "DENY")
 			// TODO: use CSP nonce or hash to eliminate need for unsafe-inline
-			w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; img-src * data:")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src * data:")
 			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		}
 	}
