@@ -218,7 +218,10 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLo
 	}
 }
 
-const capabilityName = "https://tailscale.com/cap/kubernetes"
+const (
+	capabilityName    = "tailscale.com/cap/kubernetes"
+	oldCapabilityName = "https://" + capabilityName
+)
 
 type capRule struct {
 	// Impersonate is a list of rules that specify how to impersonate the caller
@@ -239,6 +242,10 @@ func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 	log = log.With("remote", r.RemoteAddr)
 	who := whoIsFromRequest(r)
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)
+	if len(rules) == 0 && err == nil {
+		// Try the old capability name for backwards compatibility.
+		rules, err = tailcfg.UnmarshalCapJSON[capRule](who.CapMap, oldCapabilityName)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal capability: %v", err)
 	}
