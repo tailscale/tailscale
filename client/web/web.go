@@ -448,6 +448,7 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case sErr != nil && errors.Is(sErr, errNotUsingTailscale):
 		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
 		resp.AuthNeeded = ""
 	case sErr != nil && errors.Is(sErr, errNotOwner):
 		// Restricted to the readonly view, no auth action to take.
@@ -474,6 +475,12 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		resp.CanManageNode = true
 		resp.AuthNeeded = ""
 	default:
+		// whois being nil implies local as the request did not come over Tailscale
+		if whois == nil || (whois.Node.StableID == status.Self.ID) {
+			s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
+		} else {
+			s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote", 1)
+		}
 		resp.AuthNeeded = tailscaleAuth
 	}
 
