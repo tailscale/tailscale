@@ -369,4 +369,3 @@ export type MetricName =
   | "web_client_node_connect"
   | "web_client_node_disconnect"
   | "web_client_advertise_routes_change"
-  | "web_client_device_details_click"

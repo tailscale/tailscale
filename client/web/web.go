@@ -336,6 +336,9 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
 			// Readonly endpoint allowed without valid browser session.
 			return true
+		case r.URL.Path == "/api/device-details-click" && r.Method == httpm.POST:
+			// Special case metric endpoint that is allowed without a browser session.
+			return true
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
 			if err != nil || !session.isAuthorized(s.timeNow()) {
@@ -371,6 +374,8 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 		s.serveGetNodeData(w, r)
 	case r.URL.Path == "/api/up" && r.Method == httpm.POST:
 		s.serveTailscaleUp(w, r)
+	case r.URL.Path == "/api/device-details-click" && r.Method == httpm.POST:
+		s.serveDeviceDetailsClick(w, r)
 	default:
 		http.Error(w, "invalid endpoint or method", http.StatusNotFound)
 	}
@@ -548,6 +553,9 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	case path == "/routes" && r.Method == httpm.POST:
 		s.servePostRoutes(w, r)
+		return
+	case path == "/device-details-click" && r.Method == httpm.POST:
+		s.serveDeviceDetailsClick(w, r)
 		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
@@ -968,6 +976,21 @@ func (s *Server) serveTailscaleUp(w http.ResponseWriter, r *http.Request) {
 	} else {
 		io.WriteString(w, "{}")
 	}
+}
+
+// serveDeviceDetailsClick increments the web_client_device_details_click metric
+// by one.
+//
+// Metric logging from the frontend typically is proxied to the localapi. This event
+// has been special cased as access to the localapi is gated upon having a valid
+// session which is not always the case when we want to be logging this metric (e.g.,
+// when in readonly mode).
+//
+// Other metrics should not be logged in this way without a good reason.
+func (s *Server) serveDeviceDetailsClick(w http.ResponseWriter, r *http.Request) {
+	s.lc.IncrementCounter(r.Context(), "web_client_device_details_click", 1)
+
+	io.WriteString(w, "{}")
 }
 
 // proxyRequestToLocalAPI proxies the web API request to the localapi.
