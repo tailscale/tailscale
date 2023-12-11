@@ -790,6 +790,7 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 		},
 		UserProfile: otherUser,
 	}
+	nonTailscaleIP := "10.100.2.3"
 
 	testControlURL := &defaultControlURL
 	var loggedMetrics []string
@@ -820,9 +821,9 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 		waitAuthURL: mockWaitAuthURL,
 	}
 
-	remoteNodeCookie := "ts-cookie-remote-node"
-	s.browserSessions.Store(remoteNodeCookie, &browserSession{
-		ID:            remoteNodeCookie,
+	authenticatedRemoteNodeCookie := "ts-cookie-remote-node-authenticated"
+	s.browserSessions.Store(authenticatedRemoteNodeCookie, &browserSession{
+		ID:            authenticatedRemoteNodeCookie,
 		SrcNode:       remoteNode.Node.ID,
 		SrcUser:       user.ID,
 		Created:       oneHourAgo,
@@ -830,15 +831,35 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 		AuthURL:       *testControlURL + testAuthPathSuccess,
 		Authenticated: true,
 	})
-	localNodeCookie := "ts-cookie-local-node"
-	s.browserSessions.Store(localNodeCookie, &browserSession{
-		ID:            localNodeCookie,
+	authenticatedLocalNodeCookie := "ts-cookie-local-node-authenticated"
+	s.browserSessions.Store(authenticatedLocalNodeCookie, &browserSession{
+		ID:            authenticatedLocalNodeCookie,
 		SrcNode:       localNode.Node.ID,
 		SrcUser:       user.ID,
 		Created:       oneHourAgo,
 		AuthID:        testAuthPathSuccess,
 		AuthURL:       *testControlURL + testAuthPathSuccess,
 		Authenticated: true,
+	})
+	unauthenticatedRemoteNodeCookie := "ts-cookie-remote-node-unauthenticated"
+	s.browserSessions.Store(unauthenticatedRemoteNodeCookie, &browserSession{
+		ID:            unauthenticatedRemoteNodeCookie,
+		SrcNode:       remoteNode.Node.ID,
+		SrcUser:       user.ID,
+		Created:       oneHourAgo,
+		AuthID:        testAuthPathSuccess,
+		AuthURL:       *testControlURL + testAuthPathSuccess,
+		Authenticated: false,
+	})
+	unauthenticatedLocalNodeCookie := "ts-cookie-local-node-unauthenticated"
+	s.browserSessions.Store(unauthenticatedLocalNodeCookie, &browserSession{
+		ID:            unauthenticatedLocalNodeCookie,
+		SrcNode:       localNode.Node.ID,
+		SrcUser:       user.ID,
+		Created:       oneHourAgo,
+		AuthID:        testAuthPathSuccess,
+		AuthURL:       *testControlURL + testAuthPathSuccess,
+		Authenticated: false,
 	})
 
 	tests := []struct {
@@ -850,33 +871,51 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 	}{
 		{
 			name:             "managing-remote",
-			cookie:           remoteNodeCookie,
+			cookie:           authenticatedRemoteNodeCookie,
 			remoteAddr:       remoteIP,
 			wantLoggedMetric: "web_client_managing_remote",
 		},
 		{
 			name:             "managing-local",
-			cookie:           localNodeCookie,
+			cookie:           authenticatedLocalNodeCookie,
 			remoteAddr:       localIP,
 			wantLoggedMetric: "web_client_managing_local",
 		},
 		{
 			name:             "viewing-not-owner",
-			cookie:           remoteNodeCookie,
+			cookie:           authenticatedRemoteNodeCookie,
 			remoteAddr:       otherIP,
 			wantLoggedMetric: "web_client_viewing_not_owner",
 		},
 		{
 			name:             "viewing-local-tagged",
-			cookie:           localNodeCookie,
+			cookie:           authenticatedLocalNodeCookie,
 			remoteAddr:       localTaggedIP,
 			wantLoggedMetric: "web_client_viewing_local_tag",
 		},
 		{
 			name:             "viewing-remote-tagged",
-			cookie:           remoteNodeCookie,
+			cookie:           authenticatedRemoteNodeCookie,
 			remoteAddr:       remoteTaggedIP,
 			wantLoggedMetric: "web_client_viewing_remote_tag",
+		},
+		{
+			name:             "viewing-local-non-tailscale",
+			cookie:           authenticatedLocalNodeCookie,
+			remoteAddr:       nonTailscaleIP,
+			wantLoggedMetric: "web_client_viewing_local",
+		},
+		{
+			name:             "viewing-local-unauthenticated",
+			cookie:           unauthenticatedLocalNodeCookie,
+			remoteAddr:       localIP,
+			wantLoggedMetric: "web_client_viewing_local",
+		},
+		{
+			name:             "viewing-remote-unauthenticated",
+			cookie:           unauthenticatedRemoteNodeCookie,
+			remoteAddr:       remoteIP,
+			wantLoggedMetric: "web_client_viewing_remote",
 		},
 	}
 	for _, tt := range tests {
