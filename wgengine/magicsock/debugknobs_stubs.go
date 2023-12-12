@@ -28,3 +28,4 @@ func debugEnablePMTUD() opt.Bool       { return "" }
 func debugRingBufferMaxSizeBytes() int { return 0 }
 func inTest() bool                     { return false }
 func debugPeerMap() bool               { return false }
+func debugPreferDERPRegion() int       { return 0 }

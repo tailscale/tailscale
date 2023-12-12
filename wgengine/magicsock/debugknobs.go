@@ -55,7 +55,8 @@ var (
 	// sockets.
 	debugEnablePMTUD = envknob.RegisterOptBool("TS_DEBUG_ENABLE_PMTUD")
 	// debugPMTUD prints extra debugging about peer MTU path discovery.
-	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
+	debugPMTUD            = envknob.RegisterBool("TS_DEBUG_PMTUD")
+	debugPreferDERPRegion = envknob.RegisterInt("TS_DEBUG_PREFER_DERP_REGION")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.
 )

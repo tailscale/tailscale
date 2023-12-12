@@ -649,6 +649,10 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	ni.WorkingUDP.Set(report.UDP)
 	ni.WorkingICMPv4.Set(report.ICMPv4)
 	ni.PreferredDERP = report.PreferredDERP
+	preferDERP := debugPreferDERPRegion()
+	if preferDERP > 0 {
+		ni.PreferredDERP = preferDERP
+	}
 
 	if ni.PreferredDERP == 0 {
 		// Perhaps UDP is blocked. Pick a deterministic but arbitrary
