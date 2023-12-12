@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +43,7 @@ type Principal struct {
 	Groups []string
 }
 
-// ForRemote is the TailFS filesystem exposed to remote nodes. It  provides a
+// ForRemote is the TailFS filesystem exposed to remote nodes. It provides a
 // unified WebDAV interface to local directories that have been shared.
 type ForRemote interface {
 	// SetShares sets the complete set of shares exposed by this node.
@@ -91,14 +92,14 @@ func (s *fileSystemForRemote) SetShares(shares map[string]*Share) {
 	}
 	s.mx.Lock()
 	s.shares = shares
-	oldProxies := s.userServers
+	oldUserServers := s.userServers
 	s.userServers = userServers
 	s.mx.Unlock()
 
-	// stop old proxies
-	for _, p := range oldProxies {
-		if err := p.Close(); err != nil {
-			s.logf("error closing old tailfs user proxy: %v", err)
+	// stop old user servers
+	for _, server := range oldUserServers {
+		if err := server.Close(); err != nil {
+			s.logf("error closing old tailfs user server: %v", err)
 		}
 	}
 }
@@ -119,9 +120,9 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 	for _, share := range sharesMap {
 		userServer, found := userServers[share.As]
 		if found {
-			userServer.addrMx.RLock()
+			userServer.mx.RLock()
 			addr := userServer.addr
-			userServer.addrMx.RUnlock()
+			userServer.mx.RUnlock()
 			children[share.Name] = webdavfs.New(&webdavfs.Opts{
 				Client: gowebdav.New(&gowebdav.Opts{
 					URI: fmt.Sprintf("http://%v/%v", addr, share.Name),
@@ -140,6 +141,16 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 }
 
 func (s *fileSystemForRemote) Close() error {
+	s.mx.Lock()
+	oldUserServers := s.userServers
+	s.mx.Unlock()
+
+	for _, server := range oldUserServers {
+		if err := server.Close(); err != nil {
+			s.logf("error closing old tailfs user server: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -150,12 +161,21 @@ func (s *fileSystemForRemote) Close() error {
 type userServer struct {
 	logf   logger.Logf
 	shares []*Share
+	closed bool
+	cmd    *exec.Cmd
 	addr   string
-	addrMx sync.RWMutex
+	mx     sync.RWMutex
 }
 
 func (s *userServer) Close() error {
-	// TODO(oxtoacart): actually implement this
+	s.mx.Lock()
+	cmd := s.cmd
+	s.closed = true
+	s.mx.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		return cmd.Process.Kill()
+	}
+	// not running, that's okay
 	return nil
 }
 
@@ -167,6 +187,13 @@ func (s *userServer) runLoop() {
 	}
 	s.logf("Using executable %v", executable)
 	for {
+		s.mx.RLock()
+		closed := s.closed
+		s.mx.RUnlock()
+		if closed {
+			return
+		}
+
 		err := s.run(executable)
 		s.logf("error running, will try again: %v", err)
 		// TODO(oxtoacart): maybe be smarter about backing off here
@@ -175,12 +202,12 @@ func (s *userServer) runLoop() {
 }
 
 func (s *userServer) run(executable string) error {
+	// set up the command
 	args := []string{"serve-tailfs"}
 	for _, s := range s.shares {
 		args = append(args, s.Name, s.Path)
 	}
 	cmd := runas.Cmd(s.shares[0].As, executable, args...)
-	s.logf("Command: %v", cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
@@ -196,6 +223,11 @@ func (s *userServer) run(executable string) error {
 	if err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
+	s.mx.Lock()
+	s.cmd = cmd
+	s.mx.Unlock()
+
+	// read address
 	stdoutScanner := bufio.NewScanner(stdout)
 	stdoutScanner.Scan()
 	if stdoutScanner.Err() != nil {
@@ -215,8 +247,8 @@ func (s *userServer) run(executable string) error {
 			s.logf(stdoutScanner.Text())
 		}
 	}()
-	s.addrMx.Lock()
+	s.mx.Lock()
 	s.addr = strings.TrimSpace(addr)
-	s.addrMx.Unlock()
+	s.mx.Unlock()
 	return cmd.Wait()
 }
