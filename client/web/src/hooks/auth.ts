@@ -83,7 +83,8 @@ export default function useAuth() {
 
   useEffect(() => {
     loadAuth() // Refresh auth state after syno auth runs
-  }, [loadAuth, ranSynoAuth])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ranSynoAuth])
 
   return {
     data,
