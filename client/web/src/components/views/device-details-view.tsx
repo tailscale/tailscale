@@ -151,6 +151,23 @@ export default function DeviceDetailsView({
             </tbody>
           </table>
         </Card>
+        <Card noPadding className="-mx-5 p-5 details-card">
+          <h2 className="mb-2">Debug</h2>
+          <table>
+            <tbody>
+              <tr>
+                <td>TUN Mode</td>
+                <td>{node.TUNMode ? "Yes" : "No"}</td>
+              </tr>
+              {node.IsSynology && (
+                <tr>
+                  <td>Synology Version</td>
+                  <td>{node.DSMVersion}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </Card>
         <footer className="text-gray-500 text-sm leading-tight text-center">
           <Control.AdminContainer node={node}>
             Want even more details? Visit{" "}
