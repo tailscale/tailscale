@@ -243,6 +243,43 @@ func mustIP(str string) netip.Addr {
 	return ip
 }
 
+func TestRoutesRequireNoCustomResolvers(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   Config
+		expected bool
+	}{
+		{"noRoutes", Config{Routes: map[dnsname.FQDN][]*dnstype.Resolver{}}, true},
+		{"onlyDefault", Config{Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"ts.net.": {
+				{},
+			},
+		}}, true},
+		{"oneOther", Config{Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"example.com.": {
+				{},
+			},
+		}}, false},
+		{"defaultAndOneOther", Config{Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"ts.net.": {
+				{},
+			},
+			"example.com.": {
+				{},
+			},
+		}}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.RoutesRequireNoCustomResolvers()
+			if result != tt.expected {
+				t.Errorf("result = %v; want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestRDNSNameToIPv4(t *testing.T) {
 	tests := []struct {
 		name   string
