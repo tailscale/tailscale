@@ -155,9 +155,8 @@ func (s *fileSystemForRemote) Close() error {
 }
 
 // userServer runs tailscaled serve-tailfs to serve webdav content for the
-// given Shares. All Shares are assumed to have the same Who, and the content
-// is served as that Who user.
-// content at the given paths as that user
+// given Shares. All Shares are assumed to have the same As, and the content
+// is served as that As user.
 type userServer struct {
 	logf   logger.Logf
 	shares []*Share
