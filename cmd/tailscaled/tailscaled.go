@@ -806,7 +806,6 @@ func serveTailfs(args []string) error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	fmt.Printf("%v\n", l.Addr())
-	fmt.Println("ZZZZ hi there")
 	handlers := make(map[string]http.Handler)
 	for i := 0; i < len(args); i += 2 {
 		share := args[0]
@@ -819,13 +818,10 @@ func serveTailfs(args []string) error {
 		handlers[share] = h
 	}
 	return http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("ZZZZ tailscaled serving %v", r.URL.Path)
 		parts := strings.Split(r.URL.Path[1:], "/")
 		r.URL.Path = "/" + strings.Join(parts[1:], "/")
-		log.Printf("ZZZZ tailscaled path is %v", r.URL.Path)
 		h, ok := handlers[parts[0]]
 		if !ok {
-			log.Printf("ZZZZ handler not found for %v", parts[0])
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}

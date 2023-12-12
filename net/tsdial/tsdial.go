@@ -372,10 +372,8 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 		if d.NetstackDialTCP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
 		}
-		d.logf("ZZZZ dialing peerapi %v via netstack", ipp)
 		return d.NetstackDialTCP(ctx, ipp)
 	}
-	d.logf("ZZZZ dialing peerapi %v using peer dialer", ipp)
 	return d.getPeerDialer().DialContext(ctx, network, addr)
 }
 
@@ -420,6 +418,5 @@ func (d *Dialer) PeerAPIHTTPClient() *http.Client {
 // The returned value must not be mutated; it's owned by the Dialer
 // and shared by callers.
 func (d *Dialer) PeerAPITransport() *http.Transport {
-	d.logf("ZZZZ PeerAPITransport() called")
 	return d.PeerAPIHTTPClient().Transport.(*http.Transport)
 }

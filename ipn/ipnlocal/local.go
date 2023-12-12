@@ -4608,7 +4608,6 @@ type tailfsTransport struct {
 }
 
 func (t *tailfsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.b.logf("ZZZZ round trippin!")
 	// dialTimeout is fairly aggressive to avoid hangs on contact
 	// offline/unreachable hosts
 	dialTimeout := 1 * time.Second // TODO(oxtoacart): tune this
@@ -4616,7 +4615,6 @@ func (t *tailfsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	tr := t.b.Dialer().PeerAPITransport().Clone()
 	dialContext := tr.DialContext
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		t.b.logf("ZZZZ dialin with context!")
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
 		return dialContext(ctxWithTimeout, network, addr)

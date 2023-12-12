@@ -115,7 +115,6 @@ require (
 	github.com/dave/brenda v1.1.0 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
-	github.com/hectane/go-acl v0.0.0-20230122075934-ca0b05cb1adb // indirect
 )
 
 require (

@@ -110,7 +110,6 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 		return
 	}
 
-	s.logf("ZZZZ Serving %v", r.URL.Path)
 	s.mx.RLock()
 	sharesMap := s.shares
 	userServers := s.userServers
@@ -118,17 +117,16 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 
 	children := make(map[string]webdav.FileSystem, len(sharesMap))
 	for _, share := range sharesMap {
-		s.logf("ZZZZ adding share %v %v", share.Name, share.Path)
 		userServer, found := userServers[share.As]
 		if found {
 			userServer.addrMx.RLock()
 			addr := userServer.addr
 			userServer.addrMx.RUnlock()
-			s.logf("ZZZZ found user server for %v: %v at %v", share.Name, share.As, addr)
 			children[share.Name] = webdavfs.New(&webdavfs.Opts{
 				Client: gowebdav.New(&gowebdav.Opts{
 					URI: fmt.Sprintf("http://%v/%v", addr, share.Name),
 				}),
+				Logf: s.logf,
 			})
 		}
 	}

@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"reflect"
 
 	"github.com/tailscale/gowebdav"
 	"golang.org/x/net/webdav"
@@ -80,7 +79,6 @@ func (s *fileSystemForLocal) SetRemotes(domain string, namesToURLS map[string]st
 			URI:       url,
 			Transport: transport,
 		})
-		s.logf("ZZZZ setting transport for %v to %v", domain, reflect.TypeOf(transport))
 		client.SetTransport(transport)
 		opts := &webdavfs.Opts{
 			Client:       client,
