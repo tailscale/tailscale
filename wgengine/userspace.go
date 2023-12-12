@@ -447,7 +447,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
-		conf.SetSubsystem(tailfs.Serve(e.logf))
+		conf.SetSubsystem(tailfs.NewFileSystemForLocal(e.logf))
 	}
 
 	e.logf("Engine created.")

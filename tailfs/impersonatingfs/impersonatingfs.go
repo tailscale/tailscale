@@ -47,7 +47,7 @@ func (fs *fs) Mkdir(ctx context.Context, name string, perm os.FileMode) error {
 func (fs *fs) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
 	path := filepath.Join(fs.base, name)
 
-	_, err := os.Stat(path)
+	fi, err := os.Stat(path)
 	fileExists := err == nil || !os.IsNotExist(err)
 	if err != nil && fileExists {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
@@ -69,9 +69,16 @@ func (fs *fs) OpenFile(ctx context.Context, name string, flag int, perm os.FileM
 		}
 	} else {
 		if fileExists {
-			// make sure user has read permissions to file
-			if !hasRead(path, fs.user, fs.group) {
-				return nil, os.ErrPermission
+			if fi.IsDir() {
+				// make sure user has execute permissions to file
+				if !hasExecute(path, fs.user, fs.group) {
+					return nil, os.ErrPermission
+				}
+			} else {
+				// make sure user has read permissions to file
+				if !hasRead(path, fs.user, fs.group) {
+					return nil, os.ErrPermission
+				}
 			}
 		}
 	}

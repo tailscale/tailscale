@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/webdav"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
@@ -140,6 +141,7 @@ var subCommands = map[string]*func([]string) error{
 	"uninstall-system-daemon": &uninstallSystemDaemon,
 	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
+	"serve-tailfs":            &serveTailfsFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -398,7 +400,7 @@ func run() error {
 		debugMux = newDebugMux()
 	}
 
-	sys.TailfsForRemote.Set(tailfs.Serve(logf))
+	sys.TailfsForRemote.Set(tailfs.NewFileSystemForRemote(logf))
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
 
@@ -787,6 +789,44 @@ func beChild(args []string) error {
 		return fmt.Errorf("unknown be-child mode %q", typ)
 	}
 	return f(args[1:])
+}
+
+var serveTailfsFunc = serveTailfs
+
+func serveTailfs(args []string) error {
+	if len(args) < 2 {
+		return errors.New("missing shares")
+	}
+	if len(args)%2 != 0 {
+		return errors.New("need <sharename> <path> pairs")
+	}
+	// TODO(oxtoacart): maybe use something more private than loopback?
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	fmt.Printf("%v\n", l.Addr())
+	handlers := make(map[string]http.Handler)
+	for i := 0; i < len(args); i += 2 {
+		share := args[0]
+		path := args[1]
+		fmt.Println(path)
+		h := &webdav.Handler{
+			FileSystem: webdav.Dir(path),
+			LockSystem: webdav.NewMemLS(),
+		}
+		handlers[share] = h
+	}
+	return http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(r.URL.Path[1:], "/")
+		r.URL.Path = "/" + strings.Join(parts[1:], "/")
+		h, ok := handlers[parts[0]]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
 }
 
 // dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process

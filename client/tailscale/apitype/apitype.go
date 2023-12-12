@@ -49,9 +49,3 @@ type ReloadConfigResponse struct {
 	Reloaded bool   // whether the config was reloaded
 	Err      string // any error message
 }
-
-// ShareInfo provides information about a currently active share
-type ShareInfo struct {
-	Name string
-	Path string
-}

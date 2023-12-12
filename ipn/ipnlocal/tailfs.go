@@ -5,12 +5,15 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailfs"
 	"tailscale.com/types/logger"
@@ -19,14 +22,33 @@ import (
 
 const (
 	TailfsInternalPort = 8080
+
+	tailfsSharesStateKey = ipn.StateKey("_tailfs-shares")
 )
 
-func (b *LocalBackend) TailfsAddShare(name, path string) error {
+func (b *LocalBackend) TailfsAddShare(share *tailfs.Share) error {
 	fs, ok := b.sys.TailfsForRemote.GetOK()
 	if !ok {
 		return errors.New("tailfs not enabled")
 	}
-	fs.AddShare(name, path)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	shares, err := b.tailfsGetSharesLocked()
+	if err != nil {
+		return err
+	}
+	shares[share.Name] = share
+	data, err := json.Marshal(shares)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	err = b.store.WriteState(tailfsSharesStateKey, data)
+	if err != nil {
+		return fmt.Errorf("write state: %w", err)
+	}
+	fs.SetShares(shares)
 	return nil
 }
 
@@ -35,8 +57,55 @@ func (b *LocalBackend) TailfsRemoveShare(name string) error {
 	if !ok {
 		return errors.New("tailfs not enabled")
 	}
-	fs.RemoveShare(name)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	shares, err := b.tailfsGetSharesLocked()
+	if err != nil {
+		return err
+	}
+	_, shareExists := shares[name]
+	if !shareExists {
+		return os.ErrNotExist
+	}
+	delete(shares, name)
+	data, err := json.Marshal(shares)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	err = b.store.WriteState(tailfsSharesStateKey, data)
+	if err != nil {
+		return fmt.Errorf("write state: %w", err)
+	}
+	fs.SetShares(shares)
 	return nil
+}
+
+func (b *LocalBackend) TailfsGetShares() (map[string]*tailfs.Share, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.tailfsGetSharesLocked()
+}
+
+func (b *LocalBackend) tailfsGetSharesLocked() (map[string]*tailfs.Share, error) {
+	data, err := b.store.ReadState(tailfsSharesStateKey)
+	if err != nil {
+		if errors.Is(err, ipn.ErrStateNotExist) {
+			return make(map[string]*tailfs.Share), nil
+		} else {
+			return nil, fmt.Errorf("read state: %w", err)
+		}
+	}
+
+	var shares map[string]*tailfs.Share
+	err = json.Unmarshal(data, &shares)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+
+	return shares, nil
 }
 
 // updateTailfsListenersLocked creates listeners on the internal Tailfs port.
@@ -47,16 +116,10 @@ func (b *LocalBackend) updateTailfsListenersLocked() {
 		return
 	}
 
-	tailfsPorts := map[uint16]tailfs.FileSystem{}
-
-	if fs, ok := b.sys.TailfsForLocal.GetOK(); ok {
-		tailfsPorts[TailfsInternalPort] = fs
-	}
-
 	addrs := b.netMap.GetAddresses()
 	for i := range addrs.LenIter() {
-		for port, fs := range tailfsPorts {
-			addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), port)
+		if fs, ok := b.sys.TailfsForLocal.GetOK(); ok {
+			addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), TailfsInternalPort)
 			if _, ok := b.tailfsListeners[addrPort]; ok {
 				continue // already listening
 			}
@@ -71,7 +134,7 @@ func (b *LocalBackend) updateTailfsListenersLocked() {
 
 // newTailfsListener returns a listener for local connections to a Tailfs
 // WebDAV FileSystem.
-func (b *LocalBackend) newTailfsListener(ctx context.Context, fs tailfs.FileSystem, ap netip.AddrPort, logf logger.Logf) *localListener {
+func (b *LocalBackend) newTailfsListener(ctx context.Context, fs tailfs.ForLocal, ap netip.AddrPort, logf logger.Logf) *localListener {
 	ctx, cancel := context.WithCancel(ctx)
 	return &localListener{
 		b:      b,

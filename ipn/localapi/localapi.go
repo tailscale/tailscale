@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -1048,6 +1049,34 @@ func (h *Handler) connIsLocalAdmin() bool {
 
 	default:
 		return false
+	}
+}
+
+func (h *Handler) getUsername() (string, error) {
+	if h.ConnIdentity == nil {
+		h.logf("[unexpected] missing ConnIdentity in LocalAPI Handler")
+		return "", errors.New("missing ConnIdentity")
+	}
+	switch runtime.GOOS {
+	case "windows":
+		tok, err := h.ConnIdentity.WindowsToken()
+		if err != nil {
+			return "", fmt.Errorf("get windows token: %w", err)
+		}
+		defer tok.Close()
+		return tok.Username()
+	case "darwin", "linux":
+		uid, ok := h.ConnIdentity.Creds().UserID()
+		if !ok {
+			return "", errors.New("missing user ID")
+		}
+		u, err := osuser.LookupByUID(uid)
+		if err != nil {
+			return "", fmt.Errorf("lookup user: %w", err)
+		}
+		return u.Username, nil
+	default:
+		return "", errors.New("unsupported OS")
 	}
 }
 
@@ -2433,7 +2462,7 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "PUT":
-		var share apitype.ShareInfo
+		var share tailfs.Share
 		err := json.NewDecoder(r.Body).Decode(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2448,47 +2477,51 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not a directory", http.StatusBadRequest)
 			return
 		}
-		tailfsSharesMu.Lock()
-		defer tailfsSharesMu.Unlock()
-		tailfsShares[share.Name] = share.Path
-		err = h.b.TailfsAddShare(share.Name, share.Path)
+		if share.As != "" {
+			// user is explicitly trying to set the user who does the sharing
+			if !h.connIsLocalAdmin() {
+				http.Error(w, "must be local admin to set 'as'", http.StatusForbidden)
+				return
+			}
+		} else {
+			// default to sharing as the connected user
+			username, err := h.getUsername()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			share.As = username
+		}
+		err = h.b.TailfsAddShare(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 	case "DELETE":
-		var share apitype.ShareInfo
+		var share tailfs.Share
 		err := json.NewDecoder(r.Body).Decode(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		tailfsSharesMu.Lock()
-		defer tailfsSharesMu.Unlock()
-		_, shareExists := tailfsShares[share.Name]
-		if !shareExists {
-			http.Error(w, "share does not exist", http.StatusNotFound)
-			return
-		}
-		delete(tailfsShares, share.Name)
 		err = h.b.TailfsRemoveShare(share.Name)
 		if err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "share not found", http.StatusNotFound)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "GET":
-		var shares []*apitype.ShareInfo
-		tailfsSharesMu.Lock()
-		defer tailfsSharesMu.Unlock()
-		for name, path := range tailfsShares {
-			shares = append(shares, &apitype.ShareInfo{
-				Name: name,
-				Path: path,
-			})
+		shares, err := h.b.TailfsGetShares()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		err := json.NewEncoder(w).Encode(shares)
+		err = json.NewEncoder(w).Encode(shares)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2497,10 +2530,6 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 	}
 }
-
-// TODO(oxtoacart): need to remember share settings across runs somehow
-var tailfsShares = make(map[string]string)
-var tailfsSharesMu sync.Mutex
 
 var (
 	metricInvalidRequests = clientmetric.NewCounter("localapi_invalid_requests")

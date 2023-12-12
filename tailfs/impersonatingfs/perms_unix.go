@@ -17,6 +17,11 @@ func hasWrite(filename string, uid, gid string) bool {
 	return err == nil
 }
 
+func hasExecute(filename string, uid, gid string) bool {
+	err := exec.Command("sudo", "-u", fmt.Sprintf("#%v", uid), "-g", fmt.Sprintf("#%v", gid), "test", "-x", filename).Run()
+	return err == nil
+}
+
 func chmod(filename string, mode os.FileMode) error {
 	return os.Chmod(filename, mode)
 }

@@ -6,11 +6,13 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/tailfs"
 )
 
 var shareHelpCommon = strings.TrimSpace(`
@@ -26,10 +28,14 @@ For more examples and use cases visit our docs site ...
 `)
 
 const (
-	shareAddUsage    = "share add <name> <path>"
+	shareAddUsage    = "share add [-as <username] <name> <path>"
 	shareRemoveUsage = "share remove <name>"
 	shareListUsage   = "share list"
 )
+
+var shareAddArgs struct {
+	as string
+}
 
 // newShareCommand returns a new "share" subcommand using e as its environment.
 var shareCmd = &ffcli.Command{
@@ -48,6 +54,11 @@ var shareCmd = &ffcli.Command{
 			Exec:      runShareAdd,
 			ShortHelp: "add a share",
 			UsageFunc: usageFunc,
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("add")
+				fs.StringVar(&shareAddArgs.as, "as", "", "shares files as this user, must be root or a local admin to use this flag")
+				return fs
+			})(),
 		},
 		{
 			Name:      "remove",
@@ -73,7 +84,11 @@ func runShareAdd(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v:", shareAddUsage)
 	}
 
-	return localClient.ShareAdd(ctx, args[0], args[1])
+	return localClient.ShareAdd(ctx, &tailfs.Share{
+		Name: args[0],
+		Path: args[1],
+		As:   shareAddArgs.as,
+	})
 }
 
 // runShareRemove is the entry point for the "tailscale share remove" command.
@@ -91,9 +106,13 @@ func runShareList(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v:", shareListUsage)
 	}
 
-	shares, err := localClient.ShareList(ctx)
+	sharesMap, err := localClient.ShareList(ctx)
 	if err != nil {
 		return err
+	}
+	shares := make([]*tailfs.Share, 0, len(sharesMap))
+	for _, share := range sharesMap {
+		shares = append(shares, share)
 	}
 
 	sort.Slice(shares, func(i, j int) bool {

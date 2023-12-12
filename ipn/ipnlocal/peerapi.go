@@ -38,6 +38,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
@@ -208,10 +209,6 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		peerNode:   peerNode,
 		peerUser:   peerUser,
 	}
-	tfs, found := pln.lb.sys.TailfsForRemote.GetOK()
-	if found {
-		h.tailfsHandler = tfs.Handler()
-	}
 	httpServer := &http.Server{
 		Handler: h,
 	}
@@ -223,13 +220,12 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 
 // peerAPIHandler serves the PeerAPI for a source specific client.
 type peerAPIHandler struct {
-	ps            *peerAPIServer
-	remoteAddr    netip.AddrPort
-	isSelf        bool                // whether peerNode is owned by same user as this node
-	selfNode      tailcfg.NodeView    // this node; always non-nil
-	peerNode      tailcfg.NodeView    // peerNode is who's making the request
-	peerUser      tailcfg.UserProfile // profile of peerNode
-	tailfsHandler http.Handler
+	ps         *peerAPIServer
+	remoteAddr netip.AddrPort
+	isSelf     bool                // whether peerNode is owned by same user as this node
+	selfNode   tailcfg.NodeView    // this node; always non-nil
+	peerNode   tailcfg.NodeView    // peerNode is who's making the request
+	peerUser   tailcfg.UserProfile // profile of peerNode
 }
 
 func (h *peerAPIHandler) logf(format string, a ...any) {
@@ -1105,11 +1101,17 @@ func (h *peerAPIHandler) handleServeTailfs(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "tailfs not allowed", http.StatusForbidden)
 		return
 	}
-	if h.tailfsHandler == nil {
+	tfs, found := h.ps.b.sys.TailfsForRemote.GetOK()
+	if !found {
 		http.Error(w, "tailfs not enabled", http.StatusNotFound)
 	}
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailfsPrefix)
-	h.tailfsHandler.ServeHTTP(w, r)
+	p := &tailfs.Principal{
+		IsSelf: h.isSelf,
+		UID:    h.peerUser.ID,
+		Groups: h.peerUser.Groups,
+	}
+	tfs.ServeHTTP(p, w, r)
 }
 
 // newFakePeerAPIListener creates a new net.Listener that acts like

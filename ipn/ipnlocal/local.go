@@ -3287,15 +3287,6 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 			}, opts
 		}
 	}
-	// TODO(oxtoacart): add b.ShouldRunTailfsExternal()
-	if dst.Port() == TailfsInternalPort {
-		fs, ok := b.sys.TailfsForRemote.GetOK()
-		if ok {
-			return func(conn net.Conn) error {
-				return fs.HandleConn(conn, conn.RemoteAddr())
-			}, opts
-		}
-	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
 		return func(c net.Conn) error {
 			b.handlePeerAPIConn(src, dst, c)

@@ -34,6 +34,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
@@ -1418,29 +1419,25 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
-func (lc *LocalClient) ShareAdd(ctx context.Context, name, path string) error {
-	req := apitype.ShareInfo{
-		Name: name,
-		Path: path,
-	}
-	_, err := lc.send(ctx, "PUT", "/localapi/v0/shares", http.StatusCreated, jsonBody(req))
+func (lc *LocalClient) ShareAdd(ctx context.Context, share *tailfs.Share) error {
+	_, err := lc.send(ctx, "PUT", "/localapi/v0/shares", http.StatusCreated, jsonBody(share))
 	return err
 }
 
 func (lc *LocalClient) ShareRemove(ctx context.Context, name string) error {
-	req := apitype.ShareInfo{
+	share := &tailfs.Share{
 		Name: name,
 	}
-	_, err := lc.send(ctx, "DELETE", "/localapi/v0/shares", http.StatusNoContent, jsonBody(req))
+	_, err := lc.send(ctx, "DELETE", "/localapi/v0/shares", http.StatusNoContent, jsonBody(share))
 	return err
 }
 
-func (lc *LocalClient) ShareList(ctx context.Context) ([]*apitype.ShareInfo, error) {
+func (lc *LocalClient) ShareList(ctx context.Context) (map[string]*tailfs.Share, error) {
 	result, err := lc.get200(ctx, "/localapi/v0/shares")
 	if err != nil {
 		return nil, err
 	}
-	var shares []*apitype.ShareInfo
+	var shares map[string]*tailfs.Share
 	err = json.Unmarshal(result, &shares)
 	return shares, err
 }

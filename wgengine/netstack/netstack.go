@@ -130,7 +130,7 @@ type Impl struct {
 	ctxCancel      context.CancelFunc     // called on Close
 	lb             *ipnlocal.LocalBackend // or nil
 	dns            *dns.Manager
-	tailfsForLocal tailfs.FileSystem // or nil
+	tailfsForLocal tailfs.ForLocal // or nil
 
 	peerapiPort4Atomic atomic.Uint32 // uint16 port number for IPv4 peerapi
 	peerapiPort6Atomic atomic.Uint32 // uint16 port number for IPv6 peerapi
@@ -158,7 +158,7 @@ const nicID = 1
 const maxUDPPacketSize = tstun.MaxPacketSize
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, tailfsForLocal tailfs.FileSystem) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, tailfsForLocal tailfs.ForLocal) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
