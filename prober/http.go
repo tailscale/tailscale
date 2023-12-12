@@ -53,7 +53,12 @@ func probeHTTP(ctx context.Context, url string, want []byte) error {
 	}
 
 	if !bytes.Contains(bs, want) {
-		return fmt.Errorf("body of %q does not contain %q", url, want)
+		// Log response body, but truncate it if it's too large; the limit
+		// has been chosen arbitrarily.
+		if maxlen := 300; len(bs) > maxlen {
+			bs = bs[:maxlen]
+		}
+		return fmt.Errorf("body of %q does not contain %q (got: %q)", url, want, string(bs))
 	}
 
 	return nil
