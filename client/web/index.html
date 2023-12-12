@@ -15,13 +15,14 @@
     </noscript>
     <script type="module" src="/src/index.tsx"></script>
     <script>
+      // if this script is changed, also change hash in web.go
       window.addEventListener("load", () => {
         if (!window.Tailscale) {
           const rootEl = document.createElement("p")
-          rootEl.innerHTML = 'Tailscale was built without the web client. See <a href="https://github.com/tailscale/tailscale#building-the-web-client">Building the web client</a> for more information.'
+          rootEl.innerHTML = 'Tailscale web interface is unavailable.';
           document.body.append(rootEl)
         }
-      });
+      })
     </script>
   </body>
 </html>
