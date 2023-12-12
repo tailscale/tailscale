@@ -94,7 +94,9 @@ export default function DeviceDetailsView({
                   {node.KeyExpired
                     ? "Expired"
                     : // TODO: present as relative expiry (e.g. "5 months from now")
-                      new Date(node.KeyExpiry).toLocaleString()}
+                    node.KeyExpiry
+                    ? new Date(node.KeyExpiry).toLocaleString()
+                    : "No expiry"}
                 </td>
               </tr>
             </tbody>
