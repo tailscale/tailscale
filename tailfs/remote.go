@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/tailscale/gowebdav"
+	"golang.org/x/net/webdav"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailfs/compositefs"
+	"tailscale.com/tailfs/webdavfs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/runas"
 )
@@ -59,38 +59,43 @@ type ForRemote interface {
 func NewFileSystemForRemote(logf logger.Logf) ForRemote {
 	fs := &fileSystemForRemote{
 		logf:        logf,
-		cfs:         compositefs.New(logf),
-		userProxies: make(map[string]*userProxy),
+		lockSystem:  webdav.NewMemLS(),
+		userServers: make(map[string]*userServer),
 	}
 	return fs
 }
 
 type fileSystemForRemote struct {
-	logf          logger.Logf
-	cfs           compositefs.CompositeFileSystem
-	userProxies   map[string]*userProxy
-	userProxiesMx sync.RWMutex
+	logf        logger.Logf
+	lockSystem  webdav.LockSystem
+	shares      map[string]*Share
+	userServers map[string]*userServer
+	mx          sync.RWMutex
 }
 
 func (s *fileSystemForRemote) SetShares(shares map[string]*Share) {
-	userProxies := make(map[string]*userProxy)
+	// set up one server per user
+	userServers := make(map[string]*userServer)
 	for _, share := range shares {
-		p, found := userProxies[share.As]
+		p, found := userServers[share.As]
 		if !found {
-			p = &userProxy{
+			p = &userServer{
 				logf: s.logf,
 			}
-			userProxies[share.As] = p
+			userServers[share.As] = p
 		}
 		p.shares = append(p.shares, share)
 	}
-	for _, p := range userProxies {
+	for _, p := range userServers {
 		go p.runLoop()
 	}
-	s.userProxiesMx.Lock()
-	oldProxies := s.userProxies
-	s.userProxies = userProxies
-	s.userProxiesMx.Unlock()
+	s.mx.Lock()
+	s.shares = shares
+	oldProxies := s.userServers
+	s.userServers = userServers
+	s.mx.Unlock()
+
+	// stop old proxies
 	for _, p := range oldProxies {
 		if err := p.Close(); err != nil {
 			s.logf("error closing old tailfs user proxy: %v", err)
@@ -99,50 +104,79 @@ func (s *fileSystemForRemote) SetShares(shares map[string]*Share) {
 }
 
 func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWriter, r *http.Request) {
+	// TODO(oxtoacart): allow permissions other than just self
+	if !principal.IsSelf {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	s.mx.RLock()
+	sharesMap := s.shares
+	userServers := s.userServers
+	s.mx.RUnlock()
+
+	children := make(map[string]webdav.FileSystem, len(sharesMap))
+	for _, share := range sharesMap {
+		userServer, found := userServers[share.As]
+		if found {
+			children[share.Name] = webdavfs.New(&webdavfs.Opts{
+				Client: gowebdav.New(&gowebdav.Opts{
+					URI: fmt.Sprintf("http://%v", userServer.addr),
+				}),
+			})
+		}
+	}
+	cfs := compositefs.New(s.logf)
+	cfs.SetChildren(children)
+	h := webdav.Handler{
+		FileSystem: cfs,
+		LockSystem: s.lockSystem,
+	}
+	h.ServeHTTP(w, r)
 }
 
 func (s *fileSystemForRemote) Close() error {
 	return nil
 }
 
-// userProxy runs tailscaled serve-tailfs to serve webdav content for the
+// userServer runs tailscaled serve-tailfs to serve webdav content for the
 // given Shares. All Shares are assumed to have the same Who, and the content
 // is served as that Who user.
 // content at the given paths as that user
-type userProxy struct {
-	logf           logger.Logf
-	shares         []*Share
-	reverseProxy   *httputil.ReverseProxy
-	reverseProxyMx sync.RWMutex
+type userServer struct {
+	logf   logger.Logf
+	shares []*Share
+	addr   string
+	addrMx sync.RWMutex
 }
 
-func (p *userProxy) Close() error {
+func (s *userServer) Close() error {
 	// TODO(oxtoacart): actually implement this
 	return nil
 }
 
-func (p *userProxy) runLoop() {
+func (s *userServer) runLoop() {
 	executable, err := os.Executable()
 	if err != nil {
-		p.logf("can't find executable: %v", err)
+		s.logf("can't find executable: %v", err)
 		return
 	}
-	p.logf("Using executable %v", executable)
+	s.logf("Using executable %v", executable)
 	for {
-		err := p.run(executable)
-		p.logf("error running, will try again: %v", err)
+		err := s.run(executable)
+		s.logf("error running, will try again: %v", err)
 		// TODO(oxtoacart): maybe be smarter about backing off here
 		time.Sleep(1 * time.Second)
 	}
 }
 
-func (p *userProxy) run(executable string) error {
+func (s *userServer) run(executable string) error {
 	args := []string{"serve-tailfs"}
-	for _, s := range p.shares {
+	for _, s := range s.shares {
 		args = append(args, s.Name, s.Path)
 	}
-	cmd := runas.Cmd(p.shares[0].As, executable, args...)
-	p.logf("Command: %v", cmd)
+	cmd := runas.Cmd(s.shares[0].As, executable, args...)
+	s.logf("Command: %v", cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
@@ -157,15 +191,10 @@ func (p *userProxy) run(executable string) error {
 	if err != nil {
 		return fmt.Errorf("read addr: %w", err)
 	}
-	u, err := url.Parse(fmt.Sprintf("http://%v", strings.TrimSpace(addr)))
-	if err != nil {
-		return fmt.Errorf("parse url: %w", err)
-	}
 	// send the rest of stdout to discard to avoid blocking
 	go io.Copy(io.Discard, r)
-	rp := httputil.NewSingleHostReverseProxy(u)
-	p.reverseProxyMx.Lock()
-	p.reverseProxy = rp
-	p.reverseProxyMx.Unlock()
+	s.addrMx.Lock()
+	s.addr = addr
+	s.addrMx.Unlock()
 	return cmd.Wait()
 }

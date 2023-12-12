@@ -41,7 +41,7 @@ type fileSystemForLocal struct {
 	logf        logger.Logf
 	cfs         compositefs.CompositeFileSystem
 	listener    connlistener.Listener
-	userProxies map[string]*userProxy
+	userProxies map[string]*userServer
 }
 
 func (s *fileSystemForLocal) serveAt() {
