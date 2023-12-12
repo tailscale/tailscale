@@ -28,7 +28,7 @@ For more examples and use cases visit our docs site ...
 `)
 
 const (
-	shareAddUsage    = "share add [-as <username] <name> <path>"
+	shareAddUsage    = "share add [-as <username>] <name> <path>"
 	shareRemoveUsage = "share remove <name>"
 	shareListUsage   = "share list"
 )
