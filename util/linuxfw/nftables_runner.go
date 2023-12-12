@@ -429,7 +429,7 @@ func getOrCreateChain(c *nftables.Conn, cinfo chainInfo) (*nftables.Chain, error
 		return chain, nil
 	}
 
-	_ = c.AddChain(&nftables.Chain{
+	chain = c.AddChain(&nftables.Chain{
 		Name:     cinfo.name,
 		Table:    cinfo.table,
 		Type:     cinfo.chainType,
