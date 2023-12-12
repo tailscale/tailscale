@@ -251,9 +251,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !s.devMode {
+			// This hash corresponds to the inline script in index.html that runs when the react app is unavailable.
+			// It was generated from https://csplite.com/csp/sha/.
+			// If the contents of the script are changed, this hash must be updated.
+			const indexScriptHash = "sha384-CW2AYVfS14P7QHZN27thEkMLKiCj3YNURPoLc1elwiEkMVHeuYTWkJOEki1F3nZc"
+
 			w.Header().Set("X-Frame-Options", "DENY")
-			// TODO: use CSP nonce or hash to eliminate need for unsafe-inline
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src * data:")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src * data:; script-src 'self' '"+indexScriptHash+"'")
 			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		}
 	}
