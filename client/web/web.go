@@ -739,14 +739,15 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 }
 
 func availableFeatures() map[string]bool {
+	env := hostinfo.GetEnvType()
 	features := map[string]bool{
-		"advertise-exit-node": true,                            // available on all platforms
-		"advertise-routes":    true,                            // available on all platforms
-		"use-exit-node":       distro.Get() != distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
+		"advertise-exit-node": true, // available on all platforms
+		"advertise-routes":    true, // available on all platforms
+		"use-exit-node":       canUseExitNode(env) == nil,
 		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
 		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
 	}
-	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn {
+	if env == hostinfo.HomeAssistantAddOn {
 		// Setting SSH on Home Assistant causes trouble on startup
 		// (since the flag is not being passed to `tailscale up`).
 		// Although Tailscale SSH does work here,
@@ -754,6 +755,19 @@ func availableFeatures() map[string]bool {
 		features["ssh"] = false
 	}
 	return features
+}
+
+func canUseExitNode(env hostinfo.EnvType) error {
+	switch dist := distro.Get(); dist {
+	case distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
+		distro.QNAP,
+		distro.Unraid:
+		return fmt.Errorf("Tailscale exit nodes cannot be used on %s.", dist)
+	}
+	if env == hostinfo.HomeAssistantAddOn {
+		return errors.New("Tailscale exit nodes cannot be used on Home Assistant.")
+	}
+	return nil
 }
 
 // aclsAllowAccess returns whether tailnet ACLs (as expressed in the provided filter rules)
