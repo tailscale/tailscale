@@ -52,10 +52,12 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 			return
 		}
 
-		// Aggressively cache static assets, since we cache-bust our assets with
-		// hashed filenames.
-		w.Header().Set("Cache-Control", "public, max-age=31535996")
-		w.Header().Set("Vary", "Accept-Encoding")
+		if strings.HasPrefix(path, "assets/") {
+			// Aggressively cache static assets, since we cache-bust our assets with
+			// hashed filenames.
+			w.Header().Set("Cache-Control", "public, max-age=31535996")
+			w.Header().Set("Vary", "Accept-Encoding")
+		}
 
 		http.ServeContent(w, r, path, start, fSeeker)
 	}), nil
