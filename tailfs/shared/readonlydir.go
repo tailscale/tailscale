@@ -6,6 +6,7 @@ package shared
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"sync"
@@ -23,22 +24,27 @@ type DirFile struct {
 }
 
 func (d *DirFile) Readdir(count int) ([]fs.FileInfo, error) {
+	fmt.Println("ZZZZ here")
 	err := d.loadChildrenIfNecessary()
 	if err != nil {
+		fmt.Printf("ZZZZ error loading children: %v\n", err)
 		return nil, err
 	}
 
 	if count <= 0 {
 		result := d.children
+		fmt.Printf("ZZZZ returning with number of children %d\n", len(d.children))
 		d.children = nil
 		return result, nil
 	}
 
+	fmt.Printf("ZZZZ number of children %d\n", len(d.children))
 	n := len(d.children)
 	if count < n {
 		n = count
 	}
 	result := d.children[:n]
+	fmt.Printf("ZZZZ number of result children %d\n", len(result))
 	d.children = d.children[n:]
 	if len(d.children) == 0 {
 		err = io.EOF

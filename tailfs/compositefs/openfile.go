@@ -24,6 +24,7 @@ func (cfs *compositeFileSystem) OpenFile(ctx context.Context, name string, flag 
 				for _, c := range cfs.children {
 					children = append(children, shared.ReadOnlyDirInfo(c.name))
 				}
+				cfs.logf("ZZZZ children for dirfile: %d %v", len(children), children)
 				return children, nil
 			},
 		}, nil

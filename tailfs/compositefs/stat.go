@@ -11,23 +11,29 @@ import (
 )
 
 func (cfs *compositeFileSystem) Stat(ctx context.Context, name string) (fs.FileInfo, error) {
+	cfs.logf("ZZZZ compositefs stat %v", name)
 	if isRoot(name) {
 		// Root is a directory
+		cfs.logf("ZZZZ compositefs stat root")
 		return shared.ReadOnlyDirInfo(name), nil
 	}
 
 	path, onChild, child, err := cfs.pathToChild(name)
 	if err != nil {
+		cfs.logf("ZZZZ compositefs can't get pathToChild: %v", err)
 		return nil, err
 	}
 
 	if !onChild {
+		cfs.logf("ZZZZ compositefs stat child")
 		// This means name refers to a child itself rather than a file on a child
 		return shared.ReadOnlyDirInfo(name), nil
 	}
 
+	cfs.logf("ZZZZ compositefs will actually stat %v", path)
 	fi, err := child.fs.Stat(ctx, path)
 	if err != nil {
+		cfs.logf("ZZZZ compositefs stat failed %v", err)
 		return nil, err
 	}
 

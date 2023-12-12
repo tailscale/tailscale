@@ -187,7 +187,9 @@ func (wfs *webdavFS) doStat(name string) (fs.FileInfo, error) {
 	ctxWithTimeout, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
+	wfs.logf("ZZZZ webdavfs stating %v", name)
 	fi, err := wfs.Client.Stat(ctxWithTimeout, name)
+	wfs.logf("ZZZZ webdavfs stat result %v %v", fi, err)
 	return fi, translateWebDAVError(err)
 }
 
