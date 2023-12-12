@@ -121,6 +121,7 @@ func runShareList(ctx context.Context, args []string) error {
 
 	longestName := 4 // "name"
 	longestPath := 4 // "path"
+	longestAs := 2   // "as"
 	for _, share := range shares {
 		if len(share.Name) > longestName {
 			longestName = len(share.Name)
@@ -128,12 +129,15 @@ func runShareList(ctx context.Context, args []string) error {
 		if len(share.Path) > longestPath {
 			longestPath = len(share.Path)
 		}
+		if len(share.As) > longestAs {
+			longestAs = len(share.As)
+		}
 	}
-	formatString := fmt.Sprintf("%%-%ds    %%s\n", longestName)
-	fmt.Printf(formatString, "name", "path")
-	fmt.Printf(formatString, strings.Repeat("-", longestName), strings.Repeat("-", longestPath))
+	formatString := fmt.Sprintf("%%-%ds    %%-%ds    %%s\n", longestName, longestPath)
+	fmt.Printf(formatString, "name", "path", "as")
+	fmt.Printf(formatString, strings.Repeat("-", longestName), strings.Repeat("-", longestPath), strings.Repeat("-", longestAs))
 	for _, share := range shares {
-		fmt.Printf(formatString, share.Name, share.Path)
+		fmt.Printf(formatString, share.Name, share.Path, share.As)
 	}
 
 	return nil
