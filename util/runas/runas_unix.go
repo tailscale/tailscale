@@ -1,3 +1,5 @@
+//go:build unix
+
 package runas
 
 import "os/exec"

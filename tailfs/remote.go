@@ -3,6 +3,7 @@ package tailfs
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/tailscale/gowebdav"
 	"golang.org/x/net/webdav"
+	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailfs/compositefs"
 	"tailscale.com/tailfs/webdavfs"
@@ -125,7 +127,12 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 			userServer.mx.RUnlock()
 			children[share.Name] = webdavfs.New(&webdavfs.Opts{
 				Client: gowebdav.New(&gowebdav.Opts{
-					URI: fmt.Sprintf("http://%v/%v", addr, share.Name),
+					URI: fmt.Sprintf("http://safesocket/%v", share.Name),
+					Transport: &http.Transport{
+						Dial: func(_, _ string) (net.Conn, error) {
+							return safesocket.Connect(safesocket.DefaultConnectionStrategy(addr))
+						},
+					},
 				}),
 				Logf: s.logf,
 			})
@@ -184,7 +191,7 @@ func (s *userServer) runLoop() {
 		s.logf("can't find executable: %v", err)
 		return
 	}
-	s.logf("Using executable %v", executable)
+	s.logf("ZZZZ Using executable %v", executable)
 	for {
 		s.mx.RLock()
 		closed := s.closed

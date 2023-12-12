@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/net/webdav"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscaled/childproc"
@@ -801,7 +802,8 @@ func serveTailfs(args []string) error {
 		return errors.New("need <sharename> <path> pairs")
 	}
 	// TODO(oxtoacart): maybe use something more private than loopback?
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("%v.socket", uuid.New().String()))
+	l, err := safesocket.Listen(path)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
