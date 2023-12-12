@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,34 +198,27 @@ func (s *userServer) run(executable string) error {
 	if err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
-	stdoutReader := bufio.NewReader(stdout)
-	addr, err := stdoutReader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read addr: %w", err)
+	stdoutScanner := bufio.NewScanner(stdout)
+	stdoutScanner.Scan()
+	if stdoutScanner.Err() != nil {
+		return fmt.Errorf("read addr: %w", stdoutScanner.Err())
 	}
+	addr := stdoutScanner.Text()
 	// send the rest of stdout to logger to avoid blocking
 	go func() {
-		for {
-			str, err := stdoutReader.ReadString('\n')
-			if err != nil {
-				return
-			}
-			s.logf(str)
+		for ; ; stdoutScanner.Scan() {
+			s.logf(stdoutScanner.Text())
 		}
 	}()
 	// also send stderr to logger
-	stderrReader := bufio.NewReader(stderr)
+	stderrScanner := bufio.NewScanner(stderr)
 	go func() {
-		for {
-			str, err := stderrReader.ReadString('\n')
-			if err != nil {
-				return
-			}
-			s.logf(str)
+		for ; ; stderrScanner.Scan() {
+			s.logf(stdoutScanner.Text())
 		}
 	}()
 	s.addrMx.Lock()
-	s.addr = addr
+	s.addr = strings.TrimSpace(addr)
 	s.addrMx.Unlock()
 	return cmd.Wait()
 }
