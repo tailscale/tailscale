@@ -30,6 +30,11 @@ func (kv kv) String() string {
 
 var publishOnce sync.Once
 
+var (
+	dnsMode      string
+	dnsModeMutex sync.RWMutex
+)
+
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
 	env := newOSConfigEnv{
 		fs:                directFS{},
@@ -43,6 +48,8 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	if err != nil {
 		return nil, err
 	}
+
+	setGlobalDnsMode(mode)
 	publishOnce.Do(func() {
 		sanitizedMode := strings.ReplaceAll(mode, "-", "_")
 		m := clientmetric.NewGauge(fmt.Sprintf("dns_manager_linux_mode_%s", sanitizedMode))
@@ -426,20 +433,16 @@ func dbusReadString(name, objectPath, iface, member string) (string, error) {
 	return result.String(), nil
 }
 
-func GetDnsMode() (string, error) {
-	var logf logger.Logf = log.Printf
-	env := newOSConfigEnv{
-		fs:                directFS{},
-		dbusPing:          dbusPing,
-		dbusReadString:    dbusReadString,
-		nmIsUsingResolved: nmIsUsingResolved,
-		nmVersionBetween:  nmVersionBetween,
-		resolvconfStyle:   resolvconfStyle,
-	}
+// setGlobalDnsMode safely sets the global DNS mode variable
+func setGlobalDnsMode(mode string) {
+	dnsModeMutex.Lock()
+	defer dnsModeMutex.Unlock()
+	dnsMode = mode
+}
 
-	// Call dnsMode and handle both returned values
-	ret, err := dnsMode(logf, env)
-
-	// Return the values received from dnsMode
-	return ret, err
+// GetGlobalDnsMode safely returns the global DNS mode variable
+func GetGlobalDnsMode() string {
+	dnsModeMutex.RLock()
+	defer dnsModeMutex.RUnlock()
+	return dnsMode
 }

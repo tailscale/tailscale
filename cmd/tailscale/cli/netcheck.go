@@ -150,11 +150,10 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	}
 
 	if runtime.GOOS == "linux" {
-		mode, err := dns.GetDnsMode()
-		if err != nil {
-			return err
+		mode := dns.GetGlobalDnsMode()
+		if mode != "" {
+			printf("\t* Current DNS Mode: %v\n", mode)
 		}
-		printf("\t* Current DNS Mode: %v\n", mode)
 	}
 
 	// When DERP latency checking failed,
