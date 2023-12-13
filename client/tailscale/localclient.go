@@ -1616,6 +1616,22 @@ func (lc *LocalClient) DriveShareList(ctx context.Context) ([]*drive.Share, erro
 	return shares, err
 }
 
+// GetUpdateProgress returns the status of an in-progress Tailscale self-update.
+// This is provided as a slice of ipnstate.UpdateProgress structs with various
+// log messages in order from oldest to newest. If an update is not in progress,
+// the returned slice will be empty.
+func (lc *LocalClient) GetUpdateProgress(ctx context.Context) ([]ipnstate.UpdateProgress, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/update/progress")
+	if err != nil {
+		return nil, err
+	}
+	ups, err := decodeJSON[[]ipnstate.UpdateProgress](body)
+	if err != nil {
+		return nil, err
+	}
+	return ups, nil
+}
+
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
 // It's returned by LocalClient.WatchIPNBus.
 //
