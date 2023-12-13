@@ -939,6 +939,49 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 	}
 }
 
+func TestNoOffSiteRedirect(t *testing.T) {
+	options := ServerOpts{
+		Mode: LoginServerMode,
+		// Emulate the admin using a --prefix option with leading slashes:
+		PathPrefix: "//evil.example.com/goat",
+		CGIMode:    true,
+	}
+	s, err := NewServer(options)
+	if err != nil {
+		t.Error(err)
+	}
+
+	tests := []struct {
+		name         string
+		target       string
+		wantHandled  bool
+		wantLocation string
+	}{
+		{
+			name:   "2-slashes",
+			target: "http://localhost//evil.example.com/goat",
+			// We must also get the trailing slash added:
+			wantLocation: "/evil.example.com/goat/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s.logf = t.Logf
+			r := httptest.NewRequest(httpm.GET, tt.target, nil)
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, r)
+			res := w.Result()
+			defer res.Body.Close()
+
+			location := w.Header().Get("Location")
+			if location != tt.wantLocation {
+				t.Errorf("request(%q) got wrong location; want=%q, got=%q", tt.target, tt.wantLocation, location)
+			}
+		})
+	}
+}
+
 func TestRequireTailscaleIP(t *testing.T) {
 	self := &ipnstate.PeerStatus{
 		TailscaleIPs: []netip.Addr{
@@ -1007,7 +1050,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.target, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			s.logf = t.Logf
 			r := httptest.NewRequest(httpm.GET, tt.target, nil)
 			w := httptest.NewRecorder()

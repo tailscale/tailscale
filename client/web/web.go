@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -173,6 +174,13 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 		timeNow:     opts.TimeNow,
 		newAuthURL:  opts.NewAuthURL,
 		waitAuthURL: opts.WaitAuthURL,
+	}
+	if opts.PathPrefix != "" {
+		// In enforcePrefix, we add the necessary leading '/'. If we did not
+		// strip 1 or more leading '/'s here, we would end up redirecting
+		// clients to e.g. //example.com (a schema-less URL that points to
+		// another site). See https://github.com/tailscale/corp/issues/16268.
+		s.pathPrefix = strings.TrimLeft(path.Clean(opts.PathPrefix), "/\\")
 	}
 	if s.mode == ManageServerMode {
 		if opts.NewAuthURL == nil {
