@@ -396,6 +396,7 @@ type authResponse struct {
 	AuthNeeded     authType        `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
 	CanManageNode  bool            `json:"canManageNode"`
 	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitempty"`
+	ServerMode     ServerMode      `json:"serverMode"`
 }
 
 // viewerIdentity is the Tailscale identity of the source node
@@ -411,6 +412,7 @@ type viewerIdentity struct {
 // and returns an authResponse indicating the current auth state and any steps the user needs to take.
 func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	var resp authResponse
+	resp.ServerMode = s.mode
 	session, whois, status, sErr := s.getSession(r)
 
 	if whois != nil {

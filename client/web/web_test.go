@@ -523,7 +523,7 @@ func TestServeAuth(t *testing.T) {
 			name:          "no-session",
 			path:          "/api/auth",
 			wantStatus:    http.StatusOK,
-			wantResp:      &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi},
+			wantResp:      &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi, ServerMode: ManageServerMode},
 			wantNewCookie: false,
 			wantSession:   nil,
 		},
@@ -548,7 +548,7 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi},
+			wantResp:   &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi, ServerMode: ManageServerMode},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
@@ -596,7 +596,7 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{CanManageNode: true, ViewerIdentity: vi},
+			wantResp:   &authResponse{CanManageNode: true, ViewerIdentity: vi, ServerMode: ManageServerMode},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
