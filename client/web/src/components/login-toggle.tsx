@@ -125,7 +125,7 @@ function LoginPopoverContent({
   useEffect(() => checkTSConnection(), [])
 
   const handleSignInClick = useCallback(() => {
-    if (auth.viewerIdentity) {
+    if (auth.viewerIdentity && auth.serverMode === "manage") {
       if (window.self !== window.top) {
         // if we're inside an iframe, start session in new window
         let url = new URL(window.location.href)
@@ -145,7 +145,7 @@ function LoginPopoverContent({
         window.location.href = manageURL
       }
     }
-  }, [node.IPv4, auth.viewerIdentity, newSession])
+  }, [auth.viewerIdentity, auth.serverMode, newSession, node.IPv4])
 
   return (
     <div onMouseEnter={!canConnectOverTS ? checkTSConnection : undefined}>
