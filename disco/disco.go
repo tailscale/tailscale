@@ -171,6 +171,7 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 // The recipient may choose to not open a path back, if it's already
 // happy with its path. But usually it will.
 type CallMeMaybe struct {
+	MarshalTime time.Time
 	// MyNumber is what the peer believes its endpoints are.
 	//
 	// Prior to Tailscale 1.4, the endpoints were exchanged purely
@@ -194,9 +195,9 @@ const epLength = 16 + 2 // 16 byte IP address + 2 byte port
 
 func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
 	ret, p := appendMsgHeader(b, TypeCallMeMaybe, 1, 8+(epLength*len(m.MyNumber)))
-	t := time.Now().Unix()
-	fmt.Printf("JORDAN: putting timestamp %s in call-me-maybe\n", time.Unix(t, 0))
-	binary.BigEndian.PutUint64(p, uint64(t))
+	now := time.Now()
+	binary.BigEndian.PutUint64(p, uint64(now.UnixNano()))
+	m.MarshalTime = now
 	p = p[8:]
 	for _, ipp := range m.MyNumber {
 		a := ipp.Addr().As16()
@@ -211,10 +212,11 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 	m = new(CallMeMaybe)
 	if ver == 1 {
 		u := binary.BigEndian.Uint64(p)
-		t := time.Unix(int64(u), 0)
-		fmt.Printf("JORDAN: call-me-maybe has timestamp: %s\n", t)
+		t := time.Unix(0, int64(u))
+		m.MarshalTime = t
 		p = p[8:]
-	} else if len(p)%epLength != 0 || ver != 0 || len(p) == 0 {
+	}
+	if len(p)%epLength != 0 || (ver != 0 && ver != 1) || len(p) == 0 {
 		return m, nil
 	}
 	m.MyNumber = make([]netip.AddrPort, 0, len(p)/epLength)

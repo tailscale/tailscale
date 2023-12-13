@@ -1277,6 +1277,10 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	pkt = append(pkt, box...)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
 	if sent {
+		cmm, ok := m.(*disco.CallMeMaybe)
+		if ok {
+			c.logf("JORDAN: TX call-me-maybe nonce[:8]: %x marshalTime: %s", box[:8], cmm.MarshalTime)
+		}
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
 			node := "?"
 			if !dstKey.IsZero() {
@@ -1436,6 +1440,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			return true
 		})
 	case *disco.CallMeMaybe:
+		c.logf("JORDAN: RX call-me-maybe nonce[:8]: %x marshalTime: %s via: %s", sealedBox[:8], dm.MarshalTime, via)
 		metricRecvDiscoCallMeMaybe.Add(1)
 		if !isDERP || derpNodeSrc.IsZero() {
 			// CallMeMaybe messages should only come via DERP.

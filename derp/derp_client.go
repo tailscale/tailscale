@@ -5,6 +5,7 @@ package derp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
+	"tailscale.com/disco"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -209,6 +211,10 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 			ret = fmt.Errorf("derp.Send: %w", ret)
 		}
 	}()
+
+	if len(pkt) > 46 && bytes.Equal(pkt[:6], []byte(disco.Magic)) {
+		c.logf("JORDAN: derp.Client.send() disco packet with nonce[:8]: %x", pkt[38:46])
+	}
 
 	if len(pkt) > MaxPacketSize {
 		return fmt.Errorf("packet too big: %d", len(pkt))
@@ -569,6 +575,9 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			}
 			rp.Source = key.NodePublicFromRaw32(mem.B(b[:keyLen]))
 			rp.Data = b[keyLen:n]
+			if len(rp.Data) > 46 && bytes.Equal(rp.Data[:6], []byte(disco.Magic)) {
+				c.logf("JORDAN: derp client recvTimeout() RX disco with nonce[:8]: %x", rp.Data[38:46])
+			}
 			return rp, nil
 
 		case framePing:

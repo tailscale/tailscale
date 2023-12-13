@@ -5,6 +5,7 @@ package magicsock
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"hash/fnv"
@@ -20,6 +21,7 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/disco"
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
@@ -530,6 +532,9 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 			pkt = m
 			res.n = len(m.Data)
 			res.src = m.Source
+			if len(m.Data) > 46 && bytes.Equal(m.Data[:6], []byte(disco.Magic)) {
+				c.logf("JORDAN: conn.runDerpReader() RX disco with nonce[:8]: %x", m.Data[38:46])
+			}
 			if logDerpVerbose() {
 				c.logf("magicsock: got derp-%v packet: %q", regionID, m.Data)
 			}
@@ -567,6 +572,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 					regionID, key.NodePublic(m.Peer).ShortString(), m.Reason)
 			}
 			c.removeDerpPeerRoute(key.NodePublic(m.Peer), regionID, dc)
+			// this will fall down to c.derpRecvCh <- res, writing the previous packet again
 		default:
 			// Ignore.
 			continue
@@ -608,6 +614,9 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 		case <-ctx.Done():
 			return
 		case wr := <-ch:
+			if len(wr.b) > 46 && bytes.Equal(wr.b[:6], []byte(disco.Magic)) {
+				c.logf("JORDAN: runDerpWriter() disco packet with nonce[:8]: %x", wr.b[38:46])
+			}
 			err := dc.Send(wr.pubKey, wr.b)
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
@@ -627,6 +636,7 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 		if c.isClosed() {
 			break
 		}
+
 		n, ep := c.processDERPReadResult(dm, buffs[0])
 		if n == 0 {
 			// No data read occurred. Wait for another packet.
@@ -681,6 +691,13 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if debugUseDERPHTTP() {
+		for _, v := range dm.Regions {
+			for _, n := range v.Nodes {
+				n.DERPPort = 3340
+			}
+		}
+	}
 	var derpAddr = debugUseDERPAddr()
 	if derpAddr != "" {
 		derpPort := 443
