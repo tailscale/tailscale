@@ -15,7 +15,7 @@ export function UpdateAvailableNotification({
   const [, setLocation] = useLocation()
 
   return (
-    <Card>
+    <Card noPadding className="-mx-5 p-5 details-card">
       <h2 className="mb-2">
         Update available{" "}
         {details.LatestVersion && `(v${details.LatestVersion})`}
