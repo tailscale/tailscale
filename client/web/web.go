@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -24,7 +25,9 @@ import (
 	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/licenses"
@@ -33,6 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -71,6 +75,13 @@ type Server struct {
 	// The map provides a lookup of the session by cookie value
 	// (browserSession.ID => browserSession).
 	browserSessions sync.Map
+
+	// newAuthURL creates a new auth URL that can be used to validate
+	// a browser session to manage this web client.
+	newAuthURL func(ctx context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
+	// waitWebClientAuthURL blocks until the associated auth URL has
+	// been completed by its user, or until ctx is canceled.
+	waitAuthURL func(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
 }
 
 // ServerMode specifies the mode of a running web.Server.
@@ -121,6 +132,20 @@ type ServerOpts struct {
 	// Logf optionally provides a logger function.
 	// log.Printf is used as default.
 	Logf logger.Logf
+
+	// The following two fields are required and used exclusively
+	// in ManageServerMode to facilitate the control server login
+	// check step for authorizing browser sessions.
+
+	// NewAuthURL should be provided as a function that generates
+	// a new tailcfg.WebClientAuthResponse.
+	// This field is required for ManageServerMode mode.
+	NewAuthURL func(ctx context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
+	// WaitAuthURL should be provided as a function that blocks until
+	// the associated tailcfg.WebClientAuthResponse has been marked
+	// as completed.
+	// This field is required for ManageServerMode mode.
+	WaitAuthURL func(ctx context.Context, id string, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error)
 }
 
 // NewServer constructs a new Tailscale web client server.
@@ -140,13 +165,30 @@ func NewServer(opts ServerOpts) (s *Server, err error) {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
 	s = &Server{
-		mode:       opts.Mode,
-		logf:       opts.Logf,
-		devMode:    envknob.Bool("TS_DEBUG_WEB_CLIENT_DEV"),
-		lc:         opts.LocalClient,
-		cgiMode:    opts.CGIMode,
-		pathPrefix: opts.PathPrefix,
-		timeNow:    opts.TimeNow,
+		mode:        opts.Mode,
+		logf:        opts.Logf,
+		devMode:     envknob.Bool("TS_DEBUG_WEB_CLIENT_DEV"),
+		lc:          opts.LocalClient,
+		cgiMode:     opts.CGIMode,
+		pathPrefix:  opts.PathPrefix,
+		timeNow:     opts.TimeNow,
+		newAuthURL:  opts.NewAuthURL,
+		waitAuthURL: opts.WaitAuthURL,
+	}
+	if opts.PathPrefix != "" {
+		// In enforcePrefix, we add the necessary leading '/'. If we did not
+		// strip 1 or more leading '/'s here, we would end up redirecting
+		// clients to e.g. //example.com (a schema-less URL that points to
+		// another site). See https://github.com/tailscale/corp/issues/16268.
+		s.pathPrefix = strings.TrimLeft(path.Clean(opts.PathPrefix), "/\\")
+	}
+	if s.mode == ManageServerMode {
+		if opts.NewAuthURL == nil {
+			return nil, fmt.Errorf("must provide a NewAuthURL implementation")
+		}
+		if opts.WaitAuthURL == nil {
+			return nil, fmt.Errorf("must provide WaitAuthURL implementation")
+		}
 	}
 	if s.timeNow == nil {
 		s.timeNow = time.Now
@@ -195,7 +237,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler := s.serve
 
 	// if path prefix is defined, strip it from requests.
-	if s.pathPrefix != "" {
+	if s.cgiMode && s.pathPrefix != "" {
 		handler = enforcePrefix(s.pathPrefix, handler)
 	}
 
@@ -217,9 +259,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !s.devMode {
+			// This hash corresponds to the inline script in index.html that runs when the react app is unavailable.
+			// It was generated from https://csplite.com/csp/sha/.
+			// If the contents of the script are changed, this hash must be updated.
+			const indexScriptHash = "sha384-CW2AYVfS14P7QHZN27thEkMLKiCj3YNURPoLc1elwiEkMVHeuYTWkJOEki1F3nZc"
+
 			w.Header().Set("X-Frame-Options", "DENY")
-			// TODO: use CSP nonce or hash to eliminate need for unsafe-inline
-			w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; img-src * data:")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src * data:; script-src 'self' '"+indexScriptHash+"'")
 			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		}
 	}
@@ -243,9 +289,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		// Pass API requests through to the API handler.
 		s.apiHandler.ServeHTTP(w, r)
 		return
-	}
-	if !s.devMode {
-		s.lc.IncrementCounter(r.Context(), "web_client_page_load", 1)
 	}
 	s.assetsHandler.ServeHTTP(w, r)
 }
@@ -296,22 +339,20 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 // errors to the ResponseWriter itself.
 func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
 	if s.mode == ManageServerMode { // client using tailscale auth
-		_, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+		session, _, _, err := s.getSession(r)
 		switch {
-		case err != nil:
+		case errors.Is(err, errNotUsingTailscale):
 			// All requests must be made over tailscale.
 			http.Error(w, "must access over tailscale", http.StatusUnauthorized)
 			return false
 		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
-			// Readonly endpoint allowed without browser session.
+			// Readonly endpoint allowed without valid browser session.
+			return true
+		case r.URL.Path == "/api/device-details-click" && r.Method == httpm.POST:
+			// Special case metric endpoint that is allowed without a browser session.
 			return true
 		case strings.HasPrefix(r.URL.Path, "/api/"):
 			// All other /api/ endpoints require a valid browser session.
-			//
-			// TODO(sonia): s.getSession calls whois again,
-			// should try and use the above call instead of running another
-			// localapi request.
-			session, _, err := s.getSession(r)
 			if err != nil || !session.isAuthorized(s.timeNow()) {
 				http.Error(w, "no valid session", http.StatusUnauthorized)
 				return false
@@ -340,18 +381,16 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 // which protects the handler using gorilla csrf.
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
-	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
-		http.Error(w, "invalid endpoint", http.StatusNotFound)
-		return
-	}
-	switch r.Method {
-	case httpm.GET:
-		// TODO(soniaappasamy): we may want a minimal node data response here
+	switch {
+	case r.URL.Path == "/api/data" && r.Method == httpm.GET:
 		s.serveGetNodeData(w, r)
-		return
+	case r.URL.Path == "/api/up" && r.Method == httpm.POST:
+		s.serveTailscaleUp(w, r)
+	case r.URL.Path == "/api/device-details-click" && r.Method == httpm.POST:
+		s.serveDeviceDetailsClick(w, r)
+	default:
+		http.Error(w, "invalid endpoint or method", http.StatusNotFound)
 	}
-	http.Error(w, "invalid endpoint", http.StatusNotFound)
-	return
 }
 
 type authType string
@@ -365,6 +404,7 @@ type authResponse struct {
 	AuthNeeded     authType        `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
 	CanManageNode  bool            `json:"canManageNode"`
 	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitempty"`
+	ServerMode     ServerMode      `json:"serverMode"`
 }
 
 // viewerIdentity is the Tailscale identity of the source node
@@ -380,46 +420,8 @@ type viewerIdentity struct {
 // and returns an authResponse indicating the current auth state and any steps the user needs to take.
 func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	var resp authResponse
-
-	session, whois, err := s.getSession(r)
-	switch {
-	case err != nil && errors.Is(err, errNotUsingTailscale):
-		// not using tailscale, so perform platform auth
-		switch distro.Get() {
-		case distro.Synology:
-			authorized, err := authorizeSynology(r)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-			if !authorized {
-				resp.AuthNeeded = synoAuth
-			}
-		case distro.QNAP:
-			if _, err := authorizeQNAP(r); err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-		default:
-			// no additional auth for this distro
-		}
-	case err != nil && (errors.Is(err, errNotOwner) ||
-		errors.Is(err, errNotUsingTailscale) ||
-		errors.Is(err, errTaggedLocalSource) ||
-		errors.Is(err, errTaggedRemoteSource)):
-		// These cases are all restricted to the readonly view.
-		// No auth action to take.
-		resp.AuthNeeded = ""
-	case err != nil && !errors.Is(err, errNoSession):
-		// Any other error.
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	case session.isAuthorized(s.timeNow()):
-		resp.CanManageNode = true
-		resp.AuthNeeded = ""
-	default:
-		resp.AuthNeeded = tailscaleAuth
-	}
+	resp.ServerMode = s.mode
+	session, whois, status, sErr := s.getSession(r)
 
 	if whois != nil {
 		resp.ViewerIdentity = &viewerIdentity{
@@ -431,6 +433,71 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 			resp.ViewerIdentity.NodeIP = addrs[0].Addr().String()
 		}
 	}
+
+	// First verify platform auth.
+	// If platform auth is needed, this should happen first.
+	if s.mode == LoginServerMode {
+		switch distro.Get() {
+		case distro.Synology:
+			authorized, err := authorizeSynology(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			if !authorized {
+				resp.AuthNeeded = synoAuth
+				writeJSON(w, resp)
+				return
+			}
+		case distro.QNAP:
+			if _, err := authorizeQNAP(r); err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+		default:
+			// no additional auth for this distro
+		}
+	}
+
+	switch {
+	case sErr != nil && errors.Is(sErr, errNotUsingTailscale):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
+		resp.AuthNeeded = ""
+	case sErr != nil && errors.Is(sErr, errNotOwner):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_not_owner", 1)
+		resp.AuthNeeded = ""
+	case sErr != nil && errors.Is(sErr, errTaggedLocalSource):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local_tag", 1)
+		resp.AuthNeeded = ""
+	case sErr != nil && errors.Is(sErr, errTaggedRemoteSource):
+		// Restricted to the readonly view, no auth action to take.
+		s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote_tag", 1)
+		resp.AuthNeeded = ""
+	case sErr != nil && !errors.Is(sErr, errNoSession):
+		// Any other error.
+		http.Error(w, sErr.Error(), http.StatusInternalServerError)
+		return
+	case session.isAuthorized(s.timeNow()):
+		if whois.Node.StableID == status.Self.ID {
+			s.lc.IncrementCounter(r.Context(), "web_client_managing_local", 1)
+		} else {
+			s.lc.IncrementCounter(r.Context(), "web_client_managing_remote", 1)
+		}
+		resp.CanManageNode = true
+		resp.AuthNeeded = ""
+	default:
+		// whois being nil implies local as the request did not come over Tailscale
+		if whois == nil || (whois.Node.StableID == status.Self.ID) {
+			s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
+		} else {
+			s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote", 1)
+		}
+		resp.AuthNeeded = tailscaleAuth
+	}
+
 	writeJSON(w, resp)
 }
 
@@ -440,7 +507,7 @@ type newSessionAuthResponse struct {
 
 // serveAPIAuthSessionNew handles requests to the /api/auth/session/new endpoint.
 func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) {
-	session, whois, err := s.getSession(r)
+	session, whois, _, err := s.getSession(r)
 	if err != nil && !errors.Is(err, errNoSession) {
 		// Source associated with request not allowed to create
 		// a session for this web client.
@@ -457,11 +524,19 @@ func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) 
 		}
 		// Set the cookie on browser.
 		http.SetCookie(w, &http.Cookie{
-			Name:    sessionCookieName,
-			Value:   session.ID,
-			Raw:     session.ID,
-			Path:    "/",
-			Expires: session.expires(),
+			Name:     sessionCookieName,
+			Value:    session.ID,
+			Raw:      session.ID,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+			Expires:  session.expires(),
+			// We can't set Secure to true because we serve over HTTP
+			// (but only on Tailscale IPs, hence over encrypted
+			// connections that a LAN-local attacker cannot sniff).
+			// In the future, we could support HTTPS requests using
+			// the full MagicDNS hostname, and could set this.
+			// Secure:  true,
 		})
 	}
 
@@ -470,7 +545,7 @@ func (s *Server) serveAPIAuthSessionNew(w http.ResponseWriter, r *http.Request) 
 
 // serveAPIAuthSessionWait handles requests to the /api/auth/session/wait endpoint.
 func (s *Server) serveAPIAuthSessionWait(w http.ResponseWriter, r *http.Request) {
-	session, _, err := s.getSession(r)
+	session, _, _, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
@@ -491,15 +566,17 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
-	case path == "/data":
-		switch r.Method {
-		case httpm.GET:
-			s.serveGetNodeData(w, r)
-		case httpm.POST:
-			s.servePostNodeUpdate(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
+	case path == "/data" && r.Method == httpm.GET:
+		s.serveGetNodeData(w, r)
+		return
+	case path == "/exit-nodes" && r.Method == httpm.GET:
+		s.serveGetExitNodes(w, r)
+		return
+	case path == "/routes" && r.Method == httpm.POST:
+		s.servePostRoutes(w, r)
+		return
+	case path == "/device-details-click" && r.Method == httpm.POST:
+		s.serveDeviceDetailsClick(w, r)
 		return
 	case strings.HasPrefix(path, "/local/"):
 		s.proxyRequestToLocalAPI(w, r)
@@ -514,7 +591,7 @@ type nodeData struct {
 	DeviceName  string
 	TailnetName string // TLS cert name
 	DomainName  string
-	IP          string // IPv4
+	IPv4        string
 	IPv6        string
 	OS          string
 	IPNVersion  string
@@ -533,13 +610,33 @@ type nodeData struct {
 	UnraidToken string
 	URLPrefix   string // if set, the URL prefix the client is served behind
 
-	AdvertiseExitNode bool
-	AdvertiseRoutes   string
-	RunningSSHServer  bool
+	UsingExitNode               *exitNode
+	AdvertisingExitNode         bool
+	AdvertisingExitNodeApproved bool          // whether running this node as an exit node has been approved by an admin
+	AdvertisedRoutes            []subnetRoute // excludes exit node routes
+	RunningSSHServer            bool
 
 	ClientVersion *tailcfg.ClientVersion
 
-	LicensesURL string
+	// whether tailnet ACLs allow access to port 5252 on this device
+	ACLAllowsAnyIncomingTraffic bool
+
+	ControlAdminURL string
+	LicensesURL     string
+
+	// Features is the set of available features for use on the
+	// current platform. e.g. "ssh", "advertise-exit-node", etc.
+	// Map value is true if the given feature key is available.
+	//
+	// See web.availableFeatures func for population of this field.
+	// Contents are expected to match values defined in node-data.ts
+	// on the frontend.
+	Features map[string]bool
+}
+
+type subnetRoute struct {
+	Route    string
+	Approved bool // approved by control server
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -553,6 +650,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	filterRules, _ := s.lc.DebugPacketFilterRules(r.Context())
 	data := &nodeData{
 		ID:               st.Self.ID,
 		Status:           st.BackendState,
@@ -569,8 +667,19 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		UnraidToken:      os.Getenv("UNRAID_CSRF_TOKEN"),
 		RunningSSHServer: prefs.RunSSH,
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
+		ControlAdminURL:  prefs.AdminPageURL(),
 		LicensesURL:      licenses.LicensesURL(),
+		Features:         availableFeatures(),
+
+		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
+
+	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn && data.URLPrefix == "" {
+		// X-Ingress-Path is the path prefix in use for Home Assistant
+		// https://developers.home-assistant.io/docs/add-ons/presentation#ingress
+		data.URLPrefix = r.Header.Get("X-Ingress-Path")
+	}
+
 	cv, err := s.lc.CheckUpdate(r.Context())
 	if err != nil {
 		s.logf("could not check for updates: %v", err)
@@ -579,11 +688,11 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {
-			data.IP = ip.String()
+			data.IPv4 = ip.String()
 		} else if ip.Is6() {
 			data.IPv6 = ip.String()
 		}
-		if data.IP != "" && data.IPv6 != "" {
+		if data.IPv4 != "" && data.IPv6 != "" {
 			break
 		}
 	}
@@ -597,120 +706,220 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	if st.Self.KeyExpiry != nil {
 		data.KeyExpiry = st.Self.KeyExpiry.Format(time.RFC3339)
 	}
+
+	routeApproved := func(route netip.Prefix) bool {
+		if st.Self == nil || st.Self.AllowedIPs == nil {
+			return false
+		}
+		return st.Self.AllowedIPs.ContainsFunc(func(p netip.Prefix) bool {
+			return p == route
+		})
+	}
+	data.AdvertisingExitNodeApproved = routeApproved(exitNodeRouteV4) || routeApproved(exitNodeRouteV6)
+
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
-			data.AdvertiseExitNode = true
+			data.AdvertisingExitNode = true
 		} else {
-			if data.AdvertiseRoutes != "" {
-				data.AdvertiseRoutes += ","
+			data.AdvertisedRoutes = append(data.AdvertisedRoutes, subnetRoute{
+				Route:    r.String(),
+				Approved: routeApproved(r),
+			})
+		}
+	}
+	if e := st.ExitNodeStatus; e != nil {
+		data.UsingExitNode = &exitNode{
+			ID:     e.ID,
+			Online: e.Online,
+		}
+		for _, ps := range st.Peer {
+			if ps.ID == e.ID {
+				data.UsingExitNode.Name = ps.DNSName
+				data.UsingExitNode.Location = ps.Location
+				break
 			}
-			data.AdvertiseRoutes += r.String()
+		}
+		if data.UsingExitNode.Name == "" {
+			// Falling back to TailscaleIP/StableNodeID when the peer
+			// is no longer included in status.
+			if len(e.TailscaleIPs) > 0 {
+				data.UsingExitNode.Name = e.TailscaleIPs[0].Addr().String()
+			} else {
+				data.UsingExitNode.Name = string(e.ID)
+			}
 		}
 	}
 	writeJSON(w, *data)
 }
 
-type nodeUpdate struct {
-	AdvertiseRoutes   string
-	AdvertiseExitNode bool
-	Reauthenticate    bool
-	ForceLogout       bool
+func availableFeatures() map[string]bool {
+	env := hostinfo.GetEnvType()
+	features := map[string]bool{
+		"advertise-exit-node": true, // available on all platforms
+		"advertise-routes":    true, // available on all platforms
+		"use-exit-node":       canUseExitNode(env) == nil,
+		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
+		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
+	}
+	if env == hostinfo.HomeAssistantAddOn {
+		// Setting SSH on Home Assistant causes trouble on startup
+		// (since the flag is not being passed to `tailscale up`).
+		// Although Tailscale SSH does work here,
+		// it's not terribly useful since it's running in a separate container.
+		features["ssh"] = false
+	}
+	return features
 }
 
-func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+func canUseExitNode(env hostinfo.EnvType) error {
+	switch dist := distro.Get(); dist {
+	case distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
+		distro.QNAP,
+		distro.Unraid:
+		return fmt.Errorf("Tailscale exit nodes cannot be used on %s.", dist)
+	}
+	if env == hostinfo.HomeAssistantAddOn {
+		return errors.New("Tailscale exit nodes cannot be used on Home Assistant.")
+	}
+	return nil
+}
 
+// aclsAllowAccess returns whether tailnet ACLs (as expressed in the provided filter rules)
+// permit any devices to access the local web client.
+// This does not currently check whether a specific device can connect, just any device.
+func (s *Server) aclsAllowAccess(rules []tailcfg.FilterRule) bool {
+	for _, rule := range rules {
+		for _, dp := range rule.DstPorts {
+			if dp.Ports.Contains(ListenPort) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type exitNode struct {
+	ID       tailcfg.StableNodeID
+	Name     string
+	Location *tailcfg.Location
+	Online   bool
+}
+
+func (s *Server) serveGetExitNodes(w http.ResponseWriter, r *http.Request) {
 	st, err := s.lc.Status(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	var exitNodes []*exitNode
+	for _, ps := range st.Peer {
+		if !ps.ExitNodeOption {
+			continue
+		}
+		exitNodes = append(exitNodes, &exitNode{
+			ID:       ps.ID,
+			Name:     ps.DNSName,
+			Location: ps.Location,
+			Online:   ps.Online,
+		})
+	}
+	writeJSON(w, exitNodes)
+}
 
-	var postData nodeUpdate
-	type mi map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&postData); err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+type postRoutesRequest struct {
+	SetExitNode       bool // when set, UseExitNode and AdvertiseExitNode values are applied
+	SetRoutes         bool // when set, AdvertiseRoutes value is applied
+	UseExitNode       tailcfg.StableNodeID
+	AdvertiseExitNode bool
+	AdvertiseRoutes   []string
+}
+
+func (s *Server) servePostRoutes(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var data postRoutesRequest
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	prefs, err := s.lc.GetPrefs(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	isCurrentlyExitNode := slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV4) || slices.Contains(prefs.AdvertiseRoutes, exitNodeRouteV6)
-
-	if postData.AdvertiseExitNode != isCurrentlyExitNode {
-		if postData.AdvertiseExitNode {
-			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_enable", 1)
-		} else {
-			s.lc.IncrementCounter(r.Context(), "web_client_advertise_exitnode_disable", 1)
+	var currNonExitRoutes []string
+	var currAdvertisingExitNode bool
+	for _, r := range prefs.AdvertiseRoutes {
+		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
+			currAdvertisingExitNode = true
+			continue
 		}
+		currNonExitRoutes = append(currNonExitRoutes, r.String())
+	}
+	// Set non-edited fields to their current values.
+	if data.SetExitNode {
+		data.AdvertiseRoutes = currNonExitRoutes
+	} else if data.SetRoutes {
+		data.AdvertiseExitNode = currAdvertisingExitNode
+		data.UseExitNode = prefs.ExitNodeID
 	}
 
-	routes, err := netutil.CalcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
+	// Calculate routes.
+	routesStr := strings.Join(data.AdvertiseRoutes, ",")
+	routes, err := netutil.CalcAdvertiseRoutes(routesStr, data.AdvertiseExitNode)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	mp := &ipn.MaskedPrefs{
+
+	hasExitNodeRoute := func(all []netip.Prefix) bool {
+		return slices.Contains(all, exitNodeRouteV4) ||
+			slices.Contains(all, exitNodeRouteV6)
+	}
+
+	if !data.UseExitNode.IsZero() && hasExitNodeRoute(routes) {
+		http.Error(w, "cannot use and advertise exit node at same time", http.StatusBadRequest)
+		return
+	}
+
+	// Make prefs update.
+	p := &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
-		WantRunningSet:     true,
+		ExitNodeIDSet:      true,
+		Prefs: ipn.Prefs{
+			ExitNodeID:      data.UseExitNode,
+			AdvertiseRoutes: routes,
+		},
 	}
-	mp.Prefs.WantRunning = true
-	mp.Prefs.AdvertiseRoutes = routes
-	s.logf("Doing edit: %v", mp.Pretty())
-
-	if _, err := s.lc.EditPrefs(r.Context(), mp); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+	if _, err := s.lc.EditPrefs(r.Context(), p); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	var reauth, logout bool
-	if postData.Reauthenticate {
-		reauth = true
-	}
-	if postData.ForceLogout {
-		logout = true
-	}
-	s.logf("tailscaleUp(reauth=%v, logout=%v) ...", reauth, logout)
-	url, err := s.tailscaleUp(r.Context(), st, postData)
-	s.logf("tailscaleUp = (URL %v, %v)", url != "", err)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(mi{"error": err.Error()})
-		return
-	}
-	if url != "" {
-		json.NewEncoder(w).Encode(mi{"url": url})
-	} else {
-		io.WriteString(w, "{}")
-	}
+	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {
-	if postData.ForceLogout {
-		if err := s.lc.Logout(ctx); err != nil {
-			return "", fmt.Errorf("Logout error: %w", err)
-		}
-		return "", nil
-	}
-
+// tailscaleUp starts the daemon with the provided options.
+// If reauthentication has been requested, an authURL is returned to complete device registration.
+func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tailscaleUpOptions) (authURL string, retErr error) {
 	origAuthURL := st.AuthURL
 	isRunning := st.BackendState == ipn.Running.String()
 
-	forceReauth := postData.Reauthenticate
-	if !forceReauth {
-		if origAuthURL != "" {
+	if !opt.Reauthenticate {
+		switch {
+		case origAuthURL != "":
 			return origAuthURL, nil
-		}
-		if isRunning {
+		case isRunning:
 			return "", nil
+		case st.BackendState == ipn.Stopped.String():
+			// stopped and not reauthenticating, so just start running
+			_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					WantRunning: true,
+				},
+				WantRunningSet: true,
+			})
+			return "", err
 		}
 	}
 
@@ -730,10 +939,18 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 
 	go func() {
 		if !isRunning {
-			s.lc.Start(ctx, ipn.Options{})
+			ipnOptions := ipn.Options{AuthKey: opt.AuthKey}
+			if opt.ControlURL != "" {
+				ipnOptions.UpdatePrefs = &ipn.Prefs{ControlURL: opt.ControlURL}
+			}
+			if err := s.lc.Start(ctx, ipnOptions); err != nil {
+				s.logf("start: %v", err)
+			}
 		}
-		if forceReauth {
-			s.lc.StartLoginInteractive(ctx)
+		if opt.Reauthenticate {
+			if err := s.lc.StartLoginInteractive(ctx); err != nil {
+				s.logf("startLogin: %v", err)
+			}
 		}
 	}()
 
@@ -741,6 +958,9 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 		n, err := watcher.Next()
 		if err != nil {
 			return "", err
+		}
+		if n.State != nil && *n.State == ipn.Running {
+			return "", nil
 		}
 		if n.ErrMessage != nil {
 			msg := *n.ErrMessage
@@ -750,6 +970,65 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 			return *url, nil
 		}
 	}
+}
+
+type tailscaleUpOptions struct {
+	// If true, force reauthentication of the client.
+	// Otherwise simply reconnect, the same as running `tailscale up`.
+	Reauthenticate bool
+
+	ControlURL string
+	AuthKey    string
+}
+
+// serveTailscaleUp serves requests to /api/up.
+// If the user needs to authenticate, an authURL is provided in the response.
+func (s *Server) serveTailscaleUp(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	st, err := s.lc.Status(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var opt tailscaleUpOptions
+	type mi map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&opt); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	s.logf("tailscaleUp(reauth=%v) ...", opt.Reauthenticate)
+	url, err := s.tailscaleUp(r.Context(), st, opt)
+	s.logf("tailscaleUp = (URL %v, %v)", url != "", err)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(mi{"error": err.Error()})
+		return
+	}
+	if url != "" {
+		json.NewEncoder(w).Encode(mi{"url": url})
+	} else {
+		io.WriteString(w, "{}")
+	}
+}
+
+// serveDeviceDetailsClick increments the web_client_device_details_click metric
+// by one.
+//
+// Metric logging from the frontend typically is proxied to the localapi. This event
+// has been special cased as access to the localapi is gated upon having a valid
+// session which is not always the case when we want to be logging this metric (e.g.,
+// when in readonly mode).
+//
+// Other metrics should not be logged in this way without a good reason.
+func (s *Server) serveDeviceDetailsClick(w http.ResponseWriter, r *http.Request) {
+	s.lc.IncrementCounter(r.Context(), "web_client_device_details_click", 1)
+
+	io.WriteString(w, "{}")
 }
 
 // proxyRequestToLocalAPI proxies the web API request to the localapi.
@@ -764,6 +1043,13 @@ func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) 
 	if r.URL.Path == path { // missing prefix
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
+	}
+	if r.Method == httpm.PATCH {
+		// enforce that PATCH requests are always application/json
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
 	}
 	if !slices.Contains(localapiAllowlist, path) {
 		http.Error(w, fmt.Sprintf("%s not allowed from localapi proxy", path), http.StatusForbidden)
@@ -805,6 +1091,7 @@ var localapiAllowlist = []string{
 	"/v0/update/check",
 	"/v0/update/install",
 	"/v0/update/progress",
+	"/v0/upload-client-metrics",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.

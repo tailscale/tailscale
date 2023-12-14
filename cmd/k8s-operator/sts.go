@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
@@ -46,15 +47,18 @@ const (
 	AnnotationHostname           = "tailscale.com/hostname"
 	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
+	//MagicDNS name of tailnet node.
+	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
 
 	// Annotations set by the operator on pods to trigger restarts when the
-	// hostname or IP changes.
-	podAnnotationLastSetClusterIP       = "tailscale.com/operator-last-set-cluster-ip"
-	podAnnotationLastSetHostname        = "tailscale.com/operator-last-set-hostname"
-	podAnnotationLastSetTailnetTargetIP = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
+	// hostname, IP or FQDN changes.
+	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
+	podAnnotationLastSetHostname          = "tailscale.com/operator-last-set-hostname"
+	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
+	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
 )
 
 type tailscaleSTSConfig struct {
@@ -69,8 +73,15 @@ type tailscaleSTSConfig struct {
 	// Tailscale IP of a Tailscale service we are setting up egress for
 	TailnetTargetIP string
 
+	// Tailscale FQDN of a Tailscale service we are setting up egress for
+	TailnetTargetFQDN string
+
 	Hostname string
 	Tags     []string // if empty, use defaultTags
+
+	// Routes is a list of CIDRs to pass via --advertise-routes flag
+	// Should only be set if this is config for subnetRouter
+	Routes string
 }
 
 type tailscaleSTSReconciler struct {
@@ -176,10 +187,39 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 	return true, nil
 }
 
+// maxStatefulSetNameLength is maximum length the StatefulSet name can
+// have to NOT result in a too long value for controller-revision-hash
+// label value (see https://github.com/kubernetes/kubernetes/issues/64023).
+// controller-revision-hash label value consists of StatefulSet's name + hyphen + revision hash.
+// Maximum label value length is 63 chars. Length of revision hash is 10 chars.
+// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+// https://github.com/kubernetes/kubernetes/blob/v1.28.4/pkg/controller/history/controller_history.go#L90-L104
+const maxStatefulSetNameLength = 63 - 10 - 1
+
+// statefulSetNameBase accepts name of parent resource and returns a string in
+// form ts-<portion-of-parentname>- that, when passed to Kubernetes name
+// generation will NOT result in a StatefulSet name longer than 52 chars.
+// This is done because of https://github.com/kubernetes/kubernetes/issues/64023.
+func statefulSetNameBase(parent string) string {
+
+	base := fmt.Sprintf("ts-%s-", parent)
+
+	// Calculate what length name GenerateName returns for this base.
+	generator := names.SimpleNameGenerator
+	generatedName := generator.GenerateName(base)
+
+	if excess := len(generatedName) - maxStatefulSetNameLength; excess > 0 {
+		base = base[:len(base)-excess-1] // take extra char off to make space for hyphen
+		base = base + "-"                // re-instate hyphen
+	}
+	return base
+}
+
 func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
+	nameBase := statefulSetNameBase(sts.ParentResourceName)
 	hsvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "ts-" + sts.ParentResourceName + "-",
+			GenerateName: nameBase,
 			Namespace:    a.operatorNamespace,
 			Labels:       sts.ChildResourceLabels,
 		},
@@ -352,7 +392,11 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_TAILNET_TARGET_IP",
 			Value: sts.TailnetTargetIP,
 		})
-
+	} else if sts.TailnetTargetFQDN != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_TAILNET_TARGET_FQDN",
+			Value: sts.TailnetTargetFQDN,
+		})
 	} else if sts.ServeConfig != nil {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_SERVE_CONFIG",
@@ -375,6 +419,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 				},
 			},
 		})
+	} else if len(sts.Routes) > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_ROUTES",
+			Value: sts.Routes,
+		})
+
 	}
 	if a.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
@@ -407,6 +457,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	}
 	if sts.TailnetTargetIP != "" {
 		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetIP] = sts.TailnetTargetIP
+	}
+	if sts.TailnetTargetFQDN != "" {
+		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetFQDN] = sts.TailnetTargetFQDN
 	}
 	ss.Spec.Template.Labels = map[string]string{
 		"app": sts.ParentResourceUID,

@@ -547,6 +547,98 @@ func TestNetmapForResponse(t *testing.T) {
 			t.Errorf("Node mismatch in 2nd netmap; got: %s", j)
 		}
 	})
+	t.Run("named_packetfilter", func(t *testing.T) {
+		pfA := []tailcfg.FilterRule{
+			{
+				SrcIPs: []string{"10.0.0.1"},
+				DstPorts: []tailcfg.NetPortRange{
+					{IP: "10.2.3.4", Ports: tailcfg.PortRange{First: 22, Last: 22}},
+				},
+			},
+		}
+		pfB := []tailcfg.FilterRule{
+			{
+				SrcIPs: []string{"10.0.0.2"},
+				DstPorts: []tailcfg.NetPortRange{
+					{IP: "10.2.3.4", Ports: tailcfg.PortRange{First: 22, Last: 22}},
+				},
+			},
+		}
+		ms := newTestMapSession(t, nil)
+
+		// Mix of old & new style (PacketFilter and PacketFilters).
+		nm1 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:         new(tailcfg.Node),
+			PacketFilter: pfA,
+			PacketFilters: map[string][]tailcfg.FilterRule{
+				"pf-b": pfB,
+			},
+		})
+		if got, want := len(nm1.PacketFilter), 2; got != want {
+			t.Fatalf("PacketFilter length = %v; want %v", got, want)
+		}
+		if got, want := first(nm1.PacketFilter[0].Srcs).String(), "10.0.0.1/32"; got != want {
+			t.Fatalf("PacketFilter[0].Srcs = %v; want %v", got, want)
+		}
+		if got, want := first(nm1.PacketFilter[1].Srcs).String(), "10.0.0.2/32"; got != want {
+			t.Fatalf("PacketFilter[0].Srcs = %v; want %v", got, want)
+		}
+
+		// No-op change. Remember the old stuff.
+		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:          new(tailcfg.Node),
+			PacketFilter:  nil,
+			PacketFilters: nil,
+		})
+		if got, want := len(nm2.PacketFilter), 2; got != want {
+			t.Fatalf("PacketFilter length = %v; want %v", got, want)
+		}
+		if !reflect.DeepEqual(nm1.PacketFilter, nm2.PacketFilter) {
+			t.Error("packet filters differ")
+		}
+
+		// New style only, with clear.
+		nm3 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:         new(tailcfg.Node),
+			PacketFilter: nil,
+			PacketFilters: map[string][]tailcfg.FilterRule{
+				"*":    nil,
+				"pf-b": pfB,
+			},
+		})
+		if got, want := len(nm3.PacketFilter), 1; got != want {
+			t.Fatalf("PacketFilter length = %v; want %v", got, want)
+		}
+		if got, want := first(nm3.PacketFilter[0].Srcs).String(), "10.0.0.2/32"; got != want {
+			t.Fatalf("PacketFilter[0].Srcs = %v; want %v", got, want)
+		}
+
+		// New style only, adding pfA back, not as the legacy "base" layer:.
+		nm4 := ms.netmapForResponse(&tailcfg.MapResponse{
+			Node:         new(tailcfg.Node),
+			PacketFilter: nil,
+			PacketFilters: map[string][]tailcfg.FilterRule{
+				"pf-a": pfA,
+			},
+		})
+		if got, want := len(nm4.PacketFilter), 2; got != want {
+			t.Fatalf("PacketFilter length = %v; want %v", got, want)
+		}
+		if got, want := first(nm4.PacketFilter[0].Srcs).String(), "10.0.0.1/32"; got != want {
+			t.Fatalf("PacketFilter[0].Srcs = %v; want %v", got, want)
+		}
+		if got, want := first(nm4.PacketFilter[1].Srcs).String(), "10.0.0.2/32"; got != want {
+			t.Fatalf("PacketFilter[0].Srcs = %v; want %v", got, want)
+		}
+	})
+}
+
+func first[T any](s []T) T {
+	if len(s) == 0 {
+		var zero T
+		return zero
+	}
+	return s[0]
 }
 
 func TestDeltaDERPMap(t *testing.T) {

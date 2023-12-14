@@ -56,6 +56,14 @@ type Knobs struct {
 	// SilentDisco is whether the node should suppress disco heartbeats to its
 	// peers.
 	SilentDisco atomic.Bool
+
+	// LinuxForceIPTables is whether the node should use iptables for Linux
+	// netfiltering, unless overridden by the user.
+	LinuxForceIPTables atomic.Bool
+
+	// LinuxForceNfTables is whether the node should use nftables for Linux
+	// netfiltering, unless overridden by the user.
+	LinuxForceNfTables atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -79,6 +87,8 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		peerMTUEnable                 = has(tailcfg.NodeAttrPeerMTUEnable)
 		dnsForwarderDisableTCPRetries = has(tailcfg.NodeAttrDNSForwarderDisableTCPRetries)
 		silentDisco                   = has(tailcfg.NodeAttrSilentDisco)
+		forceIPTables                 = has(tailcfg.NodeAttrLinuxMustUseIPTables)
+		forceNfTables                 = has(tailcfg.NodeAttrLinuxMustUseNfTables)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -97,6 +107,8 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.PeerMTUEnable.Store(peerMTUEnable)
 	k.DisableDNSForwarderTCPRetries.Store(dnsForwarderDisableTCPRetries)
 	k.SilentDisco.Store(silentDisco)
+	k.LinuxForceIPTables.Store(forceIPTables)
+	k.LinuxForceNfTables.Store(forceNfTables)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -116,5 +128,7 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"PeerMTUEnable":                 k.PeerMTUEnable.Load(),
 		"DisableDNSForwarderTCPRetries": k.DisableDNSForwarderTCPRetries.Load(),
 		"SilentDisco":                   k.SilentDisco.Load(),
+		"LinuxForceIPTables":            k.LinuxForceIPTables.Load(),
+		"LinuxForceNfTables":            k.LinuxForceNfTables.Load(),
 	}
 }

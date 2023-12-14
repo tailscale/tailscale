@@ -1,16 +1,23 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+import cx from "classnames"
 import React from "react"
-import { PrefsUpdate } from "src/hooks/node-data"
+import { useAPI } from "src/api"
+import * as Control from "src/components/control-components"
+import { NodeData } from "src/types"
+import Card from "src/ui/card"
 import Toggle from "src/ui/toggle"
 
 export default function SSHView({
   readonly,
-  runningSSH,
-  updatePrefs,
+  node,
 }: {
   readonly: boolean
-  runningSSH: boolean
-  updatePrefs: (p: PrefsUpdate) => Promise<void>
+  node: NodeData
 }) {
+  const api = useAPI()
+
   return (
     <>
       <h1 className="mb-1">Tailscale SSH server</h1>
@@ -19,33 +26,56 @@ export default function SSHView({
         your tailnet to SSH into it.{" "}
         <a
           href="https://tailscale.com/kb/1193/tailscale-ssh/"
-          className="text-indigo-700"
+          className="text-blue-700"
           target="_blank"
+          rel="noreferrer"
         >
           Learn more &rarr;
         </a>
       </p>
-      <div className="-mx-5 px-4 py-3 bg-white rounded-lg border border-gray-200 flex gap-2.5 mb-3">
-        <Toggle
-          checked={runningSSH}
-          onChange={() => updatePrefs({ RunSSHSet: true, RunSSH: !runningSSH })}
-          disabled={readonly}
-        />
-        <div className="text-black text-sm font-medium leading-tight">
-          Run Tailscale SSH server
-        </div>
-      </div>
-      <p className="text-neutral-500 text-sm leading-tight">
-        Remember to make sure that the{" "}
-        <a
-          href="https://login.tailscale.com/admin/acls/"
-          className="text-indigo-700"
-          target="_blank"
+      <Card noPadding className="-mx-5 p-5">
+        {!readonly ? (
+          <label className="flex gap-3 items-center">
+            <Toggle
+              checked={node.RunningSSHServer}
+              onChange={() =>
+                api({
+                  action: "update-prefs",
+                  data: {
+                    RunSSHSet: true,
+                    RunSSH: !node.RunningSSHServer,
+                  },
+                })
+              }
+            />
+            <div className="text-black text-sm font-medium leading-tight">
+              Run Tailscale SSH server
+            </div>
+          </label>
+        ) : (
+          <div className="inline-flex items-center gap-3">
+            <span
+              className={cx("w-2 h-2 rounded-full", {
+                "bg-green-300": node.RunningSSHServer,
+                "bg-gray-300": !node.RunningSSHServer,
+              })}
+            />
+            {node.RunningSSHServer ? "Running" : "Not running"}
+          </div>
+        )}
+      </Card>
+      {node.RunningSSHServer && (
+        <Control.AdminContainer
+          className="text-gray-500 text-sm leading-tight mt-3"
+          node={node}
         >
-          tailnet policy file
-        </a>{" "}
-        allows other devices to SSH into this device.
-      </p>
+          Remember to make sure that the{" "}
+          <Control.AdminLink node={node} path="/acls">
+            tailnet policy file
+          </Control.AdminLink>{" "}
+          allows other devices to SSH into this device.
+        </Control.AdminContainer>
+      )}
     </>
   )
 }

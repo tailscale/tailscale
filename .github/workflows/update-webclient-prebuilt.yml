@@ -18,6 +18,7 @@ jobs:
 
       - name: Run go get
         run: |
+          ./tool/go version # build gocross if needed using regular GOPROXY
           GOPROXY=direct ./tool/go get github.com/tailscale/web-client-prebuilt
           ./tool/go mod tidy
 

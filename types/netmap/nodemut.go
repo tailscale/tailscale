@@ -161,6 +161,7 @@ func mapResponseContainsNonPatchFields(res *tailcfg.MapResponse) bool {
 		res.Domain != "" ||
 		res.CollectServices != "" ||
 		res.PacketFilter != nil ||
+		res.PacketFilters != nil ||
 		res.UserProfiles != nil ||
 		res.Health != nil ||
 		res.SSHPolicy != nil ||

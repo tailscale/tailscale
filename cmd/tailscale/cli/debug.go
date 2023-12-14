@@ -130,6 +130,16 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "force a magicsock rebind",
 		},
 		{
+			Name:      "derp-set-homeless",
+			Exec:      localAPIAction("derp-set-homeless"),
+			ShortHelp: "enable DERP homeless mode (breaks reachablility)",
+		},
+		{
+			Name:      "derp-unset-homeless",
+			Exec:      localAPIAction("derp-unset-homeless"),
+			ShortHelp: "disable DERP homeless mode",
+		},
+		{
 			Name:      "break-tcp-conns",
 			Exec:      localAPIAction("break-tcp-conns"),
 			ShortHelp: "break any open TCP connections from the daemon",
@@ -179,6 +189,17 @@ var debugCmd = &ffcli.Command{
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
 				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
+				fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
+				return fs
+			})(),
+		},
+		{
+			Name:      "netmap",
+			Exec:      runNetmap,
+			ShortHelp: "print the current network map",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("netmap")
+				fs.BoolVar(&netmapArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 				return fs
 			})(),
 		},
@@ -406,6 +427,7 @@ var watchIPNArgs struct {
 	netmap         bool
 	initial        bool
 	showPrivateKey bool
+	count          int
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
@@ -421,8 +443,8 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		return err
 	}
 	defer watcher.Close()
-	printf("Connected.\n")
-	for {
+	fmt.Fprintf(os.Stderr, "Connected.\n")
+	for seen := 0; watchIPNArgs.count == 0 || seen < watchIPNArgs.count; seen++ {
 		n, err := watcher.Next()
 		if err != nil {
 			return err
@@ -431,8 +453,36 @@ func runWatchIPN(ctx context.Context, args []string) error {
 			n.NetMap = nil
 		}
 		j, _ := json.MarshalIndent(n, "", "\t")
-		printf("%s\n", j)
+		fmt.Printf("%s\n", j)
 	}
+	return nil
+}
+
+var netmapArgs struct {
+	showPrivateKey bool
+}
+
+func runNetmap(ctx context.Context, args []string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var mask ipn.NotifyWatchOpt = ipn.NotifyInitialNetMap
+	if !netmapArgs.showPrivateKey {
+		mask |= ipn.NotifyNoPrivateKeys
+	}
+	watcher, err := localClient.WatchIPNBus(ctx, mask)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+
+	n, err := watcher.Next()
+	if err != nil {
+		return err
+	}
+	j, _ := json.MarshalIndent(n.NetMap, "", "\t")
+	fmt.Printf("%s\n", j)
+	return nil
 }
 
 func runDERPMap(ctx context.Context, args []string) error {

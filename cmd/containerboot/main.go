@@ -13,11 +13,13 @@
 //
 //   - TS_AUTHKEY: the authkey to use for login.
 //   - TS_HOSTNAME: the hostname to request for the node.
-//   - TS_ROUTES: subnet routes to advertise.
+//   - TS_ROUTES: subnet routes to advertise. To accept routes, use TS_EXTRA_ARGS to pass in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
-//     destination.
+//     destination defined by an IP.
+//   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
+//     destination defined by a MagicDNS name.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
 //   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
 //   - TS_USERSPACE: run with userspace networking (the default)
@@ -69,6 +71,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -77,6 +80,7 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
@@ -87,7 +91,7 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 	if defaultBool("TS_TEST_FAKE_NETFILTER", false) {
 		return linuxfw.NewFakeIPTablesRunner(), nil
 	}
-	return linuxfw.New(logf)
+	return linuxfw.New(logf, "")
 }
 
 func main() {
@@ -95,24 +99,25 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	cfg := &settings{
-		AuthKey:         defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:        defaultEnv("TS_HOSTNAME", ""),
-		Routes:          defaultEnv("TS_ROUTES", ""),
-		ServeConfigPath: defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
-		TailnetTargetIP: defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:       defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:    os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:   defaultBool("TS_USERSPACE", true),
-		StateDir:        defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:       defaultBool("TS_ACCEPT_DNS", false),
-		KubeSecret:      defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:  defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
-		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		AuthKey:           defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:          defaultEnv("TS_HOSTNAME", ""),
+		Routes:            defaultEnv("TS_ROUTES", ""),
+		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
+		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
+		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:   defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:         defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:      os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:     defaultBool("TS_USERSPACE", true),
+		StateDir:          defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:         defaultBool("TS_ACCEPT_DNS", false),
+		KubeSecret:        defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		SOCKSProxyAddr:    defaultEnv("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:     defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:            defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:          defaultBool("TS_AUTH_ONCE", false),
+		Root:              defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
@@ -122,13 +127,19 @@ func main() {
 	if cfg.TailnetTargetIP != "" && cfg.UserspaceMode {
 		log.Fatal("TS_TAILNET_TARGET_IP is not supported with TS_USERSPACE")
 	}
+	if cfg.TailnetTargetFQDN != "" && cfg.UserspaceMode {
+		log.Fatal("TS_TAILNET_TARGET_FQDN is not supported with TS_USERSPACE")
+	}
+	if cfg.TailnetTargetFQDN != "" && cfg.TailnetTargetIP != "" {
+		log.Fatal("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
+	}
 
 	if !cfg.UserspaceMode {
 		if err := ensureTunFile(cfg.Root); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
-		if cfg.ProxyTo != "" || cfg.Routes != "" || cfg.TailnetTargetIP != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.TailnetTargetIP, cfg.Routes); err != nil {
+		if cfg.ProxyTo != "" || cfg.Routes != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
+			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -181,14 +192,38 @@ func main() {
 		}
 	}
 
-	client, daemonPid, err := startTailscaled(bootCtx, cfg)
+	client, daemonProcess, err := startTailscaled(bootCtx, cfg)
 	if err != nil {
 		log.Fatalf("failed to bring up tailscale: %v", err)
 	}
+	killTailscaled := func() {
+		if err := daemonProcess.Signal(unix.SIGTERM); err != nil {
+			log.Fatalf("error shutting tailscaled down: %v", err)
+		}
+	}
+	defer killTailscaled()
 
 	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
 	if err != nil {
 		log.Fatalf("failed to watch tailscaled for updates: %v", err)
+	}
+
+	// Now that we've started tailscaled, we can symlink the socket to the
+	// default location if needed.
+	const defaultTailscaledSocketPath = "/var/run/tailscale/tailscaled.sock"
+	if cfg.Socket != "" && cfg.Socket != defaultTailscaledSocketPath {
+		// If we were given a socket path, symlink it to the default location so
+		// that the CLI can find it without any extra flags.
+		// See #6849.
+
+		dir := filepath.Dir(defaultTailscaledSocketPath)
+		err := os.MkdirAll(dir, 0700)
+		if err == nil {
+			err = syscall.Symlink(cfg.Socket, defaultTailscaledSocketPath)
+		}
+		if err != nil {
+			log.Printf("[warning] failed to symlink socket: %v\n\tTo interact with the Tailscale CLI please use `tailscale --socket=%q`", err, cfg.Socket)
+		}
 	}
 
 	// Because we're still shelling out to `tailscale up` to get access to its
@@ -252,7 +287,7 @@ authLoop:
 
 	w.Close()
 
-	ctx, cancel := context.WithCancel(context.Background()) // no deadline now that we're in steady state
+	ctx, cancel := contextWithExitSignalWatch()
 	defer cancel()
 
 	if cfg.AuthOnce {
@@ -287,11 +322,13 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != ""
+		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != ""
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
+
+		currentEgressIPs deephash.Sum
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
@@ -306,84 +343,151 @@ authLoop:
 			log.Fatalf("error creating new netfilter runner: %v", err)
 		}
 	}
+	notifyChan := make(chan ipn.Notify)
+	errChan := make(chan error)
+	go func() {
+		for {
+			n, err := w.Next()
+			if err != nil {
+				errChan <- err
+				break
+			} else {
+				notifyChan <- n
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+runLoop:
 	for {
-		n, err := w.Next()
-		if err != nil {
+		select {
+		case <-ctx.Done():
+			// Although killTailscaled() is deferred earlier, if we
+			// have started the reaper defined below, we need to
+			// kill tailscaled and let reaper clean up child
+			// processes.
+			killTailscaled()
+			break runLoop
+		case err := <-errChan:
 			log.Fatalf("failed to read from tailscaled: %v", err)
-		}
-
-		if n.State != nil && *n.State != ipn.Running {
-			// Something's gone wrong and we've left the authenticated state.
-			// Our container image never recovered gracefully from this, and the
-			// control flow required to make it work now is hard. So, just crash
-			// the container and rely on the container runtime to restart us,
-			// whereupon we'll go through initial auth again.
-			log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
-		}
-		if n.NetMap != nil {
-			addrs := n.NetMap.SelfNode.Addresses().AsSlice()
-			newCurrentIPs := deephash.Hash(&addrs)
-			ipsHaveChanged := newCurrentIPs != currentIPs
-			if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
-				log.Printf("Installing proxy rules")
-				if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
-					log.Fatalf("installing ingress proxy rules: %v", err)
-				}
+		case n := <-notifyChan:
+			if n.State != nil && *n.State != ipn.Running {
+				// Something's gone wrong and we've left the authenticated state.
+				// Our container image never recovered gracefully from this, and the
+				// control flow required to make it work now is hard. So, just crash
+				// the container and rely on the container runtime to restart us,
+				// whereupon we'll go through initial auth again.
+				log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 			}
-			if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) > 0 {
-				cd := n.NetMap.DNS.CertDomains[0]
-				prev := certDomain.Swap(ptr.To(cd))
-				if prev == nil || *prev != cd {
-					select {
-					case certDomainChanged <- true:
-					default:
+			if n.NetMap != nil {
+				addrs := n.NetMap.SelfNode.Addresses().AsSlice()
+				newCurrentIPs := deephash.Hash(&addrs)
+				ipsHaveChanged := newCurrentIPs != currentIPs
+
+				if cfg.TailnetTargetFQDN != "" {
+					var (
+						egressAddrs          []netip.Prefix
+						newCurentEgressIPs   deephash.Sum
+						egressIPsHaveChanged bool
+						node                 tailcfg.NodeView
+						nodeFound            bool
+					)
+					for _, n := range n.NetMap.Peers {
+						if strings.EqualFold(n.Name(), cfg.TailnetTargetFQDN) {
+							node = n
+							nodeFound = true
+							break
+						}
+					}
+					if !nodeFound {
+						log.Printf("Tailscale node %q not found; it either does not exist, or not reachable because of ACLs", cfg.TailnetTargetFQDN)
+						break
+					}
+					egressAddrs = node.Addresses().AsSlice()
+					newCurentEgressIPs = deephash.Hash(&egressAddrs)
+					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
+					if egressIPsHaveChanged && len(egressAddrs) > 0 {
+						for _, egressAddr := range egressAddrs {
+							ea := egressAddr.Addr()
+							// TODO (irbekrm): make it work for IPv6 too.
+							if ea.Is6() {
+								log.Println("Not installing egress forwarding rules for IPv6 as this is currently not supported")
+								continue
+							}
+							log.Printf("Installing forwarding rules for destination %v", ea.String())
+							if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
+								log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+							}
+						}
+					}
+					currentEgressIPs = newCurentEgressIPs
+				}
+				if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
+					log.Printf("Installing proxy rules")
+					if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
+						log.Fatalf("installing ingress proxy rules: %v", err)
+					}
+				}
+				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) > 0 {
+					cd := n.NetMap.DNS.CertDomains[0]
+					prev := certDomain.Swap(ptr.To(cd))
+					if prev == nil || *prev != cd {
+						select {
+						case certDomainChanged <- true:
+						default:
+						}
+					}
+				}
+				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) > 0 {
+					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
+					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
+						log.Fatalf("installing egress proxy rules: %v", err)
+					}
+				}
+				currentIPs = newCurrentIPs
+
+				deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
+				if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
+					if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+						log.Fatalf("storing device ID in kube secret: %v", err)
 					}
 				}
 			}
-			if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) > 0 {
-				if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
-					log.Fatalf("installing egress proxy rules: %v", err)
-				}
-			}
-			currentIPs = newCurrentIPs
+			if !startupTasksDone {
+				if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
+					// This log message is used in tests to detect when all
+					// post-auth configuration is done.
+					log.Println("Startup complete, waiting for shutdown signal")
+					startupTasksDone = true
 
-			deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
-			if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
-				if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
-					log.Fatalf("storing device ID in kube secret: %v", err)
-				}
-			}
-		}
-		if !startupTasksDone {
-			if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
-				// This log message is used in tests to detect when all
-				// post-auth configuration is done.
-				log.Println("Startup complete, waiting for shutdown signal")
-				startupTasksDone = true
+					// Reap all processes, since we are PID1 and need to collect zombies. We can
+					// only start doing this once we've stopped shelling out to things
+					// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
+					// and wedge bringup.
+					reaper := func() {
+						defer wg.Done()
+						for {
+							var status unix.WaitStatus
+							pid, err := unix.Wait4(-1, &status, 0, nil)
+							if errors.Is(err, unix.EINTR) {
+								continue
+							}
+							if err != nil {
+								log.Fatalf("Waiting for exited processes: %v", err)
+							}
+							if pid == daemonProcess.Pid {
+								log.Printf("Tailscaled exited")
+								os.Exit(0)
+							}
+						}
 
-				// Reap all processes, since we are PID1 and need to collect zombies. We can
-				// only start doing this once we've stopped shelling out to things
-				// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
-				// and wedge bringup.
-				go func() {
-					for {
-						var status unix.WaitStatus
-						pid, err := unix.Wait4(-1, &status, 0, nil)
-						if errors.Is(err, unix.EINTR) {
-							continue
-						}
-						if err != nil {
-							log.Fatalf("Waiting for exited processes: %v", err)
-						}
-						if pid == daemonPid {
-							log.Printf("Tailscaled exited")
-							os.Exit(0)
-						}
 					}
-				}()
+					wg.Add(1)
+					go reaper()
+				}
 			}
 		}
 	}
+	wg.Wait()
 }
 
 // watchServeConfigChanges watches path for changes, and when it sees one, reads
@@ -460,10 +564,8 @@ func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
 	return &sc, nil
 }
 
-func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, int, error) {
+func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, *os.Process, error) {
 	args := tailscaledArgs(cfg)
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, unix.SIGTERM, unix.SIGINT)
 	// tailscaled runs without context, since it needs to persist
 	// beyond the startup timeout in ctx.
 	cmd := exec.Command("tailscaled", args...)
@@ -474,13 +576,8 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 	}
 	log.Printf("Starting tailscaled")
 	if err := cmd.Start(); err != nil {
-		return nil, 0, fmt.Errorf("starting tailscaled failed: %v", err)
+		return nil, nil, fmt.Errorf("starting tailscaled failed: %v", err)
 	}
-	go func() {
-		<-sigCh
-		log.Printf("Received SIGTERM from container runtime, shutting down tailscaled")
-		cmd.Process.Signal(unix.SIGTERM)
-	}()
 
 	// Wait for the socket file to appear, otherwise API ops will racily fail.
 	log.Printf("Waiting for tailscaled socket")
@@ -503,7 +600,7 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 		UseSocketOnly: true,
 	}
 
-	return tsClient, cmd.Process.Pid, nil
+	return tsClient, cmd.Process, nil
 }
 
 // tailscaledArgs uses cfg to construct the argv for tailscaled.
@@ -617,7 +714,7 @@ func ensureTunFile(root string) error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, routes string) error {
+func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTargetFQDN, routes string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
@@ -642,6 +739,11 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, routes string
 		} else {
 			v6Forwarding = true
 		}
+	}
+	// Currently we only proxy traffic to the IPv4 address of the tailnet
+	// target.
+	if tailnetTargetFQDN != "" {
+		v4Forwarding = true
 	}
 	if routes != "" {
 		for _, route := range strings.Split(routes, ",") {
@@ -754,9 +856,13 @@ type settings struct {
 	// is done. This is typically a locally reachable IP.
 	ProxyTo string
 	// TailnetTargetIP is the destination IP to which all incoming
-	// non-Tailscale traffic should be proxied. If empty, no
-	// proxying is done. This is typically a Tailscale IP.
-	TailnetTargetIP    string
+	// non-Tailscale traffic should be proxied. This is typically a
+	// Tailscale IP.
+	TailnetTargetIP string
+	// TailnetTargetFQDN is an MagicDNS name to which all incoming
+	// non-Tailscale traffic should be proxied. This must be a full Tailnet
+	// node FQDN.
+	TailnetTargetFQDN  string
 	ServeConfigPath    string
 	DaemonExtraArgs    string
 	ExtraArgs          string
@@ -800,4 +906,26 @@ func defaultBool(name string, defVal bool) bool {
 		return defVal
 	}
 	return ret
+}
+
+// contextWithExitSignalWatch watches for SIGTERM/SIGINT signals. It returns a
+// context that gets cancelled when a signal is received and a cancel function
+// that can be called to free the resources when the watch should be stopped.
+func contextWithExitSignalWatch() (context.Context, func()) {
+	closeChan := make(chan string)
+	ctx, cancel := context.WithCancel(context.Background())
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-signalChan:
+			cancel()
+		case <-closeChan:
+			return
+		}
+	}()
+	f := func() {
+		closeChan <- "goodbye"
+	}
+	return ctx, f
 }

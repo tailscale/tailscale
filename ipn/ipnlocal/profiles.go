@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"net/netip"
 	"runtime"
 	"slices"
 	"strings"
@@ -19,7 +18,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpx"
-	"tailscale.com/util/winutil"
 )
 
 var errAlreadyMigrated = errors.New("profile migration already completed")
@@ -207,11 +205,10 @@ func init() {
 // It also saves the prefs to the StateStore. It stores a copy of the
 // provided prefs, which may be accessed via CurrentPrefs.
 //
-// If tailnetMagicDNSName is provided non-empty, it will be used to
-// enrich the profile with the tailnet's MagicDNS name. The MagicDNS
-// name cannot be pulled from prefsIn directly because it is not saved
-// on ipn.Prefs (since it's not a field that is configurable by nodes).
-func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, tailnetMagicDNSName string) error {
+// NetworkProfile stores additional information about the tailnet the user
+// is logged into so that we can keep track of things like their domain name
+// across user switches to disambiguate the same account but a different tailnet.
+func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile) error {
 	prefs := prefsIn.AsStruct()
 	newPersist := prefs.Persist
 	if newPersist == nil || newPersist.NodeID == "" || newPersist.UserProfile.LoginName == "" {
@@ -255,9 +252,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, tailnetMagicDNSName st
 	cp.ControlURL = prefs.ControlURL
 	cp.UserProfile = newPersist.UserProfile
 	cp.NodeID = newPersist.NodeID
-	if tailnetMagicDNSName != "" {
-		cp.TailnetMagicDNSName = tailnetMagicDNSName
-	}
+	cp.NetworkProfile = np
 	pm.knownProfiles[cp.ID] = cp
 	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {
@@ -446,36 +441,17 @@ func (pm *profileManager) NewProfile() {
 	pm.currentProfile = &ipn.LoginProfile{}
 }
 
-// defaultPrefs is the default prefs for a new profile.
+// defaultPrefs is the default prefs for a new profile. This initializes before
+// even this package's init() so do not rely on other parts of the system being
+// fully initialized here (for example, syspolicy will not be available on
+// Apple platforms).
 var defaultPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
 	prefs.LoggedOut = true
 	prefs.WantRunning = false
 
-	controlURL, _ := winutil.GetPolicyString("LoginURL")
-	prefs.ControlURL = controlURL
-
-	prefs.ExitNodeIP = resolveExitNodeIP(netip.Addr{})
-
-	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
-	// backend), so this has to convert between the two conventions.
-	shieldsUp, _ := winutil.GetPolicyString("AllowIncomingConnections")
-	prefs.ShieldsUp = shieldsUp == "never"
-	forceDaemon, _ := winutil.GetPolicyString("UnattendedMode")
-	prefs.ForceDaemon = forceDaemon == "always"
-
 	return prefs.View()
 }()
-
-func resolveExitNodeIP(defIP netip.Addr) (ret netip.Addr) {
-	ret = defIP
-	if exitNode, _ := winutil.GetPolicyString("ExitNodeIP"); exitNode != "" {
-		if ip, err := netip.ParseAddr(exitNode); err == nil {
-			ret = ip
-		}
-	}
-	return ret
-}
 
 // Store returns the StateStore used by the ProfileManager.
 func (pm *profileManager) Store() ipn.StateStore {
@@ -601,7 +577,7 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 		return fmt.Errorf("load legacy prefs: %w", err)
 	}
 	pm.dlogf("loaded legacy preferences; sentinel=%q", sentinel)
-	if err := pm.SetPrefs(prefs, ""); err != nil {
+	if err := pm.SetPrefs(prefs, ipn.NetworkProfile{}); err != nil {
 		metricMigrationError.Add(1)
 		return fmt.Errorf("migrating _daemon profile: %w", err)
 	}
@@ -609,6 +585,12 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 	pm.dlogf("completed legacy preferences migration with sentinel=%q", sentinel)
 	metricMigrationSuccess.Add(1)
 	return nil
+}
+
+func (pm *profileManager) requiresBackfill() bool {
+	return pm != nil &&
+		pm.currentProfile != nil &&
+		pm.currentProfile.NetworkProfile.RequiresBackfill()
 }
 
 var (

@@ -1,0 +1,102 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN>
+
+<PLUGIN
+  name="tailscale"
+  author="Derek Kaser"
+  version="2023.11.01"
+  pluginURL="https://raw.githubusercontent.com/dkaser/unraid-tailscale/main/plugin/tailscale.plg"
+  launch="Settings/Tailscale"
+  support="https://forums.unraid.net/topic/136889-plugin-tailscale/"
+>
+
+<CHANGES>
+<![CDATA[
+###2023.10.29###
+- Update Tailscale to 1.50.1
+- Fix nginx hang when Tailscale restarts
+
+###2023.09.26###
+- Update Tailscale to 1.50.0
+- New Tailscale web interface
+
+###2023.09.14a###
+- Update Tailscale to 1.48.2
+
+###2023.08.22###
+- Update Tailscale to 1.48.1
+
+For older releases, see https://github.com/dkaser/unraid-tailscale/releases
+]]>
+</CHANGES>
+
+<FILE Name="/boot/config/plugins/tailscale/unraid-tailscale-utils-1.4.1-noarch-1.txz">
+<URL>https://github.com/dkaser/unraid-tailscale-utils/releases/download/1.4.1/unraid-tailscale-utils-1.4.1-noarch-1.txz</URL>
+<MD5>7095ab4b88b34d8f5da6483865883267</MD5>
+</FILE>
+
+<FILE Name="/boot/config/plugins/tailscale/unraid-plugin-diagnostics-1.2.2-noarch-1.txz">
+<URL>https://github.com/dkaser/unraid-plugin-diagnostics/releases/download/1.2.2/unraid-plugin-diagnostics-1.2.2-noarch-1.txz</URL>
+<MD5>9d358575499305889962d83ebd90c20c</MD5>
+</FILE>
+
+<!--
+The 'install' script.
+-->
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+if [ -d "/usr/local/emhttp/plugins/tailscale" ]; then
+    rm -rf /usr/local/emhttp/plugins/tailscale
+fi
+
+upgradepkg --install-new /boot/config/plugins/tailscale/unraid-plugin-diagnostics-1.2.2-noarch-1.txz
+upgradepkg --install-new --reinstall /boot/config/plugins/tailscale/unraid-tailscale-utils-1.4.1-noarch-1.txz
+
+mkdir -p /usr/local/emhttp/plugins/tailscale/bin
+
+ln -s /usr/local/emhttp/plugins/tailscale/bin/tailscale /usr/local/sbin/tailscale
+ln -s /usr/local/emhttp/plugins/tailscale/bin/tailscaled /usr/local/sbin/tailscaled
+
+mkdir -p /var/local/emhttp/plugins/tailscale
+echo "VERSION=2023.11.01" >> /var/local/emhttp/plugins/tailscale/tailscale.ini
+
+# start tailscaled
+/usr/local/emhttp/plugins/tailscale/restart.sh
+
+# cleanup old versions
+rm -f /boot/config/plugins/tailscale/tailscale-utils-*.txz
+rm -f $(ls /boot/config/plugins/tailscale/unraid-tailscale-utils-*.txz 2>/dev/null | grep -v '1.4.1')
+rm -f $(ls /boot/config/plugins/tailscale/unraid-plugin-diagnostics-*.txz 2>/dev/null | grep -v '1.2.2')
+
+echo ""
+echo "----------------------------------------------------"
+echo " tailscale has been installed."
+echo " Version: 2023.11.01"
+echo "----------------------------------------------------"
+echo ""
+]]>
+</INLINE>
+</FILE>
+
+<!--
+The 'remove' script.
+-->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+<![CDATA[
+# Stop service
+/etc/rc.d/rc.tailscale stop 2>/dev/null
+
+rm /usr/local/sbin/tailscale
+rm /usr/local/sbin/tailscaled
+
+removepkg unraid-tailscale-utils-1.4.1
+
+rm -rf /usr/local/emhttp/plugins/tailscale
+rm -rf /boot/config/plugins/tailscale
+]]>
+</INLINE>
+</FILE>
+
+</PLUGIN>

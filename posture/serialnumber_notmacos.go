@@ -99,13 +99,7 @@ func GetSerialNumbers(logf logger.Logf) ([]string, error) {
 		}
 	}
 
-	// if there were no serial numbers, check if any errors were
-	// returned and combine them.
-	if len(serials) == 0 && err != nil {
-		return nil, err
-	}
-
-	logf("got serial numbers %v (errors: %s)", serials, err)
+	logf("got serial numbers %v", serials)
 
 	return serials, nil
 }

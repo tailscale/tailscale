@@ -4,6 +4,7 @@
 package web
 
 import (
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -13,9 +14,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	prebuilt "github.com/tailscale/web-client-prebuilt"
 )
+
+var start = time.Now()
 
 func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	if devMode {
@@ -25,17 +29,46 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	}
 
 	fsys := prebuilt.FS()
-	fileserver := http.FileServer(http.FS(fsys))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := fs.Stat(fsys, strings.TrimPrefix(r.URL.Path, "/"))
-		if os.IsNotExist(err) {
-			// rewrite request to just fetch /index.html and let
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		f, err := openPrecompressedFile(w, r, path, fsys)
+		if err != nil {
+			// Rewrite request to just fetch index.html and let
 			// the frontend router handle it.
 			r = r.Clone(r.Context())
-			r.URL.Path = "/"
+			path = "index.html"
+			f, err = openPrecompressedFile(w, r, path, fsys)
 		}
-		fileserver.ServeHTTP(w, r)
+		if f == nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+
+		// fs.File does not claim to implement Seeker, but in practice it does.
+		fSeeker, ok := f.(io.ReadSeeker)
+		if !ok {
+			http.Error(w, "Not seekable", http.StatusInternalServerError)
+			return
+		}
+
+		if strings.HasPrefix(path, "assets/") {
+			// Aggressively cache static assets, since we cache-bust our assets with
+			// hashed filenames.
+			w.Header().Set("Cache-Control", "public, max-age=31535996")
+			w.Header().Set("Vary", "Accept-Encoding")
+		}
+
+		http.ServeContent(w, r, path, start, fSeeker)
 	}), nil
+}
+
+func openPrecompressedFile(w http.ResponseWriter, r *http.Request, path string, fs fs.FS) (fs.File, error) {
+	if f, err := fs.Open(path + ".gz"); err == nil {
+		w.Header().Set("Content-Encoding", "gzip")
+		return f, nil
+	}
+	return fs.Open(path) // fallback
 }
 
 // startDevServer starts the JS dev server that does on-demand rebuilding

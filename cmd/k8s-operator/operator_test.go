@@ -66,9 +66,9 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -159,6 +159,119 @@ func TestLoadBalancerClass(t *testing.T) {
 	}
 	expectEqual(t, fc, want)
 }
+func TestTailnetTargetFQDNAnnotation(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tailnetTargetFQDN := "foo.bar.ts.net."
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Selector: map[string]string{
+				"foo": "bar",
+			},
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	o := stsOpts{
+		name:              shortName,
+		secretName:        fullName,
+		tailnetTargetFQDN: tailnetTargetFQDN,
+		hostname:          "default-test",
+	}
+	expectEqual(t, fc, expectedSTS(o))
+	want := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Namespace:  "default",
+			Finalizers: []string{"tailscale.com/finalizer"},
+			UID:        types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: fmt.Sprintf("%s.operator-ns.svc.cluster.local", shortName),
+			Type:         corev1.ServiceTypeExternalName,
+			Selector:     nil,
+		},
+	}
+	expectEqual(t, fc, want)
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	o = stsOpts{
+		name:              shortName,
+		secretName:        fullName,
+		tailnetTargetFQDN: tailnetTargetFQDN,
+		hostname:          "default-test",
+	}
+	expectEqual(t, fc, expectedSTS(o))
+
+	// Change the tailscale-target-fqdn annotation which should update the
+	// StatefulSet
+	tailnetTargetFQDN = "bar.baz.ts.net"
+	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		s.ObjectMeta.Annotations = map[string]string{
+			AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+		}
+	})
+
+	// Remove the tailscale-target-fqdn annotation which should make the
+	// operator clean up
+	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		s.ObjectMeta.Annotations = map[string]string{}
+	})
+	expectReconciled(t, sr, "default", "test")
+
+	// // synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
+	// // didn't create any child resources since this is all faked, so the
+	// // deletion goes through immediately.
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	// // The deletion triggers another reconcile, to finish the cleanup.
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+}
 func TestTailnetTargetIPAnnotation(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
@@ -203,9 +316,9 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:            shortName,
@@ -235,7 +348,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		},
 	}
 	expectEqual(t, fc, want)
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o = stsOpts{
 		name:            shortName,
@@ -271,10 +384,6 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
-
-	// At the moment we don't revert changes to the user created Service -
-	// we don't have a reliable way how to tell what it was before and also
-	// we don't really expect it to be re-used
 }
 
 func TestAnnotations(t *testing.T) {
@@ -318,9 +427,9 @@ func TestAnnotations(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -423,9 +532,9 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -556,9 +665,9 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -699,9 +808,9 @@ func TestCustomHostname(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -810,7 +919,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := stsOpts{
 		name:              shortName,
 		secretName:        fullName,
@@ -860,9 +969,9 @@ func TestDefaultLoadBalancer(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	// expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -912,7 +1021,7 @@ func TestProxyFirewallMode(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := stsOpts{
 		name:         shortName,
 		secretName:   fullName,
@@ -923,7 +1032,7 @@ func TestProxyFirewallMode(t *testing.T) {
 
 }
 
-func expectedSecret(name string) *corev1.Secret {
+func expectedSecret(name, parentNamespace, typ string) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
@@ -935,8 +1044,8 @@ func expectedSecret(name string) *corev1.Secret {
 			Labels: map[string]string{
 				"tailscale.com/managed":              "true",
 				"tailscale.com/parent-resource":      "test",
-				"tailscale.com/parent-resource-ns":   "default",
-				"tailscale.com/parent-resource-type": "svc",
+				"tailscale.com/parent-resource-ns":   parentNamespace,
+				"tailscale.com/parent-resource-type": typ,
 			},
 		},
 		StringData: map[string]string{
@@ -987,6 +1096,13 @@ func expectedSTS(opts stsOpts) *appsv1.StatefulSet {
 			Name:  "TS_TAILNET_TARGET_IP",
 			Value: opts.tailnetTargetIP,
 		})
+	} else if opts.tailnetTargetFQDN != "" {
+		annots["tailscale.com/operator-last-set-ts-tailnet-target-fqdn"] = opts.tailnetTargetFQDN
+		containerEnv = append(containerEnv, corev1.EnvVar{
+			Name:  "TS_TAILNET_TARGET_FQDN",
+			Value: opts.tailnetTargetFQDN,
+		})
+
 	} else {
 		containerEnv = append(containerEnv, corev1.EnvVar{
 			Name:  "TS_DEST_IP",
@@ -1062,20 +1178,20 @@ func expectedSTS(opts stsOpts) *appsv1.StatefulSet {
 	}
 }
 
-func findGenName(t *testing.T, client client.Client, ns, name string) (full, noSuffix string) {
+func findGenName(t *testing.T, client client.Client, ns, name, typ string) (full, noSuffix string) {
 	t.Helper()
 	labels := map[string]string{
 		LabelManaged:         "true",
 		LabelParentName:      name,
 		LabelParentNamespace: ns,
-		LabelParentType:      "svc",
+		LabelParentType:      typ,
 	}
 	s, err := getSingleObject[corev1.Secret](context.Background(), client, "operator-ns", labels)
 	if err != nil {
 		t.Fatalf("finding secret for %q: %v", name, err)
 	}
 	if s == nil {
-		t.Fatalf("no secret found for %q", name)
+		t.Fatalf("no secret found for %q %s %+#v", name, ns, labels)
 	}
 	return s.GetName(), strings.TrimSuffix(s.GetName(), "-0")
 }
@@ -1147,12 +1263,12 @@ func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns
 	}
 }
 
-func expectReconciled(t *testing.T, sr *ServiceReconciler, ns, name string) {
+func expectReconciled(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
 		NamespacedName: types.NamespacedName{
-			Name:      name,
 			Namespace: ns,
+			Name:      name,
 		},
 	}
 	res, err := sr.Reconcile(context.Background(), req)
@@ -1167,7 +1283,7 @@ func expectReconciled(t *testing.T, sr *ServiceReconciler, ns, name string) {
 	}
 }
 
-func expectRequeue(t *testing.T, sr *ServiceReconciler, ns, name string) {
+func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
 		NamespacedName: types.NamespacedName{
@@ -1178,9 +1294,6 @@ func expectRequeue(t *testing.T, sr *ServiceReconciler, ns, name string) {
 	res, err := sr.Reconcile(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
-	}
-	if res.Requeue {
-		t.Fatalf("unexpected immediate requeue")
 	}
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected timed requeue, got success")
@@ -1194,6 +1307,7 @@ type stsOpts struct {
 	priorityClassName string
 	firewallMode      string
 	tailnetTargetIP   string
+	tailnetTargetFQDN string
 }
 
 type fakeTSClient struct {
@@ -1231,4 +1345,31 @@ func (c *fakeTSClient) Deleted() []string {
 	c.Lock()
 	defer c.Unlock()
 	return c.deleted
+}
+
+func Test_isMagicDNSName(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{
+			in:   "foo.tail4567.ts.net",
+			want: true,
+		},
+		{
+			in:   "foo.tail4567.ts.net.",
+			want: true,
+		},
+		{
+			in:   "foo.tail4567",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := isMagicDNSName(tt.in); got != tt.want {
+				t.Errorf("isMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
 }

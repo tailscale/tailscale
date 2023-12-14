@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch, setSynoToken } from "src/api"
 
@@ -9,6 +12,7 @@ export enum AuthType {
 export type AuthResponse = {
   authNeeded?: AuthType
   canManageNode: boolean
+  serverMode: "login" | "manage"
   viewerIdentity?: {
     loginName: string
     nodeName: string
@@ -22,19 +26,20 @@ export type AuthResponse = {
 export default function useAuth() {
   const [data, setData] = useState<AuthResponse>()
   const [loading, setLoading] = useState<boolean>(true)
+  const [ranSynoAuth, setRanSynoAuth] = useState<boolean>(false)
 
   const loadAuth = useCallback(() => {
     setLoading(true)
-    return apiFetch("/auth", "GET")
-      .then((r) => r.json())
+    return apiFetch<AuthResponse>("/auth", "GET")
       .then((d) => {
         setData(d)
-        switch ((d as AuthResponse).authNeeded) {
+        switch (d.authNeeded) {
           case AuthType.synology:
             fetch("/webman/login.cgi")
               .then((r) => r.json())
               .then((a) => {
                 setSynoToken(a.SynoToken)
+                setRanSynoAuth(true)
                 setLoading(false)
               })
             break
@@ -50,30 +55,37 @@ export default function useAuth() {
   }, [])
 
   const newSession = useCallback(() => {
-    return apiFetch("/auth/session/new", "GET")
-      .then((r) => r.json())
+    return apiFetch<{ authUrl?: string }>("/auth/session/new", "GET")
       .then((d) => {
         if (d.authUrl) {
           window.open(d.authUrl, "_blank")
-          // refresh data when auth complete
-          apiFetch("/auth/session/wait", "GET").then(() => loadAuth())
+          return apiFetch("/auth/session/wait", "GET")
         }
+      })
+      .then(() => {
+        loadAuth()
       })
       .catch((error) => {
         console.error(error)
       })
-  }, [])
+  }, [loadAuth])
 
   useEffect(() => {
     loadAuth().then((d) => {
       if (
-        !d.canManageNode &&
-        new URLSearchParams(window.location.search).get("check") == "now"
+        !d?.canManageNode &&
+        new URLSearchParams(window.location.search).get("check") === "now"
       ) {
         newSession()
       }
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    loadAuth() // Refresh auth state after syno auth runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ranSynoAuth])
 
   return {
     data,

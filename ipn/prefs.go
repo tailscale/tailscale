@@ -45,6 +45,8 @@ func IsLoginServerSynonym(val any) bool {
 }
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
+// When you add a Pref to this struct, remember to add a corresponding
+// field in MaskedPrefs, and check your field for equality in Prefs.Equals().
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	//
@@ -213,6 +215,11 @@ type Prefs struct {
 	// posture checks.
 	PostureChecking bool
 
+	// NetfilterKind specifies what netfilter implementation to use.
+	//
+	// Linux-only.
+	NetfilterKind string
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -241,34 +248,55 @@ type AppConnectorPrefs struct {
 }
 
 // MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
+//
+// Each FooSet field maps to a corresponding Foo field in Prefs. FooSet can be
+// a struct, in which case inner fields of FooSet map to inner fields of Foo in
+// Prefs (see AutoUpdateSet for example).
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet             bool `json:",omitempty"`
-	RouteAllSet               bool `json:",omitempty"`
-	AllowSingleHostsSet       bool `json:",omitempty"`
-	ExitNodeIDSet             bool `json:",omitempty"`
-	ExitNodeIPSet             bool `json:",omitempty"`
-	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
-	CorpDNSSet                bool `json:",omitempty"`
-	RunSSHSet                 bool `json:",omitempty"`
-	RunWebClientSet           bool `json:",omitempty"`
-	WantRunningSet            bool `json:",omitempty"`
-	LoggedOutSet              bool `json:",omitempty"`
-	ShieldsUpSet              bool `json:",omitempty"`
-	AdvertiseTagsSet          bool `json:",omitempty"`
-	HostnameSet               bool `json:",omitempty"`
-	NotepadURLsSet            bool `json:",omitempty"`
-	ForceDaemonSet            bool `json:",omitempty"`
-	EggSet                    bool `json:",omitempty"`
-	AdvertiseRoutesSet        bool `json:",omitempty"`
-	NoSNATSet                 bool `json:",omitempty"`
-	NetfilterModeSet          bool `json:",omitempty"`
-	OperatorUserSet           bool `json:",omitempty"`
-	ProfileNameSet            bool `json:",omitempty"`
-	AutoUpdateSet             bool `json:",omitempty"`
-	AppConnectorSet           bool `json:",omitempty"`
-	PostureCheckingSet        bool `json:",omitempty"`
+	ControlURLSet             bool                `json:",omitempty"`
+	RouteAllSet               bool                `json:",omitempty"`
+	AllowSingleHostsSet       bool                `json:",omitempty"`
+	ExitNodeIDSet             bool                `json:",omitempty"`
+	ExitNodeIPSet             bool                `json:",omitempty"`
+	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
+	CorpDNSSet                bool                `json:",omitempty"`
+	RunSSHSet                 bool                `json:",omitempty"`
+	RunWebClientSet           bool                `json:",omitempty"`
+	WantRunningSet            bool                `json:",omitempty"`
+	LoggedOutSet              bool                `json:",omitempty"`
+	ShieldsUpSet              bool                `json:",omitempty"`
+	AdvertiseTagsSet          bool                `json:",omitempty"`
+	HostnameSet               bool                `json:",omitempty"`
+	NotepadURLsSet            bool                `json:",omitempty"`
+	ForceDaemonSet            bool                `json:",omitempty"`
+	EggSet                    bool                `json:",omitempty"`
+	AdvertiseRoutesSet        bool                `json:",omitempty"`
+	NoSNATSet                 bool                `json:",omitempty"`
+	NetfilterModeSet          bool                `json:",omitempty"`
+	OperatorUserSet           bool                `json:",omitempty"`
+	ProfileNameSet            bool                `json:",omitempty"`
+	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
+	AppConnectorSet           bool                `json:",omitempty"`
+	PostureCheckingSet        bool                `json:",omitempty"`
+	NetfilterKindSet          bool                `json:",omitempty"`
+}
+
+type AutoUpdatePrefsMask struct {
+	CheckSet bool `json:",omitempty"`
+	ApplySet bool `json:",omitempty"`
+}
+
+func (m AutoUpdatePrefsMask) Pretty(au AutoUpdatePrefs) string {
+	var fields []string
+	if m.CheckSet {
+		fields = append(fields, fmt.Sprintf("Check=%v", au.Check))
+	}
+	if m.ApplySet {
+		fields = append(fields, fmt.Sprintf("Apply=%v", au.Apply))
+	}
+	return strings.Join(fields, " ")
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -280,13 +308,34 @@ func (p *Prefs) ApplyEdits(m *MaskedPrefs) {
 	pv := reflect.ValueOf(p).Elem()
 	mv := reflect.ValueOf(m).Elem()
 	mpv := reflect.ValueOf(&m.Prefs).Elem()
-	fields := mv.NumField()
-	for i := 1; i < fields; i++ {
-		if mv.Field(i).Bool() {
-			newFieldValue := mpv.Field(i - 1)
-			pv.Field(i - 1).Set(newFieldValue)
+	applyPrefsEdits(mpv, pv, maskFields(mv))
+}
+
+func applyPrefsEdits(src, dst reflect.Value, mask map[string]reflect.Value) {
+	for n, m := range mask {
+		switch m.Kind() {
+		case reflect.Bool:
+			if m.Bool() {
+				dst.FieldByName(n).Set(src.FieldByName(n))
+			}
+		case reflect.Struct:
+			applyPrefsEdits(src.FieldByName(n), dst.FieldByName(n), maskFields(m))
+		default:
+			panic(fmt.Sprintf("unsupported mask field kind %v", m.Kind()))
 		}
 	}
+}
+
+func maskFields(v reflect.Value) map[string]reflect.Value {
+	mask := make(map[string]reflect.Value)
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Type().Field(i).Name
+		if !strings.HasSuffix(f, "Set") {
+			continue
+		}
+		mask[strings.TrimSuffix(f, "Set")] = v.Field(i)
+	}
+	return mask
 }
 
 // IsEmpty reports whether there are no masks set or if m is nil.
@@ -297,7 +346,7 @@ func (m *MaskedPrefs) IsEmpty() bool {
 	mv := reflect.ValueOf(m).Elem()
 	fields := mv.NumField()
 	for i := 1; i < fields; i++ {
-		if mv.Field(i).Bool() {
+		if !mv.Field(i).IsZero() {
 			return false
 		}
 	}
@@ -336,15 +385,30 @@ func (m *MaskedPrefs) Pretty() string {
 
 	for i := 1; i < mt.NumField(); i++ {
 		name := mt.Field(i).Name
-		if mv.Field(i).Bool() {
-			if !first {
-				sb.WriteString(" ")
+		mf := mv.Field(i)
+		switch mf.Kind() {
+		case reflect.Bool:
+			if mf.Bool() {
+				if !first {
+					sb.WriteString(" ")
+				}
+				first = false
+				f := mpv.Field(i - 1)
+				fmt.Fprintf(&sb, format(f),
+					strings.TrimSuffix(name, "Set"),
+					f.Interface())
 			}
-			first = false
-			f := mpv.Field(i - 1)
-			fmt.Fprintf(&sb, format(f),
-				strings.TrimSuffix(name, "Set"),
-				f.Interface())
+		case reflect.Struct:
+			if mf.IsZero() {
+				continue
+			}
+			mpf := mpv.Field(i - 1)
+			prettyFn := mf.MethodByName("Pretty")
+			if !prettyFn.IsValid() {
+				panic(fmt.Sprintf("MaskedPrefs field %q is missing the Pretty method", name))
+			}
+			res := prettyFn.Call([]reflect.Value{mpf})
+			fmt.Fprintf(&sb, "%s={%s}", strings.TrimSuffix(name, "Set"), res[0].String())
 		}
 	}
 	sb.WriteString("}")
@@ -409,6 +473,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.OperatorUser != "" {
 		fmt.Fprintf(&sb, "op=%q ", p.OperatorUser)
 	}
+	if p.NetfilterKind != "" {
+		fmt.Fprintf(&sb, "netfilterKind=%s ", p.NetfilterKind)
+	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
 	if p.Persist != nil {
@@ -444,8 +511,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		return false
 	}
 
-	return p != nil && p2 != nil &&
-		p.ControlURL == p2.ControlURL &&
+	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
@@ -469,7 +535,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate == p2.AutoUpdate &&
 		p.AppConnector == p2.AppConnector &&
-		p.PostureChecking == p2.PostureChecking
+		p.PostureChecking == p2.PostureChecking &&
+		p.NetfilterKind == p2.NetfilterKind
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
@@ -570,7 +637,7 @@ func (p *Prefs) AdminPageURL() string {
 		// TODO(crawshaw): In future release, make this https://console.tailscale.com
 		url = "https://login.tailscale.com"
 	}
-	return url + "/admin/machines"
+	return url + "/admin"
 }
 
 // AdvertisesExitNode reports whether p is advertising both the v4 and
@@ -790,6 +857,23 @@ type ProfileID string
 // tests.
 type WindowsUserID string
 
+// NetworkProfile is a subset of netmap.NetworkMap
+// that should be saved with each user profile.
+type NetworkProfile struct {
+	MagicDNSName string
+	DomainName   string
+}
+
+// RequiresBackfill returns whether this object does not have all the data
+// expected. This is because this struct is a later addition to LoginProfile and
+// this method can be checked to see if it's been backfilled to the current
+// expectation or not. Note that for now, it just checks if the struct is empty.
+// In the future, if we have new optional fields, this method can be changed to
+// do more explicit checks to return whether it's apt for a backfill or not.
+func (n NetworkProfile) RequiresBackfill() bool {
+	return n == NetworkProfile{}
+}
+
 // LoginProfile represents a single login profile as managed
 // by the ProfileManager.
 type LoginProfile struct {
@@ -804,13 +888,12 @@ type LoginProfile struct {
 	// It is filled in from the UserProfile.LoginName field.
 	Name string
 
-	// TailnetMagicDNSName is filled with the MagicDNS suffix for this
-	// profile's node (even if MagicDNS isn't necessarily in use).
-	// It will neither start nor end with a period.
+	// NetworkProfile is a subset of netmap.NetworkMap that we
+	// store to remember information about the tailnet that this
+	// profile was logged in with.
 	//
-	// TailnetMagicDNSName is only filled from 2023-09-09 forward,
-	// and will only get backfilled when a profile is the current profile.
-	TailnetMagicDNSName string
+	// This field was added on 2023-11-17.
+	NetworkProfile NetworkProfile
 
 	// Key is the StateKey under which the profile is stored.
 	// It is assigned once at profile creation time and never changes.

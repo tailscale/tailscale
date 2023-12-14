@@ -60,6 +60,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AutoUpdate",
 		"AppConnector",
 		"PostureChecking",
+		"NetfilterKind",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
@@ -327,6 +328,16 @@ func TestPrefsEqual(t *testing.T) {
 			&Prefs{PostureChecking: false},
 			false,
 		},
+		{
+			&Prefs{NetfilterKind: "iptables"},
+			&Prefs{NetfilterKind: "iptables"},
+			true,
+		},
+		{
+			&Prefs{NetfilterKind: "nftables"},
+			&Prefs{NetfilterKind: ""},
+			false,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.a.Equals(tt.b)
@@ -545,6 +556,20 @@ func TestPrefsPretty(t *testing.T) {
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
 		},
+		{
+			Prefs{
+				NetfilterKind: "iptables",
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off netfilterKind=iptables update=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				NetfilterKind: "",
+			},
+			"linux",
+			`Prefs{ra=false mesh=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+		},
 	}
 	for i, tt := range tests {
 		got := tt.p.pretty(tt.os)
@@ -735,6 +760,42 @@ func TestMaskedPrefsPretty(t *testing.T) {
 				ExitNodeIPSet: true,
 			},
 			want: `MaskedPrefs{ExitNodeIP=100.102.104.105}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: true, ApplySet: false},
+			},
+			want: `MaskedPrefs{AutoUpdate={Check=true}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: true},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: true, ApplySet: true},
+			},
+			want: `MaskedPrefs{AutoUpdate={Check=true Apply=true}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: false},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: true},
+			},
+			want: `MaskedPrefs{AutoUpdate={Apply=false}}`,
+		},
+		{
+			m: &MaskedPrefs{
+				Prefs: Prefs{
+					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: true},
+				},
+				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: false},
+			},
+			want: `MaskedPrefs{}`,
 		},
 	}
 	for i, tt := range tests {

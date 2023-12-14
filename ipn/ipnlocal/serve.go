@@ -757,7 +757,8 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), 500)
+		b.logf("error calling stat on %s: %v", fileOrDir, err)
+		http.Error(w, "an error occurred reading the file or directory", 500)
 		return
 	}
 	if fi.Mode().IsRegular() {
@@ -767,7 +768,8 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 		}
 		f, err := os.Open(fileOrDir)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			b.logf("error opening %s: %v", fileOrDir, err)
+			http.Error(w, "an error occurred reading the file or directory", 500)
 			return
 		}
 		defer f.Close()

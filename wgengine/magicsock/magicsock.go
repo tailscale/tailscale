@@ -270,6 +270,7 @@ type Conn struct {
 	privateKey       key.NodePrivate               // WireGuard private key for this node
 	everHadKey       bool                          // whether we ever had a non-zero private key
 	myDerp           int                           // nearest DERP region ID; 0 means none/unknown
+	homeless         bool                          // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
 	derpStarted      chan struct{}                 // closed on first connection to DERP; for tests & cleaner Close
 	activeDerp       map[int]activeDerp            // DERP regionID -> connection to a node in that region
 	prevDerp         map[int]*syncs.WaitGroupChan
@@ -289,6 +290,10 @@ type Conn struct {
 
 	// wgPinger is the WireGuard only pinger used for latency measurements.
 	wgPinger lazy.SyncValue[*ping.Pinger]
+
+	// onPortUpdate is called with the new port when magicsock rebinds to
+	// a new port.
+	onPortUpdate func(port uint16, network string)
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -354,6 +359,10 @@ type Options struct {
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
 	ControlKnobs *controlknobs.Knobs
+
+	// OnPortUpdate is called with the new port when magicsock rebinds to
+	// a new port.
+	OnPortUpdate func(port uint16, network string)
 }
 
 func (o *Options) logf() logger.Logf {
@@ -426,6 +435,7 @@ func NewConn(opts Options) (*Conn, error) {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	}
 	c.netMon = opts.NetMon
+	c.onPortUpdate = opts.OnPortUpdate
 
 	if err := c.rebind(keepCurrentPort); err != nil {
 		return nil, err
@@ -618,7 +628,17 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	report, err := c.netChecker.GetReport(ctx, dm)
+	report, err := c.netChecker.GetReport(ctx, dm, &netcheck.GetReportOpts{
+		// Pass information about the last time that we received a
+		// frame from a DERP server to our netchecker to help avoid
+		// flapping the home region while there's still active
+		// communication.
+		//
+		// NOTE(andrew-d): I don't love that we're depending on the
+		// health package here, but I'd rather do that and not store
+		// the exact same state in two different places.
+		GetLastDERPActivity: health.GetDERPRegionReceivedTime,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1513,7 +1533,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	// mappings to make p2p path discovery faster in simple
 	// cases. Without this, disco would still work, but would be
 	// reliant on DERP call-me-maybe to establish the disco<>node
-	// mapping, and on subsequent disco handlePongLocked to establish
+	// mapping, and on subsequent disco handlePongConnLocked to establish
 	// the IP<>disco mapping.
 	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
 		if !isDerp {
@@ -2202,7 +2222,7 @@ func (c *Conn) goroutinesRunningLocked() bool {
 }
 
 func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
-	if c.networkDown() {
+	if c.networkDown() || c.homeless {
 		return false
 	}
 	if len(c.peerSet) == 0 || c.privateKey.IsZero() {
@@ -2340,6 +2360,19 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if err != nil {
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
+		}
+		if c.onPortUpdate != nil {
+			_, gotPortStr, err := net.SplitHostPort(pconn.LocalAddr().String())
+			if err != nil {
+				c.logf("could not parse port from %s: %w", pconn.LocalAddr().String(), err)
+			} else {
+				gotPort, err := strconv.ParseUint(gotPortStr, 10, 16)
+				if err != nil {
+					c.logf("could not parse port from %s: %w", gotPort, err)
+				} else {
+					c.onPortUpdate(uint16(gotPort), network)
+				}
+			}
 		}
 		trySetSocketBuffer(pconn, c.logf)
 
@@ -2684,6 +2717,24 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 // Nil may be specified to disable statistics gathering.
 func (c *Conn) SetStatistics(stats *connstats.Statistics) {
 	c.stats.Store(stats)
+}
+
+// SetHomeless sets whether magicsock should idle harder and not have a DERP
+// home connection active and not search for its nearest DERP home. In this
+// homeless mode, the node is unreachable by others.
+func (c *Conn) SetHomeless(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.homeless = v
+
+	if v && c.myDerp != 0 {
+		oldHome := c.myDerp
+		c.myDerp = 0
+		c.closeDerpLocked(oldHome, "set-homeless")
+	}
+	if !v {
+		go c.updateEndpoints("set-homeless-disabled")
+	}
 }
 
 const (

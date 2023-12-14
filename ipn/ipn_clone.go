@@ -55,6 +55,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	AutoUpdate             AutoUpdatePrefs
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
+	NetfilterKind          string
 	Persist                *persist.Persist
 }{})
 

@@ -36,15 +36,11 @@ func (c *darwinConfigurator) SupportsSplitDNS() bool {
 func (c *darwinConfigurator) SetDNS(cfg OSConfig) error {
 	var buf bytes.Buffer
 	buf.WriteString(macResolverFileHeader)
-	for i, ip := range cfg.Nameservers {
-		if i == 0 {
-			buf.WriteString("nameserver ")
-		} else {
-			buf.WriteString(" ")
-		}
+	for _, ip := range cfg.Nameservers {
+		buf.WriteString("nameserver ")
 		buf.WriteString(ip.String())
+		buf.WriteString("\n")
 	}
-	buf.WriteString("\n")
 
 	if err := os.MkdirAll("/etc/resolver", 0755); err != nil {
 		return err

@@ -141,7 +141,12 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	defer c.mu.Unlock()
 	if !c.wantDerpLocked() {
 		c.myDerp = 0
-		health.SetMagicSockDERPHome(0)
+		health.SetMagicSockDERPHome(0, c.homeless)
+		return false
+	}
+	if c.homeless {
+		c.myDerp = 0
+		health.SetMagicSockDERPHome(0, c.homeless)
 		return false
 	}
 	if derpNum == c.myDerp {
@@ -152,7 +157,7 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		metricDERPHomeChange.Add(1)
 	}
 	c.myDerp = derpNum
-	health.SetMagicSockDERPHome(derpNum)
+	health.SetMagicSockDERPHome(derpNum, c.homeless)
 
 	if c.privateKey.IsZero() {
 		// No private key yet, so DERP connections won't come up anyway.

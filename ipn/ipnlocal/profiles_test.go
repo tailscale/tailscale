@@ -41,7 +41,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 				LoginName: loginName,
 			},
 		}
-		if err := pm.SetPrefs(p.View(), ""); err != nil {
+		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()
@@ -96,7 +96,7 @@ func TestProfileList(t *testing.T) {
 				LoginName: loginName,
 			},
 		}
-		if err := pm.SetPrefs(p.View(), ""); err != nil {
+		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()
@@ -157,7 +157,7 @@ func TestProfileDupe(t *testing.T) {
 	reauth := func(pm *profileManager, p *persist.Persist) {
 		prefs := ipn.NewPrefs()
 		prefs.Persist = p
-		must.Do(pm.SetPrefs(prefs.View(), ""))
+		must.Do(pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}))
 	}
 	login := func(pm *profileManager, p *persist.Persist) {
 		pm.NewProfile()
@@ -379,7 +379,7 @@ func TestProfileManagement(t *testing.T) {
 			},
 			NodeID: nid,
 		}
-		if err := pm.SetPrefs(p.View(), ""); err != nil {
+		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()
@@ -506,7 +506,7 @@ func TestProfileManagementWindows(t *testing.T) {
 			},
 			NodeID: tailcfg.StableNodeID(strconv.Itoa(int(id))),
 		}
-		if err := pm.SetPrefs(p.View(), ""); err != nil {
+		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()

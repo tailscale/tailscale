@@ -10,12 +10,17 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/must"
 )
 
 func TestImpersonationHeaders(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name     string
 		emailish string
@@ -100,7 +105,7 @@ func TestImpersonationHeaders(t *testing.T) {
 			},
 			CapMap: tc.capMap,
 		})
-		addImpersonationHeaders(r)
+		addImpersonationHeaders(r, zl.Sugar())
 
 		if d := cmp.Diff(tc.wantHeaders, r.Header); d != "" {
 			t.Errorf("unexpected header (-want +got):\n%s", d)
