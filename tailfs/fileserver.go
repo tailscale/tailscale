@@ -2,6 +2,7 @@ package tailfs
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -62,6 +63,7 @@ func (s *FileServer) Serve() error {
 
 // ServeHTTP implements the http.Handler interface.
 func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("ZZZZ ServeHTTP: %v", r.URL.Path)
 	parts := strings.Split(r.URL.Path[1:], "/")
 	r.URL.Path = "/" + strings.Join(parts[1:], "/")
 	pathOnDisk := s.sharePath(parts[0])
