@@ -3,9 +3,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.13.0
-  name: connectors.tailscale.io
+  name: connectors.tailscale.com
 spec:
-  group: tailscale.io
+  group: tailscale.com
   names:
     kind: Connector
     listKind: ConnectorList
@@ -42,6 +42,8 @@ spec:
             spec:
               description: Desired state of the Connector resource.
               type: object
+              required:
+                - subnetRouter
               properties:
                 subnetRouter:
                   description: SubnetRouter configures a Tailscale subnet router to be deployed in the cluster. If unset no subnet router will be deployed. https://tailscale.com/kb/1019/subnets/

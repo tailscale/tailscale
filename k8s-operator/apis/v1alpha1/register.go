@@ -43,7 +43,7 @@ func init() {
 		panic(fmt.Sprintf("failed to add k8s.io scheme: %s", err))
 	}
 	if err := AddToScheme(GlobalScheme); err != nil {
-		panic(fmt.Sprintf("failed to add tailscale.io scheme: %s", err))
+		panic(fmt.Sprintf("failed to add tailscale.com scheme: %s", err))
 	}
 }
 

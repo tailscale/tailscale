@@ -4,5 +4,5 @@
 //go:build !plan9
 
 // +kubebuilder:object:generate=true
-// +groupName=tailscale.io
+// +groupName=tailscale.com
 package v1alpha1

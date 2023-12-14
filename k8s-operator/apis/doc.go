@@ -5,4 +5,4 @@
 
 package apis
 
-const GroupName = "tailscale.io"
+const GroupName = "tailscale.com"

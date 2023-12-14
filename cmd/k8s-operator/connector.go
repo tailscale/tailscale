@@ -8,11 +8,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
@@ -35,8 +37,10 @@ const (
 	reasonSubnetRouterCreated           = "SubnetRouterCreated"
 	reasonSubnetRouterCleanupFailed     = "SubnetRouterCleanupFailed"
 	reasonSubnetRouterCleanupInProgress = "SubnetRouterCleanupInProgress"
+	reasonSubnetRouterInvalid           = "SubnetRouterInvalid"
 
 	messageSubnetRouterCreationFailed = "Failed creating subnet router for routes %s: %v"
+	messageSubnetRouterInvalid        = "Subnet router is invalid: %v"
 	messageSubnetRouterCreated        = "Created subnet router for routes %s"
 	messageSubnetRouterCleanupFailed  = "Failed cleaning up subnet router resources: %v"
 	msgSubnetRouterCleanupInProgress  = "SubnetRouterCleanupInProgress"
@@ -79,7 +83,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		logger.Debugf("connector not found, assuming it was deleted")
 		return reconcile.Result{}, nil
 	} else if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.io Connector: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com Connector: %w", err)
 	}
 	if !cn.DeletionTimestamp.IsZero() {
 		logger.Debugf("connector is being deleted or should not be exposed, cleaning up components")
@@ -135,75 +139,54 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		}
 	}
 
-	// At the momement SubnetRouter is the only component configurable via
-	// ConnectorSpec and a ConnectorSpec without a SubnetRouter is invalid- but
-	// that will change in the future - so run the cleanup and provision
-	// conditionally.
-	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.Routes) > 0 {
-		var sb strings.Builder
-		sb.WriteString(string(cn.Spec.SubnetRouter.Routes[0]))
-		for _, r := range cn.Spec.SubnetRouter.Routes[1:] {
-			sb.WriteString(fmt.Sprintf(",%s", r))
-		}
-		cidrsS := sb.String()
-		logger.Debugf("ensuring a subnet router is deployed")
-		err := a.maybeProvisionSubnetRouter(ctx, logger, cn, cidrsS)
-		if err != nil {
-			msg := fmt.Sprintf(messageSubnetRouterCreationFailed, cidrsS, err)
-			cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
-				Ready:   metav1.ConditionFalse,
-				Reason:  reasonSubnetRouterCreationFailed,
-				Message: msg,
-			}
-			a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonSubnetRouterCreationFailed, msg)
-			return reconcile.Result{}, err
-		} else {
-			cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
-				Routes:  cidrsS,
-				Ready:   metav1.ConditionTrue,
-				Reason:  reasonSubnetRouterCreated,
-				Message: fmt.Sprintf(messageSubnetRouterCreated, cidrsS),
-			}
-		}
-
-	} else {
-		logger.Debugf("ensuring a subnet router is cleaned up if it was ever created")
-		if done, err := a.maybeCleanupSubnetRouter(ctx, logger, cn); err != nil {
-			msg := fmt.Sprintf(messageSubnetRouterCleanupFailed, err)
-			cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
-				Routes:  "",
-				Ready:   metav1.ConditionUnknown,
-				Reason:  reasonSubnetRouterCleanupFailed,
-				Message: msg,
-			}
-			a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonSubnetRouterCleanupFailed, msg)
-			return reconcile.Result{}, err
-		} else if !done {
-			logger.Debugf("cleanup not done yet, will retry...")
-			cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
-				Routes:  "",
-				Ready:   metav1.ConditionUnknown,
-				Reason:  reasonSubnetRouterCleanupInProgress,
-				Message: msgSubnetRouterCleanupInProgress,
-			}
-			return reconcile.Result{Requeue: true}, nil
-
-		} else {
-			cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{}
-		}
+	// A Connector with unset .spec.subnetRouter and unset
+	// cn.spec.subnetRouter.Routes will be rejected at apply time (because
+	// these fields are set as required by our CRD validation). This check
+	// is here for if our CRD validation breaks unnoticed we don't crash the
+	// operator with nil pointer exception.
+	if cn.Spec.SubnetRouter == nil || len(cn.Spec.SubnetRouter.Routes) < 1 {
+		return reconcile.Result{}, nil
 	}
 
+	if err := validateSubnetRouter(*cn.Spec.SubnetRouter); err != nil {
+		msg := fmt.Sprintf(messageSubnetRouterInvalid, err)
+		cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
+			Ready:   metav1.ConditionFalse,
+			Reason:  reasonSubnetRouterInvalid,
+			Message: msg,
+		}
+		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonSubnetRouterInvalid, msg)
+		return reconcile.Result{}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(string(cn.Spec.SubnetRouter.Routes[0]))
+	for _, r := range cn.Spec.SubnetRouter.Routes[1:] {
+		sb.WriteString(fmt.Sprintf(",%s", r))
+	}
+	cidrsS := sb.String()
+	logger.Debugf("ensuring a subnet router is deployed")
+	err = a.maybeProvisionSubnetRouter(ctx, logger, cn, cidrsS)
+	if err != nil {
+		msg := fmt.Sprintf(messageSubnetRouterCreationFailed, cidrsS, err)
+		cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
+			Ready:   metav1.ConditionFalse,
+			Reason:  reasonSubnetRouterCreationFailed,
+			Message: msg,
+		}
+		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonSubnetRouterCreationFailed, msg)
+		return reconcile.Result{}, err
+	}
+	cn.Status.SubnetRouter = &tsapi.SubnetRouterStatus{
+		Routes:  cidrsS,
+		Ready:   metav1.ConditionTrue,
+		Reason:  reasonSubnetRouterCreated,
+		Message: fmt.Sprintf(messageSubnetRouterCreated, cidrsS),
+	}
 	return reconcile.Result{}, nil
 }
 
 func (a *ConnectorReconciler) maybeCleanupSubnetRouter(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) (bool, error) {
-	// At the momement SubnetRouter is the only component configurable via
-	// ConnectorSpec and a ConnectorSpec without a SubnetRouter is invalid- but
-	// that will change in the future - so run the cleanup and provision
-	// conditionally already now.
-	if cn.Spec.SubnetRouter == nil {
-		return true, nil
-	}
 	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(cn.Name, a.tsnamespace, "subnetrouter")); err != nil {
 		return false, fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
@@ -248,6 +231,20 @@ func (a *ConnectorReconciler) maybeProvisionSubnetRouter(ctx context.Context, lo
 
 	_, err := a.ssr.Provision(ctx, logger, sts)
 
+	return err
+}
+func validateSubnetRouter(sb tsapi.SubnetRouter) error {
+	var err error
+	for _, route := range sb.Routes {
+		pfx, e := netip.ParsePrefix(string(route))
+		if e != nil {
+			err = errors.Wrap(err, fmt.Sprintf("route %s is invalid: %v", route, err))
+			continue
+		}
+		if pfx.Masked() != pfx {
+			err = errors.Wrap(err, fmt.Sprintf("route %s has non-address bits set; expected %s", pfx, pfx.Masked()))
+		}
+	}
 	return err
 }
 

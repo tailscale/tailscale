@@ -46,11 +46,10 @@ type ConnectorSpec struct {
 	// SubnetRouter configures a Tailscale subnet router to be deployed in
 	// the cluster. If unset no subnet router will be deployed.
 	// https://tailscale.com/kb/1019/subnets/
-	SubnetRouter *SubnetRouter `json:"subnetRouter,omitempty"`
+	SubnetRouter *SubnetRouter `json:"subnetRouter"`
 }
 
 // SubnetRouter describes a subnet router.
-// If unset none will be deployed.
 // +kubebuilder:validation:XValidation:rule="has(self.tags) == has(oldSelf.tags)",message="Subnetrouter tags cannot be changed. Delete and redeploy the Connector if you need to change it."
 type SubnetRouter struct {
 	// Routes refer to in-cluster CIDRs that the subnet router should make

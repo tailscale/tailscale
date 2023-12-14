@@ -48,7 +48,7 @@ rules:
       verbs:
         - '*'
     - apiGroups:
-        - tailscale.io
+        - tailscale.com
       resources:
         - connectors
         - connectors/status

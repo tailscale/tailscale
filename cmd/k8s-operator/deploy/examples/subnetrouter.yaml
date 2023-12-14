@@ -4,7 +4,7 @@
 # otherwise you will need to approve it manually in control panel once the
 # subnet router has been created.
 # https://tailscale.com/kb/1019/subnets/#advertise-subnet-routes
-apiVersion: tailscale.io/v1alpha1
+apiVersion: tailscale.com/v1alpha1
 kind: Connector
 metadata:
   name: exposepods

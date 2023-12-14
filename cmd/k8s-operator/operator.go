@@ -48,7 +48,7 @@ import (
 //go:generate go run tailscale.com/cmd/k8s-operator/generate
 
 // Generate Connector CustomResourceDefinition yaml from its Go types.
-//go:generate go run  sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
+//go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
 
 func main() {
 	// Required to use our client API. We're fine with the instability since the
@@ -91,6 +91,8 @@ func main() {
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
+	// TODO (irbekrm): gather the reconciler options into an opts struct
+	// rather than passing a million of them in one by one.
 	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tsEnableConnector)
 }
 
