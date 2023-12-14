@@ -37,12 +37,18 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tsnet"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
 
+// Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
 //go:generate go run tailscale.com/cmd/k8s-operator/generate
+
+// Generate Connector CustomResourceDefinition yaml from its Go types.
+//go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
 
 func main() {
 	// Required to use our client API. We're fine with the instability since the
@@ -56,6 +62,7 @@ func main() {
 		priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode    = defaultEnv("PROXY_FIREWALL_MODE", "")
+		tsEnableConnector = defaultBool("ENABLE_CONNECTOR", false)
 	)
 
 	var opts []kzap.Opts
@@ -84,7 +91,9 @@ func main() {
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
+	// TODO (irbekrm): gather the reconciler options into an opts struct
+	// rather than passing a million of them in one by one.
+	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tsEnableConnector)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -192,7 +201,7 @@ waitOnline:
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string) {
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string, enableConnector bool) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -206,20 +215,25 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	nsFilter := cache.ByObject{
 		Field: client.InNamespace(tsNamespace).AsSelector(),
 	}
-	mgr, err := manager.New(restConfig, manager.Options{
+	mgrOpts := manager.Options{
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:      nsFilter,
 				&appsv1.StatefulSet{}: nsFilter,
 			},
 		},
-	})
+	}
+	if enableConnector {
+		mgrOpts.Scheme = tsapi.GlobalScheme
+	}
+	mgr, err := manager.New(restConfig, mgrOpts)
 	if err != nil {
 		startlog.Fatalf("could not create manager: %v", err)
 	}
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
 	svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
+
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
@@ -264,6 +278,23 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		startlog.Fatalf("could not create controller: %v", err)
 	}
 
+	if enableConnector {
+		connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("subnetrouter"))
+		err = builder.ControllerManagedBy(mgr).
+			For(&tsapi.Connector{}).
+			Watches(&appsv1.StatefulSet{}, connectorFilter).
+			Watches(&corev1.Secret{}, connectorFilter).
+			Complete(&ConnectorReconciler{
+				ssr:      ssr,
+				recorder: eventRecorder,
+				Client:   mgr.GetClient(),
+				logger:   zlog.Named("connector-reconciler"),
+				clock:    tstime.DefaultClock{},
+			})
+		if err != nil {
+			startlog.Fatal("could not create connector reconciler: %v", err)
+		}
+	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)

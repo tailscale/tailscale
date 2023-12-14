@@ -47,6 +47,16 @@ rules:
         - ingresses/status
       verbs:
         - '*'
+    - apiGroups:
+        - tailscale.com
+      resources:
+        - connectors
+        - connectors/status
+      verbs:
+        - get
+        - list
+        - watch
+        - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -150,6 +160,8 @@ spec:
                       valueFrom:
                         fieldRef:
                             fieldPath: metadata.namespace
+                    - name: ENABLE_CONNECTOR
+                      value: "false"
                     - name: CLIENT_ID_FILE
                       value: /oauth/client_id
                     - name: CLIENT_SECRET_FILE
