@@ -3422,7 +3422,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		}
 	}
 	slices.Sort(domains)
-	slices.Compact(domains)
+	domains = slices.Compact(domains)
 	b.appConnector.UpdateDomains(domains)
 }
 
