@@ -37,10 +37,9 @@ func NewFileSystemForLocal(logf logger.Logf) ForLocal {
 }
 
 type fileSystemForLocal struct {
-	logf        logger.Logf
-	cfs         compositefs.CompositeFileSystem
-	listener    connlistener.Listener
-	userProxies map[string]*userServer
+	logf     logger.Logf
+	cfs      compositefs.CompositeFileSystem
+	listener connlistener.Listener
 }
 
 func (s *fileSystemForLocal) serveAt() {

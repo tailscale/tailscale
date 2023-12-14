@@ -2477,14 +2477,23 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not a directory", http.StatusBadRequest)
 			return
 		}
-		if share.As != "" {
-			// user is explicitly trying to set the user who does the sharing
+		if version.IsSandboxedMacOS() {
+			// on the sandboxed MacOS app, we cannot share as specific users,
+			// we just have to rely on the App itself serving file content as
+			// whatever user ran the App (usually not root).
+			if share.As != "" {
+				http.Error(w, "cannot set '-as' on sandboxed MacOS application", http.StatusBadRequest)
+				return
+			}
+		} else if share.As != "" {
+			// user is explicitly trying to set the user who does the sharing,
+			// make sure they're a local admin
 			if !h.connIsLocalAdmin() {
 				http.Error(w, "must be local admin to set 'as'", http.StatusForbidden)
 				return
 			}
 		} else {
-			// default to sharing as the connected user
+			// share.As not specified, default to sharing as the connected user
 			username, err := h.getUsername()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

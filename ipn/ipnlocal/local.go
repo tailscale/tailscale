@@ -2273,7 +2273,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	b.mu.Lock()
 	b.activeWatchSessions.Add(sessionID)
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialTailfsShares
 	if mask&initialBits != 0 {
 		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
@@ -2288,6 +2288,17 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		}
 		if mask&ipn.NotifyInitialNetMap != 0 {
 			ini.NetMap = b.netMap
+		}
+		if mask&ipn.NotifyInitialTailfsShares != 0 {
+			shares, err := b.tailfsGetSharesLocked()
+			if err != nil {
+				b.logf("notify initial tailfs shares: %v", err)
+			} else {
+				ini.TailfsShares = make(map[string]string, len(shares))
+				for _, share := range shares {
+					ini.TailfsShares[share.Name] = share.Path
+				}
+			}
 		}
 	}
 

@@ -33,23 +33,32 @@ func (b *LocalBackend) TailfsAddShare(share *tailfs.Share) error {
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	shares, err := b.tailfsGetSharesLocked()
+	shares, err := b.tailfsAddShareLocked(fs, share)
+	b.mu.Unlock()
 	if err != nil {
 		return err
+	}
+
+	b.tailfsNotifyShares(shares)
+	return nil
+}
+
+func (b *LocalBackend) tailfsAddShareLocked(fs tailfs.ForRemote, share *tailfs.Share) (map[string]*tailfs.Share, error) {
+	shares, err := b.tailfsGetSharesLocked()
+	if err != nil {
+		return nil, err
 	}
 	shares[share.Name] = share
 	data, err := json.Marshal(shares)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return nil, fmt.Errorf("marshal: %w", err)
 	}
 	err = b.store.WriteState(tailfsSharesStateKey, data)
 	if err != nil {
-		return fmt.Errorf("write state: %w", err)
+		return nil, fmt.Errorf("write state: %w", err)
 	}
 	fs.SetShares(shares)
-	return nil
+	return shares, nil
 }
 
 func (b *LocalBackend) TailfsRemoveShare(name string) error {
@@ -59,27 +68,46 @@ func (b *LocalBackend) TailfsRemoveShare(name string) error {
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	shares, err := b.tailfsGetSharesLocked()
+	shares, err := b.tailfsRemoveShareLocked(fs, name)
+	b.mu.Unlock()
 	if err != nil {
 		return err
 	}
+
+	b.tailfsNotifyShares(shares)
+	return nil
+}
+
+func (b *LocalBackend) tailfsRemoveShareLocked(fs tailfs.ForRemote, name string) (map[string]*tailfs.Share, error) {
+	shares, err := b.tailfsGetSharesLocked()
+	if err != nil {
+		return nil, err
+	}
 	_, shareExists := shares[name]
 	if !shareExists {
-		return os.ErrNotExist
+		return nil, os.ErrNotExist
 	}
 	delete(shares, name)
 	data, err := json.Marshal(shares)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return nil, fmt.Errorf("marshal: %w", err)
 	}
 	err = b.store.WriteState(tailfsSharesStateKey, data)
 	if err != nil {
-		return fmt.Errorf("write state: %w", err)
+		return nil, fmt.Errorf("write state: %w", err)
 	}
 	fs.SetShares(shares)
-	return nil
+	return shares, nil
+}
+
+// tailfsNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
+// about the latest set of shares.
+func (b *LocalBackend) tailfsNotifyShares(shares map[string]*tailfs.Share) {
+	sharesMap := make(map[string]string, len(shares))
+	for _, share := range shares {
+		sharesMap[share.Name] = share.Path
+	}
+	b.send(ipn.Notify{TailfsShares: sharesMap})
 }
 
 func (b *LocalBackend) TailfsGetShares() (map[string]*tailfs.Share, error) {

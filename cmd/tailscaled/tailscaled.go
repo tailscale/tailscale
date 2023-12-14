@@ -29,8 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
-	"golang.org/x/net/webdav"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
@@ -801,34 +799,18 @@ func serveTailfs(args []string) error {
 	if len(args)%2 != 0 {
 		return errors.New("need <sharename> <path> pairs")
 	}
-	// TODO(oxtoacart): maybe use something more private than loopback?
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("%v.socket", uuid.New().String()))
-	l, err := safesocket.Listen(path)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-	fmt.Printf("%v\n", l.Addr())
-	handlers := make(map[string]http.Handler)
+	shares := make(map[string]string)
 	for i := 0; i < len(args); i += 2 {
-		share := args[0]
-		path := args[1]
-		fmt.Println(path)
-		h := &webdav.Handler{
-			FileSystem: webdav.Dir(path),
-			LockSystem: webdav.NewMemLS(),
-		}
-		handlers[share] = h
+		shares[args[0]] = args[1]
 	}
-	return http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.Split(r.URL.Path[1:], "/")
-		r.URL.Path = "/" + strings.Join(parts[1:], "/")
-		h, ok := handlers[parts[0]]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		h.ServeHTTP(w, r)
-	}))
+	s, err := tailfs.NewFileServer(func(share string) string {
+		return shares[share]
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%v\n", s.Addr())
+	return s.Serve()
 }
 
 // dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process

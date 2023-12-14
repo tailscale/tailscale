@@ -19,6 +19,7 @@ import (
 	"tailscale.com/tailfs/webdavfs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/runas"
+	"tailscale.com/version"
 )
 
 // Share represents a folder that's shared with remote Tailfs nodes.
@@ -77,6 +78,11 @@ type fileSystemForRemote struct {
 }
 
 func (s *fileSystemForRemote) SetShares(shares map[string]*Share) {
+	if version.IsSandboxedMacOS() {
+		// TODO(oxtoacart): will need to delegate to MacOS application somehow
+		return
+	}
+
 	// set up one server per user
 	userServers := make(map[string]*userServer)
 	for _, share := range shares {
@@ -110,6 +116,12 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 	// TODO(oxtoacart): allow permissions other than just self
 	if !principal.IsSelf {
 		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	if version.IsSandboxedMacOS() {
+		// TODO(oxtoacart): will need to delegate to MacOS application somehow
+		w.WriteHeader(http.StatusNotImplemented)
 		return
 	}
 
@@ -191,7 +203,6 @@ func (s *userServer) runLoop() {
 		s.logf("can't find executable: %v", err)
 		return
 	}
-	s.logf("ZZZZ Using executable %v", executable)
 	for {
 		s.mx.RLock()
 		closed := s.closed
