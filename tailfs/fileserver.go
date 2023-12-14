@@ -29,8 +29,9 @@ type FileServer struct {
 // named shares using the sharePath function. If sharePath returns the empty
 // string, it will return 404 Not Found.
 //
-// The server listens at a random address using safesocket.Listen. The listen
-// address is available via the Addr() method.
+// The server attempts to listen at a random address using safesocket.Listen.
+// If safesocket.Listen fails, it falls back to listening on localhost.
+// The listen address is available via the Addr() method.
 //
 // The server doesn't actually process requests until the Serve() method is
 // called.
@@ -38,7 +39,10 @@ func NewFileServer(sharePath func(share string) string) (*FileServer, error) {
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("%v.socket", uuid.New().String()))
 	l, err := safesocket.Listen(path)
 	if err != nil {
-		return nil, err
+		l, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &FileServer{
 		sharePath: sharePath,
