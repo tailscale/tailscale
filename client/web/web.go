@@ -306,22 +306,61 @@ func (s *Server) requireTailscaleIP(w http.ResponseWriter, r *http.Request) (han
 		return true
 	}
 
-	var ipv4 string // store the first IPv4 address we see for redirect later
-	for _, ip := range st.Self.TailscaleIPs {
-		if ip.Is4() {
-			if r.Host == fmt.Sprintf("%s:%d", ip, ListenPort) {
-				return false
-			}
-			ipv4 = ip.String()
-		}
-		if ip.Is6() && r.Host == fmt.Sprintf("[%s]:%d", ip, ListenPort) {
-			return false
-		}
+	ipv4, ipv6 := s.selfNodeAddresses(r, st)
+	if r.Host == fmt.Sprintf("%s:%d", ipv4.String(), ListenPort) {
+		return false // already accessing over Tailscale IP
 	}
+	if r.Host == fmt.Sprintf("[%s]:%d", ipv6.String(), ListenPort) {
+		return false // already accessing over Tailscale IP
+	}
+
+	// Not currently accessing via Tailscale IP,
+	// redirect them.
+
+	var preferV6 bool
+	if ap, err := netip.ParseAddrPort(r.Host); err == nil {
+		// If Host was already ipv6, keep them on same protocol.
+		preferV6 = ap.Addr().Is6()
+	}
+
 	newURL := *r.URL
-	newURL.Host = fmt.Sprintf("%s:%d", ipv4, ListenPort)
+	if (preferV6 && ipv6.IsValid()) || !ipv4.IsValid() {
+		newURL.Host = fmt.Sprintf("[%s]:%d", ipv6.String(), ListenPort)
+	} else {
+		newURL.Host = fmt.Sprintf("%s:%d", ipv4.String(), ListenPort)
+	}
 	http.Redirect(w, r, newURL.String(), http.StatusMovedPermanently)
 	return true
+}
+
+// selfNodeAddresses return the Tailscale IPv4 and IPv6 addresses for the self node.
+// st is expected to be a status with peers included.
+func (s *Server) selfNodeAddresses(r *http.Request, st *ipnstate.Status) (ipv4, ipv6 netip.Addr) {
+	for _, ip := range st.Self.TailscaleIPs {
+		if ip.Is4() {
+			ipv4 = ip
+		} else if ip.Is6() {
+			ipv6 = ip
+		}
+		if ipv4.IsValid() && ipv6.IsValid() {
+			break // found both IPs
+		}
+	}
+	if whois, err := s.lc.WhoIs(r.Context(), r.RemoteAddr); err == nil {
+		// The source peer connecting to this node may know it by a different
+		// IP than the node knows itself as. Specifically, this may be the case
+		// if the peer is coming from a different tailnet (sharee node), as IPs
+		// are specific to each tailnet.
+		// Here, we check if the source peer knows the node by a different IP,
+		// and return the peer's version if so.
+		if knownIPv4 := whois.Node.SelfNodeV4MasqAddrForThisPeer; knownIPv4 != nil {
+			ipv4 = *knownIPv4
+		}
+		if knownIPv6 := whois.Node.SelfNodeV6MasqAddrForThisPeer; knownIPv6 != nil {
+			ipv6 = *knownIPv6
+		}
+	}
+	return ipv4, ipv6
 }
 
 // authorizeRequest reports whether the request from the web client
@@ -666,6 +705,10 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
 
+	ipv4, ipv6 := s.selfNodeAddresses(r, st)
+	data.IPv4 = ipv4.String()
+	data.IPv6 = ipv6.String()
+
 	if hostinfo.GetEnvType() == hostinfo.HomeAssistantAddOn && data.URLPrefix == "" {
 		// X-Ingress-Path is the path prefix in use for Home Assistant
 		// https://developers.home-assistant.io/docs/add-ons/presentation#ingress
@@ -678,16 +721,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	} else {
 		data.ClientVersion = cv
 	}
-	for _, ip := range st.TailscaleIPs {
-		if ip.Is4() {
-			data.IPv4 = ip.String()
-		} else if ip.Is6() {
-			data.IPv6 = ip.String()
-		}
-		if data.IPv4 != "" && data.IPv6 != "" {
-			break
-		}
-	}
+
 	if st.CurrentTailnet != nil {
 		data.TailnetName = st.CurrentTailnet.MagicDNSSuffix
 		data.DomainName = st.CurrentTailnet.Name
