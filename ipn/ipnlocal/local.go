@@ -430,12 +430,13 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	fs, ok := b.sys.TailfsForRemote.GetOK()
+	logf("ZZZZ looked for TailfsForRemote, found? %v", ok)
 	if ok {
 		b.mu.Lock()
 		shares, err := b.tailfsGetSharesLocked()
 		b.mu.Unlock()
 		if err == nil && len(shares) > 0 {
-			logf("initializing tailfs with %d shares", len(shares))
+			logf("ZZZZ initializing tailfs with %d shares", len(shares))
 			fs.SetShares(shares)
 		}
 	}

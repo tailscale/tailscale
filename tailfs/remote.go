@@ -132,6 +132,7 @@ func (s *fileSystemForRemote) SetShares(shares map[string]*Share) {
 }
 
 func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWriter, r *http.Request) {
+	s.logf("ZZZZ ServeHTTP: %v", r.URL.Path)
 	// TODO(oxtoacart): allow permissions other than just self
 	if !principal.IsSelf {
 		w.WriteHeader(http.StatusForbidden)
@@ -144,6 +145,7 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 	fileServerAddr := s.fileServerAddr
 	s.mx.RUnlock()
 
+	s.logf("ZZZZ sharesMap: %v", sharesMap)
 	children := make(map[string]webdav.FileSystem, len(sharesMap))
 	for _, share := range sharesMap {
 		var addr string
