@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,8 +19,6 @@ import (
 	"tailscale.com/tailfs/compositefs"
 	"tailscale.com/tailfs/webdavfs"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/runas"
-	"tailscale.com/version"
 )
 
 // Share represents a folder that's shared with remote Tailfs nodes.
@@ -49,7 +48,17 @@ type Principal struct {
 // ForRemote is the TailFS filesystem exposed to remote nodes. It provides a
 // unified WebDAV interface to local directories that have been shared.
 type ForRemote interface {
-	// SetShares sets the complete set of shares exposed by this node.
+	// SetFileServerAddr sets the address of the file server to which we
+	// should proxy. This is used on platforms like Windows and MacOS
+	// sandboxed where we can't spawn user-specific sub-processes and instead
+	// rely on the UI application that's already running as an unprivileged
+	// user to access the filesystem for us.
+	SetFileServerAddr(addr string)
+
+	// SetShares sets the complete set of shares exposed by this node. If
+	// useUserServers is true, we will use one subprocess peruser to access
+	// the filesystem (see userServer). Otherwise, we will use the file server
+	// configured via SetFileServerAddr.
 	SetShares(shares map[string]*Share)
 
 	// ServeHTTP is like the equivalent method from http.Handler but also
@@ -70,16 +79,26 @@ func NewFileSystemForRemote(logf logger.Logf) ForRemote {
 }
 
 type fileSystemForRemote struct {
-	logf        logger.Logf
-	lockSystem  webdav.LockSystem
-	shares      map[string]*Share
-	userServers map[string]*userServer
-	mx          sync.RWMutex
+	logf           logger.Logf
+	lockSystem     webdav.LockSystem
+	fileServerAddr string
+	shares         map[string]*Share
+	userServers    map[string]*userServer
+	mx             sync.RWMutex
+}
+
+func (s *fileSystemForRemote) SetFileServerAddr(addr string) {
+	s.logf("ZZZZ setting fileserveraddr to %v", addr)
+	s.mx.Lock()
+	s.fileServerAddr = addr
+	s.mx.Unlock()
 }
 
 func (s *fileSystemForRemote) SetShares(shares map[string]*Share) {
-	if version.IsSandboxedMacOS() {
-		// TODO(oxtoacart): will need to delegate to MacOS application somehow
+	if !useUserServers() {
+		s.mx.Lock()
+		s.shares = shares
+		s.mx.Unlock()
 		return
 	}
 
@@ -119,36 +138,50 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 		return
 	}
 
-	if version.IsSandboxedMacOS() {
-		// TODO(oxtoacart): will need to delegate to MacOS application somehow
-		w.WriteHeader(http.StatusNotImplemented)
-		return
-	}
-
 	s.mx.RLock()
 	sharesMap := s.shares
 	userServers := s.userServers
+	fileServerAddr := s.fileServerAddr
 	s.mx.RUnlock()
 
 	children := make(map[string]webdav.FileSystem, len(sharesMap))
 	for _, share := range sharesMap {
-		userServer, found := userServers[share.As]
-		if found {
-			userServer.mx.RLock()
-			addr := userServer.addr
-			userServer.mx.RUnlock()
-			children[share.Name] = webdavfs.New(&webdavfs.Opts{
-				Client: gowebdav.New(&gowebdav.Opts{
-					URI: fmt.Sprintf("http://safesocket/%v", share.Name),
-					Transport: &http.Transport{
-						Dial: func(_, _ string) (net.Conn, error) {
-							return safesocket.Connect(safesocket.DefaultConnectionStrategy(addr))
-						},
-					},
-				}),
-				Logf: s.logf,
-			})
+		var addr string
+		if !useUserServers() {
+			addr = fileServerAddr
+		} else {
+			userServer, found := userServers[share.As]
+			if found {
+				userServer.mx.RLock()
+				addr = userServer.addr
+				userServer.mx.RUnlock()
+			}
 		}
+
+		if addr == "" {
+			s.logf("ZZZZ no server found for user %v, skipping share %v", share.As, share.Name)
+			continue
+		}
+
+		s.logf("Using addr %v for file server", addr)
+
+		children[share.Name] = webdavfs.New(&webdavfs.Opts{
+			Client: gowebdav.New(&gowebdav.Opts{
+				URI: fmt.Sprintf("http://safesocket/%v", share.Name),
+				Transport: &http.Transport{
+					Dial: func(_, _ string) (net.Conn, error) {
+						_, err := netip.ParseAddrPort(addr)
+						if err == nil {
+							// this is a regular network address, dial normally
+							return net.Dial("tcp", addr)
+						}
+						// assume this is a safesocket address
+						return safesocket.Connect(safesocket.DefaultConnectionStrategy(addr))
+					},
+				},
+			}),
+			Logf: s.logf,
+		})
 	}
 	cfs := compositefs.New(s.logf)
 	cfs.SetChildren(children)
@@ -212,19 +245,24 @@ func (s *userServer) runLoop() {
 		}
 
 		err := s.run(executable)
-		s.logf("error running, will try again: %v", err)
+		s.logf("error running %v, will try again: %v", executable, err)
 		// TODO(oxtoacart): maybe be smarter about backing off here
 		time.Sleep(1 * time.Second)
 	}
 }
 
+// Run runs the executable (tailscaled). This function only works on UNIX systems,
+// but those are the only ones on which we use userServers anyway.
 func (s *userServer) run(executable string) error {
 	// set up the command
 	args := []string{"serve-tailfs"}
 	for _, s := range s.shares {
 		args = append(args, s.Name, s.Path)
 	}
-	cmd := runas.Cmd(s.shares[0].As, executable, args...)
+	allArgs := []string{"-u", s.shares[0].As, executable}
+	allArgs = append(allArgs, args...)
+	cmd := exec.Command("sudo", allArgs...)
+	s.logf("running %v", cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)

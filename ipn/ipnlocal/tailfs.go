@@ -26,6 +26,17 @@ const (
 	tailfsSharesStateKey = ipn.StateKey("_tailfs-shares")
 )
 
+func (b *LocalBackend) TailfsSetFileServerAddr(addr string) error {
+	fs, ok := b.sys.TailfsForRemote.GetOK()
+	if !ok {
+		return errors.New("tailfs not enabled")
+	}
+
+	b.logf("ZZZZ setting tailfs file server addr to %v", addr)
+	fs.SetFileServerAddr(addr)
+	return nil
+}
+
 func (b *LocalBackend) TailfsAddShare(share *tailfs.Share) error {
 	fs, ok := b.sys.TailfsForRemote.GetOK()
 	if !ok {

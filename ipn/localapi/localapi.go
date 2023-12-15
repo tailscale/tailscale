@@ -108,7 +108,8 @@ var handler = map[string]localAPIHandler{
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
-	"shares":                      (*Handler).serveShares,
+	"tailfs/fileserver-address":   (*Handler).serveTailfsFileServerAddr,
+	"tailfs/shares":               (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
 	"tka/init":                    (*Handler).serveTKAInit,
@@ -2456,6 +2457,23 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	ups := h.b.GetSelfUpdateProgress()
 
 	json.NewEncoder(w).Encode(ups)
+}
+
+// serveTailfsFileServerAddr handles updates of the tailfs file server address.
+func (h *Handler) serveTailfsFileServerAddr(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "only PUT allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	h.b.TailfsSetFileServerAddr(string(b))
+	w.WriteHeader(http.StatusCreated)
 }
 
 // serveShares handles the management of tailfs shares.

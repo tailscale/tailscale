@@ -84,7 +84,7 @@ func runShareAdd(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v:", shareAddUsage)
 	}
 
-	return localClient.ShareAdd(ctx, &tailfs.Share{
+	return localClient.TailfsShareAdd(ctx, &tailfs.Share{
 		Name: args[0],
 		Path: args[1],
 		As:   shareAddArgs.as,
@@ -97,7 +97,7 @@ func runShareRemove(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v:", shareRemoveUsage)
 	}
 
-	return localClient.ShareRemove(ctx, args[0])
+	return localClient.TailfsShareRemove(ctx, args[0])
 }
 
 // runShareList is the entry point for the "tailscale share list" command.
@@ -106,7 +106,7 @@ func runShareList(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v:", shareListUsage)
 	}
 
-	sharesMap, err := localClient.ShareList(ctx)
+	sharesMap, err := localClient.TailfsShareList(ctx)
 	if err != nil {
 		return err
 	}
