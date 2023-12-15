@@ -150,8 +150,10 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 	for _, share := range sharesMap {
 		var addr string
 		if !useUserServers() {
+			s.logf("ZZZZ not using user servers, fileserveraddr is %v", fileServerAddr)
 			addr = fileServerAddr
 		} else {
+			s.logf("ZZZZ using user servers")
 			userServer, found := userServers[share.As]
 			if found {
 				userServer.mx.RLock()
@@ -175,10 +177,16 @@ func (s *fileSystemForRemote) ServeHTTP(principal *Principal, w http.ResponseWri
 						_, err := netip.ParseAddrPort(addr)
 						if err == nil {
 							// this is a regular network address, dial normally
+							s.logf("ZZZZ Dialing as normal address: %v", addr)
 							return net.Dial("tcp", addr)
 						}
+						s.logf("ZZZZ dialing safesocket addres %v", addr)
 						// assume this is a safesocket address
-						return safesocket.Connect(safesocket.DefaultConnectionStrategy(addr))
+						conn, err := safesocket.Connect(safesocket.DefaultConnectionStrategy(addr))
+						if err != nil {
+							s.logf("ZZZZ unable to dial safesocket %v: %v", addr, err)
+						}
+						return conn, err
 					},
 				},
 			}),

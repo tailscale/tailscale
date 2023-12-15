@@ -799,16 +799,15 @@ func serveTailfs(args []string) error {
 	if len(args)%2 != 0 {
 		return errors.New("need <sharename> <path> pairs")
 	}
+	s, err := tailfs.NewFileServer()
+	if err != nil {
+		log.Fatal(err)
+	}
 	shares := make(map[string]string)
 	for i := 0; i < len(args); i += 2 {
 		shares[args[0]] = args[1]
 	}
-	s, err := tailfs.NewFileServer(func(share string) string {
-		return shares[share]
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
+	s.SetShares(shares)
 	fmt.Printf("%v\n", s.Addr())
 	return s.Serve()
 }
