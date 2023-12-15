@@ -77,3 +77,15 @@ func EqualSameNil[S ~[]E, E comparable](s1, s2 S) bool {
 	}
 	return true
 }
+
+// ReplaceBetween replaces the elements between start and end exclusive with the
+// given replacement. It returns a new slice with the replacement applied.
+func ReplaceBetween[S ~[]T, T any](s S, start, end int, replacement []T) S {
+	if start < 0 || end < 0 || start > end || end > len(s) {
+		panic("invalid indices")
+	}
+	if start == end {
+		return s
+	}
+	return append(append(s[:start+1:start+1], replacement...), s[end:]...)
+}

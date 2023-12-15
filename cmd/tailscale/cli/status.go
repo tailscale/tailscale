@@ -140,8 +140,7 @@ func runStatus(ctx context.Context, args []string) error {
 			// connection.
 			ssh, _ := findSSH()
 			if ssh != "" {
-				_, err = checkSSHClientVersion(ssh)
-				if err == nil {
+				if !checkSSHClientVersion(ssh) {
 					_, err := writeKnownHosts(st)
 					if err != nil {
 						return err

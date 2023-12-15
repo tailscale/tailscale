@@ -174,15 +174,16 @@ func writeKnownHosts(st *ipnstate.Status) (knownHostsFile string, err error) {
 	return knownHostsFile, nil
 }
 
-// checkSSHClientVersion checks if the OpenSSH version supports the KnownHostsCommand option
-// returns an error if the version is less than 8.4, and the version,
-// otherwise returns nil and the version
-func checkSSHClientVersion(ssh string) (sshVersion *semver.Version, err error) {
-	sshVersion = getSSHClientVersion(ssh)
-	if sshVersion.LessThan(semver.MustParse("8.4")) {
-		return sshVersion, errors.New(fmt.Sprintf("OpenSSH version %s does not support the KnownHostsCommand option", sshVersion))
+// checkSSHClientVersion checks if the OpenSSH version supports the
+// KnownHostsCommand option and returns true if it does
+func checkSSHClientVersion(sshBin string) bool {
+	args := []string{"-G", "-o", "KnownHostsCommand=true", "127.0.0.1"}
+	_, err := exec.Command(sshBin, args...).Output()
+	if err != nil {
+		// If the command errored then it doesn't support KnownHostsCommand
+		return false
 	}
-	return sshVersion, nil
+	return true
 }
 
 // genKnownHostsOption generates either a UserKnownHostsFile or KnownHostsCommand option
@@ -196,15 +197,15 @@ func genKnownHostsOption(st *ipnstate.Status, tailscaleBin string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	_, err = checkSSHClientVersion(ssh)
-	if err != nil {
-		knownhostsFile, err := writeKnownHosts(st)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf(`UserKnownHostsFile %s`, knownhostsFile), nil
+
+	if checkSSHClientVersion(ssh) {
+		return fmt.Sprintf(`KnownHostsCommand %s status --ssh-host-keys`, tailscaleBin), nil
 	}
-	return fmt.Sprintf(`KnownHostsCommand %s status --ssh-host-keys`, tailscaleBin), nil
+	knownhostsFile, err := writeKnownHosts(st)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`UserKnownHostsFile %s`, knownhostsFile), nil
 }
 
 func genKnownHostsFile(st *ipnstate.Status) []byte {
@@ -322,11 +323,11 @@ func isSSHOverTailscale() bool {
 // isSSHHost checks if the node's ssh is managed by Tailscale.
 func isSSHHost(st *ipnstate.Status, arg string) bool {
 	ps, ok := nodeFromArg(st, arg)
-	if !ok {
-		return false
+	if ok {
+		if len(ps.SSH_HostKeys) == 0 {
+			return false
+		}
+		return true
 	}
-	if len(ps.SSH_HostKeys) == 0 {
-		return false
-	}
-	return true
+	return false
 }
