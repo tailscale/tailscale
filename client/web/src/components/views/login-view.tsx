@@ -1,7 +1,11 @@
-import React, { useCallback, useState } from "react"
-import { apiFetch } from "src/api"
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+import React, { useState } from "react"
+import { useAPI } from "src/api"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
-import { NodeData } from "src/hooks/node-data"
+import { NodeData } from "src/types"
+import Button from "src/ui/button"
 import Collapsible from "src/ui/collapsible"
 import Input from "src/ui/input"
 
@@ -9,27 +13,15 @@ import Input from "src/ui/input"
  * LoginView is rendered when the client is not authenticated
  * to a tailnet.
  */
-export default function LoginView({
-  data,
-  refreshData,
-}: {
-  data: NodeData
-  refreshData: () => void
-}) {
+export default function LoginView({ data }: { data: NodeData }) {
+  const api = useAPI()
   const [controlURL, setControlURL] = useState<string>("")
   const [authKey, setAuthKey] = useState<string>("")
-
-  const login = useCallback(
-    (opt: TailscaleUpOptions) => {
-      tailscaleUp(opt).then(refreshData)
-    },
-    [refreshData]
-  )
 
   return (
     <div className="mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
       <TailscaleIcon className="my-2 mb-8" />
-      {data.Status == "Stopped" ? (
+      {data.Status === "Stopped" ? (
         <>
           <div className="mb-6">
             <h3 className="text-3xl font-semibold mb-3">Connect</h3>
@@ -37,14 +29,15 @@ export default function LoginView({
               Your device is disconnected from Tailscale.
             </p>
           </div>
-          <button
-            onClick={() => login({})}
-            className="button button-blue w-full mb-4"
+          <Button
+            onClick={() => api({ action: "up", data: {} })}
+            className="w-full mb-4"
+            intent="primary"
           >
             Connect to Tailscale
-          </button>
+          </Button>
         </>
-      ) : data.IP ? (
+      ) : data.IPv4 ? (
         <>
           <div className="mb-6">
             <p className="text-gray-700">
@@ -54,18 +47,22 @@ export default function LoginView({
                 href="https://tailscale.com/kb/1028/key-expiry"
                 className="link"
                 target="_blank"
+                rel="noreferrer"
               >
                 learn more
               </a>
               .
             </p>
           </div>
-          <button
-            onClick={() => login({ Reauthenticate: true })}
-            className="button button-blue w-full mb-4"
+          <Button
+            onClick={() =>
+              api({ action: "up", data: { Reauthenticate: true } })
+            }
+            className="w-full mb-4"
+            intent="primary"
           >
             Reauthenticate
-          </button>
+          </Button>
         </>
       ) : (
         <>
@@ -74,24 +71,33 @@ export default function LoginView({
             <p className="text-gray-700">
               Get started by logging in to your Tailscale network.
               Or,&nbsp;learn&nbsp;more at{" "}
-              <a href="https://tailscale.com/" className="link" target="_blank">
+              <a
+                href="https://tailscale.com/"
+                className="link"
+                target="_blank"
+                rel="noreferrer"
+              >
                 tailscale.com
               </a>
               .
             </p>
           </div>
-          <button
+          <Button
             onClick={() =>
-              login({
-                Reauthenticate: true,
-                ControlURL: controlURL,
-                AuthKey: authKey,
+              api({
+                action: "up",
+                data: {
+                  Reauthenticate: true,
+                  ControlURL: controlURL,
+                  AuthKey: authKey,
+                },
               })
             }
-            className="button button-blue w-full mb-4"
+            className="w-full mb-4"
+            intent="primary"
           >
             Log In
-          </button>
+          </Button>
           <Collapsible trigger="Advanced options">
             <h4 className="font-medium mb-1 mt-2">Auth Key</h4>
             <p className="text-sm text-gray-500">
@@ -100,6 +106,7 @@ export default function LoginView({
                 href="https://tailscale.com/kb/1085/auth-keys/"
                 className="link"
                 target="_blank"
+                rel="noreferrer"
               >
                 Learn more &rarr;
               </a>
@@ -123,21 +130,4 @@ export default function LoginView({
       )}
     </div>
   )
-}
-
-type TailscaleUpOptions = {
-  Reauthenticate?: boolean // force reauthentication
-  ControlURL?: string
-  AuthKey?: string
-}
-
-function tailscaleUp(options: TailscaleUpOptions) {
-  return apiFetch("/up", "POST", options)
-    .then((r) => r.json())
-    .then((d) => {
-      d.url && window.open(d.url, "_blank")
-    })
-    .catch((e) => {
-      console.error("Failed to login:", e)
-    })
 }

@@ -8,6 +8,12 @@ oauth: {}
   # clientId: ""
   # clientSecret: ""
 
+# enableConnector determines whether the operator should reconcile
+# connector.tailscale.com custom resources. If set to true you have to install
+# connector CRD in a separate step.
+# You can do so by running 'kubectl apply -f ./cmd/k8s-operator/deploy/crds'.
+enableConnector: "false"
+
 operatorConfig:
   image:
     repo: tailscale/k8s-operator

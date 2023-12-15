@@ -11,4 +11,5 @@ package tools
 import (
 	_ "github.com/tailscale/mkctr"
 	_ "honnef.co/go/tools/cmd/staticcheck"
+	_ "sigs.k8s.io/controller-tools/cmd/controller-gen"
 )

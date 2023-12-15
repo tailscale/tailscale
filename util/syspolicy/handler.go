@@ -6,6 +6,7 @@ package syspolicy
 import (
 	"errors"
 	"sync/atomic"
+	"testing"
 )
 
 var (
@@ -55,4 +56,11 @@ func RegisterHandler(h Handler) {
 	if !handlerUsed.CompareAndSwap(false, true) {
 		panic("handler was already used before registration")
 	}
+}
+
+func SetHandlerForTest(tb testing.TB, h Handler) {
+	tb.Helper()
+	oldHandler := handler
+	handler = h
+	tb.Cleanup(func() { handler = oldHandler })
 }

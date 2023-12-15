@@ -167,7 +167,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return err
 		}
 	}
-	if maskedPrefs.AutoUpdateSet {
+	if maskedPrefs.AutoUpdateSet.ApplySet {
 		// On macsys, tailscaled will set the Sparkle auto-update setting. It
 		// does not use clientupdate.
 		if version.IsMacSysExt() {
@@ -180,8 +180,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 				return fmt.Errorf("failed to enable automatic updates: %v, %q", err, out)
 			}
 		} else {
-			_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
-			if errors.Is(err, errors.ErrUnsupported) {
+			if !clientupdate.CanAutoUpdate() {
 				return errors.New("automatic updates are not supported on this platform")
 			}
 		}

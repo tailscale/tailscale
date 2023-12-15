@@ -125,6 +125,76 @@ func TestLikelyHomeRouterIP(t *testing.T) {
 	})
 }
 
+// https://github.com/tailscale/tailscale/issues/10466
+func TestLikelyHomeRouterIP_Prefix(t *testing.T) {
+	ipnet := func(s string) net.Addr {
+		ip, ipnet, err := net.ParseCIDR(s)
+		ipnet.IP = ip
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ipnet
+	}
+
+	mockInterfaces := []Interface{
+		// Valid and running interface that doesn't have a route to the
+		// internet, and comes before the interface that does.
+		{
+			Interface: &net.Interface{
+				Index: 1,
+				MTU:   1500,
+				Name:  "docker0",
+				Flags: net.FlagUp |
+					net.FlagBroadcast |
+					net.FlagMulticast |
+					net.FlagRunning,
+			},
+			AltAddrs: []net.Addr{
+				ipnet("172.17.0.0/16"),
+			},
+		},
+
+		// Fake interface with a gateway to the internet.
+		{
+			Interface: &net.Interface{
+				Index: 2,
+				MTU:   1500,
+				Name:  "fake0",
+				Flags: net.FlagUp |
+					net.FlagBroadcast |
+					net.FlagMulticast |
+					net.FlagRunning,
+			},
+			AltAddrs: []net.Addr{
+				ipnet("192.168.7.100/24"),
+			},
+		},
+	}
+
+	// Mock out the responses from netInterfaces()
+	tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+		return mockInterfaces, nil
+	})
+
+	// Mock out the likelyHomeRouterIP to return a known gateway.
+	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, bool) {
+		return netip.MustParseAddr("192.168.7.1"), true
+	})
+
+	gw, my, ok := LikelyHomeRouterIP()
+	if !ok {
+		t.Fatal("expected success")
+	}
+	t.Logf("myIP = %v; gw = %v", my, gw)
+
+	if want := netip.MustParseAddr("192.168.7.1"); gw != want {
+		t.Errorf("got gateway %v; want %v", gw, want)
+	}
+	if want := netip.MustParseAddr("192.168.7.100"); my != want {
+		t.Errorf("got self IP %v; want %v", my, want)
+	}
+}
+
 func TestLikelyHomeRouterIP_NoMocks(t *testing.T) {
 	// Verify that this works properly when called on a real live system,
 	// without any mocks.

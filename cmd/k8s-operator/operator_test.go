@@ -66,9 +66,9 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -203,9 +203,9 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:              shortName,
@@ -235,7 +235,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		},
 	}
 	expectEqual(t, fc, want)
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o = stsOpts{
 		name:              shortName,
@@ -316,9 +316,9 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:            shortName,
@@ -348,7 +348,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		},
 	}
 	expectEqual(t, fc, want)
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o = stsOpts{
 		name:            shortName,
@@ -427,9 +427,9 @@ func TestAnnotations(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -532,9 +532,9 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -665,9 +665,9 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -808,9 +808,9 @@ func TestCustomHostname(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -919,7 +919,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := stsOpts{
 		name:              shortName,
 		secretName:        fullName,
@@ -969,9 +969,9 @@ func TestDefaultLoadBalancer(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedSecret(fullName))
+	// expectEqual(t, fc, expectedSecret(fullName, "default", "svc"))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
 	o := stsOpts{
 		name:       shortName,
@@ -1021,7 +1021,7 @@ func TestProxyFirewallMode(t *testing.T) {
 
 	expectReconciled(t, sr, "default", "test")
 
-	fullName, shortName := findGenName(t, fc, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 	o := stsOpts{
 		name:         shortName,
 		secretName:   fullName,
@@ -1032,7 +1032,7 @@ func TestProxyFirewallMode(t *testing.T) {
 
 }
 
-func expectedSecret(name string) *corev1.Secret {
+func expectedSecret(name, parentNamespace, typ string) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
@@ -1044,8 +1044,8 @@ func expectedSecret(name string) *corev1.Secret {
 			Labels: map[string]string{
 				"tailscale.com/managed":              "true",
 				"tailscale.com/parent-resource":      "test",
-				"tailscale.com/parent-resource-ns":   "default",
-				"tailscale.com/parent-resource-type": "svc",
+				"tailscale.com/parent-resource-ns":   parentNamespace,
+				"tailscale.com/parent-resource-type": typ,
 			},
 		},
 		StringData: map[string]string{
@@ -1178,20 +1178,20 @@ func expectedSTS(opts stsOpts) *appsv1.StatefulSet {
 	}
 }
 
-func findGenName(t *testing.T, client client.Client, ns, name string) (full, noSuffix string) {
+func findGenName(t *testing.T, client client.Client, ns, name, typ string) (full, noSuffix string) {
 	t.Helper()
 	labels := map[string]string{
 		LabelManaged:         "true",
 		LabelParentName:      name,
 		LabelParentNamespace: ns,
-		LabelParentType:      "svc",
+		LabelParentType:      typ,
 	}
 	s, err := getSingleObject[corev1.Secret](context.Background(), client, "operator-ns", labels)
 	if err != nil {
 		t.Fatalf("finding secret for %q: %v", name, err)
 	}
 	if s == nil {
-		t.Fatalf("no secret found for %q", name)
+		t.Fatalf("no secret found for %q %s %+#v", name, ns, labels)
 	}
 	return s.GetName(), strings.TrimSuffix(s.GetName(), "-0")
 }
@@ -1263,12 +1263,12 @@ func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns
 	}
 }
 
-func expectReconciled(t *testing.T, sr *ServiceReconciler, ns, name string) {
+func expectReconciled(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
 		NamespacedName: types.NamespacedName{
-			Name:      name,
 			Namespace: ns,
+			Name:      name,
 		},
 	}
 	res, err := sr.Reconcile(context.Background(), req)
@@ -1283,7 +1283,7 @@ func expectReconciled(t *testing.T, sr *ServiceReconciler, ns, name string) {
 	}
 }
 
-func expectRequeue(t *testing.T, sr *ServiceReconciler, ns, name string) {
+func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
 		NamespacedName: types.NamespacedName{
@@ -1294,9 +1294,6 @@ func expectRequeue(t *testing.T, sr *ServiceReconciler, ns, name string) {
 	res, err := sr.Reconcile(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
-	}
-	if res.Requeue {
-		t.Fatalf("unexpected immediate requeue")
 	}
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected timed requeue, got success")

@@ -67,9 +67,6 @@ func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
 	}
 
 	prefs.ControlURL = policy.SelectControlURL(defaultPrefs.ControlURL(), prefs.ControlURL)
-	prefs.ExitNodeIP = resolveExitNodeIP(prefs.ExitNodeIP)
-	prefs.ShieldsUp = resolveShieldsUp(prefs.ShieldsUp)
-	prefs.ForceDaemon = resolveForceDaemon(prefs.ForceDaemon)
 
 	pm.logf("migrating Windows profile to new format")
 	return migrationSentinel, prefs.View(), nil
@@ -77,14 +74,4 @@ func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
 
 func (pm *profileManager) completeMigration(migrationSentinel string) {
 	atomicfile.WriteFile(migrationSentinel, []byte{}, 0600)
-}
-
-func resolveShieldsUp(defval bool) bool {
-	pol := policy.GetPreferenceOptionPolicy("AllowIncomingConnections")
-	return !pol.ShouldEnable(!defval)
-}
-
-func resolveForceDaemon(defval bool) bool {
-	pol := policy.GetPreferenceOptionPolicy("UnattendedMode")
-	return pol.ShouldEnable(defval)
 }

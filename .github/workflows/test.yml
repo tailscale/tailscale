@@ -429,7 +429,7 @@ jobs:
       uses: actions/checkout@v4
     - name: check that 'go generate' is clean
       run: |
-        pkgs=$(./tool/go list ./... | grep -v dnsfallback)
+        pkgs=$(./tool/go list ./... | grep -Ev 'dnsfallback|k8s-operator')
         ./tool/go generate $pkgs
         echo
         echo

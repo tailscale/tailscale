@@ -1,23 +1,30 @@
-import cx from "classnames"
-import React, { useEffect } from "react"
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+import React from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
 import HomeView from "src/components/views/home-view"
 import LoginView from "src/components/views/login-view"
 import SSHView from "src/components/views/ssh-view"
+import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse } from "src/hooks/auth"
-import useNodeData, { NodeData } from "src/hooks/node-data"
+import { Feature, featureDescription, NodeData } from "src/types"
+import Card from "src/ui/card"
+import EmptyState from "src/ui/empty-state"
+import LoadingDots from "src/ui/loading-dots"
+import useSWR from "swr"
 import { Link, Route, Router, Switch, useLocation } from "wouter"
 
 export default function App() {
   const { data: auth, loading: loadingAuth, newSession } = useAuth()
 
   return (
-    <main className="min-w-sm max-w-lg mx-auto py-14 px-5">
+    <main className="min-w-sm max-w-lg mx-auto py-4 sm:py-14 px-5">
       {loadingAuth || !auth ? (
-        <div className="text-center py-14">Loading...</div> // TODO(sonia): add a loading view
+        <LoadingView />
       ) : (
         <WebClient auth={auth} newSession={newSession} />
       )}
@@ -32,56 +39,87 @@ function WebClient({
   auth: AuthResponse
   newSession: () => Promise<void>
 }) {
-  const { data, refreshData, updateNode, updatePrefs } = useNodeData()
-  useEffect(() => {
-    refreshData()
-  }, [auth, refreshData])
+  const { data: node } = useSWR<NodeData>("/data")
 
-  return !data ? (
-    <div className="text-center py-14">Loading...</div>
-  ) : data.Status === "NeedsLogin" ||
-    data.Status === "NoState" ||
-    data.Status === "Stopped" ? (
+  return !node ? (
+    <LoadingView />
+  ) : node.Status === "NeedsLogin" ||
+    node.Status === "NoState" ||
+    node.Status === "Stopped" ? (
     // Client not on a tailnet, render login.
-    <LoginView data={data} refreshData={refreshData} />
+    <LoginView data={node} />
   ) : (
     // Otherwise render the new web client.
     <>
-      <Router base={data.URLPrefix}>
-        <Header node={data} auth={auth} newSession={newSession} />
+      <Router base={node.URLPrefix}>
+        <Header node={node} auth={auth} newSession={newSession} />
         <Switch>
           <Route path="/">
-            <HomeView
-              readonly={!auth.canManageNode}
-              node={data}
-              updateNode={updateNode}
-              updatePrefs={updatePrefs}
-            />
+            <HomeView readonly={!auth.canManageNode} node={node} />
           </Route>
           <Route path="/details">
-            <DeviceDetailsView readonly={!auth.canManageNode} node={data} />
+            <DeviceDetailsView readonly={!auth.canManageNode} node={node} />
           </Route>
-          <Route path="/subnets">{/* TODO */}Subnet router</Route>
-          <Route path="/ssh">
-            <SSHView
-              readonly={!auth.canManageNode}
-              runningSSH={data.RunningSSHServer}
-              updatePrefs={updatePrefs}
-            />
-          </Route>
-          <Route path="/serve">{/* TODO */}Share local content</Route>
-          <Route path="/update">
+          <FeatureRoute path="/subnets" feature="advertise-routes" node={node}>
+            <SubnetRouterView readonly={!auth.canManageNode} node={node} />
+          </FeatureRoute>
+          <FeatureRoute path="/ssh" feature="ssh" node={node}>
+            <SSHView readonly={!auth.canManageNode} node={node} />
+          </FeatureRoute>
+          {/* <Route path="/serve">Share local content</Route> */}
+          <FeatureRoute path="/update" feature="auto-update" node={node}>
             <UpdatingView
-              versionInfo={data.ClientVersion}
-              currentVersion={data.IPNVersion}
+              versionInfo={node.ClientVersion}
+              currentVersion={node.IPNVersion}
             />
+          </FeatureRoute>
+          <Route path="/disconnected">
+            <Card className="mt-8">
+              <EmptyState description="You have been disconnected" />
+            </Card>
           </Route>
           <Route>
-            <h2 className="mt-8">Page not found</h2>
+            <Card className="mt-8">
+              <EmptyState description="Page not found" />
+            </Card>
           </Route>
         </Switch>
       </Router>
     </>
+  )
+}
+
+/**
+ * FeatureRoute renders a Route component,
+ * but only displays the child view if the specified feature is
+ * available for use on this node's platform. If not available,
+ * a not allowed view is rendered instead.
+ */
+function FeatureRoute({
+  path,
+  node,
+  feature,
+  children,
+}: {
+  path: string
+  node: NodeData
+  feature: Feature
+  children: React.ReactNode
+}) {
+  return (
+    <Route path={path}>
+      {!node.Features[feature] ? (
+        <Card className="mt-8">
+          <EmptyState
+            description={`${featureDescription(
+              feature
+            )} not available on this device.`}
+          />
+        </Card>
+      ) : (
+        children
+      )}
+    </Route>
   )
 }
 
@@ -96,22 +134,24 @@ function Header({
 }) {
   const [loc] = useLocation()
 
+  if (loc === "/disconnected") {
+    // No header on view presented after logout.
+    return null
+  }
+
   return (
     <>
-      <div className="flex justify-between mb-12">
-        <div className="flex gap-3">
+      <div className="flex flex-wrap gap-4 justify-between items-center mb-9 md:mb-12">
+        <Link to="/" className="flex gap-3 overflow-hidden">
           <TailscaleIcon />
-          <div className="inline text-neutral-800 text-lg font-medium leading-snug">
+          <div className="inline text-gray-800 text-lg font-medium leading-snug truncate">
             {node.DomainName}
           </div>
-        </div>
+        </Link>
         <LoginToggle node={node} auth={auth} newSession={newSession} />
       </div>
       {loc !== "/" && loc !== "/update" && (
-        <Link
-          to="/"
-          className="text-indigo-500 font-medium leading-snug block mb-[10px]"
-        >
+        <Link to="/" className="link font-medium block mb-2">
           &larr; Back to {node.DeviceName}
         </Link>
       )}
@@ -119,21 +159,12 @@ function Header({
   )
 }
 
-function Footer({
-  licensesURL,
-  className,
-}: {
-  licensesURL: string
-  className?: string
-}) {
+/**
+ * LoadingView fills its container with small animated loading dots
+ * in the center.
+ */
+export function LoadingView() {
   return (
-    <footer className={cx("container max-w-lg mx-auto text-center", className)}>
-      <a
-        className="text-xs text-gray-500 hover:text-gray-600"
-        href={licensesURL}
-      >
-        Open Source Licenses
-      </a>
-    </footer>
+    <LoadingDots className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
   )
 }

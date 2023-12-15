@@ -1,14 +1,15 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React from "react"
 import { ReactComponent as CheckCircleIcon } from "src/assets/icons/check-circle.svg"
 import { ReactComponent as XCircleIcon } from "src/assets/icons/x-circle.svg"
 import { ChangelogText } from "src/components/update-available"
-import {
-  UpdateState,
-  useInstallUpdate,
-  VersionInfo,
-} from "src/hooks/self-update"
+import { UpdateState, useInstallUpdate } from "src/hooks/self-update"
+import { VersionInfo } from "src/types"
+import Button from "src/ui/button"
 import Spinner from "src/ui/spinner"
-import { Link } from "wouter"
+import { useLocation } from "wouter"
 
 /**
  * UpdatingView is rendered when the user initiates a Tailscale update, and
@@ -21,6 +22,7 @@ export function UpdatingView({
   versionInfo?: VersionInfo
   currentVersion: string
 }) {
+  const [, setLocation] = useLocation()
   const { updateState, updateLog } = useInstallUpdate(
     currentVersion,
     versionInfo
@@ -48,9 +50,13 @@ export function UpdatingView({
                 : null}
               . <ChangelogText version={versionInfo?.LatestVersion} />
             </p>
-            <Link className="button button-blue text-sm m-3" to="/">
+            <Button
+              className="m-3"
+              sizeVariant="small"
+              onClick={() => setLocation("/")}
+            >
               Log in to access
-            </Link>
+            </Button>
           </>
         ) : updateState === UpdateState.UpToDate ? (
           <>
@@ -60,9 +66,13 @@ export function UpdatingView({
               You are already running Tailscale {currentVersion}, which is the
               newest version available.
             </p>
-            <Link className="button button-blue text-sm m-3" to="/">
+            <Button
+              className="m-3"
+              sizeVariant="small"
+              onClick={() => setLocation("/")}
+            >
               Return
-            </Link>
+            </Button>
           </>
         ) : (
           /* TODO(naman,sonia): Figure out the body copy and design for this view. */
@@ -76,9 +86,13 @@ export function UpdatingView({
                 : null}{" "}
               failed.
             </p>
-            <Link className="button button-blue text-sm m-3" to="/">
+            <Button
+              className="m-3"
+              sizeVariant="small"
+              onClick={() => setLocation("/")}
+            >
               Return
-            </Link>
+            </Button>
           </>
         )}
         <pre className="h-64 overflow-scroll m-3">
