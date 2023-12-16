@@ -18,6 +18,10 @@ func parseUPnPDiscoResponse([]byte) (uPnPDiscoResponse, error) {
 	return uPnPDiscoResponse{}, nil
 }
 
+func processUPnPResponses(metas []uPnPDiscoResponse) []uPnPDiscoResponse {
+	return metas
+}
+
 func (c *Client) getUPnPPortMapping(
 	ctx context.Context,
 	gw netip.Addr,
