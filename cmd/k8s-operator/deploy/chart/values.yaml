@@ -22,7 +22,7 @@ operatorConfig:
     tag: ""
     digest: ""
     pullPolicy: Always
-  logging: "info"
+  logging: "info" # info, debug, dev
   hostname: "tailscale-operator"
   nodeSelector:
     kubernetes.io/os: linux
@@ -53,7 +53,9 @@ proxyConfig:
   # ACL tag that operator will tag proxies with. Operator must be made owner of
   # these tags
   # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
-  defaultTags: tag:k8s
+  # Multiple tags can be passed as a comma-separated string i.e 'tag:k8s-proxies,tag:prod'.
+  # Note that if you pass multiple tags to this field via `--set` flag to helm upgrade/install commands you must escape the comma (for example, "tag:k8s-proxies\,tag:prod"). See https://github.com/helm/helm/issues/1556
+  defaultTags: "tag:k8s"
   firewallMode: auto
 
 # apiServerProxyConfig allows to configure whether the operator should expose
