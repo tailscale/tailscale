@@ -14,7 +14,9 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -94,13 +96,19 @@ type Client struct {
 
 	pcpSawTime time.Time // time we last saw PCP was available
 
-	uPnPSawTime    time.Time         // time we last saw UPnP was available
-	uPnPMeta       uPnPDiscoResponse // Location header from UPnP UDP discovery response
-	uPnPHTTPClient *http.Client      // netns-configured HTTP client for UPnP; nil until needed
+	uPnPSawTime    time.Time           // time we last saw UPnP was available
+	uPnPMetas      []uPnPDiscoResponse // UPnP UDP discovery responses
+	uPnPHTTPClient *http.Client        // netns-configured HTTP client for UPnP; nil until needed
 
 	localPort uint16
 
 	mapping mapping // non-nil if we have a mapping
+}
+
+func (c *Client) vlogf(format string, args ...any) {
+	if c.debug.VerboseLogs {
+		c.logf(format, args...)
+	}
 }
 
 // mapping represents a created port-mapping over some protocol.  It specifies a lease duration,
@@ -307,7 +315,7 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	c.pmpPubIPTime = time.Time{}
 	c.pcpSawTime = time.Time{}
 	c.uPnPSawTime = time.Time{}
-	c.uPnPMeta = uPnPDiscoResponse{}
+	c.uPnPMetas = nil
 }
 
 func (c *Client) sawPMPRecently() bool {
@@ -803,12 +811,69 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		uc.WriteToUDPAddrPort(uPnPIGDPacket, upnpMulticastAddr)
 	}
 
+	// We can see multiple UPnP responses from LANs with multiple
+	// UPnP-capable routers. Rather than randomly picking whichever arrives
+	// first, let's collect all UPnP responses and choose at the end.
+	//
+	// We do this by starting a 50ms timer from when the first UDP packet
+	// is received, and waiting at least that long for more UPnP responses
+	// to arrive before returning (as long as the first packet is seen
+	// within the first 200ms of the context creation, which is likely in
+	// the common case).
+	//
+	// This 50ms timer is distinct from the context timeout; it is used to
+	// delay an early return in the case where we see all three portmapping
+	// responses (PCP, PMP, UPnP), whereas the context timeout causes the
+	// loop to exit regardless of what portmapping responses we've seen.
+	//
+	// We use an atomic value to signal that the timer has finished.
+	var (
+		upnpTimer     *time.Timer
+		upnpTimerDone atomic.Bool
+	)
+	defer func() {
+		if upnpTimer != nil {
+			upnpTimer.Stop()
+		}
+	}()
+
+	// Store all returned UPnP responses until we're done, at which point
+	// we select from all available options.
+	var upnpResponses []uPnPDiscoResponse
+	defer func() {
+		if !res.UPnP || len(upnpResponses) == 0 {
+			// Either we didn't discover any UPnP responses or
+			// c.sawUPnPRecently() is true; don't change anything.
+			return
+		}
+
+		// Deduplicate and sort responses
+		upnpResponses = processUPnPResponses(upnpResponses)
+
+		c.mu.Lock()
+		c.uPnPSawTime = time.Now()
+		if !slices.Equal(c.uPnPMetas, upnpResponses) {
+			c.logf("UPnP meta changed: %+v", upnpResponses)
+			c.uPnPMetas = upnpResponses
+			metricUPnPUpdatedMeta.Add(1)
+		}
+		c.mu.Unlock()
+	}()
+
+	// This is the main loop that receives UDP packets and parses them into
+	// PCP, PMP, or UPnP responses, updates our ProbeResult, and stores
+	// data for use in GetCachedMappingOrStartCreatingOne.
 	buf := make([]byte, 1500)
 	pcpHeard := false // true when we get any PCP response
 	for {
 		if pcpHeard && res.PMP && res.UPnP {
-			// Nothing more to discover.
-			return res, nil
+			if upnpTimerDone.Load() {
+				// Nothing more to discover.
+				return res, nil
+			}
+
+			// UPnP timer still running; fall through and keep
+			// receiving packets.
 		}
 		n, src, err := uc.ReadFromUDPAddrPort(buf)
 		if err != nil {
@@ -817,6 +882,11 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 			return res, err
 		}
+		// Start timer after we get the first response.
+		if upnpTimer == nil {
+			upnpTimer = time.AfterFunc(50*time.Millisecond, func() { upnpTimerDone.Store(true) })
+		}
+
 		ip := src.Addr().Unmap()
 
 		handleUPnPResponse := func() {
@@ -834,15 +904,14 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 			metricUPnPOK.Add(1)
 			c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
+
+			// Store the UPnP response for later selection
 			res.UPnP = true
-			c.mu.Lock()
-			c.uPnPSawTime = time.Now()
-			if c.uPnPMeta != meta {
-				c.logf("UPnP meta changed: %+v", meta)
-				c.uPnPMeta = meta
-				metricUPnPUpdatedMeta.Add(1)
+			if len(upnpResponses) > 10 {
+				c.logf("too many UPnP responses: skipping")
+			} else {
+				upnpResponses = append(upnpResponses, meta)
 			}
-			c.mu.Unlock()
 		}
 
 		port := src.Port()

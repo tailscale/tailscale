@@ -10,6 +10,7 @@ package portmapper
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -421,38 +423,133 @@ func (c *Client) getUPnPPortMapping(
 		internal: internal,
 	}
 
-	var (
-		rootDev *goupnp.RootDevice
-		loc     *url.URL
-		err     error
-	)
+	// We can have multiple UPnP "meta" values (which correspond to the
+	// UPnP discovery responses received). We want to try all of them when
+	// obtaining a mapping, but also prefer any existing mapping's root
+	// device (if present), since that will allow us to renew an existing
+	// mapping instead of creating a new one.
+	// Start by grabbing the list of metas, any existing mapping, and
+	// creating a HTTP client for use.
 	c.mu.Lock()
 	oldMapping, ok := c.mapping.(*upnpMapping)
-	meta := c.uPnPMeta
+	metas := c.uPnPMetas
 	ctx = goupnp.WithHTTPClient(ctx, c.upnpHTTPClientLocked())
 	c.mu.Unlock()
-	if ok && oldMapping != nil {
-		rootDev = oldMapping.rootDev
-		loc = oldMapping.loc
-	} else {
-		rootDev, loc, err = getUPnPRootDevice(ctx, c.logf, c.debug, gw, meta)
-		if c.debug.VerboseLogs {
-			c.logf("getUPnPRootDevice: loc=%q err=%v", loc, err)
-		}
-		if err != nil {
-			return netip.AddrPort{}, false
-		}
+
+	// Wrapper for a uPnPDiscoResponse with an optional existing root
+	// device + URL (if we've got a previous cached mapping).
+	type step struct {
+		rootDev *goupnp.RootDevice // if nil, use 'meta'
+		loc     *url.URL           // non-nil if rootDev is non-nil
+		meta    uPnPDiscoResponse
 	}
-	if rootDev == nil {
-		return netip.AddrPort{}, false
+	var steps []step
+
+	// Now, if we have an existing mapping, swap that mapping's entry to
+	// the first entry in our "metas" list so we try it first.
+	haveOldMapping := ok && oldMapping != nil
+	if haveOldMapping && oldMapping.rootDev != nil {
+		steps = append(steps, step{rootDev: oldMapping.rootDev, loc: oldMapping.loc})
+	}
+	// Note: this includes the meta for a previously-cached mapping, in
+	// case the rootDev changes.
+	for _, meta := range metas {
+		steps = append(steps, step{meta: meta})
 	}
 
-	// Now that we have a root device, select the best mapping service from
-	// it. This makes network requests, and can vary from mapping to
-	// mapping if the upstream device's connection status changes.
+	// Now, iterate through every meta that we have trying to get an
+	// external IP address. If we succeed, we'll return; if we fail, we
+	// continue this loop.
+	var errs []error
+	for _, step := range steps {
+		var (
+			rootDev *goupnp.RootDevice
+			loc     *url.URL
+			err     error
+		)
+		if step.rootDev != nil {
+			rootDev = step.rootDev
+			loc = step.loc
+		} else {
+			rootDev, loc, err = getUPnPRootDevice(ctx, c.logf, c.debug, gw, step.meta)
+			c.vlogf("getUPnPRootDevice: loc=%q err=%v", loc, err)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		if rootDev == nil {
+			continue
+		}
+
+		// This actually performs the port mapping operation using this
+		// root device.
+		//
+		// TODO(andrew-d): this can successfully perform a portmap and
+		// return an externalAddrPort that refers to a non-public IP
+		// address if the first selected RootDevice is a device that is
+		// connected to another internal network. This is still better
+		// than randomly flapping between multiple devices, but we
+		// should probably split this up further to try the best
+		// service (one with an external IP) first, instead of
+		// iterating by device.
+		//
+		// This is probably sufficiently unlikely that I'm leaving that
+		// as a follow-up task if it's necessary.
+		externalAddrPort, client, err := c.tryUPnPPortmapWithDevice(ctx, internal, prevPort, rootDev, loc)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		// If we get here, we're successful; we can cache this mapping,
+		// update our local port, and then return.
+		//
+		// NOTE: this time might not technically be accurate if we created a
+		// permanent lease above, but we should still re-check the presence of
+		// the lease on a regular basis so we use it anyway.
+		d := time.Duration(pmpMapLifetimeSec) * time.Second
+		upnp.goodUntil = now.Add(d)
+		upnp.renewAfter = now.Add(d / 2)
+		upnp.external = externalAddrPort
+		upnp.rootDev = rootDev
+		upnp.loc = loc
+		upnp.client = client
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.mapping = upnp
+		c.localPort = externalAddrPort.Port()
+		return upnp.external, true
+	}
+
+	// If we get here, we didn't get anything.
+	// TODO(andrew-d): use or log errs?
+	_ = errs
+	return netip.AddrPort{}, false
+}
+
+// tryUPnPPortmapWithDevice attempts to perform a port forward from the given
+// UPnP device to the 'internal' address. It tries to re-use the previous port,
+// if a non-zero value is provided, and handles retries and errors about
+// unsupported features.
+//
+// It returns the external address and port that was mapped (i.e. the
+// address+port that another Tailscale node can use to make a connection to
+// this one) and the UPnP client that was used to obtain that mapping.
+func (c *Client) tryUPnPPortmapWithDevice(
+	ctx context.Context,
+	internal netip.AddrPort,
+	prevPort uint16,
+	rootDev *goupnp.RootDevice,
+	loc *url.URL,
+) (netip.AddrPort, upnpClient, error) {
+	// Select the best mapping service from the given root device. This
+	// makes network requests, and can vary from mapping to mapping if the
+	// upstream device's connection status changes.
 	client, err := selectBestService(ctx, c.logf, rootDev, loc)
 	if err != nil {
-		return netip.AddrPort{}, false
+		return netip.AddrPort{}, nil, err
 	}
 
 	// Start by trying to make a temporary lease with a duration.
@@ -465,9 +562,7 @@ func (c *Client) getUPnPPortMapping(
 		internal.Addr().String(),
 		pmpMapLifetimeSec*time.Second,
 	)
-	if c.debug.VerboseLogs {
-		c.logf("addAnyPortMapping: %v, err=%q", newPort, err)
-	}
+	c.vlogf("addAnyPortMapping: %v, err=%q", newPort, err)
 
 	// If this is an error and the code is
 	// "OnlyPermanentLeasesSupported", then we retry with no lease
@@ -490,45 +585,63 @@ func (c *Client) getUPnPPortMapping(
 				internal.Addr().String(),
 				0, // permanent
 			)
-			if c.debug.VerboseLogs {
-				c.logf("addAnyPortMapping: 725 retry %v, err=%q", newPort, err)
-			}
+			c.vlogf("addAnyPortMapping: 725 retry %v, err=%q", newPort, err)
 		}
 	}
 	if err != nil {
-		return netip.AddrPort{}, false
+		return netip.AddrPort{}, nil, err
 	}
 
 	// TODO cache this ip somewhere?
 	extIP, err := client.GetExternalIPAddress(ctx)
-	if c.debug.VerboseLogs {
-		c.logf("client.GetExternalIPAddress: %v, %v", extIP, err)
-	}
+	c.vlogf("client.GetExternalIPAddress: %v, %v", extIP, err)
 	if err != nil {
-		// TODO this doesn't seem right
-		return netip.AddrPort{}, false
+		return netip.AddrPort{}, nil, err
 	}
 	externalIP, err := netip.ParseAddr(extIP)
 	if err != nil {
-		return netip.AddrPort{}, false
+		return netip.AddrPort{}, nil, err
 	}
 
-	upnp.external = netip.AddrPortFrom(externalIP, newPort)
+	return netip.AddrPortFrom(externalIP, newPort), client, nil
+}
 
-	// NOTE: this time might not technically be accurate if we created a
-	// permanent lease above, but we should still re-check the presence of
-	// the lease on a regular basis so we use it anyway.
-	d := time.Duration(pmpMapLifetimeSec) * time.Second
-	upnp.goodUntil = now.Add(d)
-	upnp.renewAfter = now.Add(d / 2)
-	upnp.rootDev = rootDev
-	upnp.loc = loc
-	upnp.client = client
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mapping = upnp
-	c.localPort = newPort
-	return upnp.external, true
+// processUPnPResponses sorts and deduplicates a list of UPnP discovery
+// responses, returning the possibly-reduced list.
+//
+// It will perform a consistent sort of the provided responses, so if we have
+// multiple valid UPnP destinations a consistent option will be picked every
+// time.
+func processUPnPResponses(metas []uPnPDiscoResponse) []uPnPDiscoResponse {
+	// Sort and compact all responses to remove duplicates; since
+	// we send multiple probes, we often get duplicate responses.
+	slices.SortFunc(metas, func(a, b uPnPDiscoResponse) int {
+		// Sort the USN in reverse, so that
+		// "InternetGatewayDevice:2" sorts before
+		// "InternetGatewayDevice:1".
+		if ii := cmp.Compare(a.USN, b.USN); ii != 0 {
+			return -ii
+		}
+		if ii := cmp.Compare(a.Location, b.Location); ii != 0 {
+			return ii
+		}
+		return cmp.Compare(a.Server, b.Server)
+	})
+
+	// We can get multiple responses that point to a single Location, since
+	// we probe for both ssdp:all and InternetGatewayDevice:1 as
+	// independent packets. Compact by comparing the Location and Server,
+	// but not the USN (which contains the device being offered).
+	//
+	// Since the slices are sorted in reverse above, this means that if we
+	// get a discovery response for both InternetGatewayDevice:1 and
+	// InternetGatewayDevice:2, we'll keep the first
+	// (InternetGatewayDevice:2) response, which is what we want.
+	metas = slices.CompactFunc(metas, func(a, b uPnPDiscoResponse) bool {
+		return a.Location == b.Location && a.Server == b.Server
+	})
+
+	return metas
 }
 
 // getUPnPErrorCode returns the UPnP error code from the given response, if the
