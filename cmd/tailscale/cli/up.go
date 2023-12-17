@@ -560,10 +560,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 					if upArgs.qr {
 						q, err := qrcode.New(*url, qrcode.Medium)
+						q.DisableBorder = true
 						if err != nil {
 							log.Printf("QR code error: %v", err)
 						} else {
-							fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+							fmt.Fprintf(Stderr, "%s\n", q.ToSmallString(true))
 						}
 					}
 				}
