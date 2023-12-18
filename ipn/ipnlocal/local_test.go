@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -1780,13 +1781,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
+					Apply: opt.NewBool(false),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantAnyChange: true,
@@ -1799,13 +1800,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
+					Apply: opt.NewBool(false),
 				},
 			},
 			wantAnyChange: true,
@@ -1818,13 +1819,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: false,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantAnyChange: true,
@@ -1837,13 +1838,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: false,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantAnyChange: true,
@@ -2051,6 +2052,59 @@ func TestPreferencePolicyInfo(t *testing.T) {
 						t.Errorf("pref=%v, want %v", got, tt.wantValue)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
+	tests := []struct {
+		desc           string
+		before, after  opt.Bool
+		tailnetDefault bool
+	}{
+		{
+			before:         opt.Bool(""),
+			tailnetDefault: true,
+			after:          opt.NewBool(true),
+		},
+		{
+			before:         opt.Bool(""),
+			tailnetDefault: false,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.Bool("unset"),
+			tailnetDefault: true,
+			after:          opt.NewBool(true),
+		},
+		{
+			before:         opt.Bool("unset"),
+			tailnetDefault: false,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(false),
+			tailnetDefault: true,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(true),
+			tailnetDefault: false,
+			after:          opt.NewBool(true),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("before=%s after=%s", tt.before, tt.after), func(t *testing.T) {
+			b := newTestBackend(t)
+			p := ipn.NewPrefs()
+			p.AutoUpdate.Apply = tt.before
+			if err := b.pm.setPrefsLocked(p.View()); err != nil {
+				t.Fatal(err)
+			}
+			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)
+			if want, got := tt.after, b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
+				t.Errorf("got: %q, want %q", got, want)
 			}
 		})
 	}

@@ -76,6 +76,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/ptr"
@@ -1271,8 +1272,8 @@ var preferencePolicies = []preferencePolicyInfo{
 	},
 	{
 		key: syspolicy.ApplyUpdates,
-		get: func(p ipn.PrefsView) bool { return p.AutoUpdate().Apply },
-		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Apply = v },
+		get: func(p ipn.PrefsView) bool { v, _ := p.AutoUpdate().Apply.Get(); return v },
+		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Apply.Set(v) },
 	},
 	{
 		key: syspolicy.EnableRunExitNode,
@@ -1767,25 +1768,26 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// new controlclient. SetPrefs() allows you to overwrite ServerURL,
 	// but it won't take effect until the next Start().
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
-		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
-		Logf:                 logger.WithPrefix(b.logf, "control: "),
-		Persist:              *persistv,
-		ServerURL:            serverURL,
-		AuthKey:              opts.AuthKey,
-		Hostinfo:             hostinfo,
-		HTTPTestClient:       httpTestClient,
-		DiscoPublicKey:       discoPublic,
-		DebugFlags:           debugFlags,
-		NetMon:               b.sys.NetMon.Get(),
-		Pinger:               b,
-		PopBrowserURL:        b.tellClientToBrowseToURL,
-		OnClientVersion:      b.onClientVersion,
-		OnControlTime:        b.em.onControlTime,
-		Dialer:               b.Dialer(),
-		Observer:             b,
-		C2NHandler:           http.HandlerFunc(b.handleC2N),
-		DialPlan:             &b.dialPlan, // pointer because it can't be copied
-		ControlKnobs:         b.sys.ControlKnobs(),
+		GetMachinePrivateKey:       b.createGetMachinePrivateKeyFunc(),
+		Logf:                       logger.WithPrefix(b.logf, "control: "),
+		Persist:                    *persistv,
+		ServerURL:                  serverURL,
+		AuthKey:                    opts.AuthKey,
+		Hostinfo:                   hostinfo,
+		HTTPTestClient:             httpTestClient,
+		DiscoPublicKey:             discoPublic,
+		DebugFlags:                 debugFlags,
+		NetMon:                     b.sys.NetMon.Get(),
+		Pinger:                     b,
+		PopBrowserURL:              b.tellClientToBrowseToURL,
+		OnClientVersion:            b.onClientVersion,
+		OnTailnetDefaultAutoUpdate: b.onTailnetDefaultAutoUpdate,
+		OnControlTime:              b.em.onControlTime,
+		Dialer:                     b.Dialer(),
+		Observer:                   b,
+		C2NHandler:                 http.HandlerFunc(b.handleC2N),
+		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
+		ControlKnobs:               b.sys.ControlKnobs(),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -2498,6 +2500,32 @@ func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 	b.lastClientVersion = v
 	b.mu.Unlock()
 	b.send(ipn.Notify{ClientVersion: v})
+}
+
+func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
+	prefs := b.pm.CurrentPrefs()
+	if !prefs.Valid() {
+		b.logf("[unexpected]: received tailnet default auto-update callback but current prefs are nil")
+		return
+	}
+	if _, ok := prefs.AutoUpdate().Apply.Get(); ok {
+		// Apply was already set from a previous default or manually by the
+		// user. Tailnet default should not affect us, even if it changes.
+		return
+	}
+	b.logf("using tailnet default auto-update setting: %v", au)
+	prefsClone := prefs.AsStruct()
+	prefsClone.AutoUpdate.Apply = opt.NewBool(au)
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: *prefsClone,
+		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+			ApplySet: true,
+		},
+	})
+	if err != nil {
+		b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
+		return
+	}
 }
 
 // For testing lazy machine key generation.
@@ -4079,7 +4107,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
-	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply
+	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {

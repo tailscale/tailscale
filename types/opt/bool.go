@@ -18,6 +18,12 @@ import (
 // field without it being dropped.
 type Bool string
 
+// NewBool constructs a new Bool value equal to b. The returned Bool is set,
+// unless Set("") or Clear() methods are called.
+func NewBool(b bool) Bool {
+	return Bool(strconv.FormatBool(b))
+}
+
 func (b *Bool) Set(v bool) {
 	*b = Bool(strconv.FormatBool(v))
 }

@@ -176,5 +176,6 @@ func mapResponseContainsNonPatchFields(res *tailcfg.MapResponse) bool {
 		// PeersChanged to PeersChangedPatch in patchifyPeersChanged before this
 		// function is called, so it should never be set anyway. But for
 		// completedness, and for tests, check it too:
-		res.PeersChanged != nil
+		res.PeersChanged != nil ||
+		res.DefaultAutoUpdate != ""
 }

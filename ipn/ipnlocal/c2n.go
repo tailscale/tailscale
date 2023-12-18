@@ -378,7 +378,7 @@ func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
 	prefs := b.Prefs().AutoUpdate()
 	return tailcfg.C2NUpdateResponse{
-		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply,
+		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply.EqualBool(true),
 		Supported: clientupdate.CanAutoUpdate(),
 	}
 }
