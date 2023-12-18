@@ -3466,7 +3466,7 @@ func (b *LocalBackend) authReconfig() {
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := hasCapability(nm, tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
-	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
+	dcfg := b.dnsConfigForNetmapLocked(prefs, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
@@ -3558,12 +3558,13 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 	return false
 }
 
-// dnsConfigForNetmap returns a *dns.Config for the given netmap,
-// prefs, client OS version, and cloud hosting environment.
+// dnsConfigForNetmapLocked returns a *dns.Config for the given netmap, prefs,
+// client OS version, and cloud hosting environment.
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, logf logger.Logf, versionOS string) *dns.Config {
+func (b *LocalBackend) dnsConfigForNetmapLocked(prefs ipn.PrefsView, versionOS string) *dns.Config {
+	nm := b.netMap
 	if nm == nil {
 		return nil
 	}
@@ -3582,7 +3583,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// isn't configured to make MagicDNS resolution truly
 	// magic. Details in
 	// https://github.com/tailscale/tailscale/issues/1886.
-	set := func(name string, addrs views.Slice[netip.Prefix]) {
+	set := func(name string, addrs views.Slice[netip.Prefix], noIPv6 bool) {
 		if addrs.Len() == 0 || name == "" {
 			return
 		}
@@ -3599,31 +3600,61 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 		var ips []netip.Addr
 		for i := range addrs.LenIter() {
-			addr := addrs.At(i)
+			addr := addrs.At(i).Addr()
 			if selfV6Only {
-				if addr.Addr().Is6() {
-					ips = append(ips, addr.Addr())
+				if addr.Is6() {
+					ips = append(ips, addr)
 				}
 				continue
 			}
-			// If this node has an IPv4 address, then
-			// remove peers' IPv6 addresses for now, as we
-			// don't guarantee that the peer node actually
-			// can speak IPv6 correctly.
+
+			// If this is an IPv4 address, we always use it.
+			if addr.Is4() {
+				ips = append(ips, addr)
+				continue
+			}
+
+			// If the node has no IPv4 addresses at all, we use
+			// this address in all cases (even if noIPv6 is set),
+			// since it's better to return a valid-but-unusable
+			// IPv6 addr instead of an empty result.
+			if !have4 {
+				ips = append(ips, addr)
+				continue
+			}
+
+			// If this peer doesn't have host-level IPv6 support,
+			// but (checked above) does have IPv4 addresses, then
+			// we don't return IPv6 addresses to stop the local
+			// node from trying to communicate with the peer over
+			// IPv6 (which won't work).
 			//
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 {
+			if noIPv6 {
 				continue
 			}
-			ips = append(ips, addr.Addr())
+			ips = append(ips, addr)
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	set(nm.Name, nm.GetAddresses())
-	for _, peer := range peers {
-		set(peer.Name(), peer.Addresses())
+
+	var noIPv6Self bool
+	if b.hostinfo != nil && b.hostinfo.NetInfo != nil {
+		b, ok := b.hostinfo.NetInfo.OSHasIPv6.Get()
+
+		// No data == assume we have v6
+		if ok && !b {
+			noIPv6Self = true
+		}
+	}
+	if nm.SelfNode.Valid() && nm.SelfNode.NoIPv6() {
+		noIPv6Self = true
+	}
+	set(nm.Name, nm.GetAddresses(), noIPv6Self)
+	for _, peer := range b.peers {
+		set(peer.Name(), peer.Addresses(), peer.NoIPv6())
 	}
 	for _, rec := range nm.DNS.ExtraRecords {
 		switch rec.Type {
@@ -3652,7 +3683,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	for _, dom := range nm.DNS.Domains {
 		fqdn, err := dnsname.ToFQDN(dom)
 		if err != nil {
-			logf("[unexpected] non-FQDN search domain %q", dom)
+			b.logf("[unexpected] non-FQDN search domain %q", dom)
 		}
 		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 	}
@@ -3668,7 +3699,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it.
-	if dohURL, ok := exitNodeCanProxyDNS(nm, peers, prefs.ExitNodeID()); ok {
+	if dohURL, ok := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID()); ok {
 		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
 		return dcfg
 	}
@@ -3679,7 +3710,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	if len(nm.DNS.Resolvers) > 0 {
 		addDefault(nm.DNS.Resolvers)
 	} else {
-		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
+		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, b.peers, prefs.ExitNodeID()); ok {
 			addDefault(resolvers)
 		}
 	}
@@ -3687,7 +3718,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	for suffix, resolvers := range nm.DNS.Routes {
 		fqdn, err := dnsname.ToFQDN(suffix)
 		if err != nil {
-			logf("[unexpected] non-FQDN route suffix %q", suffix)
+			b.logf("[unexpected] non-FQDN route suffix %q", suffix)
 		}
 
 		// Create map entry even if len(resolvers) == 0; Issue 2706.

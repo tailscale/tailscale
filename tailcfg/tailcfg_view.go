@@ -198,6 +198,7 @@ func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
+func (v NodeView) NoIPv6() bool           { return v.ж.NoIPv6 }
 func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -236,6 +237,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	NoIPv6                        bool
 }{})
 
 // View returns a readonly view of Hostinfo.

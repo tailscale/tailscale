@@ -14,10 +14,12 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/wgengine"
 )
 
 func ipps(ippStrs ...string) (ipps []netip.Prefix) {
@@ -83,7 +85,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				{
 					ID:        2,
 					Name:      "b.net",
-					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
+					Addresses: ipps("100.102.0.1", "100.102.0.2"), // host has broken IPv6
+					NoIPv6:    true,
 				},
 				{
 					ID:        3,
@@ -97,7 +100,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Hosts: map[dnsname.FQDN][]netip.Addr{
 					"b.net.":       ips("100.102.0.1", "100.102.0.2"),
 					"myname.net.":  ips("100.101.101.101"),
-					"peera.net.":   ips("100.102.0.1", "100.102.0.2"),
+					"peera.net.":   ips("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
 					"v6-only.net.": ips("fe75::3"),
 				},
 			},
@@ -327,12 +330,88 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
+		{
+			name: "self_no_ipv6",
+			nm: &netmap.NetworkMap{
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101", "fe75::1010"),
+					NoIPv6:    true,
+				}).View(),
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peera.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+			}),
+			prefs: &ipn.Prefs{},
+			want: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"myname.net.": ips("100.101.101.101"),
+					"peera.net.":  ips("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+			},
+		},
+		{
+			name: "self_no_ipv6_hostinfo",
+			nm: &netmap.NetworkMap{
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101", "fe75::1010"),
+					Hostinfo: (&tailcfg.Hostinfo{
+						NetInfo: &tailcfg.NetInfo{
+							OSHasIPv6: "false",
+						},
+					}).View(),
+				}).View(),
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peera.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+			}),
+			prefs: &ipn.Prefs{},
+			want: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"myname.net.": ips("100.101.101.101"),
+					"peera.net.":  ips("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			verOS := cmpx.Or(tt.os, "linux")
+
+			eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
+
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), log.Logf, verOS)
+			b := &LocalBackend{
+				e:      eng,
+				netMap: tt.nm,
+				logf:   log.Logf,
+				peers:  peersMap(tt.peers),
+			}
+			b.mu.Lock()
+			b.updateFilterLocked(b.netMap, tt.prefs.View())
+
+			if sn := tt.nm.SelfNode; sn.Valid() && sn.Hostinfo().Valid() {
+				b.hostinfo = sn.Hostinfo().AsStruct()
+			}
+
+			// the updateFilterLocked function logs something; clear it
+			log.Lock()
+			log.Reset()
+			log.Unlock()
+
+			got := b.dnsConfigForNetmapLocked(tt.prefs.View(), verOS)
+			b.mu.Unlock()
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
