@@ -4,6 +4,7 @@
 package netmap
 
 import (
+	"cmp"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -13,7 +14,6 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/cmpx"
 )
 
 // NodeMutation is the common interface for types that describe
@@ -139,7 +139,7 @@ func MutationsFromMapResponse(res *tailcfg.MapResponse, now time.Time) (ret []No
 		}
 	}
 	slices.SortStableFunc(ret, func(a, b NodeMutation) int {
-		return cmpx.Compare(a.NodeIDBeingMutated(), b.NodeIDBeingMutated())
+		return cmp.Compare(a.NodeIDBeingMutated(), b.NodeIDBeingMutated())
 	})
 	return ret, true
 }

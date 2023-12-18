@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/cmpx"
 )
 
 var errAlreadyMigrated = errors.New("profile migration already completed")
@@ -113,7 +113,7 @@ func (pm *profileManager) allProfiles() (out []*ipn.LoginProfile) {
 		}
 	}
 	slices.SortFunc(out, func(a, b *ipn.LoginProfile) int {
-		return cmpx.Compare(a.Name, b.Name)
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return out
 }
