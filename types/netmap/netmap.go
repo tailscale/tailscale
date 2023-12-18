@@ -5,6 +5,7 @@
 package netmap
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -16,7 +17,6 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -146,7 +146,7 @@ func (nm *NetworkMap) PeerIndexByNodeID(nodeID tailcfg.NodeID) int {
 		return -1
 	}
 	idx, ok := sort.Find(len(nm.Peers), func(i int) int {
-		return cmpx.Compare(nodeID, nm.Peers[i].ID())
+		return cmp.Compare(nodeID, nm.Peers[i].ID())
 	})
 	if !ok {
 		return -1

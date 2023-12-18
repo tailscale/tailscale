@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -1331,7 +1332,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			nm.Peers = append(nm.Peers, p)
 		}
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
-			return cmpx.Compare(a.ID(), b.ID())
+			return cmp.Compare(a.ID(), b.ID())
 		})
 		notify = &ipn.Notify{NetMap: nm}
 	} else if testenv.InTest() {
@@ -1548,7 +1549,7 @@ func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
 	defer b.mu.Unlock()
 	ret := xmaps.Values(b.peers)
 	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
-		return cmpx.Compare(a.ID(), b.ID())
+		return cmp.Compare(a.ID(), b.ID())
 	})
 	return ret
 }
@@ -4876,7 +4877,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		})
 	}
 	slices.SortFunc(ret, func(a, b *apitype.FileTarget) int {
-		return cmpx.Compare(a.Node.Name, b.Node.Name)
+		return cmp.Compare(a.Node.Name, b.Node.Name)
 	})
 	return ret, nil
 }
