@@ -258,7 +258,7 @@ var debugCmd = &ffcli.Command{
 		{
 			Name:      "portmap",
 			Exec:      debugPortmap,
-			ShortHelp: "run portmap debugging debugging",
+			ShortHelp: "run portmap debugging",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("portmap")
 				fs.DurationVar(&debugPortmapArgs.duration, "duration", 5*time.Second, "timeout for port mapping")
