@@ -774,7 +774,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				}
 				if !prefs.ExitNodeID().IsZero() {
 					if exitPeer, ok := b.netMap.PeerWithStableID(prefs.ExitNodeID()); ok {
-						var online = false
+						online := false
 						if v := exitPeer.Online(); v != nil {
 							online = *v
 						}
@@ -855,7 +855,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		if p.LastSeen() != nil {
 			lastSeen = *p.LastSeen()
 		}
-		var tailscaleIPs = make([]netip.Addr, 0, p.Addresses().Len())
+		tailscaleIPs := make([]netip.Addr, 0, p.Addresses().Len())
 		for i := range p.Addresses().LenIter() {
 			addr := p.Addresses().At(i)
 			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
@@ -4200,7 +4200,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}
-
 }
 
 // hasNodeKey reports whether a non-zero node key is present in the current
@@ -5781,12 +5780,21 @@ func (b *LocalBackend) ObserveDNSResponse(res []byte) {
 	appConnector.ObserveDNSResponse(res)
 }
 
+// ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
+var ErrDisallowedAutoRoute = errors.New("route is not allowed")
+
 // AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
 // route advertisement if one is not already present in the existing routes.
+// If the route is disallowed, ErrDisallowedAutoRoute is returned.
 func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
+	if !allowedAutoRoute(ipp) {
+		return ErrDisallowedAutoRoute
+	}
 	currentRoutes := b.Prefs().AdvertiseRoutes()
-	// TODO(raggi): check if the new route is a subset of an existing route.
-	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool { return r == ipp }) {
+	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool {
+		// TODO(raggi): add support for subset checks and avoid subset route creations.
+		return ipp.IsSingleIP() && r.Contains(ipp.Addr()) || r == ipp
+	}) {
 		return nil
 	}
 	routes := append(currentRoutes.AsSlice(), ipp)
@@ -5797,6 +5805,36 @@ func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
+}
+
+var (
+	disallowedAddrs = []netip.Addr{
+		netip.MustParseAddr("::1"),
+		netip.MustParseAddr("::"),
+		netip.MustParseAddr("0.0.0.0"),
+	}
+	disallowedRanges = []netip.Prefix{
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("ff00::/8"),
+	}
+)
+
+// allowedAutoRoute determines if the route being added via AdvertiseRoute (the app connector featuge) should be allowed.
+func allowedAutoRoute(ipp netip.Prefix) bool {
+	// Note: blocking the addrs for globals, not solely the prefixes.
+	for _, addr := range disallowedAddrs {
+		if ipp.Addr() == addr {
+			return false
+		}
+	}
+	for _, pfx := range disallowedRanges {
+		if pfx.Overlaps(ipp) {
+			return false
+		}
+	}
+	// TODO(raggi): exclude tailscale service IPs and so on as well.
+	return true
 }
 
 // mayDeref dereferences p if non-nil, otherwise it returns the zero value.

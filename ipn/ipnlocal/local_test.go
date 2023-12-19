@@ -265,7 +265,6 @@ func TestPeerRoutes(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestPeerAPIBase(t *testing.T) {
@@ -700,7 +699,6 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestStatusWithoutPeers(t *testing.T) {
@@ -1168,6 +1166,26 @@ func TestRouteAdvertiser(t *testing.T) {
 	must.Do(ra.AdvertiseRoute(testPrefix))
 
 	routes := b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+}
+
+func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
+	b := newTestBackend(t)
+	testPrefix := netip.MustParsePrefix("192.0.0.0/24")
+	ra := appc.RouteAdvertiser(b)
+	must.Do(ra.AdvertiseRoute(testPrefix))
+
+	routes := b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+
+	must.Do(ra.AdvertiseRoute(netip.MustParsePrefix("192.0.0.8/32")))
+
+	// the above /32 is not added as it is contained within the /24
+	routes = b.Prefs().AdvertiseRoutes()
 	if routes.Len() != 1 || routes.At(0) != testPrefix {
 		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
 	}
@@ -1886,7 +1904,6 @@ func TestApplySysPolicy(t *testing.T) {
 			})
 
 			t.Run("set prefs", func(t *testing.T) {
-
 				b := newTestBackend(t)
 				b.SetPrefs(tt.prefs.Clone())
 				if !b.Prefs().Equals(tt.wantPrefs.View()) {
