@@ -414,12 +414,20 @@ func (m *MaskedPrefs) Pretty() string {
 				continue
 			}
 			mpf := mpv.Field(i - 1)
-			prettyFn := mf.MethodByName("Pretty")
-			if !prettyFn.IsValid() {
-				panic(fmt.Sprintf("MaskedPrefs field %q is missing the Pretty method", name))
+			// This would be much simpler with reflect.MethodByName("Pretty"),
+			// but using MethodByName disables some linker optimizations and
+			// makes our binaries much larger. See
+			// https://github.com/tailscale/tailscale/issues/10627#issuecomment-1861211945
+			//
+			// Instead, have this explicit switch by field name to do type
+			// assertions.
+			switch name {
+			case "AutoUpdateSet":
+				p := mf.Interface().(AutoUpdatePrefsMask).Pretty(mpf.Interface().(AutoUpdatePrefs))
+				fmt.Fprintf(&sb, "%s={%s}", strings.TrimSuffix(name, "Set"), p)
+			default:
+				panic(fmt.Sprintf("unexpected MaskedPrefs field %q", name))
 			}
-			res := prettyFn.Call([]reflect.Value{mpf})
-			fmt.Fprintf(&sb, "%s={%s}", strings.TrimSuffix(name, "Set"), res[0].String())
 		}
 	}
 	sb.WriteString("}")
