@@ -60,6 +60,8 @@ The Tailscale API does not currently support pagination. All results are returne
   - Update tags: [`POST /api/v2/device/{deviceID}/tags`](#update-device-tags)
 - **Key**
   - Update device key: [`POST /api/v2/device/{deviceID}/key`](#update-device-key)
+- **IP Address**
+  - Set device IPv4 address: [`POST /api/v2/device/{deviceID}/ip`](#set-device-ipv4-address)
 
 **[Tailnet](#tailnet)**
 - [**Policy File**](#policy-file)
@@ -600,7 +602,7 @@ If the tags supplied in the `POST` call do not exist in the tailnet policy file,
 }
 ```
 
-<a href="device-key-post"><a>
+<a href="device-key-post"></a>
 
 ## Update device key
 
@@ -648,6 +650,51 @@ This returns a 2xx code on success, with an empty JSON object in the response bo
 curl "https://api.tailscale.com/api/v2/device/11055/key" \
 -u "tskey-api-xxxxx:" \
 --data-binary '{"keyExpiryDisabled": true}'
+```
+
+### Response
+
+The response is 2xx on success. The response body is currently an empty JSON object.
+
+## Set device IPv4 address
+
+``` http
+POST /api/v2/device/{deviceID}/ip
+```
+
+Set the Tailscale IPv4 address of the device.
+
+### Parameters
+
+#### `deviceid` (required in URL path)
+
+The ID of the device.
+
+#### `ipv4` (optional in `POST` body)
+
+Provide a new IPv4 address for the device.
+
+When a device is added to a tailnet, its Tailscale IPv4 address is set at random either from the CGNAT range, or a subset of the CGNAT range specified by an [ip pool](https://tailscale.com/kb/1304/ip-pool).
+This endpoint can be used to replace the existing IPv4 address with a specific value.
+
+``` jsonc
+{
+  "ipv4": "100.80.0.1"
+}
+```
+
+This action will break any existing connections to this machine.
+You will need to reconnect to this machine using the new IP address.
+You may also need to flush your DNS cache.
+
+This returns a 2xx code on success, with an empty JSON object in the response body.
+
+### Request example
+
+``` sh
+curl "https://api.tailscale.com/api/v2/device/11055/ip" \
+-u "tskey-api-xxxxx:" \
+--data-binary '{"ipv4": "100.80.0.1"}'
 ```
 
 ### Response
