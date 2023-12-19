@@ -58,9 +58,16 @@ type pcpMapping struct {
 	// Doesn't seem to be used elsewhere, but can use it for validation at some point.
 }
 
+func (p *pcpMapping) MappingType() string      { return "pcp" }
 func (p *pcpMapping) GoodUntil() time.Time     { return p.goodUntil }
 func (p *pcpMapping) RenewAfter() time.Time    { return p.renewAfter }
 func (p *pcpMapping) External() netip.AddrPort { return p.external }
+func (p *pcpMapping) MappingDebug() string {
+	return fmt.Sprintf("pcpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d}",
+		p.gw, p.external, p.internal,
+		p.renewAfter.Unix(), p.goodUntil.Unix())
+}
+
 func (p *pcpMapping) Release(ctx context.Context) {
 	uc, err := p.c.listenPacket(ctx, "udp4", ":0")
 	if err != nil {

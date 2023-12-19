@@ -68,9 +68,16 @@ type upnpMapping struct {
 //	https://github.com/tailscale/tailscale/issues/7377
 const upnpProtocolUDP = "UDP"
 
+func (u *upnpMapping) MappingType() string      { return "upnp" }
 func (u *upnpMapping) GoodUntil() time.Time     { return u.goodUntil }
 func (u *upnpMapping) RenewAfter() time.Time    { return u.renewAfter }
 func (u *upnpMapping) External() netip.AddrPort { return u.external }
+func (u *upnpMapping) MappingDebug() string {
+	return fmt.Sprintf("upnpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d, loc:%q}",
+		u.gw, u.external, u.internal,
+		u.renewAfter.Unix(), u.goodUntil.Unix(),
+		u.loc)
+}
 func (u *upnpMapping) Release(ctx context.Context) {
 	u.client.DeletePortMapping(ctx, "", u.external.Port(), upnpProtocolUDP)
 }
