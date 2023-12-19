@@ -154,5 +154,7 @@ func (src *WebServerConfig) Clone() *WebServerConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _WebServerConfigCloneNeedsRegeneration = WebServerConfig(struct {
-	Handlers map[string]*HTTPHandler
+	Handlers    map[string]*HTTPHandler
+	TLSCertPath string
+	TLSKeyPath  string
 }{})

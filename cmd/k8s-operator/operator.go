@@ -63,6 +63,8 @@ func main() {
 		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode    = defaultEnv("PROXY_FIREWALL_MODE", "")
 		tsEnableConnector = defaultBool("ENABLE_CONNECTOR", false)
+		tlsCertPath       = defaultEnv("TLS_CERT_PATH", "")
+		tlsKeyPath        = defaultEnv("TLS_KEY_PATH", "")
 	)
 
 	var opts []kzap.Opts
@@ -93,7 +95,7 @@ func main() {
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
 	// TODO (irbekrm): gather the reconciler options into an opts struct
 	// rather than passing a million of them in one by one.
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tsEnableConnector)
+	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tlsCertPath, tlsKeyPath, tsEnableConnector)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -201,7 +203,7 @@ waitOnline:
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string, enableConnector bool) {
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode, tlsCertPath, tlsKeyPath string, enableConnector bool) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -269,10 +271,12 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		Watches(&corev1.Secret{}, ingressChildFilter).
 		Watches(&corev1.Service{}, ingressChildFilter).
 		Complete(&IngressReconciler{
-			ssr:      ssr,
-			recorder: eventRecorder,
-			Client:   mgr.GetClient(),
-			logger:   zlog.Named("ingress-reconciler"),
+			ssr:         ssr,
+			recorder:    eventRecorder,
+			Client:      mgr.GetClient(),
+			logger:      zlog.Named("ingress-reconciler"),
+			tlsCertPath: tlsCertPath,
+			tlsKeyPath:  tlsKeyPath,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)

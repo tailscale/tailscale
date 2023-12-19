@@ -94,6 +94,9 @@ type FunnelConn struct {
 // WebServerConfig describes a web server's configuration.
 type WebServerConfig struct {
 	Handlers map[string]*HTTPHandler // mountPoint => handler
+	// TODO: put these two into a single struct with some validation functions
+	TLSCertPath string `json:",omitempty"`  // a filesystem location containing TLS cert
+	TLSKeyPath  string `json:",omitempty:"` // a filesystem location containing TLS key
 }
 
 // TCPPortHandler describes what to do when handling a TCP

@@ -34,3 +34,11 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
+          volumeMounts:
+          - name: tls-certs
+            mountPath: /tls
+            readOnly: true
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: tls-certs

@@ -38,6 +38,10 @@ type IngressReconciler struct {
 	// managedIngresses is a set of all ingress resources that we're currently
 	// managing. This is only used for metrics.
 	managedIngresses set.Slice[types.UID]
+
+	// TODO: configure this for each ingress individually instead perhaps
+	tlsCertPath string
+	tlsKeyPath  string
 }
 
 var (
@@ -143,6 +147,10 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 				Handlers: map[string]*ipn.HTTPHandler{},
 			},
 		},
+	}
+	if a.tlsCertPath != "" && a.tlsKeyPath != "" {
+		sc.Web[magic443].TLSCertPath = a.tlsCertPath
+		sc.Web[magic443].TLSKeyPath = a.tlsKeyPath
 	}
 	if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
 		sc.AllowFunnel = map[ipn.HostPort]bool{

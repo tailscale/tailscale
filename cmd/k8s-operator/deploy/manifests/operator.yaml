@@ -174,12 +174,19 @@ spec:
                       value: "false"
                     - name: PROXY_FIREWALL_MODE
                       value: auto
+                    - name: TLS_CERT_PATH
+                      value: /tls/tls.crt
+                    - name: TLS_KEY_PATH
+                      value: /tls/tls.key
                   image: tailscale/k8s-operator:unstable
                   imagePullPolicy: Always
                   name: operator
                   volumeMounts:
                     - mountPath: /oauth
                       name: oauth
+                      readOnly: true
+                    - mountPath: /tls
+                      name: tls-certs
                       readOnly: true
             nodeSelector:
                 kubernetes.io/os: linux
@@ -188,3 +195,6 @@ spec:
                 - name: oauth
                   secret:
                     secretName: operator-oauth
+                - name: tls-certs
+                  secret:
+                    secretName: tls-certs

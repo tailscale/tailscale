@@ -868,9 +868,28 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHe
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")
 		}
-		_, ok := b.webServerConfig(hi.ServerName, port)
+		cfg, ok := b.webServerConfig(hi.ServerName, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
+		}
+		if cfg.AsStruct().TLSCertPath != "" && cfg.AsStruct().TLSKeyPath != "" {
+			// TODO: check that the cert is actually right for the domain of that webServerConfig
+			// TODO: verify these paths in a reliable way
+			keyData, err := os.ReadFile(cfg.AsStruct().TLSKeyPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read keyPath: %w", err)
+			}
+
+			certData, err := os.ReadFile(cfg.AsStruct().TLSCertPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read certPath: %w", err)
+			}
+
+			cert, err := tls.X509KeyPair(certData, keyData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse TLS cert and key: %v", err)
+			}
+			return &cert, nil
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

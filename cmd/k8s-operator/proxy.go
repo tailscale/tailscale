@@ -145,6 +145,8 @@ func (h *apiserverProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // It never returns.
 func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLogger, mode apiServerProxyMode) {
+	proxyCertPath := os.Getenv("TLS_CERT_PATH")
+	proxyKeyPath := os.Getenv("TLS_KEY_PATH")
 	if mode == apiserverProxyModeDisabled {
 		return
 	}
@@ -202,11 +204,37 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLo
 			Transport: rt,
 		},
 	}
+	certGetter := lc.GetCertificate
+	if proxyCertPath != "" && proxyKeyPath != "" {
+		log.Infof("Using cert path: %v, key path: %v", proxyCertPath, proxyKeyPath)
+
+		certGetter = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			// TODO: check that the path actually contains a valid cert for the requested SNI
+			keyData, err := os.ReadFile(proxyKeyPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read keyPath: %w", err)
+			}
+
+			certData, err := os.ReadFile(proxyCertPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read certPath: %w", err)
+			}
+
+			cert, err := tls.X509KeyPair(certData, keyData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse TLS cert and key: %v", err)
+			}
+			return &cert, nil
+		}
+	} else {
+		log.Info("Will be provisioning certs for tailscale")
+	}
+	// GetCertificate func(*ClientHelloInfo) (*Certificate, error)
 	hs := &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
 		// incompatible with HTTP/2; so disable HTTP/2 in the proxy.
 		TLSConfig: &tls.Config{
-			GetCertificate: lc.GetCertificate,
+			GetCertificate: certGetter,
 			NextProtos:     []string{"http/1.1"},
 		},
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),

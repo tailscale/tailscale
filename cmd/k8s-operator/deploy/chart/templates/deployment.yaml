@@ -35,6 +35,9 @@ spec:
       - name: oauth
         secret:
           secretName: operator-oauth
+      - name: tls-certs
+        secret:
+          secretName: tls-certs
       containers:
         - name: operator
           {{- with .Values.operatorConfig.securityContext }}
@@ -74,9 +77,16 @@ spec:
               value: "{{ .Values.apiServerProxyConfig.mode }}"
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
+            - name: TLS_CERT_PATH
+              value: /tls/tls.crt
+            - name: TLS_KEY_PATH
+              value: /tls/tls.key
           volumeMounts:
           - name: oauth
             mountPath: /oauth
+            readOnly: true
+          - name: tls-certs
+            mountPath: /tls
             readOnly: true
       {{- with .Values.operatorConfig.nodeSelector }}
       nodeSelector:

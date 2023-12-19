@@ -22,3 +22,11 @@ spec:
               value: "true"
             - name: TS_AUTH_ONCE
               value: "true"
+          volumeMounts:
+          - name: tls-certs
+            mountPath: /tls
+            readOnly: true
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: tls-certs
