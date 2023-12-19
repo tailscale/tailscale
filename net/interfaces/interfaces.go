@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
@@ -525,7 +526,21 @@ func HTTPOfListener(ln net.Listener) string {
 
 }
 
-var likelyHomeRouterIP func() (netip.Addr, bool)
+// likelyHomeRouterIP, if present, is a platform-specific function that is used
+// to determine the likely home router IP of the current system. The signature
+// of this function is:
+//
+//	func() (homeRouter, localAddr netip.Addr, ok bool)
+//
+// It should return a homeRouter IP and ok=true, or no homeRouter IP and
+// ok=false. Optionally, an implementation can return the "self" IP address as
+// well, which will be used instead of attempting to determine it by reading
+// the system's interfaces.
+var likelyHomeRouterIP func() (netip.Addr, netip.Addr, bool)
+
+// For debugging the new behaviour where likelyHomeRouterIP can return the
+// "self" IP; should remove after we're confidant this won't cause issues.
+var disableLikelyHomeRouterIPSelf = envknob.RegisterBool("TS_DEBUG_DISABLE_LIKELY_HOME_ROUTER_IP_SELF")
 
 // LikelyHomeRouterIP returns the likely IP of the residential router,
 // which will always be an IPv4 private address, if found.
@@ -533,15 +548,30 @@ var likelyHomeRouterIP func() (netip.Addr, bool)
 // the LAN using that gateway.
 // This is used as the destination for UPnP, NAT-PMP, PCP, etc queries.
 func LikelyHomeRouterIP() (gateway, myIP netip.Addr, ok bool) {
-	if likelyHomeRouterIP != nil {
-		gateway, ok = likelyHomeRouterIP()
-		if !ok {
-			return
-		}
+	// If we don't have a way to get the home router IP, then we can't do
+	// anything; just return.
+	if likelyHomeRouterIP == nil {
+		return
 	}
+
+	// Get the gateway next; if that fails, we can't continue.
+	gateway, myIP, ok = likelyHomeRouterIP()
 	if !ok {
 		return
 	}
+
+	// If the platform-specific implementation returned a valid myIP, then
+	// we can return it as-is without needing to iterate through all
+	// interface addresses.
+	if disableLikelyHomeRouterIPSelf() {
+		myIP = netip.Addr{}
+	}
+	if myIP.IsValid() {
+		return
+	}
+
+	// The platform-specific implementation didn't return a valid myIP;
+	// iterate through all interfaces and try to find the correct one.
 	ForeachInterfaceAddress(func(i Interface, pfx netip.Prefix) {
 		if !i.IsUp() {
 			// Skip interfaces that aren't up.
