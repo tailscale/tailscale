@@ -127,6 +127,11 @@ type mapping interface {
 	RenewAfter() time.Time
 	// External indicates what port the mapping can be reached from on the outside.
 	External() netip.AddrPort
+	// MappingType returns a descriptive string for this type of mapping.
+	MappingType() string
+	// MappingDebug returns a debug string for this mapping, for use when
+	// printing verbose logs.
+	MappingDebug() string
 }
 
 // HaveMapping reports whether we have a current valid mapping.
@@ -154,9 +159,17 @@ func (m *pmpMapping) externalValid() bool {
 	return m.external.Addr().IsValid() && m.external.Port() != 0
 }
 
+func (p *pmpMapping) MappingType() string      { return "pmp" }
 func (p *pmpMapping) GoodUntil() time.Time     { return p.goodUntil }
 func (p *pmpMapping) RenewAfter() time.Time    { return p.renewAfter }
 func (p *pmpMapping) External() netip.AddrPort { return p.external }
+
+func (p *pmpMapping) MappingDebug() string {
+	return fmt.Sprintf("pmpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d, epoch:%v}",
+		p.gw, p.external, p.internal,
+		p.renewAfter.Unix(), p.goodUntil.Unix(),
+		p.epoch)
+}
 
 // Release does a best effort fire-and-forget release of the PMP mapping m.
 func (m *pmpMapping) Release(ctx context.Context) {
@@ -454,6 +467,44 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		return netip.AddrPort{}, NoMappingError{ErrGatewayIPv6}
 	}
 
+	now := time.Now()
+
+	// Log what kind of portmap we obtained
+	reusedExisting := false
+	defer func() {
+		if err != nil {
+			return
+		}
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		portmapType := "none"
+		if c.mapping != nil {
+			portmapType = c.mapping.MappingType()
+		}
+		if reusedExisting {
+			portmapType = "existing-" + portmapType
+		}
+
+		if c.mapping == nil {
+			c.logf("[unexpected] no error but no stored mapping: now=%d external=%v type=%s",
+				now.Unix(), external, portmapType)
+			return
+		}
+
+		// Print the internal details of each mapping if we're being verbose.
+		if c.debug.VerboseLogs {
+			c.logf("successfully obtained mapping: now=%d external=%v type=%s mapping=%s",
+				now.Unix(), external, portmapType, c.mapping.MappingDebug())
+			return
+		}
+
+		c.logf("[v1] successfully obtained mapping: now=%d external=%v type=%s goodUntil=%d renewAfter=%d",
+			now.Unix(), external, portmapType,
+			c.mapping.GoodUntil().Unix(), c.mapping.RenewAfter().Unix())
+	}()
+
 	c.mu.Lock()
 	localPort := c.localPort
 	internalAddr := netip.AddrPortFrom(myIP, localPort)
@@ -463,10 +514,10 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 	var prevPort uint16
 
 	// Do we have an existing mapping that's valid?
-	now := time.Now()
 	if m := c.mapping; m != nil {
 		if now.Before(m.RenewAfter()) {
 			defer c.mu.Unlock()
+			reusedExisting = true
 			return m.External(), nil
 		}
 		// The mapping might still be valid, so just try to renew it.
@@ -478,6 +529,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return external, nil
 		}
+		c.vlogf("fallback to UPnP due to PCP and PMP being disabled failed")
 		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 
@@ -507,6 +559,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return external, nil
 		}
+		c.vlogf("fallback to UPnP due to no PCP and PMP failed")
 		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	c.mu.Unlock()
