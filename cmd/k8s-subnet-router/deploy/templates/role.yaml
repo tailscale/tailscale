@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tailscale-subnet-router.fullname" . }}
+  labels:
+    {{- include "tailscale-subnet-router.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""] # "" indicates the core API group
+    resources: ["secrets"]
+    # Create can not be restricted to a resource name.
+    verbs: ["create"]
+  - apiGroups: [""]
+    resourceNames: [ {{ .Values.tailscale.state.secretName }} ]
+    resources: ["secrets"]
+    verbs: ["get", "update", "patch"]
