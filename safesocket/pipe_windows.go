@@ -17,13 +17,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func connect(s *ConnectionStrategy) (net.Conn, error) {
+func connect(path string) (net.Conn, error) {
 	dl := time.Now().Add(20 * time.Second)
 	ctx, cancel := context.WithDeadline(context.Background(), dl)
 	defer cancel()
 	// We use the identification impersonation level so that tailscaled may
 	// obtain information about our token for access control purposes.
-	return winio.DialPipeAccessImpLevel(ctx, s.path, windows.GENERIC_READ|windows.GENERIC_WRITE, winio.PipeImpLevelIdentification)
+	return winio.DialPipeAccessImpLevel(ctx, path, windows.GENERIC_READ|windows.GENERIC_WRITE, winio.PipeImpLevelIdentification)
 }
 
 func setFlags(network, address string, c syscall.RawConn) error {

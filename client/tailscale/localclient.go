@@ -102,8 +102,7 @@ func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) 
 			return d.DialContext(ctx, "tcp", "127.0.0.1:"+strconv.Itoa(port))
 		}
 	}
-	s := safesocket.DefaultConnectionStrategy(lc.socket())
-	return safesocket.Connect(s)
+	return safesocket.Connect(lc.socket())
 }
 
 // DoLocalRequest makes an HTTP request to the local machine's Tailscale daemon.

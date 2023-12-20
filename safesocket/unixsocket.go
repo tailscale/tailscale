@@ -16,11 +16,11 @@ import (
 	"runtime"
 )
 
-func connect(s *ConnectionStrategy) (net.Conn, error) {
+func connect(path string) (net.Conn, error) {
 	if runtime.GOOS == "js" {
 		return nil, errors.New("safesocket.Connect not yet implemented on js/wasm")
 	}
-	return net.Dial("unix", s.path)
+	return net.Dial("unix", path)
 }
 
 func listen(path string) (net.Listener, error) {
