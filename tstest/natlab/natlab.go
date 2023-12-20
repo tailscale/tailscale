@@ -442,16 +442,6 @@ func (m *Machine) forwardPacket(p *Packet, iif *Interface) {
 	oif.net.write(p)
 }
 
-func unspecOf(ip netip.Addr) netip.Addr {
-	if ip.Is4() {
-		return v4unspec
-	}
-	if ip.Is6() {
-		return v6unspec
-	}
-	panic(fmt.Sprintf("bogus IP %#v", ip))
-}
-
 // Attach adds an interface to a machine.
 //
 // The first interface added to a Machine becomes that machine's
@@ -570,19 +560,6 @@ func (m *Machine) interfaceForIP(ip netip.Addr) (*Interface, error) {
 		}
 	}
 	return nil, fmt.Errorf("no route found to %v", ip)
-}
-
-func (m *Machine) hasv6() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, f := range m.interfaces {
-		for _, ip := range f.ips {
-			if ip.Is6() {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (m *Machine) pickEphemPort() (port uint16, err error) {

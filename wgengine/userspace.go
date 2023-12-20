@@ -985,8 +985,6 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
-var singleNewline = []byte{'\n'}
-
 var ErrEngineClosing = errors.New("engine closing; no status")
 
 func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
@@ -1487,8 +1485,7 @@ func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
 }
 
 var (
-	metricMagicDNSPacketIn = clientmetric.NewCounter("magicdns_packet_in") // for 100.100.100.100
-	metricReflectToOS      = clientmetric.NewCounter("packet_reflect_to_os")
+	metricReflectToOS = clientmetric.NewCounter("packet_reflect_to_os")
 
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")

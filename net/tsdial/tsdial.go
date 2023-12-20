@@ -196,18 +196,6 @@ func (d *Dialer) closeSysConn(id int) {
 	go c.Close() // ignore the error
 }
 
-func (d *Dialer) interfaceIndexLocked(ifName string) (index int, ok bool) {
-	if d.netMon == nil {
-		return 0, false
-	}
-	st := d.netMon.InterfaceState()
-	iface, ok := st.Interface[ifName]
-	if !ok {
-		return 0, false
-	}
-	return iface.Index, true
-}
-
 // peerDialControlFunc is non-nil on platforms that require a way to
 // bind to dial out to other peers.
 var peerDialControlFunc func(*Dialer) func(network, address string, c syscall.RawConn) error
