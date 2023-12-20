@@ -1905,20 +1905,18 @@ func envEq(a, b string) bool {
 }
 
 var (
-	metricActiveSessions       = clientmetric.NewGauge("ssh_active_sessions")
-	metricIncomingConnections  = clientmetric.NewCounter("ssh_incoming_connections")
-	metricPublicKeyConnections = clientmetric.NewCounter("ssh_publickey_connections") // total
-	metricPublicKeyAccepts     = clientmetric.NewCounter("ssh_publickey_accepts")     // accepted subset of ssh_publickey_connections
-	metricTerminalAccept       = clientmetric.NewCounter("ssh_terminalaction_accept")
-	metricTerminalReject       = clientmetric.NewCounter("ssh_terminalaction_reject")
-	metricTerminalInterrupt    = clientmetric.NewCounter("ssh_terminalaction_interrupt")
-	metricTerminalMalformed    = clientmetric.NewCounter("ssh_terminalaction_malformed")
-	metricTerminalFetchError   = clientmetric.NewCounter("ssh_terminalaction_fetch_error")
-	metricHolds                = clientmetric.NewCounter("ssh_holds")
-	metricPolicyChangeKick     = clientmetric.NewCounter("ssh_policy_change_kick")
-	metricSFTP                 = clientmetric.NewCounter("ssh_sftp_sessions")
-	metricLocalPortForward     = clientmetric.NewCounter("ssh_local_port_forward_requests")
-	metricRemotePortForward    = clientmetric.NewCounter("ssh_remote_port_forward_requests")
+	metricActiveSessions      = clientmetric.NewGauge("ssh_active_sessions")
+	metricIncomingConnections = clientmetric.NewCounter("ssh_incoming_connections")
+	metricPublicKeyAccepts    = clientmetric.NewCounter("ssh_publickey_accepts") // accepted subset of ssh_publickey_connections
+	metricTerminalAccept      = clientmetric.NewCounter("ssh_terminalaction_accept")
+	metricTerminalReject      = clientmetric.NewCounter("ssh_terminalaction_reject")
+	metricTerminalMalformed   = clientmetric.NewCounter("ssh_terminalaction_malformed")
+	metricTerminalFetchError  = clientmetric.NewCounter("ssh_terminalaction_fetch_error")
+	metricHolds               = clientmetric.NewCounter("ssh_holds")
+	metricPolicyChangeKick    = clientmetric.NewCounter("ssh_policy_change_kick")
+	metricSFTP                = clientmetric.NewCounter("ssh_sftp_sessions")
+	metricLocalPortForward    = clientmetric.NewCounter("ssh_local_port_forward_requests")
+	metricRemotePortForward   = clientmetric.NewCounter("ssh_remote_port_forward_requests")
 )
 
 // userVisibleError is a wrapper around an error that implements

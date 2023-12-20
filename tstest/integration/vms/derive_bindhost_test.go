@@ -4,7 +4,6 @@
 package vms
 
 import (
-	"io"
 	"net/netip"
 	"runtime"
 	"testing"
@@ -43,9 +42,3 @@ func TestDeriveBindhost(t *testing.T) {
 	}
 	t.Log(deriveBindhost(t))
 }
-
-type nopWriteCloser struct {
-	io.Writer
-}
-
-func (nwc nopWriteCloser) Close() error { return nil }

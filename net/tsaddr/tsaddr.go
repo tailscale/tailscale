@@ -37,7 +37,6 @@ func CGNATRange() netip.Prefix {
 
 var (
 	cgnatRange   oncePrefix
-	ulaRange     oncePrefix
 	tsUlaRange   oncePrefix
 	tsViaRange   oncePrefix
 	ula4To6Range oncePrefix

@@ -26,7 +26,7 @@ func peerDialControlFuncNetworkExtension(d *Dialer) func(network, address string
 	defer d.mu.Unlock()
 
 	index := -1
-	if x, ok := d.interfaceIndexLocked(d.tunName); ok {
+	if x, ok := interfaceIndexLocked(d); ok {
 		index = x
 	}
 	var lc net.ListenConfig
@@ -37,4 +37,16 @@ func peerDialControlFuncNetworkExtension(d *Dialer) func(network, address string
 		}
 		return lc.Control(network, address, c)
 	}
+}
+
+func interfaceIndexLocked(d *Dialer) (index int, ok bool) {
+	if d.netMon == nil {
+		return 0, false
+	}
+	st := d.netMon.InterfaceState()
+	iface, ok := st.Interface[d.tunName]
+	if !ok {
+		return 0, false
+	}
+	return iface.Index, true
 }
