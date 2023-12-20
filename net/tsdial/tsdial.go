@@ -41,6 +41,8 @@ type Dialer struct {
 	// If nil, it's not used.
 	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
 
+	// UserDialCustomResolver if non-nil is invoked by UserDial to resolve a destination address.
+	// It is invoked after the in-memory tailnet machine map.
 	UserDialCustomResolver func(string) (netip.Addr, error)
 
 	peerClientOnce sync.Once
@@ -241,8 +243,15 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 		return ipp, err
 	}
 
+	// TODO(bradfitz): wire up net/dnscache too.
+
 	// Try tsdns resolver next to resolve SplitDNS
 	host, port, err := splitHostPort(addr)
+	if err != nil {
+		// addr is malformed.
+		return netip.AddrPort{}, err
+	}
+
 	if d.UserDialCustomResolver != nil {
 		ip, err := d.UserDialCustomResolver(host)
 		if err == nil {
@@ -252,13 +261,6 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	}
 
 	// Otherwise, hit the network.
-
-	// TODO(bradfitz): wire up net/dnscache too.
-
-	if err != nil {
-		// addr is malformed.
-		return netip.AddrPort{}, err
-	}
 
 	var r net.Resolver
 	if exitDNSDoH != "" && runtime.GOOS != "windows" { // Windows: https://github.com/golang/go/issues/33097

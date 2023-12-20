@@ -6,6 +6,7 @@ package dns
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"time"
@@ -56,3 +57,26 @@ type todoAddr struct{}
 
 func (todoAddr) Network() string { return "unused" }
 func (todoAddr) String() string  { return "unused-todoAddr" }
+
+func Quad100Resolver(ctx context.Context, mgr *Manager) func(host string) (netip.Addr, error) {
+	return func(host string) (netip.Addr, error) {
+		var r net.Resolver
+		r.PreferGo = true
+		r.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return &Quad100conn{
+				Ctx:        ctx,
+				DnsManager: mgr,
+			}, nil
+		}
+
+		ips, err := r.LookupIP(ctx, "ip4", host)
+		if err != nil {
+			return netip.Addr{}, err
+		}
+		if len(ips) == 0 {
+			return netip.Addr{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+		}
+		ip, _ := netip.AddrFromSlice(ips[0])
+		return ip, nil
+	}
+}
