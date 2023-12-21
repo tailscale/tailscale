@@ -968,8 +968,6 @@ func BenchmarkTableDelete(b *testing.B) {
 	})
 }
 
-var addrSink netip.Addr
-
 func BenchmarkTableGet(b *testing.B) {
 	forFamilyAndCount(b, func(b *testing.B, routes []slowPrefixEntry[int]) {
 		genAddr := randomAddr4
@@ -1106,18 +1104,6 @@ type slowPrefixEntry[T any] struct {
 	val T
 }
 
-func (t *slowPrefixTable[T]) delete(pfx netip.Prefix) {
-	pfx = pfx.Masked()
-	ret := make([]slowPrefixEntry[T], 0, len(t.prefixes))
-	for _, ent := range t.prefixes {
-		if ent.pfx == pfx {
-			continue
-		}
-		ret = append(ret, ent)
-	}
-	t.prefixes = ret
-}
-
 func (t *slowPrefixTable[T]) insert(pfx netip.Prefix, val T) {
 	pfx = pfx.Masked()
 	for i, ent := range t.prefixes {
@@ -1229,27 +1215,4 @@ func roundFloat64(f float64) float64 {
 		panic(err)
 	}
 	return ret
-}
-
-func minimize(pfxs []slowPrefixEntry[int], f func(skip map[netip.Prefix]bool) error) (map[netip.Prefix]bool, error) {
-	if f(nil) == nil {
-		return nil, nil
-	}
-
-	remove := map[netip.Prefix]bool{}
-	for lastLen := -1; len(remove) != lastLen; lastLen = len(remove) {
-		fmt.Println("len is ", len(remove))
-		for i, pfx := range pfxs {
-			if remove[pfx.pfx] {
-				continue
-			}
-			remove[pfx.pfx] = true
-			fmt.Printf("%d %d: trying without %s\n", i, len(remove), pfx.pfx)
-			if f(remove) == nil {
-				delete(remove, pfx.pfx)
-			}
-		}
-	}
-
-	return remove, f(remove)
 }

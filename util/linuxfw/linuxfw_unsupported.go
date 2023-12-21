@@ -5,7 +5,7 @@
 // support in upstream dependencies.
 
 // TODO(#8502): add support for more architectures
-//go:build !linux || (linux && !(arm64 || amd64))
+//go:build linux && !(arm64 || amd64)
 
 package linuxfw
 

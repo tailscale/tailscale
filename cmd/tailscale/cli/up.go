@@ -1044,18 +1044,6 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 	return
 }
 
-func anyPeerAdvertisingRoutes(st *ipnstate.Status) bool {
-	for _, ps := range st.Peer {
-		if ps.PrimaryRoutes == nil {
-			continue
-		}
-		if ps.PrimaryRoutes.Len() > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func init() {
 	// Required to use our client API. We're fine with the instability since the
 	// client lives in the same repo as this code.

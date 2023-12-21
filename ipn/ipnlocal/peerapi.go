@@ -62,10 +62,6 @@ type peerAPIServer struct {
 	taildrop *taildrop.Manager
 }
 
-var (
-	errNilPeerAPIServer = errors.New("peerapi unavailable; not listening")
-)
-
 func (s *peerAPIServer) listen(ip netip.Addr, ifState *interfaces.State) (ln net.Listener, err error) {
 	// Android for whatever reason often has problems creating the peerapi listener.
 	// But since we started intercepting it with netstack, it's not even important that

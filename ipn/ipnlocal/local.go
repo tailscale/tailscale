@@ -5324,15 +5324,6 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 	return cc.DoNoiseRequest(req)
 }
 
-// tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
-// on prefs. It returns false if there are no prefs set.
-func (b *LocalBackend) tailscaleSSHEnabled() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	p := b.pm.CurrentPrefs()
-	return p.Valid() && p.RunSSH()
-}
-
 func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -753,12 +753,6 @@ func (s *Server) debugLogf(format string, v ...any) {
 	}
 }
 
-// for testing
-var (
-	timeSleep = time.Sleep
-	timeNow   = time.Now
-)
-
 // run serves the client until there's an error.
 // If the client hangs up or the server is closed, run returns nil, otherwise run returns an error.
 func (c *sclient) run(ctx context.Context) error {

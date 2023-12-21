@@ -382,26 +382,6 @@ func CreateAppMutex(name string) (windows.Handle, error) {
 	return windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(name))
 }
 
-// getTokenInfoVariableLen obtains variable-length token information. Use
-// this function for information classes that output variable-length data.
-func getTokenInfoVariableLen[T any](token windows.Token, infoClass uint32) (*T, error) {
-	var buf []byte
-	var desiredLen uint32
-
-	err := windows.GetTokenInformation(token, infoClass, nil, 0, &desiredLen)
-
-	for err == windows.ERROR_INSUFFICIENT_BUFFER {
-		buf = make([]byte, desiredLen)
-		err = windows.GetTokenInformation(token, infoClass, unsafe.SliceData(buf), desiredLen, &desiredLen)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return (*T)(unsafe.Pointer(unsafe.SliceData(buf))), nil
-}
-
 // getTokenInfoFixedLen obtains known fixed-length token information. Use this
 // function for information classes that output enumerations, BOOLs, integers etc.
 func getTokenInfoFixedLen[T any](token windows.Token, infoClass uint32) (result T, err error) {

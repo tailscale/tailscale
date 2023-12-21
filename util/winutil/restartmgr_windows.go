@@ -112,6 +112,7 @@ const (
 type _RM_APP_STATUS uint32
 
 const (
+	//lint:ignore U1000 maps to a win32 API
 	_RmStatusUnknown        _RM_APP_STATUS = 0x0
 	_RmStatusRunning        _RM_APP_STATUS = 0x1
 	_RmStatusStopped        _RM_APP_STATUS = 0x2
