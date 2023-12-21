@@ -220,6 +220,13 @@ func (m *Monitor) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unreg
 	}
 }
 
+// isActive reports whether this monitor has been started and not yet closed.
+func (m *Monitor) isActive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started && !m.closed
+}
+
 // Start starts the monitor.
 // A monitor can only be started & closed once.
 func (m *Monitor) Start() {
