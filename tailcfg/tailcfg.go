@@ -136,6 +136,10 @@ func (u UserID) IsZero() bool {
 	return u == 0
 }
 
+func (u UserID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(int64(float64(int64(u))))
+}
+
 type LoginID ID
 
 func (u LoginID) IsZero() bool {
