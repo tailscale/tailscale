@@ -54,8 +54,7 @@ type pcpMapping struct {
 	renewAfter time.Time
 	goodUntil  time.Time
 
-	// TODO should this also contain an epoch?
-	// Doesn't seem to be used elsewhere, but can use it for validation at some point.
+	epoch uint32
 }
 
 func (p *pcpMapping) MappingType() string      { return "pcp" }
@@ -140,6 +139,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 		external:   external,
 		renewAfter: now.Add(lifetime / 2),
 		goodUntil:  now.Add(lifetime),
+		epoch:      res.Epoch,
 	}
 
 	return mapping, nil
