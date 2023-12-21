@@ -45,6 +45,7 @@ import (
 	_ "tailscale.com/safesocket"
 	_ "tailscale.com/syncs"
 	_ "tailscale.com/tailcfg"
+	_ "tailscale.com/tailfs"
 	_ "tailscale.com/tsd"
 	_ "tailscale.com/tsweb/varz"
 	_ "tailscale.com/types/flagtype"

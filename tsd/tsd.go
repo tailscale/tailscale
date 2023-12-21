@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -47,6 +48,7 @@ type System struct {
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
+	TailfsForLocal SubSystem[tailfs.ForLocal]
 
 	// InitialConfig is initial server config, if any.
 	// It is nil if the node is not in declarative mode.
@@ -98,6 +100,8 @@ func (s *System) Set(v any) {
 		s.StateStore.Set(v)
 	case NetstackImpl:
 		s.Netstack.Set(v)
+	case tailfs.ForLocal:
+		s.TailfsForLocal.Set(v)
 	default:
 		panic(fmt.Sprintf("unknown type %T", v))
 	}

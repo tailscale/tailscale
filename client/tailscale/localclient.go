@@ -34,6 +34,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
@@ -1415,6 +1416,44 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 		return nil, err
 	}
 	return &cv, nil
+}
+
+// TailfsSetFileServerAddr instructs Tailfs to use the server at addr to access
+// the filesystem. This is used on platforms like Windows and MacOS to let
+// Tailfs know to use the file server running in the GUI app.
+func (lc *LocalClient) TailfsSetFileServerAddr(ctx context.Context, addr string) error {
+	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/fileserver-address", http.StatusCreated, strings.NewReader(addr))
+	return err
+}
+
+// TailfsShareAdd adds the given share to the list of shares that Tailfs will
+// serve to remote nodes. If a share with the same name already exists, the
+// existing share is replaced/updated.
+func (lc *LocalClient) TailfsShareAdd(ctx context.Context, share *tailfs.Share) error {
+	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/shares", http.StatusCreated, jsonBody(share))
+	return err
+}
+
+// TailfsShareRemove removes the share with the given name from the list of
+// shares that Tailfs will serve to remote nodes.
+func (lc *LocalClient) TailfsShareRemove(ctx context.Context, name string) error {
+	share := &tailfs.Share{
+		Name: name,
+	}
+	_, err := lc.send(ctx, "DELETE", "/localapi/v0/tailfs/shares", http.StatusNoContent, jsonBody(share))
+	return err
+}
+
+// TailfsShareList returns the list of shares that Tailfs is currently serving
+// to remote nodes.
+func (lc *LocalClient) TailfsShareList(ctx context.Context) (map[string]*tailfs.Share, error) {
+	result, err := lc.get200(ctx, "/localapi/v0/tailfs/shares")
+	if err != nil {
+		return nil, err
+	}
+	var shares map[string]*tailfs.Share
+	err = json.Unmarshal(result, &shares)
+	return shares, err
 }
 
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.

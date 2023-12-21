@@ -52,6 +52,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
+	"tailscale.com/tailfs"
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
@@ -140,6 +141,7 @@ var subCommands = map[string]*func([]string) error{
 	"uninstall-system-daemon": &uninstallSystemDaemon,
 	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
+	"serve-tailfs":            &serveTailfsFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -628,6 +630,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		Dialer:       sys.Dialer.Get(),
 		SetSubsystem: sys.Set,
 		ControlKnobs: sys.ControlKnobs(),
+		EnableTailfs: true,
 	}
 
 	onlyNetstack = name == "userspace-networking"
@@ -730,6 +733,7 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
+	tfs, _ := sys.TailfsForLocal.GetOK()
 	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -737,6 +741,7 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		sys.Dialer.Get(),
 		sys.DNSManager.Get(),
 		sys.ProxyMapper(),
+		tfs,
 	)
 	if err != nil {
 		return nil, err
@@ -804,6 +809,35 @@ func beChild(args []string) error {
 		return fmt.Errorf("unknown be-child mode %q", typ)
 	}
 	return f(args[1:])
+}
+
+var serveTailfsFunc = serveTailfs
+
+// serveTailfs serves one or more tailfs on localhost using the WebDAV
+// protocol. On UNIX and MacOS tailscaled environment, tailfs spawns child
+// tailscaled processes in serve-tailfs mode in order to access the fliesystem
+// as specific (usually unprivileged) users.
+//
+// serveTailfs prints the address on which it's listening to stdout so that the
+// parent process knows where to connect to.
+func serveTailfs(args []string) error {
+	if len(args) == 0 {
+		return errors.New("missing shares")
+	}
+	if len(args)%2 != 0 {
+		return errors.New("need <sharename> <path> pairs")
+	}
+	s, err := tailfs.NewFileServer()
+	if err != nil {
+		log.Fatal(err)
+	}
+	shares := make(map[string]string)
+	for i := 0; i < len(args); i += 2 {
+		shares[args[i]] = args[i+1]
+	}
+	s.SetShares(shares)
+	fmt.Printf("%v\n", s.Addr())
+	return s.Serve()
 }
 
 // dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process

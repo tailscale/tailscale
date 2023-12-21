@@ -16,4 +16,12 @@
 ) {
   src =  ./.;
 }).shellNix
-# nix-direnv cache busting line: sha256-b/iffKOn7nMiWvM0AIGGzZaJ15NTaBlJff+aja3NQio=
+<<<<<<< HEAD
+# nix-direnv cache busting line: sha256-3NzfNgqSjDILsm2kzP9S0lc+Xmej0gAdDqGJOsWrKdk=
+=======
+<<<<<<< HEAD
+# nix-direnv cache busting line: sha256-3NzfNgqSjDILsm2kzP9S0lc+Xmej0gAdDqGJOsWrKdk=
+=======
+# nix-direnv cache busting line: sha256-3NzfNgqSjDILsm2kzP9S0lc+Xmej0gAdDqGJOsWrKdk=
+>>>>>>> 3bc261cc (tailfs: initial implementation)
+>>>>>>> db634a9b (tailfs: initial implementation)

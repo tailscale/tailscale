@@ -278,6 +278,7 @@ func main() {
 				goTestArgsWithCoverage,
 				fmt.Sprintf("-coverprofile=%v", coverageFile),
 				"-covermode=set",
+				"-coverpkg=./...",
 			)
 		}
 

@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailfs"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -201,6 +202,10 @@ type Config struct {
 
 	// SetSubsystem, if non-nil, is called for each new subsystem created, just before a successful return.
 	SetSubsystem func(any)
+
+	// EnableTailfs, if true, will cause the engine to expose a Tailfs listener
+	// at 100.100.100.100:8080
+	EnableTailfs bool
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -446,6 +451,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
+		if conf.EnableTailfs {
+			conf.SetSubsystem(tailfs.NewFileSystemForLocal(e.logf))
+		}
 	}
 
 	e.logf("Engine created.")
