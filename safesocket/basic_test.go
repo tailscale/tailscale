@@ -57,8 +57,7 @@ func TestBasics(t *testing.T) {
 	}()
 
 	go func() {
-		s := DefaultConnectionStrategy(sock)
-		c, err := Connect(s)
+		c, err := Connect(sock)
 		if err != nil {
 			errs <- err
 			return

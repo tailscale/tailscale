@@ -15,6 +15,6 @@ func listen(path string) (net.Listener, error) {
 	return memconn.Listen("memu", memName)
 }
 
-func connect(_ *ConnectionStrategy) (net.Conn, error) {
+func connect(_ string) (net.Conn, error) {
 	return memconn.Dial("memu", memName)
 }
