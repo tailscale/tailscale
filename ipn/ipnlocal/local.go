@@ -4011,10 +4011,13 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		singleRouteThreshold = 1
 	}
 
-	netfilterKind := b.capForcedNetfilter
+	b.mu.Lock()
+	netfilterKind := b.capForcedNetfilter // protected by b.mu
+	b.mu.Unlock()
+
 	if prefs.NetfilterKind() != "" {
-		if b.capForcedNetfilter != "" {
-			b.logf("nodeattr netfilter preference %s overridden by c2n pref %s", b.capForcedNetfilter, prefs.NetfilterKind())
+		if netfilterKind != "" {
+			b.logf("nodeattr netfilter preference %s overridden by c2n pref %s", netfilterKind, prefs.NetfilterKind())
 		}
 		netfilterKind = prefs.NetfilterKind()
 	}
