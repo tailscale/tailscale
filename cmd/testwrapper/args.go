@@ -12,22 +12,6 @@ import (
 	"testing"
 )
 
-// defaultTestArgs contains the default values for all flags in the testing
-// package. It is used to reset the flag values in testwrapper tests to allow
-// parsing the flags again.
-var defaultTestArgs map[string]string
-
-// initDefaultTestArgs initializes defaultTestArgs.
-func initDefaultTestArgs() {
-	if defaultTestArgs != nil {
-		return
-	}
-	defaultTestArgs = make(map[string]string)
-	flag.CommandLine.VisitAll(func(f *flag.Flag) {
-		defaultTestArgs[f.Name] = f.DefValue
-	})
-}
-
 // registerTestFlags registers all flags from the testing package with the
 // provided flag set. It does so by calling testing.Init() and then iterating
 // over all flags registered on flag.CommandLine.

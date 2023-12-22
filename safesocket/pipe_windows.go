@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/go-winio"
@@ -24,13 +23,6 @@ func connect(path string) (net.Conn, error) {
 	// We use the identification impersonation level so that tailscaled may
 	// obtain information about our token for access control purposes.
 	return winio.DialPipeAccessImpLevel(ctx, path, windows.GENERIC_READ|windows.GENERIC_WRITE, winio.PipeImpLevelIdentification)
-}
-
-func setFlags(network, address string, c syscall.RawConn) error {
-	return c.Control(func(fd uintptr) {
-		syscall.SetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET,
-			syscall.SO_REUSEADDR, 1)
-	})
 }
 
 // windowsSDDL is the Security Descriptor set on the namedpipe.

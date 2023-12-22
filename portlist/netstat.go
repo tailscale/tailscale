@@ -55,8 +55,6 @@ func isLoopbackAddr(s mem.RO) bool {
 		mem.HasPrefix(s, mem.S("::1."))
 }
 
-type nothing struct{}
-
 // appendParsePortsNetstat appends to base listening ports
 // from "netstat" output, read from br. See TestParsePortsNetstat
 // for example input lines.

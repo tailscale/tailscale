@@ -169,6 +169,8 @@ type Conn struct {
 	port atomic.Uint32
 
 	// peerMTUEnabled is whether path MTU discovery to peers is enabled.
+	//
+	//lint:ignore U1000 used on Linux/Darwin only
 	peerMTUEnabled atomic.Bool
 
 	// stats maintains per-connection counters.
@@ -2933,7 +2935,9 @@ var (
 	metricDERPHomeChange = clientmetric.NewCounter("derp_home_change")
 
 	// Disco packets received bpf read path
+	//lint:ignore U1000 used on Linux only
 	metricRecvDiscoPacketIPv4 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv4")
+	//lint:ignore U1000 used on Linux only
 	metricRecvDiscoPacketIPv6 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv6")
 
 	// metricMaxPeerMTUProbed is the largest peer path MTU we successfully probed.

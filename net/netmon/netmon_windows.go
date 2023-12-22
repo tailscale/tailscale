@@ -181,3 +181,10 @@ func (m *winMon) somethingChanged(evt string) {
 		return
 	}
 }
+
+// isActive reports whether this monitor has been started and not yet closed.
+func (m *Monitor) isActive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started && !m.closed
+}

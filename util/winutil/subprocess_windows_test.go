@@ -12,11 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // The code in this file is adapted from internal/testenv in the Go source tree
@@ -52,15 +50,6 @@ func pathToTestProg(t *testing.T, binary string) string {
 	return exe
 }
 
-func runTestProg(t *testing.T, binary, name string, env ...string) string {
-	exe, err := buildTestProg(t, binary, "-buildvcs=false")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return runBuiltTestProg(t, exe, name, env...)
-}
-
 func startTestProg(t *testing.T, binary, name string, env ...string) {
 	exe, err := buildTestProg(t, binary, "-buildvcs=false")
 	if err != nil {
@@ -68,16 +57,6 @@ func startTestProg(t *testing.T, binary, name string, env ...string) {
 	}
 
 	startBuiltTestProg(t, exe, name, env...)
-}
-
-func runBuiltTestProg(t *testing.T, exe, name string, env ...string) string {
-	cmd := exec.Command(exe, name)
-	cmd.Env = append(cmd.Env, env...)
-	if testing.Short() {
-		cmd.Env = append(cmd.Env, "RUNTIME_TEST_SHORT=1")
-	}
-	out, _ := runWithTimeout(t, cmd)
-	return string(out)
 }
 
 func startBuiltTestProg(t *testing.T, exe, name string, env ...string) {
@@ -276,20 +255,6 @@ func mustHaveGoBuild(t testing.TB) {
 	}
 }
 
-// hasGoRun reports whether the current system can run programs with “go run.”
-func hasGoRun() bool {
-	// For now, having go run and having go build are the same.
-	return hasGoBuild()
-}
-
-// mustHaveGoRun checks that the current system can run programs with “go run.”
-// If not, mustHaveGoRun calls t.Skip with an explanation.
-func mustHaveGoRun(t testing.TB) {
-	if !hasGoRun() {
-		t.Skipf("skipping test: 'go run' not available on %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-}
-
 var (
 	gorootOnce sync.Once
 	gorootPath string
@@ -364,57 +329,6 @@ func findGOROOT() (string, error) {
 	})
 
 	return gorootPath, gorootErr
-}
-
-// runWithTimeout runs cmd and returns its combined output. If the
-// subprocess exits with a non-zero status, it will log that status
-// and return a non-nil error, but this is not considered fatal.
-func runWithTimeout(t testing.TB, cmd *exec.Cmd) ([]byte, error) {
-	args := cmd.Args
-	if args == nil {
-		args = []string{cmd.Path}
-	}
-
-	var b bytes.Buffer
-	cmd.Stdout = &b
-	cmd.Stderr = &b
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", args, err)
-	}
-
-	// If the process doesn't complete within 1 minute,
-	// assume it is hanging and kill it to get a stack trace.
-	p := cmd.Process
-	done := make(chan bool)
-	go func() {
-		scale := 2
-		if s := os.Getenv("GO_TEST_TIMEOUT_SCALE"); s != "" {
-			if sc, err := strconv.Atoi(s); err == nil {
-				scale = sc
-			}
-		}
-
-		select {
-		case <-done:
-		case <-time.After(time.Duration(scale) * time.Minute):
-			p.Signal(os.Kill)
-			// If SIGQUIT doesn't do it after a little
-			// while, kill the process.
-			select {
-			case <-done:
-			case <-time.After(time.Duration(scale) * 30 * time.Second):
-				p.Signal(os.Kill)
-			}
-		}
-	}()
-
-	err := cmd.Wait()
-	if err != nil {
-		t.Logf("%s exit status: %v", args, err)
-	}
-	close(done)
-
-	return b.Bytes(), err
 }
 
 // start runs cmd asynchronously and returns immediately.

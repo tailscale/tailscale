@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/netip"
 	"os"
 	"os/user"
 	"runtime"
@@ -18,7 +17,6 @@ import (
 	"inet.af/peercred"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
-	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -206,13 +204,4 @@ func isLocalAdmin(uid string) (bool, error) {
 		return false, fmt.Errorf("no system admin group found")
 	}
 	return groupmember.IsMemberOfGroup(adminGroup, u.Username)
-}
-
-func peerPid(entries []netstat.Entry, la, ra netip.AddrPort) int {
-	for _, e := range entries {
-		if e.Local == ra && e.Remote == la {
-			return e.Pid
-		}
-	}
-	return 0
 }
