@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -1029,6 +1030,16 @@ func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *userMeta) erro
 	gid, err := strconv.ParseUint(lu.Gid, 10, 32)
 	if err != nil {
 		return err
+	}
+	// On Linux, UID/GID values are 32-bit unsigned ints. Unfortunately, we
+	// need to pass them to os.Chown below which takes an int. This means that
+	// on 32-bit systems we could overflow that int. Check it and fail
+	// explicitly instead.
+	if uid > math.MaxInt {
+		return fmt.Errorf("UID %v overflows MaxInt for user %q", uid, lu.Name)
+	}
+	if gid > math.MaxInt {
+		return fmt.Errorf("GID %v overflows MaxInt for user %q", gid, lu.Name)
 	}
 	socket := ln.Addr().String()
 	dir := filepath.Dir(socket)
