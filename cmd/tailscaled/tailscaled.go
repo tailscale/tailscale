@@ -340,9 +340,7 @@ func run() error {
 		sys.InitialConfig = conf
 	}
 
-	netMon, err := netmon.New(func(format string, args ...any) {
-		logf(format, args...)
-	})
+	netMon, err := netmon.New(logf)
 	if err != nil {
 		return fmt.Errorf("netmon.New: %w", err)
 	}
