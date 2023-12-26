@@ -2,11 +2,12 @@ package dns
 
 import (
 	"context"
-	dns "golang.org/x/net/dns/dnsmessage"
 	"net"
+	"testing"
+
+	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/util/dnsname"
-	"testing"
 )
 
 func TestQuad100Conn(t *testing.T) {
@@ -21,9 +22,9 @@ func TestQuad100Conn(t *testing.T) {
 	m.resolver.TestOnlySetHook(f.SetResolver)
 	m.Set(Config{
 		Hosts: hosts(
-			"dave.ts.com.", "1.2.3.4",
-			"matt.ts.com.", "2.3.4.5"),
-		Routes:        upstreams("ts.com", ""),
+			"dave.ts.net.", "1.2.3.4",
+			"matt.ts.net.", "2.3.4.5"),
+		Routes:        upstreams("ts.net", ""),
 		SearchDomains: fqdns("tailscale.com", "universe.tf"),
 	})
 	defer m.Down()
@@ -35,7 +36,7 @@ func TestQuad100Conn(t *testing.T) {
 	defer q100.Close()
 
 	var b []byte
-	domain := dnsname.FQDN("matt.ts.com.")
+	domain := dnsname.FQDN("matt.ts.net.")
 
 	// Send a query
 	b = mkDNSRequest(domain, dns.TypeA, addEDNS)
@@ -89,16 +90,16 @@ func TestQuad100Resolver(t *testing.T) {
 	m.resolver.TestOnlySetHook(f.SetResolver)
 	m.Set(Config{
 		Hosts: hosts(
-			"dave.ts.com.", "1.2.3.4",
-			"matt.ts.com.", "2.3.4.5"),
-		Routes:        upstreams("ts.com", ""),
+			"dave.ts.net.", "1.2.3.4",
+			"matt.ts.net.", "2.3.4.5"),
+		Routes:        upstreams("ts.net", ""),
 		SearchDomains: fqdns("tailscale.com", "universe.tf"),
 	})
 	defer m.Down()
 
 	resolver := Quad100Resolver(context.Background(), m)
 
-	ip, err := resolver("matt.ts.com")
+	ip, err := resolver("matt.ts.net")
 	if err != nil {
 		t.Errorf("could not resolve host: %v", err)
 	}
