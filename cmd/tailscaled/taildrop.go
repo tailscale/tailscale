@@ -27,7 +27,6 @@ func configureTaildrop(logf logger.Logf, lb *ipnlocal.LocalBackend) {
 		} else {
 			logf("%s Taildrop: using %v", dg, path)
 			lb.SetDirectFileRoot(path)
-			lb.SetDirectFileDoFinalRename(true)
 		}
 	}
 

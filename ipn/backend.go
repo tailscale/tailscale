@@ -175,6 +175,7 @@ type PartialFile struct {
 	// in-progress '*.partial' file's path when the peerapi isn't
 	// being used; see LocalBackend.SetDirectFileRoot.
 	PartialPath string `json:",omitempty"`
+	FinalPath   string `json:",omitempty"`
 
 	// Done is set in "direct" mode when the partial file has been
 	// closed and is ready for the caller to rename away the

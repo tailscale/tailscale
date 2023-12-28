@@ -64,9 +64,6 @@ func (m *Manager) PartialFiles(id ClientID) (ret []string, err error) {
 	if m == nil || m.opts.Dir == "" {
 		return nil, ErrNoTaildrop
 	}
-	if m.opts.DirectFileMode && m.opts.AvoidFinalRename {
-		return nil, nil // resuming is not supported for users that peek at our file structure
-	}
 
 	suffix := id.partialSuffix()
 	if err := rangeDir(m.opts.Dir, func(de fs.DirEntry) bool {
@@ -90,9 +87,6 @@ func (m *Manager) HashPartialFile(id ClientID, baseName string) (next func() (Bl
 	}
 	noopNext := func() (BlockChecksum, error) { return BlockChecksum{}, io.EOF }
 	noopClose := func() error { return nil }
-	if m.opts.DirectFileMode && m.opts.AvoidFinalRename {
-		return noopNext, noopClose, nil // resuming is not supported for users that peek at our file structure
-	}
 
 	dstFile, err := joinDir(m.opts.Dir, baseName)
 	if err != nil {
