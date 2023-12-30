@@ -56,8 +56,8 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "open a browser in web mode")
-		fs.BoolVar(&statusArgs.humanReadableIEC, "human", false, "print human-readable bytes in IEC format (in powers of 1024)")
-		fs.BoolVar(&statusArgs.humanReadableSI, "human-si", false, "print human-readable bytes in SI format (in powers of 1000)")
+		fs.BoolVar(&statusArgs.humanReadableSI, "human", false, "print human-readable bytes in SI format (in powers of 1000)")
+		fs.BoolVar(&statusArgs.humanReadableIEC, "human-iec", false, "print human-readable bytes in IEC format (in powers of 1024)")
 		return fs
 	})(),
 }
@@ -70,8 +70,8 @@ var statusArgs struct {
 	active           bool   // in CLI mode, filter output to only peers with active sessions
 	self             bool   // in CLI mode, show status of local machine
 	peers            bool   // in CLI mode, show status of peer machines
-	humanReadableIEC bool   // in CLI mode, print human-readable peer traffic bytes in IEC format
 	humanReadableSI  bool   // in CLI mode, print human-readable peer traffic bytes in SI format
+	humanReadableIEC bool   // in CLI mode, print human-readable peer traffic bytes in IEC format
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -197,12 +197,12 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 		}
 		if anyTraffic {
-			if statusArgs.humanReadableIEC {
-				f("; tx %s rx %s", humanReadableBytes(ps.TxBytes, false), humanReadableBytes(ps.RxBytes, false))
-			} else if statusArgs.humanReadableSI {
-				f("; tx %s rx %s", humanReadableBytes(ps.TxBytes, true), humanReadableBytes(ps.RxBytes, true))
+			if statusArgs.humanReadableSI {
+				f(", tx %s rx %s", humanReadableBytes(ps.TxBytes, true), humanReadableBytes(ps.RxBytes, false))
+			} else if statusArgs.humanReadableIEC {
+				f(", tx %s rx %s", humanReadableBytes(ps.TxBytes, false), humanReadableBytes(ps.RxBytes, true))
 			} else {
-				f("; tx %d rx %d", ps.TxBytes, ps.RxBytes)
+				f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 			}
 		}
 		f("\n")
@@ -348,15 +348,15 @@ func firstIPString(v []netip.Addr) string {
 }
 
 // humanReadableBytes returns a human-readable string for the given number of bytes.
-func humanReadableBytes(b int64, useSI bool) string {
+func humanReadableBytes(b int64, useIEC bool) string {
 	var base float64
 	var units []string
-	if useSI {
-		base = 1000
-		units = []string{"B", "kB", "MB", "GB", "TB", "PB", "EB"}
-	} else {
+	if useIEC {
 		base = 1024
 		units = []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	} else {
+		base = 1000
+		units = []string{"B", "kB", "MB", "GB", "TB", "PB", "EB"}
 	}
 	if b < int64(base) {
 		return fmt.Sprintf("%d B", b)
