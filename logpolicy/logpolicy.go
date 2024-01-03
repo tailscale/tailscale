@@ -48,8 +48,8 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/testenv"
-	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -61,14 +61,8 @@ var getLogTargetOnce struct {
 
 func getLogTarget() string {
 	getLogTargetOnce.Do(func() {
-		if val, ok := os.LookupEnv("TS_LOG_TARGET"); ok {
-			getLogTargetOnce.v = val
-		} else {
-			if runtime.GOOS == "windows" {
-				logTarget, _ := winutil.GetRegString("LogTarget")
-				getLogTargetOnce.v = logTarget
-			}
-		}
+		envTarget, _ := os.LookupEnv("TS_LOG_TARGET")
+		getLogTargetOnce.v, _ = syspolicy.GetString(syspolicy.LogTarget, envTarget)
 	})
 
 	return getLogTargetOnce.v
