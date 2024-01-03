@@ -332,7 +332,6 @@ func managedResourceHandlerForType(typ string) handler.MapFunc {
 			{NamespacedName: parentFromObjectLabels(o)},
 		}
 	}
-
 }
 
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {

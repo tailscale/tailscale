@@ -67,8 +67,12 @@ type tailscaleSTSConfig struct {
 	ChildResourceLabels map[string]string
 
 	ServeConfig *ipn.ServeConfig
-	// Tailscale target in cluster we are setting up ingress for
+
+	// Cluster target for ingress defined by an IP address
 	ClusterTargetIP string
+
+	// Cluster target for ingress defined by a DNS name
+	ClusterTargetDNS string
 
 	// Tailscale IP of a Tailscale service we are setting up egress for
 	TailnetTargetIP string
@@ -386,6 +390,11 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEST_IP",
 			Value: sts.ClusterTargetIP,
+		})
+	} else if sts.ClusterTargetDNS != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEST_DNS",
+			Value: sts.ClusterTargetDNS,
 		})
 	} else if sts.TailnetTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{

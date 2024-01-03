@@ -186,7 +186,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	a.mu.Lock()
-	if a.shouldExpose(svc) {
+	if a.shouldExpose(svc) && svc.Spec.Type == corev1.ServiceTypeExternalName {
+		sts.ClusterTargetDNS = svc.Spec.ExternalName
+		a.managedIngressProxies.Add(svc.UID)
+		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+	} else if a.shouldExpose(svc) {
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
@@ -279,13 +283,14 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
+	// TODO: if external name service, check that the name is a DNS name (not an IP address)
 	return violations
 }
 
 func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
 	// Headless services can't be exposed, since there is no ClusterIP to
 	// forward to.
-	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
+	if svc.Spec.Type != corev1.ServiceTypeExternalName && (svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None") {
 		return false
 	}
 

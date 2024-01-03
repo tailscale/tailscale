@@ -15,7 +15,9 @@
 //   - TS_HOSTNAME: the hostname to request for the node.
 //   - TS_ROUTES: subnet routes to advertise. To accept routes, use TS_EXTRA_ARGS to pass in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
-//     destination.
+//     destination defined by an IP address.
+//   - TS_DEST_DNS: proxy all incoming Tailscale traffic to the given
+//     destination defined by a DNS name.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination defined by an IP.
 //   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
@@ -63,6 +65,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -80,6 +83,8 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/net/dns/recursive"
+	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -104,6 +109,7 @@ func main() {
 		Routes:            defaultEnv("TS_ROUTES", ""),
 		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
 		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
+		ProxyToDNS:        defaultEnv("TS_DEST_DNS", ""),
 		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
 		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
 		DaemonExtraArgs:   defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
@@ -322,7 +328,7 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != ""
+		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.ProxyToDNS != ""
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
@@ -425,6 +431,12 @@ runLoop:
 					log.Printf("Installing proxy rules")
 					if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
 						log.Fatalf("installing ingress proxy rules: %v", err)
+					}
+				}
+				if cfg.ProxyToDNS != "" && len(addrs) > 0 && ipsHaveChanged {
+					log.Printf("Installing proxy rules")
+					if err := installIngressForwardingRuleExternalNameService(ctx, cfg.ProxyToDNS, addrs, nfr); err != nil {
+						log.Fatalf("installing ingress proxy rules for External Name Service: %v", err)
 					}
 				}
 				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) > 0 {
@@ -846,6 +858,37 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	return nil
 }
 
+func installIngressForwardingRuleExternalNameService(ctx context.Context, name string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+	dsts, err := resolveDNS(ctx, name)
+	if err != nil {
+		return fmt.Errorf("error resolving DNS name: %v", err)
+	}
+	for _, dst := range dsts {
+		log.Printf("DNS name %s resolved to %s", name, dst.String())
+	}
+	var local netip.Addr
+	for _, pfx := range tsIPs {
+		// TODO (irbekrm): support IPv6
+		if !(pfx.IsSingleIP() && pfx.Addr().Is4()) {
+			continue
+		}
+		local = pfx.Addr()
+		break
+	}
+	if !local.IsValid() {
+		return fmt.Errorf("no tailscale IP matching family found in %v", tsIPs)
+	}
+	if err := nfr.DNATWithLoadBalancer(local, dsts); err != nil {
+		return fmt.Errorf("installing DNAT rules for ingress to %s: %w", name, err)
+	}
+	for _, dst := range dsts {
+		if err := nfr.ClampMSSToPMTU("tailscale0", dst); err != nil {
+			return fmt.Errorf("adding rule to clamp traffic to %v: %w", dst, err)
+		}
+	}
+	return nil
+}
+
 // settings is all the configuration for containerboot.
 type settings struct {
 	AuthKey  string
@@ -854,7 +897,8 @@ type settings struct {
 	// ProxyTo is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
-	ProxyTo string
+	ProxyTo    string
+	ProxyToDNS string
 	// TailnetTargetIP is the destination IP to which all incoming
 	// non-Tailscale traffic should be proxied. This is typically a
 	// Tailscale IP.
@@ -877,6 +921,27 @@ type settings struct {
 	AuthOnce           bool
 	Root               string
 	KubernetesCanPatch bool
+}
+
+func resolveDNS(ctx context.Context, name string) ([]netip.Addr, error) {
+	// net/dns/recursive/recursive.go
+	// send a DNS query to kube dns server
+	// TODO: watch for resolv.conf changes
+	conf, err := resolvconffile.ParseFile(resolvconffile.Path)
+	if err != nil {
+		return []netip.Addr{}, fmt.Errorf("error parsing resolv.conf: %v", err)
+	}
+	if len(conf.Nameservers) == 0 {
+		return []netip.Addr{}, errors.New("resolv.conf contains no nameservers")
+	}
+	// TODO (irbekrm): support IPv6
+	res := recursive.NewResolverWithRoots(&net.Dialer{}, log.Printf, conf.Nameservers, true)
+	addrs, _, err := res.Resolve(ctx, name)
+	if len(addrs) < 1 {
+		// TODO (irbekrm): pretty print []netip.Addrs
+		return nil, fmt.Errorf("no IPv4 addresses returned for DNS name %s from nameservers %+#v", conf.Nameservers)
+	}
+	return addrs, err
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

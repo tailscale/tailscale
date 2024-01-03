@@ -126,6 +126,16 @@ type Resolver struct {
 	//    - DNS-over-HTTPS or DNS-over-TLS support
 }
 
+// TODO (irbekrm): make these config params into resolver opts?
+func NewResolverWithRoots(dialer netns.Dialer, log logger.Logf, roots []netip.Addr, noIPv6 bool) *Resolver {
+	return &Resolver{
+		Dialer:      dialer,
+		Logf:        log,
+		NoIPv6:      noIPv6,
+		rootServers: roots,
+	}
+}
+
 // queryState stores all state during the course of a single query
 type queryState struct {
 	// rootServers are the root nameservers to start from

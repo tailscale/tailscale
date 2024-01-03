@@ -10,12 +10,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"reflect"
 	"strings"
 
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/tsaddr"
@@ -109,7 +111,6 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 		dadderLen = 16
 		fam = unix.NFPROTO_IPV6
 	}
-
 	dnatRule := &nftables.Rule{
 		Table: nat,
 		Chain: preroutingCh,
@@ -138,6 +139,100 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 	}
 	n.conn.InsertRule(dnatRule)
 	return n.conn.Flush()
+}
+func (n *nftablesRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error {
+	nat, preroutingCh, err := n.ensurePreroutingChain(dsts[0])
+	if err != nil {
+		return err
+	}
+	// Delete all rules from the nat prerouting chain.
+	n.conn.FlushChain(preroutingCh)
+
+	addrType := nftables.TypeIPAddr
+	if dsts[0].Is6() {
+		addrType = nftables.TypeIP6Addr
+	}
+
+	set := &nftables.Set{
+		Table:    nat,
+		IsMap:    true,
+		Name:     "addrs",
+		ID:       uint32(1),
+		KeyType:  nftables.TypeInteger,
+		DataType: addrType,
+	}
+	if set, err = createSetIfNotExist(n.conn, set); err != nil {
+		return fmt.Errorf("error ensuring a set: %v", err)
+	}
+	err = n.conn.Flush()
+	if err != nil {
+		log.Printf("error flushing after creating set: %v", err)
+	}
+	// n.conn.FlushSet(set)
+	// setElems := make([]nftables.SetElement, len(dsts))
+	// for i, dst := range dsts {
+	// 	setElems[i] = nftables.SetElement{
+	// 		Key: binaryutil.BigEndian.PutUint16(uint16(i)),
+	// 		Val: dst.AsSlice(),
+	// 	}
+	// }
+	element := []nftables.SetElement{
+		{
+			Key: binaryutil.BigEndian.PutUint16(uint16(22)),
+			Val: []byte(net.ParseIP(dsts[0].String()).To4()),
+		},
+	}
+	if err := n.conn.SetAddElements(set, element); err != nil {
+		return fmt.Errorf("error after adding set elements: %v", err)
+	}
+	err = n.conn.Flush()
+	if err != nil {
+		log.Printf("error flushing after adding set elements: %v", err)
+	}
+	var daddrOffset, dadderLen, famConst uint32
+	if dsts[0].Is4() {
+		famConst = unix.NFPROTO_IPV4
+		daddrOffset = 16
+		dadderLen = 4
+	} else {
+		famConst = unix.NFPROTO_IPV6
+		daddrOffset = 24
+		dadderLen = 16
+	}
+	fmt.Println(famConst)
+
+	dnatRule := &nftables.Rule{
+		Table: nat,
+		Chain: preroutingCh,
+		Exprs: []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       daddrOffset,
+				Len:          dadderLen,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     origDst.AsSlice(),
+			},
+			&expr.Numgen{
+				Register: 1,
+				Type:     unix.NFT_NG_INCREMENTAL,
+				Modulus:  uint32(len(dsts)),
+			},
+			// &expr.NAT{
+			// 	Type:       expr.NATTypeDestNAT,
+			// 	Family:     famConst,
+			// 	RegAddrMin: 1, // reg 1 contains the numgen expr that will evaluate to a destination IP
+			// },
+		},
+	}
+	rule := n.conn.AddRule(dnatRule)
+	log.Printf("\nrule is %#+v\n", rule)
+	err = n.conn.Flush()
+	log.Printf("received error: %v", err)
+	return nil
 }
 
 func (n *nftablesRunner) DNATNonTailscaleTraffic(tunname string, dst netip.Addr) error {
@@ -356,6 +451,22 @@ func getTableIfExists(c *nftables.Conn, family nftables.TableFamily, name string
 	return nil, nil
 }
 
+func createSetIfNotExist(c *nftables.Conn, set *nftables.Set) (*nftables.Set, error) {
+	sets, err := c.GetSets(set.Table)
+	if err != nil {
+		return nil, fmt.Errorf("error listing sets: %v", err)
+	}
+	for _, s := range sets {
+		if s.Name == set.Name {
+			return s, nil
+		}
+	}
+	if err := c.AddSet(set, nil); err != nil {
+		return nil, fmt.Errorf("error creating a set: %v", err)
+	}
+	return set, nil
+}
+
 // createTableIfNotExist creates a nftables table via connection c if it does
 // not exist within the given family.
 func createTableIfNotExist(c *nftables.Conn, family nftables.TableFamily, name string) (*nftables.Table, error) {
@@ -494,6 +605,14 @@ type NetfilterRunner interface {
 	// to the provided destination, as used in the Kubernetes ingress proxies.
 	AddDNATRule(origDst, dst netip.Addr) error
 
+	// DNATWithLoadBalancer adds a rule to the nat/PREROUTING chain to DNAT
+	// traffic destined for the given original destination to the given new
+	// destination(s) using round robin to load balance if more than one
+	// destination is provided. This is used to forward all traffic destined
+	// for the Tailscale interface to the provided destination(s), as used
+	// in the Kubernetes ingress proxies.
+	DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error
+
 	// AddSNATRuleForDst adds a rule to the nat/POSTROUTING chain to SNAT
 	// traffic destined for dst to src.
 	// This is used to forward traffic destined for the local machine over
@@ -503,7 +622,7 @@ type NetfilterRunner interface {
 	// DNATNonTailscaleTraffic adds a rule to the nat/PREROUTING chain to DNAT
 	// all traffic inbound from any interface except exemptInterface to dst.
 	// This is used to forward traffic destined for the local machine over
-	// the Tailscale interface, as used in the Kubernetes egress proxies.//
+	// the Tailscale interface, as used in the Kubernetes egress proxies.
 	DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error
 
 	// ClampMSSToPMTU adds a rule to the mangle/FORWARD chain to clamp MSS for

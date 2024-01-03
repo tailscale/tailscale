@@ -307,6 +307,27 @@ func (i *iptablesRunner) DNATNonTailscaleTraffic(tun string, dst netip.Addr) err
 	return table.Insert("nat", "PREROUTING", 1, "!", "-i", tun, "-j", "DNAT", "--to-destination", dst.String())
 }
 
+// DNATWithLoadBalancer adds DNAT rules to load balance all incoming traffic NOT
+// destined to tun interface to provided destinations using round robin.
+// NB: this function clears the nat PREROUTING chain on start, so it is only
+// safe to use on systems where Tailscale is the only process that uses this
+// chain (i.e containers).
+func (i *iptablesRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error {
+	table := i.getIPTByAddr(dsts[0])
+	if err := table.ClearChain("nat", "PREROUTING"); err != nil && !isErrChainNotExist(err) {
+		return fmt.Errorf("error deleting rules from the PREROUTING chain: %w", err)
+	}
+	// If dsts contain more than one address, for n := n in range(len(dsts)..2) route packets for every nth connection to dsts[n].
+	for i := len(dsts); i >= 2; i-- {
+		dst := dsts[i-1] // the order in which rules for addrs are installed does not matter
+		if err := table.Append("nat", "PREROUTING", "--destination", origDst.String(), "-m", "statistic", "--mode", "nth", "--every", fmt.Sprint(i), "--packet", "0", "-j", "DNAT", "--to-destination", dst.String()); err != nil {
+			return fmt.Errorf("error adding DNAT rule for %s: %w", dst.String(), err)
+		}
+	}
+	// If the packet falls through to this rule, we route to the first destination in the list unconditionally.
+	return table.Append("nat", "PREROUTING", "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dsts[0].String())
+}
+
 func (i *iptablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	table := i.getIPTByAddr(addr)
 	return table.Append("mangle", "FORWARD", "-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
