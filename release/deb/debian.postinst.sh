@@ -1,3 +1,4 @@
+#!/bin/sh
 if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
 	deb-systemd-helper unmask 'tailscaled.service' >/dev/null || true
 	if deb-systemd-helper --quiet was-enabled 'tailscaled.service'; then
