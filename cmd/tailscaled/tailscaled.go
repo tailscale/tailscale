@@ -324,7 +324,7 @@ func ipnServerOpts() (o serverOptions) {
 var logPol *logpolicy.Policy
 var debugMux *http.ServeMux
 
-func run() error {
+func run() (err error) {
 	var logf logger.Logf = log.Printf
 
 	sys := new(tsd.System)
@@ -332,7 +332,6 @@ func run() error {
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
 	if args.confFile != "" {
-		var err error
 		conf, err = conffile.Load(args.confFile)
 		if err != nil {
 			return fmt.Errorf("error reading config file: %w", err)
@@ -340,13 +339,17 @@ func run() error {
 		sys.InitialConfig = conf
 	}
 
-	netMon, err := netmon.New(func(format string, args ...any) {
-		logf(format, args...)
-	})
-	if err != nil {
-		return fmt.Errorf("netmon.New: %w", err)
+	var netMon *netmon.Monitor
+	isWinSvc := isWindowsService()
+	if !isWinSvc {
+		netMon, err = netmon.New(func(format string, args ...any) {
+			logf(format, args...)
+		})
+		if err != nil {
+			return fmt.Errorf("netmon.New: %w", err)
+		}
+		sys.Set(netMon)
 	}
-	sys.Set(netMon)
 
 	pol := logpolicy.New(logtail.CollectionNode, netMon, nil /* use log.Printf */)
 	pol.SetVerbosityLevel(args.verbose)
@@ -362,7 +365,7 @@ func run() error {
 		log.Printf("Error reading environment config: %v", err)
 	}
 
-	if isWindowsService() {
+	if isWinSvc {
 		// Run the IPN server from the Windows service manager.
 		log.Printf("Running service...")
 		if err := runWindowsService(pol); err != nil {
