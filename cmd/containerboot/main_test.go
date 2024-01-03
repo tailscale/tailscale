@@ -219,6 +219,28 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
+			Name: "empty routes",
+			Env: map[string]string{
+				"TS_AUTHKEY": "tskey-key",
+				"TS_ROUTES":  "",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key --advertise-routes=",
+					},
+				},
+				{
+					Notify: runningNotify,
+					WantFiles: map[string]string{
+						"proc/sys/net/ipv4/ip_forward":          "0",
+						"proc/sys/net/ipv6/conf/all/forwarding": "0",
+					},
+				},
+			},
+		},
+		{
 			Name: "routes_kernel_ipv4",
 			Env: map[string]string{
 				"TS_AUTHKEY":   "tskey-key",
