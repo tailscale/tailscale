@@ -458,7 +458,7 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 // https://infosec.mozilla.org/guidelines/web_security
 func AddBrowserHeaders(w http.ResponseWriter) {
 	w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; block-all-mixed-content; object-src 'none'")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
