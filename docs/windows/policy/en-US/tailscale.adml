@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources revision="1.0" schemaVersion="1.0"
+                           xmlns="http://www.microsoft.com/GroupPolicy/PolicyDefinitions">
+    <displayName>Tailscale</displayName>
+    <description>A set of policies that enforces particular settings in the Tailscale Windows client.</description>
+    <resources>
+        <stringTable>
+            <string id="TAILSCALE_PRODUCT">Tailscale</string>
+            <string id="SINCE_V1_22">Tailscale version 1.22.0 and later</string>
+            <string id="SINCE_V1_26">Tailscale version 1.26.0 and later</string>
+            <string id="SINCE_V1_50">Tailscale version 1.50.0 and later</string>
+            <string id="SINCE_V1_52">Tailscale version 1.52.0 and later</string>
+            <string id="SINCE_V1_56">Tailscale version 1.56.0 and later</string>
+            <string id="PARTIAL_FULL_SINCE_V1_56">Tailscale version 1.56.0 and later (full support), some earlier versions (partial support)</string>
+            <string id="SINCE_V1_58">Tailscale version 1.58.0 and later</string>
+            <string id="Tailscale_Category">Tailscale</string>
+            <string id="UI_Category">UI customization</string>
+            <string id="Settings_Category">Settings</string>
+            <string id="LoginURL">Require using a specific Tailscale coordination server</string>
+            <string id="LoginURL_Help"><![CDATA[This policy can be used to require the use of a particular Tailscale coordination server.
+See https://tailscale.com/kb/1315/mdm-keys#set-a-custom-control-server-url for more details.
+
+If you configure this policy, set it to the URL of your coordination server, beginning with https:// and ending with no trailing slash. If blank or "https://controlplane.tailscale.com", the default coordination server will be required.
+
+If you disable this policy, the Tailscale SaaS coordination server will be used by default, but a non-standard Tailscale coordination server can be configured using the CLI.]]></string>
+            <string id="LogTarget">Require using a specific Tailscale log server</string>
+            <string id="LogTarget_Help"><![CDATA[This policy can be used to require the use of a non-standard log server.
+Please note that using a non-standard log server will limit Tailscale Support's ability to diagnose problems.
+
+If you configure this policy, set it to the URL of your log server, beginning with https:// and ending with no trailing slash. If blank or "https://log.tailscale.io", the default log server will be used.
+
+If you disable this policy, the Tailscale standard log server will be used by default, but a non-standard Tailscale log server can be configured using the TS_LOG_TARGET environment variable.]]></string>
+            <string id="Tailnet">Specify which Tailnet should be used for Login</string>
+            <string id="Tailnet_Help"><![CDATA[This policy can be used to suggest or require a specific tailnet when opening the login page.
+See https://tailscale.com/kb/1315/mdm-keys#set-a-suggested-or-required-tailnet for more details.
+
+To suggest a tailnet at login time, set this to the name of the tailnet, as shown in the top-left of the admin panel, such as "example.com". That tailnet's SSO button will be shown prominently, along with the option to select a different tailnet.
+
+To require logging in to a particular tailnet, add the "required:" prefix, such as "required:example.com". The result is similar to the suggested tailnet but there will be no option to choose a different tailnet.
+
+If you configure this policy, set it to the name of the tailnet, possibly with the "required:" prefix, as described above.
+
+If you disable this policy, the standard login page will be used.]]></string>
+            <string id="ExitNodeID">Require using a specific Exit Node</string>
+            <string id="ExitNodeID_Help"><![CDATA[This policy can be used to require always using the specified Exit Node whenever the Tailscale client is connected.
+See https://tailscale.com/kb/1315/mdm-keys#force-an-exit-node-to-always-be-used and https://tailscale.com/kb/1103/exit-nodes for more details.
+
+If you enable this policy, set it to the ID of an exit node. The ID is visible on the Machines page of the admin console, or can be queried using the Tailscale API. If the specified exit node is unavailable, this device will have no Internet access unless Tailscale is disconnected.
+
+If you disable this policy or supply an empty exit node ID, then usage of exit nodes will be disallowed.
+
+If you do not configure this policy, no exit node will be used by default but an exit node (if one is available and permitted by ACLs) can be chosen by the user if desired.]]></string>
+            <string id="AllowIncomingConnections">Allow incoming connections</string>
+            <string id="AllowIncomingConnections_Help"><![CDATA[This policy can be used to require that the Allow Incoming Connections setting is configured a certain way.
+See https://tailscale.com/kb/1315/mdm-keys#set-whether-to-allow-incoming-connections and https://tailscale.com/kb/1072/client-preferences#allow-incoming-connections for more details.
+
+If you enable this policy, then Allow Incoming Connections is always enabled and the menu option is hidden.
+
+If you disable this policy, then Allow Incoming Connections is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Allow Incoming Connections depends on what is selected in the Preferences submenu.]]></string>
+            <string id="UnattendedMode">Run Tailscale in Unattended Mode</string>
+            <string id="UnattendedMode_Help"><![CDATA[This policy can be used to require that the Run Unattended setting is configured a certain way.
+See https://tailscale.com/kb/1315/mdm-keys#set-unattended-mode and https://tailscale.com/kb/1088/run-unattended for more details.
+
+If you enable this policy, then Run Unattended is always enabled and the menu option is hidden.
+
+If you disable this policy, then Run Unattended is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Run Unattended depends on what is selected in the Preferences submenu.]]></string>
+            <string id="ExitNodeAllowLANAccess">Allow Local Network Access when an Exit Node is in use</string>
+            <string id="ExitNodeAllowLANAccess_Help"><![CDATA[This policy can be used to require that the Allow Local Network Access setting is configured a certain way.
+See https://tailscale.com/kb/1315/mdm-keys#toggle-local-network-access-when-an-exit-node-is-in-use and https://tailscale.com/kb/1103/exit-nodes#step-4-use-the-exit-node for more details.
+
+If you enable this policy, then Allow Local Network Access is always enabled and the menu option is hidden.
+
+If you disable this policy, then Allow Local Network Access is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Allow Local Network Access depends on what is selected in the Exit Node submenu.]]></string>
+            <string id="UseTailscaleDNSSettings">Use Tailscale DNS Settings</string>
+            <string id="UseTailscaleDNSSettings_Help"><![CDATA[This policy can be used to require that Use Tailscale DNS is configured a certain way.
+See https://tailscale.com/kb/1315/mdm-keys#set-whether-the-device-uses-tailscale-dns-settings for more details.
+
+If you enable this policy, then Use Tailscale DNS is always enabled and the menu option is hidden.
+
+If you disable this policy, then Use Tailscale DNS is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Use Tailscale DNS depends on what is selected in the Preferences submenu.]]></string>
+            <string id="UseTailscaleSubnets">Use Tailscale Subnets</string>
+            <string id="UseTailscaleSubnets_Help"><![CDATA[This policy can be used to require that Use Tailscale Subnets is configured a certain way.
+See https://tailscale.com/kb/1315/mdm-keys#set-whether-the-device-accepts-tailscale-subnets or https://tailscale.com/kb/1019/subnets for more details.
+
+If you enable this policy, then Use Tailscale Subnets is always enabled and the menu option is hidden.
+
+If you disable this policy, then Use Tailscale Subnets is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Use Tailscale Subnets depends on what is selected in the Preferences submenu.]]></string>
+            <string id="InstallUpdates">Automatically install updates</string>
+            <string id="InstallUpdates_Help"><![CDATA[This policy can be used to require that Automatically Install Updates is configured a certain way.
+See https://tailscale.com/kb/1067/update#auto-updates for more details.
+
+If you enable this policy, then Automatically Install Updates is always enabled and the menu option is hidden.
+
+If you disable this policy, then Automatically Install Updates is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Automatically Install Updates depends on what is selected in the Preferences submenu.]]></string>
+            <string id="AdvertiseExitNode">Run Tailscale as an Exit Node</string>
+            <string id="AdvertiseExitNode_Help"><![CDATA[This policy can be used to require that Run Exit Node is configured a certain way.
+See https://tailscale.com/kb/1103/exit-nodes for more details.
+
+If you enable this policy, then Run Exit Node is always enabled and the menu option is hidden.
+
+If you disable this policy, then Run Exit Node is always disabled and the menu option is hidden.
+
+If you do not configure this policy, then Run Exit Node depends on what is selected in the Exit Node submenu.]]></string>
+            <string id="AdminPanel">Show the "Admin Panel" menu item</string>
+            <string id="AdminPanel_Help"><![CDATA[This policy can be used to show or hide the Admin Console item in the Tailscale Menu.
+
+If you enable or don't configure this policy, the Admin Console item will be shown in the Tailscale menu when available.
+
+If you disable this policy, the Admin Console item will always be hidden from the Tailscale menu.]]></string>
+            <string id="NetworkDevices">Show the "Network Devices" submenu</string>
+            <string id="NetworkDevices_Help"><![CDATA[This policy can be used to show or hide the Network Devices submenu in the Tailscale Menu.
+
+If you enable or don't configure this policy, the Network Devices submenu will be shown in the Tailscale menu.
+
+If you disable this policy, the Network Devices submenu will be hidden from the Tailscale menu. This does not affect other devices' visibility in the CLI.]]></string>
+            <string id="TestMenu">Show the "Debug" submenu</string>
+            <string id="TestMenu_Help"><![CDATA[This policy can be used to show or hide the Debug submenu of the Tailscale menu.
+See https://tailscale.com/kb/1315/mdm-keys#hide-the-debug-menu for more details.
+
+If you enable or don't configure this policy, the Debug submenu will be shown in the Tailscale menu when opened while holding Ctrl.
+
+If you disable this policy, the Debug submenu will be hidden from the Tailscale menu.]]></string>
+            <string id="UpdateMenu">Show the "Update Available" menu item</string>
+            <string id="UpdateMenu_Help"><![CDATA[This policy can be used to show or hide the Update Available item in the Tailscale Menu.
+See https://tailscale.com/kb/1315/mdm-keys#hide-the-update-menu for more details.
+
+If you enable or don't configure this policy, the Update Available item will be shown in the Tailscale menu when there is an update.
+
+If you disable this policy, the Update Available item will be hidden from the Tailscale menu.]]></string>
+            <string id="RunExitNode">Show the "Run Exit Node" menu item</string>
+            <string id="RunExitNode_Help"><![CDATA[This policy can be used to show or hide the Run Exit Node item in the Exit Node submenu.
+See https://tailscale.com/kb/1315/mdm-keys#hide-the-run-as-exit-node-menu-item for more details.
+This does not affect using the CLI to enable or disable advertising an exit node. If you wish to enable or disable this feature, see the Run Exit Node policy in the Settings category.
+
+If you enable or don't configure this policy, the Run Exit Node item will be shown in the Exit Node submenu.
+
+If you disable this policy, the Run Exit Node item will be hidden from the Exit Node submenu.]]></string>
+            <string id="PreferencesMenu">Show the "Preferences" submenu</string>
+            <string id="PreferencesMenu_Help"><![CDATA[This policy can be used to show or hide the Preferences submenu of the Tailscale menu.
+See https://tailscale.com/kb/1315/mdm-keys#hide-the-preferences-menu for more details.
+This does not affect using the CLI to modify that menu's preferences. If you wish to control those, look at the policies in the Settings category.
+
+If you enable or don't configure this policy, the Preferences submenu will be shown in the Tailscale menu.
+
+If you disable this policy, the Preferences submenu will be hidden from the Tailscale menu.]]></string>
+            <string id="ExitNodesPicker">Show the "Exit Node" submenu</string>
+            <string id="ExitNodesPicker_Help"><![CDATA[This policy can be used to show or hide the Exit Node submenu of the Tailscale menu.
+See https://tailscale.com/kb/1315/mdm-keys#hide-the-exit-node-picker for more details.
+This does not affect using the CLI to select or stop using an exit node. If you wish to control exit node usage, look at the "Require using a specific Exit Node" policy in the Settings category.
+
+If you enable or don't configure this policy, the Exit Node submenu will be shown in the Tailscale menu.
+
+If you disable this policy, the Exit Node submenu will be hidden from the Tailscale menu.]]></string>
+            <string id="KeyExpirationNoticeTime">Specify a custom key expiration notification time</string>
+            <string id="KeyExpirationNoticeTime_Help"><![CDATA[This policy can be used to configure how soon the notification appears before key expiry.
+See https://tailscale.com/kb/1315/mdm-keys#set-the-key-expiration-notice-period for more details.
+
+Time intervals must be specified as a Go Duration: for example, 24h, 5h25m30s. Time units larger than hours are unsupported.
+
+If you enable this policy and supply a valid time interval, the key expiry notification will begin to display when the current key has less than that amount of time remaining.
+
+If you disable or don't configure this policy, the default time period will be used (as of Tailscale 1.56, this is 24 hours).]]></string>
+            <string id="LogSCMInteractions">Log extra details about service events</string>
+            <string id="LogSCMInteractions_Help"><![CDATA[This policy can be used to enable additional logging related to Service Control Manager for debugging purposes.
+This should only be enabled if recommended by Tailscale Support.
+
+If you enable this policy, additional logging will be enabled for SCM events.
+
+If you disable or don't configure this policy, the normal amount of logging occurs.]]></string>
+            <string id="FlushDNSOnSessionUnlock">Flush the DNS cache on session unlock</string>
+            <string id="FlushDNSOnSessionUnlock_Help"><![CDATA[This policy can be used to enable additional DNS cache flushing for debugging purposes.
+This should only be enabled if recommended by Tailscale Support.
+
+If you enable this policy, the DNS cache will be flushed on session unlock in addition to when the DNS cache would normally be flushed.
+
+If you disable or don't configure this policy, the DNS cache is managed normally.]]></string>
+            <string id="PostureChecking">Collect data for posture checking</string>
+            <string id="PostureChecking_Help"><![CDATA[This policy can be used to require that the Posture Checking setting is configured a certain way.
+See https://tailscale.com/kb/1315/mdm-keys#enable-gathering-device-posture-data and https://tailscale.com/kb/1326/device-identity for more details.
+
+If you enable this policy, then data collection is always enabled.
+
+If you disable this policy, then data collection is always disabled.
+
+If you do not configure this policy, then data collection depends on if it has been enabled from the CLI (as of Tailscale 1.56), it may be present in the GUI in later versions.]]></string>
+        </stringTable>
+        <presentationTable>
+            <presentation id="LoginURL">
+                <textBox refId="LoginURLPrompt">
+                    <label>Coordination server</label>
+                </textBox>
+            </presentation>
+            <presentation id="LogTarget">
+                <textBox refId="LogTargetPrompt">
+                    <label>Log server</label>
+                </textBox>
+            </presentation>
+            <presentation id="Tailnet">
+                <textBox refId="TailnetPrompt">
+                    <label>Tailnet</label>
+                </textBox>
+            </presentation>
+            <presentation id="ExitNodeID">
+                <textBox refId="ExitNodeIDPrompt">
+                    <label>Exit Node</label>
+                </textBox>
+            </presentation>
+        </presentationTable>
+    </resources>
+</policyDefinitionResources>
