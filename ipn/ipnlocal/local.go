@@ -608,6 +608,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
 	b.updateFilterLocked(b.netMap, b.pm.CurrentPrefs())
+	updateExitNodeUsageWarning(b.pm.CurrentPrefs(), delta.New)
 
 	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
 		want := b.netMap.GetAddresses().Len()
@@ -3084,6 +3085,22 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 		return true // assume true until set otherwise
 	}
 	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
+}
+
+var warnExitNodeUsage = health.NewWarnable(health.WithConnectivityImpact())
+
+// updateExitNodeUsageWarning updates a warnable meant to notify users of
+// configuration issues that could break exit node usage.
+func updateExitNodeUsageWarning(p ipn.PrefsView, state *interfaces.State) {
+	var result error
+	if p.ExitNodeIP().IsValid() || p.ExitNodeID() != "" {
+		warn, _ := netutil.CheckReversePathFiltering(state)
+		const comment = "please set rp_filter=2 instead of rp_filter=1; see https://github.com/tailscale/tailscale/issues/3310"
+		if len(warn) > 0 {
+			result = fmt.Errorf("%s: %v, %s", healthmsg.WarnExitNodeUsage, warn, comment)
+		}
+	}
+	warnExitNodeUsage.Set(result)
 }
 
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {

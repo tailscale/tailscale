@@ -6,7 +6,6 @@ package netutil
 import (
 	"io"
 	"net"
-	"net/netip"
 	"runtime"
 	"testing"
 )
@@ -71,9 +70,7 @@ func TestCheckReversePathFiltering(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skipf("skipping on %s", runtime.GOOS)
 	}
-	warn, err := CheckReversePathFiltering([]netip.Prefix{
-		netip.MustParsePrefix("192.168.1.1/24"),
-	}, nil)
+	warn, err := CheckReversePathFiltering(nil)
 	t.Logf("err: %v", err)
 	t.Logf("warnings: %v", warn)
 }

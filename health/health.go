@@ -103,6 +103,16 @@ func WithMapDebugFlag(name string) WarnableOpt {
 	})
 }
 
+// WithConnectivityImpact returns an option which makes a Warnable annotated as
+// something that could be breaking external network connectivity on the
+// machine. This will make the warnable returned by OverallError alongside
+// network connectivity errors.
+func WithConnectivityImpact() WarnableOpt {
+	return warnOptFunc(func(w *Warnable) {
+		w.hasConnectivityImpact = true
+	})
+}
+
 type warnOptFunc func(*Warnable)
 
 func (f warnOptFunc) mod(w *Warnable) { f(w) }
@@ -111,6 +121,10 @@ func (f warnOptFunc) mod(w *Warnable) { f(w) }
 // The caller of NewWarnable is responsible for calling Set to update the state.
 type Warnable struct {
 	debugFlag string // optional MapRequest.DebugFlag to send when unhealthy
+
+	// If true, this warning is related to configuration of networking stack
+	// on the machine that impacts connectivity.
+	hasConnectivityImpact bool
 
 	isSet atomic.Bool
 	mu    sync.Mutex
@@ -442,9 +456,35 @@ func OverallError() error {
 
 var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 
+// networkErrorf creates an error that indicates issues with outgoing network
+// connectivity. Any active warnings related to network connectivity will
+// automatically be appended to it.
+func networkErrorf(format string, a ...any) error {
+	errs := []error{
+		fmt.Errorf(format, a...),
+	}
+	for w := range warnables {
+		if !w.hasConnectivityImpact {
+			continue
+		}
+		if err := w.get(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) == 1 {
+		return errs[0]
+	}
+	return multierr.New(errs...)
+}
+
+var errNetworkDown = networkErrorf("network down")
+var errNotInMapPoll = networkErrorf("not in map poll")
+var errNoDERPHome = errors.New("no DERP home")
+var errNoUDP4Bind = networkErrorf("no udp4 bind")
+
 func overallErrorLocked() error {
 	if !anyInterfaceUp {
-		return errors.New("network down")
+		return errNetworkDown
 	}
 	if localLogConfigErr != nil {
 		return localLogConfigErr
@@ -457,26 +497,26 @@ func overallErrorLocked() error {
 	}
 	now := time.Now()
 	if !inMapPoll && (lastMapPollEndedAt.IsZero() || now.Sub(lastMapPollEndedAt) > 10*time.Second) {
-		return errors.New("not in map poll")
+		return errNotInMapPoll
 	}
 	const tooIdle = 2*time.Minute + 5*time.Second
 	if d := now.Sub(lastStreamedMapResponse).Round(time.Second); d > tooIdle {
-		return fmt.Errorf("no map response in %v", d)
+		return networkErrorf("no map response in %v", d)
 	}
 	if !derpHomeless {
 		rid := derpHomeRegion
 		if rid == 0 {
-			return errors.New("no DERP home")
+			return errNoDERPHome
 		}
 		if !derpRegionConnected[rid] {
-			return fmt.Errorf("not connected to home DERP region %v", rid)
+			return networkErrorf("not connected to home DERP region %v", rid)
 		}
 		if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
-			return fmt.Errorf("haven't heard from home DERP region %v in %v", rid, d)
+			return networkErrorf("haven't heard from home DERP region %v in %v", rid, d)
 		}
 	}
 	if udp4Unbound {
-		return errors.New("no udp4 bind")
+		return errNoUDP4Bind
 	}
 
 	// TODO: use

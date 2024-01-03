@@ -11,4 +11,5 @@ const (
 	WarnAcceptRoutesOff = "Some peers are advertising routes but --accept-routes is false"
 	TailscaleSSHOnBut   = "Tailscale SSH enabled, but " // + ... something from caller
 	LockedOut           = "this node is locked out; it will not have connectivity until it is signed. For more info, see https://tailscale.com/s/locked-out"
+	WarnExitNodeUsage   = "The following issues on your machine will likely make usage of exit nodes impossible"
 )

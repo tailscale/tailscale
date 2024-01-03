@@ -153,7 +153,7 @@ func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, er
 // This function returns an error if it is unable to determine whether reverse
 // path filtering is enabled, or a warning describing configuration issues if
 // reverse path fitering is non-functional or partly functional.
-func CheckReversePathFiltering(routes []netip.Prefix, state *interfaces.State) (warn []string, err error) {
+func CheckReversePathFiltering(state *interfaces.State) (warn []string, err error) {
 	if runtime.GOOS != "linux" {
 		return nil, nil
 	}
@@ -164,12 +164,6 @@ func CheckReversePathFiltering(routes []netip.Prefix, state *interfaces.State) (
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	// Reverse path filtering as a syscall is only implemented on Linux for IPv4.
-	wantV4, _ := protocolsRequiredForForwarding(routes, state)
-	if !wantV4 {
-		return nil, nil
 	}
 
 	// The kernel uses the maximum value for rp_filter between the 'all'
@@ -205,7 +199,7 @@ func CheckReversePathFiltering(routes []netip.Prefix, state *interfaces.State) (
 			iSetting = allSetting
 		}
 		if iSetting == filtStrict {
-			warn = append(warn, fmt.Sprintf("Interface %q has strict reverse-path filtering enabled", iface.Name))
+			warn = append(warn, fmt.Sprintf("interface %q has strict reverse-path filtering enabled", iface.Name))
 		}
 	}
 	return warn, nil
