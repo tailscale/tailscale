@@ -49,9 +49,9 @@ func init() {
 // there is only one endpoint for a peer, but in Tailscale we distribute a
 // number of possible endpoints for a peer which would include the all the
 // likely addresses at which a peer may be reachable. This endpoint type holds
-// the information required that when WiregGuard-Go wants to send to a
-// particular peer (essentally represented by this endpoint type), the send
-// function can use the currnetly best known Tailscale endpoint to send packets
+// the information required that when wireguard-go wants to send to a
+// particular peer (essentially represented by this endpoint type), the send
+// function can use the currently best known Tailscale endpoint to send packets
 // to the peer.
 type endpoint struct {
 	// atomically accessed; declared first for alignment reasons
@@ -790,7 +790,7 @@ func (de *endpoint) sendWireGuardOnlyPingsLocked(now mono.Time) {
 		return
 	}
 
-	// Normally the we only send pings at a low rate as the decision to start
+	// Normally we only send pings at a low rate as the decision to start
 	// sending a ping sets bestAddrAtUntil with a reasonable time to keep trying
 	// that address, however, if that code changed we may want to be sure that
 	// we don't ever send excessive pings to avoid impact to the client/user.
