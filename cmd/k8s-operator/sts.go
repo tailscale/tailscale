@@ -79,9 +79,16 @@ type tailscaleSTSConfig struct {
 	Hostname string
 	Tags     []string // if empty, use defaultTags
 
-	// Routes is a list of CIDRs to pass via --advertise-routes flag
-	// Should only be set if this is config for subnetRouter
-	Routes string
+	// Connector specifies a configuration of a Connector instance if that's
+	// what this StatefulSet should be created for.
+	Connector *connector
+}
+
+type connector struct {
+	// routes is a list of subnet routes that this Connector should expose.
+	routes string
+	// isExitNode defines whether this Connector should act as an exit node.
+	isExitNode bool
 }
 
 type tailscaleSTSReconciler struct {
@@ -419,19 +426,24 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 				},
 			},
 		})
-	} else if len(sts.Routes) > 0 {
+	} else if sts.Connector != nil {
+		// We need to provide these env vars even if the values are empty to
+		// ensure that a transition from a Connector with a defined subnet
+		// router or exit node to one without succeeds.
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_EXTRA_ARGS",
+			Value: fmt.Sprintf("--advertise-exit-node=%v", sts.Connector.isExitNode),
+		})
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_ROUTES",
-			Value: sts.Routes,
+			Value: sts.Connector.routes,
 		})
-
 	}
 	if a.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
 			Value: a.tsFirewallMode,
-		},
-		)
+		})
 	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,

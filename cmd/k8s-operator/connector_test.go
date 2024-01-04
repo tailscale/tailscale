@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"go.uber.org/zap"
@@ -21,6 +22,8 @@ import (
 )
 
 func TestConnector(t *testing.T) {
+	// Create a Connector that defines a Tailscale node that advertises
+	// 10.40.0.0/14 route and acts as an exit node.
 	cn := &tsapi.Connector{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test",
@@ -34,6 +37,7 @@ func TestConnector(t *testing.T) {
 			SubnetRouter: &tsapi.SubnetRouter{
 				Routes: []tsapi.Route{"10.40.0.0/14"},
 			},
+			IsExitNode: true,
 		},
 	}
 	fc := fake.NewClientBuilder().
@@ -48,7 +52,6 @@ func TestConnector(t *testing.T) {
 	}
 
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	// Create a Connector with a subnet router definition
 	cr := &ConnectorReconciler{
 		Client: fc,
 		ssr: &tailscaleSTSReconciler{
@@ -63,26 +66,54 @@ func TestConnector(t *testing.T) {
 	}
 
 	expectReconciled(t, cr, "", "test")
-	fullName, shortName := findGenName(t, fc, "", "test", "subnetrouter")
+	fullName, shortName := findGenName(t, fc, "", "test", "connector")
 
-	expectEqual(t, fc, expectedSecret(fullName, "", "subnetrouter"))
-	expectEqual(t, fc, expectedConnectorSTS(shortName, fullName, "10.40.0.0/14"))
+	expectEqual(t, fc, expectedSecret(fullName, "", "connector"))
+	opts := connectorSTSOpts{
+		connectorName: "test",
+		stsName:       shortName,
+		secretName:    fullName,
+		routes:        "10.40.0.0/14",
+		isExitNode:    true,
+	}
+	expectEqual(t, fc, expectedConnectorSTS(opts))
 
-	// Add another CIDR
+	// Add another route to be advertised.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
 		conn.Spec.SubnetRouter.Routes = []tsapi.Route{"10.40.0.0/14", "10.44.0.0/20"}
 	})
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedConnectorSTS(shortName, fullName, "10.40.0.0/14,10.44.0.0/20"))
+	opts.routes = "10.40.0.0/14,10.44.0.0/20"
 
-	// Remove a CIDR
+	expectEqual(t, fc, expectedConnectorSTS(opts))
+
+	// Remove a route.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
 		conn.Spec.SubnetRouter.Routes = []tsapi.Route{"10.44.0.0/20"}
 	})
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedConnectorSTS(shortName, fullName, "10.44.0.0/20"))
+	opts.routes = "10.44.0.0/20"
+	expectEqual(t, fc, expectedConnectorSTS(opts))
 
-	// Delete the Connector
+	// Remove the subnet router.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.SubnetRouter = nil
+	})
+	expectReconciled(t, cr, "", "test")
+	opts.routes = ""
+	expectEqual(t, fc, expectedConnectorSTS(opts))
+
+	// Re-add the subnet router.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.SubnetRouter = &tsapi.SubnetRouter{
+			Routes: []tsapi.Route{"10.44.0.0/20"},
+		}
+	})
+	expectReconciled(t, cr, "", "test")
+	opts.routes = "10.44.0.0/20"
+	expectEqual(t, fc, expectedConnectorSTS(opts))
+
+	// Delete the Connector.
 	if err = fc.Delete(context.Background(), cn); err != nil {
 		t.Fatalf("error deleting Connector: %v", err)
 	}
@@ -93,22 +124,85 @@ func TestConnector(t *testing.T) {
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 
+	// Create a Connector that advertises a route and is not an exit node.
+	cn = &tsapi.Connector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+			UID:  types.UID("1234-UID"),
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       tsapi.ConnectorKind,
+			APIVersion: "tailscale.io/v1alpha1",
+		},
+		Spec: tsapi.ConnectorSpec{
+			SubnetRouter: &tsapi.SubnetRouter{
+				Routes: []tsapi.Route{"10.40.0.0/14"},
+			},
+		},
+	}
+	mustCreate(t, fc, cn)
+	expectReconciled(t, cr, "", "test")
+	fullName, shortName = findGenName(t, fc, "", "test", "connector")
+
+	expectEqual(t, fc, expectedSecret(fullName, "", "connector"))
+	opts = connectorSTSOpts{
+		connectorName: "test",
+		stsName:       shortName,
+		secretName:    fullName,
+		routes:        "10.40.0.0/14",
+		isExitNode:    false,
+	}
+	expectEqual(t, fc, expectedConnectorSTS(opts))
+
+	// Delete the Connector.
+	if err = fc.Delete(context.Background(), cn); err != nil {
+		t.Fatalf("error deleting Connector: %v", err)
+	}
+
+	expectRequeue(t, cr, "", "test")
+	expectReconciled(t, cr, "", "test")
+
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 }
 
-func expectedConnectorSTS(stsName, secretName, routes string) *appsv1.StatefulSet {
-	return &appsv1.StatefulSet{
+type connectorSTSOpts struct {
+	stsName       string
+	secretName    string
+	connectorName string
+	hostname      string
+	routes        string
+	isExitNode    bool
+}
+
+func expectedConnectorSTS(opts connectorSTSOpts) *appsv1.StatefulSet {
+	var hostname string
+	if opts.hostname != "" {
+		hostname = opts.hostname
+	} else {
+		hostname = opts.connectorName + "-connector"
+	}
+	containerEnv := []corev1.EnvVar{
+		{Name: "TS_USERSPACE", Value: "false"},
+		{Name: "TS_AUTH_ONCE", Value: "true"},
+		{Name: "TS_KUBE_SECRET", Value: opts.secretName},
+		{Name: "TS_HOSTNAME", Value: hostname},
+		{Name: "TS_EXTRA_ARGS", Value: fmt.Sprintf("--advertise-exit-node=%v", opts.isExitNode)},
+		{Name: "TS_ROUTES", Value: opts.routes},
+	}
+	sts := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
 			APIVersion: "apps/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      stsName,
+			Name:      opts.stsName,
 			Namespace: "operator-ns",
 			Labels: map[string]string{
 				"tailscale.com/managed":              "true",
 				"tailscale.com/parent-resource":      "test",
 				"tailscale.com/parent-resource-ns":   "",
-				"tailscale.com/parent-resource-type": "subnetrouter",
+				"tailscale.com/parent-resource-type": "connector",
 			},
 		},
 		Spec: appsv1.StatefulSetSpec{
@@ -116,13 +210,13 @@ func expectedConnectorSTS(stsName, secretName, routes string) *appsv1.StatefulSe
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "1234-UID"},
 			},
-			ServiceName: stsName,
+			ServiceName: opts.stsName,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
 					Labels:                     map[string]string{"app": "1234-UID"},
 					Annotations: map[string]string{
-						"tailscale.com/operator-last-set-hostname": "test-subnetrouter",
+						"tailscale.com/operator-last-set-hostname": hostname,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -142,13 +236,7 @@ func expectedConnectorSTS(stsName, secretName, routes string) *appsv1.StatefulSe
 						{
 							Name:  "tailscale",
 							Image: "tailscale/tailscale",
-							Env: []corev1.EnvVar{
-								{Name: "TS_USERSPACE", Value: "false"},
-								{Name: "TS_AUTH_ONCE", Value: "true"},
-								{Name: "TS_KUBE_SECRET", Value: secretName},
-								{Name: "TS_HOSTNAME", Value: "test-subnetrouter"},
-								{Name: "TS_ROUTES", Value: routes},
-							},
+							Env:   containerEnv,
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
 									Add: []corev1.Capability{"NET_ADMIN"},
@@ -161,4 +249,5 @@ func expectedConnectorSTS(stsName, secretName, routes string) *appsv1.StatefulSe
 			},
 		},
 	}
+	return sts
 }
