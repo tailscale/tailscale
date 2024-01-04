@@ -106,6 +106,7 @@ func main() {
 		Hostname:          defaultEnv("TS_HOSTNAME", ""),
 		Routes:            defaultEnvPointer("TS_ROUTES"),
 		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
+		ConfigFilePath:    defaultEnv("TS_CONFIG_FILE_PATH", ""),
 		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
 		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
 		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
@@ -637,6 +638,9 @@ func tailscaledArgs(cfg *settings) []string {
 	if cfg.DaemonExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.DaemonExtraArgs)...)
 	}
+	if cfg.ConfigFilePath != "" {
+		args = append(args, "--config="+cfg.ConfigFilePath)
+	}
 	return args
 }
 
@@ -888,6 +892,7 @@ type settings struct {
 	AuthOnce           bool
 	Root               string
 	KubernetesCanPatch bool
+	ConfigFilePath     string
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/opt"
@@ -479,6 +480,16 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
+}
+
+func confFile(sts *tailscaleSTSConfig) (*ipn.ConfigVAlpha, error) {
+	if sts.connector != nil {}
+	routes, err := netutil.CalcAdvertiseRoutes(sts., advertiseDefaultRoute)
+
+	return &ipn.ConfigVAlpha{
+		Hostname: &sts.Hostname,
+	}, nil
+
 }
 
 // ptrObject is a type constraint for pointer types that implement
