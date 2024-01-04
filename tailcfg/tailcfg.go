@@ -124,7 +124,8 @@ type CapabilityVersion int
 //   - 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
 //   - 82: 2023-12-01: Client understands NodeAttrLinuxMustUseIPTables, NodeAttrLinuxMustUseNfTables, c2n /netfilter-kind
 //   - 83: 2023-12-18: Client understands DefaultAutoUpdate
-const CurrentCapabilityVersion CapabilityVersion = 83
+//   - 84: 2024-01-04: Client understands SeamlessKeyRenewal
+const CurrentCapabilityVersion CapabilityVersion = 84
 
 type StableID string
 
@@ -2190,6 +2191,10 @@ const (
 	// netfilter management.
 	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
 	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
+
+	// NodeAttrSeamlessKeyRenewal makes clients enable beta functionality
+	// of renewing node keys without breaking connections.
+	NodeAttrSeamlessKeyRenewal NodeCapability = "seamless-key-renewal"
 )
 
 // SetDNSRequest is a request to add a DNS record.
