@@ -756,7 +756,7 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTarget
 	if tailnetTargetFQDN != "" {
 		v4Forwarding = true
 	}
-	if routes != nil {
+	if routes != nil && *routes != "" {
 		for _, route := range strings.Split(*routes, ",") {
 			cidr, err := netip.ParsePrefix(route)
 			if err != nil {
