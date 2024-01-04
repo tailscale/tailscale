@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/netip"
 	"syscall"
 
@@ -20,20 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
 )
-
-func defaultRoute() (d DefaultRouteDetails, err error) {
-	idx, err := DefaultRouteInterfaceIndex()
-	if err != nil {
-		return d, err
-	}
-	iface, err := net.InterfaceByIndex(idx)
-	if err != nil {
-		return d, err
-	}
-	d.InterfaceName = iface.Name
-	d.InterfaceIndex = idx
-	return d, nil
-}
 
 // ErrNoGatewayIndexFound is returned by DefaultRouteInterfaceIndex when no
 // default route is found.
