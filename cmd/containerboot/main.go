@@ -25,6 +25,10 @@
 //     destination defined by a MagicDNS name.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
 //   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
+//   - TS_SET_EXTRA_ARGS: extra arguments to 'tailscale set'.'tailscale set' is
+//     run on subsequent container restarts if TS_AUTH_ONCE is set to true. It
+//     gets passed values of TS_ACCEPT_DNS, TS_SOCKET, TS_ROUTES, TS_HOSTNAME
+//     and TS_SET_EXTRA_ARGS.
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
@@ -111,6 +115,7 @@ func main() {
 		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
 		DaemonExtraArgs:   defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
 		ExtraArgs:         defaultEnv("TS_EXTRA_ARGS", ""),
+		SetExtraArgs:      defaultEnv("TS_SET_EXTRA_ARGS", ""),
 		InKubernetes:      os.Getenv("KUBERNETES_SERVICE_HOST") != "",
 		UserspaceMode:     defaultBool("TS_USERSPACE", true),
 		StateDir:          defaultEnv("TS_STATE_DIR", ""),
@@ -695,6 +700,9 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
+	if cfg.SetExtraArgs != "" {
+		args = append(args, strings.Fields(cfg.SetExtraArgs)...)
+	}
 	log.Printf("Running 'tailscale set'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
@@ -877,6 +885,7 @@ type settings struct {
 	ServeConfigPath    string
 	DaemonExtraArgs    string
 	ExtraArgs          string
+	SetExtraArgs       string
 	InKubernetes       bool
 	UserspaceMode      bool
 	StateDir           string

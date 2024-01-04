@@ -350,8 +350,9 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "authkey_once",
 			Env: map[string]string{
-				"TS_AUTHKEY":   "tskey-key",
-				"TS_AUTH_ONCE": "true",
+				"TS_AUTHKEY":        "tskey-key",
+				"TS_AUTH_ONCE":      "true",
+				"TS_SET_EXTRA_ARGS": "--advertise-exit-node=true --advertise-app-connector=true",
 			},
 			Phases: []phase{
 				{
@@ -370,7 +371,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					Notify: runningNotify,
 					WantCmds: []string{
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --advertise-exit-node=true --advertise-app-connector=true",
 					},
 				},
 			},
