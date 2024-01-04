@@ -1074,9 +1074,11 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.blockEngineUpdates(false)
 	}
 
-	if st.LoginFinished() && wasBlocked {
-		// Auth completed, unblock the engine
-		b.blockEngineUpdates(false)
+	if st.LoginFinished() && (wasBlocked || b.seamlessRenewalEnabled()) {
+		if wasBlocked {
+			// Auth completed, unblock the engine
+			b.blockEngineUpdates(false)
+		}
 		b.authReconfig()
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
@@ -1108,7 +1110,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.authURL = st.URL
 		b.authURLSticky = st.URL
 	}
-	if wasBlocked && st.LoginFinished() {
+	if (wasBlocked || b.seamlessRenewalEnabled()) && st.LoginFinished() {
 		// Interactive login finished successfully (URL visited).
 		// After an interactive login, the user always wants
 		// WantRunning.
@@ -2456,8 +2458,10 @@ func (b *LocalBackend) popBrowserAuthNow() {
 
 	b.logf("popBrowserAuthNow: url=%v", url != "")
 
-	b.blockEngineUpdates(true)
-	b.stopEngineAndWait()
+	if !b.seamlessRenewalEnabled() {
+		b.blockEngineUpdates(true)
+		b.stopEngineAndWait()
+	}
 	b.tellClientToBrowseToURL(url)
 	if b.State() == ipn.Running {
 		b.enterState(ipn.Starting)
@@ -4176,6 +4180,9 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 	switch newState {
 	case ipn.NeedsLogin:
 		systemd.Status("Needs login: %s", authURL)
+		if b.seamlessRenewalEnabled() {
+			break
+		}
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped:
@@ -5799,6 +5806,14 @@ func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
+}
+
+// seamlessRenewalEnabled reports whether seamless key renewals are enabled
+// (i.e. we saw our self node with the SeamlessKeyRenewal attr in a netmap).
+// This enables beta functionality of renewing node keys without breaking
+// connections.
+func (b *LocalBackend) seamlessRenewalEnabled() bool {
+	return b.ControlKnobs().SeamlessKeyRenewal.Load()
 }
 
 var (

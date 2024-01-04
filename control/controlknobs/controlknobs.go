@@ -64,6 +64,11 @@ type Knobs struct {
 	// LinuxForceNfTables is whether the node should use nftables for Linux
 	// netfiltering, unless overridden by the user.
 	LinuxForceNfTables atomic.Bool
+
+	// SeamlessKeyRenewal is whether to enable the alpha functionality of
+	// renewing node keys without breaking connections.
+	// http://go/seamless-key-renewal
+	SeamlessKeyRenewal atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -89,6 +94,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		silentDisco                   = has(tailcfg.NodeAttrSilentDisco)
 		forceIPTables                 = has(tailcfg.NodeAttrLinuxMustUseIPTables)
 		forceNfTables                 = has(tailcfg.NodeAttrLinuxMustUseNfTables)
+		seamlessKeyRenewal            = has(tailcfg.NodeAttrSeamlessKeyRenewal)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -109,6 +115,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.SilentDisco.Store(silentDisco)
 	k.LinuxForceIPTables.Store(forceIPTables)
 	k.LinuxForceNfTables.Store(forceNfTables)
+	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -130,5 +137,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"SilentDisco":                   k.SilentDisco.Load(),
 		"LinuxForceIPTables":            k.LinuxForceIPTables.Load(),
 		"LinuxForceNfTables":            k.LinuxForceNfTables.Load(),
+		"SeamlessKeyRenewal":            k.SeamlessKeyRenewal.Load(),
 	}
 }
