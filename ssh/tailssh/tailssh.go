@@ -254,7 +254,7 @@ func (c *conn) vlogf(format string, args ...any) {
 
 // isAuthorized walks through the action chain and returns nil if the connection
 // is authorized. If the connection is not authorized, it returns
-// gossh.ErrDenied. If the action chain resolution fails, it returns the
+// errDenied. If the action chain resolution fails, it returns the
 // resolution error.
 func (c *conn) isAuthorized(ctx ssh.Context) error {
 	action := c.currentAction
@@ -266,7 +266,7 @@ func (c *conn) isAuthorized(ctx ssh.Context) error {
 			return nil
 		}
 		if action.Reject || action.HoldAndDelegate == "" {
-			return gossh.ErrDenied
+			return errDenied
 		}
 		var err error
 		action, err = c.resolveNextAction(ctx)
@@ -281,6 +281,10 @@ func (c *conn) isAuthorized(ctx ssh.Context) error {
 	}
 }
 
+// errDenied is returned by auth callbacks when a connection is denied by the
+// policy.
+var errDenied = errors.New("ssh: access denied")
+
 // errPubKeyRequired is returned by NoClientAuthCallback to make the client
 // resort to public-key auth; not user visible.
 var errPubKeyRequired = errors.New("ssh publickey required")
@@ -293,7 +297,7 @@ var errPubKeyRequired = errors.New("ssh publickey required")
 // starting it afresh). It returns an error if the policy evaluation fails, or
 // if the decision is "reject"
 //
-// It either returns nil (accept) or errPubKeyRequired or gossh.ErrDenied
+// It either returns nil (accept) or errPubKeyRequired or errDenied
 // (reject). The errors may be wrapped.
 func (c *conn) NoClientAuthCallback(ctx ssh.Context) error {
 	if c.insecureSkipTailscaleAuth {
@@ -360,18 +364,18 @@ func (c *conn) PublicKeyHandler(ctx ssh.Context, pubKey ssh.PublicKey) error {
 // pubKey. It returns nil if the matching policy action is Accept or
 // HoldAndDelegate. If pubKey is nil, there was no policy match but there is a
 // policy that might match a public key it returns errPubKeyRequired. Otherwise,
-// it returns gossh.ErrDenied.
+// it returns errDenied.
 func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	if err := c.setInfo(ctx); err != nil {
 		c.logf("failed to get conninfo: %v", err)
-		return gossh.ErrDenied
+		return errDenied
 	}
 	a, localUser, err := c.evaluatePolicy(pubKey)
 	if err != nil {
 		if pubKey == nil && c.havePubKeyPolicy() {
 			return errPubKeyRequired
 		}
-		return fmt.Errorf("%w: %v", gossh.ErrDenied, err)
+		return fmt.Errorf("%w: %v", errDenied, err)
 	}
 	c.action0 = a
 	c.currentAction = a
@@ -402,10 +406,10 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	}
 	if a.Reject {
 		c.finalAction = a
-		return gossh.ErrDenied
+		return errDenied
 	}
 	// Shouldn't get here, but:
-	return gossh.ErrDenied
+	return errDenied
 }
 
 // ServerConfig implements ssh.ServerConfigCallback.
@@ -423,7 +427,7 @@ func (srv *server) newConn() (*conn, error) {
 		// Stop accepting new connections.
 		// Connections in the auth phase are handled in handleConnPostSSHAuth.
 		// Existing sessions are terminated by Shutdown.
-		return nil, gossh.ErrDenied
+		return nil, errDenied
 	}
 	srv.mu.Unlock()
 	c := &conn{srv: srv}
