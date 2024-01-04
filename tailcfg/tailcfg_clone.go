@@ -119,6 +119,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	NoIPv6                        bool
 }{})
 
 // Clone makes a deep copy of Hostinfo.

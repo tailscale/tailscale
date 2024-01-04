@@ -124,7 +124,8 @@ type CapabilityVersion int
 //   - 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
 //   - 82: 2023-12-01: Client understands NodeAttrLinuxMustUseIPTables, NodeAttrLinuxMustUseNfTables, c2n /netfilter-kind
 //   - 83: 2023-12-18: Client understands DefaultAutoUpdate
-const CurrentCapabilityVersion CapabilityVersion = 83
+//   - 84: 2023-01-03: Client understands Node.NoIPv6
+const CurrentCapabilityVersion CapabilityVersion = 84
 
 type StableID string
 
@@ -407,6 +408,11 @@ type Node struct {
 	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
 	// node is marked IsWireGuardOnly and being used as an exit node.
 	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
+
+	// NoIPv6 is set when this node has broken IPv6 support at the
+	// operating system level, and thus cannot receive IPv6 packets even
+	// inside a Wireguard tunnel.
+	NoIPv6 bool `json:",omitempty"`
 }
 
 // HasCap reports whether the node has the given capability.
@@ -2015,7 +2021,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Expired == n2.Expired &&
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
-		n.IsWireGuardOnly == n2.IsWireGuardOnly
+		n.IsWireGuardOnly == n2.IsWireGuardOnly &&
+		n.NoIPv6 == n2.NoIPv6
 }
 
 func eqPtr[T comparable](a, b *T) bool {
