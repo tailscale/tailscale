@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tailscale.com/metrics"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/version"
 )
 
@@ -30,13 +31,14 @@ func init() {
 }
 
 const (
-	gaugePrefix    = "gauge_"
-	counterPrefix  = "counter_"
-	labelMapPrefix = "labelmap_"
+	gaugePrefix     = "gauge_"
+	counterPrefix   = "counter_"
+	labelMapPrefix  = "labelmap_"
+	histogramPrefix = "histogram_"
 )
 
 // prefixesToTrim contains key prefixes to remove when exporting and sorting metrics.
-var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix}
+var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix, histogramPrefix}
 
 var timeStart = time.Now()
 
@@ -70,10 +72,12 @@ func prometheusMetric(prefix string, key string) (string, string, string) {
 	case strings.HasPrefix(key, gaugePrefix):
 		typ = "gauge"
 		key = strings.TrimPrefix(key, gaugePrefix)
-
 	case strings.HasPrefix(key, counterPrefix):
 		typ = "counter"
 		key = strings.TrimPrefix(key, counterPrefix)
+	case strings.HasPrefix(key, histogramPrefix):
+		typ = "histogram"
+		key = strings.TrimPrefix(key, histogramPrefix)
 	}
 	if strings.HasPrefix(key, labelMapPrefix) {
 		key = strings.TrimPrefix(key, labelMapPrefix)
@@ -96,16 +100,10 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 
 	switch v := kv.Value.(type) {
 	case *expvar.Int:
-		if typ == "" {
-			typ = "counter"
-		}
-		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmpx.Or(typ, "counter"), name, v.Value())
 		return
 	case *expvar.Float:
-		if typ == "" {
-			typ = "gauge"
-		}
-		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmpx.Or(typ, "gauge"), name, v.Value())
 		return
 	case *metrics.Set:
 		v.Do(func(kv expvar.KeyValue) {
@@ -194,8 +192,10 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 		// IntMap uses expvar.Map on the inside, which presorts
 		// keys. The output ordering is deterministic.
 		v.Do(func(kv expvar.KeyValue) {
-			fmt.Fprintf(w, "%s{%s=%q} %v\n", name, v.Label, kv.Key, kv.Value)
+			fmt.Fprintf(w, "%s{%s=%q} %v\n", name, cmpx.Or(v.Label, "label"), kv.Key, kv.Value)
 		})
+	case *metrics.Histogram:
+		v.PromExport(w, name)
 	case *expvar.Map:
 		if label != "" && typ != "" {
 			fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)

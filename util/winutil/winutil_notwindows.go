@@ -6,20 +6,24 @@
 package winutil
 
 import (
+	"errors"
 	"fmt"
 	"os/user"
 	"runtime"
 )
 
 const regBase = ``
+const regPolicyBase = ``
 
-func getPolicyString(name, defval string) string { return defval }
+var ErrNoValue = errors.New("no value because registry is unavailable on this OS")
 
-func getPolicyInteger(name string, defval uint64) uint64 { return defval }
+func getPolicyString(name string) (string, error) { return "", ErrNoValue }
 
-func getRegString(name, defval string) string { return defval }
+func getPolicyInteger(name string) (uint64, error) { return 0, ErrNoValue }
 
-func getRegInteger(name string, defval uint64) uint64 { return defval }
+func getRegString(name string) (string, error) { return "", ErrNoValue }
+
+func getRegInteger(name string) (uint64, error) { return 0, ErrNoValue }
 
 func isSIDValidPrincipal(uid string) bool { return false }
 
@@ -28,3 +32,5 @@ func lookupPseudoUser(uid string) (*user.User, error) {
 }
 
 func IsCurrentProcessElevated() bool { return false }
+
+func registerForRestart(opts RegisterForRestartOpts) error { return nil }

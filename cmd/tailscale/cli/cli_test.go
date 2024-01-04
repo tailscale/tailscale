@@ -18,10 +18,13 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/version/distro"
 )
 
@@ -553,6 +556,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode:    preftype.NetfilterOn,
 				CorpDNS:          true,
 				AllowSingleHosts: true,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
 			},
 		},
 		{
@@ -566,6 +572,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				AllowSingleHosts: true,
 				RouteAll:         true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
 			},
 		},
 		{
@@ -581,6 +590,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 					netip.MustParsePrefix("::/0"),
 				},
 				NetfilterMode: preftype.NetfilterOn,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
 			},
 		},
 		{
@@ -667,6 +679,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:   true,
 				NetfilterMode: preftype.NetfilterNoDivert,
 				NoSNAT:        true,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
 			},
 		},
 		{
@@ -680,6 +695,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:   true,
 				NetfilterMode: preftype.NetfilterOff,
 				NoSNAT:        true,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+				},
 			},
 		},
 		{
@@ -694,6 +712,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:      true,
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
+				},
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
 				},
 			},
 		},
@@ -719,10 +740,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var warnBuf tstest.MemLogger
-			goos := tt.goos
-			if goos == "" {
-				goos = "linux"
-			}
+			goos := cmpx.Or(tt.goos, "linux")
 			st := tt.st
 			if st == nil {
 				st = new(ipnstate.Status)
@@ -762,7 +780,7 @@ func TestPrefFlagMapping(t *testing.T) {
 	prefHasFlag := map[string]bool{}
 	for _, pv := range prefsOfFlag {
 		for _, pref := range pv {
-			prefHasFlag[pref] = true
+			prefHasFlag[strings.Split(pref, ".")[0]] = true
 		}
 	}
 
@@ -785,6 +803,13 @@ func TestPrefFlagMapping(t *testing.T) {
 			continue
 		case "Egg":
 			// Not applicable.
+			continue
+		case "RunWebClient":
+			// TODO(tailscale/corp#14335): Currently behind a feature flag.
+			continue
+		case "NetfilterKind":
+			// Handled by TS_DEBUG_FIREWALL_MODE env var, we don't want to have
+			// a CLI flag for this. The Pref is used by c2n.
 			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
@@ -836,7 +861,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{},
 			curPrefs: &ipn.Prefs{
 				ControlURL: ipn.DefaultControlURL,
-				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:    &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 			},
 			env: upCheckEnv{
 				backendState: "Stopped",
@@ -848,7 +873,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{},
 			curPrefs: &ipn.Prefs{
 				ControlURL: ipn.DefaultControlURL,
-				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:    &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 			},
 			env:            upCheckEnv{backendState: "Running"},
 			wantSimpleUp:   true,
@@ -859,13 +884,14 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{"--reset"},
 			curPrefs: &ipn.Prefs{
 				ControlURL: ipn.DefaultControlURL,
-				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:    &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 			},
 			env: upCheckEnv{backendState: "Running"},
 			wantJustEditMP: &ipn.MaskedPrefs{
 				AdvertiseRoutesSet:        true,
 				AdvertiseTagsSet:          true,
 				AllowSingleHostsSet:       true,
+				AppConnectorSet:           true,
 				ControlURLSet:             true,
 				CorpDNSSet:                true,
 				ExitNodeAllowLANAccessSet: true,
@@ -886,7 +912,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{},
 			curPrefs: &ipn.Prefs{
 				ControlURL: "https://login.tailscale.com",
-				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:    &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 			},
 			env:            upCheckEnv{backendState: "Running"},
 			wantSimpleUp:   true,
@@ -897,7 +923,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{"--login-server=https://localhost:1000"},
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
@@ -912,7 +938,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{"--advertise-tags=tag:foo"},
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
@@ -946,7 +972,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{"--ssh"},
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
@@ -967,7 +993,7 @@ func TestUpdatePrefs(t *testing.T) {
 			flags: []string{"--ssh=false"},
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				RunSSH:           true,
@@ -992,7 +1018,7 @@ func TestUpdatePrefs(t *testing.T) {
 			sshOverTailscale: true,
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
@@ -1016,7 +1042,7 @@ func TestUpdatePrefs(t *testing.T) {
 			sshOverTailscale: true,
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
@@ -1039,7 +1065,7 @@ func TestUpdatePrefs(t *testing.T) {
 			sshOverTailscale: true,
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
@@ -1061,7 +1087,7 @@ func TestUpdatePrefs(t *testing.T) {
 			sshOverTailscale: true,
 			curPrefs: &ipn.Prefs{
 				ControlURL:       "https://login.tailscale.com",
-				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				Persist:          &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				RunSSH:           true,
@@ -1103,6 +1129,49 @@ func TestUpdatePrefs(t *testing.T) {
 			},
 			wantJustEditMP: nil,
 			env:            upCheckEnv{backendState: "Running"},
+		},
+		{
+			name:  "advertise_connector",
+			flags: []string{"--advertise-connector"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				AppConnectorSet: true,
+				WantRunningSet:  true,
+			},
+			env: upCheckEnv{backendState: "Running"},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if !newPrefs.AppConnector.Advertise {
+					t.Errorf("prefs.AppConnector.Advertise not set")
+				}
+			},
+		},
+		{
+			name:  "no_advertise_connector",
+			flags: []string{"--advertise-connector=false"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				AppConnector: ipn.AppConnectorPrefs{
+					Advertise: true,
+				},
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				AppConnectorSet: true,
+				WantRunningSet:  true,
+			},
+			env: upCheckEnv{backendState: "Running"},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if newPrefs.AppConnector.Advertise {
+					t.Errorf("prefs.AppConnector.Advertise not unset")
+				}
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -1152,16 +1221,11 @@ func TestUpdatePrefs(t *testing.T) {
 				justEditMP.Prefs = ipn.Prefs{} // uninteresting
 			}
 			if !reflect.DeepEqual(justEditMP, tt.wantJustEditMP) {
-				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was \n%v", asJSON(oldEditPrefs))
+				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was \n%v", logger.AsJSON(oldEditPrefs))
 				t.Fatalf("justEditMP: %v\n\n: ", cmp.Diff(justEditMP, tt.wantJustEditMP, cmpIP))
 			}
 		})
 	}
-}
-
-func asJSON(v any) string {
-	b, _ := json.MarshalIndent(v, "", "\t")
-	return string(b)
 }
 
 var cmpIP = cmp.Comparer(func(a, b netip.Addr) bool {
@@ -1258,7 +1322,9 @@ func TestParseNLArgs(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			keys, disablements, err := parseNLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
-			if !reflect.DeepEqual(err, tc.wantErr) {
+			if (tc.wantErr == nil && err != nil) ||
+				(tc.wantErr != nil && err == nil) ||
+				(tc.wantErr != nil && err != nil && tc.wantErr.Error() != err.Error()) {
 				t.Fatalf("parseNLArgs(%v).err = %v, want %v", tc.input, err, tc.wantErr)
 			}
 

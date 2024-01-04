@@ -399,11 +399,24 @@ func (m *windowsManager) Close() error {
 // Windows DHCP client from sending dynamic DNS updates for our interface to
 // AD domain controllers.
 func (m *windowsManager) disableDynamicUpdates() error {
-	if err := m.setSingleDWORD(winutil.IPv4TCPIPInterfacePrefix, "DisableDynamicUpdate", 1); err != nil {
-		return err
+	prefixen := []winutil.RegistryPathPrefix{
+		winutil.IPv4TCPIPInterfacePrefix,
+		winutil.IPv6TCPIPInterfacePrefix,
 	}
-	if err := m.setSingleDWORD(winutil.IPv6TCPIPInterfacePrefix, "DisableDynamicUpdate", 1); err != nil {
-		return err
+
+	for _, prefix := range prefixen {
+		k, err := m.openInterfaceKey(prefix)
+		if err != nil {
+			return err
+		}
+		defer k.Close()
+
+		if err := k.SetDWordValue("DisableDynamicUpdate", 1); err != nil {
+			return err
+		}
+		if err := k.SetDWordValue("MaxNumberOfAddressesToRegister", 0); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -31,7 +31,7 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.20-alpine AS build-env
+FROM golang:1.21-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
@@ -47,8 +47,7 @@ RUN go install \
     golang.org/x/crypto/ssh \
     golang.org/x/crypto/acme \
     nhooyr.io/websocket \
-    github.com/mdlayher/netlink \
-    golang.zx2c4.com/wireguard/device
+    github.com/mdlayher/netlink
 
 COPY . .
 
@@ -67,10 +66,10 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
-FROM alpine:3.16
+FROM alpine:3.18
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 # For compat with the previous run.sh, although ideally you should be
 # using build_docker.sh which sets an entrypoint for the image.
-RUN ln -s /usr/local/bin/containerboot /tailscale/run.sh
+RUN mkdir /tailscale && ln -s /usr/local/bin/containerboot /tailscale/run.sh

@@ -30,7 +30,10 @@ type State struct {
 	// to turn off the TKA in the event of a consensus-breaking bug.
 	DisablementSecrets [][]byte `cbor:"2,keyasint"`
 
-	// Keys are the public keys currently trusted by the TKA.
+	// Keys are the public keys of either:
+	//
+	//   1. The signing nodes currently trusted by the TKA.
+	//   2. Ephemeral keys that were used to generate pre-signed auth keys.
 	Keys []Key `cbor:"3,keyasint"`
 
 	// StateID's are nonce's, generated on enablement and fixed for

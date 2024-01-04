@@ -23,6 +23,7 @@ import (
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/netaddr"
@@ -53,8 +54,9 @@ var (
 )
 
 type packet struct {
-	bs   []byte
-	addr netip.AddrPort // src for a request, dst for a response
+	bs     []byte
+	family string         // either "tcp" or "udp"
+	addr   netip.AddrPort // src for a request, dst for a response
 }
 
 // Config is a resolver configuration.
@@ -187,8 +189,6 @@ type Resolver struct {
 
 	// closed signals all goroutines to stop.
 	closed chan struct{}
-	// wg signals when all goroutines have stopped.
-	wg sync.WaitGroup
 
 	// mu guards the following fields from being updated while used.
 	mu           sync.Mutex
@@ -206,7 +206,7 @@ type ForwardLinkSelector interface {
 
 // New returns a new resolver.
 // netMon optionally specifies a network monitor to use for socket rebinding.
-func New(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *Resolver {
+func New(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *Resolver {
 	if dialer == nil {
 		panic("nil Dialer")
 	}
@@ -218,7 +218,7 @@ func New(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, 
 		ipToHost: map[netip.Addr]dnsname.FQDN{},
 		dialer:   dialer,
 	}
-	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer)
+	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer, knobs)
 	return r
 }
 
@@ -266,7 +266,7 @@ func (r *Resolver) Close() {
 // bound on per-query resource usage.
 const dnsQueryTimeout = 10 * time.Second
 
-func (r *Resolver) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
+func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
 	metricDNSQueryLocal.Add(1)
 	select {
 	case <-r.closed:
@@ -281,7 +281,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
 		defer cancel()
-		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, from}, responses)
+		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses)
 		if err != nil {
 			select {
 			// Best effort: use any error response sent by forwardWithDestChan.
@@ -312,9 +312,9 @@ func parseExitNodeQuery(q []byte) *response {
 	return p.response()
 }
 
-// HandleExitNodeDNSQuery handles a DNS query that arrived from a peer
-// via the peerapi's DoH server. This is only used when the local
-// node is being an exit node.
+// HandlePeerDNSQuery handles a DNS query that arrived from a peer
+// via the peerapi's DoH server. This is used when the local
+// node is being an exit node or an app connector.
 //
 // The provided allowName callback is whether a DNS query for a name
 // (as found by parsing q) is allowed.
@@ -323,7 +323,7 @@ func parseExitNodeQuery(q []byte) *response {
 // still result in a response DNS packet (saying there's a failure)
 // and a nil error.
 // TODO: figure out if we even need an error result.
-func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
+func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
 	metricDNSExitProxyQuery.Add(1)
 	ch := make(chan packet, 1)
 
@@ -348,7 +348,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 		// but for now that's probably good enough. Later we'll
 		// want to blend in everything from scutil --dns.
 		fallthrough
-	case "linux", "freebsd", "openbsd", "illumos":
+	case "linux", "freebsd", "openbsd", "illumos", "ios":
 		nameserver, err := stubResolverForOS()
 		if err != nil {
 			r.logf("stubResolverForOS: %v", err)
@@ -358,18 +358,21 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 		// TODO: more than 1 resolver from /etc/resolv.conf?
 
 		var resolvers []resolverAndDelay
-		if nameserver == tsaddr.TailscaleServiceIP() || nameserver == tsaddr.TailscaleServiceIPv6() {
+		switch nameserver {
+		case tsaddr.TailscaleServiceIP(), tsaddr.TailscaleServiceIPv6():
 			// If resolv.conf says 100.100.100.100, it's coming right back to us anyway
 			// so avoid the loop through the kernel and just do what we
 			// would've done anyway. By not passing any resolvers, the forwarder
 			// will use its default ones from our DNS config.
-		} else {
+		case netip.Addr{}:
+			// Likewise, if the platform has no resolv.conf, just use our defaults.
+		default:
 			resolvers = []resolverAndDelay{{
 				name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
 			}}
 		}
 
-		err = r.forwarder.forwardWithDestChan(ctx, packet{q, from}, ch, resolvers...)
+		err = r.forwarder.forwardWithDestChan(ctx, packet{q, "tcp", from}, ch, resolvers...)
 		if err != nil {
 			metricDNSExitProxyErrorForward.Add(1)
 			return nil, err
@@ -390,7 +393,7 @@ var debugExitNodeDNSNetPkg = envknob.RegisterBool("TS_DEBUG_EXIT_NODE_DNS_NET_PK
 
 // handleExitNodeDNSQueryWithNetPkg takes a DNS query message in q and
 // return a reply (for the ExitDNS DoH service) using the net package's
-// native APIs. This is only used on Windows for now.
+// native APIs.
 //
 // If resolver is nil, the net.Resolver zero value is used.
 //
@@ -529,7 +532,13 @@ var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 
 // stubResolverForOS returns the IP address of the first nameserver in
 // /etc/resolv.conf.
+//
+// It may also return the netip.Addr zero value and a nil error to mean
+// that the platform has no resolv.conf.
 func stubResolverForOS() (ip netip.Addr, err error) {
+	if runtime.GOOS == "ios" {
+		return netip.Addr{}, nil // no resolv.conf on iOS
+	}
 	fi, err := os.Stat(resolvconffile.Path)
 	if err != nil {
 		return netip.Addr{}, err
@@ -598,6 +607,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 			}
 		}
 		// Not authoritative, signal that forwarding is advisable.
+		metricDNSResolveLocalErrorRefused.Add(1)
 		return netip.Addr{}, dns.RCodeRefused
 	}
 
@@ -724,7 +734,7 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr
 		return netip.Addr{}, false // badly formed, don't respond
 	}
 
-	// MapVia will never error when given an ipv4 netip.Prefix.
+	// MapVia will never error when given an IPv4 netip.Prefix.
 	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
 	return out.Addr(), true
 }
@@ -1237,6 +1247,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	resp := parser.response()
 	resp.Header.RCode = rcode
 	resp.IP = ip
+	metricDNSMagicDNSSuccessName.Add(1)
 	return marshalResponse(resp)
 }
 
@@ -1294,9 +1305,8 @@ var (
 	metricDNSFwdErrorContext         = clientmetric.NewCounter("dns_query_fwd_error_context")
 	metricDNSFwdErrorContextGotError = clientmetric.NewCounter("dns_query_fwd_error_context_got_error")
 
-	metricDNSFwdErrorType      = clientmetric.NewCounter("dns_query_fwd_error_type")
-	metricDNSFwdErrorParseAddr = clientmetric.NewCounter("dns_query_fwd_error_parse_addr")
-	metricDNSFwdTruncated      = clientmetric.NewCounter("dns_query_fwd_truncated")
+	metricDNSFwdErrorType = clientmetric.NewCounter("dns_query_fwd_error_type")
+	metricDNSFwdTruncated = clientmetric.NewCounter("dns_query_fwd_truncated")
 
 	metricDNSFwdUDP            = clientmetric.NewCounter("dns_query_fwd_udp")       // on entry
 	metricDNSFwdUDPWrote       = clientmetric.NewCounter("dns_query_fwd_udp_wrote") // sent UDP packet
@@ -1305,6 +1315,14 @@ var (
 	metricDNSFwdUDPErrorTxID   = clientmetric.NewCounter("dns_query_fwd_udp_error_txid")
 	metricDNSFwdUDPErrorRead   = clientmetric.NewCounter("dns_query_fwd_udp_error_read")
 	metricDNSFwdUDPSuccess     = clientmetric.NewCounter("dns_query_fwd_udp_success")
+
+	metricDNSFwdTCP            = clientmetric.NewCounter("dns_query_fwd_tcp")       // on entry
+	metricDNSFwdTCPWrote       = clientmetric.NewCounter("dns_query_fwd_tcp_wrote") // sent TCP packet
+	metricDNSFwdTCPErrorWrite  = clientmetric.NewCounter("dns_query_fwd_tcp_error_write")
+	metricDNSFwdTCPErrorServer = clientmetric.NewCounter("dns_query_fwd_tcp_error_server")
+	metricDNSFwdTCPErrorTxID   = clientmetric.NewCounter("dns_query_fwd_tcp_error_txid")
+	metricDNSFwdTCPErrorRead   = clientmetric.NewCounter("dns_query_fwd_tcp_error_read")
+	metricDNSFwdTCPSuccess     = clientmetric.NewCounter("dns_query_fwd_tcp_success")
 
 	metricDNSFwdDoH               = clientmetric.NewCounter("dns_query_fwd_doh")
 	metricDNSFwdDoHErrorStatus    = clientmetric.NewCounter("dns_query_fwd_doh_error_status")

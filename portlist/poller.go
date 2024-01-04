@@ -7,19 +7,27 @@
 package portlist
 
 import (
-	"context"
 	"errors"
+	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 )
 
-var pollInterval = 5 * time.Second // default; changed by some OS-specific init funcs
+var (
+	newOSImpl            func(includeLocalhost bool) osImpl // if non-nil, constructs a new osImpl.
+	pollInterval         = 5 * time.Second                  // default; changed by some OS-specific init funcs
+	debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
+)
 
-var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
+// PollInterval is the recommended OS-specific interval
+// to wait between *Poller.Poll method calls.
+func PollInterval() time.Duration {
+	return pollInterval
+}
 
 // Poller scans the systems for listening ports periodically and sends
 // the results to C.
@@ -29,22 +37,15 @@ type Poller struct {
 	// This field should only be changed before calling Run.
 	IncludeLocalhost bool
 
-	c chan List // unbuffered
-
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
 	// code. When non-nil, it's responsible for getting the complete list of
 	// cached ports complete with the process name. That is, when set,
 	// addProcesses is not used.
 	// A nil values means we don't have code for getting the list on the current
 	// operating system.
-	os     osImpl
-	osOnce sync.Once // guards init of os
-
-	// closeCtx is the context that's canceled on Close.
-	closeCtx       context.Context
-	closeCtxCancel context.CancelFunc
-
-	runDone chan struct{} // closed when Run completes
+	os       osImpl
+	initOnce sync.Once // guards init of os
+	initErr  error
 
 	// scatch is memory for Poller.getList to reuse between calls.
 	scratch []Port
@@ -66,123 +67,55 @@ type osImpl interface {
 	AppendListeningPorts(base []Port) ([]Port, error)
 }
 
-// newOSImpl, if non-nil, constructs a new osImpl.
-var newOSImpl func(includeLocalhost bool) osImpl
-
-var errUnimplemented = errors.New("portlist poller not implemented on " + runtime.GOOS)
-
-// NewPoller returns a new portlist Poller. It returns an error
-// if the portlist couldn't be obtained.
-func NewPoller() (*Poller, error) {
-	if debugDisablePortlist() {
-		return nil, errors.New("portlist disabled by envknob")
-	}
-	p := &Poller{
-		c:       make(chan List),
-		runDone: make(chan struct{}),
-	}
-	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
-	p.osOnce.Do(p.initOSField)
-	if p.os == nil {
-		return nil, errUnimplemented
-	}
-
-	// Do one initial poll synchronously so we can return an error
-	// early.
-	if pl, err := p.getList(); err != nil {
-		return nil, err
-	} else {
-		p.setPrev(pl)
-	}
-	return p, nil
-}
-
 func (p *Poller) setPrev(pl List) {
 	// Make a copy, as the pass in pl slice aliases pl.scratch and we don't want
 	// that to except to the caller.
 	p.prev = slices.Clone(pl)
 }
 
-func (p *Poller) initOSField() {
-	if newOSImpl != nil {
+// init initializes the Poller by ensuring it has an underlying
+// OS implementation and is not turned off by envknob.
+func (p *Poller) init() {
+	switch {
+	case debugDisablePortlist():
+		p.initErr = errors.New("portlist disabled by envknob")
+	case newOSImpl == nil:
+		p.initErr = errors.New("portlist poller not implemented on " + runtime.GOOS)
+	default:
 		p.os = newOSImpl(p.IncludeLocalhost)
 	}
 }
 
-// Updates return the channel that receives port list updates.
-//
-// The channel is closed when the Poller is closed.
-func (p *Poller) Updates() <-chan List { return p.c }
-
 // Close closes the Poller.
-// Run will return with a nil error.
 func (p *Poller) Close() error {
-	p.closeCtxCancel()
-	<-p.runDone
-	if p.os != nil {
-		p.os.Close()
+	if p.initErr != nil {
+		return p.initErr
 	}
-	return nil
+	if p.os == nil {
+		return nil
+	}
+	return p.os.Close()
 }
 
-// send sends pl to p.c and returns whether it was successfully sent.
-func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
-	select {
-	case p.c <- pl:
-		return true, nil
-	case <-ctx.Done():
-		return false, ctx.Err()
-	case <-p.closeCtx.Done():
-		return false, nil
+// Poll returns the list of listening ports, if changed from
+// a previous call as indicated by the changed result.
+func (p *Poller) Poll() (ports []Port, changed bool, err error) {
+	p.initOnce.Do(p.init)
+	if p.initErr != nil {
+		return nil, false, fmt.Errorf("error initializing poller: %w", p.initErr)
 	}
-}
-
-// Run runs the Poller periodically until either the context
-// is done, or the Close is called.
-//
-// Run may only be called once.
-func (p *Poller) Run(ctx context.Context) error {
-	tick := time.NewTicker(pollInterval)
-	defer tick.Stop()
-	return p.runWithTickChan(ctx, tick.C)
-}
-
-func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time) error {
-	defer close(p.runDone)
-	defer close(p.c)
-
-	// Send out the pre-generated initial value.
-	if sent, err := p.send(ctx, p.prev); !sent {
-		return err
+	pl, err := p.getList()
+	if err != nil {
+		return nil, false, err
 	}
-
-	for {
-		select {
-		case <-tickChan:
-			pl, err := p.getList()
-			if err != nil {
-				return err
-			}
-			if pl.equal(p.prev) {
-				continue
-			}
-			p.setPrev(pl)
-			if sent, err := p.send(ctx, p.prev); !sent {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-p.closeCtx.Done():
-			return nil
-		}
+	if pl.equal(p.prev) {
+		return nil, false, nil
 	}
+	p.setPrev(pl)
+	return p.prev, true, nil
 }
 
 func (p *Poller) getList() (List, error) {
-	if debugDisablePortlist() {
-		return nil, nil
-	}
-	p.osOnce.Do(p.initOSField)
 	var err error
 	p.scratch, err = p.os.AppendListeningPorts(p.scratch[:0])
 	return p.scratch, err

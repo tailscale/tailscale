@@ -18,6 +18,12 @@ import (
 // field without it being dropped.
 type Bool string
 
+// NewBool constructs a new Bool value equal to b. The returned Bool is set,
+// unless Set("") or Clear() methods are called.
+func NewBool(b bool) Bool {
+	return Bool(strconv.FormatBool(b))
+}
+
 func (b *Bool) Set(v bool) {
 	*b = Bool(strconv.FormatBool(v))
 }
@@ -87,21 +93,15 @@ func (b Bool) MarshalJSON() ([]byte, error) {
 }
 
 func (b *Bool) UnmarshalJSON(j []byte) error {
-	// Note: written with a bunch of ifs instead of a switch
-	// because I'm sure the Go compiler optimizes away these
-	// []byte->string allocations in an == comparison, but I'm too
-	// lazy to check whether that's true in a switch also.
-	if string(j) == "true" {
+	switch string(j) {
+	case "true":
 		*b = "true"
-		return nil
-	}
-	if string(j) == "false" {
+	case "false":
 		*b = "false"
-		return nil
-	}
-	if string(j) == "null" {
+	case "null":
 		*b = "unset"
-		return nil
+	default:
+		return fmt.Errorf("invalid opt.Bool value %q", j)
 	}
-	return fmt.Errorf("invalid opt.Bool value %q", j)
+	return nil
 }

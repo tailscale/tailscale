@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"golang.org/x/exp/slices"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/version"

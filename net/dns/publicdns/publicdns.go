@@ -129,9 +129,15 @@ func addDoH(ipStr, base string) {
 	dohIPsOfBase[base] = append(dohIPsOfBase[base], ip)
 }
 
+const (
+	wikimediaDNSv4 = "185.71.138.138"
+	wikimediaDNSv6 = "2001:67c:930::1"
+)
+
 // populate is called once to initialize the knownDoH and dohIPsOfBase maps.
 func populate() {
 	// Cloudflare
+	// https://developers.cloudflare.com/1.1.1.1/ip-addresses/
 	addDoH("1.1.1.1", "https://cloudflare-dns.com/dns-query")
 	addDoH("1.0.0.1", "https://cloudflare-dns.com/dns-query")
 	addDoH("2606:4700:4700::1111", "https://cloudflare-dns.com/dns-query")
@@ -165,10 +171,17 @@ func populate() {
 	// addDoH("208.67.220.123", "https://doh.familyshield.opendns.com/dns-query")
 
 	// Quad9
+	// https://www.quad9.net/service/service-addresses-and-features
 	addDoH("9.9.9.9", "https://dns.quad9.net/dns-query")
 	addDoH("149.112.112.112", "https://dns.quad9.net/dns-query")
 	addDoH("2620:fe::fe", "https://dns.quad9.net/dns-query")
-	addDoH("2620:fe::fe:9", "https://dns.quad9.net/dns-query")
+	addDoH("2620:fe::9", "https://dns.quad9.net/dns-query")
+
+	// Quad9 +ECS +DNSSEC
+	addDoH("9.9.9.11", "https://dns11.quad9.net/dns-query")
+	addDoH("149.112.112.11", "https://dns11.quad9.net/dns-query")
+	addDoH("2620:fe::11", "https://dns11.quad9.net/dns-query")
+	addDoH("2620:fe::fe:11", "https://dns11.quad9.net/dns-query")
 
 	// Quad9 -DNSSEC
 	addDoH("9.9.9.10", "https://dns10.quad9.net/dns-query")
@@ -177,14 +190,26 @@ func populate() {
 	addDoH("2620:fe::fe:10", "https://dns10.quad9.net/dns-query")
 
 	// Mullvad
-	addDoH("194.242.2.2", "https://doh.mullvad.net/dns-query")
-	addDoH("193.19.108.2", "https://doh.mullvad.net/dns-query")
-	addDoH("2a07:e340::2", "https://doh.mullvad.net/dns-query")
+	// See https://mullvad.net/en/help/dns-over-https-and-dns-over-tls/
+	// Mullvad (default)
+	addDoH("194.242.2.2", "https://dns.mullvad.net/dns-query")
+	addDoH("2a07:e340::2", "https://dns.mullvad.net/dns-query")
+	// Mullvad (adblock)
+	addDoH("194.242.2.3", "https://adblock.dns.mullvad.net/dns-query")
+	addDoH("2a07:e340::3", "https://adblock.dns.mullvad.net/dns-query")
+	// Mullvad (base)
+	addDoH("194.242.2.4", "https://base.dns.mullvad.net/dns-query")
+	addDoH("2a07:e340::4", "https://base.dns.mullvad.net/dns-query")
+	// Mullvad (extended)
+	addDoH("194.242.2.5", "https://extended.dns.mullvad.net/dns-query")
+	addDoH("2a07:e340::5", "https://extended.dns.mullvad.net/dns-query")
+	// Mullvad (all)
+	addDoH("194.242.2.9", "https://all.dns.mullvad.net/dns-query")
+	addDoH("2a07:e340::9", "https://all.dns.mullvad.net/dns-query")
 
-	// Mullvad -Ads
-	addDoH("194.242.2.3", "https://adblock.doh.mullvad.net/dns-query")
-	addDoH("193.19.108.3", "https://adblock.doh.mullvad.net/dns-query")
-	addDoH("2a07:e340::3", "https://adblock.doh.mullvad.net/dns-query")
+	// Wikimedia
+	addDoH(wikimediaDNSv4, "https://wikimedia-dns.org/dns-query")
+	addDoH(wikimediaDNSv6, "https://wikimedia-dns.org/dns-query")
 }
 
 var (
@@ -207,6 +232,10 @@ var (
 	nextDNSv4RangeB = netip.MustParsePrefix("45.90.30.0/24")
 	nextDNSv4One    = nextDNSv4RangeA.Addr()
 	nextDNSv4Two    = nextDNSv4RangeB.Addr()
+
+	// Wikimedia DNS server IPs (anycast)
+	wikimediaDNSv4Addr = netip.MustParseAddr(wikimediaDNSv4)
+	wikimediaDNSv6Addr = netip.MustParseAddr(wikimediaDNSv6)
 )
 
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
@@ -224,5 +253,6 @@ func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
 // DNS-over-HTTPS (not regular port 53 DNS).
 func IPIsDoHOnlyServer(ip netip.Addr) bool {
 	return nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) ||
-		nextDNSv4RangeA.Contains(ip) || nextDNSv4RangeB.Contains(ip)
+		nextDNSv4RangeA.Contains(ip) || nextDNSv4RangeB.Contains(ip) ||
+		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr
 }

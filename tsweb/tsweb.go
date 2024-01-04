@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/vizerror"
 )
 
@@ -50,6 +51,9 @@ func IsProd443(addr string) bool {
 // AllowDebugAccess reports whether r should be permitted to access
 // various debug endpoints.
 func AllowDebugAccess(r *http.Request) bool {
+	if allowDebugAccessWithKey(r) {
+		return true
+	}
 	if r.Header.Get("X-Forwarded-For") != "" {
 		// TODO if/when needed. For now, conservative:
 		return false
@@ -65,14 +69,19 @@ func AllowDebugAccess(r *http.Request) bool {
 	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == envknob.String("TS_ALLOW_DEBUG_IP") {
 		return true
 	}
-	if r.Method == "GET" {
-		urlKey := r.FormValue("debugkey")
-		keyPath := envknob.String("TS_DEBUG_KEY_PATH")
-		if urlKey != "" && keyPath != "" {
-			slurp, err := os.ReadFile(keyPath)
-			if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
-				return true
-			}
+	return false
+}
+
+func allowDebugAccessWithKey(r *http.Request) bool {
+	if r.Method != "GET" {
+		return false
+	}
+	urlKey := r.FormValue("debugkey")
+	keyPath := envknob.String("TS_DEBUG_KEY_PATH")
+	if urlKey != "" && keyPath != "" {
+		slurp, err := os.ReadFile(keyPath)
+		if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
+			return true
 		}
 	}
 	return false
@@ -144,10 +153,7 @@ func (h Port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Redirect authorized user to the debug handler.
 		path = "/debug/"
 	}
-	host := h.FQDN
-	if host == "" {
-		host = r.Host
-	}
+	host := cmpx.Or(h.FQDN, r.Host)
 	target := "https://" + host + path
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -197,6 +203,13 @@ type ErrorHandlerFunc func(http.ResponseWriter, *http.Request, HTTPError)
 // calls f.
 type ReturnHandlerFunc func(http.ResponseWriter, *http.Request) error
 
+// A Middleware is a function that wraps an http.Handler to extend or modify
+// its behaviour.
+//
+// The implementation of the wrapper is responsible for delegating its input
+// request to the underlying handler, if appropriate.
+type Middleware func(h http.Handler) http.Handler
+
 // ServeHTTPReturn calls f(w, r).
 func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request) error {
 	return f(w, r)
@@ -233,6 +246,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestURI: r.URL.RequestURI(),
 		UserAgent:  r.UserAgent(),
 		Referer:    r.Referer(),
+		RequestID:  RequestIDFromContext(r.Context()),
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
@@ -298,14 +312,22 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			lw.WriteHeader(msg.Code)
 			fmt.Fprintln(lw, hErr.Msg)
+			if msg.RequestID != "" {
+				fmt.Fprintln(lw, msg.RequestID)
+			}
 		}
 	case err != nil:
+		const internalServerError = "internal server error"
+		errorMessage := internalServerError
+		if msg.RequestID != "" {
+			errorMessage += "\n" + string(msg.RequestID)
+		}
 		// Handler returned a generic error. Serve an internal server
 		// error, if necessary.
 		msg.Err = err.Error()
 		if lw.code == 0 {
 			msg.Code = http.StatusInternalServerError
-			http.Error(lw, "internal server error", msg.Code)
+			http.Error(lw, errorMessage, msg.Code)
 		}
 	}
 
@@ -412,7 +434,6 @@ type HTTPError struct {
 
 // Error implements the error interface.
 func (e HTTPError) Error() string { return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err) }
-
 func (e HTTPError) Unwrap() error { return e.Err }
 
 // Error returns an HTTPError containing the given information.
@@ -424,4 +445,38 @@ func Error(code int, msg string, err error) HTTPError {
 // TODO: migrate all users to varz.Handler or promvarz.Handler and remove this.
 func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	varz.Handler(w, r)
+}
+
+// AddBrowserHeaders sets various HTTP security headers for browser-facing endpoints.
+//
+// The specific headers:
+//   - require HTTPS access (HSTS)
+//   - disallow iframe embedding
+//   - mitigate MIME confusion attacks
+//
+// These headers are based on
+// https://infosec.mozilla.org/guidelines/web_security
+func AddBrowserHeaders(w http.ResponseWriter) {
+	w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; block-all-mixed-content; object-src 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+// BrowserHeaderHandler wraps the provided http.Handler with a call to
+// AddBrowserHeaders.
+func BrowserHeaderHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		AddBrowserHeaders(w)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// BrowserHeaderHandlerFunc wraps the provided http.HandlerFunc with a call to
+// AddBrowserHeaders.
+func BrowserHeaderHandlerFunc(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		AddBrowserHeaders(w)
+		h.ServeHTTP(w, r)
+	}
 }

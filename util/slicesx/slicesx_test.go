@@ -5,9 +5,10 @@ package slicesx
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
-	"golang.org/x/exp/slices"
+	qt "github.com/frankban/quicktest"
 )
 
 func TestInterleave(t *testing.T) {
@@ -44,6 +45,7 @@ func BenchmarkInterleave(b *testing.B) {
 		)
 	}
 }
+
 func TestShuffle(t *testing.T) {
 	var sl []int
 	for i := 0; i < 100; i++ {
@@ -63,4 +65,35 @@ func TestShuffle(t *testing.T) {
 	if !wasShuffled {
 		t.Errorf("expected shuffle after 10 tries")
 	}
+}
+
+func TestPartition(t *testing.T) {
+	var sl []int
+	for i := 1; i <= 10; i++ {
+		sl = append(sl, i)
+	}
+
+	evens, odds := Partition(sl, func(elem int) bool {
+		return elem%2 == 0
+	})
+
+	wantEvens := []int{2, 4, 6, 8, 10}
+	wantOdds := []int{1, 3, 5, 7, 9}
+	if !reflect.DeepEqual(evens, wantEvens) {
+		t.Errorf("evens: got %v, want %v", evens, wantEvens)
+	}
+	if !reflect.DeepEqual(odds, wantOdds) {
+		t.Errorf("odds: got %v, want %v", odds, wantOdds)
+	}
+}
+
+func TestEqualSameNil(t *testing.T) {
+	c := qt.New(t)
+	c.Check(EqualSameNil([]string{"a"}, []string{"a"}), qt.Equals, true)
+	c.Check(EqualSameNil([]string{"a"}, []string{"b"}), qt.Equals, false)
+	c.Check(EqualSameNil([]string{"a"}, []string{}), qt.Equals, false)
+	c.Check(EqualSameNil([]string{}, []string{}), qt.Equals, true)
+	c.Check(EqualSameNil(nil, []string{}), qt.Equals, false)
+	c.Check(EqualSameNil([]string{}, nil), qt.Equals, false)
+	c.Check(EqualSameNil[[]string](nil, nil), qt.Equals, true)
 }

@@ -16,4 +16,5 @@ func TestMain(m *testing.M) {
 		// TODO: https://github.com/tailscale/tailscale/issues/7866
 		os.Exit(0)
 	}
+	os.Exit(m.Run())
 }

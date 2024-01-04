@@ -3,7 +3,10 @@
 
 package flakytest
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestIssueFormat(t *testing.T) {
 	testCases := []struct {
@@ -22,5 +25,19 @@ func TestIssueFormat(t *testing.T) {
 			}
 			t.Errorf("expected issueRegexp to%s match %q", ss, testCase.issue)
 		}
+	}
+}
+
+// TestFlakeRun is a test that fails when run in the testwrapper
+// for the first time, but succeeds on the second run.
+// It's used to test whether the testwrapper retries flaky tests.
+func TestFlakeRun(t *testing.T) {
+	Mark(t, "https://github.com/tailscale/tailscale/issues/0") // random issue
+	e := os.Getenv(FlakeAttemptEnv)
+	if e == "" {
+		t.Skip("not running in testwrapper")
+	}
+	if e == "1" {
+		t.Fatal("First run in testwrapper, failing so that test is retried. This is expected.")
 	}
 }

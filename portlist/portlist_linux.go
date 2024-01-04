@@ -178,7 +178,7 @@ func (li *linuxImpl) parseProcNetFile(r *bufio.Reader, fileBase string) error {
 	// Scratch buffer for making inode strings.
 	inoBuf := make([]byte, 0, 50)
 
-	for err == nil {
+	for {
 		line, err := r.ReadSlice('\n')
 		if err == io.EOF {
 			break
@@ -322,6 +322,8 @@ func (li *linuxImpl) findProcessNames(need map[string]*portMeta) error {
 				pe.pid = int(p)
 			}
 			pe.port.Process = argvSubject(argv...)
+			pid64, _ := mem.ParseInt(pid, 10, 0)
+			pe.port.Pid = int(pid64)
 			pe.needsProcName = false
 			delete(need, string(targetBuf[:n]))
 			if len(need) == 0 {

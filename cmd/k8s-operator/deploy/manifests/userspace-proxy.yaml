@@ -1,0 +1,24 @@
+# This file is not a complete manifest, it's a skeleton that the operator embeds
+# at build time and then uses to construct Tailscale proxy pods.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {}
+spec:
+  replicas: 1
+  template:
+    metadata:
+      deletionGracePeriodSeconds: 10
+    spec:
+      serviceAccountName: proxies
+      resources:
+        requests:
+          cpu: 1m
+          memory: 1Mi
+      containers:
+        - name: tailscale
+          imagePullPolicy: Always
+          env:
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_AUTH_ONCE
+              value: "true"

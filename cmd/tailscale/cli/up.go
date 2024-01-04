@@ -6,7 +6,6 @@ package cli
 import (
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -30,11 +29,10 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/netutil"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -92,8 +90,6 @@ func acceptRouteDefault(goos string) bool {
 
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
 
-func inTest() bool { return flag.Lookup("test.v") != nil }
-
 // newUpFlagSet returns a new flag set for the "up" and "login" commands.
 func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	if cmd != "up" && cmd != "login" {
@@ -101,6 +97,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	}
 	upf := newFlagSet(cmd)
 
+	// When adding new flags, prefer to put them under "tailscale set" instead
+	// of here. Setting preferences via "tailscale up" is deprecated.
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 
@@ -115,7 +113,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
+	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
@@ -161,11 +161,13 @@ type upArgsT struct {
 	exitNodeAllowLANAccess bool
 	shieldsUp              bool
 	runSSH                 bool
+	runWebClient           bool
 	forceReauth            bool
 	forceDaemon            bool
 	advertiseRoutes        string
 	advertiseDefaultRoute  bool
 	advertiseTags          string
+	advertiseConnector     bool
 	snat                   bool
 	netfilterMode          string
 	authKeyOrFile          string // "secret" or "file:/path/to/secret"
@@ -223,82 +225,6 @@ func warnf(format string, args ...any) {
 	printf("Warning: "+format+"\n", args...)
 }
 
-var (
-	ipv4default = netip.MustParsePrefix("0.0.0.0/0")
-	ipv6default = netip.MustParsePrefix("::/0")
-)
-
-func validateViaPrefix(ipp netip.Prefix) error {
-	if !tsaddr.IsViaPrefix(ipp) {
-		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
-	}
-	if ipp.Bits() < (128 - 32) {
-		return fmt.Errorf("%v 4-in-6 prefix must be at least a /%v", ipp, 128-32)
-	}
-	a := ipp.Addr().As16()
-	// The first 64 bits of a are the via prefix.
-	// The next 32 bits are the "site ID".
-	// The last 32 bits are the IPv4.
-	// For now, we reserve the top 3 bytes of the site ID,
-	// and only allow users to use site IDs 0-255.
-	siteID := binary.BigEndian.Uint32(a[8:12])
-	if siteID > 0xFF {
-		return fmt.Errorf("route %v contains invalid site ID %08x; must be 0xff or less", ipp, siteID)
-	}
-	return nil
-}
-
-func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netip.Prefix, error) {
-	routeMap := map[netip.Prefix]bool{}
-	if advertiseRoutes != "" {
-		var default4, default6 bool
-		advroutes := strings.Split(advertiseRoutes, ",")
-		for _, s := range advroutes {
-			ipp, err := netip.ParsePrefix(s)
-			if err != nil {
-				return nil, fmt.Errorf("%q is not a valid IP address or CIDR prefix", s)
-			}
-			if ipp != ipp.Masked() {
-				return nil, fmt.Errorf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
-			}
-			if tsaddr.IsViaPrefix(ipp) {
-				if err := validateViaPrefix(ipp); err != nil {
-					return nil, err
-				}
-			}
-			if ipp == ipv4default {
-				default4 = true
-			} else if ipp == ipv6default {
-				default6 = true
-			}
-			routeMap[ipp] = true
-		}
-		if default4 && !default6 {
-			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
-		} else if default6 && !default4 {
-			return nil, fmt.Errorf("%s advertised without its IPv4 counterpart, please also advertise %s", ipv6default, ipv4default)
-		}
-	}
-	if advertiseDefaultRoute {
-		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
-		routeMap[netip.MustParsePrefix("::/0")] = true
-	}
-	if len(routeMap) == 0 {
-		return nil, nil
-	}
-	routes := make([]netip.Prefix, 0, len(routeMap))
-	for r := range routeMap {
-		routes = append(routes, r)
-	}
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Bits() != routes[j].Bits() {
-			return routes[i].Bits() < routes[j].Bits()
-		}
-		return routes[i].Addr().Less(routes[j].Addr())
-	})
-	return routes, nil
-}
-
 // prefsFromUpArgs returns the ipn.Prefs for the provided args.
 //
 // Note that the parameters upArgs and warnf are named intentionally
@@ -306,7 +232,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 // function exists for testing and should have no side effects or
 // outside interactions (e.g. no making Tailscale LocalAPI calls).
 func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
-	routes, err := calcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
+	routes, err := netutil.CalcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
 	if err != nil {
 		return nil, err
 	}
@@ -354,12 +280,14 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.RunSSH = upArgs.runSSH
+	prefs.RunWebClient = upArgs.runWebClient
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
 	prefs.Hostname = upArgs.hostname
 	prefs.ForceDaemon = upArgs.forceDaemon
 	prefs.OperatorUser = upArgs.opUser
 	prefs.ProfileName = upArgs.profileName
+	prefs.AppConnector.Advertise = upArgs.advertiseConnector
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
@@ -425,7 +353,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 
 	simpleUp = env.flagSet.NFlag() == 0 &&
 		curPrefs.Persist != nil &&
-		curPrefs.Persist.LoginName != "" &&
+		curPrefs.Persist.UserProfile.LoginName != "" &&
 		env.backendState != ipn.NeedsLogin.String()
 
 	justEdit := env.backendState == ipn.Running.String() &&
@@ -509,11 +437,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		fatalf("%s", err)
 	}
 
-	if len(prefs.AdvertiseRoutes) > 0 {
-		if err := localClient.CheckIPForwarding(context.Background()); err != nil {
-			warnf("%v", err)
-		}
-	}
+	warnOnAdvertiseRouts(ctx, prefs)
 
 	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
@@ -726,7 +650,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 // the health check, rather than just a string.
 func upWorthyWarning(s string) bool {
 	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
-		strings.Contains(s, healthmsg.WarnAcceptRoutesOff)
+		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
+		strings.Contains(s, healthmsg.LockedOut) ||
+		strings.Contains(strings.ToLower(s), "update available: ")
 }
 
 func checkUpWarnings(ctx context.Context) {
@@ -790,16 +716,26 @@ func init() {
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
+	addPrefFlagMapping("webclient", "RunWebClient")
 	addPrefFlagMapping("nickname", "ProfileName")
+	addPrefFlagMapping("update-check", "AutoUpdate.Check")
+	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
+	addPrefFlagMapping("advertise-connector", "AppConnector")
+	addPrefFlagMapping("posture-checking", "PostureChecking")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefsOfFlag[flagName] = prefNames
 	prefType := reflect.TypeOf(ipn.Prefs{})
 	for _, pref := range prefNames {
-		// Crash at runtime if there's a typo in the prefName.
-		if _, ok := prefType.FieldByName(pref); !ok {
-			panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+		t := prefType
+		for _, name := range strings.Split(pref, ".") {
+			// Crash at runtime if there's a typo in the prefName.
+			f, ok := t.FieldByName(name)
+			if !ok {
+				panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+			}
+			t = f.Type
 		}
 	}
 }
@@ -820,7 +756,11 @@ func updateMaskedPrefsFromUpOrSetFlag(mp *ipn.MaskedPrefs, flagName string) {
 	}
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
-			reflect.ValueOf(mp).Elem().FieldByName(pref + "Set").SetBool(true)
+			f := reflect.ValueOf(mp).Elem()
+			for _, name := range strings.Split(pref, ".") {
+				f = f.FieldByName(name + "Set")
+			}
+			f.SetBool(true)
 		}
 		return
 	}
@@ -994,6 +934,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			panic(fmt.Sprintf("unhandled flag %q", f.Name))
 		case "ssh":
 			set(prefs.RunSSH)
+		case "webclient":
+			set(prefs.RunWebClient)
 		case "login-server":
 			set(prefs.ControlURL)
 		case "accept-routes":
@@ -1025,6 +967,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(sb.String())
 		case "advertise-exit-node":
 			set(hasExitNodeRoutes(prefs.AdvertiseRoutes))
+		case "advertise-connector":
+			set(prefs.AppConnector.Advertise)
 		case "snat-subnet-routes":
 			set(!prefs.NoSNAT)
 		case "netfilter-mode":
@@ -1100,18 +1044,6 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 	return
 }
 
-func anyPeerAdvertisingRoutes(st *ipnstate.Status) bool {
-	for _, ps := range st.Peer {
-		if ps.PrimaryRoutes == nil {
-			continue
-		}
-		if ps.PrimaryRoutes.Len() > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func init() {
 	// Required to use our client API. We're fine with the instability since the
 	// client lives in the same repo as this code.
@@ -1131,9 +1063,6 @@ func init() {
 func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 	if !strings.HasPrefix(v, "tskey-client-") {
 		return v, nil
-	}
-	if !envknob.Bool("TS_EXPERIMENT_OAUTH_AUTHKEY") {
-		return "", errors.New("oauth authkeys are in experimental status")
 	}
 	if tags == "" {
 		return "", errors.New("oauth authkeys require --advertise-tags")
@@ -1203,4 +1132,19 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 		return "", err
 	}
 	return authkey, nil
+}
+
+func warnOnAdvertiseRouts(ctx context.Context, prefs *ipn.Prefs) {
+	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise {
+		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
+		//  into a single HTTP req.
+		if err := localClient.CheckIPForwarding(ctx); err != nil {
+			warnf("%v", err)
+		}
+		if runtime.GOOS == "linux" {
+			if err := localClient.CheckUDPGROForwarding(ctx); err != nil {
+				warnf("%v", err)
+			}
+		}
+	}
 }

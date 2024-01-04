@@ -42,3 +42,38 @@ func Shuffle[S ~[]T, T any](s S) {
 		s[i], s[j] = s[j], s[i]
 	}
 }
+
+// Partition returns two slices, the first containing the elements of the input
+// slice for which the callback evaluates to true, the second containing the rest.
+//
+// This function does not mutate s.
+func Partition[S ~[]T, T any](s S, cb func(T) bool) (trues, falses S) {
+	for _, elem := range s {
+		if cb(elem) {
+			trues = append(trues, elem)
+		} else {
+			falses = append(falses, elem)
+		}
+	}
+	return
+}
+
+// EqualSameNil reports whether two slices are equal: the same length, same
+// nilness (notably when length zero), and all elements equal. If the lengths
+// are different or their nilness differs, Equal returns false. Otherwise, the
+// elements are compared in increasing index order, and the comparison stops at
+// the first unequal pair. Floating point NaNs are not considered equal.
+//
+// It is identical to the standard library's slices.Equal but adds the matching
+// nilness check.
+func EqualSameNil[S ~[]E, E comparable](s1, s2 S) bool {
+	if len(s1) != len(s2) || (s1 == nil) != (s2 == nil) {
+		return false
+	}
+	for i := range s1 {
+		if s1[i] != s2[i] {
+			return false
+		}
+	}
+	return true
+}

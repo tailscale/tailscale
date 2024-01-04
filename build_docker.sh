@@ -26,7 +26,7 @@ eval $(./build_dist.sh shellvars)
 
 DEFAULT_TARGET="client"
 DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
-DEFAULT_BASE="tailscale/alpine-base:3.16"
+DEFAULT_BASE="tailscale/alpine-base:3.18"
 
 PUSH="${PUSH:-false}"
 TARGET="${TARGET:-${DEFAULT_TARGET}}"

@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 )
 
 func TestFastShutdown(t *testing.T) {
@@ -212,7 +214,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 var sink []byte
 
 func TestLoggerEncodeTextAllocs(t *testing.T) {
-	lg := &Logger{timeNow: time.Now}
+	lg := &Logger{clock: tstime.StdClock{}}
 	inBuf := []byte("some text to encode")
 	procID := uint32(0x24d32ee9)
 	procSequence := uint64(0x12346)
@@ -226,8 +228,8 @@ func TestLoggerEncodeTextAllocs(t *testing.T) {
 
 func TestLoggerWriteLength(t *testing.T) {
 	lg := &Logger{
-		timeNow: time.Now,
-		buffer:  NewMemoryBuffer(1024),
+		clock:  tstime.StdClock{},
+		buffer: NewMemoryBuffer(1024),
 	}
 	inBuf := []byte("some text to encode")
 	n, err := lg.Write(inBuf)
@@ -309,7 +311,7 @@ func unmarshalOne(t *testing.T, body []byte) map[string]any {
 }
 
 func TestEncodeTextTruncation(t *testing.T) {
-	lg := &Logger{timeNow: time.Now, lowMem: true}
+	lg := &Logger{clock: tstime.StdClock{}, lowMem: true}
 	in := bytes.Repeat([]byte("a"), 5120)
 	b := lg.encodeText(in, true, 0, 0, 0)
 	got := string(b)
@@ -363,7 +365,7 @@ func TestEncode(t *testing.T) {
 	for _, tt := range tests {
 		buf := new(simpleMemBuf)
 		lg := &Logger{
-			timeNow:      func() time.Time { return time.Unix(123, 456).UTC() },
+			clock:        tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 456).UTC()}),
 			buffer:       buf,
 			procID:       7,
 			procSequence: 1,
@@ -375,6 +377,112 @@ func TestEncode(t *testing.T) {
 		}
 		if err := json.Compact(new(bytes.Buffer), buf.buf.Bytes()); err != nil {
 			t.Errorf("invalid output JSON for %q: %s", tt.in, got)
+		}
+	}
+}
+
+// Test that even if Logger.Write modifies the input buffer, we still return the
+// length of the input buffer, not what we shrank it down to. Otherwise the
+// caller will think we did a short write, violating the io.Writer contract.
+func TestLoggerWriteResult(t *testing.T) {
+	buf := NewMemoryBuffer(100)
+	lg := &Logger{
+		clock:  tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 0)}),
+		buffer: buf,
+	}
+
+	const in = "[v1] foo"
+	n, err := lg.Write([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := n, len(in); got != want {
+		t.Errorf("Write = %v; want %v", got, want)
+	}
+	back, err := buf.TryReadLine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(back), `{"logtail": {"client_time": "1970-01-01T00:02:03Z"}, "v":1,"text": "foo"}`+"\n"; got != want {
+		t.Errorf("mismatch.\n got: %#q\nwant: %#q", back, want)
+	}
+}
+func TestRedact(t *testing.T) {
+	envknob.Setenv("TS_OBSCURE_LOGGED_IPS", "true")
+	tests := []struct {
+		in   string
+		want string
+	}{
+		// tests for ipv4 addresses
+		{
+			"120.100.30.47",
+			"120.100.x.x",
+		},
+		{
+			"192.167.0.1/65",
+			"192.167.x.x/65",
+		},
+		{
+			"node [5Btdd] d:e89a3384f526d251 now using 10.0.0.222:41641 mtu=1360 tx=d81a8a35a0ce",
+			"node [5Btdd] d:e89a3384f526d251 now using 10.0.x.x:41641 mtu=1360 tx=d81a8a35a0ce",
+		},
+		//tests for ipv6 addresses
+		{
+			"2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			"2001:0db8:x",
+		},
+		{
+			"2345:0425:2CA1:0000:0000:0567:5673:23b5",
+			"2345:0425:x",
+		},
+		{
+			"2601:645:8200:edf0::c9de/64",
+			"2601:645:x/64",
+		},
+		{
+			"node [5Btdd] d:e89a3384f526d251 now using 2051:0000:140F::875B:131C mtu=1360 tx=d81a8a35a0ce",
+			"node [5Btdd] d:e89a3384f526d251 now using 2051:0000:x mtu=1360 tx=d81a8a35a0ce",
+		},
+		{
+			"2601:645:8200:edf0::c9de/64 2601:645:8200:edf0:1ce9:b17d:71f5:f6a3/64",
+			"2601:645:x/64 2601:645:x/64",
+		},
+		//tests for tailscale ip addresses
+		{
+			"100.64.5.6",
+			"100.64.5.6",
+		},
+		{
+			"fd7a:115c:a1e0::/96",
+			"fd7a:115c:a1e0::/96",
+		},
+		//tests for ipv6 and ipv4 together
+		{
+			"192.167.0.1 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			"192.167.x.x 2001:0db8:x",
+		},
+		{
+			"node [5Btdd] d:e89a3384f526d251 now using 10.0.0.222:41641 mtu=1360 tx=d81a8a35a0ce 2345:0425:2CA1::0567:5673:23b5",
+			"node [5Btdd] d:e89a3384f526d251 now using 10.0.x.x:41641 mtu=1360 tx=d81a8a35a0ce 2345:0425:x",
+		},
+		{
+			"100.64.5.6 2091:0db8:85a3:0000:0000:8a2e:0370:7334",
+			"100.64.5.6 2091:0db8:x",
+		},
+		{
+			"192.167.0.1 120.100.30.47 2041:0000:140F::875B:131B",
+			"192.167.x.x 120.100.x.x 2041:0000:x",
+		},
+		{
+			"fd7a:115c:a1e0::/96 192.167.0.1 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			"fd7a:115c:a1e0::/96 192.167.x.x 2001:0db8:x",
+		},
+	}
+
+	for _, tt := range tests {
+		gotBuf := redactIPs([]byte(tt.in))
+		if string(gotBuf) != tt.want {
+			t.Errorf("for %q,\n got: %#q\nwant: %#q\n", tt.in, gotBuf, tt.want)
 		}
 	}
 }

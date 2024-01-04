@@ -65,13 +65,12 @@ func (v *PersistView) UnmarshalJSON(b []byte) error {
 func (v PersistView) LegacyFrontendPrivateMachineKey() key.MachinePrivate {
 	return v.ж.LegacyFrontendPrivateMachineKey
 }
-func (v PersistView) PrivateNodeKey() key.NodePrivate    { return v.ж.PrivateNodeKey }
-func (v PersistView) OldPrivateNodeKey() key.NodePrivate { return v.ж.OldPrivateNodeKey }
-func (v PersistView) Provider() string                   { return v.ж.Provider }
-func (v PersistView) LoginName() string                  { return v.ж.LoginName }
-func (v PersistView) UserProfile() tailcfg.UserProfile   { return v.ж.UserProfile }
-func (v PersistView) NetworkLockKey() key.NLPrivate      { return v.ж.NetworkLockKey }
-func (v PersistView) NodeID() tailcfg.StableNodeID       { return v.ж.NodeID }
+func (v PersistView) PrivateNodeKey() key.NodePrivate      { return v.ж.PrivateNodeKey }
+func (v PersistView) OldPrivateNodeKey() key.NodePrivate   { return v.ж.OldPrivateNodeKey }
+func (v PersistView) Provider() string                     { return v.ж.Provider }
+func (v PersistView) UserProfile() tailcfg.UserProfileView { return v.ж.UserProfile.View() }
+func (v PersistView) NetworkLockKey() key.NLPrivate        { return v.ж.NetworkLockKey }
+func (v PersistView) NodeID() tailcfg.StableNodeID         { return v.ж.NodeID }
 func (v PersistView) DisallowedTKAStateIDs() views.Slice[string] {
 	return views.SliceOf(v.ж.DisallowedTKAStateIDs)
 }
@@ -83,7 +82,6 @@ var _PersistViewNeedsRegeneration = Persist(struct {
 	PrivateNodeKey                  key.NodePrivate
 	OldPrivateNodeKey               key.NodePrivate
 	Provider                        string
-	LoginName                       string
 	UserProfile                     tailcfg.UserProfile
 	NetworkLockKey                  key.NLPrivate
 	NodeID                          tailcfg.StableNodeID

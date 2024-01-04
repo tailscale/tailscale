@@ -30,6 +30,7 @@ const (
 	Gokrazy   = Distro("gokrazy")
 	WDMyCloud = Distro("wdmycloud")
 	Unraid    = Distro("unraid")
+	Alpine    = Distro("alpine")
 )
 
 var distro lazy.SyncValue[Distro]
@@ -93,6 +94,8 @@ func linuxDistro() Distro {
 		return WDMyCloud
 	case have("/etc/unraid-version"):
 		return Unraid
+	case have("/etc/alpine-release"):
+		return Alpine
 	}
 	return ""
 }

@@ -20,12 +20,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/tailscale/golang-x-crypto/ssh"
 	"go4.org/mem"
-	"golang.org/x/exp/slices"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/lineread"
 	"tailscale.com/util/mak"
@@ -216,4 +216,13 @@ func (b *LocalBackend) getSSHHostKeyPublicStrings() (ret []string) {
 		ret = append(ret, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
 	}
 	return ret
+}
+
+// tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
+// on prefs. It returns false if there are no prefs set.
+func (b *LocalBackend) tailscaleSSHEnabled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := b.pm.CurrentPrefs()
+	return p.Valid() && p.RunSSH()
 }

@@ -613,7 +613,7 @@ func TestManager(t *testing.T) {
 				SplitDNS:   test.split,
 				BaseConfig: test.bs,
 			}
-			m := NewManager(t.Logf, &f, nil, new(tsdial.Dialer), nil)
+			m := NewManager(t.Logf, &f, nil, new(tsdial.Dialer), nil, nil)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
 			if err := m.Set(test.in); err != nil {
@@ -632,13 +632,6 @@ func TestManager(t *testing.T) {
 func mustIPs(strs ...string) (ret []netip.Addr) {
 	for _, s := range strs {
 		ret = append(ret, netip.MustParseAddr(s))
-	}
-	return ret
-}
-
-func mustIPPs(strs ...string) (ret []netip.AddrPort) {
-	for _, s := range strs {
-		ret = append(ret, netip.MustParseAddrPort(s))
 	}
 	return ret
 }
@@ -670,26 +663,6 @@ func hosts(strs ...string) (ret map[dnsname.FQDN][]netip.Addr) {
 				panic("IP provided before name")
 			}
 			ret[key] = append(ret[key], ip)
-		} else {
-			fqdn, err := dnsname.ToFQDN(s)
-			if err != nil {
-				panic(err)
-			}
-			key = fqdn
-		}
-	}
-	return ret
-}
-
-func hostsR(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
-	var key dnsname.FQDN
-	ret = map[dnsname.FQDN][]dnstype.Resolver{}
-	for _, s := range strs {
-		if ip, err := netip.ParseAddr(s); err == nil {
-			if key == "" {
-				panic("IP provided before name")
-			}
-			ret[key] = append(ret[key], dnstype.Resolver{Addr: ip.String()})
 		} else {
 			fqdn, err := dnsname.ToFQDN(s)
 			if err != nil {

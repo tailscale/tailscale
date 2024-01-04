@@ -49,4 +49,4 @@ while [ "$#" -gt 1 ]; do
 	esac
 done
 
-exec ./tool/go build ${tags:+-tags=$tags} -ldflags "$ldflags" "$@"
+exec $go build ${tags:+-tags=$tags} -ldflags "$ldflags" "$@"

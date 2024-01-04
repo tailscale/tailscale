@@ -117,7 +117,11 @@ func build(outDir string, targets ...string) error {
 		// Fallback slow path for cross-compiled binaries.
 		for _, target := range targets {
 			outFile := filepath.Join(outDir, path.Base(target)+exe())
-			cmd := exec.Command(goBin, "build", "-o", outFile, target)
+			cmd := exec.Command(goBin, "build", "-o", outFile)
+			if version.IsRace() {
+				cmd.Args = append(cmd.Args, "-race")
+			}
+			cmd.Args = append(cmd.Args, target)
 			cmd.Env = append(os.Environ(), "GOARCH="+runtime.GOARCH)
 			if errOut, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to build %v with %v: %v, %s", target, goBin, err, errOut)
@@ -137,6 +141,16 @@ func findGo() (string, error) {
 	// 1. Look for a go binary in $PATH[0].
 	// 2. Look for a go binary in runtime.GOROOT()/bin if runtime.GOROOT() is non-empty.
 	// 3. Look for a go binary in $PATH.
+
+	// For tests we want to run as root on GitHub actions, we run with -exec=sudo,
+	// but that results in this test running with a different PATH and picking the
+	// wrong Go. So hard code the GitHub Actions case.
+	if os.Getuid() == 0 && os.Getenv("GITHUB_ACTIONS") == "true" {
+		const sudoGithubGo = "/home/runner/.cache/tailscale-go/bin/go"
+		if _, err := os.Stat(sudoGithubGo); err == nil {
+			return sudoGithubGo, nil
+		}
+	}
 
 	paths := strings.FieldsFunc(os.Getenv("PATH"), func(r rune) bool { return os.IsPathSeparator(uint8(r)) })
 	if len(paths) > 0 {

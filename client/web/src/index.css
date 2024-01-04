@@ -1,0 +1,464 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  @font-face {
+    font-family: "Inter";
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+    src: url("./assets/fonts/Inter.var.latin.woff2") format("woff2-variations");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC,
+      U+02BB-02BC, U+2000-206F, U+2122, U+2190-2199, U+2212, U+2215, U+FEFF,
+      U+FFFD, U+E06B-E080, U+02E2, U+02E2, U+02B0, U+1D34, U+1D57, U+1D40,
+      U+207F, U+1D3A, U+1D48, U+1D30, U+02B3, U+1D3F;
+  }
+  
+  html {
+    /**
+     * These lines force the page to occupy the full width of the browser,
+     * ignoring the scrollbar, and prevent horizontal scrolling. This eliminates
+     * shifting when moving between pages with a scrollbar and those without, by
+     * ignoring the width of the scrollbar.
+     *
+     * It also disables horizontal scrolling of the body wholesale, so, as always
+     * avoid content flowing off the page.
+     */
+    width: 100vw;
+    overflow-x: hidden;
+  }
+
+  :root {
+    --color-white: 255 255 255;
+
+    --color-gray-0: 250 249 248;
+    --color-gray-50: 249 247 246;
+    --color-gray-100: 247 245 244;
+    --color-gray-200: 238 235 234;
+    --color-gray-300: 218 214 213;
+    --color-gray-400: 175 172 171;
+    --color-gray-500: 112 110 109;
+    --color-gray-600: 68 67 66;
+    --color-gray-700: 46 45 45;
+    --color-gray-800: 35 34 34;
+    --color-gray-900: 31 30 30;
+
+    --color-red-0: 255 246 244;
+    --color-red-50: 255 211 207;
+    --color-red-100: 255 177 171;
+    --color-red-200: 246 143 135;
+    --color-red-300: 228 108 99;
+    --color-red-400: 208 72 65;
+    --color-red-500: 178 45 48;
+    --color-red-600: 148 8 33;
+    --color-red-700: 118 0 18;
+    --color-red-800: 90 0 0;
+    --color-red-900: 66 0 0;
+
+    --color-yellow-0: 252 249 233;
+    --color-yellow-50: 248 229 185;
+    --color-yellow-100: 239 192 120;
+    --color-yellow-200: 229 153 62;
+    --color-yellow-300: 217 121 23;
+    --color-yellow-400: 187 85 4;
+    --color-yellow-500: 152 55 5;
+    --color-yellow-600: 118 43 11;
+    --color-yellow-700: 87 31 13;
+    --color-yellow-800: 58 22 7;
+    --color-yellow-900: 58 22 7;
+
+    --color-orange-0: 255 250 238;
+    --color-orange-50: 254 227 192;
+    --color-orange-100: 248 184 134;
+    --color-orange-200: 245 146 94;
+    --color-orange-300: 229 111 74;
+    --color-orange-400: 196 76 52;
+    --color-orange-500: 158 47 40;
+    --color-orange-600: 126 30 35;
+    --color-orange-700: 93 22 27;
+    --color-orange-800: 66 14 17;
+    --color-orange-900: 66 14 17;
+
+    --color-green-0: 239 255 237;
+    --color-green-50: 203 244 201;
+    --color-green-100: 133 217 150;
+    --color-green-200: 51 194 127;
+    --color-green-300: 30 166 114;
+    --color-green-400: 9 130 93;
+    --color-green-500: 14 98 69;
+    --color-green-600: 13 75 59;
+    --color-green-700: 11 55 51;
+    --color-green-800: 8 36 41;
+    --color-green-900: 8 36 41;
+
+    --color-blue-0: 240 245 255;
+    --color-blue-50: 206 222 253;
+    --color-blue-100: 173 199 252;
+    --color-blue-200: 133 170 245;
+    --color-blue-300: 108 148 236;
+    --color-blue-400: 90 130 222;
+    --color-blue-500: 75 112 204;
+    --color-blue-600: 63 93 179;
+    --color-blue-700: 50 73 148;
+    --color-blue-800: 37 53 112;
+    --color-blue-900: 25 34 74;
+
+    --color-text-base: rgb(var(--color-gray-800) / 1);
+    --color-text-muted: rgb(var(--color-gray-500) / 1);
+    --color-text-disabled: rgb(var(--color-gray-400) / 1);
+    --color-text-primary: rgb(var(--color-blue-600) / 1);
+    --color-text-warning: rgb(var(--color-orange-600) / 1);
+    --color-text-danger: rgb(var(--color-red-600) / 1);
+
+    --color-bg-app: rgb(var(--color-gray-100) / 1);
+    --color-bg-menu-item-hover: rgb(var(--color-gray-100) / 1);
+
+    --color-border-base: rgb(var(--color-gray-200) / 1);
+  }
+
+  html,
+  body,
+  #app-root {
+    min-height: 100vh;
+  }
+
+  body {
+    @apply text-text-base font-sans w-full antialiased;
+    font-size: 16px;
+    line-height: 1.4;
+    letter-spacing: -0.015em; /* Inter is a little loose by default */
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  ::selection {
+    background-color: rgba(97, 122, 255, 0.2);
+  }
+
+  strong {
+    @apply font-semibold;
+  }
+
+  button {
+    text-align: inherit; /* don't center buttons by default */
+    letter-spacing: inherit; /* inherit existing letter spacing, rather than using browser defaults */
+    vertical-align: top; /* fix alignment of display: inline-block buttons */
+  }
+
+  a:focus,
+  button:focus {
+    outline: none;
+  }
+  a:focus-visible,
+  button:focus-visible {
+    outline: auto;
+  }
+
+  h1 {
+    @apply text-gray-800 text-[22px] font-medium leading-[30.80px];
+  }
+
+  h2 {
+    @apply text-gray-500 text-sm font-medium uppercase leading-tight tracking-wide;
+  }
+}
+
+@layer components {
+  .details-card h1 {
+    @apply text-gray-800 text-lg font-medium leading-snug;
+  }
+  .details-card h2 {
+    @apply text-gray-500 text-xs font-semibold uppercase tracking-wide;
+  }
+  .details-card table {
+    @apply w-full;
+  }
+  .details-card tbody {
+    @apply flex flex-col gap-2;
+  }
+  .details-card tr {
+    @apply grid grid-flow-col grid-cols-3 gap-2;
+  }
+  .details-card td:first-child {
+    @apply text-gray-500 text-sm leading-tight truncate;
+  }
+  .details-card td:last-child {
+    @apply col-span-2 text-gray-800 text-sm leading-tight;
+  }
+
+  .description {
+    @apply text-gray-500 leading-snug;
+  }
+
+  /**
+   * .toggle applies "Toggle" UI styles to input[type="checkbox"] form elements.
+   * You can use the -large and -small modifiers for size variants.
+   */
+  .toggle {
+    @apply appearance-none relative w-10 h-5 rounded-full bg-gray-300 cursor-pointer;
+    transition: background-color 200ms ease-in-out;
+  }
+
+  .toggle:disabled {
+    @apply bg-gray-200;
+    @apply cursor-not-allowed;
+  }
+
+  .toggle:checked {
+    @apply bg-blue-500;
+  }
+
+  .toggle:checked:disabled {
+    @apply bg-blue-300;
+  }
+
+  .toggle:focus {
+    @apply outline-none ring;
+  }
+
+  .toggle::after {
+    @apply absolute bg-white rounded-full will-change-[width];
+    @apply w-3.5 h-3.5 m-[0.1875rem] translate-x-0;
+    content: " ";
+    transition: width 200ms ease, transform 200ms ease;
+  }
+
+  .toggle:checked::after {
+    @apply translate-x-5;
+  }
+
+  .toggle:checked:disabled::after {
+    @apply bg-blue-50;
+  }
+
+  .toggle:enabled:active::after {
+    @apply w-[1.125rem];
+  }
+
+  .toggle:checked:enabled:active::after {
+    @apply w-[1.125rem] translate-x-3.5;
+  }
+
+  .toggle-large {
+    @apply w-12 h-6;
+  }
+
+  .toggle-large::after {
+    @apply m-1 w-4 h-4;
+  }
+
+  .toggle-large:checked::after {
+    @apply translate-x-6;
+  }
+
+  .toggle-large:enabled:active::after {
+    @apply w-6;
+  }
+
+  .toggle-large:checked:enabled:active::after {
+    @apply w-6 translate-x-4;
+  }
+
+  .toggle-small {
+    @apply w-6 h-3;
+  }
+
+  .toggle-small:focus {
+    /**
+     * We disable ring for .toggle-small because it is a
+     * small, inline element.
+     */
+    @apply outline-none shadow-none;
+  }
+
+  .toggle-small::after {
+    @apply w-2 h-2 m-0.5;
+  }
+
+  .toggle-small:checked::after {
+    @apply translate-x-3;
+  }
+
+  .toggle-small:enabled:active::after {
+    @apply w-[0.675rem];
+  }
+
+  .toggle-small:checked:enabled:active::after {
+    @apply w-[0.675rem] translate-x-[0.55rem];
+  }
+
+  /**
+   * .button encapsulates all the base button styles we use across the app.
+   */
+
+  .button {
+    @apply relative inline-flex flex-nowrap items-center justify-center font-medium py-2 px-4 rounded-md border border-transparent text-center whitespace-nowrap;
+    transition-property: background-color, border-color, color, box-shadow;
+    transition-duration: 120ms;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  }
+  .button:focus-visible {
+    @apply outline-none ring;
+  }
+  .button:disabled {
+    @apply pointer-events-none select-none;
+  }
+
+  .button-group {
+    @apply whitespace-nowrap;
+  }
+
+  .button-group .button {
+    @apply min-w-[60px];
+  }
+
+  .button-group .button:not(:first-child) {
+    @apply rounded-l-none;
+  }
+
+  .button-group .button:not(:last-child) {
+    @apply rounded-r-none border-r-0;
+  }
+
+  /**
+   * .input defines default text input field styling. These styles should
+   * correspond to .button, sharing a similar height and rounding, since .input
+   * and .button are commonly used together.
+   */
+
+  .input,
+  .input-wrapper {
+    @apply appearance-none leading-tight rounded-md bg-white border border-gray-300 hover:border-gray-400 transition-colors w-full h-input;
+  }
+
+  .input {
+    @apply px-3;
+  }
+
+  .input::placeholder,
+  .input-wrapper::placeholder {
+    @apply text-gray-400;
+  }
+
+  .input:disabled,
+  .input-wrapper:disabled {
+    @apply border-gray-300;
+    @apply bg-gray-0;
+    @apply cursor-not-allowed;
+  }
+
+  .input:focus,
+  .input-wrapper:focus-within {
+    @apply outline-none ring border-gray-400;
+  }
+
+  .input-error {
+    @apply border-red-200;
+  }
+
+  /**
+   * .loading-dots creates a set of three dots that pulse for indicating loading
+   * states where a more horizontal appearance is helpful.
+   */
+
+  .loading-dots {
+    @apply inline-flex items-center;
+  }
+
+  .loading-dots span {
+    @apply inline-block w-[0.35rem] h-[0.35rem] rounded-full bg-current mx-[0.15em];
+    animation-name: loading-dots-blink;
+    animation-duration: 1.4s;
+    animation-iteration-count: infinite;
+    animation-fill-mode: both;
+  }
+
+  .loading-dots span:nth-child(2) {
+    animation-delay: 200ms;
+  }
+
+  .loading-dots span:nth-child(3) {
+    animation-delay: 400ms;
+  }
+
+  @keyframes loading-dots-blink {
+    0% {
+      opacity: 0.2;
+    }
+    20% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.2;
+    }
+  }
+
+  /**
+  * .spinner creates a circular animated spinner, most often used to indicate a
+  * loading state. The .spinner element must define a width, height, and
+  * border-width for the spinner to apply.
+  */
+
+  @keyframes spin {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spinner {
+    @apply border-transparent border-t-current border-l-current rounded-full;
+    animation: spin 700ms linear infinite;
+  }
+
+  /**
+   * .link applies standard styling to links across the app. By default we unstyle
+   * all anchor tags. While this might sound crazy for a website, it's _very_
+   * helpful in an app, since anchor tags can be used to wrap buttons, icons,
+   * and all manner of UI component. As a result, all anchor tags intended to look
+   * like links should have a .link class.
+   */
+
+  .link {
+    @apply text-text-primary;
+  }
+
+  .link:hover,
+  .link:active {
+    @apply text-blue-700;
+  }
+
+  .link-destructive {
+    @apply text-text-danger;
+  }
+
+  .link-destructive:hover,
+  .link-destructive:active {
+    @apply text-red-700;
+  }
+
+  .link-fade {
+  }
+
+  .link-fade:hover {
+    @apply opacity-75;
+  }
+
+  .link-underline {
+    @apply underline;
+  }
+
+  .link-underline:hover {
+    @apply opacity-75;
+  }
+}
+
+@layer utilities {
+  .h-input {
+    @apply h-[2.375rem];
+  }
+}

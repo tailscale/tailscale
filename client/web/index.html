@@ -1,0 +1,28 @@
+<!doctype html>
+<html class="bg-gray-50">
+  <head>
+    <title>Tailscale</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="shortcut icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAQAAADZc7J/AAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAAmJLR0QA/4ePzL8AAAAHdElNRQflAx4QGA4EvmzDAAAA30lEQVRIx2NgGAWMCKa8JKM4A8Ovt88ekyLCDGOoyDBJMjExMbFy8zF8/EKsCAMDE8yAPyIwFps48SJIBpAL4AZwvoSx/r0lXgQpDN58EWL5x/7/H+vL20+JFxluQKVe5b3Ke5V+0kQQCamfoYKBg4GDwUKI8d0BYkWQkrLKewYBKPPDHUFiRaiZkBgmwhj/F5IgggyUJ6i8V3mv0kCayDAAeEsklXqGAgYGhgV3CnGrwVciYSYk0kokhgS44/JxqqFpiYSZbEgskd4dEBRk1GD4wdB5twKXmlHAwMDAAACdEZau06NQUwAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyMC0wNy0xNVQxNTo1Mzo0MCswMDowMCVXsDIAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjAtMDctMTVUMTU6NTM6NDArMDA6MDBUCgiOAAAAAElFTkSuQmCC" />
+    <link rel="stylesheet" type="text/css" href="/src/index.css" />
+    <link rel="preload" as="font" href="/src/assets/fonts/Inter.var.latin.woff2" type="font/woff2" crossorigin />
+  </head>
+  <body class="px-2">
+    <noscript>
+      <p class="mb-2">You need to enable Javascript to access the Tailscale web client.</p>
+      <p>If you need any help, feel free to <a href="mailto:support+webclient@tailscale.com" class="link">contact us</a>.</p>
+    </noscript>
+    <script type="module" src="/src/index.tsx"></script>
+    <script>
+      // if this script is changed, also change hash in web.go
+      window.addEventListener("load", () => {
+        if (!window.Tailscale) {
+          const rootEl = document.createElement("p")
+          rootEl.innerHTML = 'Tailscale web interface is unavailable.';
+          document.body.append(rootEl)
+        }
+      })
+    </script>
+  </body>
+</html>

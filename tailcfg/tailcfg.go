@@ -3,15 +3,17 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
 
 import (
 	"bytes"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +22,9 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/slicesx"
 )
 
 // CapabilityVersion represents the client's capability level. That
@@ -99,7 +103,28 @@ type CapabilityVersion int
 //   - 60: 2023-04-06: Client understands IsWireGuardOnly
 //   - 61: 2023-04-18: Client understand SSHAction.SSHRecorderFailureAction
 //   - 62: 2023-05-05: Client can notify control over noise for SSHEventNotificationRequest recording failure events
-const CurrentCapabilityVersion CapabilityVersion = 62
+//   - 63: 2023-06-08: Client understands SSHAction.AllowRemotePortForwarding.
+//   - 64: 2023-07-11: Client understands s/CapabilityTailnetLockAlpha/CapabilityTailnetLock
+//   - 65: 2023-07-12: Client understands DERPMap.HomeParams + incremental DERPMap updates with params
+//   - 66: 2023-07-23: UserProfile.Groups added (available via WhoIs)
+//   - 67: 2023-07-25: Client understands PeerCapMap
+//   - 68: 2023-08-09: Client has dedicated updateRoutine; MapRequest.Stream true means ignore Hostinfo+Endpoints
+//   - 69: 2023-08-16: removed Debug.LogHeap* + GoroutineDumpURL; added c2n /debug/logheap
+//   - 70: 2023-08-16: removed most Debug fields; added NodeAttrDisable*, NodeAttrDebug* instead
+//   - 71: 2023-08-17: added NodeAttrOneCGNATEnable, NodeAttrOneCGNATDisable
+//   - 72: 2023-08-23: TS-2023-006 UPnP issue fixed; UPnP can now be used again
+//   - 73: 2023-09-01: Non-Windows clients expect to receive ClientVersion
+//   - 74: 2023-09-18: Client understands NodeCapMap
+//   - 75: 2023-09-12: Client understands NodeAttrDNSForwarderDisableTCPRetries
+//   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
+//   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
+//   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
+//   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
+//   - 80: 2023-11-16: can handle c2n GET /tls-cert-status
+//   - 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
+//   - 82: 2023-12-01: Client understands NodeAttrLinuxMustUseIPTables, NodeAttrLinuxMustUseNfTables, c2n /netfilter-kind
+//   - 83: 2023-12-18: Client understands DefaultAutoUpdate
+const CurrentCapabilityVersion CapabilityVersion = 83
 
 type StableID string
 
@@ -145,7 +170,6 @@ type User struct {
 	LoginName     string `json:"-"` // not stored, filled from Login // TODO REMOVE
 	DisplayName   string // if non-empty overrides Login field
 	ProfilePicURL string // if non-empty overrides Login field
-	Domain        string
 	Logins        []LoginID
 	Created       time.Time
 }
@@ -157,7 +181,6 @@ type Login struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 }
 
 // A UserProfile is display-friendly data for a user.
@@ -172,6 +195,27 @@ type UserProfile struct {
 	// Roles exists for legacy reasons, to keep old macOS clients
 	// happy. It JSON marshals as [].
 	Roles emptyStructJSONSlice
+
+	// Groups contains group identifiers for any group that this user is
+	// a part of and that the coordination server is configured to tell
+	// your node about. (Thus, it may be empty or incomplete.)
+	// There's no semantic difference between a nil and an empty list.
+	// The list is always sorted.
+	Groups []string `json:",omitempty"`
+}
+
+func (p *UserProfile) Equal(p2 *UserProfile) bool {
+	if p == nil && p2 == nil {
+		return true
+	}
+	if p == nil || p2 == nil {
+		return false
+	}
+	return p.ID == p2.ID &&
+		p.LoginName == p2.LoginName &&
+		p.DisplayName == p2.DisplayName &&
+		p.ProfilePicURL == p2.ProfilePicURL &&
+		(len(p.Groups) == 0 && len(p2.Groups) == 0 || reflect.DeepEqual(p.Groups, p2.Groups))
 }
 
 type emptyStructJSONSlice struct{}
@@ -184,6 +228,31 @@ func (emptyStructJSONSlice) MarshalJSON() ([]byte, error) {
 
 func (emptyStructJSONSlice) UnmarshalJSON([]byte) error { return nil }
 
+// RawMessage is a raw encoded JSON value. It implements Marshaler and
+// Unmarshaler and can be used to delay JSON decoding or precompute a JSON
+// encoding.
+//
+// It is like json.RawMessage but is a string instead of a []byte to better
+// portray immutable data.
+type RawMessage string
+
+// MarshalJSON returns m as the JSON encoding of m.
+func (m RawMessage) MarshalJSON() ([]byte, error) {
+	if m == "" {
+		return []byte("null"), nil
+	}
+	return []byte(m), nil
+}
+
+// UnmarshalJSON sets *m to a copy of data.
+func (m *RawMessage) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return errors.New("RawMessage: UnmarshalJSON on nil pointer")
+	}
+	*m = RawMessage(data)
+	return nil
+}
+
 type Node struct {
 	ID       NodeID
 	StableID StableNodeID
@@ -194,9 +263,9 @@ type Node struct {
 	// e.g. "host.tail-scale.ts.net."
 	Name string
 
-	// User is the user who created the node. If ACL tags are in
-	// use for the node then it doesn't reflect the ACL identity
-	// that the node is running as.
+	// User is the user who created the node. If ACL tags are in use for the
+	// node then it doesn't reflect the ACL identity that the node is running
+	// as.
 	User UserID
 
 	// Sharer, if non-zero, is the user who shared this node, if different than User.
@@ -207,13 +276,23 @@ type Node struct {
 	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
 	Machine      key.MachinePublic
 	DiscoKey     key.DiscoPublic
-	Addresses    []netip.Prefix // IP addresses of this Node directly
-	AllowedIPs   []netip.Prefix // range of IP addresses to route to this node
-	Endpoints    []string       `json:",omitempty"` // IP+port (public via STUN, and local LANs)
-	DERP         string         `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
-	Hostinfo     HostinfoView
-	Created      time.Time
-	Cap          CapabilityVersion `json:",omitempty"` // if non-zero, the node's capability version; old servers might not send
+	Addresses    []netip.Prefix   // IP addresses of this Node directly
+	AllowedIPs   []netip.Prefix   // range of IP addresses to route to this node
+	Endpoints    []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+
+	// DERP is this node's home DERP region ID integer, but shoved into an
+	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
+	// (a loopback address (127) followed by the digits over the letters DERP on
+	// a QWERTY keyboard (3.3.40)). The "port number" is the home DERP region ID
+	// integer.
+	//
+	// TODO(bradfitz): simplify this legacy mess; add a new HomeDERPRegionID int
+	// field behind a new capver bump.
+	DERP string `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+
+	Hostinfo HostinfoView
+	Created  time.Time
+	Cap      CapabilityVersion `json:",omitempty"` // if non-zero, the node's capability version; old servers might not send
 
 	// Tags are the list of ACL tags applied to this node.
 	// Tags take the form of `tag:<value>` where value starts
@@ -241,8 +320,6 @@ type Node struct {
 	// current node doesn't have permission to know.
 	Online *bool `json:",omitempty"`
 
-	KeepAlive bool `json:",omitempty"` // open and keep open a connection to this peer
-
 	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
 
 	// Capabilities are capabilities that the node has.
@@ -250,7 +327,21 @@ type Node struct {
 	// such as:
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
-	Capabilities []string `json:",omitempty"`
+	//
+	// Deprecated: use CapMap instead.
+	Capabilities []NodeCapability `json:",omitempty"`
+
+	// CapMap is a map of capabilities to their optional argument/data values.
+	//
+	// It is valid for a capability to not have any argument/data values; such
+	// capabilities can be tested for using the HasCap method. These type of
+	// capabilities are used to indicate that a node has a capability, but there
+	// is no additional data associated with it. These were previously
+	// represented by the Capabilities field, but can now be represented by
+	// CapMap with an empty value.
+	//
+	// See NodeCapability for more information on keys.
+	CapMap NodeCapMap `json:",omitempty"`
 
 	// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
 	// restrictions. However, in exchange for that privilege, it does not get
@@ -293,11 +384,41 @@ type Node struct {
 	// not be masqueraded (e.g. in case of --snat-subnet-routes).
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
 
+	// SelfNodeV6MasqAddrForThisPeer is the IPv6 that this peer knows the current node as.
+	// It may be empty if the peer knows the current node by its native
+	// IPv6 address.
+	// This field is only populated in a MapResponse for peers and not
+	// for the current node.
+	//
+	// If set, it should be used to masquerade traffic originating from the
+	// current node to this peer. The masquerade address is only relevant
+	// for this peer and not for other peers.
+	//
+	// This only applies to traffic originating from the current node to the
+	// peer or any of its subnets. Traffic originating from subnet routes will
+	// not be masqueraded (e.g. in case of --snat-subnet-routes).
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
+
 	// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
-	// order to be reachable. TODO(#7826): 2023-04-06: only the first parseable
-	// Endpoint is used, see #7826 for updates.
+	// order to be reachable.
 	IsWireGuardOnly bool `json:",omitempty"`
+
+	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
+	// node is marked IsWireGuardOnly and being used as an exit node.
+	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
+}
+
+// HasCap reports whether the node has the given capability.
+// It is safe to call on an invalid NodeView.
+func (v NodeView) HasCap(cap NodeCapability) bool {
+	return v.ж.HasCap(cap)
+}
+
+// HasCap reports whether the node has the given capability.
+// It is safe to call on a nil Node.
+func (v *Node) HasCap(cap NodeCapability) bool {
+	return v != nil && (v.CapMap.Contains(cap) || slices.Contains(v.Capabilities, cap))
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -349,6 +470,20 @@ func (n *Node) IsTagged() bool {
 	return len(n.Tags) > 0
 }
 
+// SharerOrUser Sharer if set, else User.
+func (n *Node) SharerOrUser() UserID {
+	return cmpx.Or(n.Sharer, n.User)
+}
+
+// IsTagged reports whether the node has any tags.
+func (n NodeView) IsTagged() bool { return n.ж.IsTagged() }
+
+// DisplayName wraps Node.DisplayName.
+func (n NodeView) DisplayName(forOwner bool) string { return n.ж.DisplayName(forOwner) }
+
+// SharerOrUser wraps Node.SharerOrUser.
+func (n NodeView) SharerOrUser() UserID { return n.ж.SharerOrUser() }
+
 // InitDisplayNames computes and populates n's display name
 // fields: n.ComputedName, n.computedHostIfDifferent, and
 // n.ComputedNameWithHost.
@@ -391,6 +526,10 @@ const (
 	MachineAuthorized   // server has approved
 	MachineInvalid      // server has explicitly rejected this machine key
 )
+
+func (m MachineStatus) AppendText(b []byte) ([]byte, error) {
+	return append(b, m.String()...), nil
+}
 
 func (m MachineStatus) MarshalText() ([]byte, error) {
 	return []byte(m.String()), nil
@@ -510,7 +649,7 @@ type Service struct {
 	//     * "peerapi6": peerapi is available on IPv6; Port is the
 	//        port number that the peerapi is running on the
 	//        node's Tailscale IPv6 address.
-	//     * "peerapi-dns": the local peerapi service supports
+	//     * "peerapi-dns-proxy": the local peerapi service supports
 	//        being a DNS proxy (when the node is an exit
 	//        node). For this service, the Port number is really
 	//        the version number of the service.
@@ -528,6 +667,31 @@ type Service struct {
 
 	// TODO(apenwarr): allow advertising services on subnet IPs?
 	// TODO(apenwarr): add "tags" here for each service?
+}
+
+// Location represents geographical location data about a
+// Tailscale host. Location is optional and only set if
+// explicitly declared by a node.
+type Location struct {
+	Country     string `json:",omitempty"` // User friendly country name, with proper capitalization ("Canada")
+	CountryCode string `json:",omitempty"` // ISO 3166-1 alpha-2 in upper case ("CA")
+	City        string `json:",omitempty"` // User friendly city name, with proper capitalization ("Squamish")
+
+	// CityCode is a short code representing the city in upper case.
+	// CityCode is used to disambiguate a city from another location
+	// with the same city name. It uniquely identifies a particular
+	// geographical location, within the tailnet.
+	// IATA, ICAO or ISO 3166-2 codes are recommended ("YSE")
+	CityCode string `json:",omitempty"`
+
+	// Priority determines the order of use of an exit node when a
+	// location based preference matches more than one exit node,
+	// the node with the highest priority wins. Nodes of equal
+	// probability may be selected arbitrarily.
+	//
+	// A value of 0 means the exit node does not have a priority
+	// preference. A negative int is not allowed.
+	Priority int `json:",omitempty"`
 }
 
 // Hostinfo contains a summary of a Tailscale host.
@@ -577,12 +741,19 @@ type Hostinfo struct {
 	GoVersion       string         `json:",omitempty"` // Go version binary was built with
 	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags     []string       `json:",omitempty"` // set of ACL tags this node wants to claim
+	WoLMACs         []string       `json:",omitempty"` // MAC address(es) to send Wake-on-LAN packets to wake this node (lowercase hex w/ colons)
 	Services        []Service      `json:",omitempty"` // services advertised by this machine
 	NetInfo         *NetInfo       `json:",omitempty"`
 	SSH_HostKeys    []string       `json:"sshHostKeys,omitempty"` // if advertised
 	Cloud           string         `json:",omitempty"`
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
+	AppConnector    opt.Bool       `json:",omitempty"` // if the client is running the app-connector service
+
+	// Location represents geographical location data about a
+	// Tailscale host. Location is optional and only set if
+	// explicitly declared by a node.
+	Location *Location `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -646,11 +817,12 @@ type NetInfo struct {
 	// Empty means not checked.
 	PCP opt.Bool
 
-	// PreferredDERP is this node's preferred DERP server
-	// for incoming traffic. The node might be be temporarily
-	// connected to multiple DERP servers (to send to other nodes)
-	// but PreferredDERP is the instance number that the node
-	// subscribes to traffic at.
+	// PreferredDERP is this node's preferred (home) DERP region ID.
+	// This is where the node expects to be contacted to begin a
+	// peer-to-peer connection. The node might be be temporarily
+	// connected to multiple DERP servers (to speak to other nodes
+	// that are located elsewhere) but PreferredDERP is the region ID
+	// that the node subscribes to traffic at.
 	// Zero means disconnected or unknown.
 	PreferredDERP int
 
@@ -667,6 +839,14 @@ type NetInfo struct {
 	// the control plane.
 	DERPLatency map[string]float64 `json:",omitempty"`
 
+	// FirewallMode encodes both which firewall mode was selected and why.
+	// It is Linux-specific (at least as of 2023-08-19) and is meant to help
+	// debug iptables-vs-nftables issues. The string is of the form
+	// "{nft,ift}-REASON", like "nft-forced" or "ipt-default". Empty means
+	// either not Linux or a configuration in which the host firewall rules
+	// are not managed by tailscaled.
+	FirewallMode string `json:",omitempty"`
+
 	// Update BasicallyEqual when adding fields.
 }
 
@@ -674,10 +854,10 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q}",
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q firewallmode=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
 		ni.OSHasIPv6, ni.WorkingUDP, ni.WorkingICMPv4,
-		ni.PreferredDERP, ni.portMapSummary(), ni.LinkType)
+		ni.PreferredDERP, ni.portMapSummary(), ni.LinkType, ni.FirewallMode)
 }
 
 func (ni *NetInfo) portMapSummary() string {
@@ -725,7 +905,8 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.PMP == ni2.PMP &&
 		ni.PCP == ni2.PCP &&
 		ni.PreferredDERP == ni2.PreferredDERP &&
-		ni.LinkType == ni2.LinkType
+		ni.LinkType == ni2.LinkType &&
+		ni.FirewallMode == ni2.FirewallMode
 }
 
 // Equal reports whether h and h2 are equal.
@@ -828,6 +1009,10 @@ const (
 	SignatureV2
 )
 
+func (st SignatureType) AppendText(b []byte) ([]byte, error) {
+	return append(b, st.String()...), nil
+}
+
 func (st SignatureType) MarshalText() ([]byte, error) {
 	return []byte(st.String()), nil
 }
@@ -866,6 +1051,16 @@ func (st SignatureType) String() string {
 	}
 }
 
+// RegisterResponseAuth is the authentication information returned by the server
+// in response to a RegisterRequest.
+type RegisterResponseAuth struct {
+	_ structs.Incomparable
+	// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
+	Provider, LoginName string
+	Oauth2Token         *Oauth2Token
+	AuthKey             string
+}
+
 // RegisterRequest is sent by a client to register the key for a node.
 // It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
@@ -884,13 +1079,7 @@ type RegisterRequest struct {
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
 	NLKey      key.NLPublic
-	Auth       struct {
-		_ structs.Incomparable
-		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
-		Provider, LoginName string
-		Oauth2Token         *Oauth2Token
-		AuthKey             string
-	}
+	Auth       RegisterResponseAuth
 	// Expiry optionally specifies the requested key expiry.
 	// The server policy may override.
 	// As a special case, if Expiry is in the past and NodeKey is
@@ -917,29 +1106,17 @@ type RegisterRequest struct {
 	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
 	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
 	Signature     []byte        `json:",omitempty"` // as described by SignatureType
-}
 
-// Clone makes a deep copy of RegisterRequest.
-// The result aliases no memory with the original.
-//
-// TODO: extend cmd/cloner to generate this method.
-func (req *RegisterRequest) Clone() *RegisterRequest {
-	if req == nil {
-		return nil
-	}
-	res := new(RegisterRequest)
-	*res = *req
-	if res.Hostinfo != nil {
-		res.Hostinfo = res.Hostinfo.Clone()
-	}
-	if res.Auth.Oauth2Token != nil {
-		tok := *res.Auth.Oauth2Token
-		res.Auth.Oauth2Token = &tok
-	}
-	res.DeviceCert = append(res.DeviceCert[:0:0], res.DeviceCert...)
-	res.Signature = append(res.Signature[:0:0], res.Signature...)
-	res.NodeKeySignature = append(res.NodeKeySignature[:0:0], res.NodeKeySignature...)
-	return res
+	// Tailnet is an optional identifier specifying the name of the recommended or required
+	// network that the node should join. Its exact form should not be depended on; new
+	// forms are coming later. The identifier is generally a domain name (for an organization)
+	// or e-mail address (for a personal account on a shared e-mail provider). It is the same name
+	// used by the API, as described in /api.md#tailnet.
+	// If Tailnet begins with the prefix "required:" then the server should prevent logging in to a different
+	// network than the one specified. Otherwise, the server should recommend the specified network
+	// but still permit logging in to other networks.
+	// If empty, no recommendation is offered to the server and the login page should show all options.
+	Tailnet string `json:",omitempty"`
 }
 
 // RegisterResponse is returned by the server in response to a RegisterRequest.
@@ -995,7 +1172,9 @@ type Endpoint struct {
 	Type EndpointType
 }
 
-// MapRequest is sent by a client to start a long-poll network map updates.
+// MapRequest is sent by a client to either update the control plane
+// about its current state, or to start a long-poll of network map updates.
+//
 // The request includes a copy of the client's current set of WireGuard
 // endpoints and general host information.
 //
@@ -1011,13 +1190,25 @@ type MapRequest struct {
 	// For current values and history, see the CapabilityVersion type's docs.
 	Version CapabilityVersion
 
-	Compress    string // "zstd" or "" (no compression)
-	KeepAlive   bool   // whether server should send keep-alives back to us
-	NodeKey     key.NodePublic
-	DiscoKey    key.DiscoPublic
-	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
-	Stream      bool // if true, multiple MapResponse objects are returned
-	Hostinfo    *Hostinfo
+	Compress  string // "zstd" or "" (no compression)
+	KeepAlive bool   // whether server should send keep-alives back to us
+	NodeKey   key.NodePublic
+	DiscoKey  key.DiscoPublic
+
+	// Stream is whether the client wants to receive multiple MapResponses over
+	// the same HTTP connection.
+	//
+	// If false, the server will send a single MapResponse and then close the
+	// connection.
+	//
+	// If true and Version >= 68, the server should treat this as a read-only
+	// request and ignore any Hostinfo or other fields that might be set.
+	Stream bool
+
+	// Hostinfo is the client's current Hostinfo. Although it is always included
+	// in the request, the server may choose to ignore it when Stream is true
+	// and Version >= 68.
+	Hostinfo *Hostinfo
 
 	// MapSessionHandle, if non-empty, is a request to reattach to a previous
 	// map session after a previous map session was interrupted for whatever
@@ -1039,7 +1230,8 @@ type MapRequest struct {
 	MapSessionSeq int64 `json:",omitempty"`
 
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
-	Endpoints []string
+	// These can be ignored if Stream is true and Version >= 68.
+	Endpoints []netip.AddrPort `json:",omitempty"`
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
 	EndpointTypes []EndpointType `json:",omitempty"`
 
@@ -1048,13 +1240,12 @@ type MapRequest struct {
 	// It is encoded as tka.AUMHash.MarshalText.
 	TKAHead string `json:",omitempty"`
 
-	// ReadOnly is whether the client just wants to fetch the
-	// MapResponse, without updating their Endpoints. The
-	// Endpoints field will be ignored and LastSeen will not be
-	// updated and peers will not be notified of changes.
+	// ReadOnly was set when client just wanted to fetch the MapResponse,
+	// without updating their Endpoints. The intended use was for clients to
+	// discover the DERP map at start-up before their first real endpoint
+	// update.
 	//
-	// The intended use is for clients to discover the DERP map at
-	// start-up before their first real endpoint update.
+	// Deprecated: always false as of Version 68.
 	ReadOnly bool `json:",omitempty"`
 
 	// OmitPeers is whether the client is okay with the Peers list being omitted
@@ -1118,7 +1309,110 @@ type CapGrant struct {
 	// Caps are the capabilities the source IP matched by
 	// FilterRule.SrcIPs are granted to the destination IP,
 	// matched by Dsts.
-	Caps []string `json:",omitempty"`
+	// Deprecated: use CapMap instead.
+	Caps []PeerCapability `json:",omitempty"`
+
+	// CapMap is a map of capabilities to their values.
+	// The key is the capability name, and the value is a list of
+	// values for that capability.
+	CapMap PeerCapMap `json:",omitempty"`
+}
+
+// PeerCapability represents a capability granted to a peer by a FilterRule when
+// the peer communicates with the node that has this rule. Its meaning is
+// application-defined.
+//
+// It must be a URL like "https://tailscale.com/cap/file-send".
+type PeerCapability string
+
+const (
+	// PeerCapabilityFileSharingTarget grants the current node the ability to send
+	// files to the peer which has this capability.
+	PeerCapabilityFileSharingTarget PeerCapability = "https://tailscale.com/cap/file-sharing-target"
+	// PeerCapabilityFileSharingSend grants the ability to receive files from a
+	// node that's owned by a different user.
+	PeerCapabilityFileSharingSend PeerCapability = "https://tailscale.com/cap/file-send"
+	// PeerCapabilityDebugPeer grants the ability for a peer to read this node's
+	// goroutines, metrics, magicsock internal state, etc.
+	PeerCapabilityDebugPeer PeerCapability = "https://tailscale.com/cap/debug-peer"
+	// PeerCapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
+	PeerCapabilityWakeOnLAN PeerCapability = "https://tailscale.com/cap/wake-on-lan"
+	// PeerCapabilityIngress grants the ability for a peer to send ingress traffic.
+	PeerCapabilityIngress PeerCapability = "https://tailscale.com/cap/ingress"
+)
+
+// NodeCapMap is a map of capabilities to their optional values. It is valid for
+// a capability to have no values (nil slice); such capabilities can be tested
+// for by using the Contains method.
+//
+// See [NodeCapability] for more information on keys.
+type NodeCapMap map[NodeCapability][]RawMessage
+
+// Equal reports whether c and c2 are equal.
+func (c NodeCapMap) Equal(c2 NodeCapMap) bool {
+	return maps.EqualFunc(c, c2, slices.Equal)
+}
+
+// UnmarshalNodeCapJSON unmarshals each JSON value in cm[cap] as T.
+// If cap does not exist in cm, it returns (nil, nil).
+// It returns an error if the values cannot be unmarshaled into the provided type.
+func UnmarshalNodeCapJSON[T any](cm NodeCapMap, cap NodeCapability) ([]T, error) {
+	vals, ok := cm[cap]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]T, 0, len(vals))
+	for _, v := range vals {
+		var t T
+		if err := json.Unmarshal([]byte(v), &t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// Contains reports whether c has the capability cap. This is used to test for
+// the existence of a capability, especially when the capability has no
+// associated argument/data values.
+func (c NodeCapMap) Contains(cap NodeCapability) bool {
+	_, ok := c[cap]
+	return ok
+}
+
+// PeerCapMap is a map of capabilities to their optional values. It is valid for
+// a capability to have no values (nil slice); such capabilities can be tested
+// for by using the HasCapability method.
+//
+// The values are opaque to Tailscale, but are passed through from the ACLs to
+// the application via the WhoIs API.
+type PeerCapMap map[PeerCapability][]RawMessage
+
+// UnmarshalCapJSON unmarshals each JSON value in cm[cap] as T.
+// If cap does not exist in cm, it returns (nil, nil).
+// It returns an error if the values cannot be unmarshaled into the provided type.
+func UnmarshalCapJSON[T any](cm PeerCapMap, cap PeerCapability) ([]T, error) {
+	vals, ok := cm[cap]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]T, 0, len(vals))
+	for _, v := range vals {
+		var t T
+		if err := json.Unmarshal([]byte(v), &t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// HasCapability reports whether c has the capability cap. This is used to test
+// for the existence of a capability, especially when the capability has no
+// associated argument/data values.
+func (c PeerCapMap) HasCapability(cap PeerCapability) bool {
+	_, ok := c[cap]
+	return ok
 }
 
 // FilterRule represents one rule in a packet filter.
@@ -1253,7 +1547,12 @@ type DNSConfig struct {
 	// match.
 	//
 	// Matches are case insensitive.
-	ExitNodeFilteredSet []string
+	ExitNodeFilteredSet []string `json:",omitempty"`
+
+	// TempCorpIssue13969 is a temporary (2023-08-16) field for an internal hack day prototype.
+	// It contains a user inputed URL that should have a list of domains to be blocked.
+	// See https://github.com/tailscale/corp/issues/13969.
+	TempCorpIssue13969 string `json:",omitempty"`
 }
 
 // DNSRecord is an extra DNS record to add to MagicDNS.
@@ -1376,6 +1675,27 @@ type PingResponse struct {
 	IsLocalIP bool `json:",omitempty"`
 }
 
+// MapResponse is the response to a MapRequest. It describes the state of the
+// local node, the peer nodes, the DNS configuration, the packet filter, and
+// more. A MapRequest, depending on its parameters, may result in the control
+// plane coordination server sending 0, 1 or a stream of multiple MapResponse
+// values.
+//
+// When the client sets MapRequest.Stream, the server sends a stream of
+// MapResponses. That long-lived HTTP transaction is called a "map poll". In a
+// map poll, the first MapResponse will be complete and subsequent MapResponses
+// will be incremental updates with only changed information.
+//
+// The zero value for all fields means "unchanged". Unfortunately, several
+// fields were defined before that convention was established, so they use a
+// slice with omitempty, meaning this type can't be used to marshal JSON
+// containing non-nil zero-length slices (meaning explicitly now empty). The
+// control plane uses a separate type to marshal these fields. This type is
+// primarily used for unmarshaling responses so the omitempty annotations are
+// mostly useless, except that this type is also used for the integration test's
+// fake control server. (It's not necessary to marshal a non-nil zero-length
+// slice for the things we've needed to test in the integration tests as of
+// 2023-09-09).
 type MapResponse struct {
 	// MapSessionHandle optionally specifies a unique opaque handle for this
 	// stateful MapResponse session. Servers may choose not to send it, and it's
@@ -1476,19 +1796,52 @@ type MapResponse struct {
 	// previously streamed non-nil MapResponse.PacketFilter within
 	// the same HTTP response. A non-nil but empty list always means
 	// no PacketFilter (that is, to block everything).
+	//
+	// Note that this package's type, due its use of a slice and omitempty, is
+	// unable to marshal a zero-length non-nil slice. The control server needs
+	// to marshal this type using a separate type. See MapResponse docs.
+	//
+	// See PacketFilters for the newer way to send PacketFilter updates.
 	PacketFilter []FilterRule `json:",omitempty"`
+
+	// PacketFilters encodes incremental packet filter updates to the client
+	// without having to send the entire packet filter on any changes as
+	// required by the older PacketFilter (singular) field above. The map keys
+	// are server-assigned arbitrary strings. The map values are the new rules
+	// for that key, or nil to delete it. The client then concatenates all the
+	// rules together to generate the final packet filter. Because the
+	// FilterRules can only match or not match, the ordering of filter rules
+	// doesn't matter. (That said, the client generates the file merged packet
+	// filter rules by concananting all the packet filter rules sorted by the
+	// map key name. But it does so for stability and testability, not
+	// correctness. If something needs to rely on that property, something has
+	// gone wrong.)
+	//
+	// If the server sends a non-nil PacketFilter (above), that is equivalent to
+	// a named packet filter with the key "base". It is valid for the server to
+	// send both PacketFilter and PacketFilters in the same MapResponse or
+	// alternate between them within a session. The PacketFilter is applied
+	// first (if set) and then the PacketFilters.
+	//
+	// As a special case, the map key "*" with a value of nil means to clear all
+	// prior named packet filters (including any implicit "base") before
+	// processing the other map entries.
+	PacketFilters map[string][]FilterRule `json:",omitempty"`
 
 	// UserProfiles are the user profiles of nodes in the network.
 	// As as of 1.1.541 (mapver 5), this contains new or updated
 	// user profiles only.
 	UserProfiles []UserProfile `json:",omitempty"`
 
-	// Health, if non-nil, sets the health state
-	// of the node from the control plane's perspective.
-	// A nil value means no change from the previous MapResponse.
-	// A non-nil 0-length slice restores the health to good (no known problems).
-	// A non-zero length slice are the list of problems that the control place
-	// sees.
+	// Health, if non-nil, sets the health state of the node from the control
+	// plane's perspective. A nil value means no change from the previous
+	// MapResponse. A non-nil 0-length slice restores the health to good (no
+	// known problems). A non-zero length slice are the list of problems that
+	// the control place sees.
+	//
+	// Note that this package's type, due its use of a slice and omitempty, is
+	// unable to marshal a zero-length non-nil slice. The control server needs
+	// to marshal this type using a separate type. See MapResponse docs.
 	Health []string `json:",omitempty"`
 
 	// SSHPolicy, if non-nil, updates the SSH policy for how incoming
@@ -1525,6 +1878,13 @@ type MapResponse struct {
 	// download and whether the client is using it. A nil value means no change
 	// or nothing to report.
 	ClientVersion *ClientVersion `json:",omitempty"`
+
+	// DefaultAutoUpdate is the default node auto-update setting for this
+	// tailnet. The node is free to opt-in or out locally regardless of this
+	// value. This value is only used on first MapResponse from control, the
+	// auto-update setting doesn't change if the tailnet admin flips the
+	// default after the node registered.
+	DefaultAutoUpdate opt.Bool `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available
@@ -1538,9 +1898,12 @@ type ClientVersion struct {
 	// LatestVersion is the latest version.Short ("1.34.2") version available
 	// for download for the client's platform and packaging type.
 	// It won't be populated if RunningLatest is true.
-	// The primary purpose of the LatestVersion value is to invalidate the client's
-	// cache update check value, if any. This primarily applies to Windows.
 	LatestVersion string `json:",omitempty"`
+
+	// UrgentSecurityUpdate is set when the client is missing an important
+	// security update. That update may be in LatestVersion or earlier.
+	// UrgentSecurityUpdate should not be set if RunningLatest is false.
+	UrgentSecurityUpdate bool `json:",omitempty"`
 
 	// Notify is whether the client should do an OS-specific notification about
 	// a new version being available. This should not be populated if
@@ -1585,104 +1948,29 @@ type ControlIPCandidate struct {
 	Priority int `json:",omitempty"`
 }
 
-// Debug are instructions from the control server to the client
-// to adjust debug settings.
+// Debug used to be a miscellaneous set of declarative debug config changes and
+// imperative debug commands. They've since been mostly migrated to node
+// attributes (MapResponse.Node.Capabilities) for the declarative things and c2n
+// requests for the imperative things. Not much remains here. Don't add more.
 type Debug struct {
-	// LogHeapPprof controls whether the client should log
-	// its heap pprof data. Each true value sent from the server
-	// means that client should do one more log.
-	LogHeapPprof bool `json:",omitempty"`
-
-	// LogHeapURL is the URL to POST its heap pprof to.
-	// Empty means to not log.
-	LogHeapURL string `json:",omitempty"`
-
-	// ForceBackgroundSTUN controls whether magicsock should
-	// always do its background STUN queries (see magicsock's
-	// periodicReSTUN), regardless of inactivity.
-	ForceBackgroundSTUN bool `json:",omitempty"`
-
-	// SetForceBackgroundSTUN controls whether magicsock should always do its
-	// background STUN queries (see magicsock's periodicReSTUN), regardless of
-	// inactivity.
-	//
-	// As of capver 37, this field is the preferred field for control to set on
-	// the wire and ForceBackgroundSTUN is only used within the code as the
-	// current map session value. But ForceBackgroundSTUN can still be used too.
-	SetForceBackgroundSTUN opt.Bool `json:",omitempty"`
-
-	// DERPRoute controls whether the DERP reverse path
-	// optimization (see Issue 150) should be enabled or
-	// disabled. The environment variable in magicsock is the
-	// highest priority (if set), then this (if set), then the
-	// binary default value.
-	DERPRoute opt.Bool `json:",omitempty"`
-
-	// TrimWGConfig controls whether Tailscale does lazy, on-demand
-	// wireguard configuration of peers.
-	TrimWGConfig opt.Bool `json:",omitempty"`
-
-	// DisableSubnetsIfPAC controls whether subnet routers should be
-	// disabled if WPAD is present on the network.
-	DisableSubnetsIfPAC opt.Bool `json:",omitempty"`
-
-	// GoroutineDumpURL, if non-empty, requests that the client do
-	// a one-time dump of its active goroutines to the given URL.
-	GoroutineDumpURL string `json:",omitempty"`
-
 	// SleepSeconds requests that the client sleep for the
 	// provided number of seconds.
 	// The client can (and should) limit the value (such as 5
-	// minutes).
+	// minutes). This exists as a safety measure to slow down
+	// spinning clients, in case we introduce a bug in the
+	// state machine.
 	SleepSeconds float64 `json:",omitempty"`
-
-	// RandomizeClientPort is whether magicsock should UDP bind to
-	// :0 to get a random local port, ignoring any configured
-	// fixed port.
-	RandomizeClientPort bool `json:",omitempty"`
-
-	// SetRandomizeClientPort is whether magicsock should UDP bind to :0 to get
-	// a random local port, ignoring any configured fixed port.
-	//
-	// As of capver 37, this field is the preferred field for control to set on
-	// the wire and RandomizeClientPort is only used within the code as the
-	// current map session value. But RandomizeClientPort can still be used too.
-	SetRandomizeClientPort opt.Bool `json:",omitempty"`
-
-	// OneCGNATRoute controls whether the client should prefer to make one
-	// big CGNAT /10 route rather than a /32 per peer.
-	OneCGNATRoute opt.Bool `json:",omitempty"`
-
-	// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
-	// By default, we want to enable it to see if it works on more clients.
-	//
-	// If UPnP catastrophically fails for people, this should be set to True to kill
-	// new attempts at UPnP connections.
-	DisableUPnP opt.Bool `json:",omitempty"`
 
 	// DisableLogTail disables the logtail package. Once disabled it can't be
 	// re-enabled for the lifetime of the process.
+	//
+	// This is primarily used by Headscale.
 	DisableLogTail bool `json:",omitempty"`
 
-	// EnableSilentDisco disables the use of heartBeatTimer in magicsock and attempts to
-	// handle disco silently. See issue #540 for details.
-	EnableSilentDisco bool `json:",omitempty"`
-
 	// Exit optionally specifies that the client should os.Exit
-	// with this code.
+	// with this code. This is a safety measure in case a client is crash
+	// looping or in an unsafe state and we need to remotely shut it down.
 	Exit *int `json:",omitempty"`
-}
-
-func appendKey(base []byte, prefix string, k [32]byte) []byte {
-	ret := append(base, make([]byte, len(prefix)+64)...)
-	buf := ret[len(base):]
-	copy(buf, prefix)
-	hex.Encode(buf[len(prefix):], k[:])
-	return ret
-}
-
-func keyMarshalText(prefix string, k [32]byte) []byte {
-	return appendKey(nil, prefix, k)
 }
 
 func (id ID) String() string      { return fmt.Sprintf("id:%x", int64(id)) }
@@ -1708,23 +1996,25 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
 		eqPtr(n.Online, n2.Online) &&
-		eqCIDRs(n.Addresses, n2.Addresses) &&
-		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
-		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
-		eqStrings(n.Endpoints, n2.Endpoints) &&
+		slicesx.EqualSameNil(n.Addresses, n2.Addresses) &&
+		slicesx.EqualSameNil(n.AllowedIPs, n2.AllowedIPs) &&
+		slicesx.EqualSameNil(n.PrimaryRoutes, n2.PrimaryRoutes) &&
+		slicesx.EqualSameNil(n.Endpoints, n2.Endpoints) &&
 		n.DERP == n2.DERP &&
 		n.Cap == n2.Cap &&
 		n.Hostinfo.Equal(n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
 		n.MachineAuthorized == n2.MachineAuthorized &&
-		eqStrings(n.Capabilities, n2.Capabilities) &&
+		slices.Equal(n.Capabilities, n2.Capabilities) &&
+		n.CapMap.Equal(n2.CapMap) &&
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
-		eqStrings(n.Tags, n2.Tags) &&
+		slicesx.EqualSameNil(n.Tags, n2.Tags) &&
 		n.Expired == n2.Expired &&
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
+		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
 		n.IsWireGuardOnly == n2.IsWireGuardOnly
 }
 
@@ -1736,30 +2026,6 @@ func eqPtr[T comparable](a, b *T) bool {
 		return false
 	}
 	return *a == *b
-}
-
-func eqStrings(a, b []string) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func eqCIDRs(a, b []netip.Prefix) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func eqTimePtr(a, b *time.Time) bool {
@@ -1791,89 +2057,139 @@ type Oauth2Token struct {
 	Expiry time.Time `json:"expiry,omitempty"`
 }
 
-const (
-	// These are the capabilities that the self node has as listed in
-	// MapResponse.Node.Capabilities.
-	//
-	// We've since started referring to these as "Node Attributes" ("nodeAttrs"
-	// in the ACL policy file).
+// NodeCapability represents a capability granted to the self node as listed in
+// MapResponse.Node.Capabilities.
+//
+// It must be a URL like "https://tailscale.com/cap/file-sharing", or a
+// well-known capability name like "funnel". The latter is only allowed for
+// Tailscale-defined capabilities.
+//
+// Unlike PeerCapability, NodeCapability is not in context of a peer and is
+// granted to the node itself.
+//
+// These are also referred to as "Node Attributes" in the ACL policy file.
+type NodeCapability string
 
-	CapabilityFileSharing        = "https://tailscale.com/cap/file-sharing"
-	CapabilityAdmin              = "https://tailscale.com/cap/is-admin"
-	CapabilitySSH                = "https://tailscale.com/cap/ssh"                   // feature enabled/available
-	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
-	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
-	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+const (
+	CapabilityFileSharing        NodeCapability = "https://tailscale.com/cap/file-sharing"
+	CapabilityAdmin              NodeCapability = "https://tailscale.com/cap/is-admin"
+	CapabilitySSH                NodeCapability = "https://tailscale.com/cap/ssh"                   // feature enabled/available
+	CapabilitySSHRuleIn          NodeCapability = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
+	CapabilityDataPlaneAuditLogs NodeCapability = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
+	CapabilityDebug              NodeCapability = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+	CapabilityHTTPS              NodeCapability = "https"                                           // https cert provisioning enabled on tailnet
 
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more
 	// details on the behaviour of this capability.
-	CapabilityBindToInterfaceByRoute = "https://tailscale.com/cap/bind-to-interface-by-route"
+	CapabilityBindToInterfaceByRoute NodeCapability = "https://tailscale.com/cap/bind-to-interface-by-route"
 
 	// CapabilityDebugDisableAlternateDefaultRouteInterface changes how Darwin
 	// nodes get the default interface. There is an optional hook (used by the
 	// macOS and iOS clients) to override the default interface, this capability
 	// disables that and uses the default behavior (of parsing the routing
 	// table).
-	CapabilityDebugDisableAlternateDefaultRouteInterface = "https://tailscale.com/cap/debug-disable-alternate-default-route-interface"
+	CapabilityDebugDisableAlternateDefaultRouteInterface NodeCapability = "https://tailscale.com/cap/debug-disable-alternate-default-route-interface"
 
 	// CapabilityDebugDisableBindConnToInterface disables the automatic binding
 	// of connections to the default network interface on Darwin nodes.
-	CapabilityDebugDisableBindConnToInterface = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
+	CapabilityDebugDisableBindConnToInterface NodeCapability = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
 
-	// CapabilityTailnetLockAlpha indicates the node is in the tailnet lock alpha,
-	// and initialization of tailnet lock may proceed.
-	//
-	// TODO(tom): Remove this for 1.35 and later.
-	CapabilityTailnetLockAlpha = "https://tailscale.com/cap/tailnet-lock-alpha"
-
-	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
-
-	// CapabilityFileSharingTarget grants the current node the ability to send
-	// files to the peer which has this capability.
-	CapabilityFileSharingTarget = "https://tailscale.com/cap/file-sharing-target"
-	// CapabilityFileSharingSend grants the ability to receive files from a
-	// node that's owned by a different user.
-	CapabilityFileSharingSend = "https://tailscale.com/cap/file-send"
-	// CapabilityDebugPeer grants the ability for a peer to read this node's
-	// goroutines, metrics, magicsock internal state, etc.
-	CapabilityDebugPeer = "https://tailscale.com/cap/debug-peer"
-	// CapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
-	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
-	// CapabilityIngress grants the ability for a peer to send ingress traffic.
-	CapabilityIngress = "https://tailscale.com/cap/ingress"
-	// CapabilitySSHSessionHaul grants the ability to receive SSH session logs
-	// from a peer.
-	CapabilitySSHSessionHaul = "https://tailscale.com/cap/ssh-session-haul"
+	// CapabilityTailnetLock indicates the node may initialize tailnet lock.
+	CapabilityTailnetLock NodeCapability = "https://tailscale.com/cap/tailnet-lock"
 
 	// Funnel warning capabilities used for reporting errors to the user.
 
 	// CapabilityWarnFunnelNoInvite indicates whether Funnel is enabled for the tailnet.
-	// NOTE: In transition from Alpha to Beta, this capability is being reused as the enablement.
-	CapabilityWarnFunnelNoInvite = "https://tailscale.com/cap/warn-funnel-no-invite"
+	// This cap is no longer used 2023-08-09 onwards.
+	CapabilityWarnFunnelNoInvite NodeCapability = "https://tailscale.com/cap/warn-funnel-no-invite"
 
 	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
-	CapabilityWarnFunnelNoHTTPS = "https://tailscale.com/cap/warn-funnel-no-https"
+	// This cap is no longer used 2023-08-09 onwards.
+	CapabilityWarnFunnelNoHTTPS NodeCapability = "https://tailscale.com/cap/warn-funnel-no-https"
 
 	// Debug logging capabilities
 
 	// CapabilityDebugTSDNSResolution enables verbose debug logging for DNS
 	// resolution for Tailscale-controlled domains (the control server, log
 	// server, DERP servers, etc.)
-	CapabilityDebugTSDNSResolution = "https://tailscale.com/cap/debug-ts-dns-resolution"
+	CapabilityDebugTSDNSResolution NodeCapability = "https://tailscale.com/cap/debug-ts-dns-resolution"
 
 	// CapabilityFunnelPorts specifies the ports that the Funnel is available on.
 	// The ports are specified as a comma-separated list of port numbers or port
 	// ranges (e.g. "80,443,8080-8090") in the ports query parameter.
 	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
-	CapabilityFunnelPorts = "https://tailscale.com/cap/funnel-ports"
-)
+	CapabilityFunnelPorts NodeCapability = "https://tailscale.com/cap/funnel-ports"
 
-const (
 	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
-	NodeAttrFunnel = "funnel"
+	NodeAttrFunnel NodeCapability = "funnel"
 	// NodeAttrSSHAggregator grants the ability for a node to collect SSH sessions.
-	NodeAttrSSHAggregator = "ssh-aggregator"
+	NodeAttrSSHAggregator NodeCapability = "ssh-aggregator"
+
+	// NodeAttrDebugForceBackgroundSTUN forces a node to always do background
+	// STUN queries regardless of inactivity.
+	NodeAttrDebugForceBackgroundSTUN NodeCapability = "debug-always-stun"
+
+	// NodeAttrDebugDisableWGTrim disables the lazy WireGuard configuration,
+	// always giving WireGuard the full netmap, even for idle peers.
+	NodeAttrDebugDisableWGTrim NodeCapability = "debug-no-wg-trim"
+
+	// NodeAttrDebugDisableDRPO disables the DERP Return Path Optimization.
+	// See Issue 150.
+	NodeAttrDebugDisableDRPO NodeCapability = "debug-disable-drpo"
+
+	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
+	// disabled if WPAD is present on the network.
+	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
+
+	// NodeAttrDisableUPnP makes the client not perform a UPnP portmapping.
+	// By default, we want to enable it to see if it works on more clients.
+	//
+	// If UPnP catastrophically fails for people, this should be set kill
+	// new attempts at UPnP connections.
+	NodeAttrDisableUPnP NodeCapability = "debug-disable-upnp"
+
+	// NodeAttrDisableDeltaUpdates makes the client not process updates via the
+	// delta update mechanism and should instead treat all netmap changes as
+	// "full" ones as tailscaled did in 1.48.x and earlier.
+	NodeAttrDisableDeltaUpdates NodeCapability = "disable-delta-updates"
+
+	// NodeAttrRandomizeClientPort makes magicsock UDP bind to
+	// :0 to get a random local port, ignoring any configured
+	// fixed port.
+	NodeAttrRandomizeClientPort NodeCapability = "randomize-client-port"
+
+	// NodeAttrSilentDisco makes the client suppress disco heartbeats to its
+	// peers.
+	NodeAttrSilentDisco NodeCapability = "silent-disco"
+
+	// NodeAttrOneCGNATEnable makes the client prefer one big CGNAT /10 route
+	// rather than a /32 per peer. At most one of this or
+	// NodeAttrOneCGNATDisable may be set; if neither are, it's automatic.
+	NodeAttrOneCGNATEnable NodeCapability = "one-cgnat?v=true"
+
+	// NodeAttrOneCGNATDisable makes the client prefer a /32 route per peer
+	// rather than one big /10 CGNAT route. At most one of this or
+	// NodeAttrOneCGNATEnable may be set; if neither are, it's automatic.
+	NodeAttrOneCGNATDisable NodeCapability = "one-cgnat?v=false"
+
+	// NodeAttrPeerMTUEnable makes the client do path MTU discovery to its
+	// peers. If it isn't set, it defaults to the client default.
+	NodeAttrPeerMTUEnable NodeCapability = "peer-mtu-enable"
+
+	// NodeAttrDNSForwarderDisableTCPRetries disables retrying truncated
+	// DNS queries over TCP if the response is truncated.
+	NodeAttrDNSForwarderDisableTCPRetries NodeCapability = "dns-forwarder-disable-tcp-retries"
+
+	// NodeAttrLinuxMustUseIPTables forces Linux clients to use iptables for
+	// netfilter management.
+	// This cannot be set simultaneously with NodeAttrLinuxMustUseNfTables.
+	NodeAttrLinuxMustUseIPTables NodeCapability = "linux-netfilter?v=iptables"
+
+	// NodeAttrLinuxMustUseNfTables forces Linux clients to use nftables for
+	// netfilter management.
+	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
+	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -2048,6 +2364,10 @@ type SSHAction struct {
 	// to use local port forwarding if requested.
 	AllowLocalPortForwarding bool `json:"allowLocalPortForwarding,omitempty"`
 
+	// AllowRemotePortForwarding, if true, allows accepted connections
+	// to use remote port forwarding if requested.
+	AllowRemotePortForwarding bool `json:"allowRemotePortForwarding,omitempty"`
+
 	// Recorders defines the destinations of the SSH session recorders.
 	// The recording will be uploaded to http://addr:port/record.
 	Recorders []netip.AddrPort `json:"recorders,omitempty"`
@@ -2138,6 +2458,69 @@ type SSHRecordingAttempt struct {
 	FailureMessage string
 }
 
+// QueryFeatureRequest is a request sent to "/machine/feature/query"
+// to get instructions on how to enable a feature, such as Funnel,
+// for the node's tailnet.
+//
+// See QueryFeatureResponse for response structure.
+type QueryFeatureRequest struct {
+	// Feature is the string identifier for a feature.
+	Feature string `json:",omitempty"`
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic `json:",omitempty"`
+}
+
+// QueryFeatureResponse is the response to an QueryFeatureRequest.
+// See cli.enableFeatureInteractive for usage.
+type QueryFeatureResponse struct {
+	// Complete is true when the feature is already enabled.
+	Complete bool `json:",omitempty"`
+
+	// Text holds lines to display in the CLI with information
+	// about the feature and how to enable it.
+	//
+	// Lines are separated by newline characters. The final
+	// newline may be omitted.
+	Text string `json:",omitempty"`
+
+	// URL is the link for the user to visit to take action on
+	// enabling the feature.
+	//
+	// When empty, there is no action for this user to take.
+	URL string `json:",omitempty"`
+
+	// ShouldWait specifies whether the CLI should block and
+	// wait for the user to enable the feature.
+	//
+	// If this is true, the enablement from the control server
+	// is expected to be a quick and uninterrupted process for
+	// the user, and blocking allows them to immediately start
+	// using the feature once enabled without rerunning the
+	// command (e.g. no need to re-run "funnel on").
+	//
+	// The CLI can watch the IPN notification bus for changes in
+	// required node capabilities to know when to continue.
+	ShouldWait bool `json:",omitempty"`
+}
+
+// WebClientAuthResponse is the response to a web client authentication request
+// sent to "/machine/webclient/action" or "/machine/webclient/wait".
+// See client/web for usage.
+type WebClientAuthResponse struct {
+	// ID is a unique identifier for the session auth request.
+	// It can be supplied to "/machine/webclient/wait" to pause until
+	// the session authentication has been completed.
+	ID string `json:",omitempty"`
+
+	// URL is the link for the user to visit to authenticate the session.
+	//
+	// When empty, there is no action for the user to take.
+	URL string `json:",omitempty"`
+
+	// Complete is true when the session authentication has been completed.
+	Complete bool `json:",omitempty"`
+}
+
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
 // over HTTPS (regular TLS) to the Tailscale control plane server,
 // where the 'v' argument is the client's current capability version
@@ -2216,9 +2599,12 @@ type PeerChange struct {
 	// Cap, if non-zero, means that NodeID's capability version has changed.
 	Cap CapabilityVersion `json:",omitempty"`
 
+	// CapMap, if non-nil, means that NodeID's capability map has changed.
+	CapMap NodeCapMap `json:",omitempty"`
+
 	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
 	// have changed to these.
-	Endpoints []string `json:",omitempty"`
+	Endpoints []netip.AddrPort `json:",omitempty"`
 
 	// Key, if non-nil, means that the NodeID's wireguard public key changed.
 	Key *key.NodePublic `json:",omitempty"`
@@ -2242,7 +2628,7 @@ type PeerChange struct {
 	// Capabilities, if non-nil, means that the NodeID's capabilities changed.
 	// It's a pointer to a slice for "omitempty", to allow differentiating
 	// a change to empty from no change.
-	Capabilities *[]string `json:",omitempty"`
+	Capabilities *[]NodeCapability `json:",omitempty"`
 }
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means to
@@ -2251,6 +2637,8 @@ type PeerChange struct {
 //
 // Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
 const DerpMagicIP = "127.3.3.40"
+
+var DerpMagicIPAddr = netip.MustParseAddr(DerpMagicIP)
 
 // EarlyNoise is the early payload that's sent over Noise but before the HTTP/2
 // handshake when connecting to the coordination server.

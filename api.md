@@ -60,6 +60,8 @@ The Tailscale API does not currently support pagination. All results are returne
   - Update tags: [`POST /api/v2/device/{deviceID}/tags`](#update-device-tags)
 - **Key**
   - Update device key: [`POST /api/v2/device/{deviceID}/key`](#update-device-key)
+- **IP Address**
+  - Set device IPv4 address: [`POST /api/v2/device/{deviceID}/ip`](#set-device-ipv4-address)
 
 **[Tailnet](#tailnet)**
 - [**Policy File**](#policy-file)
@@ -101,8 +103,8 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
 ``` jsonc
 {
   // addresses (array of strings) is a list of Tailscale IP
-  // addresses for the device, including both ipv4 (formatted as 100.x.y.z)
-  // and ipv6 (formatted as fd7a:115c:a1e0:a:b:c:d:e) addresses.
+  // addresses for the device, including both IPv4 (formatted as 100.x.y.z)
+  // and IPv6 (formatted as fd7a:115c:a1e0:a:b:c:d:e) addresses.
   "addresses": [
     "100.87.74.78",
     "fd7a:115c:a1e0:ac82:4843:ca90:697d:c36e"
@@ -209,10 +211,6 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
       "192.68.0.21:59128"
     ],
 
-    // derp (string) is the IP:port of the DERP server currently being used.
-    // Learn about DERP servers at https://tailscale.com/kb/1232/.
-    "derp":"",
-
     // mappingVariesByDestIP (boolean) is 'true' if the host's NAT mappings
     // vary based on the destination IP.
     "mappingVariesByDestIP":false,
@@ -281,6 +279,15 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
   // tailnet lock is not enabled.
   // Learn more about tailnet lock at https://tailscale.com/kb/1226/.
   "tailnetLockKey": "",
+
+  // postureIdentity contains extra identifiers from the device when the tailnet
+  // it is connected to has device posture identification collection enabled.
+  // If the device has not opted-in to posture identification collection, this
+  // will contain {"disabled": true}.
+  // Learn more about posture identity at https://tailscale.com/kb/1326/device-identity
+  "postureIdentity": {
+    "serialNumbers": ["CP74LFQJXM"]
+  }
 }
 ```
 
@@ -332,6 +339,7 @@ Currently, there are two supported options:
   - `enabledRoutes`
   - `advertisedRoutes`
   - `clientConnectivity` (which contains the following fields: `mappingVariesByDestIP`, `derp`, `endpoints`, `latency`, and `clientSupports`)
+  - `postureIdentity`
 
 ### Request example
 
@@ -516,7 +524,8 @@ The ID of the device.
 
 #### `authorized` (required in `POST` body)
 
-Specify whether the device is authorized.
+Specify whether the device is authorized. False to deauthorize an authorized device, and true to authorize a new device or to re-authorize a previously deauthorized device.
+
 
 ``` jsonc
 {
@@ -593,7 +602,7 @@ If the tags supplied in the `POST` call do not exist in the tailnet policy file,
 }
 ```
 
-<a href="device-key-post"><a>
+<a href="device-key-post"></a>
 
 ## Update device key
 
@@ -641,6 +650,51 @@ This returns a 2xx code on success, with an empty JSON object in the response bo
 curl "https://api.tailscale.com/api/v2/device/11055/key" \
 -u "tskey-api-xxxxx:" \
 --data-binary '{"keyExpiryDisabled": true}'
+```
+
+### Response
+
+The response is 2xx on success. The response body is currently an empty JSON object.
+
+## Set device IPv4 address
+
+``` http
+POST /api/v2/device/{deviceID}/ip
+```
+
+Set the Tailscale IPv4 address of the device.
+
+### Parameters
+
+#### `deviceid` (required in URL path)
+
+The ID of the device.
+
+#### `ipv4` (optional in `POST` body)
+
+Provide a new IPv4 address for the device.
+
+When a device is added to a tailnet, its Tailscale IPv4 address is set at random either from the CGNAT range, or a subset of the CGNAT range specified by an [ip pool](https://tailscale.com/kb/1304/ip-pool).
+This endpoint can be used to replace the existing IPv4 address with a specific value.
+
+``` jsonc
+{
+  "ipv4": "100.80.0.1"
+}
+```
+
+This action will break any existing connections to this machine.
+You will need to reconnect to this machine using the new IP address.
+You may also need to flush your DNS cache.
+
+This returns a 2xx code on success, with an empty JSON object in the response body.
+
+### Request example
+
+``` sh
+curl "https://api.tailscale.com/api/v2/device/11055/ip" \
+-u "tskey-api-xxxxx:" \
+--data-binary '{"ipv4": "100.80.0.1"}'
 ```
 
 ### Response
@@ -1114,6 +1168,21 @@ Look at the response body to determine whether there was a problem within your A
   }
   ```
 
+If your tailnet has [user and group provisioning](https://tailscale.com/kb/1180/sso-okta-scim/) turned on, we will also warn you about
+any groups that are used in the policy file that are not being synced from SCIM. Explicitly defined groups will not trigger this warning.
+
+```jsonc
+{
+  "message":"warning(s) found",
+  "data":[
+          {
+            "user": "group:unknown@example.com",
+            "warnings":["group is not syncing from SCIM and will be ignored by rules in the policy file"]
+          }
+        ]
+}
+```
+
 <a href="tailnet-devices"></a>
 
 ## List tailnet devices
@@ -1222,6 +1291,11 @@ The remaining three methods operate on auth keys and API access tokens.
 
   // expirySeconds (int) is the duration in seconds a new key is valid.
   "expirySeconds": 86400
+
+  // description (string) is an optional short phrase that describes what
+  // this key is used for. It can be a maximum of 50 alphanumeric characters.
+  // Hyphens and underscores are also allowed.
+  "description": "short description of key purpose"
 }
 ```
 
@@ -1308,6 +1382,9 @@ Note the following about required vs. optional values:
   Specifies the duration in seconds until the key should expire.
   Defaults to 90 days if not supplied.
 
+- **`description`:** Optional in `POST` body.
+  A short string specifying the purpose of the key. Can be a maximum of 50 alphanumeric characters. Hyphens and spaces are also allowed.
+
 ### Request example
 
 ``` jsonc
@@ -1325,7 +1402,8 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/keys" \
       }
     }
   },
-  "expirySeconds": 86400
+  "expirySeconds": 86400,
+  "description": "dev access"
 }'
 ```
 
@@ -1351,7 +1429,8 @@ It holds the capabilities specified in the request and can no longer be retrieve
         "tags": [ "tag:example" ]
       }
     }
-  }
+  },
+  "description": "dev access"
 }
 ```
 
@@ -1403,7 +1482,20 @@ The response is a JSON object with information about the key supplied.
         ]
       }
     }
-  }
+  },
+  "description": "dev access"
+}
+```
+
+Response for a revoked (deleted) or expired key will have an `invalid` field set to `true`:
+
+``` jsonc
+{
+  "id": "abc123456CNTRL",
+  "created": "2022-05-05T18:55:44Z",
+  "expires": "2022-08-03T18:55:44Z",
+  "revoked": "2023-04-01T20:50:00Z",
+  "invalid": true
 }
 ```
 

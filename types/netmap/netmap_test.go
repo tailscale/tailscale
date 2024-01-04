@@ -34,6 +34,22 @@ func testDiscoKey(hexPrefix string) (ret key.DiscoPublic) {
 	return key.DiscoPublicFromRaw32(mem.B(bs[:]))
 }
 
+func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
+	nv := make([]tailcfg.NodeView, len(v))
+	for i, n := range v {
+		nv[i] = n.View()
+	}
+	return nv
+}
+
+func eps(s ...string) []netip.AddrPort {
+	var eps []netip.AddrPort
+	for _, ep := range s {
+		eps = append(eps, netip.MustParseAddrPort(ep))
+	}
+	return eps
+}
+
 func TestNetworkMapConcise(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -44,36 +60,20 @@ func TestNetworkMapConcise(t *testing.T) {
 			name: "basic",
 			nm: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						Key:       testNodeKey(3),
 						DERP:      "127.3.3.40:4",
-						Endpoints: []string{"10.2.0.100:12", "10.1.0.100:12345"},
+						Endpoints: eps("10.2.0.100:12", "10.1.0.100:12345"),
 					},
-				},
+				}),
 			},
 			want: "netmap: self: [AQEBA] auth=machine-unknown u=? []\n [AgICA] D2                 :    192.168.0.100:12     192.168.0.100:12354\n [AwMDA] D4                 :       10.2.0.100:12        10.1.0.100:12345\n",
-		},
-		{
-			name: "debug_non_nil",
-			nm: &NetworkMap{
-				NodeKey: testNodeKey(1),
-				Debug:   &tailcfg.Debug{},
-			},
-			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={} []\n",
-		},
-		{
-			name: "debug_values",
-			nm: &NetworkMap{
-				NodeKey: testNodeKey(1),
-				Debug:   &tailcfg.Debug{LogHeapPprof: true},
-			},
-			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={\"LogHeapPprof\":true} []\n",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -99,23 +99,23 @@ func TestConciseDiffFrom(t *testing.T) {
 			name: "no_change",
 			a: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			b: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			want: "",
 		},
@@ -123,23 +123,23 @@ func TestConciseDiffFrom(t *testing.T) {
 			name: "header_change",
 			a: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			b: &NetworkMap{
 				NodeKey: testNodeKey(2),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			want: "-netmap: self: [AQEBA] auth=machine-unknown u=? []\n+netmap: self: [AgICA] auth=machine-unknown u=? []\n",
 		},
@@ -147,37 +147,37 @@ func TestConciseDiffFrom(t *testing.T) {
 			name: "peer_add",
 			a: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			b: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:        1,
 						Key:       testNodeKey(1),
 						DERP:      "127.3.3.40:1",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        3,
 						Key:       testNodeKey(3),
 						DERP:      "127.3.3.40:3",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			want: "+ [AQEBA] D1                 :    192.168.0.100:12     192.168.0.100:12354\n+ [AwMDA] D3                 :    192.168.0.100:12     192.168.0.100:12354\n",
 		},
@@ -185,37 +185,37 @@ func TestConciseDiffFrom(t *testing.T) {
 			name: "peer_remove",
 			a: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:        1,
 						Key:       testNodeKey(1),
 						DERP:      "127.3.3.40:1",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        3,
 						Key:       testNodeKey(3),
 						DERP:      "127.3.3.40:3",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			b: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
-				},
+				}),
 			},
 			want: "- [AQEBA] D1                 :    192.168.0.100:12     192.168.0.100:12354\n- [AwMDA] D3                 :    192.168.0.100:12     192.168.0.100:12354\n",
 		},
@@ -223,25 +223,25 @@ func TestConciseDiffFrom(t *testing.T) {
 			name: "peer_port_change",
 			a: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:1"},
+						Endpoints: eps("192.168.0.100:12", "1.1.1.1:1"),
 					},
-				},
+				}),
 			},
 			b: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:2"},
+						Endpoints: eps("192.168.0.100:12", "1.1.1.1:2"),
 					},
-				},
+				}),
 			},
 			want: "- [AgICA] D2                 :    192.168.0.100:12             1.1.1.1:1  \n+ [AgICA] D2                 :    192.168.0.100:12             1.1.1.1:2  \n",
 		},
@@ -249,29 +249,29 @@ func TestConciseDiffFrom(t *testing.T) {
 			name: "disco_key_only_change",
 			a: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:         2,
 						Key:        testNodeKey(2),
 						DERP:       "127.3.3.40:2",
-						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
+						Endpoints:  eps("192.168.0.100:41641", "1.1.1.1:41641"),
 						DiscoKey:   testDiscoKey("f00f00f00f"),
 						AllowedIPs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
 					},
-				},
+				}),
 			},
 			b: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						ID:         2,
 						Key:        testNodeKey(2),
 						DERP:       "127.3.3.40:2",
-						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
+						Endpoints:  eps("192.168.0.100:41641", "1.1.1.1:41641"),
 						DiscoKey:   testDiscoKey("ba4ba4ba4b"),
 						AllowedIPs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
 					},
-				},
+				}),
 			},
 			want: "- [AgICA] d:f00f00f00f000000 D2 100.102.103.104 :   192.168.0.100:41641         1.1.1.1:41641\n+ [AgICA] d:ba4ba4ba4b000000 D2 100.102.103.104 :   192.168.0.100:41641         1.1.1.1:41641\n",
 		},
@@ -286,5 +286,33 @@ func TestConciseDiffFrom(t *testing.T) {
 				t.Errorf("Wrong output\n Got: %q\nWant: %q\n## Got (unescaped):\n%s\n## Want (unescaped):\n%s\n", got, tt.want, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPeerIndexByNodeID(t *testing.T) {
+	var nilPtr *NetworkMap
+	if nilPtr.PeerIndexByNodeID(123) != -1 {
+		t.Errorf("nil PeerIndexByNodeID should return -1")
+	}
+	var nm NetworkMap
+	const min = 2
+	const max = 10000
+	const hole = max / 2
+	for nid := tailcfg.NodeID(2); nid <= max; nid++ {
+		if nid == hole {
+			continue
+		}
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{ID: nid}).View())
+	}
+	for want, nv := range nm.Peers {
+		got := nm.PeerIndexByNodeID(nv.ID())
+		if got != want {
+			t.Errorf("PeerIndexByNodeID(%v) = %v; want %v", nv.ID(), got, want)
+		}
+	}
+	for _, miss := range []tailcfg.NodeID{min - 1, hole, max + 1} {
+		if got := nm.PeerIndexByNodeID(miss); got != -1 {
+			t.Errorf("PeerIndexByNodeID(%v) = %v; want -1", miss, got)
+		}
 	}
 }

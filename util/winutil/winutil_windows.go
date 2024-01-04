@@ -4,11 +4,8 @@
 package winutil
 
 import (
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os/exec"
 	"os/user"
@@ -16,12 +13,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"tailscale.com/types/logger"
 )
 
 const (
@@ -31,6 +26,9 @@ const (
 
 // ErrNoShell is returned when the shell process is not found.
 var ErrNoShell = errors.New("no Shell process is present")
+
+// ErrNoValue is returned when the value doesn't exist in the registry.
+var ErrNoValue = registry.ErrNotExist
 
 // GetDesktopPID searches the PID of the process that's running the
 // currently active desktop. Returns ErrNoShell if the shell is not present.
@@ -50,44 +48,44 @@ func GetDesktopPID() (uint32, error) {
 	return pid, nil
 }
 
-func getPolicyString(name, defval string) string {
+func getPolicyString(name string) (string, error) {
 	s, err := getRegStringInternal(regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
-		return getRegString(name, defval)
+		return getRegString(name)
 	}
-	return s
+	return s, err
 }
 
-func getPolicyInteger(name string, defval uint64) uint64 {
+func getRegString(name string) (string, error) {
+	s, err := getRegStringInternal(regBase, name)
+	if err != nil {
+		return "", err
+	}
+	return s, err
+}
+
+func getPolicyInteger(name string) (uint64, error) {
 	i, err := getRegIntegerInternal(regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
-		return getRegInteger(name, defval)
+		return getRegInteger(name)
 	}
-	return i
+	return i, err
 }
 
-func getRegString(name, defval string) string {
-	s, err := getRegStringInternal(regBase, name)
-	if err != nil {
-		return defval
-	}
-	return s
-}
-
-func getRegInteger(name string, defval uint64) uint64 {
+func getRegInteger(name string) (uint64, error) {
 	i, err := getRegIntegerInternal(regBase, name)
 	if err != nil {
-		return defval
+		return 0, err
 	}
-	return i
+	return i, err
 }
 
 func getRegStringInternal(subKey, name string) (string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return "", err
@@ -96,7 +94,7 @@ func getRegStringInternal(subKey, name string) (string, error) {
 
 	val, _, err := key.GetStringValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
 		return "", err
@@ -117,7 +115,7 @@ func GetRegStrings(name string, defval []string) []string {
 func getRegStringsInternal(subKey, name string) ([]string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return nil, err
@@ -126,7 +124,7 @@ func getRegStringsInternal(subKey, name string) ([]string, error) {
 
 	val, _, err := key.GetStringsValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
 		return nil, err
@@ -157,7 +155,7 @@ func DeleteRegValue(name string) error {
 
 func deleteRegValueInternal(subKey, name string) error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.SET_VALUE)
-	if err == registry.ErrNotExist {
+	if err == ErrNoValue {
 		return nil
 	}
 	if err != nil {
@@ -167,7 +165,7 @@ func deleteRegValueInternal(subKey, name string) error {
 	defer key.Close()
 
 	err = key.DeleteValue(name)
-	if err == registry.ErrNotExist {
+	if err == ErrNoValue {
 		err = nil
 	}
 	return err
@@ -176,7 +174,7 @@ func deleteRegValueInternal(subKey, name string) error {
 func getRegIntegerInternal(subKey, name string) (uint64, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return 0, err
@@ -185,7 +183,7 @@ func getRegIntegerInternal(subKey, name string) (uint64, error) {
 
 	val, _, err := key.GetIntegerValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetIntegerValue(%v): %v", name, err)
 		}
 		return 0, err
@@ -226,29 +224,85 @@ func isSIDValidPrincipal(uid string) bool {
 }
 
 // EnableCurrentThreadPrivilege enables the named privilege
-// in the current thread access token.
-func EnableCurrentThreadPrivilege(name string) error {
+// in the current thread's access token. The current goroutine is also locked to
+// the OS thread (runtime.LockOSThread). Callers must call the returned disable
+// function when done with the privileged task.
+func EnableCurrentThreadPrivilege(name string) (disable func(), err error) {
+	return EnableCurrentThreadPrivileges([]string{name})
+}
+
+// EnableCurrentThreadPrivileges enables the named privileges
+// in the current thread's access token. The current goroutine is also locked to
+// the OS thread (runtime.LockOSThread). Callers must call the returned disable
+// function when done with the privileged task.
+func EnableCurrentThreadPrivileges(names []string) (disable func(), err error) {
+	runtime.LockOSThread()
+	if len(names) == 0 {
+		// Nothing to enable; no-op isn't really an error...
+		return runtime.UnlockOSThread, nil
+	}
+
+	if err := windows.ImpersonateSelf(windows.SecurityImpersonation); err != nil {
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+
+	disable = func() {
+		defer runtime.UnlockOSThread()
+		// If RevertToSelf fails, it's not really recoverable and we should panic.
+		// Failure to do so would leak the privileges we're enabling, which is a
+		// security issue.
+		if err := windows.RevertToSelf(); err != nil {
+			panic(fmt.Sprintf("RevertToSelf failed: %v", err))
+		}
+	}
+
+	defer func() {
+		if err != nil {
+			disable()
+		}
+	}()
+
 	var t windows.Token
-	err := windows.OpenThreadToken(windows.CurrentThread(),
+	err = windows.OpenThreadToken(windows.CurrentThread(),
 		windows.TOKEN_QUERY|windows.TOKEN_ADJUST_PRIVILEGES, false, &t)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer t.Close()
 
-	var tp windows.Tokenprivileges
+	tp := newTokenPrivileges(len(names))
+	privs := tp.AllPrivileges()
+	for i := range privs {
+		var privStr *uint16
+		privStr, err = windows.UTF16PtrFromString(names[i])
+		if err != nil {
+			return nil, err
+		}
+		err = windows.LookupPrivilegeValue(nil, privStr, &privs[i].Luid)
+		if err != nil {
+			return nil, err
+		}
+		privs[i].Attributes = windows.SE_PRIVILEGE_ENABLED
+	}
 
-	privStr, err := syscall.UTF16PtrFromString(name)
+	err = windows.AdjustTokenPrivileges(t, false, tp, 0, nil, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	err = windows.LookupPrivilegeValue(nil, privStr, &tp.Privileges[0].Luid)
-	if err != nil {
-		return err
+
+	return disable, nil
+}
+
+func newTokenPrivileges(numPrivs int) *windows.Tokenprivileges {
+	if numPrivs <= 0 {
+		panic("numPrivs must be > 0")
 	}
-	tp.PrivilegeCount = 1
-	tp.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
-	return windows.AdjustTokenPrivileges(t, false, &tp, 0, nil, nil)
+	numBytes := unsafe.Sizeof(windows.Tokenprivileges{}) + (uintptr(numPrivs-1) * unsafe.Sizeof(windows.LUIDAndAttributes{}))
+	buf := make([]byte, numBytes)
+	result := (*windows.Tokenprivileges)(unsafe.Pointer(unsafe.SliceData(buf)))
+	result.PrivilegeCount = uint32(numPrivs)
+	return result
 }
 
 // StartProcessAsChild starts exePath process as a child of parentPID.
@@ -256,16 +310,7 @@ func EnableCurrentThreadPrivilege(name string) error {
 // the new process, along with any optional environment variables in extraEnv.
 func StartProcessAsChild(parentPID uint32, exePath string, extraEnv []string) error {
 	// The rest of this function requires SeDebugPrivilege to be held.
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	err := windows.ImpersonateSelf(windows.SecurityImpersonation)
-	if err != nil {
-		return err
-	}
-	defer windows.RevertToSelf()
-
+	//
 	// According to https://docs.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights
 	//
 	// ... To open a handle to another process and obtain full access rights,
@@ -277,10 +322,11 @@ func StartProcessAsChild(parentPID uint32, exePath string, extraEnv []string) er
 	//
 	// TODO: try look for something less than SeDebugPrivilege
 
-	err = EnableCurrentThreadPrivilege("SeDebugPrivilege")
+	disableSeDebug, err := EnableCurrentThreadPrivilege("SeDebugPrivilege")
 	if err != nil {
 		return err
 	}
+	defer disableSeDebug()
 
 	ph, err := windows.OpenProcess(
 		windows.PROCESS_CREATE_PROCESS|windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_DUP_HANDLE,
@@ -336,35 +382,30 @@ func CreateAppMutex(name string) (windows.Handle, error) {
 	return windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(name))
 }
 
-func getTokenInfo(token windows.Token, infoClass uint32) ([]byte, error) {
-	var desiredLen uint32
-	err := windows.GetTokenInformation(token, infoClass, nil, 0, &desiredLen)
-	if err != nil && err != windows.ERROR_INSUFFICIENT_BUFFER {
-		return nil, err
-	}
-
-	buf := make([]byte, desiredLen)
-	actualLen := desiredLen
-	err = windows.GetTokenInformation(token, infoClass, &buf[0], desiredLen, &actualLen)
-	return buf, err
+// getTokenInfoFixedLen obtains known fixed-length token information. Use this
+// function for information classes that output enumerations, BOOLs, integers etc.
+func getTokenInfoFixedLen[T any](token windows.Token, infoClass uint32) (result T, err error) {
+	var actualLen uint32
+	p := (*byte)(unsafe.Pointer(&result))
+	err = windows.GetTokenInformation(token, infoClass, p, uint32(unsafe.Sizeof(result)), &actualLen)
+	return result, err
 }
 
-func getTokenUserInfo(token windows.Token) (*windows.Tokenuser, error) {
-	buf, err := getTokenInfo(token, windows.TokenUser)
+type tokenElevationType int32
+
+const (
+	tokenElevationTypeDefault tokenElevationType = 1
+	tokenElevationTypeFull    tokenElevationType = 2
+	tokenElevationTypeLimited tokenElevationType = 3
+)
+
+// IsTokenLimited returns whether token is a limited UAC token.
+func IsTokenLimited(token windows.Token) (bool, error) {
+	elevationType, err := getTokenInfoFixedLen[tokenElevationType](token, windows.TokenElevationType)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-
-	return (*windows.Tokenuser)(unsafe.Pointer(&buf[0])), nil
-}
-
-func getTokenPrimaryGroupInfo(token windows.Token) (*windows.Tokenprimarygroup, error) {
-	buf, err := getTokenInfo(token, windows.TokenPrimaryGroup)
-	if err != nil {
-		return nil, err
-	}
-
-	return (*windows.Tokenprimarygroup)(unsafe.Pointer(&buf[0])), nil
+	return elevationType == tokenElevationTypeLimited, nil
 }
 
 // UserSIDs contains the SIDs for a Windows NT token object's associated user
@@ -383,12 +424,12 @@ func GetCurrentUserSIDs() (*UserSIDs, error) {
 	}
 	defer token.Close()
 
-	userInfo, err := getTokenUserInfo(token)
+	userInfo, err := token.GetTokenUser()
 	if err != nil {
 		return nil, err
 	}
 
-	primaryGroup, err := getTokenPrimaryGroupInfo(token)
+	primaryGroup, err := token.GetTokenPrimaryGroup()
 	if err != nil {
 		return nil, err
 	}
@@ -557,165 +598,44 @@ func findHomeDirInRegistry(uid string) (dir string, err error) {
 	return dir, nil
 }
 
-const (
-	maxBinaryValueLen  = 128   // we'll truncate any binary values longer than this
-	maxRegValueNameLen = 16384 // maximum length supported by Windows + 1
-	initialValueBufLen = 80    // large enough to contain a stringified GUID encoded as UTF-16
-)
-
-const (
-	supportInfoKeyRegistry = "Registry"
-)
-
-// LogSupportInfo obtains information useful for troubleshooting and support,
-// and writes it to the log as a JSON-encoded object.
-func LogSupportInfo(logf logger.Logf) {
-	var b strings.Builder
-	if err := getSupportInfo(&b); err != nil {
-		log.Printf("error encoding support info: %v", err)
-		return
+// ProcessImageName returns the fully-qualified path to the executable image
+// associated with process.
+func ProcessImageName(process windows.Handle) (string, error) {
+	var pathBuf [windows.MAX_PATH]uint16
+	pathBufLen := uint32(len(pathBuf))
+	if err := windows.QueryFullProcessImageName(process, 0, &pathBuf[0], &pathBufLen); err != nil {
+		return "", err
 	}
-	logf("Support Info: %s", b.String())
+	return windows.UTF16ToString(pathBuf[:pathBufLen]), nil
 }
 
-func getSupportInfo(w io.Writer) error {
-	output := make(map[string]any)
-
-	regInfo, err := getRegistrySupportInfo(registry.LOCAL_MACHINE, []string{regPolicyBase, regBase})
-	if err == nil {
-		output[supportInfoKeyRegistry] = regInfo
-	} else {
-		output[supportInfoKeyRegistry] = err
+// TSSessionIDToLogonSessionID retrieves the logon session ID associated with
+// tsSessionId, which is a Terminal Services / RDP session ID. The calling
+// process must be running as LocalSystem.
+func TSSessionIDToLogonSessionID(tsSessionID uint32) (logonSessionID windows.LUID, err error) {
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(tsSessionID, &token); err != nil {
+		return logonSessionID, fmt.Errorf("WTSQueryUserToken: %w", err)
 	}
-
-	enc := json.NewEncoder(w)
-	return enc.Encode(output)
+	defer token.Close()
+	return LogonSessionID(token)
 }
 
-type getRegistrySupportInfoBufs struct {
-	nameBuf  []uint16
-	valueBuf []byte
+// TSSessionID obtains the Terminal Services (RDP) session ID associated with token.
+func TSSessionID(token windows.Token) (tsSessionID uint32, err error) {
+	return getTokenInfoFixedLen[uint32](token, windows.TokenSessionId)
 }
 
-func getRegistrySupportInfo(root registry.Key, subKeys []string) (map[string]any, error) {
-	bufs := getRegistrySupportInfoBufs{
-		nameBuf:  make([]uint16, maxRegValueNameLen),
-		valueBuf: make([]byte, initialValueBufLen),
-	}
-
-	output := make(map[string]any)
-
-	for _, subKey := range subKeys {
-		if err := getRegSubKey(root, subKey, 5, &bufs, output); err != nil && !errors.Is(err, registry.ErrNotExist) {
-			return nil, fmt.Errorf("getRegistrySupportInfo: %w", err)
-		}
-	}
-
-	return output, nil
+type tokenOrigin struct {
+	originatingLogonSession windows.LUID
 }
 
-func keyString(key registry.Key, subKey string) string {
-	var keyStr string
-	switch key {
-	case registry.CLASSES_ROOT:
-		keyStr = `HKCR\`
-	case registry.CURRENT_USER:
-		keyStr = `HKCU\`
-	case registry.LOCAL_MACHINE:
-		keyStr = `HKLM\`
-	case registry.USERS:
-		keyStr = `HKU\`
-	case registry.CURRENT_CONFIG:
-		keyStr = `HKCC\`
-	case registry.PERFORMANCE_DATA:
-		keyStr = `HKPD\`
-	default:
-	}
-
-	return keyStr + subKey
-}
-
-func getRegSubKey(key registry.Key, subKey string, recursionLimit int, bufs *getRegistrySupportInfoBufs, output map[string]any) error {
-	keyStr := keyString(key, subKey)
-	k, err := registry.OpenKey(key, subKey, registry.READ)
+// LogonSessionID obtains the logon session ID associated with token.
+func LogonSessionID(token windows.Token) (logonSessionID windows.LUID, err error) {
+	origin, err := getTokenInfoFixedLen[tokenOrigin](token, windows.TokenOrigin)
 	if err != nil {
-		return fmt.Errorf("opening %q: %w", keyStr, err)
-	}
-	defer k.Close()
-
-	kv := make(map[string]any)
-	index := uint32(0)
-
-loopValues:
-	for {
-		nbuf := bufs.nameBuf
-		nameLen := uint32(len(nbuf))
-		valueType := uint32(0)
-		vbuf := bufs.valueBuf
-		valueLen := uint32(len(vbuf))
-
-		err := regEnumValue(k, index, &nbuf[0], &nameLen, nil, &valueType, &vbuf[0], &valueLen)
-		switch err {
-		case windows.ERROR_NO_MORE_ITEMS:
-			break loopValues
-		case windows.ERROR_MORE_DATA:
-			bufs.valueBuf = make([]byte, valueLen)
-			continue
-		case nil:
-		default:
-			return fmt.Errorf("regEnumValue: %w", err)
-		}
-
-		var value any
-
-		switch valueType {
-		case registry.SZ, registry.EXPAND_SZ:
-			value = windows.UTF16PtrToString((*uint16)(unsafe.Pointer(&vbuf[0])))
-		case registry.BINARY:
-			if valueLen > maxBinaryValueLen {
-				valueLen = maxBinaryValueLen
-			}
-			value = append([]byte{}, vbuf[:valueLen]...)
-		case registry.DWORD:
-			value = binary.LittleEndian.Uint32(vbuf[:4])
-		case registry.MULTI_SZ:
-			// Adapted from x/sys/windows/registry/(Key).GetStringsValue
-			p := (*[1 << 29]uint16)(unsafe.Pointer(&vbuf[0]))[: valueLen/2 : valueLen/2]
-			var strs []string
-			if len(p) > 0 {
-				if p[len(p)-1] == 0 {
-					p = p[:len(p)-1]
-				}
-				strs = make([]string, 0, 5)
-				from := 0
-				for i, c := range p {
-					if c == 0 {
-						strs = append(strs, string(utf16.Decode(p[from:i])))
-						from = i + 1
-					}
-				}
-			}
-			value = strs
-		case registry.QWORD:
-			value = binary.LittleEndian.Uint64(vbuf[:8])
-		default:
-			value = fmt.Sprintf("<unsupported value type %d>", valueType)
-		}
-
-		kv[windows.UTF16PtrToString(&nbuf[0])] = value
-		index++
+		return logonSessionID, err
 	}
 
-	if recursionLimit > 0 {
-		if sks, err := k.ReadSubKeyNames(0); err == nil {
-			for _, sk := range sks {
-				if err := getRegSubKey(k, sk, recursionLimit-1, bufs, kv); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	output[keyStr] = kv
-	return nil
+	return origin.originatingLogonSession, nil
 }

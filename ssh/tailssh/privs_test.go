@@ -15,11 +15,11 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"syscall"
 	"testing"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/types/logger"
 )
 

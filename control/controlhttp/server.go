@@ -146,7 +146,7 @@ func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request
 		return nil, fmt.Errorf("decoding base64 handshake parameter: %v", err)
 	}
 
-	conn := wsconn.NetConn(ctx, c, websocket.MessageBinary)
+	conn := wsconn.NetConn(ctx, c, websocket.MessageBinary, r.RemoteAddr)
 	nc, err := controlbase.Server(ctx, conn, private, init)
 	if err != nil {
 		conn.Close()

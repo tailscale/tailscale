@@ -9,15 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/health"
@@ -27,8 +26,6 @@ import (
 	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/winnet"
 )
-
-var wintunLinkLocal = netip.MustParseAddr("fe80::99d0:ec2d:b2e7:536b")
 
 // monitorDefaultRoutes subscribes to route change events and updates
 // the Tailscale tunnel interface's MTU to match that of the
@@ -241,7 +238,7 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 var networkCategoryWarning = health.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
-	var mtu = tstun.DefaultMTU()
+	var mtu = tstun.DefaultTUNMTU()
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,
 		// Issue 474: on early boot, when the network is still
@@ -396,7 +393,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		return fmt.Errorf("syncAddresses: %w", err)
 	}
 
-	slices.SortFunc(routes, routeDataLess)
+	slices.SortFunc(routes, routeDataCompare)
 
 	deduplicatedRoutes := []*winipcfg.RouteData{}
 	for i := 0; i < len(routes); i++ {
@@ -468,21 +465,6 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	}
 
 	return errAcc
-}
-
-// unwrapIP returns the shortest version of ip.
-func unwrapIP(ip net.IP) net.IP {
-	if ip4 := ip.To4(); ip4 != nil {
-		return ip4
-	}
-	return ip
-}
-
-func v4Mask(m net.IPMask) net.IPMask {
-	if len(m) == 16 {
-		return m[12:]
-	}
-	return m
 }
 
 func netCompare(a, b netip.Prefix) int {
@@ -652,8 +634,8 @@ func routeDataCompare(a, b *winipcfg.RouteData) int {
 func deltaRouteData(a, b []*winipcfg.RouteData) (add, del []*winipcfg.RouteData) {
 	add = make([]*winipcfg.RouteData, 0, len(b))
 	del = make([]*winipcfg.RouteData, 0, len(a))
-	slices.SortFunc(a, routeDataLess)
-	slices.SortFunc(b, routeDataLess)
+	slices.SortFunc(a, routeDataCompare)
+	slices.SortFunc(b, routeDataCompare)
 
 	i := 0
 	j := 0

@@ -37,8 +37,6 @@ var (
 
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
-
-	magicDNSv4Port = netip.MustParseAddrPort("100.100.100.100:53")
 )
 
 var dnsCfg = Config{
@@ -233,7 +231,7 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	return r.Query(context.Background(), query, netip.AddrPort{})
+	return r.Query(context.Background(), query, "udp", netip.AddrPort{})
 }
 
 func mustIP(str string) netip.Addr {
@@ -315,7 +313,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func newResolver(t testing.TB) *Resolver {
-	return New(t.Logf, nil /* no network monitor */, nil /* no link selector */, new(tsdial.Dialer))
+	return New(t.Logf, nil /* no network monitor */, nil /* no link selector */, new(tsdial.Dialer), nil /* no control knobs */)
 }
 
 func TestResolveLocal(t *testing.T) {
@@ -1016,7 +1014,7 @@ func TestForwardLinkSelection(t *testing.T) {
 			return "special"
 		}
 		return ""
-	}), new(tsdial.Dialer))
+	}), new(tsdial.Dialer), nil /* no control knobs */)
 
 	// Test non-special IP.
 	if got, err := fwd.packetListener(netip.Addr{}); err != nil {
@@ -1449,7 +1447,7 @@ func TestServfail(t *testing.T) {
 	r.SetConfig(cfg)
 
 	pkt, err := syncRespond(r, dnspacket("test.site.", dns.TypeA, noEdns))
-	if err != errServerFailure {
+	if !errors.Is(err, errServerFailure) {
 		t.Errorf("err = %v, want %v", err, errServerFailure)
 	}
 

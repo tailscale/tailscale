@@ -122,18 +122,24 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 		case *types.Slice:
 			if codegen.ContainsPointers(ft.Elem()) {
 				n := it.QualifiedName(ft.Elem())
+				writef("if src.%s != nil {", fname)
 				writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
 				writef("for i := range dst.%s {", fname)
 				if ptr, isPtr := ft.Elem().(*types.Pointer); isPtr {
 					if _, isBasic := ptr.Elem().Underlying().(*types.Basic); isBasic {
-						writef("\tx := *src.%s[i]", fname)
-						writef("\tdst.%s[i] = &x", fname)
+						it.Import("tailscale.com/types/ptr")
+						writef("if src.%s[i] == nil { dst.%s[i] = nil } else {", fname, fname)
+						writef("\tdst.%s[i] = ptr.To(*src.%s[i])", fname, fname)
+						writef("}")
 					} else {
 						writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
 					}
+				} else if ft.Elem().String() == "encoding/json.RawMessage" {
+					writef("\tdst.%s[i] = append(src.%s[i][:0:0], src.%s[i]...)", fname, fname, fname)
 				} else {
 					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
 				}
+				writef("}")
 				writef("}")
 			} else {
 				writef("dst.%s = append(src.%s[:0:0], src.%s...)", fname, fname, fname)
@@ -143,41 +149,41 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				writef("dst.%s = src.%s.Clone()", fname, fname)
 				continue
 			}
-			n := it.QualifiedName(ft.Elem())
+			it.Import("tailscale.com/types/ptr")
 			writef("if dst.%s != nil {", fname)
-			writef("\tdst.%s = new(%s)", fname, n)
-			writef("\t*dst.%s = *src.%s", fname, fname)
+			writef("\tdst.%s = ptr.To(*src.%s)", fname, fname)
 			if codegen.ContainsPointers(ft.Elem()) {
 				writef("\t" + `panic("TODO pointers in pointers")`)
 			}
 			writef("}")
 		case *types.Map:
 			elem := ft.Elem()
-			writef("if dst.%s != nil {", fname)
-			writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
 			if sliceType, isSlice := elem.(*types.Slice); isSlice {
 				n := it.QualifiedName(sliceType.Elem())
+				writef("if dst.%s != nil {", fname)
+				writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
 				writef("\tfor k := range src.%s {", fname)
 				// use zero-length slice instead of nil to ensure
 				// the key is always copied.
 				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 				writef("\t}")
+				writef("}")
 			} else if codegen.ContainsPointers(elem) {
+				writef("if dst.%s != nil {", fname)
+				writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
 				writef("\tfor k, v := range src.%s {", fname)
 				switch elem.(type) {
 				case *types.Pointer:
 					writef("\t\tdst.%s[k] = v.Clone()", fname)
 				default:
-					writef("\t\tv2 := v.Clone()")
-					writef("\t\tdst.%s[k] = *v2", fname)
+					writef("\t\tdst.%s[k] = *(v.Clone())", fname)
 				}
 				writef("\t}")
+				writef("}")
 			} else {
-				writef("\tfor k, v := range src.%s {", fname)
-				writef("\t\tdst.%s[k] = v", fname)
-				writef("\t}")
+				it.Import("maps")
+				writef("\tdst.%s = maps.Clone(src.%s)", fname, fname)
 			}
-			writef("}")
 		default:
 			writef(`panic("TODO: %s (%T)")`, fname, ft)
 		}

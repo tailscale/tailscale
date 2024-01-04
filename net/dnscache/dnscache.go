@@ -1,8 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// TODO(bradfitz): update this code to use netaddr more
-
 // Package dnscache contains a minimal DNS cache that makes a bunch of
 // assumptions that are only valid for us. Not recommended for general use.
 package dnscache
@@ -142,10 +140,6 @@ func (r *Resolver) dlogf(format string, args ...any) {
 func (r *Resolver) cloudHostResolver() (v *net.Resolver, ok bool) {
 	switch runtime.GOOS {
 	case "android", "ios", "darwin":
-		return nil, false
-	case "windows":
-		// TODO(bradfitz): remove this restriction once we're using Go 1.19
-		// which supports net.Resolver.PreferGo on Windows.
 		return nil, false
 	}
 	ip := cloudenv.Get().ResolverIP()
@@ -661,8 +655,6 @@ func v6addrs(aa []netip.Addr) (ret []netip.Addr) {
 	}
 	return ret
 }
-
-var errTLSHandshakeTimeout = errors.New("timeout doing TLS handshake")
 
 // TLSDialer is like Dialer but returns a func suitable for using with net/http.Transport.DialTLSContext.
 // It returns a *tls.Conn type on success.

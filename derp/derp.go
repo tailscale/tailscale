@@ -85,7 +85,7 @@ const (
 
 	// framePeerPresent is like framePeerGone, but for other
 	// members of the DERP region when they're meshed up together.
-	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected
+	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected + optional 18B ip:port (16 byte IP + 2 byte BE uint16 port)
 
 	// frameWatchConns is how one DERP node in a regional mesh
 	// subscribes to the others in the region.
@@ -199,7 +199,7 @@ func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t frameType, frameLe
 		return 0, 0, fmt.Errorf("frame header size %d exceeds reader limit of %d", frameLen, maxSize)
 	}
 
-	n, err := io.ReadFull(br, b[:minUint32(frameLen, uint32(len(b)))])
+	n, err := io.ReadFull(br, b[:min(frameLen, uint32(len(b)))])
 	if err != nil {
 		return 0, 0, err
 	}
@@ -232,11 +232,4 @@ func writeFrame(bw *bufio.Writer, t frameType, b []byte) error {
 		return err
 	}
 	return bw.Flush()
-}
-
-func minUint32(a, b uint32) uint32 {
-	if a < b {
-		return a
-	}
-	return b
 }

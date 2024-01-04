@@ -1,7 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux && !(386 || loong64 || arm || armbe)
+// TODO(#8502): add support for more architectures
+//go:build linux && (arm64 || amd64)
 
 package linuxfw
 
@@ -16,6 +17,7 @@ import (
 	"github.com/josharian/native"
 	"golang.org/x/sys/unix"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cmpx"
 )
 
 // DebugNetfilter prints debug information about netfilter rules to the
@@ -52,27 +54,18 @@ func DebugNetfilter(logf logger.Logf) error {
 			for _, ex := range rule.Exprs {
 				switch v := ex.(type) {
 				case *expr.Meta:
-					key := metaKeyNames[v.Key]
-					if key == "" {
-						key = "UNKNOWN"
-					}
+					key := cmpx.Or(metaKeyNames[v.Key], "UNKNOWN")
 					logf("netfilter:     Meta: key=%s source_register=%v register=%d", key, v.SourceRegister, v.Register)
 
 				case *expr.Cmp:
-					op := cmpOpNames[v.Op]
-					if op == "" {
-						op = "UNKNOWN"
-					}
+					op := cmpx.Or(cmpOpNames[v.Op], "UNKNOWN")
 					logf("netfilter:     Cmp: op=%s register=%d data=%s", op, v.Register, formatMaybePrintable(v.Data))
 
 				case *expr.Counter:
 					// don't print
 
 				case *expr.Verdict:
-					kind := verdictNames[v.Kind]
-					if kind == "" {
-						kind = "UNKNOWN"
-					}
+					kind := cmpx.Or(verdictNames[v.Kind], "UNKNOWN")
 					logf("netfilter:     Verdict: kind=%s data=%s", kind, v.Chain)
 
 				case *expr.Target:
@@ -110,16 +103,45 @@ func DebugNetfilter(logf logger.Logf) error {
 	return nil
 }
 
-// DetectNetfilter returns the number of nftables rules present in the system.
-func DetectNetfilter() (int, error) {
+// detectNetfilter returns the number of nftables rules present in the system.
+func detectNetfilter() (int, error) {
+	// Frist try creating a dummy postrouting chain. Emperically, we have
+	// noticed that on some devices there is partial nftables support and the
+	// kernel rejects some chains that are valid on other devices. This is a
+	// workaround to detect that case.
+	//
+	// This specifically allows us to run in on GKE nodes using COS images which
+	// have partial nftables support (as of 2023-10-18). When we try to create a
+	// dummy postrouting chain, we get an error like:
+	//  add chain: conn.Receive: netlink receive: no such file or directory
+	nft, err := newNfTablesRunner(logger.Discard)
+	if err != nil {
+		return 0, FWModeNotSupportedError{
+			Mode: FirewallModeNfTables,
+			Err:  fmt.Errorf("cannot create nftables runner: %w", err),
+		}
+	}
+	if err := nft.createDummyPostroutingChains(); err != nil {
+		return 0, FWModeNotSupportedError{
+			Mode: FirewallModeNfTables,
+			Err:  err,
+		}
+	}
+
 	conn, err := nftables.New()
 	if err != nil {
-		return 0, err
+		return 0, FWModeNotSupportedError{
+			Mode: FirewallModeNfTables,
+			Err:  err,
+		}
 	}
 
 	chains, err := conn.ListChains()
 	if err != nil {
-		return 0, fmt.Errorf("cannot list chains: %w", err)
+		return 0, FWModeNotSupportedError{
+			Mode: FirewallModeNfTables,
+			Err:  fmt.Errorf("cannot list chains: %w", err),
+		}
 	}
 
 	var validRules int
@@ -130,6 +152,7 @@ func DetectNetfilter() (int, error) {
 		}
 		validRules += len(rules)
 	}
+
 	return validRules, nil
 }
 

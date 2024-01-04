@@ -1,0 +1,73 @@
+{
+  "name": "webclient",
+  "version": "0.0.1",
+  "license": "BSD-3-Clause",
+  "engines": {
+    "node": "18.16.1",
+    "yarn": "1.22.19"
+  },
+  "private": true,
+  "dependencies": {
+    "@radix-ui/react-collapsible": "^1.0.3",
+    "@radix-ui/react-dialog": "^1.0.5",
+    "@radix-ui/react-popover": "^1.0.6",
+    "classnames": "^2.3.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "swr": "^2.2.4",
+    "wouter": "^2.11.0",
+    "zustand": "^4.4.7"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.20",
+    "@types/react-dom": "^18.0.6",
+    "@vitejs/plugin-react-swc": "^3.3.2",
+    "autoprefixer": "^10.4.15",
+    "eslint": "^8.23.1",
+    "eslint-config-react-app": "^7.0.1",
+    "jsdom": "^23.0.1",
+    "postcss": "^8.4.31",
+    "prettier": "^2.5.1",
+    "prettier-plugin-organize-imports": "^3.2.2",
+    "tailwindcss": "^3.3.3",
+    "typescript": "^4.7.4",
+    "vite": "^4.3.9",
+    "vite-plugin-rewrite-all": "^1.0.1",
+    "vite-plugin-svgr": "^3.2.0",
+    "vite-tsconfig-paths": "^3.5.0",
+    "vitest": "^0.32.0"
+  },
+  "scripts": {
+    "build": "vite build",
+    "start": "vite",
+    "lint": "tsc --noEmit && eslint 'src/**/*.{ts,tsx,js,jsx}'",
+    "test": "vitest",
+    "format": "prettier --write 'src/**/*.{ts,tsx}'",
+    "format-check": "prettier --check 'src/**/*.{ts,tsx}'"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app"
+    ],
+    "plugins": [
+      "react-hooks"
+    ],
+    "rules": {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "error"
+    },
+    "settings": {
+      "projectRoot": "client/web/package.json"
+    }
+  },
+  "prettier": {
+    "semi": false,
+    "printWidth": 80
+  },
+  "postcss": {
+    "plugins": {
+      "tailwindcss": {},
+      "autoprefixer": {}
+    }
+  }
+}

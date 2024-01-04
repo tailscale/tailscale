@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !windows
+//go:build !windows && !plan9
 
 package vms
 
@@ -18,8 +18,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
-
-const timeout = 15 * time.Second
 
 func retry(t *testing.T, fn func() error) {
 	t.Helper()

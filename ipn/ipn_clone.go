@@ -6,6 +6,7 @@
 package ipn
 
 import (
+	"maps"
 	"net/netip"
 
 	"tailscale.com/tailcfg"
@@ -37,6 +38,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	RunSSH                 bool
+	RunWebClient           bool
 	WantRunning            bool
 	LoggedOut              bool
 	ShieldsUp              bool
@@ -50,6 +52,10 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
 	ProfileName            string
+	AutoUpdate             AutoUpdatePrefs
+	AppConnector           AppConnectorPrefs
+	PostureChecking        bool
+	NetfilterKind          string
 	Persist                *persist.Persist
 }{})
 
@@ -73,10 +79,11 @@ func (src *ServeConfig) Clone() *ServeConfig {
 			dst.Web[k] = v.Clone()
 		}
 	}
-	if dst.AllowFunnel != nil {
-		dst.AllowFunnel = map[HostPort]bool{}
-		for k, v := range src.AllowFunnel {
-			dst.AllowFunnel[k] = v
+	dst.AllowFunnel = maps.Clone(src.AllowFunnel)
+	if dst.Foreground != nil {
+		dst.Foreground = map[string]*ServeConfig{}
+		for k, v := range src.Foreground {
+			dst.Foreground[k] = v.Clone()
 		}
 	}
 	return dst
@@ -87,6 +94,8 @@ var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
 	AllowFunnel map[HostPort]bool
+	Foreground  map[string]*ServeConfig
+	ETag        string
 }{})
 
 // Clone makes a deep copy of TCPPortHandler.
@@ -103,6 +112,7 @@ func (src *TCPPortHandler) Clone() *TCPPortHandler {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _TCPPortHandlerCloneNeedsRegeneration = TCPPortHandler(struct {
 	HTTPS        bool
+	HTTP         bool
 	TCPForward   string
 	TerminateTLS string
 }{})

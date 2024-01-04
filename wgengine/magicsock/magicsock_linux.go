@@ -303,11 +303,11 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 			rc.Control(func(fd uintptr) {
 				errRcv = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUFFORCE, socketBufferSize)
 				if errRcv != nil {
-					logf("magicsock: failed to force-set UDP read buffer size to %d: %v", socketBufferSize, errRcv)
+					logf("magicsock: [warning] failed to force-set UDP read buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errRcv)
 				}
 				errSnd = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUFFORCE, socketBufferSize)
 				if errSnd != nil {
-					logf("magicsock: failed to force-set UDP write buffer size to %d: %v", socketBufferSize, errSnd)
+					logf("magicsock: [warning] failed to force-set UDP write buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errSnd)
 				}
 			})
 		}
@@ -318,13 +318,6 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	}
 }
 
-const (
-	// TODO(jwhited): upstream to unix?
-	socketOptionLevelUDP   = 17
-	socketOptionUDPSegment = 103
-	socketOptionUDPGRO     = 104
-)
-
 // tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
 // and returns two booleans indicating TX and RX UDP offload support.
 func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
@@ -334,13 +327,9 @@ func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
 			return
 		}
 		err = rc.Control(func(fd uintptr) {
-			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, socketOptionUDPSegment)
-			if errSyscall != nil {
-				// no point in checking RX, TX support was added first.
-				return
-			}
-			hasTX = true
-			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, socketOptionUDPGRO, 1)
+			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
+			hasTX = errSyscall == nil
+			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
 			hasRX = errSyscall == nil
 		})
 		if err != nil {
@@ -367,11 +356,8 @@ func getGSOSizeFromControl(control []byte) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("error parsing socket control message: %w", err)
 		}
-		if hdr.Level == socketOptionLevelUDP && hdr.Type == socketOptionUDPGRO && len(data) >= 2 {
-			var gso uint16
-			// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
-			copy(unsafe.Slice((*byte)(unsafe.Pointer(&gso)), 2), data[:2])
-			return int(gso), nil
+		if hdr.Level == unix.SOL_UDP && hdr.Type == unix.UDP_GRO && len(data) >= 2 {
+			return int(binary.NativeEndian.Uint16(data[:2])), nil
 		}
 	}
 	return 0, nil
@@ -389,11 +375,10 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	}
 	*control = (*control)[:cap(*control)]
 	hdr := (*unix.Cmsghdr)(unsafe.Pointer(&(*control)[0]))
-	hdr.Level = socketOptionLevelUDP
-	hdr.Type = socketOptionUDPSegment
+	hdr.Level = unix.SOL_UDP
+	hdr.Type = unix.UDP_SEGMENT
 	hdr.SetLen(unix.CmsgLen(2))
-	// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
-	copy((*control)[unix.SizeofCmsghdr:], unsafe.Slice((*byte)(unsafe.Pointer(&gsoSize)), 2))
+	binary.NativeEndian.PutUint16((*control)[unix.SizeofCmsghdr:], gsoSize)
 	*control = (*control)[:unix.CmsgSpace(2)]
 }
 

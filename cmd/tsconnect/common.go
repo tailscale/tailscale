@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !plan9
+
 package main
 
 import (
@@ -12,11 +14,11 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
 
 	esbuild "github.com/evanw/esbuild/pkg/api"
-	"golang.org/x/exp/slices"
 )
 
 const (
@@ -31,6 +33,9 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	root, err := findRepoRoot()
 	if err != nil {
 		return nil, err
+	}
+	if *yarnPath == "" {
+		*yarnPath = path.Join(root, "tool", "yarn")
 	}
 	tsConnectDir := filepath.Join(root, "cmd", "tsconnect")
 	if err := os.Chdir(tsConnectDir); err != nil {
@@ -66,7 +71,7 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 				},
 			},
 		},
-		JSXMode: esbuild.JSXModeAutomatic,
+		JSX: esbuild.JSXAutomatic,
 	}, nil
 }
 
@@ -132,16 +137,19 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 	if err != nil {
 		log.Fatalf("Cannot parse port: %v", err)
 	}
-	result, err := esbuild.Serve(esbuild.ServeOptions{
+	buildContext, ctxErr := esbuild.Context(buildOptions)
+	if ctxErr != nil {
+		log.Fatalf("Cannot create esbuild context: %v", err)
+	}
+	result, err := buildContext.Serve(esbuild.ServeOptions{
 		Port:     uint16(port),
 		Host:     host,
 		Servedir: "./",
-	}, buildOptions)
+	})
 	if err != nil {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
 	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
-	result.Wait()
 }
 
 func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {

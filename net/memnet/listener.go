@@ -22,6 +22,10 @@ type Listener struct {
 	ch        chan Conn
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	// NewConn, if non-nil, is called to create a new pair of connections
+	// when dialing. If nil, NewConn is used.
+	NewConn func(network, addr string, maxBuf int) (Conn, Conn)
 }
 
 // Listen returns a new Listener for the provided address.
@@ -70,7 +74,14 @@ func (l *Listener) Dial(ctx context.Context, network, addr string) (_ net.Conn, 
 			Addr: addr,
 		}
 	}
-	c, s := NewConn(addr, bufferSize)
+
+	newConn := l.NewConn
+	if newConn == nil {
+		newConn = func(network, addr string, maxBuf int) (Conn, Conn) {
+			return NewConn(addr, maxBuf)
+		}
+	}
+	c, s := newConn(network, addr, bufferSize)
 	defer func() {
 		if err != nil {
 			c.Close()

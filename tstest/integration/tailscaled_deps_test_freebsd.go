@@ -11,11 +11,13 @@ import (
 	// transitive deps when we run "go install tailscaled" in a child
 	// process and can cache a prior success when a dependency changes.
 	_ "tailscale.com/chirp"
+	_ "tailscale.com/client/tailscale"
 	_ "tailscale.com/cmd/tailscaled/childproc"
 	_ "tailscale.com/control/controlclient"
 	_ "tailscale.com/derp/derphttp"
 	_ "tailscale.com/envknob"
 	_ "tailscale.com/ipn"
+	_ "tailscale.com/ipn/conffile"
 	_ "tailscale.com/ipn/ipnlocal"
 	_ "tailscale.com/ipn/ipnserver"
 	_ "tailscale.com/ipn/store"
@@ -33,7 +35,6 @@ import (
 	_ "tailscale.com/net/tstun"
 	_ "tailscale.com/paths"
 	_ "tailscale.com/safesocket"
-	_ "tailscale.com/smallzstd"
 	_ "tailscale.com/ssh/tailssh"
 	_ "tailscale.com/syncs"
 	_ "tailscale.com/tailcfg"

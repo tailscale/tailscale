@@ -12,7 +12,6 @@
 package rate
 
 import (
-	"context"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -59,10 +58,6 @@ var (
 	t0 = mono.Now()
 	t1 = t0.Add(time.Duration(1) * d)
 	t2 = t0.Add(time.Duration(2) * d)
-	t3 = t0.Add(time.Duration(3) * d)
-	t4 = t0.Add(time.Duration(4) * d)
-	t5 = t0.Add(time.Duration(5) * d)
-	t9 = t0.Add(time.Duration(9) * d)
 )
 
 type allow struct {
@@ -150,33 +145,6 @@ func TestSimultaneousRequests(t *testing.T) {
 	if numOK != burst {
 		t.Errorf("numOK = %d, want %d", numOK, burst)
 	}
-}
-
-type request struct {
-	t   time.Time
-	n   int
-	act time.Time
-	ok  bool
-}
-
-// dFromDuration converts a duration to a multiple of the global constant d
-func dFromDuration(dur time.Duration) int {
-	// Adding a millisecond to be swallowed by the integer division
-	// because we don't care about small inaccuracies
-	return int((dur + time.Millisecond) / d)
-}
-
-// dSince returns multiples of d since t0
-func dSince(t mono.Time) int {
-	return dFromDuration(t.Sub(t0))
-}
-
-type wait struct {
-	name   string
-	ctx    context.Context
-	n      int
-	delay  int // in multiples of d
-	nilErr bool
 }
 
 func BenchmarkAllowN(b *testing.B) {

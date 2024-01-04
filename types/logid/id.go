@@ -11,9 +11,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"unicode/utf8"
-
-	"golang.org/x/exp/slices"
 )
 
 // PrivateID represents a log steam for writing.
@@ -39,8 +38,12 @@ func ParsePrivateID(in string) (out PrivateID, err error) {
 	return out, err
 }
 
+func (id PrivateID) AppendText(b []byte) ([]byte, error) {
+	return hexAppendEncode(b, id[:]), nil
+}
+
 func (id PrivateID) MarshalText() ([]byte, error) {
-	return formatID(id), nil
+	return id.AppendText(nil)
 }
 
 func (id *PrivateID) UnmarshalText(in []byte) error {
@@ -48,7 +51,7 @@ func (id *PrivateID) UnmarshalText(in []byte) error {
 }
 
 func (id PrivateID) String() string {
-	return string(formatID(id))
+	return string(hexAppendEncode(nil, id[:]))
 }
 
 func (id PrivateID) IsZero() bool {
@@ -71,8 +74,12 @@ func ParsePublicID(in string) (out PublicID, err error) {
 	return out, err
 }
 
+func (id PublicID) AppendText(b []byte) ([]byte, error) {
+	return hexAppendEncode(b, id[:]), nil
+}
+
 func (id PublicID) MarshalText() ([]byte, error) {
-	return formatID(id), nil
+	return id.AppendText(nil)
 }
 
 func (id *PublicID) UnmarshalText(in []byte) error {
@@ -80,11 +87,15 @@ func (id *PublicID) UnmarshalText(in []byte) error {
 }
 
 func (id PublicID) String() string {
-	return string(formatID(id))
+	return string(hexAppendEncode(nil, id[:]))
 }
 
 func (id1 PublicID) Less(id2 PublicID) bool {
-	return slices.Compare(id1[:], id2[:]) < 0
+	return id1.Compare(id2) < 0
+}
+
+func (id1 PublicID) Compare(id2 PublicID) int {
+	return slices.Compare(id1[:], id2[:])
 }
 
 func (id PublicID) IsZero() bool {
@@ -95,10 +106,12 @@ func (id PublicID) Prefix64() uint64 {
 	return binary.BigEndian.Uint64(id[:8])
 }
 
-func formatID(in [32]byte) []byte {
-	var hexArr [2 * len(in)]byte
-	hex.Encode(hexArr[:], in[:])
-	return hexArr[:]
+// TODO(https://go.dev/issue/53693): Use hex.AppendEncode instead.
+func hexAppendEncode(dst, src []byte) []byte {
+	n := hex.EncodedLen(len(src))
+	dst = slices.Grow(dst, n)
+	hex.Encode(dst[len(dst):][:n], src)
+	return dst[:len(dst)+n]
 }
 
 func parseID[Bytes []byte | string](funcName string, out *[32]byte, in Bytes) (err error) {

@@ -35,30 +35,32 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 	ret := make(dnsMap)
 	suffix := nm.MagicDNSSuffix()
 	have4 := false
-	if nm.Name != "" && len(nm.Addresses) > 0 {
-		ip := nm.Addresses[0].Addr()
+	addrs := nm.GetAddresses()
+	if nm.Name != "" && addrs.Len() > 0 {
+		ip := addrs.At(0).Addr()
 		ret[canonMapKey(nm.Name)] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
 			ret[canonMapKey(dnsname.TrimSuffix(nm.Name, suffix))] = ip
 		}
-		for _, a := range nm.Addresses {
-			if a.Addr().Is4() {
+		for i := range addrs.LenIter() {
+			if addrs.At(i).Addr().Is4() {
 				have4 = true
 			}
 		}
 	}
 	for _, p := range nm.Peers {
-		if p.Name == "" {
+		if p.Name() == "" {
 			continue
 		}
-		for _, a := range p.Addresses {
+		for i := range p.Addresses().LenIter() {
+			a := p.Addresses().At(i)
 			ip := a.Addr()
 			if ip.Is4() && !have4 {
 				continue
 			}
-			ret[canonMapKey(p.Name)] = ip
-			if dnsname.HasSuffix(p.Name, suffix) {
-				ret[canonMapKey(dnsname.TrimSuffix(p.Name, suffix))] = ip
+			ret[canonMapKey(p.Name())] = ip
+			if dnsname.HasSuffix(p.Name(), suffix) {
+				ret[canonMapKey(dnsname.TrimSuffix(p.Name(), suffix))] = ip
 			}
 			break
 		}

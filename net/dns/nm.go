@@ -8,13 +8,14 @@ package dns
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"sort"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/josharian/native"
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/util/dnsname"
 )
 
@@ -23,6 +24,13 @@ const (
 	mediumPriority  = int32(1)   // Highest priority that doesn't hard-override
 	lowerPriority   = int32(200) // lower than all builtin auto priorities
 )
+
+// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
+//
+// This is particularly useful because certain conditions can cause indefinite hangs
+// (such as improper dbus auth followed by contextless dbus.Object.Call).
+// Such operations should be wrapped in a timeout context.
+const reconfigTimeout = time.Second
 
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
@@ -139,14 +147,18 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	// tell it explicitly to keep it. Read out the current interface
 	// settings and mirror them out to NetworkManager.
 	var addrs6 []map[string]any
-	addrs, _, err := interfaces.Tailscale()
-	if err == nil {
+	if tsIf, err := net.InterfaceByName(m.interfaceName); err == nil {
+		addrs, _ := tsIf.Addrs()
 		for _, a := range addrs {
-			if a.Is6() {
-				addrs6 = append(addrs6, map[string]any{
-					"address": a.String(),
-					"prefix":  uint32(128),
-				})
+			if ipnet, ok := a.(*net.IPNet); ok {
+				nip, ok := netip.AddrFromSlice(ipnet.IP)
+				nip = nip.Unmap()
+				if ok && tsaddr.IsTailscaleIP(nip) && nip.Is6() {
+					addrs6 = append(addrs6, map[string]any{
+						"address": nip.String(),
+						"prefix":  uint32(128),
+					})
+				}
 			}
 		}
 	}

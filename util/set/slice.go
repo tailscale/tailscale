@@ -4,7 +4,8 @@
 package set
 
 import (
-	"golang.org/x/exp/slices"
+	"slices"
+
 	"tailscale.com/types/views"
 )
 
@@ -14,10 +15,13 @@ type Slice[T comparable] struct {
 	set   map[T]bool // nil until/unless slice is large enough
 }
 
-// Slice returns the a view of the underlying slice.
+// Slice returns a view of the underlying slice.
 // The elements are in order of insertion.
 // The returned value is only valid until ss is modified again.
 func (ss *Slice[T]) Slice() views.Slice[T] { return views.SliceOf(ss.slice) }
+
+// Len returns the number of elements in the set.
+func (ss *Slice[T]) Len() int { return len(ss.slice) }
 
 // Contains reports whether v is in the set.
 // The amortized cost is O(1).

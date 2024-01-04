@@ -6,8 +6,8 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 )
 
 var _ unsafe.Pointer
@@ -40,9 +40,17 @@ func errnoErr(e syscall.Errno) error {
 
 var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
+	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
+	modrstrtmgr = windows.NewLazySystemDLL("rstrtmgr.dll")
 
-	procQueryServiceConfig2W = modadvapi32.NewProc("QueryServiceConfig2W")
-	procRegEnumValueW        = modadvapi32.NewProc("RegEnumValueW")
+	procQueryServiceConfig2W          = modadvapi32.NewProc("QueryServiceConfig2W")
+	procGetApplicationRestartSettings = modkernel32.NewProc("GetApplicationRestartSettings")
+	procRegisterApplicationRestart    = modkernel32.NewProc("RegisterApplicationRestart")
+	procRmEndSession                  = modrstrtmgr.NewProc("RmEndSession")
+	procRmGetList                     = modrstrtmgr.NewProc("RmGetList")
+	procRmJoinSession                 = modrstrtmgr.NewProc("RmJoinSession")
+	procRmRegisterResources           = modrstrtmgr.NewProc("RmRegisterResources")
+	procRmStartSession                = modrstrtmgr.NewProc("RmStartSession")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
@@ -53,8 +61,52 @@ func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, b
 	return
 }
 
-func regEnumValue(key registry.Key, index uint32, valueName *uint16, valueNameLen *uint32, reserved *uint32, valueType *uint32, pData *byte, cbData *uint32) (ret error) {
-	r0, _, _ := syscall.Syscall9(procRegEnumValueW.Addr(), 8, uintptr(key), uintptr(index), uintptr(unsafe.Pointer(valueName)), uintptr(unsafe.Pointer(valueNameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(valueType)), uintptr(unsafe.Pointer(pData)), uintptr(unsafe.Pointer(cbData)), 0)
+func getApplicationRestartSettings(process windows.Handle, commandLine *uint16, commandLineLen *uint32, flags *uint32) (ret wingoes.HRESULT) {
+	r0, _, _ := syscall.Syscall6(procGetApplicationRestartSettings.Addr(), 4, uintptr(process), uintptr(unsafe.Pointer(commandLine)), uintptr(unsafe.Pointer(commandLineLen)), uintptr(unsafe.Pointer(flags)), 0, 0)
+	ret = wingoes.HRESULT(r0)
+	return
+}
+
+func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
+	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
+	ret = wingoes.HRESULT(r0)
+	return
+}
+
+func rmEndSession(session _RMHANDLE) (ret error) {
+	r0, _, _ := syscall.Syscall(procRmEndSession.Addr(), 1, uintptr(session), 0, 0)
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func rmGetList(session _RMHANDLE, nProcInfoNeeded *uint32, nProcInfo *uint32, rgAffectedApps *_RM_PROCESS_INFO, pRebootReasons *uint32) (ret error) {
+	r0, _, _ := syscall.Syscall6(procRmGetList.Addr(), 5, uintptr(session), uintptr(unsafe.Pointer(nProcInfoNeeded)), uintptr(unsafe.Pointer(nProcInfo)), uintptr(unsafe.Pointer(rgAffectedApps)), uintptr(unsafe.Pointer(pRebootReasons)), 0)
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func rmJoinSession(pSession *_RMHANDLE, sessionKey *uint16) (ret error) {
+	r0, _, _ := syscall.Syscall(procRmJoinSession.Addr(), 2, uintptr(unsafe.Pointer(pSession)), uintptr(unsafe.Pointer(sessionKey)), 0)
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func rmRegisterResources(session _RMHANDLE, nFiles uint32, rgsFileNames **uint16, nApplications uint32, rgApplications *_RM_UNIQUE_PROCESS, nServices uint32, rgsServiceNames **uint16) (ret error) {
+	r0, _, _ := syscall.Syscall9(procRmRegisterResources.Addr(), 7, uintptr(session), uintptr(nFiles), uintptr(unsafe.Pointer(rgsFileNames)), uintptr(nApplications), uintptr(unsafe.Pointer(rgApplications)), uintptr(nServices), uintptr(unsafe.Pointer(rgsServiceNames)), 0, 0)
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret error) {
+	r0, _, _ := syscall.Syscall(procRmStartSession.Addr(), 3, uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
 	}

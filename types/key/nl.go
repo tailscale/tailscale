@@ -61,9 +61,14 @@ func (k *NLPrivate) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(nlPrivateHexPrefix))
 }
 
+// AppendText implements encoding.TextAppender.
+func (k NLPrivate) AppendText(b []byte) ([]byte, error) {
+	return appendHexKey(b, nlPrivateHexPrefix, k.k[:]), nil
+}
+
 // MarshalText implements encoding.TextMarshaler.
 func (k NLPrivate) MarshalText() ([]byte, error) {
-	return toHex(k.k[:], nlPrivateHexPrefix), nil
+	return k.AppendText(nil)
 }
 
 // Equal reports whether k and other are the same key.
@@ -132,10 +137,15 @@ func (k *NLPublic) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefix))
 }
 
+// AppendText implements encoding.TextAppender.
+func (k NLPublic) AppendText(b []byte) ([]byte, error) {
+	return appendHexKey(b, nlPublicHexPrefix, k.k[:]), nil
+}
+
 // MarshalText implements encoding.TextMarshaler, emitting a
 // representation of the form nlpub:<hex>.
 func (k NLPublic) MarshalText() ([]byte, error) {
-	return toHex(k.k[:], nlPublicHexPrefix), nil
+	return k.AppendText(nil)
 }
 
 // CLIString returns a marshalled representation suitable for use
@@ -143,7 +153,7 @@ func (k NLPublic) MarshalText() ([]byte, error) {
 // the nlpub:<hex> form emitted by MarshalText. Both forms can
 // be decoded by UnmarshalText.
 func (k NLPublic) CLIString() string {
-	return string(toHex(k.k[:], nlPublicHexPrefixCLI))
+	return string(appendHexKey(nil, nlPublicHexPrefixCLI, k.k[:]))
 }
 
 // Verifier returns a ed25519.PublicKey that can be used to

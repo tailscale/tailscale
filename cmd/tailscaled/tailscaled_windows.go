@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -50,6 +51,8 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/osdiag"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
@@ -127,10 +130,10 @@ var syslogf logger.Logf = logger.Discard
 // Windows started.
 func runWindowsService(pol *logpolicy.Policy) error {
 	go func() {
-		winutil.LogSupportInfo(log.Printf)
+		osdiag.LogSupportInfo(logger.WithPrefix(log.Printf, "Support Info: "), osdiag.LogSupportInfoReasonStartup)
 	}()
 
-	if winutil.GetPolicyInteger("LogSCMInteractions", 0) != 0 {
+	if logSCMInteractions, _ := syspolicy.GetBoolean(syspolicy.LogSCMInteractions, false); logSCMInteractions {
 		syslog, err := eventlog.Open(serviceName)
 		if err == nil {
 			syslogf = func(format string, args ...any) {
@@ -157,7 +160,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	syslogf("Service start pending")
 
 	svcAccepts := svc.AcceptStop
-	if winutil.GetPolicyInteger("FlushDNSOnSessionUnlock", 0) != 0 {
+	if flushDNSOnSessionUnlock, _ := syspolicy.GetBoolean(syspolicy.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
 		svcAccepts |= svc.AcceptSessionChange
 	}
 
@@ -296,6 +299,14 @@ func beWindowsSubprocess() bool {
 			}
 		}
 	}()
+
+	// Pre-load wintun.dll using a fully-qualified path so that wintun-go
+	// loads our copy and not some (possibly outdated) copy dropped in system32.
+	// (OSS Issue #10023)
+	fqWintunPath := fullyQualifiedWintunPath(log.Printf)
+	if _, err := windows.LoadDLL(fqWintunPath); err != nil {
+		log.Printf("Error pre-loading \"%s\": %v", fqWintunPath, err)
+	}
 
 	sys := new(tsd.System)
 	netMon, err := netmon.New(log.Printf)
@@ -505,7 +516,7 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 }
 
 func uninstallWinTun(logf logger.Logf) {
-	dll := windows.NewLazyDLL("wintun.dll")
+	dll := windows.NewLazyDLL(fullyQualifiedWintunPath(logf))
 	if err := dll.Load(); err != nil {
 		logf("Cannot load wintun.dll for uninstall: %v", err)
 		return
@@ -514,4 +525,16 @@ func uninstallWinTun(logf logger.Logf) {
 	logf("Removing wintun driver...")
 	err := wintun.Uninstall()
 	logf("Uninstall: %v", err)
+}
+
+func fullyQualifiedWintunPath(logf logger.Logf) string {
+	var dir string
+	imgName, err := winutil.ProcessImageName(windows.CurrentProcess())
+	if err != nil {
+		logf("ProcessImageName failed: %v", err)
+	} else {
+		dir = filepath.Dir(imgName)
+	}
+
+	return filepath.Join(dir, "wintun.dll")
 }

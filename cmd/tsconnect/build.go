@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !plan9
+
 package main
 
 import (
@@ -79,26 +81,6 @@ func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
 		metadata.Outputs[outputRelPath] = output
 	}
 	return json.Marshal(metadata)
-}
-
-func cleanDist() error {
-	log.Printf("Cleaning %s...\n", *distDir)
-	files, err := os.ReadDir(*distDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.MkdirAll(*distDir, 0755)
-		}
-		return err
-	}
-
-	for _, file := range files {
-		if file.Name() != "placeholder" {
-			if err := os.Remove(filepath.Join(*distDir, file.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func precompressDist(fastCompression bool) error {

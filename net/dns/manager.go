@@ -12,10 +12,12 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/exp/slices"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
@@ -38,18 +40,6 @@ const maxActiveQueries = 256
 // the lint exception is necessary and on others it is not,
 // and plain ignore complains if the exception is unnecessary.
 
-// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
-//
-// This is particularly useful because certain conditions can cause indefinite hangs
-// (such as improper dbus auth followed by contextless dbus.Object.Call).
-// Such operations should be wrapped in a timeout context.
-const reconfigTimeout = time.Second
-
-type response struct {
-	pkt []byte
-	to  netip.AddrPort // response destination (request source)
-}
-
 // Manager manages system DNS settings.
 type Manager struct {
 	logf logger.Logf
@@ -65,14 +55,14 @@ type Manager struct {
 
 // NewManagers created a new manager from the given config.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")
 	}
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, netMon, linkSel, dialer),
+		resolver: resolver.New(logf, netMon, linkSel, dialer, knobs),
 		os:       oscfg,
 	}
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
@@ -96,7 +86,9 @@ func (m *Manager) Set(cfg Config) error {
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		rcfg.WriteToBufioWriter(w)
 	}))
-	m.logf("OScfg: %+v", ocfg)
+	m.logf("OScfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
+		ocfg.WriteToBufioWriter(w)
+	}))
 
 	if err := m.resolver.SetConfig(rcfg); err != nil {
 		return err
@@ -139,14 +131,15 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 			}
 		}
 	}
-	slices.SortFunc(hosts, func(a, b *HostEntry) bool {
-		if len(a.Hosts) == 0 {
-			return false
+	slices.SortFunc(hosts, func(a, b *HostEntry) int {
+		if len(a.Hosts) == 0 && len(b.Hosts) == 0 {
+			return 0
+		} else if len(a.Hosts) == 0 {
+			return -1
+		} else if len(b.Hosts) == 0 {
+			return 1
 		}
-		if len(b.Hosts) == 0 {
-			return true
-		}
-		return a.Hosts[0] < b.Hosts[0]
+		return strings.Compare(a.Hosts[0], b.Hosts[0])
 	})
 	return hosts
 }
@@ -223,7 +216,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// This bool is used in a couple of places below to implement this
 	// workaround.
 	isWindows := runtime.GOOS == "windows"
-	if cfg.singleResolverSet() != nil && m.os.SupportsSplitDNS() && !isWindows {
+	if len(cfg.singleResolverSet()) > 0 && m.os.SupportsSplitDNS() && !isWindows {
 		// Split DNS configuration requested, where all split domains
 		// go to the same resolvers. We can let the OS do it.
 		ocfg.Nameservers = toIPsOnly(cfg.singleResolverSet())
@@ -291,7 +284,10 @@ func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netip.Addr) {
 // Query executes a DNS query received from the given address. The query is
 // provided in bs as a wire-encoded DNS query without any transport header.
 // This method is called for requests arriving over UDP and TCP.
-func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
+//
+// The "family" parameter should indicate what type of DNS query this is:
+// either "tcp" or "udp".
+func (m *Manager) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
 	select {
 	case <-m.ctx.Done():
 		return nil, net.ErrClosed
@@ -305,7 +301,7 @@ func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]
 		return nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
-	return m.resolver.Query(ctx, bs, from)
+	return m.resolver.Query(ctx, bs, family, from)
 }
 
 const (
@@ -367,7 +363,7 @@ func (s *dnsTCPSession) handleWrites() {
 }
 
 func (s *dnsTCPSession) handleQuery(q []byte) {
-	resp, err := s.m.Query(s.ctx, q, s.srcAddr)
+	resp, err := s.m.Query(s.ctx, q, "tcp", s.srcAddr)
 	if err != nil {
 		s.m.logf("tcp query: %v", err)
 		return
@@ -462,7 +458,7 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil, &tsdial.Dialer{Logf: logf}, nil)
+	dns := NewManager(logf, oscfg, nil, &tsdial.Dialer{Logf: logf}, nil, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

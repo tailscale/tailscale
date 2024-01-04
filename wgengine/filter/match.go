@@ -6,13 +6,15 @@ package filter
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
 
-//go:generate go run tailscale.com/cmd/cloner --type=Match
+//go:generate go run tailscale.com/cmd/cloner --type=Match,CapMatch
 
 // PortRange is a range of TCP and UDP ports.
 type PortRange struct {
@@ -54,7 +56,11 @@ type CapMatch struct {
 
 	// Cap is the capability that's granted if the destination IP addresses
 	// matches Dst.
-	Cap string
+	Cap tailcfg.PeerCapability
+
+	// Values are the raw JSON values of the capability.
+	// See tailcfg.PeerCapability and tailcfg.PeerCapMap for details.
+	Values []tailcfg.RawMessage
 }
 
 // Match matches packets from any IP address in Srcs to any ip:port in
@@ -95,7 +101,7 @@ type matches []Match
 
 func (ms matches) match(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !protoInList(q.IPProto, m.IPProto) {
+		if !slices.Contains(m.IPProto, q.IPProto) {
 			continue
 		}
 		if !ipInList(q.Src.Addr(), m.Srcs) {
@@ -133,7 +139,7 @@ func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 // ignored, as long as the match is for the entire uint16 port range.
 func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !protoInList(q.IPProto, m.IPProto) {
+		if !slices.Contains(m.IPProto, q.IPProto) {
 			continue
 		}
 		if !ipInList(q.Src.Addr(), m.Srcs) {
@@ -154,15 +160,6 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 func ipInList(ip netip.Addr, netlist []netip.Prefix) bool {
 	for _, net := range netlist {
 		if net.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func protoInList(proto ipproto.Proto, valid []ipproto.Proto) bool {
-	for _, v := range valid {
-		if proto == v {
 			return true
 		}
 	}

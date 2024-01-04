@@ -45,6 +45,12 @@ type AccessLogRecord struct {
 	Bytes int `json:"bytes,omitempty"`
 	// Error encountered during request processing.
 	Err string `json:"err,omitempty"`
+	// RequestID is a unique ID for this request. If the *http.Request context
+	// carries this value via SetRequestID, then it will be displayed to the
+	// client immediately after the error text, as well as logged here. This
+	// makes it easier to correlate support requests with server logs. If a
+	// RequestID generator is not configured, RequestID will be empty.
+	RequestID RequestID `json:"request_id,omitempty"`
 }
 
 // String returns m as a JSON string.
