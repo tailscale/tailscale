@@ -13,7 +13,10 @@
 //
 //   - TS_AUTHKEY: the authkey to use for login.
 //   - TS_HOSTNAME: the hostname to request for the node.
-//   - TS_ROUTES: subnet routes to advertise. To accept routes, use TS_EXTRA_ARGS to pass in --accept-routes.
+//   - TS_ROUTES: subnet routes to advertise. Explicitly setting it to an empty
+//     value will cause containerboot to stop acting as a subnet router for any
+//     previously advertised routes. To accept routes, use TS_EXTRA_ARGS to pass
+//     in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
@@ -101,7 +104,7 @@ func main() {
 	cfg := &settings{
 		AuthKey:           defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Hostname:          defaultEnv("TS_HOSTNAME", ""),
-		Routes:            defaultEnv("TS_ROUTES", ""),
+		Routes:            defaultEnvPointer("TS_ROUTES"),
 		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
 		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
 		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
@@ -138,7 +141,7 @@ func main() {
 		if err := ensureTunFile(cfg.Root); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
-		if cfg.ProxyTo != "" || cfg.Routes != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
+		if cfg.ProxyTo != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
 			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
@@ -649,8 +652,12 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
 	}
-	if cfg.Routes != "" {
-		args = append(args, "--advertise-routes="+cfg.Routes)
+	// --advertise-routes can be passed an empty string to configure a
+	// device (that might have previously advertised subnet routes) to not
+	// advertise any routes. Respect an empty string passed by a user and
+	// use it to explicitly unset the routes.
+	if cfg.Routes != nil {
+		args = append(args, "--advertise-routes="+*cfg.Routes)
 	}
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
@@ -678,8 +685,12 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	} else {
 		args = append(args, "--accept-dns=false")
 	}
-	if cfg.Routes != "" {
-		args = append(args, "--advertise-routes="+cfg.Routes)
+	// --advertise-routes can be passed an empty string to configure a
+	// device (that might have previously advertised subnet routes) to not
+	// advertise any routes. Respect an empty string passed by a user and
+	// use it to explicitly unset the routes.
+	if cfg.Routes != nil {
+		args = append(args, "--advertise-routes="+*cfg.Routes)
 	}
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
@@ -714,7 +725,7 @@ func ensureTunFile(root string) error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTargetFQDN, routes string) error {
+func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTargetFQDN string, routes *string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
@@ -745,8 +756,8 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTarget
 	if tailnetTargetFQDN != "" {
 		v4Forwarding = true
 	}
-	if routes != "" {
-		for _, route := range strings.Split(routes, ",") {
+	if routes != nil {
+		for _, route := range strings.Split(*routes, ",") {
 			cidr, err := netip.ParsePrefix(route)
 			if err != nil {
 				return fmt.Errorf("invalid subnet route: %v", err)
@@ -850,7 +861,7 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 type settings struct {
 	AuthKey  string
 	Hostname string
-	Routes   string
+	Routes   *string
 	// ProxyTo is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
@@ -886,6 +897,16 @@ func defaultEnv(name, defVal string) string {
 		return v
 	}
 	return defVal
+}
+
+// defaultEnvPointer returns a pointer to the given envvar value if set, else
+// returns nil. This is useful in cases where we need to distinguish between a
+// variable being set to empty string vs unset.
+func defaultEnvPointer(name string) *string {
+	if v, ok := os.LookupEnv(name); ok {
+		return &v
+	}
+	return nil
 }
 
 func defaultEnvs(names []string, defVal string) string {
