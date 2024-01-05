@@ -17,11 +17,12 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"go4.org/mem"
@@ -30,7 +31,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/metrics"
-	"tailscale.com/net/stun"
+	"tailscale.com/net/stunserver"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
 	"tailscale.com/util/cmpx"
@@ -59,25 +60,11 @@ var (
 )
 
 var (
-	stats             = new(metrics.Set)
-	stunDisposition   = &metrics.LabelMap{Label: "disposition"}
-	stunAddrFamily    = &metrics.LabelMap{Label: "family"}
 	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
 	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
-
-	stunReadError  = stunDisposition.Get("read_error")
-	stunNotSTUN    = stunDisposition.Get("not_stun")
-	stunWriteError = stunDisposition.Get("write_error")
-	stunSuccess    = stunDisposition.Get("success")
-
-	stunIPv4 = stunAddrFamily.Get("ipv4")
-	stunIPv6 = stunAddrFamily.Get("ipv6")
 )
 
 func init() {
-	stats.Set("counter_requests", stunDisposition)
-	stats.Set("counter_addrfamily", stunAddrFamily)
-	expvar.Publish("stun", stats)
 	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
 	expvar.Publish("gauge_derper_tls_active_version", tlsActiveVersion)
 }
@@ -135,6 +122,9 @@ func writeNewConfig() config {
 func main() {
 	flag.Parse()
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	if *dev {
 		*addr = ":3340" // above the keys DERP
 		log.Printf("Running in dev mode.")
@@ -144,6 +134,11 @@ func main() {
 	listenHost, _, err := net.SplitHostPort(*addr)
 	if err != nil {
 		log.Fatalf("invalid server address: %v", err)
+	}
+
+	if *runSTUN {
+		ss := stunserver.New(ctx)
+		go ss.ListenAndServe(net.JoinHostPort(listenHost, fmt.Sprint(*stunPort)))
 	}
 
 	cfg := loadConfig()
@@ -221,10 +216,6 @@ func main() {
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
 
-	if *runSTUN {
-		go serveSTUN(listenHost, *stunPort)
-	}
-
 	quietLogger := log.New(logFilter{}, "", 0)
 	httpsrv := &http.Server{
 		Addr:     *addr,
@@ -241,6 +232,10 @@ func main() {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
+	go func() {
+		<-ctx.Done()
+		httpsrv.Shutdown(ctx)
+	}()
 
 	if serveTLS {
 		log.Printf("derper: serving on %s with TLS", *addr)
@@ -348,59 +343,6 @@ func probeHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 	default:
 		http.Error(w, "bogus probe method", http.StatusMethodNotAllowed)
-	}
-}
-
-func serveSTUN(host string, port int) {
-	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, fmt.Sprint(port)))
-	if err != nil {
-		log.Fatalf("failed to open STUN listener: %v", err)
-	}
-	log.Printf("running STUN server on %v", pc.LocalAddr())
-	serverSTUNListener(context.Background(), pc.(*net.UDPConn))
-}
-
-func serverSTUNListener(ctx context.Context, pc *net.UDPConn) {
-	var buf [64 << 10]byte
-	var (
-		n   int
-		ua  *net.UDPAddr
-		err error
-	)
-	for {
-		n, ua, err = pc.ReadFromUDP(buf[:])
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Printf("STUN ReadFrom: %v", err)
-			time.Sleep(time.Second)
-			stunReadError.Add(1)
-			continue
-		}
-		pkt := buf[:n]
-		if !stun.Is(pkt) {
-			stunNotSTUN.Add(1)
-			continue
-		}
-		txid, err := stun.ParseBindingRequest(pkt)
-		if err != nil {
-			stunNotSTUN.Add(1)
-			continue
-		}
-		if ua.IP.To4() != nil {
-			stunIPv4.Add(1)
-		} else {
-			stunIPv6.Add(1)
-		}
-		addr, _ := netip.AddrFromSlice(ua.IP)
-		res := stun.Response(txid, netip.AddrPortFrom(addr, uint16(ua.Port)))
-		_, err = pc.WriteTo(res, ua)
-		if err != nil {
-			stunWriteError.Add(1)
-		} else {
-			stunSuccess.Add(1)
-		}
 	}
 }
 
