@@ -104,7 +104,7 @@ func main() {
 	cfg := &settings{
 		AuthKey:           defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Hostname:          defaultEnv("TS_HOSTNAME", ""),
-		Routes:            defaultEnvPointer("TS_ROUTES"),
+		Routes:            defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
 		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
 		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
@@ -114,7 +114,7 @@ func main() {
 		InKubernetes:      os.Getenv("KUBERNETES_SERVICE_HOST") != "",
 		UserspaceMode:     defaultBool("TS_USERSPACE", true),
 		StateDir:          defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:         defaultBool("TS_ACCEPT_DNS", false),
+		AcceptDNS:         defaultEnvBoolPointer("TS_ACCEPT_DNS"),
 		KubeSecret:        defaultEnv("TS_KUBE_SECRET", "tailscale"),
 		SOCKSProxyAddr:    defaultEnv("TS_SOCKS5_SERVER", ""),
 		HTTPProxyAddr:     defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
@@ -644,7 +644,7 @@ func tailscaledArgs(cfg *settings) []string {
 // if TS_AUTH_ONCE is set, only the first time containerboot starts.
 func tailscaleUp(ctx context.Context, cfg *settings) error {
 	args := []string{"--socket=" + cfg.Socket, "up"}
-	if cfg.AcceptDNS {
+	if cfg.AcceptDNS != nil && *cfg.AcceptDNS {
 		args = append(args, "--accept-dns=true")
 	} else {
 		args = append(args, "--accept-dns=false")
@@ -680,7 +680,7 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 // node is in Running state and only if TS_AUTH_ONCE is set.
 func tailscaleSet(ctx context.Context, cfg *settings) error {
 	args := []string{"--socket=" + cfg.Socket, "set"}
-	if cfg.AcceptDNS {
+	if cfg.AcceptDNS != nil && *cfg.AcceptDNS {
 		args = append(args, "--accept-dns=true")
 	} else {
 		args = append(args, "--accept-dns=false")
@@ -880,7 +880,7 @@ type settings struct {
 	InKubernetes       bool
 	UserspaceMode      bool
 	StateDir           string
-	AcceptDNS          bool
+	AcceptDNS          *bool
 	KubeSecret         string
 	SOCKSProxyAddr     string
 	HTTPProxyAddr      string
@@ -899,14 +899,26 @@ func defaultEnv(name, defVal string) string {
 	return defVal
 }
 
-// defaultEnvPointer returns a pointer to the given envvar value if set, else
+// defaultEnvStringPointer returns a pointer to the given envvar value if set, else
 // returns nil. This is useful in cases where we need to distinguish between a
 // variable being set to empty string vs unset.
-func defaultEnvPointer(name string) *string {
+func defaultEnvStringPointer(name string) *string {
 	if v, ok := os.LookupEnv(name); ok {
 		return &v
 	}
 	return nil
+}
+
+// defaultEnvBoolPointer returns a pointer to the given envvar value if set, else
+// returns nil. This is useful in cases where we need to distinguish between a
+// variable being explicitly set to false vs unset.
+func defaultEnvBoolPointer(name string) *bool {
+	v := os.Getenv(name)
+	ret, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil
+	}
+	return &ret
 }
 
 func defaultEnvs(names []string, defVal string) string {
