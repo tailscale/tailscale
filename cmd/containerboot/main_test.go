@@ -52,6 +52,12 @@ func TestContainerBoot(t *testing.T) {
 	}
 	defer kube.Close()
 
+	tailscaledConf := &ipn.ConfigVAlpha{AuthKey: func(s string) *string { return &s }("foo"), Version: "alpha0"}
+	tailscaledConfBytes, err := json.Marshal(tailscaledConf)
+	if err != nil {
+		t.Fatalf("error unmarshaling tailscaled config: %v", err)
+	}
+
 	dirs := []string{
 		"var/lib",
 		"usr/bin",
@@ -59,6 +65,7 @@ func TestContainerBoot(t *testing.T) {
 		"dev/net",
 		"proc/sys/net/ipv4",
 		"proc/sys/net/ipv6/conf/all",
+		"etc",
 	}
 	for _, path := range dirs {
 		if err := os.MkdirAll(filepath.Join(d, path), 0700); err != nil {
@@ -73,6 +80,7 @@ func TestContainerBoot(t *testing.T) {
 		"dev/net/tun":                           []byte(""),
 		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
 		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
+		"etc/tailscaled":                        tailscaledConfBytes,
 	}
 	resetFiles := func() {
 		for path, content := range files {
@@ -310,7 +318,7 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
-			Name: "ingres proxy",
+			Name: "ingress proxy",
 			Env: map[string]string{
 				"TS_AUTHKEY":   "tskey-key",
 				"TS_DEST_IP":   "1.2.3.4",
@@ -623,6 +631,21 @@ func TestContainerBoot(t *testing.T) {
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
 						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --hostname=my-server",
+					},
+				}, {
+					Notify: runningNotify,
+				},
+			},
+		},
+		{
+			Name: "experimental tailscaled configfile",
+			Env: map[string]string{
+				"EXPERIMENTAL_TS_CONFIGFILE_PATH": filepath.Join(d, "etc/tailscaled"),
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled",
 					},
 				}, {
 					Notify: runningNotify,
