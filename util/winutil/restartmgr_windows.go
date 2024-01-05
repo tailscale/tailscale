@@ -23,7 +23,12 @@ import (
 )
 
 var (
+	// ErrDefunctProcess is returned by (*UniqueProcess).AsRestartableProcess
+	// when the process no longer exists.
 	ErrDefunctProcess        = errors.New("process is defunct")
+	// ErrProcessNotRestartable is returned by (*UniqueProcess).AsRestartableProcess
+	// when the process has previously indicated that it must not be restarted
+	// during a patch/upgrade.
 	ErrProcessNotRestartable = errors.New("process is not restartable")
 )
 
