@@ -310,7 +310,7 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
-			Name: "ingres proxy",
+			Name: "ingress proxy",
 			Env: map[string]string{
 				"TS_AUTHKEY":   "tskey-key",
 				"TS_DEST_IP":   "1.2.3.4",
@@ -623,6 +623,22 @@ func TestContainerBoot(t *testing.T) {
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
 						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --hostname=my-server",
+					},
+				}, {
+					Notify: runningNotify,
+				},
+			},
+		},
+		{
+			Name: "experimental tailscaled configfile",
+			Env: map[string]string{
+				// TODO - create this file so we don't fail here
+				"TS_EXPERIMENTAL_CONFIGFILE_PATH": "/conf",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --config=/conf",
 					},
 				}, {
 					Notify: runningNotify,
