@@ -60,6 +60,7 @@ const (
 	podAnnotationLastSetHostname          = "tailscale.com/operator-last-set-hostname"
 	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
 	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
+	podAnnotationLastSetConfigFileHash    = "tailscale.com/operator-last-set-config-file-hash"
 )
 
 type tailscaleSTSConfig struct {
@@ -127,10 +128,11 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
 
-	secretName, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
+	secretName, key, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
+	sts.key = key
 	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
@@ -245,7 +247,7 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
-func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (string, error) {
+func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (string, string, error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			// Hardcode a -0 suffix so that in future, if we support
@@ -261,22 +263,23 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		logger.Debugf("secret %s/%s already exists", secret.GetNamespace(), secret.GetName())
 		orig = secret.DeepCopy()
 	} else if !apierrors.IsNotFound(err) {
-		return "", err
+		return "", "", err
 	}
 
+	var authKey string
 	if orig == nil {
 		// Secret doesn't exist yet, create one. Initially it contains
 		// only the Tailscale authkey, but once Tailscale starts it'll
 		// also store the daemon state.
 		sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, stsC.ChildResourceLabels)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if sts != nil {
 			// StatefulSet exists, so we have already created the secret.
 			// If the secret is missing, they should delete the StatefulSet.
 			logger.Errorf("Tailscale proxy secret doesn't exist, but the corresponding StatefulSet %s/%s already does. Something is wrong, please delete the StatefulSet.", sts.GetNamespace(), sts.GetName())
-			return "", nil
+			return "", "", nil
 		}
 		// Create API Key secret which is going to be used by the statefulset
 		// to authenticate with Tailscale.
@@ -287,31 +290,32 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		}
 		authKey, err := a.newAuthKey(ctx, tags)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 
 		mak.Set(&secret.StringData, "authkey", authKey)
+	} else {
+		authKey = string(orig.Data["authkey"])
 	}
 	if stsC.ServeConfig != nil {
 		j, err := json.Marshal(stsC.ServeConfig)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		mak.Set(&secret.StringData, "serve-config", string(j))
 	}
 	if orig != nil {
 		log.Printf("Patching existing secret %s", secret.Name)
 		if err := a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
-			return "", err
+			return "", "", err
 		}
 	} else {
 		if err := a.Create(ctx, secret); err != nil {
-			return "", err
+			return "", authKey, err
 		}
 		log.Printf("Created secret %s", secret.Name)
 	}
-	log.Printf("Created secret %s", secret.Name)
-	return secret.Name, nil
+	return secret.Name, authKey, nil
 }
 
 // DeviceInfo returns the device ID and hostname for the Tailscale device
@@ -396,6 +400,8 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_HOSTNAME",
 			Value: sts.Hostname,
 		})
+
+	var configFileHash string
 	if sts.ClusterTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEST_IP",
@@ -435,7 +441,11 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		})
 	} else if sts.Connector != nil {
 		// TODO: definitely not the right place for this
-		a.tsConfigCM(ctx, headlessSvc.Name, a.operatorNamespace, logger, sts)
+		var err error
+		configFileHash, err = a.tsConfigCM(ctx, headlessSvc.Name, a.operatorNamespace, logger, sts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create configmap: %w", err)
+		}
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_CONFIGFILE_PATH",
 			Value: "/tsconfig/tailscaled",
@@ -454,6 +464,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:      "configfile",
 			MountPath: "/tsconfig",
 		})
+		if sts.key != "" {
+
+		}
 		// We need to provide these env vars even if the values are empty to
 		// ensure that a transition from a Connector with a defined subnet
 		// router or exit node to one without succeeds.
@@ -499,6 +512,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	}
 	if sts.TailnetTargetFQDN != "" {
 		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetFQDN] = sts.TailnetTargetFQDN
+	}
+	if configFileHash != "" {
+		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetFQDN] = configFileHash
 	}
 	ss.Spec.Template.Labels = map[string]string{
 		"app": sts.ParentResourceUID,

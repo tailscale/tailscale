@@ -9,7 +9,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -41,6 +39,7 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 	"tailscale.com/version"
 )
 
@@ -56,13 +55,13 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	var (
-		tsNamespace       = defaultEnv("OPERATOR_NAMESPACE", "")
-		tslogging         = defaultEnv("OPERATOR_LOGGING", "info")
-		image             = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-		priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
-		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
-		tsFirewallMode    = defaultEnv("PROXY_FIREWALL_MODE", "")
-		tsEnableConnector = defaultBool("ENABLE_CONNECTOR", false)
+		// tsNamespace       = defaultEnv("OPERATOR_NAMESPACE", "")
+		tslogging = defaultEnv("OPERATOR_LOGGING", "info")
+		// image             = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		// priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
+		// tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
+		// tsFirewallMode    = defaultEnv("PROXY_FIREWALL_MODE", "")
+		// tsEnableConnector = defaultBool("ENABLE_CONNECTOR", false)
 	)
 
 	var opts []kzap.Opts
@@ -80,20 +79,22 @@ func main() {
 	// The operator can run either as a plain operator or it can
 	// additionally act as api-server proxy
 	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
-	mode := parseAPIProxyMode()
+	// mode := parseAPIProxyMode()
+	mode := apiserverProxyModeNoAuth
 	if mode == apiserverProxyModeDisabled {
 		hostinfo.SetApp("k8s-operator")
 	} else {
 		hostinfo.SetApp("k8s-operator-proxy")
 	}
 
-	s, tsClient := initTSNet(zlog)
+	s, _ := initTSNet(zlog)
 	defer s.Close()
-	restConfig := config.GetConfigOrDie()
+	restConfig := must.Get(config.GetConfigWithContext(""))
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
+	select {}
 	// TODO (irbekrm): gather the reconciler options into an opts struct
 	// rather than passing a million of them in one by one.
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tsEnableConnector)
+	// runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tsEnableConnector)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -101,31 +102,31 @@ func main() {
 // with Tailscale.
 func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	var (
-		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
-		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
-		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
-		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		// clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
+		// clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
+		hostname   = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
+		kubeSecret = defaultEnv("OPERATOR_SECRET", "")
+		// operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
 	)
 	startlog := zlog.Named("startup")
-	if clientIDPath == "" || clientSecretPath == "" {
-		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
-	}
-	clientID, err := os.ReadFile(clientIDPath)
-	if err != nil {
-		startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
-	}
-	clientSecret, err := os.ReadFile(clientSecretPath)
-	if err != nil {
-		startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
-	}
-	credentials := clientcredentials.Config{
-		ClientID:     string(clientID),
-		ClientSecret: string(clientSecret),
-		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
-	}
-	tsClient := tailscale.NewClient("-", nil)
-	tsClient.HTTPClient = credentials.Client(context.Background())
+	// if clientIDPath == "" || clientSecretPath == "" {
+	// 	startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
+	// }
+	// clientID, err := os.ReadFile(clientIDPath)
+	// if err != nil {
+	// 	startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+	// }
+	// clientSecret, err := os.ReadFile(clientSecretPath)
+	// if err != nil {
+	// 	startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
+	// }
+	// credentials := clientcredentials.Config{
+	// 	ClientID:     string(clientID),
+	// 	ClientSecret: string(clientSecret),
+	// 	TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
+	// }
+	// tsClient := tailscale.NewClient("-", nil)
+	// tsClient.HTTPClient = credentials.Client(context.Background())
 
 	s := &tsnet.Server{
 		Hostname: hostname,
@@ -163,21 +164,22 @@ waitOnline:
 			if loginDone {
 				break
 			}
-			caps := tailscale.KeyCapabilities{
-				Devices: tailscale.KeyDeviceCapabilities{
-					Create: tailscale.KeyDeviceCreateCapabilities{
-						Reusable:      false,
-						Preauthorized: true,
-						Tags:          strings.Split(operatorTags, ","),
-					},
-				},
-			}
-			authkey, _, err := tsClient.CreateKey(ctx, caps)
-			if err != nil {
-				startlog.Fatalf("creating operator authkey: %v", err)
-			}
+			// caps := tailscale.KeyCapabilities{
+			// 	Devices: tailscale.KeyDeviceCapabilities{
+			// 		Create: tailscale.KeyDeviceCreateCapabilities{
+			// 			Reusable:      false,
+			// 			Preauthorized: true,
+			// 			Tags:          strings.Split(operatorTags, ","),
+			// 		},
+			// 	},
+			// }
+			// authkey := ""
+			// authkey, _, err := tsClient.CreateKey(ctx, caps)
+			// if err != nil {
+			// 	startlog.Fatalf("creating operator authkey: %v", err)
+			// }
 			if err := lc.Start(ctx, ipn.Options{
-				AuthKey: authkey,
+				// AuthKey: authkey,
 			}); err != nil {
 				startlog.Fatalf("starting tailscale: %v", err)
 			}
@@ -196,7 +198,7 @@ waitOnline:
 		}
 		time.Sleep(time.Second)
 	}
-	return s, tsClient
+	return s, nil
 }
 
 // runReconcilers starts the controller-runtime manager and registers the
