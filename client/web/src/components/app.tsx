@@ -5,6 +5,7 @@ import React from "react"
 import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
+import DisconnectedView from "src/components/views/disconnected-view"
 import HomeView from "src/components/views/home-view"
 import LoginView from "src/components/views/login-view"
 import SSHView from "src/components/views/ssh-view"
@@ -74,9 +75,7 @@ function WebClient({
             />
           </FeatureRoute>
           <Route path="/disconnected">
-            <Card className="mt-8">
-              <EmptyState description="You have been disconnected" />
-            </Card>
+            <DisconnectedView />
           </Route>
           <Route>
             <Card className="mt-8">

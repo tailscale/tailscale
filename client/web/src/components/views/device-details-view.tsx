@@ -226,24 +226,22 @@ function DisconnectDialog() {
   return (
     <Dialog
       className="max-w-md"
-      title="Disconnect"
-      trigger={<Button sizeVariant="small">Disconnect…</Button>}
+      title="Log out"
+      trigger={<Button sizeVariant="small">Log out…</Button>}
     >
       <Dialog.Form
         cancelButton
-        submitButton="Disconnect"
+        submitButton="Log out"
         destructive
         onSubmit={() => {
           api({ action: "logout" })
           setLocation("/disconnected")
         }}
       >
-        You are about to disconnect this device from your tailnet. To reconnect,
-        you will be required to re-authenticate this device.
-        <p className="mt-4 text-sm text-text-muted">
-          Your connection to this web interface will end as soon as you click
-          disconnect.
-        </p>
+        Logging out of this device will disconnect it from your tailnet and
+        expire its node key. You won’t be able to use this web interface until
+        you re-authenticate the device from either the Tailscale app or the
+        Tailscale command line interface.
       </Dialog.Form>
     </Dialog>
   )
