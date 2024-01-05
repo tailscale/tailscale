@@ -14,6 +14,7 @@ import (
 	"net/url"
 
 	"tailscale.com/types/opt"
+	"tailscale.com/util/httpclient"
 )
 
 type GetDevicesResponse struct {
@@ -145,8 +146,7 @@ func (c *Client) Devices(ctx context.Context, fields *DeviceFieldsOpts) (deviceL
 		return nil, err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -184,8 +184,7 @@ func (c *Client) Device(ctx context.Context, deviceID string, fields *DeviceFiel
 		return nil, err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -214,8 +213,7 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) (err error) 
 		return err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return handleErrorResponse(b, resp)
 	}
 	return nil
@@ -246,8 +244,7 @@ func (c *Client) SetAuthorized(ctx context.Context, deviceID string, authorized 
 		return err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return handleErrorResponse(b, resp)
 	}
 
@@ -274,8 +271,7 @@ func (c *Client) SetTags(ctx context.Context, deviceID string, tags []string) er
 		return err
 	}
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return handleErrorResponse(b, resp)
 	}
 
