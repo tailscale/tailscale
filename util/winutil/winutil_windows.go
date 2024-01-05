@@ -367,6 +367,30 @@ func getTokenPrimaryGroupInfo(token windows.Token) (*windows.Tokenprimarygroup, 
 	return (*windows.Tokenprimarygroup)(unsafe.Pointer(&buf[0])), nil
 }
 
+type tokenElevationType int32
+
+const (
+	tokenElevationTypeDefault tokenElevationType = 1
+	tokenElevationTypeFull    tokenElevationType = 2
+	tokenElevationTypeLimited tokenElevationType = 3
+)
+
+func getTokenElevationType(token windows.Token) (result tokenElevationType, err error) {
+	var actualLen uint32
+	p := (*byte)(unsafe.Pointer(&result))
+	err = windows.GetTokenInformation(token, windows.TokenElevationType, p, uint32(unsafe.Sizeof(result)), &actualLen)
+	return result, err
+}
+
+// IsTokenLimited returns whether token is a limited UAC token.
+func IsTokenLimited(token windows.Token) (bool, error) {
+	elevationType, err := getTokenElevationType(token)
+	if err != nil {
+		return false, err
+	}
+	return elevationType == tokenElevationTypeLimited, nil
+}
+
 // UserSIDs contains the SIDs for a Windows NT token object's associated user
 // as well as its primary group.
 type UserSIDs struct {
