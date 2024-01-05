@@ -75,6 +75,9 @@ type NetworkMap struct {
 	DomainAuditLogID string
 
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
+
+	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
+	MaxKeyDuration time.Duration
 }
 
 // User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns

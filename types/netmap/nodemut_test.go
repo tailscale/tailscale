@@ -32,7 +32,7 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 			}
 			return reflect.ValueOf("foo").Convert(t)
 		case reflect.Int64:
-			return reflect.ValueOf(int64(1))
+			return reflect.ValueOf(int64(1)).Convert(t)
 		case reflect.Slice:
 			return reflect.MakeSlice(t, 1, 1)
 		case reflect.Ptr:

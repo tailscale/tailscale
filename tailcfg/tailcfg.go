@@ -125,7 +125,8 @@ type CapabilityVersion int
 //   - 82: 2023-12-01: Client understands NodeAttrLinuxMustUseIPTables, NodeAttrLinuxMustUseNfTables, c2n /netfilter-kind
 //   - 83: 2023-12-18: Client understands DefaultAutoUpdate
 //   - 84: 2024-01-04: Client understands SeamlessKeyRenewal
-const CurrentCapabilityVersion CapabilityVersion = 84
+//   - 85: 2024-01-05: Client understands MaxKeyDuration
+const CurrentCapabilityVersion CapabilityVersion = 85
 
 type StableID string
 
@@ -1886,6 +1887,10 @@ type MapResponse struct {
 	// auto-update setting doesn't change if the tailnet admin flips the
 	// default after the node registered.
 	DefaultAutoUpdate opt.Bool `json:",omitempty"`
+
+	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
+	// If zero, the value is unchanged.
+	MaxKeyDuration time.Duration `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available
