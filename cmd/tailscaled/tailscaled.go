@@ -511,7 +511,13 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			return ok
 		}
 		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			return ns.DialContextTCP(ctx, dst)
+			// Note: don't just return ns.DialContextTCP or we'll
+			// return an interface containing a nil pointer.
+			tcpConn, err := ns.DialContextTCP(ctx, dst)
+			if err != nil {
+				return nil, err
+			}
+			return tcpConn, nil
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
