@@ -151,6 +151,17 @@ type Handler struct {
 	// cert fetching access.
 	PermitCert bool
 
+	// CallerIsLocalAdmin is whether the this handler is being invoked as a
+	// result of a LocalAPI call from a user who is a local admin of the current
+	// machine.
+	//
+	// As of 2023-10-26 it is only populated on Windows.
+	//
+	// It can be used to to restrict some LocalAPI operations which should only
+	// be run by an admin and not unprivileged users in a computing environment
+	// managed by IT admins.
+	CallerIsLocalAdmin bool
+
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
@@ -832,6 +843,13 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(w, fmt.Errorf("decoding config: %w", err))
 			return
 		}
+		// require a local admin when setting a path handler
+		// TODO: roll-up this Windows-specific check into either PermitWrite
+		// or a global admin escalation check.
+		if shouldDenyServeConfigForGOOSAndUserContext(runtime.GOOS, configIn, h) {
+			http.Error(w, "must be a Windows local admin to serve a path", http.StatusUnauthorized)
+			return
+		}
 		if err := h.b.SetServeConfig(configIn); err != nil {
 			writeErrorJSON(w, fmt.Errorf("updating config: %w", err))
 			return
@@ -840,6 +858,16 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func shouldDenyServeConfigForGOOSAndUserContext(goos string, configIn *ipn.ServeConfig, h *Handler) bool {
+	if goos != "windows" {
+		return false
+	}
+	if !configIn.HasPathHandler() {
+		return false
+	}
+	return !h.CallerIsLocalAdmin
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {

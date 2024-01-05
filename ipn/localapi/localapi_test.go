@@ -13,6 +13,7 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/hostinfo"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tstest"
 )
@@ -75,5 +76,71 @@ func TestSetPushDeviceToken(t *testing.T) {
 	}
 	if got := hostinfo.New().PushDeviceToken; got != want {
 		t.Errorf("hostinfo.PushDeviceToken=%q, want %q", got, want)
+	}
+}
+
+func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		goos     string
+		configIn *ipn.ServeConfig
+		h        *Handler
+		want     bool
+	}{
+		{
+			name:     "linux",
+			goos:     "linux",
+			configIn: &ipn.ServeConfig{},
+			h:        &Handler{CallerIsLocalAdmin: false},
+			want:     false,
+		},
+		{
+			name: "windows-not-path-handler",
+			goos: "windows",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "http://127.0.0.1:3000"},
+					}},
+				},
+			},
+			h:    &Handler{CallerIsLocalAdmin: false},
+			want: false,
+		},
+		{
+			name: "windows-path-handler-admin",
+			goos: "windows",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:    &Handler{CallerIsLocalAdmin: true},
+			want: false,
+		},
+		{
+			name: "windows-path-handler-not-admin",
+			goos: "windows",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:    &Handler{CallerIsLocalAdmin: false},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldDenyServeConfigForGOOSAndUserContext(tt.goos, tt.configIn, tt.h)
+			if got != tt.want {
+				t.Errorf("shouldDenyServeConfigForGOOSAndUserContext() got = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
