@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/godbus/dbus/v5"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
@@ -31,8 +32,8 @@ func (kv kv) String() string {
 var publishOnce sync.Once
 
 var (
-	dnsMode      string
-	dnsModeMutex sync.RWMutex
+	globalDnsMode string
+	dnsModeMutex  sync.RWMutex
 )
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
@@ -437,12 +438,12 @@ func dbusReadString(name, objectPath, iface, member string) (string, error) {
 func setGlobalDnsMode(mode string) {
 	dnsModeMutex.Lock()
 	defer dnsModeMutex.Unlock()
-	dnsMode = mode
+	globalDnsMode = mode
 }
 
 // GetGlobalDnsMode safely returns the global DNS mode variable
 func GetGlobalDnsMode() string {
 	dnsModeMutex.RLock()
 	defer dnsModeMutex.RUnlock()
-	return dnsMode
+	return globalDnsMode
 }
