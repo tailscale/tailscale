@@ -169,7 +169,7 @@ func validFilenameRune(r rune) bool {
 		// sent.
 		return false
 	}
-	return unicode.IsPrint(r)
+	return unicode.IsGraphic(r)
 }
 
 func isPartialOrDeleted(s string) bool {

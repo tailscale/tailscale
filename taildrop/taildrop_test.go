@@ -55,6 +55,7 @@ func TestNextFilename(t *testing.T) {
 		{"my song.mp3", "my song (1).mp3", "my song (2).mp3"},
 		{"archive.7z", "archive (1).7z", "archive (2).7z"},
 		{"foo/bar/fizz", "foo/bar/fizz (1)", "foo/bar/fizz (2)"},
+		{"新完全マスター　N2　文法.pdf", "新完全マスター　N2　文法 (1).pdf", "新完全マスター　N2　文法 (2).pdf"},
 	}
 
 	for _, tt := range tests {
