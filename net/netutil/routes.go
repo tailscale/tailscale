@@ -29,11 +29,12 @@ func validateViaPrefix(ipp netip.Prefix) error {
 	// The first 64 bits of a are the via prefix.
 	// The next 32 bits are the "site ID".
 	// The last 32 bits are the IPv4.
-	// For now, we reserve the top 3 bytes of the site ID,
-	// and only allow users to use site IDs 0-255.
+	//
+	// We used to only allow advertising site IDs from 0-255, but we have
+	// since relaxed this (as of 2024-01) to allow IDs from 0-65535.
 	siteID := binary.BigEndian.Uint32(a[8:12])
-	if siteID > 0xFF {
-		return fmt.Errorf("route %v contains invalid site ID %08x; must be 0xff or less", ipp, siteID)
+	if siteID > 0xFFFF {
+		return fmt.Errorf("route %v contains invalid site ID %08x; must be 0xffff or less", ipp, siteID)
 	}
 	return nil
 }

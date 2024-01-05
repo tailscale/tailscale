@@ -693,8 +693,8 @@ func runVia(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("invalid site-id %q; must be decimal or hex with 0x prefix", args[0])
 		}
-		if siteID > 0xff {
-			return fmt.Errorf("site-id values over 255 are currently reserved")
+		if siteID > 0xffff {
+			return fmt.Errorf("site-id values over 65535 are currently reserved")
 		}
 		ipp, err := netip.ParsePrefix(args[1])
 		if err != nil {
