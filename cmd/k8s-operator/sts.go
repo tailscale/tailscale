@@ -442,7 +442,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	} else if sts.Connector != nil {
 		// TODO: definitely not the right place for this
 		var err error
-		configFileHash, err = a.tsConfigCM(ctx, headlessSvc.Name, a.operatorNamespace, logger, sts)
+		err = a.tsConfigCM(ctx, headlessSvc.Name, a.operatorNamespace, logger, sts)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create configmap: %w", err)
 		}
