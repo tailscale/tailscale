@@ -332,11 +332,13 @@ func run() (err error) {
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
 	if args.confFile != "" {
+		logf("loading config file")
 		conf, err = conffile.Load(args.confFile)
 		if err != nil {
 			return fmt.Errorf("error reading config file: %w", err)
 		}
 		sys.InitialConfig = conf
+		logf("loaded initial config: %#+v", string(sys.InitialConfig.Raw))
 	}
 
 	var netMon *netmon.Monitor

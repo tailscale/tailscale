@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -24,8 +25,10 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/net/netutil"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -196,6 +199,59 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 
 	_, err := a.ssr.Provision(ctx, logger, sts)
 	return err
+}
+
+func (a *tailscaleSTSReconciler) tsConfigCM(ctx context.Context, name, namespace string, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) error {
+	confFile, err := confFile(sts)
+	if err != nil {
+		return fmt.Errorf("error provisioning config: %v", err)
+	}
+
+	jsonBytes, err := json.Marshal(confFile)
+	if err != nil {
+		return fmt.Errorf("error marshaling config file: %v", err)
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels:    sts.ChildResourceLabels,
+		},
+		Data: map[string]string{
+			"tailscaled": string(jsonBytes),
+		},
+	}
+	_, err = createOrUpdate(ctx, a.Client, namespace, cm, func(config *corev1.ConfigMap) { config.Labels = cm.Labels; config.Data = cm.Data })
+	if err != nil {
+		return fmt.Errorf("error creating a ConfigMap: %v", err)
+	}
+	return nil
+}
+
+func confFile(sts *tailscaleSTSConfig) (*ipn.ConfigVAlpha, error) {
+	var (
+		routes []netip.Prefix
+		err    error
+	)
+	if sts.Connector != nil {
+		routes, err = netutil.CalcAdvertiseRoutes(sts.Connector.routes, sts.Connector.isExitNode)
+		if err != nil {
+			return nil, fmt.Errorf("error calculating routes: %v", err)
+		}
+	}
+	conf := &ipn.ConfigVAlpha{
+		Version:         "alpha0",
+		AdvertiseRoutes: routes,
+		AcceptDNS:       "false",
+		Hostname:        &sts.Hostname,
+		// Not sure how to log in if it's locked?
+		Locked: "false",
+	}
+	// fix - don't put the key there
+	if sts.key != "" {
+		conf.AuthKey = &sts.key
+	}
+	return conf, nil
 }
 
 func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) (bool, error) {

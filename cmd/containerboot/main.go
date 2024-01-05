@@ -106,7 +106,7 @@ func main() {
 		Hostname:          defaultEnv("TS_HOSTNAME", ""),
 		Routes:            defaultEnvPointer("TS_ROUTES"),
 		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
-		ConfigFilePath:    defaultEnv("TS_CONFIG_FILE_PATH", ""),
+		ConfigFilePath:    defaultEnv("TS_CONFIGFILE_PATH", ""),
 		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
 		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
 		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
@@ -294,13 +294,13 @@ authLoop:
 	ctx, cancel := contextWithExitSignalWatch()
 	defer cancel()
 
-	if cfg.AuthOnce {
-		// Now that we are authenticated, we can set/reset any of the
-		// settings that we need to.
-		if err := tailscaleSet(ctx, cfg); err != nil {
-			log.Fatalf("failed to auth tailscale: %v", err)
-		}
-	}
+	// if cfg.AuthOnce {
+	// 	// Now that we are authenticated, we can set/reset any of the
+	// 	// settings that we need to.
+	// 	// if err := tailscaleSet(ctx, cfg); err != nil {
+	// 	// 	log.Fatalf("failed to auth tailscale: %v", err)
+	// 	// }
+	// }
 
 	if cfg.ServeConfigPath != "" {
 		// Remove any serve config that may have been set by a previous run of
@@ -314,10 +314,10 @@ authLoop:
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
-		log.Printf("Deleting authkey from kube secret")
-		if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
-			log.Fatalf("deleting authkey from kube secret: %v", err)
-		}
+		// log.Printf("Deleting authkey from kube secret")
+		// if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
+		// 	log.Fatalf("deleting authkey from kube secret: %v", err)
+		// }
 	}
 
 	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
@@ -647,34 +647,40 @@ func tailscaledArgs(cfg *settings) []string {
 // tailscaleUp uses cfg to run 'tailscale up' everytime containerboot starts, or
 // if TS_AUTH_ONCE is set, only the first time containerboot starts.
 func tailscaleUp(ctx context.Context, cfg *settings) error {
-	args := []string{"--socket=" + cfg.Socket, "up"}
-	if cfg.AcceptDNS {
-		args = append(args, "--accept-dns=true")
-	} else {
-		args = append(args, "--accept-dns=false")
+	command := "up"
+	if cfg.ConfigFilePath != "" {
+		command = "login"
 	}
+	args := []string{"--socket=" + cfg.Socket, command}
 	if cfg.AuthKey != "" {
 		args = append(args, "--authkey="+cfg.AuthKey)
 	}
-	// --advertise-routes can be passed an empty string to configure a
-	// device (that might have previously advertised subnet routes) to not
-	// advertise any routes. Respect an empty string passed by a user and
-	// use it to explicitly unset the routes.
-	if cfg.Routes != nil {
-		args = append(args, "--advertise-routes="+*cfg.Routes)
+	if cfg.ConfigFilePath == "" {
+		if cfg.AcceptDNS {
+			args = append(args, "--accept-dns=true")
+		} else {
+			args = append(args, "--accept-dns=false")
+		}
+		// --advertise-routes can be passed an empty string to configure a
+		// device (that might have previously advertised subnet routes) to not
+		// advertise any routes. Respect an empty string passed by a user and
+		// use it to explicitly unset the routes.
+		if cfg.Routes != nil {
+			args = append(args, "--advertise-routes="+*cfg.Routes)
+		}
+		if cfg.Hostname != "" {
+			args = append(args, "--hostname="+cfg.Hostname)
+		}
+		if cfg.ExtraArgs != "" {
+			args = append(args, strings.Fields(cfg.ExtraArgs)...)
+		}
 	}
-	if cfg.Hostname != "" {
-		args = append(args, "--hostname="+cfg.Hostname)
-	}
-	if cfg.ExtraArgs != "" {
-		args = append(args, strings.Fields(cfg.ExtraArgs)...)
-	}
-	log.Printf("Running 'tailscale up'")
+	log.Printf("Running 'tailscale %s' with args %#+v", command, args)
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tailscale up failed: %v", err)
+		log.Printf("tailscale up with args %#+v failed: %v", args, err)
 	}
 	return nil
 }
@@ -682,32 +688,35 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 // tailscaleSet uses cfg to run 'tailscale set' to set any known configuration
 // options that are passed in via environment variables. This is run after the
 // node is in Running state and only if TS_AUTH_ONCE is set.
-func tailscaleSet(ctx context.Context, cfg *settings) error {
-	args := []string{"--socket=" + cfg.Socket, "set"}
-	if cfg.AcceptDNS {
-		args = append(args, "--accept-dns=true")
-	} else {
-		args = append(args, "--accept-dns=false")
-	}
-	// --advertise-routes can be passed an empty string to configure a
-	// device (that might have previously advertised subnet routes) to not
-	// advertise any routes. Respect an empty string passed by a user and
-	// use it to explicitly unset the routes.
-	if cfg.Routes != nil {
-		args = append(args, "--advertise-routes="+*cfg.Routes)
-	}
-	if cfg.Hostname != "" {
-		args = append(args, "--hostname="+cfg.Hostname)
-	}
-	log.Printf("Running 'tailscale set'")
-	cmd := exec.CommandContext(ctx, "tailscale", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tailscale set failed: %v", err)
-	}
-	return nil
-}
+// func tailscaleSet(ctx context.Context, cfg *settings) error {
+// 	args := []string{"--socket=" + cfg.Socket, "set"}
+// 	// TODO: fix
+// 	if cfg.ConfigFilePath == "" {
+// 		if cfg.AcceptDNS {
+// 			args = append(args, "--accept-dns=true")
+// 		} else {
+// 			args = append(args, "--accept-dns=false")
+// 		}
+// 		// --advertise-routes can be passed an empty string to configure a
+// 		// device (that might have previously advertised subnet routes) to not
+// 		// advertise any routes. Respect an empty string passed by a user and
+// 		// use it to explicitly unset the routes.
+// 		if cfg.Routes != nil {
+// 			args = append(args, "--advertise-routes="+*cfg.Routes)
+// 		}
+// 		if cfg.Hostname != "" {
+// 			args = append(args, "--hostname="+cfg.Hostname)
+// 		}
+// 	}
+// 	log.Printf("Running 'tailscale set'")
+// 	cmd := exec.CommandContext(ctx, "tailscale", args...)
+// 	cmd.Stdout = os.Stdout
+// 	cmd.Stderr = os.Stderr
+// 	if err := cmd.Run(); err != nil {
+// 		return fmt.Errorf("tailscale set failed: %v", err)
+// 	}
+// 	return nil
+// }
 
 // ensureTunFile checks that /dev/net/tun exists, creating it if
 // missing.

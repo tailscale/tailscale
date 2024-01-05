@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -26,7 +27,6 @@ import (
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
-	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/opt"
@@ -83,6 +83,9 @@ type tailscaleSTSConfig struct {
 	// Connector specifies a configuration of a Connector instance if that's
 	// what this StatefulSet should be created for.
 	Connector *connector
+
+	// temp fix whilst prototyping, remove
+	key string
 }
 
 type connector struct {
@@ -297,6 +300,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		mak.Set(&secret.StringData, "serve-config", string(j))
 	}
 	if orig != nil {
+		log.Printf("Patching existing secret %s", secret.Name)
 		if err := a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
 			return "", err
 		}
@@ -304,7 +308,9 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		if err := a.Create(ctx, secret); err != nil {
 			return "", err
 		}
+		log.Printf("Created secret %s", secret.Name)
 	}
+	log.Printf("Created secret %s", secret.Name)
 	return secret.Name, nil
 }
 
@@ -428,17 +434,37 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			},
 		})
 	} else if sts.Connector != nil {
+		// TODO: definitely not the right place for this
+		a.tsConfigCM(ctx, headlessSvc.Name, a.operatorNamespace, logger, sts)
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_CONFIGFILE_PATH",
+			Value: "/tsconfig/tailscaled",
+		})
+		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: "configfile",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: headlessSvc.Name,
+					},
+				},
+			},
+		})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "configfile",
+			MountPath: "/tsconfig",
+		})
 		// We need to provide these env vars even if the values are empty to
 		// ensure that a transition from a Connector with a defined subnet
 		// router or exit node to one without succeeds.
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_EXTRA_ARGS",
-			Value: fmt.Sprintf("--advertise-exit-node=%v", sts.Connector.isExitNode),
-		})
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_ROUTES",
-			Value: sts.Connector.routes,
-		})
+		// container.Env = append(container.Env, corev1.EnvVar{
+		// 	Name:  "TS_EXTRA_ARGS",
+		// 	Value: fmt.Sprintf("--advertise-exit-node=%v", sts.Connector.isExitNode),
+		// })
+		// container.Env = append(container.Env, corev1.EnvVar{
+		// 	Name:  "TS_ROUTES",
+		// 	Value: sts.Connector.routes,
+		// })
 	}
 	if a.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
@@ -480,16 +506,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
-}
-
-func confFile(sts *tailscaleSTSConfig) (*ipn.ConfigVAlpha, error) {
-	if sts.connector != nil {}
-	routes, err := netutil.CalcAdvertiseRoutes(sts., advertiseDefaultRoute)
-
-	return &ipn.ConfigVAlpha{
-		Hostname: &sts.Hostname,
-	}, nil
-
 }
 
 // ptrObject is a type constraint for pointer types that implement

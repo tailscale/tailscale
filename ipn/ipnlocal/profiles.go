@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"runtime"
 	"slices"
@@ -209,9 +210,11 @@ func init() {
 // is logged into so that we can keep track of things like their domain name
 // across user switches to disambiguate the same account but a different tailnet.
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile) error {
+	log.Printf("set prefs")
 	prefs := prefsIn.AsStruct()
 	newPersist := prefs.Persist
 	if newPersist == nil || newPersist.NodeID == "" || newPersist.UserProfile.LoginName == "" {
+		log.Printf("prefs: ignore profile")
 		// We don't know anything about this profile, so ignore it for now.
 		return pm.setPrefsLocked(prefs.View())
 	}
@@ -220,6 +223,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 		up.DisplayName = up.LoginName
 	}
 	cp := pm.currentProfile
+	log.Printf("current profile: %v", cp.UserProfile)
 	// Check if we already have an existing profile that matches the user/node.
 	if existing := pm.findMatchingProfiles(prefs); len(existing) > 0 {
 		// We already have a profile for this user/node we should reuse it. Also
@@ -256,12 +260,15 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 	pm.knownProfiles[cp.ID] = cp
 	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {
+		log.Printf("error writing known profiles")
 		return err
 	}
 	if err := pm.setAsUserSelectedProfileLocked(); err != nil {
+		log.Printf("error locking profile")
 		return err
 	}
 	if err := pm.setPrefsLocked(prefs.View()); err != nil {
+		log.Printf("error viewing prefs")
 		return err
 	}
 	return nil

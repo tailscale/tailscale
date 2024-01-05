@@ -341,6 +341,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	if sys.InitialConfig != nil {
+		log.Printf("Found initial config")
 		p := pm.CurrentPrefs().AsStruct()
 		mp, err := sys.InitialConfig.Parsed.ToPrefs()
 		if err != nil {
