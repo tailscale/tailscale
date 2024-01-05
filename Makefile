@@ -18,7 +18,8 @@ updatedeps: ## Update depaware deps
 	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
-		tailscale.com/cmd/derper
+		tailscale.com/cmd/derper \
+		tailscale.com/cmd/stund
 
 depaware: ## Run depaware checks
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
@@ -26,7 +27,8 @@ depaware: ## Run depaware checks
 	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
-		tailscale.com/cmd/derper
+		tailscale.com/cmd/derper \
+		tailscale.com/cmd/stund
 
 buildwindows: ## Build tailscale CLI for windows/amd64
 	GOOS=windows GOARCH=amd64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
