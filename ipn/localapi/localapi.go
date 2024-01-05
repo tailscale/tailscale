@@ -80,6 +80,7 @@ var handler = map[string]localAPIHandler{
 	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
 	"debug":                       (*Handler).serveDebug,
 	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
+	"debug-dial-types":            (*Handler).serveDebugDialTypes,
 	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
 	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
 	"debug-portmap":               (*Handler).serveDebugPortmap,
@@ -838,6 +839,76 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+
+func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug-dial-types access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ip := r.FormValue("ip")
+	port := r.FormValue("port")
+	network := r.FormValue("network")
+
+	addr := ip + ":" + port
+	if _, err := netip.ParseAddrPort(addr); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "invalid address %q: %v", addr, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	var bareDialer net.Dialer
+
+	dialer := h.b.Dialer()
+
+	var peerDialer net.Dialer
+	peerDialer.Control = dialer.PeerDialControlFunc()
+
+	// Kick off a dial with each available dialer in parallel.
+	dialers := []struct {
+		name string
+		dial func(context.Context, string, string) (net.Conn, error)
+	}{
+		{"SystemDial", dialer.SystemDial},
+		{"UserDial", dialer.UserDial},
+		{"PeerDial", peerDialer.DialContext},
+		{"BareDial", bareDialer.DialContext},
+	}
+	type result struct {
+		name string
+		conn net.Conn
+		err  error
+	}
+	results := make(chan result, len(dialers))
+
+	var wg sync.WaitGroup
+	for _, dialer := range dialers {
+		dialer := dialer // loop capture
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := dialer.dial(ctx, network, addr)
+			results <- result{dialer.name, conn, err}
+		}()
+	}
+
+	wg.Wait()
+	for i := 0; i < len(dialers); i++ {
+		res := <-results
+		fmt.Fprintf(w, "[%s] connected=%v err=%v\n", res.name, res.conn != nil, res.err)
+		if res.conn != nil {
+			res.conn.Close()
+		}
+	}
 }
 
 // servePprofFunc is the implementation of Handler.servePprof, after auth,
