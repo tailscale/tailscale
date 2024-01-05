@@ -1044,7 +1044,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 		var resp tailcfg.MapResponse
 		if err := c.decodeMsg(msg, &resp, machinePrivKey); err != nil {
-			vlogf("netmap: decode error: %v")
+			vlogf("netmap: decode error: %v", err)
 			return err
 		}
 		watchdogTimer.Stop()
