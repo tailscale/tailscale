@@ -1,0 +1,24 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    - cron: '0 22 * * *' # 设置为每天22:00 UTC时间运行
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0 # 获取所有分支历史
+
+    - name: Sync with Upstream
+      uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+      with:
+        upstream_sync_repo: tailscale/tailscale
+        upstream_sync_branch: main
+        target_sync_branch: main
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        exclude_files: 'Dockerfile|.github/workflows/dockerbuild.yml|.github/workflows/sync-with-upstream.yml'
