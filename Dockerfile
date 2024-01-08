@@ -66,7 +66,7 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
-ARG BASE_CONTAINER="ubuntu:22.04"
+ARG BASE_CONTAINER
 FROM $BASE_CONTAINER
 RUN apt-get update && apt-get install -y ca-certificates iptables iproute2 && rm -rf /var/lib/apt/lists/*
 
