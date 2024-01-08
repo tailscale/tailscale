@@ -20,5 +20,4 @@ jobs:
         upstream_sync_repo: tailscale/tailscale
         upstream_sync_branch: main
         target_sync_branch: main
-        github_token: ${{ secrets.GITHUB_TOKEN }}
         exclude_files: 'Dockerfile|.github/workflows/dockerbuild.yml|.github/workflows/sync-with-upstream.yml'
