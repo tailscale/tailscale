@@ -54,7 +54,7 @@ type ConnectorSpec struct {
 	// To autoapprove the subnet routes or exit node defined by a Connector,
 	// you can configure Tailscale ACLs to give these tags the necessary
 	// permissions.
-	// See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes
+	// See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes.
 	// If you specify custom tags here, you must also make the operator an owner of these tags.
 	// See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
 	// Tags cannot be changed once a Connector node has been created.
@@ -62,7 +62,7 @@ type ConnectorSpec struct {
 	// +optional
 	Tags Tags `json:"tags,omitempty"`
 	// Hostname is the tailnet hostname that should be assigned to the
-	// Connector node. If unset, hostname is defaulted to <connector
+	// Connector node. If unset, hostname defaults to <connector
 	// name>-connector. Hostname can contain lower case letters, numbers and
 	// dashes, it must not start or end with a dash and must be between 2
 	// and 63 characters long.
@@ -73,7 +73,7 @@ type ConnectorSpec struct {
 	// https://tailscale.com/kb/1019/subnets/
 	// +optional
 	SubnetRouter *SubnetRouter `json:"subnetRouter"`
-	// IsExitNode defines whether the Connector node should act as a
+	// ExitNode defines whether the Connector node should act as a
 	// Tailscale exit node. Defaults to false.
 	// https://tailscale.com/kb/1103/exit-nodes
 	// +optional
@@ -83,7 +83,7 @@ type ConnectorSpec struct {
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a
 // Connector node.
 type SubnetRouter struct {
-	// AdvertiseRoutes refer to in-cluster CIDRs that the subnet router should make
+	// AdvertiseRoutes refer to CIDRs that the subnet router should make
 	// available. Route values must be strings that represent a valid IPv4
 	// or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes.
 	// https://tailscale.com/kb/1201/4via6-subnets/
@@ -104,6 +104,9 @@ func (tags Tags) Stringify() []string {
 type Routes []Route
 
 func (routes Routes) Stringify() string {
+	if len(routes) < 1 {
+		return ""
+	}
 	var sb strings.Builder
 	sb.WriteString(string(routes[0]))
 	for _, r := range routes[1:] {

@@ -56,13 +56,16 @@ const (
 	AnnotationFunnel = "tailscale.com/funnel"
 
 	// Annotations set by the operator on pods to trigger restarts when the
-	// hostname, IP or FQDN changes.
+	// hostname, IP, FQDN or tailscaled config changes.
 	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
 	podAnnotationLastSetHostname          = "tailscale.com/operator-last-set-hostname"
 	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
 	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
-	podAnnotationLastSetConfigFileHash    = "tailscale.com/operator-last-set-config-file-hash"
+	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
+	podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
 
+	// tailscaledConfigKey is the name of the key in proxy Secret Data that
+	// holds the tailscaled config contents.
 	tailscaledConfigKey = "tailscaled"
 )
 
@@ -264,8 +267,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	}
 
 	var (
-		authKey, hash                  string
-		declarativeContainerBootConfig = stsC.Connector != nil
+		authKey, hash string
 	)
 	if orig == nil {
 		// Secret doesn't exist yet, create one. Initially it contains
@@ -293,51 +295,15 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			return "", "", err
 		}
 	}
-	if !declarativeContainerBootConfig && authKey != "" {
+	if !shouldDoTailscaledDeclarativeConfig(stsC) && authKey != "" {
 		mak.Set(&secret.StringData, "authkey", authKey)
 	}
-	if declarativeContainerBootConfig {
-		conf := ipn.ConfigVAlpha{
-			Version:   "alpha0",
-			AcceptDNS: "false",
-			Locked:    "false",
-			Hostname:  &stsC.Hostname,
-		}
-		if stsC.Connector != nil {
-			routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
-			if err != nil {
-				return "", "", fmt.Errorf("error calculating routes: %w", err)
-			}
-			conf.AdvertiseRoutes = routes
-		}
-		if authKey != "" {
-			conf.AuthKey = &authKey
-		} else if orig != nil && len(orig.Data[tailscaledConfigKey]) > 0 { // write to StringData, read from Data as StringData is write-only
-			origConf := &ipn.ConfigVAlpha{}
-			if err := json.Unmarshal([]byte(orig.Data[tailscaledConfigKey]), origConf); err != nil {
-				return "", "", fmt.Errorf("error unmarshaling previous tailscaled config: %w", err)
-			}
-			conf.AuthKey = origConf.AuthKey
-		}
-		confFileBytes, err := json.Marshal(conf)
+	if shouldDoTailscaledDeclarativeConfig(stsC) {
+		confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig)
 		if err != nil {
-			return "", "", fmt.Errorf("error marshaling tailscaled config : %w", err)
+			return "", "", fmt.Errorf("error creating tailscaled config: %w", err)
 		}
-		// We do not use the tailscale.com/deephash.Hash here because
-		// that produces a different hash for the same value in
-		// different tailscale builds. The hash we are producing here is
-		// used to determine if the container running the Connector
-		// Tailscale node needs to be restarted. The container does not
-		// need restarting when the only thing that changed is operator
-		// version (the hash is also exposed to users via an annotation
-		// and might be confusing if it changes without the config
-		// having changed).
-		h := sha256.New()
-		_, err = h.Write(confFileBytes)
-		if err != nil {
-			return "", "", fmt.Errorf("error producing a configfile hash: %w", err)
-		}
-		hash = fmt.Sprintf("%x", h.Sum(nil))
+		hash = h
 		mak.Set(&secret.StringData, tailscaledConfigKey, string(confFileBytes))
 	}
 	if stsC.ServeConfig != nil {
@@ -414,11 +380,8 @@ var proxyYaml []byte
 //go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
-func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, stateSecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
-	var (
-		ss                             appsv1.StatefulSet
-		declarativeContainerBootConfig = sts.Connector != nil
-	)
+func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
+	var ss appsv1.StatefulSet
 	if sts.ServeConfig != nil {
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -454,10 +417,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	container.Env = append(container.Env,
 		corev1.EnvVar{
 			Name:  "TS_KUBE_SECRET",
-			Value: stateSecret,
+			Value: proxySecret,
 		},
 	)
-	if !declarativeContainerBootConfig {
+	if !shouldDoTailscaledDeclarativeConfig(sts) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_HOSTNAME",
 			Value: sts.Hostname,
@@ -469,13 +432,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetHostname, sts.Hostname)
 	}
 	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
-	if declarativeContainerBootConfig {
+	if shouldDoTailscaledDeclarativeConfig(sts) {
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
 		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: "tailscaledconfig",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: stateSecret,
+					SecretName: proxySecret,
 					Items: []corev1.KeyToPath{{
 						Key:  tailscaledConfigKey,
 						Path: tailscaledConfigKey,
@@ -535,7 +498,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name: "serve-config",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: stateSecret,
+					SecretName: proxySecret,
 					Items: []corev1.KeyToPath{{
 						Key:  "serve-config",
 						Path: "serve-config",
@@ -548,11 +511,66 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
 }
 
+// tailscaledConfig takes a proxy config, a newly generated auth key if
+// generated and a Secret with the previous proxy state and auth key and
+// produces returns tailscaled configuration and a hash of that configuration.
+func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) ([]byte, string, error) {
+	conf := ipn.ConfigVAlpha{
+		Version:   "alpha0",
+		AcceptDNS: "false",
+		Locked:    "false",
+		Hostname:  &stsC.Hostname,
+	}
+	if stsC.Connector != nil {
+		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
+		if err != nil {
+			return nil, "", fmt.Errorf("error calculating routes: %w", err)
+		}
+		conf.AdvertiseRoutes = routes
+	}
+	if newAuthkey != "" {
+		conf.AuthKey = &newAuthkey
+	} else if oldSecret != nil && len(oldSecret.Data[tailscaledConfigKey]) > 0 { // write to StringData, read from Data as StringData is write-only
+		origConf := &ipn.ConfigVAlpha{}
+		if err := json.Unmarshal([]byte(oldSecret.Data[tailscaledConfigKey]), origConf); err != nil {
+			return nil, "", fmt.Errorf("error unmarshaling previous tailscaled config: %w", err)
+		}
+		conf.AuthKey = origConf.AuthKey
+	}
+	confFileBytes, err := json.Marshal(conf)
+	if err != nil {
+		return nil, "", fmt.Errorf("error marshaling tailscaled config : %w", err)
+	}
+	hash, err := hashBytes(confFileBytes)
+	if err != nil {
+		return nil, "", fmt.Errorf("error calculating config hash: %w", err)
+	}
+	return confFileBytes, hash, nil
+}
+
 // ptrObject is a type constraint for pointer types that implement
 // client.Object.
 type ptrObject[T any] interface {
 	client.Object
 	*T
+}
+
+// hashBytes produces a hash for the provided bytes that is the same across
+// different invocations of this code. We do not use the
+// tailscale.com/deephash.Hash here because that produces a different hash for
+// the same value in different tailscale builds. The hash we are producing here
+// is used to determine if the container running the Connector Tailscale node
+// needs to be restarted. The container does not need restarting when the only
+// thing that changed is operator version (the hash is also exposed to users via
+// an annotation and might be confusing if it changes without the config having
+// changed).
+func hashBytes(b []byte) (string, error) {
+	h := sha256.New()
+	_, err := h.Write(b)
+	if err != nil {
+		return "", fmt.Errorf("error calculating hash: %w", err)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // createOrUpdate adds obj to the k8s cluster, unless the object already exists,
@@ -657,4 +675,11 @@ func nameForService(svc *corev1.Service) (string, error) {
 
 func isValidFirewallMode(m string) bool {
 	return m == "auto" || m == "nftables" || m == "iptables"
+}
+
+// shouldDoTailscaledDeclarativeConfig determines whether the proxy instance
+// should be configured to run tailscaled only with a all config opts passed to
+// tailscaled.
+func shouldDoTailscaledDeclarativeConfig(stsC *tailscaleSTSConfig) bool {
+	return stsC.Connector != nil
 }

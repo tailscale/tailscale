@@ -39,9 +39,8 @@ const (
 	reasonConnectorCleanupInProgress = "ConnectorCleanupInProgress"
 	reasonConnectorInvalid           = "ConnectorInvalid"
 
-	messageConnectorCreationFailed   = "Failed creating Connector: %v"
-	messageConnectorInvalid          = "Connector is invalid: %v"
-	messageSubnetRouterCleanupFailed = "Failed cleaning up Connector resources: %v"
+	messageConnectorCreationFailed = "Failed creating Connector: %v"
+	messageConnectorInvalid        = "Connector is invalid: %v"
 
 	shortRequeue = time.Second * 5
 )
@@ -59,15 +58,20 @@ type ConnectorReconciler struct {
 
 	mu sync.Mutex // protects following
 
-	connectors set.Slice[types.UID] // for connectors gauge
+	subnetRouters set.Slice[types.UID] // for subnet routers gauge
+	exitNodes     set.Slice[types.UID] // for exit nodes gauge
 }
 
 var (
-	// gaugeConnectorResources tracks the number of Connectors currently managed by this operator instance
+	// gaugeConnectorResources tracks the overall number of Connectors currently managed by this operator instance.
 	gaugeConnectorResources = clientmetric.NewGauge("k8s_connector_resources")
+	// gaugeConnectorSubnetRouterResources tracks the number of Connectors managed by this operator instance that are subnet routers.
+	gaugeConnectorSubnetRouterResources = clientmetric.NewGauge("k8s_connector_subnetrouter_resources")
+	// gaugeConnectorExitNodeResources tracks the number of Connectors currently managed by this operator instance that are exit nodes.
+	gaugeConnectorExitNodeResources = clientmetric.NewGauge("k8s_connector_exitnode_resources")
 )
 
-func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
+func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	logger := a.logger.With("Connector", req.Name)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
@@ -103,21 +107,17 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		return reconcile.Result{}, nil
 	}
 
-	var (
-		reason, message string
-		readyStatus     metav1.ConditionStatus
-	)
-
 	oldCnStatus := cn.Status.DeepCopy()
-	defer func() {
-		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, readyStatus, reason, message, cn.Generation, a.clock, logger)
+	setStatus := func(cn *tsapi.Connector, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, status, reason, message, cn.Generation, a.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, cn.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := a.Client.Status().Update(ctx, cn); updateErr != nil {
-				err = updateErr
+				err = errors.Wrap(err, updateErr.Error())
 			}
 		}
-	}()
+		return res, err
+	}
 
 	if !slices.Contains(cn.Finalizers, FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
@@ -127,43 +127,33 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		logger.Infof("ensuring Connector is set up")
 		cn.Finalizers = append(cn.Finalizers, FinalizerName)
 		if err := a.Update(ctx, cn); err != nil {
-			err = fmt.Errorf("failed to add finalizer: %w", err)
-			logger.Errorf("error adding finalizer: %v", err)
-			reason = reasonConnectorCreationFailed
-			message = fmt.Sprintf(messageConnectorCreationFailed, err)
-			readyStatus = metav1.ConditionFalse
-			return reconcile.Result{}, err
+			logger.Errorf("error adding finalizer: %w", err)
+			return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorCreationFailed, reasonConnectorCreationFailed)
 		}
 	}
 
 	if err := a.validate(cn); err != nil {
 		logger.Errorf("error validating Connector spec: %w", err)
-		reason = reasonConnectorInvalid
-		message = fmt.Sprintf(messageConnectorInvalid, err)
-		readyStatus = metav1.ConditionFalse
+		message := fmt.Sprintf(messageConnectorInvalid, err)
 		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
-		return reconcile.Result{}, nil
+		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorInvalid, message)
 	}
 
 	if err = a.maybeProvisionConnector(ctx, logger, cn); err != nil {
 		logger.Errorf("error creating Connector resources: %w", err)
-		reason = reasonConnectorCreationFailed
-		message = fmt.Sprintf(messageConnectorCreationFailed, err)
-		readyStatus = metav1.ConditionFalse
-		a.recorder.Eventf(cn, corev1.EventTypeWarning, reason, message)
-	} else {
-		logger.Info("Connector resources synced")
-		reason = reasonConnectorCreated
-		message = reasonConnectorCreated
-		readyStatus = metav1.ConditionTrue
-		cn.Status.IsExitNode = cn.Spec.ExitNode
-		if cn.Spec.SubnetRouter != nil {
-			cn.Status.SubnetRoutes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
-		} else {
-			cn.Status.SubnetRoutes = ""
-		}
+		message := fmt.Sprintf(messageConnectorCreationFailed, err)
+		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorCreationFailed, message)
+		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorCreationFailed, message)
 	}
-	return reconcile.Result{}, err
+
+	logger.Info("Connector resources synced")
+	cn.Status.IsExitNode = cn.Spec.ExitNode
+	if cn.Spec.SubnetRouter != nil {
+		cn.Status.SubnetRoutes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
+		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionTrue, reasonConnectorCreated, reasonConnectorCreated)
+	}
+	cn.Status.SubnetRoutes = ""
+	return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionTrue, reasonConnectorCreated, reasonConnectorCreated)
 }
 
 // maybeProvisionConnector ensures that any new resources required for this
@@ -190,9 +180,23 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	}
 
 	a.mu.Lock()
-	a.connectors.Add(cn.UID)
-	gaugeConnectorResources.Set(int64(a.connectors.Len()))
+	if sts.Connector.isExitNode {
+		a.exitNodes.Add(cn.UID)
+	} else {
+		a.exitNodes.Remove(cn.UID)
+	}
+	if sts.Connector.routes != "" {
+		a.subnetRouters.Add(cn.GetUID())
+	} else {
+		a.subnetRouters.Remove(cn.GetUID())
+	}
 	a.mu.Unlock()
+	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
+	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
+	var connectors set.Slice[types.UID]
+	connectors.AddSlice(a.exitNodes.Slice())
+	connectors.AddSlice(a.subnetRouters.Slice())
+	gaugeConnectorResources.Set(int64(connectors.Len()))
 
 	_, err := a.ssr.Provision(ctx, logger, sts)
 	return err
@@ -212,9 +216,15 @@ func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger 
 	// reconciles exit early.
 	logger.Infof("cleaned up Connector resources")
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.connectors.Remove(cn.UID)
-	gaugeConnectorResources.Set(int64(a.connectors.Len()))
+	a.subnetRouters.Remove(cn.UID)
+	a.exitNodes.Remove(cn.UID)
+	a.mu.Unlock()
+	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
+	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
+	var connectors set.Slice[types.UID]
+	connectors.AddSlice(a.exitNodes.Slice())
+	connectors.AddSlice(a.subnetRouters.Slice())
+	gaugeConnectorResources.Set(int64(connectors.Len()))
 	return true, nil
 }
 
@@ -223,7 +233,7 @@ func (a *ConnectorReconciler) validate(cn *tsapi.Connector) error {
 	// on custom resource fields. The checks here are a backup in case the
 	// CEL validation breaks without us noticing.
 	if !(cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode) {
-		return errors.New("invalid Connector spec- a Connector must be either expose subnet routes or act as exit node (or both)")
+		return errors.New("invalid spec: a Connector must expose subnet routes or act as an exit node (or both)")
 	}
 	if cn.Spec.SubnetRouter == nil {
 		return nil
