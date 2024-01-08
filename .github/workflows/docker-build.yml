@@ -1,0 +1,38 @@
+name: CI to Docker Hub
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      base_container:
+        description: 'Base container image (e.g., ubuntu:22.04)'
+        required: true
+        default: 'ubuntu:22.04'
+  schedule:
+    - cron: '0 0 * * *' # 每天 UTC 时间 0 点运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        base_container: ['ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'debian:11', 'debian:12']
+    steps:
+    - name: Check out the repo
+      uses: actions/checkout@v2
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: hotwa/tailscale:${{ matrix.base_container }}
+        build-args: BASE_CONTAINER=${{ matrix.base_container }}

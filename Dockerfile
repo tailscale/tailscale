@@ -66,8 +66,9 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
-FROM alpine:3.18
-RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
+ARG BASE_CONTAINER="ubuntu:22.04"
+FROM $BASE_CONTAINER
+RUN apt-get update && apt-get install -y ca-certificates iptables iproute2 && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 # For compat with the previous run.sh, although ideally you should be
