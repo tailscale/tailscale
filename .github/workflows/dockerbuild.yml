@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        base_images: ['ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'debian:11', 'debian:12']
+        base_images: ['ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'debian:10', 'debian:11', 'debian:12']
     steps:
     - name: Check out the repo
       uses: actions/checkout@v4
