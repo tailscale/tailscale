@@ -37,8 +37,6 @@ var (
 
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
-
-	magicDNSv4Port = netip.MustParseAddrPort("100.100.100.100:53")
 )
 
 var dnsCfg = Config{

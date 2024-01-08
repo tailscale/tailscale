@@ -53,8 +53,12 @@ var (
 	// discovery on UDP connections between peers. Currently (2023-09-05)
 	// this only turns on the don't fragment bit for the magicsock UDP
 	// sockets.
+	//
+	//lint:ignore U1000 used on Linux/Darwin only
 	debugEnablePMTUD = envknob.RegisterOptBool("TS_DEBUG_ENABLE_PMTUD")
 	// debugPMTUD prints extra debugging about peer MTU path discovery.
+	//
+	//lint:ignore U1000 used on Linux/Darwin only
 	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the
 	// debugknobs_stubs.go file too.

@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -264,7 +265,6 @@ func TestPeerRoutes(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestPeerAPIBase(t *testing.T) {
@@ -699,7 +699,6 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestStatusWithoutPeers(t *testing.T) {
@@ -1167,6 +1166,26 @@ func TestRouteAdvertiser(t *testing.T) {
 	must.Do(ra.AdvertiseRoute(testPrefix))
 
 	routes := b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+}
+
+func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
+	b := newTestBackend(t)
+	testPrefix := netip.MustParsePrefix("192.0.0.0/24")
+	ra := appc.RouteAdvertiser(b)
+	must.Do(ra.AdvertiseRoute(testPrefix))
+
+	routes := b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+
+	must.Do(ra.AdvertiseRoute(netip.MustParsePrefix("192.0.0.8/32")))
+
+	// the above /32 is not added as it is contained within the /24
+	routes = b.Prefs().AdvertiseRoutes()
 	if routes.Len() != 1 || routes.At(0) != testPrefix {
 		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
 	}
@@ -1780,13 +1799,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
+					Apply: opt.NewBool(false),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantAnyChange: true,
@@ -1799,13 +1818,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
+					Apply: opt.NewBool(false),
 				},
 			},
 			wantAnyChange: true,
@@ -1818,13 +1837,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: false,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantAnyChange: true,
@@ -1837,13 +1856,13 @@ func TestApplySysPolicy(t *testing.T) {
 			prefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantPrefs: ipn.Prefs{
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: false,
-					Apply: true,
+					Apply: opt.NewBool(true),
 				},
 			},
 			wantAnyChange: true,
@@ -1885,7 +1904,6 @@ func TestApplySysPolicy(t *testing.T) {
 			})
 
 			t.Run("set prefs", func(t *testing.T) {
-
 				b := newTestBackend(t)
 				b.SetPrefs(tt.prefs.Clone())
 				if !b.Prefs().Equals(tt.wantPrefs.View()) {
@@ -2051,6 +2069,59 @@ func TestPreferencePolicyInfo(t *testing.T) {
 						t.Errorf("pref=%v, want %v", got, tt.wantValue)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
+	tests := []struct {
+		desc           string
+		before, after  opt.Bool
+		tailnetDefault bool
+	}{
+		{
+			before:         opt.Bool(""),
+			tailnetDefault: true,
+			after:          opt.NewBool(true),
+		},
+		{
+			before:         opt.Bool(""),
+			tailnetDefault: false,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.Bool("unset"),
+			tailnetDefault: true,
+			after:          opt.NewBool(true),
+		},
+		{
+			before:         opt.Bool("unset"),
+			tailnetDefault: false,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(false),
+			tailnetDefault: true,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(true),
+			tailnetDefault: false,
+			after:          opt.NewBool(true),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("before=%s after=%s", tt.before, tt.after), func(t *testing.T) {
+			b := newTestBackend(t)
+			p := ipn.NewPrefs()
+			p.AutoUpdate.Apply = tt.before
+			if err := b.pm.setPrefsLocked(p.View()); err != nil {
+				t.Fatal(err)
+			}
+			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)
+			if want, got := tt.after, b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
+				t.Errorf("got: %q, want %q", got, want)
 			}
 		})
 	}

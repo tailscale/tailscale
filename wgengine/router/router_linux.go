@@ -605,10 +605,6 @@ func (r *linuxRouter) getV6Available() bool {
 	return r.nfr.HasIPV6()
 }
 
-func (r *linuxRouter) getV6NATAvailable() bool {
-	return r.nfr.HasIPV6NAT()
-}
-
 // addAddress adds an IP/mask to the tunnel interface. Fails if the
 // address is already assigned to the interface, or if the addition
 // fails.

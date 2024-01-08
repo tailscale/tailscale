@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"reflect"
 	"regexp"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -332,32 +333,156 @@ func TestGetUPnPPortMapping(t *testing.T) {
 
 		c.debug.VerboseLogs = true
 
-		sawRequestWithLease.Store(false)
-		res, err := c.Probe(ctx)
-		if err != nil {
-			t.Fatalf("Probe: %v", err)
-		}
-		if !res.UPnP {
-			t.Errorf("didn't detect UPnP")
-		}
+		// Try twice to test the "cache previous mapping" logic.
+		var (
+			firstResponse netip.AddrPort
+			prevPort      uint16
+		)
+		for i := 0; i < 2; i++ {
+			sawRequestWithLease.Store(false)
+			res, err := c.Probe(ctx)
+			if err != nil {
+				t.Fatalf("Probe: %v", err)
+			}
+			if !res.UPnP {
+				t.Errorf("didn't detect UPnP")
+			}
 
-		gw, myIP, ok := c.gatewayAndSelfIP()
-		if !ok {
-			t.Fatalf("could not get gateway and self IP")
-		}
-		t.Logf("gw=%v myIP=%v", gw, myIP)
+			gw, myIP, ok := c.gatewayAndSelfIP()
+			if !ok {
+				t.Fatalf("could not get gateway and self IP")
+			}
+			t.Logf("gw=%v myIP=%v", gw, myIP)
 
-		ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
-		if !ok {
-			t.Fatal("could not get UPnP port mapping")
+			ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), prevPort)
+			if !ok {
+				t.Fatal("could not get UPnP port mapping")
+			}
+			if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+				t.Errorf("bad external address; got %v want %v", got, want)
+			}
+			if !sawRequestWithLease.Load() {
+				t.Errorf("wanted request with lease, but didn't see one")
+			}
+			if i == 0 {
+				firstResponse = ext
+				prevPort = ext.Port()
+			} else if firstResponse != ext {
+				t.Errorf("got different response on second attempt: (got) %v != %v (want)", ext, firstResponse)
+			}
+			t.Logf("external IP: %v", ext)
 		}
-		if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
-			t.Errorf("bad external address; got %v want %v", got, want)
+	}
+}
+
+func TestGetUPnPPortMappingNoResponses(t *testing.T) {
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+
+	c := newTestClient(t, igd)
+	t.Logf("Listening on upnp=%v", c.testUPnPPort)
+	defer c.Close()
+
+	c.debug.VerboseLogs = true
+
+	// Do this before setting uPnPMetas since it invalidates those mappings
+	// if gw/myIP change.
+	gw, myIP, _ := c.gatewayAndSelfIP()
+
+	t.Run("ErrorContactingUPnP", func(t *testing.T) {
+		c.mu.Lock()
+		c.uPnPMetas = []uPnPDiscoResponse{{
+			Location: "http://127.0.0.1:1/does-not-exist.xml",
+			Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+			USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+		}}
+		c.mu.Unlock()
+
+		_, ok := c.getUPnPPortMapping(context.Background(), gw, netip.AddrPortFrom(myIP, 12345), 0)
+		if ok {
+			t.Errorf("expected no mapping when there are no responses")
 		}
-		if !sawRequestWithLease.Load() {
-			t.Errorf("wanted request with lease, but didn't see one")
-		}
-		t.Logf("external IP: %v", ext)
+	})
+}
+
+func TestProcessUPnPResponses(t *testing.T) {
+	testCases := []struct {
+		name      string
+		responses []uPnPDiscoResponse
+		want      []uPnPDiscoResponse
+	}{
+		{
+			name: "single",
+			responses: []uPnPDiscoResponse{{
+				Location: "http://192.168.1.1:2828/control.xml",
+				Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+				USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+			}},
+			want: []uPnPDiscoResponse{{
+				Location: "http://192.168.1.1:2828/control.xml",
+				Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+				USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+			}},
+		},
+		{
+			name: "multiple_with_same_location",
+			responses: []uPnPDiscoResponse{
+				{
+					Location: "http://192.168.1.1:2828/control.xml",
+					Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+					USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+				},
+				{
+					Location: "http://192.168.1.1:2828/control.xml",
+					Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+					USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+				},
+			},
+			want: []uPnPDiscoResponse{{
+				Location: "http://192.168.1.1:2828/control.xml",
+				Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+				USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+			}},
+		},
+		{
+			name: "multiple_with_different_location",
+			responses: []uPnPDiscoResponse{
+				{
+					Location: "http://192.168.1.1:2828/control.xml",
+					Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+					USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+				},
+				{
+					Location: "http://192.168.100.1:2828/control.xml",
+					Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+					USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+				},
+			},
+			want: []uPnPDiscoResponse{
+				// note: this sorts first because we prefer "InternetGatewayDevice:2"
+				{
+					Location: "http://192.168.100.1:2828/control.xml",
+					Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+					USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+				},
+				{
+					Location: "http://192.168.1.1:2828/control.xml",
+					Server:   "Tailscale-Test/1.0 UPnP/1.1 MiniUPnPd/2.2.1",
+					USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+				},
+			},
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := processUPnPResponses(slices.Clone(tt.responses))
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("unexpected result:\n got: %+v\nwant: %+v\n", got, tt.want)
+			}
+		})
 	}
 }
 

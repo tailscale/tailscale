@@ -25,7 +25,7 @@ func init() {
 	getPAC = getPACWindows
 }
 
-func likelyHomeRouterIPWindows() (ret netip.Addr, ok bool) {
+func likelyHomeRouterIPWindows() (ret netip.Addr, _ netip.Addr, ok bool) {
 	rs, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
 		log.Printf("routerIP/GetIPForwardTable2 error: %v", err)
@@ -92,10 +92,10 @@ func likelyHomeRouterIPWindows() (ret netip.Addr, ok bool) {
 
 	if ret.IsValid() && !ret.IsPrivate() {
 		// Default route has a non-private gateway
-		return netip.Addr{}, false
+		return netip.Addr{}, netip.Addr{}, false
 	}
 
-	return ret, ret.IsValid()
+	return ret, netip.Addr{}, ret.IsValid()
 }
 
 // NonTailscaleMTUs returns a map of interface LUID to interface MTU,

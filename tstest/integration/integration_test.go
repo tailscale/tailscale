@@ -1226,9 +1226,8 @@ func (n *testNode) Ping(otherNode *testNode) error {
 // over its localhost IPC mechanism. (Unix socket, etc)
 func (n *testNode) AwaitListening() {
 	t := n.env.t
-	s := safesocket.DefaultConnectionStrategy(n.sockFile)
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
-		c, err := safesocket.Connect(s)
+		c, err := safesocket.Connect(n.sockFile)
 		if err == nil {
 			c.Close()
 		}

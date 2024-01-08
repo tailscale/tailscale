@@ -73,33 +73,3 @@ const (
 	// The default is "user-decides" unless otherwise stated.
 	PostureChecking Key = "PostureChecking"
 )
-
-var stringKeys = []Key{
-	ControlURL,
-	LogTarget,
-	Tailnet,
-	ExitNodeID,
-	ExitNodeIP,
-	EnableIncomingConnections,
-	EnableServerMode,
-	ExitNodeAllowLANAccess,
-	EnableTailscaleDNS,
-	EnableTailscaleSubnets,
-	AdminConsoleVisibility,
-	NetworkDevicesVisibility,
-	TestMenuVisibility,
-	UpdateMenuVisibility,
-	RunExitNodeVisibility,
-	PreferencesMenuVisibility,
-	ExitNodeMenuVisibility,
-	AutoUpdateVisibility,
-	KeyExpirationNoticeTime,
-	PostureChecking,
-}
-
-var boolKeys = []Key{
-	LogSCMInteractions,
-	FlushDNSOnSessionUnlock,
-}
-
-var uint64Keys = []Key{}

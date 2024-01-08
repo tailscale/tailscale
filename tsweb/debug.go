@@ -167,7 +167,7 @@ func debugBrowserHeaderHandler(h http.Handler) http.Handler {
 		// The only difference from AddBrowserHeaders is that this policy
 		// allows inline CSS styles. They make debug pages much easier to
 		// prototype, while the risk of user-injected CSS is relatively low.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'; style-src 'self' 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; block-all-mixed-content; object-src 'none'; style-src 'self' 'unsafe-inline'")
 		h.ServeHTTP(w, r)
 	})
 }

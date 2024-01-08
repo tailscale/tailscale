@@ -99,8 +99,9 @@ type Wrapper struct {
 	lastActivityAtomic mono.Time // time of last send or receive
 
 	destIPActivity syncs.AtomicValue[map[netip.Addr]func()]
-	destMACAtomic  syncs.AtomicValue[[6]byte]
-	discoKey       syncs.AtomicValue[key.DiscoPublic]
+	//lint:ignore U1000 used in tap_linux.go
+	destMACAtomic syncs.AtomicValue[[6]byte]
+	discoKey      syncs.AtomicValue[key.DiscoPublic]
 
 	// timeNow, if non-nil, will be used to obtain the current time.
 	timeNow func() time.Time

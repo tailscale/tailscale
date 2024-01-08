@@ -558,7 +558,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				AllowSingleHosts: true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -575,7 +574,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode:    preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -594,7 +592,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode: preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -684,7 +681,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:        true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -701,7 +697,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:        true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -720,7 +715,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				},
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},

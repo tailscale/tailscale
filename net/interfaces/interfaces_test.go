@@ -83,8 +83,8 @@ func TestLikelyHomeRouterIP(t *testing.T) {
 	})
 
 	// Mock out the likelyHomeRouterIP to return a known gateway.
-	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, bool) {
-		return netip.MustParseAddr("192.168.7.1"), true
+	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, netip.Addr, bool) {
+		return netip.MustParseAddr("192.168.7.1"), netip.Addr{}, true
 	})
 
 	gw, my, ok := LikelyHomeRouterIP()
@@ -177,8 +177,8 @@ func TestLikelyHomeRouterIP_Prefix(t *testing.T) {
 	})
 
 	// Mock out the likelyHomeRouterIP to return a known gateway.
-	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, bool) {
-		return netip.MustParseAddr("192.168.7.1"), true
+	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, netip.Addr, bool) {
+		return netip.MustParseAddr("192.168.7.1"), netip.Addr{}, true
 	})
 
 	gw, my, ok := LikelyHomeRouterIP()

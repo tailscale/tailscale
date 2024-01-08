@@ -61,23 +61,24 @@ import (
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc                 *http.Client // HTTP client used to talk to tailcontrol
-	dialer                *tsdial.Dialer
-	dnsCache              *dnscache.Resolver
-	controlKnobs          *controlknobs.Knobs // always non-nil
-	serverURL             string              // URL of the tailcontrol server
-	clock                 tstime.Clock
-	logf                  logger.Logf
-	netMon                *netmon.Monitor // or nil
-	discoPubKey           key.DiscoPublic
-	getMachinePrivKey     func() (key.MachinePrivate, error)
-	debugFlags            []string
-	skipIPForwardingCheck bool
-	pinger                Pinger
-	popBrowser            func(url string)             // or nil
-	c2nHandler            http.Handler                 // or nil
-	onClientVersion       func(*tailcfg.ClientVersion) // or nil
-	onControlTime         func(time.Time)              // or nil
+	httpc                      *http.Client // HTTP client used to talk to tailcontrol
+	dialer                     *tsdial.Dialer
+	dnsCache                   *dnscache.Resolver
+	controlKnobs               *controlknobs.Knobs // always non-nil
+	serverURL                  string              // URL of the tailcontrol server
+	clock                      tstime.Clock
+	logf                       logger.Logf
+	netMon                     *netmon.Monitor // or nil
+	discoPubKey                key.DiscoPublic
+	getMachinePrivKey          func() (key.MachinePrivate, error)
+	debugFlags                 []string
+	skipIPForwardingCheck      bool
+	pinger                     Pinger
+	popBrowser                 func(url string)             // or nil
+	c2nHandler                 http.Handler                 // or nil
+	onClientVersion            func(*tailcfg.ClientVersion) // or nil
+	onControlTime              func(time.Time)              // or nil
+	onTailnetDefaultAutoUpdate func(bool)                   // or nil
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -110,24 +111,25 @@ type Observer interface {
 }
 
 type Options struct {
-	Persist              persist.Persist                    // initial persistent data
-	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
-	ServerURL            string                             // URL of the tailcontrol server
-	AuthKey              string                             // optional node auth key for auto registration
-	Clock                tstime.Clock
-	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
-	DiscoPublicKey       key.DiscoPublic
-	Logf                 logger.Logf
-	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
-	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
-	DebugFlags           []string                     // debug settings to send to control
-	NetMon               *netmon.Monitor              // optional network monitor
-	PopBrowserURL        func(url string)             // optional func to open browser
-	OnClientVersion      func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
-	OnControlTime        func(time.Time)              // optional func to notify callers of new time from control
-	Dialer               *tsdial.Dialer               // non-nil
-	C2NHandler           http.Handler                 // or nil
-	ControlKnobs         *controlknobs.Knobs          // or nil to ignore
+	Persist                    persist.Persist                    // initial persistent data
+	GetMachinePrivateKey       func() (key.MachinePrivate, error) // returns the machine key to use
+	ServerURL                  string                             // URL of the tailcontrol server
+	AuthKey                    string                             // optional node auth key for auto registration
+	Clock                      tstime.Clock
+	Hostinfo                   *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
+	DiscoPublicKey             key.DiscoPublic
+	Logf                       logger.Logf
+	HTTPTestClient             *http.Client                 // optional HTTP client to use (for tests only)
+	NoiseTestClient            *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
+	DebugFlags                 []string                     // debug settings to send to control
+	NetMon                     *netmon.Monitor              // optional network monitor
+	PopBrowserURL              func(url string)             // optional func to open browser
+	OnClientVersion            func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
+	OnControlTime              func(time.Time)              // optional func to notify callers of new time from control
+	OnTailnetDefaultAutoUpdate func(bool)                   // optional func to inform GUI of default auto-update setting for the tailnet
+	Dialer                     *tsdial.Dialer               // non-nil
+	C2NHandler                 http.Handler                 // or nil
+	ControlKnobs               *controlknobs.Knobs          // or nil to ignore
 
 	// Observer is called when there's a change in status to report
 	// from the control client.
@@ -263,26 +265,27 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:                 httpc,
-		controlKnobs:          opts.ControlKnobs,
-		getMachinePrivKey:     opts.GetMachinePrivateKey,
-		serverURL:             opts.ServerURL,
-		clock:                 opts.Clock,
-		logf:                  opts.Logf,
-		persist:               opts.Persist.View(),
-		authKey:               opts.AuthKey,
-		discoPubKey:           opts.DiscoPublicKey,
-		debugFlags:            opts.DebugFlags,
-		netMon:                opts.NetMon,
-		skipIPForwardingCheck: opts.SkipIPForwardingCheck,
-		pinger:                opts.Pinger,
-		popBrowser:            opts.PopBrowserURL,
-		onClientVersion:       opts.OnClientVersion,
-		onControlTime:         opts.OnControlTime,
-		c2nHandler:            opts.C2NHandler,
-		dialer:                opts.Dialer,
-		dnsCache:              dnsCache,
-		dialPlan:              opts.DialPlan,
+		httpc:                      httpc,
+		controlKnobs:               opts.ControlKnobs,
+		getMachinePrivKey:          opts.GetMachinePrivateKey,
+		serverURL:                  opts.ServerURL,
+		clock:                      opts.Clock,
+		logf:                       opts.Logf,
+		persist:                    opts.Persist.View(),
+		authKey:                    opts.AuthKey,
+		discoPubKey:                opts.DiscoPublicKey,
+		debugFlags:                 opts.DebugFlags,
+		netMon:                     opts.NetMon,
+		skipIPForwardingCheck:      opts.SkipIPForwardingCheck,
+		pinger:                     opts.Pinger,
+		popBrowser:                 opts.PopBrowserURL,
+		onClientVersion:            opts.OnClientVersion,
+		onTailnetDefaultAutoUpdate: opts.OnTailnetDefaultAutoUpdate,
+		onControlTime:              opts.OnControlTime,
+		c2nHandler:                 opts.C2NHandler,
+		dialer:                     opts.Dialer,
+		dnsCache:                   dnsCache,
+		dialPlan:                   opts.DialPlan,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -1041,7 +1044,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 		var resp tailcfg.MapResponse
 		if err := c.decodeMsg(msg, &resp, machinePrivKey); err != nil {
-			vlogf("netmap: decode error: %v")
+			vlogf("netmap: decode error: %v", err)
 			return err
 		}
 		watchdogTimer.Stop()
@@ -1090,6 +1093,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		if resp.KeepAlive {
 			metricMapResponseKeepAlives.Add(1)
 			continue
+		}
+		if au, ok := resp.DefaultAutoUpdate.Get(); ok {
+			if c.onTailnetDefaultAutoUpdate != nil {
+				c.onTailnetDefaultAutoUpdate(au)
+			}
 		}
 
 		metricMapResponseMap.Add(1)

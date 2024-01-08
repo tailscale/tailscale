@@ -1,0 +1,256 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<policyDefinitions revision="1.0" schemaVersion="1.0"
+                   xmlns="http://www.microsoft.com/GroupPolicy/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="tailscale" namespace="Tailscale.Policies" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+
+  <supportedOn>
+    <products>
+      <product name="TAILSCALE_PRODUCT" displayName="$(string.TAILSCALE_PRODUCT)">
+        <majorVersion name="TAILSCALE_V1" displayName="$(string.TAILSCALE_PRODUCT)" versionIndex="1" />
+      </product>
+    </products>
+
+    <definitions>
+      <definition name="SINCE_V1_22"
+                  displayName="$(string.SINCE_V1_22)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+      <definition name="SINCE_V1_26"
+                  displayName="$(string.SINCE_V1_26)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+      <definition name="SINCE_V1_50"
+                  displayName="$(string.SINCE_V1_50)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+      <definition name="SINCE_V1_52"
+                  displayName="$(string.SINCE_V1_52)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+      <definition name="PARTIAL_FULL_SINCE_V1_56"
+                  displayName="$(string.PARTIAL_FULL_SINCE_V1_56)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+      <definition name="SINCE_V1_56"
+                  displayName="$(string.SINCE_V1_56)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+      <definition name="SINCE_V1_58"
+                  displayName="$(string.SINCE_V1_58)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Top_Category" displayName="$(string.Tailscale_Category)" />
+    <category name="UI_Category" displayName="$(string.UI_Category)">
+      <parentCategory ref="Top_Category" />
+    </category>
+    <category name="Settings_Category" displayName="$(string.Settings_Category)">
+      <parentCategory ref="Top_Category" />
+    </category>
+  </categories>
+  <policies>
+    <policy name="LoginURL" class="Machine" displayName="$(string.LoginURL)" explainText="$(string.LoginURL_Help)" presentation="$(presentation.LoginURL)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <elements>
+        <text id="LoginURLPrompt" valueName="LoginURL" required="true" />
+      </elements>
+    </policy>
+    <policy name="LogTarget" class="Machine" displayName="$(string.LogTarget)" explainText="$(string.LogTarget_Help)" presentation="$(presentation.LogTarget)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="SINCE_V1_58" />
+      <elements>
+        <text id="LogTargetPrompt" valueName="LogTarget" required="true" />
+      </elements>
+    </policy>
+    <policy name="Tailnet" class="Machine" displayName="$(string.Tailnet)" explainText="$(string.Tailnet_Help)" presentation="$(presentation.Tailnet)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="SINCE_V1_52" />
+      <elements>
+        <text id="TailnetPrompt" valueName="Tailnet" required="true" />
+      </elements>
+    </policy>
+    <policy name="ExitNodeID" class="Machine" displayName="$(string.ExitNodeID)" explainText="$(string.ExitNodeID_Help)" presentation="$(presentation.ExitNodeID)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="SINCE_V1_56" />
+      <elements>
+        <text id="ExitNodeIDPrompt" valueName="ExitNodeID" required="true" />
+      </elements>
+    </policy>
+    <policy name="AllowIncomingConnections" class="Machine" displayName="$(string.AllowIncomingConnections)" explainText="$(string.AllowIncomingConnections_Help)" key="Software\Policies\Tailscale" valueName="AllowIncomingConnections">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="UnattendedMode" class="Machine" displayName="$(string.UnattendedMode)" explainText="$(string.UnattendedMode_Help)" key="Software\Policies\Tailscale" valueName="UnattendedMode">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="ExitNodeAllowLANAccess" class="Machine" displayName="$(string.ExitNodeAllowLANAccess)" explainText="$(string.ExitNodeAllowLANAccess_Help)" key="Software\Policies\Tailscale" valueName="ExitNodeAllowLANAccess">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="UseTailscaleDNSSettings" class="Machine" displayName="$(string.UseTailscaleDNSSettings)" explainText="$(string.UseTailscaleDNSSettings_Help)" key="Software\Policies\Tailscale" valueName="UseTailscaleDNSSettings">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="UseTailscaleSubnets" class="Machine" displayName="$(string.UseTailscaleSubnets)" explainText="$(string.UseTailscaleSubnets_Help)" key="Software\Policies\Tailscale" valueName="UseTailscaleSubnets">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="InstallUpdates" class="Machine" displayName="$(string.InstallUpdates)" explainText="$(string.InstallUpdates_Help)" key="Software\Policies\Tailscale" valueName="InstallUpdates">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="AdvertiseExitNode" class="Machine" displayName="$(string.AdvertiseExitNode)" explainText="$(string.AdvertiseExitNode_Help)" key="Software\Policies\Tailscale" valueName="AdvertiseExitNode">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="PostureChecking" class="Machine" displayName="$(string.PostureChecking)" explainText="$(string.PostureChecking_Help)" key="Software\Policies\Tailscale" valueName="PostureChecking">
+      <parentCategory ref="Settings_Category" />
+      <supportedOn ref="PARTIAL_FULL_SINCE_V1_56" />
+      <enabledValue>
+        <string>always</string>
+      </enabledValue>
+      <disabledValue>
+        <string>never</string>
+      </disabledValue>
+    </policy>
+    <policy name="LogSCMInteractions" class="Machine" displayName="$(string.LogSCMInteractions)" explainText="$(string.LogSCMInteractions_Help)" key="Software\Policies\Tailscale" valueName="LogSCMInteractions">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="SINCE_V1_26" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+    <policy name="FlushDNSOnSessionUnlock" class="Machine" displayName="$(string.FlushDNSOnSessionUnlock)" explainText="$(string.FlushDNSOnSessionUnlock_Help)" key="Software\Policies\Tailscale" valueName="FlushDNSOnSessionUnlock">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+    <policy name="AdminPanel" class="Machine" displayName="$(string.AdminPanel)" explainText="$(string.AdminPanel_Help)" key="Software\Policies\Tailscale" valueName="AdminPanel">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="NetworkDevices" class="Machine" displayName="$(string.NetworkDevices)" explainText="$(string.NetworkDevices_Help)" key="Software\Policies\Tailscale" valueName="NetworkDevices">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="TestMenu" class="Machine" displayName="$(string.TestMenu)" explainText="$(string.TestMenu_Help)" key="Software\Policies\Tailscale" valueName="TestMenu">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="UpdateMenu" class="Machine" displayName="$(string.UpdateMenu)" explainText="$(string.UpdateMenu_Help)" key="Software\Policies\Tailscale" valueName="UpdateMenu">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="RunExitNode" class="Machine" displayName="$(string.RunExitNode)" explainText="$(string.RunExitNode_Help)" key="Software\Policies\Tailscale" valueName="RunExitNode">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="PreferencesMenu" class="Machine" displayName="$(string.PreferencesMenu)" explainText="$(string.PreferencesMenu_Help)" key="Software\Policies\Tailscale" valueName="PreferencesMenu">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+    <policy name="ExitNodesPicker" class="Machine" displayName="$(string.ExitNodesPicker)" explainText="$(string.ExitNodesPicker_Help)" key="Software\Policies\Tailscale" valueName="ExitNodesPicker">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_22" />
+      <enabledValue>
+        <string>show</string>
+      </enabledValue>
+      <disabledValue>
+        <string>hide</string>
+      </disabledValue>
+    </policy>
+  </policies>
+</policyDefinitions>

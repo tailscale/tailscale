@@ -21,10 +21,12 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/syspolicy"
 )
 
 // DefaultControlURL is the URL base of the control plane
@@ -237,7 +239,17 @@ type AutoUpdatePrefs struct {
 	// Apply specifies whether background auto-updates are enabled. When
 	// enabled, tailscaled will apply available updates in the background.
 	// Check must also be set when Apply is set.
-	Apply bool
+	Apply opt.Bool
+}
+
+func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
+	// This could almost be as easy as `au1.Apply == au2.Apply`, except that
+	// opt.Bool("") and opt.Bool("unset") should be treated as equal.
+	apply1, ok1 := au1.Apply.Get()
+	apply2, ok2 := au2.Apply.Get()
+	return au1.Check == au2.Check &&
+		apply1 == apply2 &&
+		ok1 == ok2
 }
 
 // AppConnectorPrefs are the app connector settings for the node agent.
@@ -403,12 +415,20 @@ func (m *MaskedPrefs) Pretty() string {
 				continue
 			}
 			mpf := mpv.Field(i - 1)
-			prettyFn := mf.MethodByName("Pretty")
-			if !prettyFn.IsValid() {
-				panic(fmt.Sprintf("MaskedPrefs field %q is missing the Pretty method", name))
+			// This would be much simpler with reflect.MethodByName("Pretty"),
+			// but using MethodByName disables some linker optimizations and
+			// makes our binaries much larger. See
+			// https://github.com/tailscale/tailscale/issues/10627#issuecomment-1861211945
+			//
+			// Instead, have this explicit switch by field name to do type
+			// assertions.
+			switch name {
+			case "AutoUpdateSet":
+				p := mf.Interface().(AutoUpdatePrefsMask).Pretty(mpf.Interface().(AutoUpdatePrefs))
+				fmt.Fprintf(&sb, "%s={%s}", strings.TrimSuffix(name, "Set"), p)
+			default:
+				panic(fmt.Sprintf("unexpected MaskedPrefs field %q", name))
 			}
-			res := prettyFn.Call([]reflect.Value{mpf})
-			fmt.Fprintf(&sb, "%s={%s}", strings.TrimSuffix(name, "Set"), res[0].String())
 		}
 	}
 	sb.WriteString("}")
@@ -533,14 +553,14 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
-		p.AutoUpdate == p2.AutoUpdate &&
+		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
 		p.NetfilterKind == p2.NetfilterKind
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
-	if au.Apply {
+	if au.Apply.EqualBool(true) {
 		return "update=on "
 	}
 	if au.Check {
@@ -600,7 +620,7 @@ func NewPrefs() *Prefs {
 		NetfilterMode:    preftype.NetfilterOn,
 		AutoUpdate: AutoUpdatePrefs{
 			Check: true,
-			Apply: false,
+			Apply: opt.Bool("unset"),
 		},
 	}
 }
@@ -618,11 +638,16 @@ func (p PrefsView) ControlURLOrDefault() string {
 // If not configured, or if the configured value is a legacy name equivalent to
 // the default, then DefaultControlURL is returned instead.
 func (p *Prefs) ControlURLOrDefault() string {
-	if p.ControlURL != "" {
-		if p.ControlURL != DefaultControlURL && IsLoginServerSynonym(p.ControlURL) {
+	controlURL, err := syspolicy.GetString(syspolicy.ControlURL, p.ControlURL)
+	if err != nil {
+		controlURL = p.ControlURL
+	}
+
+	if controlURL != "" {
+		if controlURL != DefaultControlURL && IsLoginServerSynonym(controlURL) {
 			return DefaultControlURL
 		}
-		return p.ControlURL
+		return controlURL
 	}
 	return DefaultControlURL
 }

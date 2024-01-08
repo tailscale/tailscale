@@ -240,15 +240,6 @@ func (t *strideTable[T]) tableDebugString() string {
 	return ret.String()
 }
 
-// treeDebugString returns the contents of t, formatted as a sparse tree. Each
-// line is one entry, indented such that it is contained by all its parents, and
-// non-overlapping with any of its siblings.
-func (t *strideTable[T]) treeDebugString() string {
-	var ret bytes.Buffer
-	t.treeDebugStringRec(&ret, 1, 0) // index of 0/0, and 0 indent
-	return ret.String()
-}
-
 func (t *strideTable[T]) treeDebugStringRec(w io.Writer, idx, indent int) {
 	addr, len := inversePrefixIndex(idx)
 	if t.hasPrefixRootedAt(idx) {

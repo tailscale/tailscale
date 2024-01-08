@@ -48,8 +48,8 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/testenv"
-	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -61,14 +61,8 @@ var getLogTargetOnce struct {
 
 func getLogTarget() string {
 	getLogTargetOnce.Do(func() {
-		if val, ok := os.LookupEnv("TS_LOG_TARGET"); ok {
-			getLogTargetOnce.v = val
-		} else {
-			if runtime.GOOS == "windows" {
-				logTarget, _ := winutil.GetRegString("LogTarget")
-				getLogTargetOnce.v = logTarget
-			}
-		}
+		envTarget, _ := os.LookupEnv("TS_LOG_TARGET")
+		getLogTargetOnce.v, _ = syspolicy.GetString(syspolicy.LogTarget, envTarget)
 	})
 
 	return getLogTargetOnce.v
@@ -714,7 +708,7 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 	}
 
 	if version.IsWindowsGUI() && strings.HasPrefix(netw, "tcp") {
-		if c, err := safesocket.Connect(safesocket.DefaultConnectionStrategy("")); err == nil {
+		if c, err := safesocket.Connect(""); err == nil {
 			fmt.Fprintf(c, "CONNECT %s HTTP/1.0\r\n\r\n", addr)
 			br := bufio.NewReader(c)
 			res, err := http.ReadResponse(br, nil)

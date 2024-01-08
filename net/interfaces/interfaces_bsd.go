@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/netip"
 	"syscall"
 
@@ -20,20 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
 )
-
-func defaultRoute() (d DefaultRouteDetails, err error) {
-	idx, err := DefaultRouteInterfaceIndex()
-	if err != nil {
-		return d, err
-	}
-	iface, err := net.InterfaceByIndex(idx)
-	if err != nil {
-		return d, err
-	}
-	d.InterfaceName = iface.Name
-	d.InterfaceIndex = idx
-	return d, nil
-}
 
 // ErrNoGatewayIndexFound is returned by DefaultRouteInterfaceIndex when no
 // default route is found.
@@ -86,16 +71,16 @@ func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPBSDFetchRIB
 }
 
-func likelyHomeRouterIPBSDFetchRIB() (ret netip.Addr, ok bool) {
+func likelyHomeRouterIPBSDFetchRIB() (ret, myIP netip.Addr, ok bool) {
 	rib, err := fetchRoutingTable()
 	if err != nil {
 		log.Printf("routerIP/FetchRIB: %v", err)
-		return ret, false
+		return ret, myIP, false
 	}
 	msgs, err := parseRoutingTable(rib)
 	if err != nil {
 		log.Printf("routerIP/ParseRIB: %v", err)
-		return ret, false
+		return ret, myIP, false
 	}
 	for _, m := range msgs {
 		rm, ok := m.(*route.RouteMessage)
@@ -110,10 +95,18 @@ func likelyHomeRouterIPBSDFetchRIB() (ret netip.Addr, ok bool) {
 		if !ok {
 			continue
 		}
-		return netaddr.IPv4(gw.IP[0], gw.IP[1], gw.IP[2], gw.IP[3]), true
+		// If the route entry has an interface address associated with
+		// it, then parse and return that. This is optional.
+		if len(rm.Addrs) >= unix.RTAX_IFA {
+			if addr, ok := rm.Addrs[unix.RTAX_IFA].(*route.Inet4Addr); ok {
+				myIP = netaddr.IPv4(addr.IP[0], addr.IP[1], addr.IP[2], addr.IP[3])
+			}
+		}
+
+		return netaddr.IPv4(gw.IP[0], gw.IP[1], gw.IP[2], gw.IP[3]), myIP, true
 	}
 
-	return ret, false
+	return ret, myIP, false
 }
 
 var v4default = [4]byte{0, 0, 0, 0}

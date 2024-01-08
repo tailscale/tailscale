@@ -7,7 +7,6 @@ package dns
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -17,31 +16,9 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
-
-// resolvedListenAddr is the listen address of the resolved stub resolver.
-//
-// We only consider resolved to be the system resolver if the stub resolver is;
-// that is, if this address is the sole nameserver in /etc/resolved.conf.
-// In other cases, resolved may be managing the system DNS configuration directly.
-// Then the nameserver list will be a concatenation of those for all
-// the interfaces that register their interest in being a default resolver with
-//
-//	SetLinkDomains([]{{"~.", true}, ...})
-//
-// which includes at least the interface with the default route, i.e. not us.
-// This does not work for us: there is a possibility of getting NXDOMAIN
-// from the other nameservers before we are asked or get a chance to respond.
-// We consider this case as lacking resolved support and fall through to dnsDirect.
-//
-// While it may seem that we need to read a config option to get at this,
-// this address is, in fact, hard-coded into resolved.
-var resolvedListenAddr = netaddr.IPv4(127, 0, 0, 53)
-
-var errNotReady = errors.New("interface not ready")
 
 // DBus entities we talk to.
 //

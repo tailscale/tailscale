@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/netip"
 	"reflect"
 	"slices"
 	"sort"
@@ -86,9 +85,9 @@ type mapSession struct {
 	lastDomainAuditLogID   string
 	lastHealth             []string
 	lastPopBrowserURL      string
-	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
+	lastMaxExpiry          time.Duration
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -320,6 +319,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
+	}
+	if resp.MaxKeyDuration > 0 {
+		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
 }
 
@@ -765,6 +767,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		DERPMap:           ms.lastDERPMap,
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
+		MaxKeyDuration:    ms.lastMaxExpiry,
 	}
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {
@@ -789,44 +792,4 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		nm.DNS.Proxied = true
 	}
 	return nm
-}
-
-func nodesSorted(v []*tailcfg.Node) bool {
-	for i, n := range v {
-		if i > 0 && n.ID <= v[i-1].ID {
-			return false
-		}
-	}
-	return true
-}
-
-func sortNodes(v []*tailcfg.Node) {
-	sort.Slice(v, func(i, j int) bool { return v[i].ID < v[j].ID })
-}
-
-func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
-	if v1 == nil {
-		return nil
-	}
-	v2 := make([]*tailcfg.Node, len(v1))
-	for i, n := range v1 {
-		v2[i] = n.Clone()
-	}
-	return v2
-}
-
-var debugSelfIPv6Only = envknob.RegisterBool("TS_DEBUG_SELF_V6_ONLY")
-
-func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
-	switch {
-	default:
-		return in
-	case debugSelfIPv6Only():
-		for _, a := range in {
-			if a.Addr().Is6() {
-				ret = append(ret, a)
-			}
-		}
-		return ret
-	}
 }

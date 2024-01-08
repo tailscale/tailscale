@@ -26,6 +26,7 @@ func (Check) Run(_ context.Context, logf logger.Logf) error {
 	return permissionsImpl(logf)
 }
 
+//lint:ignore U1000 used in non-windows implementations.
 func formatUserID[T constraints.Integer](id T) string {
 	idStr := fmt.Sprint(id)
 	if uu, err := user.LookupId(idStr); err != nil {
@@ -35,6 +36,7 @@ func formatUserID[T constraints.Integer](id T) string {
 	}
 }
 
+//lint:ignore U1000 used in non-windows implementations.
 func formatGroupID[T constraints.Integer](id T) string {
 	idStr := fmt.Sprint(id)
 	if g, err := user.LookupGroupId(idStr); err != nil {
@@ -44,6 +46,7 @@ func formatGroupID[T constraints.Integer](id T) string {
 	}
 }
 
+//lint:ignore U1000 used in non-windows implementations.
 func formatGroups[T constraints.Integer](groups []T) string {
 	var buf strings.Builder
 	for i, group := range groups {

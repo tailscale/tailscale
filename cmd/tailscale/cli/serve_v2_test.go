@@ -27,7 +27,6 @@ func TestServeDevConfigMutations(t *testing.T) {
 		command []string                       // serve args; nil means no command to run (only reset)
 		want    *ipn.ServeConfig               // non-nil means we want a save of this value
 		wantErr func(error) (badErrMsg string) // nil means no error is wanted
-		before  func(t *testing.T)
 	}
 
 	// group is a group of steps that share the same
@@ -1222,14 +1221,6 @@ func TestMessageForPort(t *testing.T) {
 			}
 		})
 	}
-}
-
-func unindent(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(line)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func TestIsLegacyInvocation(t *testing.T) {
