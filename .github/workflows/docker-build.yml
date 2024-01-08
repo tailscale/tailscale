@@ -1,8 +1,9 @@
-name: CI to Docker Hub
+name: "CI to Docker Hub"
 
-on:
+on: 
   push:
-    branches: [ main ]
+    branches:
+    - main
   workflow_dispatch:
     inputs:
       base_container:
