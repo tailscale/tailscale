@@ -35,4 +35,7 @@ jobs:
         file: ./Dockerfile
         push: true
         tags: hotwa/tailscale:${{ matrix.base_container }}
-        build-args: BASE_CONTAINER=${{ matrix.base_container }}
+        build-args: |
+            BASE_CONTAINER=${{ matrix.base_container }}
+
+  
