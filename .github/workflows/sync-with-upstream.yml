@@ -15,7 +15,7 @@ jobs:
         fetch-depth: 0 # 全部历史记录
 
     - name: Sync with Upstream
-      uses: aormsby/Fork-Sync-With-Upstream-action@v2
+      uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
       with:
         upstream_repository: tailscale/tailscale
         upstream_branch: main
