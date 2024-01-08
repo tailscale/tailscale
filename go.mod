@@ -63,7 +63,7 @@ require (
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
-	github.com/tailscale/golang-x-crypto v0.0.0-20230713185742-f0b76a10a08e
+	github.com/tailscale/golang-x-crypto v0.0.0-20240108194725-7ce1f622c780
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20240102155253-bf50773ba734
@@ -79,14 +79,14 @@ require (
 	go.uber.org/zap v1.26.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
 	go4.org/netipx v0.0.0-20230824141953-6213f710f925
-	golang.org/x/crypto v0.15.0
+	golang.org/x/crypto v0.17.1-0.20240102205709-08396bb92b82
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9
 	golang.org/x/mod v0.14.0
 	golang.org/x/net v0.18.0
 	golang.org/x/oauth2 v0.12.0
 	golang.org/x/sync v0.5.0
 	golang.org/x/sys v0.15.0
-	golang.org/x/term v0.14.0
+	golang.org/x/term v0.15.0
 	golang.org/x/time v0.3.0
 	golang.org/x/tools v0.15.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
