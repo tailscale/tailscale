@@ -939,36 +939,65 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 	}
 }
 
-func TestNoOffSiteRedirect(t *testing.T) {
-	options := ServerOpts{
-		Mode: LoginServerMode,
-		// Emulate the admin using a --prefix option with leading slashes:
-		PathPrefix: "//evil.example.com/goat",
-		CGIMode:    true,
-	}
-	s, err := NewServer(options)
-	if err != nil {
-		t.Error(err)
-	}
-
+// TestPathPrefix tests that the provided path prefix is normalized correctly.
+// If a leading '/' is missing, one should be added.
+// If multiple leading '/' are present, they should be collapsed to one.
+// Additionally verify that this prevents open redirects when enforcing the path prefix.
+func TestPathPrefix(t *testing.T) {
 	tests := []struct {
 		name         string
-		target       string
-		wantHandled  bool
+		prefix       string
+		wantPrefix   string
 		wantLocation string
 	}{
 		{
+			name:         "no-leading-slash",
+			prefix:       "javascript:alert(1)",
+			wantPrefix:   "/javascript:alert(1)",
+			wantLocation: "/javascript:alert(1)/",
+		},
+		{
 			name:   "2-slashes",
-			target: "http://localhost//evil.example.com/goat",
+			prefix: "//evil.example.com/goat",
 			// We must also get the trailing slash added:
+			wantPrefix:   "/evil.example.com/goat",
 			wantLocation: "/evil.example.com/goat/",
+		},
+		{
+			name:   "absolute-url",
+			prefix: "http://evil.example.com",
+			// We must also get the trailing slash added:
+			wantPrefix:   "/http:/evil.example.com",
+			wantLocation: "/http:/evil.example.com/",
+		},
+		{
+			name:   "double-dot",
+			prefix: "/../.././etc/passwd",
+			// We must also get the trailing slash added:
+			wantPrefix:   "/etc/passwd",
+			wantLocation: "/etc/passwd/",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			options := ServerOpts{
+				Mode:       LoginServerMode,
+				PathPrefix: tt.prefix,
+				CGIMode:    true,
+			}
+			s, err := NewServer(options)
+			if err != nil {
+				t.Error(err)
+			}
+
+			// verify provided prefix was normalized correctly
+			if s.pathPrefix != tt.wantPrefix {
+				t.Errorf("prefix was not normalized correctly; want=%q, got=%q", tt.wantPrefix, s.pathPrefix)
+			}
+
 			s.logf = t.Logf
-			r := httptest.NewRequest(httpm.GET, tt.target, nil)
+			r := httptest.NewRequest(httpm.GET, "http://localhost/", nil)
 			w := httptest.NewRecorder()
 			s.ServeHTTP(w, r)
 			res := w.Result()
@@ -976,7 +1005,7 @@ func TestNoOffSiteRedirect(t *testing.T) {
 
 			location := w.Header().Get("Location")
 			if location != tt.wantLocation {
-				t.Errorf("request(%q) got wrong location; want=%q, got=%q", tt.target, tt.wantLocation, location)
+				t.Errorf("request got wrong location; want=%q, got=%q", tt.wantLocation, location)
 			}
 		})
 	}
