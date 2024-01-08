@@ -1,0 +1,19 @@
+# Before applying ensure that the operator owns tag:prod.
+# https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
+# To set up autoapproval set tag:prod as approver for 10.40.0.0/14 route and exit node.
+# Otherwise approve it manually in Machines panel once the
+# ts-prod Tailscale node has been created.
+# See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes
+apiVersion: tailscale.com/v1alpha1
+kind: Connector
+metadata:
+  name: prod
+spec:
+  tags:
+  - "tag:prod"
+  hostname: ts-prod
+  subnetRouter:
+    advertiseRoutes:
+    - "10.40.0.0/14"
+    - "192.168.0.0/14"
+  exitNode: true
