@@ -67,7 +67,7 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
 ARG BASE_IMAGE="ubuntu:22.04"
-FROM $BASE_IMAGE
+FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y ca-certificates iptables iproute2 && rm -rf /var/lib/apt/lists/*
 
