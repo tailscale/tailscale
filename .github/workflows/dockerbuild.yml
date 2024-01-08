@@ -29,15 +29,14 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Transform base image tag
-      id: transform_tag
-      run: echo "TAG_NAME=$(echo ${{ matrix.base_images }} | sed 's/:/-/g')" >> $GITHUB_ENV
-
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./Dockerfile
         push: true
-        tags: hotwa/tailscale:${{ env.TAG_NAME }}
-        build-args: BASE_IMAGE=${{ matrix.base_images }}
+        tags: hotwa/tailscale:${{ matrix.base_images }}
+        build-args: |
+            BASE_IMAGE=${{ matrix.base_images }}
+
+
