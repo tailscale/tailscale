@@ -132,7 +132,7 @@ func main() {
 		TailscaledConfigFilePath: defaultEnv("EXPERIMENTAL_TS_CONFIGFILE_PATH", ""),
 	}
 	if err := cfg.validate(); err != nil {
-		log.Fatalf("invalid containerboot configuration: %v", err)
+		log.Fatalf("invalid configuration: %v", err)
 	}
 
 	if !cfg.UserspaceMode {
@@ -169,7 +169,7 @@ func main() {
 		}
 		cfg.KubernetesCanPatch = canPatch
 
-		if cfg.AuthKey == "" && !runTailscaledOnly(cfg) {
+		if cfg.AuthKey == "" && !isOneStepConfig(cfg) {
 			key, err := findKeyInKubeSecret(bootCtx, cfg.KubeSecret)
 			if err != nil {
 				log.Fatalf("Getting authkey from kube secret: %v", err)
@@ -236,7 +236,7 @@ func main() {
 	// different points in containerboot's lifecycle, hence the helper function.
 	didLogin := false
 	authTailscale := func() error {
-		if didLogin || runTailscaledOnly(cfg) {
+		if didLogin {
 			return nil
 		}
 		didLogin = true
@@ -251,7 +251,7 @@ func main() {
 		return nil
 	}
 
-	if !runTailscaleSet(cfg) {
+	if isTwoStepConfigAlwaysAuth(cfg) {
 		if err := authTailscale(); err != nil {
 			log.Fatalf("failed to auth tailscale: %v", err)
 		}
@@ -267,7 +267,7 @@ authLoop:
 		if n.State != nil {
 			switch *n.State {
 			case ipn.NeedsLogin:
-				if runTailscaledOnly(cfg) {
+				if isOneStepConfig(cfg) {
 					// This could happen if this is the
 					// first time tailscaled was run for
 					// this device and the auth key was not
@@ -298,7 +298,7 @@ authLoop:
 	ctx, cancel := contextWithExitSignalWatch()
 	defer cancel()
 
-	if runTailscaleSet(cfg) {
+	if isTwoStepConfigAuthOnce(cfg) {
 		// Now that we are authenticated, we can set/reset any of the
 		// settings that we need to.
 		if err := tailscaleSet(ctx, cfg); err != nil {
@@ -314,7 +314,7 @@ authLoop:
 		}
 	}
 
-	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && runTailscaleSet(cfg) {
+	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && isTwoStepConfigAuthOnce(cfg) {
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
@@ -996,16 +996,26 @@ func contextWithExitSignalWatch() (context.Context, func()) {
 	return ctx, f
 }
 
-// runTaiscaleSet determines whether `tailscale set` (rather than the default
-// `tailscale up`) should be used to reconfigure tailscaled on every subsequent
-// container restart after the tailnet device has logged in.
-func runTailscaleSet(cfg *settings) bool {
+// isTwoStepConfigAuthOnce returns true if the Tailscale node should be configured
+// in two steps and login should only happen once.
+// Step 1: run 'tailscaled'
+// Step 2):
+// A) if this is the first time starting this node run 'tailscale up --authkey <authkey> <config opts>'
+// B) if this is not the first time starting this node run 'tailscale set <config opts>'.
+func isTwoStepConfigAuthOnce(cfg *settings) bool {
 	return cfg.AuthOnce && cfg.TailscaledConfigFilePath == ""
 }
 
-// runTailscaledOnly determines whether tailscaled only should be ran to start,
-// configure and log in the tailnet device and the `tailscale up`/`tailscale
-// set` steps should be skipped.
-func runTailscaledOnly(cfg *settings) bool {
+// isTwoStepConfigAlwaysAuth returns true if the Tailscale node should be configured
+// in two steps and we should log in every time it starts.
+// Step 1: run 'tailscaled'
+// Step 2): run 'tailscale up --authkey <authkey> <config opts>'
+func isTwoStepConfigAlwaysAuth(cfg *settings) bool {
+	return !cfg.AuthOnce && cfg.TailscaledConfigFilePath == ""
+}
+
+// isOneStepConfig returns true if the Tailscale node should always be ran and
+// configured in a single step by running 'tailscaled <config opts>'
+func isOneStepConfig(cfg *settings) bool {
 	return cfg.TailscaledConfigFilePath != ""
 }
