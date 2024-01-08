@@ -30,7 +30,14 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Prepare base image tag
-      run: echo "BASE_IMAGE_TAG=$(echo ${{ matrix.base_images }} | tr ':' '-')" >> $GITHUB_ENV
+      run: |
+        BASE_IMAGE_TAG=$(echo ${{ matrix.base_images }} | tr ':' '-')
+        echo "BASE_IMAGE_TAG=$BASE_IMAGE_TAG" >> $GITHUB_ENV
+        if [[ $BASE_IMAGE_TAG == 'ubuntu-22.04' ]]; then
+          echo "LATEST_TAG=latest" >> $GITHUB_ENV
+        else
+          echo "LATEST_TAG=" >> $GITHUB_ENV
+        fi
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
@@ -38,7 +45,7 @@ jobs:
         context: .
         file: ./Dockerfile
         push: true
-        tags: hotwa/tailscale:${{ env.BASE_IMAGE_TAG }}  # 确保替换为您的 Docker Hub 用户名和仓库名
+        tags: |
+          hotwa/tailscale:${{ env.BASE_IMAGE_TAG }}
+          hotwa/tailscale:${{ env.LATEST_TAG }}
         build-args: BASE_IMAGE=${{ matrix.base_images }}
-    
-
