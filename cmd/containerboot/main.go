@@ -48,6 +48,13 @@
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
 //     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
 //     and will be re-applied when it changes.
+//   - EXPERIMENTAL_TS_CONFIGFILE_PATH: if specified, a path to tailscaled
+//     config. If this is set, TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY,
+//     TS_ROUTES, TS_ACCEPT_DNS env vars must not be set. If this is set,
+//     containerboot only runs `tailscaled --config <path-to-this-configfile>`
+//     and not `tailscale up` or `tailscale set`.
+//     The config file contents are currently read once on container start.
+//     NB: This env var is currently experimental and the logic will likely change!
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -83,6 +90,7 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -102,39 +110,29 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	cfg := &settings{
-		AuthKey:           defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:          defaultEnv("TS_HOSTNAME", ""),
-		Routes:            defaultEnvPointer("TS_ROUTES"),
-		ServeConfigPath:   defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTo:           defaultEnv("TS_DEST_IP", ""),
-		TailnetTargetIP:   defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		TailnetTargetFQDN: defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
-		DaemonExtraArgs:   defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:         defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:      os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:     defaultBool("TS_USERSPACE", true),
-		StateDir:          defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:         defaultBool("TS_ACCEPT_DNS", false),
-		KubeSecret:        defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:    defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:     defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:            defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:          defaultBool("TS_AUTH_ONCE", false),
-		Root:              defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		AuthKey:                  defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:                 defaultEnv("TS_HOSTNAME", ""),
+		Routes:                   defaultEnvStringPointer("TS_ROUTES"),
+		ServeConfigPath:          defaultEnv("TS_SERVE_CONFIG", ""),
+		ProxyTo:                  defaultEnv("TS_DEST_IP", ""),
+		TailnetTargetIP:          defaultEnv("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN:        defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:          defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:                defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:             os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:            defaultBool("TS_USERSPACE", true),
+		StateDir:                 defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:                defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		KubeSecret:               defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		SOCKSProxyAddr:           defaultEnv("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:            defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:                   defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:                 defaultBool("TS_AUTH_ONCE", false),
+		Root:                     defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		TailscaledConfigFilePath: defaultEnv("EXPERIMENTAL_TS_CONFIGFILE_PATH", ""),
 	}
-
-	if cfg.ProxyTo != "" && cfg.UserspaceMode {
-		log.Fatal("TS_DEST_IP is not supported with TS_USERSPACE")
-	}
-
-	if cfg.TailnetTargetIP != "" && cfg.UserspaceMode {
-		log.Fatal("TS_TAILNET_TARGET_IP is not supported with TS_USERSPACE")
-	}
-	if cfg.TailnetTargetFQDN != "" && cfg.UserspaceMode {
-		log.Fatal("TS_TAILNET_TARGET_FQDN is not supported with TS_USERSPACE")
-	}
-	if cfg.TailnetTargetFQDN != "" && cfg.TailnetTargetIP != "" {
-		log.Fatal("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
+	if err := cfg.validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
 	}
 
 	if !cfg.UserspaceMode {
@@ -171,7 +169,7 @@ func main() {
 		}
 		cfg.KubernetesCanPatch = canPatch
 
-		if cfg.AuthKey == "" {
+		if cfg.AuthKey == "" && !isOneStepConfig(cfg) {
 			key, err := findKeyInKubeSecret(bootCtx, cfg.KubeSecret)
 			if err != nil {
 				log.Fatalf("Getting authkey from kube secret: %v", err)
@@ -253,7 +251,7 @@ func main() {
 		return nil
 	}
 
-	if !cfg.AuthOnce {
+	if isTwoStepConfigAlwaysAuth(cfg) {
 		if err := authTailscale(); err != nil {
 			log.Fatalf("failed to auth tailscale: %v", err)
 		}
@@ -269,6 +267,13 @@ authLoop:
 		if n.State != nil {
 			switch *n.State {
 			case ipn.NeedsLogin:
+				if isOneStepConfig(cfg) {
+					// This could happen if this is the
+					// first time tailscaled was run for
+					// this device and the auth key was not
+					// passed via the configfile.
+					log.Fatalf("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file.")
+				}
 				if err := authTailscale(); err != nil {
 					log.Fatalf("failed to auth tailscale: %v", err)
 				}
@@ -293,7 +298,7 @@ authLoop:
 	ctx, cancel := contextWithExitSignalWatch()
 	defer cancel()
 
-	if cfg.AuthOnce {
+	if isTwoStepConfigAuthOnce(cfg) {
 		// Now that we are authenticated, we can set/reset any of the
 		// settings that we need to.
 		if err := tailscaleSet(ctx, cfg); err != nil {
@@ -309,7 +314,7 @@ authLoop:
 		}
 	}
 
-	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && cfg.AuthOnce {
+	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && isTwoStepConfigAuthOnce(cfg) {
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
@@ -634,6 +639,9 @@ func tailscaledArgs(cfg *settings) []string {
 	if cfg.HTTPProxyAddr != "" {
 		args = append(args, "--outbound-http-proxy-listen="+cfg.HTTPProxyAddr)
 	}
+	if cfg.TailscaledConfigFilePath != "" {
+		args = append(args, "--config="+cfg.TailscaledConfigFilePath)
+	}
 	if cfg.DaemonExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.DaemonExtraArgs)...)
 	}
@@ -644,7 +652,7 @@ func tailscaledArgs(cfg *settings) []string {
 // if TS_AUTH_ONCE is set, only the first time containerboot starts.
 func tailscaleUp(ctx context.Context, cfg *settings) error {
 	args := []string{"--socket=" + cfg.Socket, "up"}
-	if cfg.AcceptDNS {
+	if cfg.AcceptDNS != nil && *cfg.AcceptDNS {
 		args = append(args, "--accept-dns=true")
 	} else {
 		args = append(args, "--accept-dns=false")
@@ -680,7 +688,7 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 // node is in Running state and only if TS_AUTH_ONCE is set.
 func tailscaleSet(ctx context.Context, cfg *settings) error {
 	args := []string{"--socket=" + cfg.Socket, "set"}
-	if cfg.AcceptDNS {
+	if cfg.AcceptDNS != nil && *cfg.AcceptDNS {
 		args = append(args, "--accept-dns=true")
 	} else {
 		args = append(args, "--accept-dns=false")
@@ -873,21 +881,46 @@ type settings struct {
 	// TailnetTargetFQDN is an MagicDNS name to which all incoming
 	// non-Tailscale traffic should be proxied. This must be a full Tailnet
 	// node FQDN.
-	TailnetTargetFQDN  string
-	ServeConfigPath    string
-	DaemonExtraArgs    string
-	ExtraArgs          string
-	InKubernetes       bool
-	UserspaceMode      bool
-	StateDir           string
-	AcceptDNS          bool
-	KubeSecret         string
-	SOCKSProxyAddr     string
-	HTTPProxyAddr      string
-	Socket             string
-	AuthOnce           bool
-	Root               string
-	KubernetesCanPatch bool
+	TailnetTargetFQDN        string
+	ServeConfigPath          string
+	DaemonExtraArgs          string
+	ExtraArgs                string
+	InKubernetes             bool
+	UserspaceMode            bool
+	StateDir                 string
+	AcceptDNS                *bool
+	KubeSecret               string
+	SOCKSProxyAddr           string
+	HTTPProxyAddr            string
+	Socket                   string
+	AuthOnce                 bool
+	Root                     string
+	KubernetesCanPatch       bool
+	TailscaledConfigFilePath string
+}
+
+func (s *settings) validate() error {
+	if s.TailscaledConfigFilePath != "" {
+		if _, err := conffile.Load(s.TailscaledConfigFilePath); err != nil {
+			return fmt.Errorf("error validating tailscaled configfile contents: %w", err)
+		}
+	}
+	if s.ProxyTo != "" && s.UserspaceMode {
+		return errors.New("TS_DEST_IP is not supported with TS_USERSPACE")
+	}
+	if s.TailnetTargetIP != "" && s.UserspaceMode {
+		return errors.New("TS_TAILNET_TARGET_IP is not supported with TS_USERSPACE")
+	}
+	if s.TailnetTargetFQDN != "" && s.UserspaceMode {
+		return errors.New("TS_TAILNET_TARGET_FQDN is not supported with TS_USERSPACE")
+	}
+	if s.TailnetTargetFQDN != "" && s.TailnetTargetIP != "" {
+		return errors.New("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
+	}
+	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
+		return errors.New("EXPERIMENTAL_TS_CONFIGFILE_PATH cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
+	}
+	return nil
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if
@@ -899,14 +932,26 @@ func defaultEnv(name, defVal string) string {
 	return defVal
 }
 
-// defaultEnvPointer returns a pointer to the given envvar value if set, else
+// defaultEnvStringPointer returns a pointer to the given envvar value if set, else
 // returns nil. This is useful in cases where we need to distinguish between a
 // variable being set to empty string vs unset.
-func defaultEnvPointer(name string) *string {
+func defaultEnvStringPointer(name string) *string {
 	if v, ok := os.LookupEnv(name); ok {
 		return &v
 	}
 	return nil
+}
+
+// defaultEnvBoolPointer returns a pointer to the given envvar value if set, else
+// returns nil. This is useful in cases where we need to distinguish between a
+// variable being explicitly set to false vs unset.
+func defaultEnvBoolPointer(name string) *bool {
+	v := os.Getenv(name)
+	ret, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil
+	}
+	return &ret
 }
 
 func defaultEnvs(names []string, defVal string) string {
@@ -949,4 +994,28 @@ func contextWithExitSignalWatch() (context.Context, func()) {
 		closeChan <- "goodbye"
 	}
 	return ctx, f
+}
+
+// isTwoStepConfigAuthOnce returns true if the Tailscale node should be configured
+// in two steps and login should only happen once.
+// Step 1: run 'tailscaled'
+// Step 2):
+// A) if this is the first time starting this node run 'tailscale up --authkey <authkey> <config opts>'
+// B) if this is not the first time starting this node run 'tailscale set <config opts>'.
+func isTwoStepConfigAuthOnce(cfg *settings) bool {
+	return cfg.AuthOnce && cfg.TailscaledConfigFilePath == ""
+}
+
+// isTwoStepConfigAlwaysAuth returns true if the Tailscale node should be configured
+// in two steps and we should log in every time it starts.
+// Step 1: run 'tailscaled'
+// Step 2): run 'tailscale up --authkey <authkey> <config opts>'
+func isTwoStepConfigAlwaysAuth(cfg *settings) bool {
+	return !cfg.AuthOnce && cfg.TailscaledConfigFilePath == ""
+}
+
+// isOneStepConfig returns true if the Tailscale node should always be ran and
+// configured in a single step by running 'tailscaled <config opts>'
+func isOneStepConfig(cfg *settings) bool {
+	return cfg.TailscaledConfigFilePath != ""
 }
