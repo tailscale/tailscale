@@ -1,5 +1,5 @@
-//go:build !android
-// +build !android
+//go:build androidxx
+// +build androidxx
 
 package anet
 
