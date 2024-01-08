@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        base_images: ['ubuntu:18.04', 'ubuntu:20.04', 'ubuntu:22.04', 'debian:11', 'debian:12']
+        base_images: ['ubuntu:22.04']
     steps:
     - name: Check out the repo
       uses: actions/checkout@v4
@@ -29,16 +29,13 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Prepare base image tag
-      run: echo "BASE_IMAGE_TAG=$(echo ${{ matrix.base_images }} | tr ':' '-')" >> $GITHUB_ENV
-
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./Dockerfile
         push: true
-        tags: hotwa/tailscale:${{ env.BASE_IMAGE_TAG }}  # 确保替换为您的 Docker Hub 用户名和仓库名
+        tags: hotwa/tailscale:latest
         build-args: BASE_IMAGE=${{ matrix.base_images }}
     
 
