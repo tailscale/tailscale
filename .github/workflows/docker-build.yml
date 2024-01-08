@@ -34,6 +34,8 @@ jobs:
         context: .
         file: ./Dockerfile
         push: true
-        tags: hotwa/tailscale:lastest
+        tags: hotwa/tailscale:${{ matrix.base_images }}
+        build-args: |
+            BASE_IMAGE=${{ matrix.base_images }}
 
 
