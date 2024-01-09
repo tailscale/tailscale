@@ -22,17 +22,30 @@ jobs:
       - name: Scan source code for known vulnerabilities
         run: PATH=$PWD/tool/:$PATH "$(./tool/go env GOPATH)/bin/govulncheck" -test ./...
 
-      - uses: ruby/action-slack@v3.2.1
-        with:
-          payload: >
-            {
-              "attachments": [{
-                "title": "${{ job.status }}: ${{ github.workflow }}",
-                "title_link": "https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks",
-                "text": "${{ github.repository }}@${{ github.sha }}",
-                "color": "danger"
-              }]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Post to slack
         if: failure() && github.event_name == 'schedule'
+        uses: slackapi/slack-github-action@v1.24.0
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.GOVULNCHECK_BOT_TOKEN }}
+        with:
+          channel-id: 'C05PXRM304B'
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Govulncheck failed in ${{ github.repository }}"
+                  },
+                  "accessory": {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View results"
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                }
+              ]
+            }
