@@ -20,13 +20,31 @@ import (
 
 func main() {
 	repoRoot := "../../"
-	cmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
+	log.Print("Adding Connector CRD to Helm templates")
+	helmCRDCmd := exec.Command("./tool/go", "run", "./cmd/k8s-operator/crdsforhelm", "generate", "./")
+	helmCRDCmd.Stderr = os.Stderr
+	helmCRDCmd.Dir = repoRoot
+	helmCRDCmd.Stdout = os.Stdout
+	if err := helmCRDCmd.Run(); err != nil {
+		log.Fatalf("error adding Connector CRD to Helm templates: %v", err)
+	}
+	defer func() {
+		cleanupCmd := exec.Command("./tool/go", "run", "./cmd/k8s-operator/crdsforhelm", "cleanup", "./")
+		cleanupCmd.Stderr = os.Stderr
+		cleanupCmd.Stdout = os.Stdout
+		cleanupCmd.Dir = repoRoot
+		if err := cleanupCmd.Run(); err != nil {
+			log.Fatalf("error cleaning up generated resources")
+		}
+	}()
+	log.Print("Templating Helm chart contents")
+	helmTmplCmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
 		"--namespace=tailscale")
-	cmd.Dir = repoRoot
+	helmTmplCmd.Dir = repoRoot
 	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	helmTmplCmd.Stdout = &out
+	helmTmplCmd.Stderr = os.Stderr
+	if err := helmTmplCmd.Run(); err != nil {
 		log.Fatalf("error templating helm manifests: %v", err)
 	}
 
