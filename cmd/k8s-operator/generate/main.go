@@ -24,7 +24,7 @@ const (
 	helmTemplatesPath           = operatorDeploymentFilesPath + "/chart/templates"
 	crdTemplatePath             = helmTemplatesPath + "/connectors.yaml"
 
-	helmConditionalStart = "{{ if and .Values.installCRDs -}}\n"
+	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
 	helmConditionalEnd   = "{{- end -}}"
 )
 
@@ -34,20 +34,17 @@ func main() {
 	}
 	repoRoot := "../../"
 	switch os.Args[1] {
-	case "helmcrd":
+	case "helmcrd": // insert CRD to Helm templates behind a installCRDs=true conditional check
 		log.Print("Adding Connector CRD to Helm templates")
-		if err := generate(repoRoot); err != nil {
+		if err := generate("./"); err != nil {
 			log.Fatalf("error adding Connector CRD to Helm templates: %v", err)
 		}
-		if err := cleanup(repoRoot); err != nil {
-			log.Fatalf("error cleaning up generated resources")
-		}
-	case "staticmanifests":
-		break
+		return
+	case "staticmanifests": // generate static manifests from Helm templates (including the CRD)
 	default:
-		log.Fatalf("unknown command %s, known commands are 'staticmanifests', 'helmcrd'", os.Args[1])
+		log.Fatalf("unknown option %s, known options are 'staticmanifests', 'helmcrd'", os.Args[1])
 	}
-	log.Print("Templating Helm chart contents")
+	log.Printf("Inserting CRD into the Helm templates")
 	if err := generate(repoRoot); err != nil {
 		log.Fatalf("error adding Connector CRD to Helm templates: %v", err)
 	}
@@ -56,6 +53,7 @@ func main() {
 			log.Fatalf("error cleaning up generated resources")
 		}
 	}()
+	log.Print("Templating Helm chart contents")
 	helmTmplCmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
 		"--namespace=tailscale")
 	helmTmplCmd.Dir = repoRoot
