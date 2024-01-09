@@ -31,6 +31,7 @@ type incomingFile struct {
 	w              io.Writer // underlying writer
 	sendFileNotify func()    // called when done
 	partialPath    string    // non-empty in direct mode
+	finalPath      string    // not used in direct mode
 
 	mu         sync.Mutex
 	copied     int64
@@ -92,13 +93,6 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		return err
 	}
 
-	avoidPartialRename := m.opts.DirectFileMode && m.opts.AvoidFinalRename
-	if avoidPartialRename {
-		// Users using AvoidFinalRename are depending on the exact filename
-		// of the partial files. So avoid injecting the id into it.
-		id = ""
-	}
-
 	// Check whether there is an in-progress transfer for the file.
 	partialPath := dstPath + id.partialSuffix()
 	inFileKey := incomingFileKey{id, baseName}
@@ -111,6 +105,7 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		}
 		if m.opts.DirectFileMode {
 			inFile.partialPath = partialPath
+			inFile.finalPath = dstPath
 		}
 		return inFile
 	})
@@ -128,10 +123,6 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	defer func() {
 		f.Close() // best-effort to cleanup dangling file handles
 		if err != nil {
-			if avoidPartialRename {
-				os.Remove(partialPath) // best-effort
-				return
-			}
 			m.deleter.Insert(filepath.Base(partialPath)) // mark partial file for eventual deletion
 		}
 	}()
@@ -179,16 +170,9 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 	}
 	fileLength := offset + copyLength
 
-	// Return early for avoidPartialRename since users of AvoidFinalRename
-	// are depending on the exact naming of partial files.
-	if avoidPartialRename {
-		inFile.mu.Lock()
-		inFile.done = true
-		inFile.mu.Unlock()
-		m.totalReceived.Add(1)
-		m.opts.SendFileNotify()
-		return fileLength, nil
-	}
+	inFile.mu.Lock()
+	inFile.done = true
+	inFile.mu.Unlock()
 
 	// File has been successfully received, rename the partial file
 	// to the final destination filename. If a file of that name already exists,
@@ -221,6 +205,10 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 		}
 
 		// Avoid the final rename if a destination file has the same contents.
+		//
+		// Note: this is best effort and copying files from iOS from the Media Library
+		// results in processing on the iOS side which means the size and shas of the
+		// same file can be different.
 		if dstLength == fileLength {
 			partialSum, err := computePartialSum()
 			if err != nil {
@@ -240,6 +228,7 @@ func (m *Manager) PutFile(id ClientID, baseName string, r io.Reader, offset, len
 
 		// Choose a new destination filename and try again.
 		dstPath = NextFilename(dstPath)
+		inFile.finalPath = dstPath
 	}
 	if maxRetries <= 0 {
 		return 0, errors.New("too many retries trying to rename partial file")
