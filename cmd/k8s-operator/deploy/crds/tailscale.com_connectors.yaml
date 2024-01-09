@@ -16,11 +16,15 @@ spec:
   scope: Cluster
   versions:
     - additionalPrinterColumns:
-        - description: Cluster CIDR ranges exposed to tailnet via subnet router
-          jsonPath: .status.subnetRouter.routes
+        - description: CIDR ranges exposed to tailnet by a subnet router defined via this Connector instance.
+          jsonPath: .status.subnetRoutes
           name: SubnetRoutes
           type: string
-        - description: Status of the components deployed by the connector
+        - description: Whether this Connector instance defines an exit node.
+          jsonPath: .status.isExitNode
+          name: IsExitNode
+          type: string
+        - description: Status of the deployed Connector resources.
           jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
           name: Status
           type: string
@@ -40,38 +44,40 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired state of the Connector resource.
+              description: ConnectorSpec describes the desired Tailscale component.
               type: object
-              required:
-                - subnetRouter
               properties:
+                exitNode:
+                  description: ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false. https://tailscale.com/kb/1103/exit-nodes
+                  type: boolean
+                hostname:
+                  description: Hostname is the tailnet hostname that should be assigned to the Connector node. If unset, hostname defaults to <connector name>-connector. Hostname can contain lower case letters, numbers and dashes, it must not start or end with a dash and must be between 2 and 63 characters long.
+                  type: string
+                  pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
                 subnetRouter:
-                  description: SubnetRouter configures a Tailscale subnet router to be deployed in the cluster. If unset no subnet router will be deployed. https://tailscale.com/kb/1019/subnets/
+                  description: SubnetRouter defines subnet routes that the Connector node should expose to tailnet. If unset, none are exposed. https://tailscale.com/kb/1019/subnets/
                   type: object
                   required:
-                    - routes
+                    - advertiseRoutes
                   properties:
-                    hostname:
-                      description: Hostname is the tailnet hostname that should be assigned to the subnet router node. If unset hostname is defaulted to <connector name>-subnetrouter. Hostname can contain lower case letters, numbers and dashes, it must not start or end with a dash and must be between 2 and 63 characters long.
-                      type: string
-                      pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
-                    routes:
-                      description: Routes refer to in-cluster CIDRs that the subnet router should make available. Route values must be strings that represent a valid IPv4 or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes. https://tailscale.com/kb/1201/4via6-subnets/
+                    advertiseRoutes:
+                      description: AdvertiseRoutes refer to CIDRs that the subnet router should make available. Route values must be strings that represent a valid IPv4 or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes. https://tailscale.com/kb/1201/4via6-subnets/
                       type: array
+                      minItems: 1
                       items:
                         type: string
                         format: cidr
-                    tags:
-                      description: Tags that the Tailscale node will be tagged with. If you want the subnet router to be autoapproved, you can configure Tailscale ACLs to autoapprove the subnetrouter's CIDRs for these tags. See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes Defaults to tag:k8s. If you specify custom tags here, you must also make tag:k8s-operator owner of the custom tag. See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator. Tags cannot be changed once a Connector has been created. Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
-                      type: array
-                      items:
-                        type: string
-                        pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
-                  x-kubernetes-validations:
-                    - rule: has(self.tags) == has(oldSelf.tags)
-                      message: Subnetrouter tags cannot be changed. Delete and redeploy the Connector if you need to change it.
+                tags:
+                  description: Tags that the Tailscale node will be tagged with. Defaults to [tag:k8s]. To autoapprove the subnet routes or exit node defined by a Connector, you can configure Tailscale ACLs to give these tags the necessary permissions. See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes. If you specify custom tags here, you must also make the operator an owner of these tags. See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator. Tags cannot be changed once a Connector node has been created. Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+              x-kubernetes-validations:
+                - rule: has(self.subnetRouter) || self.exitNode == true
+                  message: A Connector needs to be either an exit node or a subnet router, or both.
             status:
-              description: Status of the Connector. This is set and managed by the Tailscale operator.
+              description: ConnectorStatus describes the status of the Connector. This is set and managed by the Tailscale operator.
               type: object
               properties:
                 conditions:
@@ -107,27 +113,12 @@ spec:
                   x-kubernetes-list-map-keys:
                     - type
                   x-kubernetes-list-type: map
-                subnetRouter:
-                  description: SubnetRouter status is the current status of a subnet router
-                  type: object
-                  required:
-                    - message
-                    - ready
-                    - reason
-                    - routes
-                  properties:
-                    message:
-                      description: Message is a more verbose reason for the current subnet router status
-                      type: string
-                    ready:
-                      description: Ready is the ready status of the subnet router
-                      type: string
-                    reason:
-                      description: Reason is the reason for the subnet router status
-                      type: string
-                    routes:
-                      description: Routes are the CIDRs currently exposed via subnet router
-                      type: string
+                isExitNode:
+                  description: IsExitNode is set to true if the Connector acts as an exit node.
+                  type: boolean
+                subnetRoutes:
+                  description: SubnetRoutes are the routes currently exposed to tailnet via this Connector instance.
+                  type: string
       served: true
       storage: true
       subresources:
