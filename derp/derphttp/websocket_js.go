@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux || windows || (darwin && !ios) || !js
+//go:build js
 
 package derphttp
 
@@ -10,13 +10,10 @@ import (
 	"crypto/tls"
 	"log"
 	"net"
-	"net/http"
 
-	"github.com/coder/websocket"
+	"nhooyr.io/websocket"
 	"tailscale.com/net/wsconn"
 )
-
-const canWebsockets = true
 
 func init() {
 	dialWebsocketFunc = dialWebsocket
@@ -25,11 +22,6 @@ func init() {
 func dialWebsocket(ctx context.Context, urlStr string, tlsConfig *tls.Config) (net.Conn, error) {
 	c, res, err := websocket.Dial(ctx, urlStr, &websocket.DialOptions{
 		Subprotocols: []string{"derp"},
-		HTTPClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
-		},
 	})
 	if err != nil {
 		log.Printf("websocket Dial: %v, %+v", err, res)
