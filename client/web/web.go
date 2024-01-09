@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/csrf"
+	"github.com/tailscale/csrf"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
