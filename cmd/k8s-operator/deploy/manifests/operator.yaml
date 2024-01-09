@@ -27,6 +27,132 @@ metadata:
     name: proxies
     namespace: tailscale
 ---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    annotations:
+        controller-gen.kubebuilder.io/version: v0.13.0
+    name: connectors.tailscale.com
+spec:
+    group: tailscale.com
+    names:
+        kind: Connector
+        listKind: ConnectorList
+        plural: connectors
+        shortNames:
+            - cn
+        singular: connector
+    scope: Cluster
+    versions:
+        - additionalPrinterColumns:
+            - description: CIDR ranges exposed to tailnet by a subnet router defined via this Connector instance.
+              jsonPath: .status.subnetRoutes
+              name: SubnetRoutes
+              type: string
+            - description: Whether this Connector instance defines an exit node.
+              jsonPath: .status.isExitNode
+              name: IsExitNode
+              type: string
+            - description: Status of the deployed Connector resources.
+              jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
+              name: Status
+              type: string
+          name: v1alpha1
+          schema:
+            openAPIV3Schema:
+                properties:
+                    apiVersion:
+                        description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+                        type: string
+                    kind:
+                        description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+                        type: string
+                    metadata:
+                        type: object
+                    spec:
+                        description: ConnectorSpec describes the desired Tailscale component.
+                        properties:
+                            exitNode:
+                                description: ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false. https://tailscale.com/kb/1103/exit-nodes
+                                type: boolean
+                            hostname:
+                                description: Hostname is the tailnet hostname that should be assigned to the Connector node. If unset, hostname defaults to <connector name>-connector. Hostname can contain lower case letters, numbers and dashes, it must not start or end with a dash and must be between 2 and 63 characters long.
+                                pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
+                                type: string
+                            subnetRouter:
+                                description: SubnetRouter defines subnet routes that the Connector node should expose to tailnet. If unset, none are exposed. https://tailscale.com/kb/1019/subnets/
+                                properties:
+                                    advertiseRoutes:
+                                        description: AdvertiseRoutes refer to CIDRs that the subnet router should make available. Route values must be strings that represent a valid IPv4 or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes. https://tailscale.com/kb/1201/4via6-subnets/
+                                        items:
+                                            format: cidr
+                                            type: string
+                                        minItems: 1
+                                        type: array
+                                required:
+                                    - advertiseRoutes
+                                type: object
+                            tags:
+                                description: Tags that the Tailscale node will be tagged with. Defaults to [tag:k8s]. To autoapprove the subnet routes or exit node defined by a Connector, you can configure Tailscale ACLs to give these tags the necessary permissions. See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes. If you specify custom tags here, you must also make the operator an owner of these tags. See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator. Tags cannot be changed once a Connector node has been created. Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
+                                items:
+                                    pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                                    type: string
+                                type: array
+                        type: object
+                        x-kubernetes-validations:
+                            - message: A Connector needs to be either an exit node or a subnet router, or both.
+                              rule: has(self.subnetRouter) || self.exitNode == true
+                    status:
+                        description: ConnectorStatus describes the status of the Connector. This is set and managed by the Tailscale operator.
+                        properties:
+                            conditions:
+                                description: List of status conditions to indicate the status of the Connector. Known condition types are `ConnectorReady`.
+                                items:
+                                    description: ConnectorCondition contains condition information for a Connector.
+                                    properties:
+                                        lastTransitionTime:
+                                            description: LastTransitionTime is the timestamp corresponding to the last status change of this condition.
+                                            format: date-time
+                                            type: string
+                                        message:
+                                            description: Message is a human readable description of the details of the last transition, complementing reason.
+                                            type: string
+                                        observedGeneration:
+                                            description: If set, this represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.condition[x].observedGeneration is 9, the condition is out of date with respect to the current state of the Connector.
+                                            format: int64
+                                            type: integer
+                                        reason:
+                                            description: Reason is a brief machine readable explanation for the condition's last transition.
+                                            type: string
+                                        status:
+                                            description: Status of the condition, one of ('True', 'False', 'Unknown').
+                                            type: string
+                                        type:
+                                            description: Type of the condition, known values are (`SubnetRouterReady`).
+                                            type: string
+                                    required:
+                                        - status
+                                        - type
+                                    type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                    - type
+                                x-kubernetes-list-type: map
+                            isExitNode:
+                                description: IsExitNode is set to true if the Connector acts as an exit node.
+                                type: boolean
+                            subnetRoutes:
+                                description: SubnetRoutes are the routes currently exposed to tailnet via this Connector instance.
+                                type: string
+                        type: object
+                required:
+                    - spec
+                type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
