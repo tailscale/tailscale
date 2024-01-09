@@ -8,10 +8,6 @@ oauth: {}
   # clientId: ""
   # clientSecret: ""
 
-# enableConnector determines whether the operator should reconcile
-# connector.tailscale.com custom resources.
-enableConnector: "false"
-
 # installCRDs determines whether tailscale.com CRDs should be installed as part
 # of chart installation. We do not use Helm's CRD installation mechanism as that
 # does not allow for upgrading CRDs.
