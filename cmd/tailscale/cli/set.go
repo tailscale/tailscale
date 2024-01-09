@@ -12,6 +12,7 @@ import (
 	"os/exec"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/web"
 	"tailscale.com/clientupdate"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
@@ -193,7 +194,15 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	}
 
 	_, err = localClient.EditPrefs(ctx, maskedPrefs)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if setArgs.runWebClient && len(st.TailscaleIPs) > 0 {
+		printf("\nWeb interface now running at %s:%d", st.TailscaleIPs[0], web.ListenPort)
+	}
+
+	return nil
 }
 
 // calcAdvertiseRoutesForSet returns the new value for Prefs.AdvertiseRoutes based on the
