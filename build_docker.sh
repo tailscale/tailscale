@@ -32,6 +32,7 @@ PUSH="${PUSH:-false}"
 TARGET="${TARGET:-${DEFAULT_TARGET}}"
 TAGS="${TAGS:-${DEFAULT_TAGS}}"
 BASE="${BASE:-${DEFAULT_BASE}}"
+PLATFORM="${PLATFORM:-}" # default to all platforms
 
 case "$TARGET" in
   client)
@@ -50,6 +51,7 @@ case "$TARGET" in
       --tags="${TAGS}" \
       --repos="${REPOS}" \
       --push="${PUSH}" \
+      --target="${PLATFORM}" \
       /usr/local/bin/containerboot
     ;;
   operator)
@@ -65,6 +67,7 @@ case "$TARGET" in
       --tags="${TAGS}" \
       --repos="${REPOS}" \
       --push="${PUSH}" \
+      --target="${PLATFORM}" \
       /usr/local/bin/operator
     ;;
   *)
