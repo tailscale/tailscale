@@ -450,10 +450,11 @@ type authResponse struct {
 // viewerIdentity is the Tailscale identity of the source node
 // connected to this web client.
 type viewerIdentity struct {
-	LoginName     string `json:"loginName"`
-	NodeName      string `json:"nodeName"`
-	NodeIP        string `json:"nodeIP"`
-	ProfilePicURL string `json:"profilePicUrl,omitempty"`
+	LoginName     string           `json:"loginName"`
+	NodeName      string           `json:"nodeName"`
+	NodeIP        string           `json:"nodeIP"`
+	ProfilePicURL string           `json:"profilePicUrl,omitempty"`
+	Capabilities  peerCapabilities `json:"capabilities"` // features peer is allowed to edit
 }
 
 // serverAPIAuth handles requests to the /api/auth endpoint
@@ -464,10 +465,16 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	session, whois, status, sErr := s.getSession(r)
 
 	if whois != nil {
+		caps, err := toPeerCapabilities(whois)
+		if err != nil {
+			http.Error(w, sErr.Error(), http.StatusInternalServerError)
+			return
+		}
 		resp.ViewerIdentity = &viewerIdentity{
 			LoginName:     whois.UserProfile.LoginName,
 			NodeName:      whois.Node.Name,
 			ProfilePicURL: whois.UserProfile.ProfilePicURL,
+			Capabilities:  caps,
 		}
 		if addrs := whois.Node.Addresses; len(addrs) > 0 {
 			resp.ViewerIdentity.NodeIP = addrs[0].Addr().String()

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -231,4 +232,56 @@ func (s *Server) newSessionID() (string, error) {
 		}
 	}
 	return "", errors.New("too many collisions generating new session; please refresh page")
+}
+
+type peerCapabilities map[capFeature]bool // value is true if the peer can edit the given feature
+
+// canEdit is true if the peerCapabilities grant edit access
+// to the given feature.
+func (p peerCapabilities) canEdit(feature capFeature) bool {
+	if p == nil {
+		return false
+	}
+	if p[capFeatureAll] {
+		return true
+	}
+	return p[feature]
+}
+
+type capFeature string
+
+const (
+	// The following values should not be edited.
+	// New caps can be added, but existing ones should not be changed,
+	// as these exact values are used by users in tailnet policy files.
+
+	capFeatureAll      capFeature = "*"        // grants peer management of all features
+	capFeatureFunnel   capFeature = "funnel"   // grants peer serve/funnel management
+	capFeatureSSH      capFeature = "ssh"      // grants peer SSH server management
+	capFeatureSubnet   capFeature = "subnet"   // grants peer subnet routes management
+	capFeatureExitNode capFeature = "exitnode" // grants peer ability to advertise-as and use exit nodes
+	capFeatureAccount  capFeature = "account"  // grants peer ability to turn on auto updates and log out of node
+)
+
+type capRule struct {
+	CanEdit []string `json:"canEdit,omitempty"` // list of features peer is allowed to edit
+}
+
+// toPeerCapabilities parses out the web ui capabilities from the
+// given whois response.
+func toPeerCapabilities(whois *apitype.WhoIsResponse) (peerCapabilities, error) {
+	caps := peerCapabilities{}
+	if whois == nil {
+		return caps, nil
+	}
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](whois.CapMap, tailcfg.PeerCapabilityWebUI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal capability: %v", err)
+	}
+	for _, c := range rules {
+		for _, f := range c.CanEdit {
+			caps[capFeature(strings.ToLower(f))] = true
+		}
+	}
+	return caps, nil
 }
