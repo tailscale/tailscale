@@ -199,6 +199,13 @@ func tailscaleModuleRef(modBs []byte) (string, error) {
 }
 
 func mkOutput(v verInfo) (VersionInfo, error) {
+	if override := os.Getenv("TS_VERSION_OVERRIDE"); override != "" {
+		var err error
+		v.major, v.minor, v.patch, err = parseVersion(override)
+		if err != nil {
+			return VersionInfo{}, fmt.Errorf("failed to parse TS_VERSION_OVERRIDE: %w", err)
+		}
+	}
 	var changeSuffix string
 	if v.minor%2 == 1 {
 		// Odd minor numbers are unstable builds.
