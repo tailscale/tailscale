@@ -1341,6 +1341,9 @@ const (
 	PeerCapabilityWakeOnLAN PeerCapability = "https://tailscale.com/cap/wake-on-lan"
 	// PeerCapabilityIngress grants the ability for a peer to send ingress traffic.
 	PeerCapabilityIngress PeerCapability = "https://tailscale.com/cap/ingress"
+	// PeerCapabilityWebUI grants the ability for a peer to edit features from the
+	// device Web UI.
+	PeerCapabilityWebUI PeerCapability = "tailscale.com/cap/webui"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for

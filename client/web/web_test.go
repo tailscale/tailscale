@@ -450,6 +450,7 @@ func TestServeAuth(t *testing.T) {
 		NodeName:      remoteNode.Node.Name,
 		NodeIP:        remoteIP,
 		ProfilePicURL: user.ProfilePicURL,
+		Capabilities:  peerCapabilities{},
 	}
 
 	testControlURL := &defaultControlURL
@@ -1092,6 +1093,163 @@ func TestRequireTailscaleIP(t *testing.T) {
 			location := w.Header().Get("Location")
 			if location != tt.wantLocation {
 				t.Errorf("request(%q) wrong location; want=%q, got=%q", tt.target, tt.wantLocation, location)
+			}
+		})
+	}
+}
+
+func TestPeerCapabilities(t *testing.T) {
+	// Testing web.toPeerCapabilities
+	toPeerCapsTests := []struct {
+		name     string
+		whois    *apitype.WhoIsResponse
+		wantCaps peerCapabilities
+	}{
+		{
+			name:     "empty-whois",
+			whois:    nil,
+			wantCaps: peerCapabilities{},
+		},
+		{
+			name: "no-webui-caps",
+			whois: &apitype.WhoIsResponse{
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityDebugPeer: []tailcfg.RawMessage{},
+				},
+			},
+			wantCaps: peerCapabilities{},
+		},
+		{
+			name: "one-webui-cap",
+			whois: &apitype.WhoIsResponse{
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{
+				capFeatureSSH:    true,
+				capFeatureSubnet: true,
+			},
+		},
+		{
+			name: "multiple-webui-cap",
+			whois: &apitype.WhoIsResponse{
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+						"{\"canEdit\":[\"subnet\",\"exitnode\",\"*\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{
+				capFeatureSSH:      true,
+				capFeatureSubnet:   true,
+				capFeatureExitNode: true,
+				capFeatureAll:      true,
+			},
+		},
+		{
+			name: "case=insensitive-caps",
+			whois: &apitype.WhoIsResponse{
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"SSH\",\"sUBnet\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{
+				capFeatureSSH:    true,
+				capFeatureSubnet: true,
+			},
+		},
+		{
+			name: "random-canEdit-contents-dont-error",
+			whois: &apitype.WhoIsResponse{
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"unknown-feature\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{
+				"unknown-feature": true,
+			},
+		},
+		{
+			name: "no-canEdit-section",
+			whois: &apitype.WhoIsResponse{
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canDoSomething\":[\"*\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{},
+		},
+	}
+	for _, tt := range toPeerCapsTests {
+		t.Run("toPeerCapabilities-"+tt.name, func(t *testing.T) {
+			got, err := toPeerCapabilities(tt.whois)
+			if err != nil {
+				t.Fatalf("unexpected: %v", err)
+			}
+			if diff := cmp.Diff(got, tt.wantCaps); diff != "" {
+				t.Errorf("wrong caps; (-got+want):%v", diff)
+			}
+		})
+	}
+
+	// Testing web.peerCapabilities.canEdit
+	canEditTests := []struct {
+		name        string
+		caps        peerCapabilities
+		wantCanEdit map[capFeature]bool
+	}{
+		{
+			name: "empty-caps",
+			caps: nil,
+			wantCanEdit: map[capFeature]bool{
+				capFeatureAll:      false,
+				capFeatureFunnel:   false,
+				capFeatureSSH:      false,
+				capFeatureSubnet:   false,
+				capFeatureExitNode: false,
+				capFeatureAccount:  false,
+			},
+		},
+		{
+			name: "some-caps",
+			caps: peerCapabilities{capFeatureSSH: true, capFeatureAccount: true},
+			wantCanEdit: map[capFeature]bool{
+				capFeatureAll:      false,
+				capFeatureFunnel:   false,
+				capFeatureSSH:      true,
+				capFeatureSubnet:   false,
+				capFeatureExitNode: false,
+				capFeatureAccount:  true,
+			},
+		},
+		{
+			name: "wildcard-in-caps",
+			caps: peerCapabilities{capFeatureAll: true, capFeatureAccount: true},
+			wantCanEdit: map[capFeature]bool{
+				capFeatureAll:      true,
+				capFeatureFunnel:   true,
+				capFeatureSSH:      true,
+				capFeatureSubnet:   true,
+				capFeatureExitNode: true,
+				capFeatureAccount:  true,
+			},
+		},
+	}
+	for _, tt := range canEditTests {
+		t.Run("canEdit-"+tt.name, func(t *testing.T) {
+			for f, want := range tt.wantCanEdit {
+				if got := tt.caps.canEdit(f); got != want {
+					t.Errorf("wrong canEdit(%s); got=%v, want=%v", f, got, want)
+				}
 			}
 		})
 	}
