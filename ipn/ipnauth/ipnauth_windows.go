@@ -93,6 +93,12 @@ func (t *token) IsElevated() bool {
 	return t.t.IsElevated()
 }
 
+func (t *token) IsLocalSystem() bool {
+	// https://web.archive.org/web/2024/https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-security-identifiers
+	const systemUID = ipn.WindowsUserID("S-1-5-18")
+	return t.IsUID(systemUID)
+}
+
 func (t *token) UserDir(folderID string) (string, error) {
 	guid, err := windows.GUIDFromString(folderID)
 	if err != nil {
