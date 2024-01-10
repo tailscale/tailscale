@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"tailscale.com/version"
 )
 
 func init() {
@@ -72,7 +74,7 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 
 	if dir := os.Getenv("TS_MACOS_CLI_SHARED_DIR"); dir != "" {
 		// First see if we're running as the non-AppStore "macsys" variant.
-		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
+		if version.IsMacSysExt() {
 			if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
 				return port, token, nil
 			}
