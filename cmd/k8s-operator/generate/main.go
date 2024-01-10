@@ -18,15 +18,49 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	operatorDeploymentFilesPath = "cmd/k8s-operator/deploy"
+	crdPath                     = operatorDeploymentFilesPath + "/crds/tailscale.com_connectors.yaml"
+	helmTemplatesPath           = operatorDeploymentFilesPath + "/chart/templates"
+	crdTemplatePath             = helmTemplatesPath + "/connectors.yaml"
+
+	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
+	helmConditionalEnd   = "{{- end -}}"
+)
+
 func main() {
+	if len(os.Args) < 2 {
+		log.Fatalf("usage ./generate [staticmanifests|helmcrd]")
+	}
 	repoRoot := "../../"
-	cmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
+	switch os.Args[1] {
+	case "helmcrd": // insert CRD to Helm templates behind a installCRDs=true conditional check
+		log.Print("Adding Connector CRD to Helm templates")
+		if err := generate("./"); err != nil {
+			log.Fatalf("error adding Connector CRD to Helm templates: %v", err)
+		}
+		return
+	case "staticmanifests": // generate static manifests from Helm templates (including the CRD)
+	default:
+		log.Fatalf("unknown option %s, known options are 'staticmanifests', 'helmcrd'", os.Args[1])
+	}
+	log.Printf("Inserting CRD into the Helm templates")
+	if err := generate(repoRoot); err != nil {
+		log.Fatalf("error adding Connector CRD to Helm templates: %v", err)
+	}
+	defer func() {
+		if err := cleanup(repoRoot); err != nil {
+			log.Fatalf("error cleaning up generated resources")
+		}
+	}()
+	log.Print("Templating Helm chart contents")
+	helmTmplCmd := exec.Command("./tool/helm", "template", "operator", "./cmd/k8s-operator/deploy/chart",
 		"--namespace=tailscale")
-	cmd.Dir = repoRoot
+	helmTmplCmd.Dir = repoRoot
 	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	helmTmplCmd.Stdout = &out
+	helmTmplCmd.Stderr = os.Stderr
+	if err := helmTmplCmd.Run(); err != nil {
 		log.Fatalf("error templating helm manifests: %v", err)
 	}
 
@@ -54,7 +88,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed read from input data: %v", err)
 		}
-
 		bytes, err := yaml.Marshal(document)
 		if err != nil {
 			log.Fatalf("failed to marshal YAML document: %v", err)
@@ -71,4 +104,36 @@ func main() {
 	if err := os.WriteFile(filepath.Join(repoRoot, "cmd/k8s-operator/deploy/manifests/operator.yaml"), []byte(finalString), 0664); err != nil {
 		log.Fatalf("error writing new file: %v", err)
 	}
+}
+
+func generate(baseDir string) error {
+	log.Print("Placing Connector CRD into Helm templates..")
+	chartBytes, err := os.ReadFile(filepath.Join(baseDir, crdPath))
+	if err != nil {
+		return fmt.Errorf("error reading CRD contents: %w", err)
+	}
+	// Place a new temporary Helm template file with the templated CRD
+	// contents into Helm templates.
+	file, err := os.Create(filepath.Join(baseDir, crdTemplatePath))
+	if err != nil {
+		return fmt.Errorf("error creating CRD template file: %w", err)
+	}
+	if _, err := file.Write([]byte(helmConditionalStart)); err != nil {
+		return fmt.Errorf("error writing helm if statement start: %w", err)
+	}
+	if _, err := file.Write(chartBytes); err != nil {
+		return fmt.Errorf("error writing chart bytes: %w", err)
+	}
+	if _, err := file.Write([]byte(helmConditionalEnd)); err != nil {
+		return fmt.Errorf("error writing helm if-statement end: %w", err)
+	}
+	return nil
+}
+
+func cleanup(baseDir string) error {
+	log.Print("Cleaning up CRD from Helm templates")
+	if err := os.Remove(filepath.Join(baseDir, crdTemplatePath)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error cleaning up CRD template: %w", err)
+	}
+	return nil
 }

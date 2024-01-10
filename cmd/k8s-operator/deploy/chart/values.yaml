@@ -9,10 +9,14 @@ oauth: {}
   # clientSecret: ""
 
 # enableConnector determines whether the operator should reconcile
-# connector.tailscale.com custom resources. If set to true you have to install
-# connector CRD in a separate step.
-# You can do so by running 'kubectl apply -f ./cmd/k8s-operator/deploy/crds'.
+# connector.tailscale.com custom resources.
 enableConnector: "false"
+
+# installCRDs determines whether tailscale.com CRDs should be installed as part
+# of chart installation. We do not use Helm's CRD installation mechanism as that
+# does not allow for upgrading CRDs.
+# https://helm.sh/docs/chart_best_practices/custom_resource_definitions/
+installCRDs: "true"
 
 operatorConfig:
   image:

@@ -45,7 +45,7 @@ import (
 )
 
 // Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
-//go:generate go run tailscale.com/cmd/k8s-operator/generate
+//go:generate go run tailscale.com/cmd/k8s-operator/generate staticmanifests
 
 // Generate Connector CustomResourceDefinition yaml from its Go types.
 //go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
