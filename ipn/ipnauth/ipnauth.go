@@ -46,6 +46,8 @@ type WindowsToken interface {
 	// IsElevated reports whether the receiver is currently executing as an
 	// elevated administrative user.
 	IsElevated() bool
+	// IsLocalSystem reports whether the receiver is the built-in SYSTEM user.
+	IsLocalSystem() bool
 	// UserDir returns the special directory identified by folderID as associated
 	// with the receiver. folderID must be one of the KNOWNFOLDERID values from
 	// the x/sys/windows package, serialized as a stringified GUID.

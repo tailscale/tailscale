@@ -2735,6 +2735,16 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error
 	if !b.pm.CurrentPrefs().ForceDaemon() {
 		return nil
 	}
+
+	// Always allow Windows SYSTEM user to connect,
+	// even if Tailscale is currently being used by another user.
+	if tok, err := ci.WindowsToken(); err == nil {
+		defer tok.Close()
+		if tok.IsLocalSystem() {
+			return nil
+		}
+	}
+
 	uid := ci.WindowsUserID()
 	if uid == "" {
 		return errors.New("empty user uid in connection identity")
