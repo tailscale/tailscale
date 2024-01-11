@@ -95,9 +95,16 @@ function LoginPopoverContent({
   const [canConnectOverTS, setCanConnectOverTS] = useState<boolean>(false)
   const [isRunningCheck, setIsRunningCheck] = useState<boolean>(false)
 
+  // Whether the current page is loaded over HTTPS.
+  // If it is, then the connectivity check to the management client
+  // will fail with a mixed-content error.
+  const isHTTPS = window.location.protocol === "https:"
+
   const checkTSConnection = useCallback(() => {
-    if (auth.viewerIdentity) {
-      setCanConnectOverTS(true) // already connected over ts
+    if (auth.viewerIdentity || isHTTPS) {
+      // Skip the connectivity check if we either already know we're connected over Tailscale,
+      // or know the connectivity check will fail because the current page is loaded over HTTPS.
+      setCanConnectOverTS(true)
       return
     }
     // Otherwise, test connection to the ts IP.
@@ -111,7 +118,7 @@ function LoginPopoverContent({
         setIsRunningCheck(false)
       })
       .catch(() => setIsRunningCheck(false))
-  }, [auth.viewerIdentity, isRunningCheck, node.IPv4])
+  }, [auth.viewerIdentity, isRunningCheck, node.IPv4, isHTTPS])
 
   /**
    * Checking connection for first time on page load.
@@ -193,6 +200,14 @@ function LoginPopoverContent({
                     You can see most of this device's details. To make changes,
                     you need to sign in.
                   </p>
+                  {isHTTPS && (
+                    // we don't know if the user can connect over TS, so
+                    // provide extra tips in case they have trouble.
+                    <p className="text-gray-500 text-xs font-semibold pt-2">
+                      Make sure you are connected to your tailnet, and that your
+                      policy file allows access.
+                    </p>
+                  )}
                   <SignInButton auth={auth} onClick={handleSignInClick} />
                 </>
               )}
