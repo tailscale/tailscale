@@ -59,8 +59,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: ENABLE_CONNECTOR
-              value: "{{ .Values.enableConnector }}"
             - name: CLIENT_ID_FILE
               value: /oauth/client_id
             - name: CLIENT_SECRET_FILE

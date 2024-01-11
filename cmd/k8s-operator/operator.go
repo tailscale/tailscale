@@ -62,7 +62,6 @@ func main() {
 		priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode    = defaultEnv("PROXY_FIREWALL_MODE", "")
-		tsEnableConnector = defaultBool("ENABLE_CONNECTOR", false)
 	)
 
 	var opts []kzap.Opts
@@ -93,7 +92,7 @@ func main() {
 	maybeLaunchAPIServerProxy(zlog, restConfig, s, mode)
 	// TODO (irbekrm): gather the reconciler options into an opts struct
 	// rather than passing a million of them in one by one.
-	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode, tsEnableConnector)
+	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -201,7 +200,7 @@ waitOnline:
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string, enableConnector bool) {
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -222,9 +221,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 				&appsv1.StatefulSet{}: nsFilter,
 			},
 		},
-	}
-	if enableConnector {
-		mgrOpts.Scheme = tsapi.GlobalScheme
+		Scheme: tsapi.GlobalScheme,
 	}
 	mgr, err := manager.New(restConfig, mgrOpts)
 	if err != nil {
@@ -278,22 +275,20 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		startlog.Fatalf("could not create controller: %v", err)
 	}
 
-	if enableConnector {
-		connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("subnetrouter"))
-		err = builder.ControllerManagedBy(mgr).
-			For(&tsapi.Connector{}).
-			Watches(&appsv1.StatefulSet{}, connectorFilter).
-			Watches(&corev1.Secret{}, connectorFilter).
-			Complete(&ConnectorReconciler{
-				ssr:      ssr,
-				recorder: eventRecorder,
-				Client:   mgr.GetClient(),
-				logger:   zlog.Named("connector-reconciler"),
-				clock:    tstime.DefaultClock{},
-			})
-		if err != nil {
-			startlog.Fatal("could not create connector reconciler: %v", err)
-		}
+	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.Connector{}).
+		Watches(&appsv1.StatefulSet{}, connectorFilter).
+		Watches(&corev1.Secret{}, connectorFilter).
+		Complete(&ConnectorReconciler{
+			ssr:      ssr,
+			recorder: eventRecorder,
+			Client:   mgr.GetClient(),
+			logger:   zlog.Named("connector-reconciler"),
+			clock:    tstime.DefaultClock{},
+		})
+	if err != nil {
+		startlog.Fatal("could not create connector reconciler: %v", err)
 	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
