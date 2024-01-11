@@ -1573,6 +1573,17 @@ func (c *sclient) sendMeshUpdates() error {
 	c.s.mu.Lock()
 	defer c.s.mu.Unlock()
 
+	// allow all happened-before mesh update request goroutines to complete, if
+	// we don't finish the task we'll queue another below.
+drainUpdates:
+	for {
+		select {
+		case <-c.meshUpdate:
+		default:
+			break drainUpdates
+		}
+	}
+
 	writes := 0
 	for _, pcs := range c.peerStateChange {
 		if c.bw.Available() <= frameHeaderLen+keyLen {
