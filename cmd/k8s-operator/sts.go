@@ -214,16 +214,21 @@ const maxStatefulSetNameLength = 63 - 10 - 1
 // generation will NOT result in a StatefulSet name longer than 52 chars.
 // This is done because of https://github.com/kubernetes/kubernetes/issues/64023.
 func statefulSetNameBase(parent string) string {
-
 	base := fmt.Sprintf("ts-%s-", parent)
-
-	// Calculate what length name GenerateName returns for this base.
 	generator := names.SimpleNameGenerator
-	generatedName := generator.GenerateName(base)
-
-	if excess := len(generatedName) - maxStatefulSetNameLength; excess > 0 {
-		base = base[:len(base)-excess-1] // take extra char off to make space for hyphen
-		base = base + "-"                // re-instate hyphen
+	tooLong := true
+	for tooLong {
+		generatedName := generator.GenerateName(base)
+		if excess := len(generatedName) - maxStatefulSetNameLength; excess > 0 {
+			base = base[:len(base)-1-excess] // cut off the excess chars
+		}
+		if !strings.HasSuffix(base, "-") { // dash may have been cut by the generator
+			base = base + "-"
+		}
+		generatedName = generator.GenerateName(base)
+		if excess := len(generatedName) - maxStatefulSetNameLength; excess <= 0 {
+			tooLong = false
+		}
 	}
 	return base
 }
