@@ -6,6 +6,9 @@
 package main
 
 import (
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -19,32 +22,20 @@ import (
 // https://github.com/kubernetes/kubernetes/blob/v1.28.4/staging/src/k8s.io/apiserver/pkg/storage/names/generate.go#L45.
 // https://github.com/kubernetes/kubernetes/pull/116430
 func Test_statefulSetNameBase(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		out  string
-	}{
-		{
-			name: "43 chars",
-			in:   "oidhexl9o832hcbhyg4uz6o0s7u9uae54h5k8ofs9xb",
-			out:  "ts-oidhexl9o832hcbhyg4uz6o0s7u9uae54h5k8ofs9xb-",
-		},
-		{
-			name: "44 chars",
-			in:   "oidhexl9o832hcbhyg4uz6o0s7u9uae54h5k8ofs9xbo",
-			out:  "ts-oidhexl9o832hcbhyg4uz6o0s7u9uae54h5k8ofs9xb-",
-		},
-		{
-			name: "42 chars",
-			in:   "oidhexl9o832hcbhyg4uz6o0s7u9uae54h5k8ofs9x",
-			out:  "ts-oidhexl9o832hcbhyg4uz6o0s7u9uae54h5k8ofs9x-",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := statefulSetNameBase(tt.in); got != tt.out {
-				t.Errorf("stsNamePrefix(%s) = %q, want %s", tt.in, got, tt.out)
-			}
-		})
+	// Service name lengths can be 1 - 63 chars, be paranoid and test them all.
+	var b strings.Builder
+	for b.Len() < 63 {
+		if _, err := b.WriteString("a"); err != nil {
+			t.Fatalf("error writing to string builder: %v", err)
+		}
+		baseLength := len(b.String())
+		if baseLength > 43 {
+			baseLength = 43 // currently 43 is the max base length
+		}
+		wantsNameR := regexp.MustCompile(`^ts-a{` + fmt.Sprint(baseLength) + `}-$`) // to match a string like ts-aaaa-
+		gotName := statefulSetNameBase(b.String())
+		if !wantsNameR.MatchString(gotName) {
+			t.Fatalf("expected string %s to match regex %s ", gotName, wantsNameR.String()) // fatal rather than error as this test is called 63 times
+		}
 	}
 }
