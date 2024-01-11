@@ -216,21 +216,17 @@ const maxStatefulSetNameLength = 63 - 10 - 1
 func statefulSetNameBase(parent string) string {
 	base := fmt.Sprintf("ts-%s-", parent)
 	generator := names.SimpleNameGenerator
-	tooLong := true
-	for tooLong {
+	for {
 		generatedName := generator.GenerateName(base)
-		if excess := len(generatedName) - maxStatefulSetNameLength; excess > 0 {
-			base = base[:len(base)-1-excess] // cut off the excess chars
+		excess := len(generatedName) - maxStatefulSetNameLength
+		if excess <= 0 {
+			return base
 		}
+		base = base[:len(base)-1-excess]   // cut off the excess chars
 		if !strings.HasSuffix(base, "-") { // dash may have been cut by the generator
 			base = base + "-"
 		}
-		generatedName = generator.GenerateName(base)
-		if excess := len(generatedName) - maxStatefulSetNameLength; excess <= 0 {
-			tooLong = false
-		}
 	}
-	return base
 }
 
 func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {

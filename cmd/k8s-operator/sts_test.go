@@ -24,17 +24,16 @@ import (
 func Test_statefulSetNameBase(t *testing.T) {
 	// Service name lengths can be 1 - 63 chars, be paranoid and test them all.
 	var b strings.Builder
-	b.WriteString("a")
-	for len(b.String()) < 63 {
+	for b.Len() < 63 {
+		if _, err := b.WriteString("a"); err != nil {
+			t.Fatalf("error writing to string builder: %v", err)
+		}
 		baseLength := len(b.String())
 		if baseLength > 43 {
 			baseLength = 43 // currently 43 is the max base length
 		}
 		wantsNameR := regexp.MustCompile(`^ts-a{` + fmt.Sprint(baseLength) + `}-$`) // to match a string like ts-aaaa-
 		gotName := statefulSetNameBase(b.String())
-		if _, err := b.WriteString("a"); err != nil {
-			t.Fatalf("error writing to string builder: %v", err)
-		}
 		if !wantsNameR.MatchString(gotName) {
 			t.Fatalf("expected string %s to match regex %s ", gotName, wantsNameR.String()) // fatal rather than error as this test is called 63 times
 		}
