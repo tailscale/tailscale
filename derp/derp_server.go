@@ -712,7 +712,6 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		bw:             bw,
 		logf:           logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v%s: ", remoteAddr, clientKey.ShortString())),
 		done:           ctx.Done(),
-		remoteAddr:     remoteAddr,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
 		sendQueue:      make(chan pkt, perClientSendQueueDepth),
@@ -1317,7 +1316,6 @@ type sclient struct {
 	info           clientInfo
 	logf           logger.Logf
 	done           <-chan struct{}  // closed when connection closes
-	remoteAddr     string           // usually ip:port from net.Conn.RemoteAddr().String()
 	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt         // packets queued to this client; never closed
 	discoSendQueue chan pkt         // important packets queued to this client; never closed
