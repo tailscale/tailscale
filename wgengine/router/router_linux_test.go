@@ -28,6 +28,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/linuxfw"
+	"tailscale.com/version/distro"
 )
 
 func TestRouterStates(t *testing.T) {
@@ -1230,4 +1231,25 @@ func adjustFwmask(t *testing.T, s string) string {
 	}
 
 	return fwmaskAdjustRe.ReplaceAllString(s, "$1")
+}
+
+func TestIPRulesForUDMPro(t *testing.T) {
+	// Override the global getDistroFunc
+	getDistroFunc = func() distro.Distro {
+		return distro.UDMPro
+	}
+	defer func() { getDistroFunc = distro.Get }() // Restore original after the test
+
+	expected := udmProIPRules
+	actual := ipRules()
+
+	if len(expected) != len(actual) {
+		t.Fatalf("Expected %d rules, got %d", len(expected), len(actual))
+	}
+
+	for i, rule := range expected {
+		if rule != actual[i] {
+			t.Errorf("Rule mismatch at index %d: expected %+v, got %+v", i, rule, actual[i])
+		}
+	}
 }
