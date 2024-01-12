@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/lineiter"
@@ -30,6 +31,7 @@ const (
 	WDMyCloud = Distro("wdmycloud")
 	Unraid    = Distro("unraid")
 	Alpine    = Distro("alpine")
+	UDMPro    = Distro("udmpro")
 )
 
 var distro lazy.SyncValue[Distro]
@@ -75,6 +77,9 @@ func linuxDistro() Distro {
 	case have("/usr/local/bin/freenas-debug"):
 		// TrueNAS Scale runs on debian
 		return TrueNAS
+	case isUDMPro():
+		// UDM-Pro runs on debian
+		return UDMPro
 	case have("/etc/debian_version"):
 		return Debian
 	case have("/etc/arch-release"):
@@ -146,4 +151,26 @@ func DSMVersion() int {
 		}
 		return 0
 	})
+}
+
+func isUDMPro() bool {
+	if exists, err := fileContainsString("/etc/board.info", "UDMPRO"); err == nil && exists {
+		return true
+	}
+	if exists, err := fileContainsString("/etc/board.info", "Dream Machine PRO"); err == nil && exists {
+		return true
+	}
+	if exists, err := fileContainsString("/sys/firmware/devicetree/base/soc/board-cfg/id", "udm pro"); err == nil && exists {
+		return true
+	}
+	return false
+}
+
+func fileContainsString(filePath, searchString string) (bool, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return false, err
+	}
+
+	return strings.Contains(string(data), searchString), nil
 }
