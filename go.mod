@@ -53,6 +53,7 @@ require (
 	github.com/mdlayher/sdnotify v1.0.0
 	github.com/miekg/dns v1.1.56
 	github.com/mitchellh/go-ps v1.0.0
+	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.6
@@ -115,6 +116,7 @@ require (
 	github.com/gobuffalo/flect v1.0.2 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
+	github.com/oschwald/maxminddb-golang v1.11.0 // indirect
 )
 
 require (

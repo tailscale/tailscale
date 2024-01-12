@@ -1338,6 +1338,17 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.IsValid() && !derpAddr.IsValid() {
 		ps.CurAddr = udpAddr.String()
 	}
+
+	// If we don't have a direct connection, look for a public IP in the list of advertised endpoints.
+	if ps.CurAddr != "" {
+		return
+	}
+	for ip := range de.endpointState {
+		if ip.Addr().IsPrivate() {
+			continue
+		}
+		ps.CurAddr = ip.Addr().String()
+	}
 }
 
 // stopAndReset stops timers associated with de and resets its state back to zero.
