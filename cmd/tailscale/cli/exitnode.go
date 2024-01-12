@@ -23,6 +23,8 @@ import (
 var exitNodeCmd = &ffcli.Command{
 	Name:       "exit-node",
 	ShortUsage: "exit-node [flags]",
+	ShortHelp:  "Show machines on your tailnet configured as exit nodes",
+	LongHelp:   "Show machines on your tailnet configured as exit nodes",
 	Subcommands: []*ffcli.Command{
 		{
 			Name:       "list",
