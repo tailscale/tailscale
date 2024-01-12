@@ -159,15 +159,15 @@ func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {
 }
 
 type clientInfo struct {
-	// Version is the DERP protocol version that the client was built with.
-	// See the ProtocolVersion const.
-	Version int `json:"version,omitempty"`
-
 	// MeshKey optionally specifies a pre-shared key used by
 	// trusted clients.  It's required to subscribe to the
 	// connection list & forward packets. It's empty for regular
 	// users.
 	MeshKey string `json:"meshKey,omitempty"`
+
+	// Version is the DERP protocol version that the client was built with.
+	// See the ProtocolVersion const.
+	Version int `json:"version,omitempty"`
 
 	// CanAckPings is whether the client declares it's able to ack
 	// pings.
