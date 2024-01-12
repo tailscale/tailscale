@@ -28,7 +28,7 @@ func Test_statefulSetNameBase(t *testing.T) {
 		if _, err := b.WriteString("a"); err != nil {
 			t.Fatalf("error writing to string builder: %v", err)
 		}
-		baseLength := len(b.String())
+		baseLength := b.Len()
 		if baseLength > 43 {
 			baseLength = 43 // currently 43 is the max base length
 		}

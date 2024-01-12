@@ -222,10 +222,8 @@ func statefulSetNameBase(parent string) string {
 		if excess <= 0 {
 			return base
 		}
-		base = base[:len(base)-1-excess]   // cut off the excess chars
-		if !strings.HasSuffix(base, "-") { // dash may have been cut by the generator
-			base = base + "-"
-		}
+		base = base[:len(base)-1-excess] // cut off the excess chars
+		base = base + "-"                // re-instate the dash
 	}
 }
 
