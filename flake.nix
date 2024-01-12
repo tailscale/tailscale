@@ -120,4 +120,4 @@
   in
     flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
 }
-# nix-direnv cache busting line: sha256-8PtzUS8VL1p7KnqSx6Y55tOl41KYOhJfe52V4qMB3Yw=
+# nix-direnv cache busting line: sha256-BK1zugKGtx2RpWHDvFZaFqz/YdoewsG8SscGt25uwtQ=
