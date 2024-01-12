@@ -1354,16 +1354,13 @@ type sclient struct {
 // peerConnState represents whether a peer is connected to the server
 // or not.
 type peerConnState struct {
+	ipPort  netip.AddrPort // if present, the peer's IP:port
 	peer    key.NodePublic
 	present bool
-	ipPort  netip.AddrPort // if present, the peer's IP:port
 }
 
 // pkt is a request to write a data frame to an sclient.
 type pkt struct {
-	// src is the who's the sender of the packet.
-	src key.NodePublic
-
 	// enqueuedAt is when a packet was put onto a queue before it was sent,
 	// and is used for reporting metrics on the duration of packets in the queue.
 	enqueuedAt time.Time
@@ -1371,6 +1368,9 @@ type pkt struct {
 	// bs is the data packet bytes.
 	// The memory is owned by pkt.
 	bs []byte
+
+	// src is the who's the sender of the packet.
+	src key.NodePublic
 }
 
 // peerGoneMsg is a request to write a peerGone frame to an sclient
