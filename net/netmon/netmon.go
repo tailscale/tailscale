@@ -478,6 +478,28 @@ func (m *Monitor) IsMajorChangeFrom(s1, s2 *interfaces.State) bool {
 			return true
 		}
 	}
+	// Iterate over s2 in case there is a field in s2 that doesn't exist in s1
+	for iname, i := range s2.Interface {
+		if iname == m.tsIfName {
+			// Ignore changes in the Tailscale interface itself.
+			continue
+		}
+		ips := s2.InterfaceIPs[iname]
+		if !m.isInterestingInterface(i, ips) {
+			continue
+		}
+		i1, ok := s1.Interface[iname]
+		if !ok {
+			return true
+		}
+		ips1, ok := s1.InterfaceIPs[iname]
+		if !ok {
+			return true
+		}
+		if !i.Equal(i1) || !prefixesMajorEqual(ips, ips1) {
+			return true
+		}
+	}
 	return false
 }
 
