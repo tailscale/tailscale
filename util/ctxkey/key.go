@@ -6,13 +6,13 @@
 // Example usage:
 //
 //	// Create a context key.
-//	var TimeoutKey = ctxkey.New("fsrv.Timeout", 5*time.Second)
+//	var TimeoutKey = ctxkey.New("mapreduce.Timeout", 5*time.Second)
 //
 //	// Store a context value.
-//	ctx = fsrv.TimeoutKey.WithValue(ctx, 10*time.Second)
+//	ctx = mapreduce.TimeoutKey.WithValue(ctx, 10*time.Second)
 //
 //	// Load a context value.
-//	timeout := fsrv.TimeoutKey.Value(ctx)
+//	timeout := mapreduce.TimeoutKey.Value(ctx)
 //	... // use timeout of type time.Duration
 //
 // This is inspired by https://go.dev/issue/49189.
@@ -24,20 +24,23 @@ import (
 	"reflect"
 )
 
+// TODO(https://go.dev/issue/60088): Use reflect.TypeFor instead.
+func reflectTypeFor[T any]() reflect.Type {
+	return reflect.TypeOf((*T)(nil)).Elem()
+}
+
 // Key is a generic key type associated with a specific value type.
 //
 // A zero Key is valid where the Value type itself is used as the context key.
-// This pattern should only be used with locally declared Go types.
-// The Value type must not be an interface type.
+// This pattern should only be used with locally declared Go types,
+// otherwise different packages risk producing key conflicts.
 //
 // Example usage:
 //
-//	type peerInfo struct { ... }           // peerInfo is an unexported type
-//	var peerInfoKey = ctxkey.Key[peerInfo]
+//	type peerInfo struct { ... }           // peerInfo is a locally declared type
+//	var peerInfoKey ctxkey.Key[peerInfo]
 //	ctx = peerInfoKey.WithValue(ctx, info) // store a context value
 //	info = peerInfoKey.Value(ctx)          // load a context value
-//
-// In general, any exported keys should be produced using [New].
 type Key[Value any] struct {
 	name   *stringer[string]
 	defVal *Value
@@ -49,6 +52,7 @@ type Key[Value any] struct {
 // The provided name is an arbitrary name only used for human debugging.
 // As a convention, it is recommended that the name be the dot-delimited
 // combination of the package name of the caller with the variable name.
+// If the name is not provided, then the name of the Value type is used.
 // Every key is unique, even if provided the same name.
 //
 // Example usage:
@@ -56,32 +60,25 @@ type Key[Value any] struct {
 //	package mapreduce
 //	var NumWorkersKey = ctxkey.New("mapreduce.NumWorkers", runtime.NumCPU())
 func New[Value any](name string, defaultValue Value) Key[Value] {
+	// Allocate a new stringer to ensure that every invocation of New
+	// creates a universally unique context key even for the same name
+	// since newly allocated pointers are globally unique within a process.
+	key := Key[Value]{name: new(stringer[string])}
 	if name == "" {
-		var v Value
-		name = reflect.TypeOf(v).String() // TODO(https://go.dev/issue/60088): Use reflect.TypeFor.
+		name = reflectTypeFor[Value]().String()
 	}
-	var defVal *Value
-	switch v := reflect.ValueOf(&defaultValue).Elem(); {
-	case v.Kind() == reflect.Interface:
-		panic(fmt.Sprintf("value type %v must not be an interface", v.Type()))
-	case !v.IsZero():
-		defVal = &defaultValue
+	key.name.v = name
+	if v := reflect.ValueOf(defaultValue); v.IsValid() && !v.IsZero() {
+		key.defVal = &defaultValue
 	}
-	// Allocate a *stringer to ensure that every invocation of New
-	// creates a universally unique context key even for the same name.
-	return Key[Value]{name: &stringer[string]{name}, defVal: defVal}
+	return key
 }
 
 // contextKey returns the context key to use.
 func (key Key[Value]) contextKey() any {
 	if key.name == nil {
 		// Use the reflect.Type of the Value (implies key not created by New).
-		var v Value
-		t := reflect.TypeOf(v)
-		if t == nil {
-			panic(fmt.Sprintf("value type %v must not be an interface", reflect.TypeOf(&v).Elem()))
-		}
-		return t
+		return reflectTypeFor[Value]()
 	} else {
 		// Use the name pointer directly (implies key created by New).
 		return key.name
@@ -122,8 +119,7 @@ func (key Key[Value]) Has(ctx context.Context) (ok bool) {
 // String returns the name of the key.
 func (key Key[Value]) String() string {
 	if key.name == nil {
-		var v Value
-		return reflect.TypeOf(v).String() // TODO(https://go.dev/issue/60088): Use reflect.TypeFor.
+		return reflectTypeFor[Value]().String()
 	}
 	return key.name.String()
 }
@@ -134,6 +130,11 @@ func (key Key[Value]) String() string {
 // Note that the [context] package lacks a dependency on [reflect],
 // so it cannot print arbitrary values. By implementing [fmt.Stringer],
 // we functionally teach a context how to print itself.
+//
+// Wrapping values within a struct has an added bonus that interface kinds
+// are properly handled. Without wrapping, we would be unable to distinguish
+// between a nil value that was explicitly set or not.
+// However, the presence of a stringer indicates an explicit nil value.
 type stringer[T any] struct{ v T }
 
 func (v stringer[T]) String() string { return fmt.Sprint(v.v) }

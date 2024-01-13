@@ -21,6 +21,7 @@ import (
 	"context"
 
 	"tailscale.com/envknob"
+	"tailscale.com/util/ctxkey"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
@@ -28,12 +29,15 @@ import (
 // Logf functions must be safe for concurrent use.
 type Logf func(format string, args ...any)
 
+// LogfKey stores and loads [Logf] values within a [context.Context].
+var LogfKey = ctxkey.New("", Logf(log.Printf))
+
 // A Context is a context.Context that should contain a custom log function, obtainable from FromContext.
 // If no log function is present, FromContext will return log.Printf.
 // To construct a Context, use Add
+//
+// Deprecated: Do not use.
 type Context context.Context
-
-type logfKey struct{}
 
 // jenc is a json.Encode + bytes.Buffer pair wired up to be reused in a pool.
 type jenc struct {
@@ -79,17 +83,17 @@ func (logf Logf) JSON(level int, recType string, v any) {
 }
 
 // FromContext extracts a log function from ctx.
+//
+// Deprecated: Use [LogfKey.Value] instead.
 func FromContext(ctx Context) Logf {
-	v := ctx.Value(logfKey{})
-	if v == nil {
-		return log.Printf
-	}
-	return v.(Logf)
+	return LogfKey.Value(ctx)
 }
 
 // Ctx constructs a Context from ctx with fn as its custom log function.
+//
+// Deprecated: Use [LogfKey.WithValue] instead.
 func Ctx(ctx context.Context, fn Logf) Context {
-	return context.WithValue(ctx, logfKey{}, fn)
+	return LogfKey.WithValue(ctx, fn)
 }
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.

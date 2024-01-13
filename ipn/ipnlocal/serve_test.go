@@ -158,7 +158,7 @@ func TestGetServeHandler(t *testing.T) {
 				TLS: &tls.ConnectionState{ServerName: serverName},
 			}
 			port := cmpx.Or(tt.port, 443)
-			req = req.WithContext(context.WithValue(req.Context(), serveHTTPContextKey{}, &serveHTTPContext{
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: port,
 			}))
 
@@ -428,7 +428,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				URL: &url.URL{Path: "/"},
 				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
 			}
-			req = req.WithContext(context.WithValue(req.Context(), serveHTTPContextKey{}, &serveHTTPContext{
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: 443,
 				SrcAddr:  netip.MustParseAddrPort(tt.srcIP + ":1234"), // random src port for tests
 			}))

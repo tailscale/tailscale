@@ -6,7 +6,6 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -24,22 +23,11 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/set"
 )
 
-type whoIsKey struct{}
-
-// whoIsFromRequest returns the WhoIsResponse previously stashed by a call to
-// addWhoIsToRequest.
-func whoIsFromRequest(r *http.Request) *apitype.WhoIsResponse {
-	return r.Context().Value(whoIsKey{}).(*apitype.WhoIsResponse)
-}
-
-// addWhoIsToRequest stashes who in r's context, retrievable by a call to
-// whoIsFromRequest.
-func addWhoIsToRequest(r *http.Request, who *apitype.WhoIsResponse) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), whoIsKey{}, who))
-}
+var whoIsKey = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 
 var counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
 
@@ -127,7 +115,7 @@ func (h *apiserverProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	counterNumRequestsProxied.Add(1)
-	h.rp.ServeHTTP(w, addWhoIsToRequest(r, who))
+	h.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
 // runAPIServerProxy runs an HTTP server that authenticates requests using the
@@ -240,7 +228,7 @@ type impersonateRule struct {
 // in the context by the apiserverProxy.
 func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 	log = log.With("remote", r.RemoteAddr)
-	who := whoIsFromRequest(r)
+	who := whoIsKey.Value(r.Context())
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)
 	if len(rules) == 0 && err == nil {
 		// Try the old capability name for backwards compatibility.

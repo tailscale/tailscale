@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"tailscale.com/util/ctxkey"
 )
 
 // RequestID is an opaque identifier for a HTTP request, used to correlate
@@ -23,6 +24,9 @@ import (
 // A RequestID has the format "REQ-1{ID}", and the ID should be treated as an
 // opaque string. The current implementation uses a UUID.
 type RequestID string
+
+// RequestIDKey stores and loads [RequestID] values within a [context.Context].
+var RequestIDKey ctxkey.Key[RequestID]
 
 // RequestIDHeader is a custom HTTP header that the WithRequestID middleware
 // uses to determine whether to re-use a given request ID from the client
@@ -42,22 +46,16 @@ func SetRequestID(h http.Handler) http.Handler {
 			// transitions if needed.
 			id = "REQ-1" + uuid.NewString()
 		}
-		ctx := withRequestID(r.Context(), RequestID(id))
+		ctx := RequestIDKey.WithValue(r.Context(), RequestID(id))
 		r = r.WithContext(ctx)
 		h.ServeHTTP(w, r)
 	})
 }
 
-type requestIDKey struct{}
-
 // RequestIDFromContext retrieves the RequestID from context that can be set by
 // the SetRequestID function.
+//
+// Deprecated: Use [RequestIDKey.Value] instead.
 func RequestIDFromContext(ctx context.Context) RequestID {
-	val, _ := ctx.Value(requestIDKey{}).(RequestID)
-	return val
-}
-
-// withRequestID sets the given request id value in the given context.
-func withRequestID(ctx context.Context, rid RequestID) context.Context {
-	return context.WithValue(ctx, requestIDKey{}, rid)
+	return RequestIDKey.Value(ctx)
 }

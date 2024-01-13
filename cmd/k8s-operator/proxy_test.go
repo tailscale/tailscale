@@ -95,7 +95,7 @@ func TestImpersonationHeaders(t *testing.T) {
 
 	for _, tc := range tests {
 		r := must.Get(http.NewRequest("GET", "https://op.ts.net/api/foo", nil))
-		r = addWhoIsToRequest(r, &apitype.WhoIsResponse{
+		r = r.WithContext(whoIsKey.WithValue(r.Context(), &apitype.WhoIsResponse{
 			Node: &tailcfg.Node{
 				Name: "node.ts.net",
 				Tags: tc.tags,
@@ -104,7 +104,7 @@ func TestImpersonationHeaders(t *testing.T) {
 				LoginName: tc.emailish,
 			},
 			CapMap: tc.capMap,
-		})
+		}))
 		addImpersonationHeaders(r, zl.Sugar())
 
 		if d := cmp.Diff(tc.wantHeaders, r.Header); d != "" {
