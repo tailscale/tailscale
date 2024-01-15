@@ -56,18 +56,22 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
+		fs.StringVar(&statusArgs.checkSSHHost, "check-ssh-host", "", "Check if a host's SSH is managed by Tailscalse")
+		fs.BoolVar(&statusArgs.sshHostKeys, "ssh-host-keys", false, "output the known hosts file")
 		return fs
 	})(),
 }
 
 var statusArgs struct {
-	json    bool   // JSON output mode
-	web     bool   // run webserver
-	listen  string // in web mode, webserver address to listen on, empty means auto
-	browser bool   // in web mode, whether to open browser
-	active  bool   // in CLI mode, filter output to only peers with active sessions
-	self    bool   // in CLI mode, show status of local machine
-	peers   bool   // in CLI mode, show status of peer machines
+	json         bool   // JSON output mode
+	web          bool   // run webserver
+	listen       string // in web mode, webserver address to listen on, empty means auto
+	browser      bool   // in web mode, whether to open browser
+	active       bool   // in CLI mode, filter output to only peers with active sessions
+	self         bool   // in CLI mode, show status of local machine
+	peers        bool   // in CLI mode, show status of peer machines
+	checkSSHHost string // check if this host's SSH is managed by Tailscale
+	sshHostKeys  bool   // output the known hosts file
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -128,6 +132,29 @@ func runStatus(ctx context.Context, args []string) error {
 			return ctx.Err()
 		}
 		return err
+	}
+	if statusArgs.checkSSHHost != "" {
+		if isSSHHost(st, statusArgs.checkSSHHost) {
+			// If the host SSH is managed by Tailscale, we anticipate that it
+			// we may need to update the known_hosts file for a subsequent SSH
+			// connection.
+			ssh, _ := findSSH()
+			if ssh != "" {
+				if !checkSSHClientVersion(ssh) {
+					_, err := writeKnownHosts(st)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		} else {
+			return errors.New("host ssh is not managed by Tailscale")
+		}
+	}
+	if statusArgs.sshHostKeys {
+		fmt.Print(string(genKnownHostsFile(st)))
+		return nil
 	}
 
 	printHealth := func() {

@@ -97,3 +97,39 @@ func TestEqualSameNil(t *testing.T) {
 	c.Check(EqualSameNil([]string{}, nil), qt.Equals, false)
 	c.Check(EqualSameNil[[]string](nil, nil), qt.Equals, true)
 }
+
+func TestReplaceBetween(t *testing.T) {
+	testCases := []struct {
+		name        string
+		s           []string
+		replacement []string
+		start, end  int
+		want        []string
+	}{
+		{
+			name:        "replace middle",
+			s:           []string{"a", "b", "c", "d", "e"},
+			replacement: []string{"x", "y"},
+			start:       1,
+			end:         3,
+			want:        []string{"a", "b", "x", "y", "d", "e"},
+		},
+		{
+			name:        "replace none",
+			s:           []string{"a", "b", "c", "d", "e"},
+			replacement: []string{"x", "y"},
+			start:       1,
+			end:         1,
+			want:        []string{"a", "b", "c", "d", "e"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ReplaceBetween(tc.s, tc.start, tc.end, tc.replacement)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
