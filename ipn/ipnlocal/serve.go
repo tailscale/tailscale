@@ -28,6 +28,7 @@ import (
 
 	"golang.org/x/net/http2"
 	"tailscale.com/ipn"
+	"tailscale.com/kube"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
@@ -875,6 +876,31 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHe
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
+		if kubeSecret := b.serveConfig.KubeSecretCert(); kubeSecret != nil {
+			// TODO: initiate kube client once, maybe cache the certs somewhere too
+			c, err := kube.New()
+			if err != nil {
+				return nil, fmt.Errorf("error initalizing kube client: %v", err)
+			}
+			c.SetNS(kubeSecret.Namespace)
+			secret, err := c.GetSecret(ctx, kubeSecret.Name)
+			if err != nil {
+				return nil, fmt.Errorf("error getting certs secret: %v", err)
+			}
+			certBytes, ok := secret.Data["tls.crt"]
+			if !ok {
+				return nil, fmt.Errorf("secret does not contain tls.crt")
+			}
+			keyBytes, ok := secret.Data["tls.key"]
+			if !ok {
+				return nil, fmt.Errorf("secret data does not contain tls.key")
+			}
+			cert, err := tls.X509KeyPair(certBytes, keyBytes)
+			if err != nil {
+				return nil, fmt.Errorf("error creating TLS key pair: %w", err)
+			}
+			return &cert, nil
+		}
 		pair, err := b.GetCertPEM(ctx, hi.ServerName)
 		if err != nil {
 			return nil, err

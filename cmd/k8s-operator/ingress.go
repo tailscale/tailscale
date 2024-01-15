@@ -129,9 +129,15 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
 	}
 
+	useProvidedCerts := ing.GetAnnotations()["tailscale.com/use-provided-certs"] == "true"
 	// magic443 is a fake hostname that we can use to tell containerboot to swap
 	// out with the real hostname once it's known.
 	const magic443 = "${TS_CERT_DOMAIN}:443"
+	var proxyHost = magic443
+	if useProvidedCerts {
+		proxyHost = fmt.Sprintf("%s:443", ing.Spec.TLS[0].Hosts[0]) // TODO: validate that host is set
+	}
+
 	sc := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{
 			443: {
@@ -139,18 +145,33 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			},
 		},
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
-			magic443: {
+			ipn.HostPort(proxyHost): {
 				Handlers: map[string]*ipn.HTTPHandler{},
 			},
 		},
 	}
-	if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
+	if useProvidedCerts {
+		logger.Info("use provided certs")
+		// get the external certs annotation
+		secretName := ing.Spec.TLS[0].SecretName
+		if secretName == "" {
+			return fmt.Errorf("MagicDNS disabled, but Ingress does not specify an alternative TLS certs Secret")
+		}
+		// TODO: here maybe verify that the Secret exists?
+		sc.KubeSecretCertStore = &ipn.KubeSecretCertStore{
+			Name:      secretName,
+			Namespace: ing.Namespace, // what if default?
+		}
+	} else {
+		logger.Info("don't use provided certs")
+	}
+	if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) && !useProvidedCerts {
 		sc.AllowFunnel = map[ipn.HostPort]bool{
 			magic443: true,
 		}
 	}
 
-	web := sc.Web[magic443]
+	web := sc.Web[ipn.HostPort(proxyHost)]
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
 		if b == nil {
 			return
@@ -194,7 +215,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
 
 	var tlsHost string // hostname or FQDN or empty
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 && !useProvidedCerts {
 		tlsHost = ing.Spec.TLS[0].Hosts[0]
 	}
 	for _, rule := range ing.Spec.Rules {

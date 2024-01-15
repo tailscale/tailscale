@@ -185,6 +185,10 @@ func (v ServeConfigView) AllowFunnel() views.Map[HostPort, bool] {
 	return views.MapOf(v.ж.AllowFunnel)
 }
 
+func (v ServeConfigView) KubeSecretCert() *KubeSecretCertStore {
+	return v.ж.KubeSecretCertStore
+}
+
 func (v ServeConfigView) Foreground() views.MapFn[string, *ServeConfig, ServeConfigView] {
 	return views.MapFnOf(v.ж.Foreground, func(t *ServeConfig) ServeConfigView {
 		return t.View()
@@ -199,6 +203,7 @@ var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
 	ETag        string
+	KubeSecretCertStore *KubeSecretCertStore
 }{})
 
 // View returns a readonly view of TCPPortHandler.

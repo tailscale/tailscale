@@ -50,6 +50,13 @@ type ServeConfig struct {
 	// GetServeConfig request and is translated to an If-Match header
 	// during a SetServeConfig request.
 	ETag string `json:"-"`
+	// Reference to a Kubernetes Secret that contains TLS certs for serve
+	KubeSecretCertStore *KubeSecretCertStore `json:",omitempty"`
+}
+
+type KubeSecretCertStore struct {
+	Name      string `json:",omitempty"`
+	Namespace string `json:",omitempty"`
 }
 
 // HostPort is an SNI name and port number, joined by a colon.

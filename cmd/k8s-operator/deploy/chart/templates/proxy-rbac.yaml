@@ -30,3 +30,25 @@ roleRef:
   kind: Role
   name: proxies
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: proxies-all-secrets
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: proxies-all-secrets
+subjects:
+- kind: ServiceAccount
+  name: proxies
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: proxies-all-secrets
+  apiGroup: rbac.authorization.k8s.io

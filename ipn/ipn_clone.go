@@ -96,6 +96,7 @@ var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
 	ETag        string
+	KubeSecretCertStore *KubeSecretCertStore
 }{})
 
 // Clone makes a deep copy of TCPPortHandler.

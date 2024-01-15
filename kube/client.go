@@ -91,6 +91,11 @@ func (c *Client) SetURL(url string) {
 	c.url = url
 }
 
+// SetNS sets the ns to use to get Secret. This is a temp fix- TODO: do it differently.
+func (c *Client) SetNS(ns string) {
+	c.ns = ns
+}
+
 // SetDialer sets the dialer to use when establishing a connection
 // to the Kubernetes API server.
 func (c *Client) SetDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
