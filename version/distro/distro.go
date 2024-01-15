@@ -153,6 +153,8 @@ func DSMVersion() int {
 	})
 }
 
+// isUDMPro checks a couple of files known to exist on a UDM-Pro and returns
+// true if the expected content exists in the files.
 func isUDMPro() bool {
 	if exists, err := fileContainsString("/etc/board.info", "UDMPRO"); err == nil && exists {
 		return true
@@ -166,6 +168,9 @@ func isUDMPro() bool {
 	return false
 }
 
+// fileContainsString is used to determine if a string exists in a file. This is
+// not efficient for larger files. If you want to use this function to parse
+// large files, please refactor to use `io.LimitedReader`.
 func fileContainsString(filePath, searchString string) (bool, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {

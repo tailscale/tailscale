@@ -1161,10 +1161,6 @@ func mustRouteTable(num int) RouteTable {
 var (
 	mainRouteTable    = newRouteTable("main", 254)
 	defaultRouteTable = newRouteTable("default", 253)
-	// Port 9 - WAN
-	udmProRouteTable1 = newRouteTable("201", 201)
-	// Port 10 - SFP+ WAN 2
-	udmProRouteTable2 = newRouteTable("202", 202)
 
 	// tailscaleRouteTable is the routing table number for Tailscale
 	// network routes. See addIPRules for the detailed policy routing
@@ -1185,7 +1181,9 @@ var (
 	tailscaleRouteTable = newRouteTable("tailscale", 52)
 )
 
-// _ipRules are the policy routing rules that Tailscale uses.
+// baseIPRules are the policy routing rules that Tailscale uses, when not
+// running on a UDM-Pro.
+//
 // The priority is the value represented here added to r.ipPolicyPrefBase,
 // which is usually 5200.
 //
@@ -1200,7 +1198,7 @@ var (
 // and 'ip rule' implementations (including busybox), don't support
 // checking for the lack of a fwmark, only the presence. The technique
 // below works even on very old kernels.
-var _ipRules = []netlink.Rule{
+var baseIPRules = []netlink.Rule{
 	// Packets from us, tagged with our fwmark, first try the kernel's
 	// main routing table.
 	{
@@ -1236,15 +1234,32 @@ var _ipRules = []netlink.Rule{
 	// usual rules (pref 32766 and 32767, ie. main and default).
 }
 
-var addedUDMProIPRules = false
+// udmProIPRules are the policy routing rules that Tailscale uses, when running
+// on a UDM-Pro.
+//
+// The priority is the value represented here added to
+// r.ipPolicyPrefBase, which is usually 5200.
+//
+// This represents an experiment that will be used to gather more information.
+// If this goes well, Tailscale may opt to use this for all of Linux.
+var udmProIPRules = []netlink.Rule{
+	// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
+	// ie. main and default).
+	{
+		Priority: 70,
+		Invert:   true,
+		Mark:     linuxfw.TailscaleBypassMarkNum,
+		Table:    tailscaleRouteTable.Num,
+	},
+}
 
+// ipRules returns the appropriate list of ip rules to be used by Tailscale. See
+// comments on baseIPRules and udmProIPRules for more details.
 func ipRules() []netlink.Rule {
-	// lazy add UDM Pro rules
 	if distro.Get() == distro.UDMPro {
-		addUDMProIpRules()
+		return udmProIPRules
 	}
-
-	return _ipRules
+	return baseIPRules
 }
 
 // justAddIPRules adds policy routing rule without deleting any first.
@@ -1574,23 +1589,4 @@ func nlAddrOfPrefix(p netip.Prefix) *netlink.Addr {
 	return &netlink.Addr{
 		IPNet: netipx.PrefixIPNet(p),
 	}
-}
-
-// Adds necessary ip rules for UDM-Pro. See issue 4038.
-func addUDMProIpRules() {
-	if addedUDMProIPRules {
-		return
-	}
-
-	_ipRules = append(_ipRules, netlink.Rule{
-		Priority: 21,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
-		Table:    udmProRouteTable1.Num,
-	}, netlink.Rule{
-		Priority: 22,
-		Mark:     linuxfw.TailscaleBypassMarkNum,
-		Table:    udmProRouteTable2.Num,
-	})
-
-	addedUDMProIPRules = true
 }
