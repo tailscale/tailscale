@@ -271,7 +271,7 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		// Not our rule.
 		return
 	}
-	if !r.ruleRestorePending.Swap(true) {
+	if r.ruleRestorePending.Swap(true) {
 		// Another timer is already pending.
 		return
 	}
