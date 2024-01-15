@@ -411,6 +411,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		},
 	}
 	mak.Set(&ss.Spec.Template.Labels, "app", sts.ParentResourceUID)
+	for key, val := range sts.ChildResourceLabels {
+		ss.Spec.Template.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
+	}
 
 	// Generic containerboot configuration options.
 	container.Env = append(container.Env,
