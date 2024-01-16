@@ -1176,6 +1176,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				if neterror.PacketWasTruncated(err) {
 					continue
 				}
+				//_, err := ruc.ReadBatch(batch.msgs[:len(buffs)], MSG_ERRQUE) rcv message ip recv here
 				return 0, err
 			}
 

@@ -177,3 +177,12 @@ func (c *RebindingUDPConn) SyscallConn() (syscall.RawConn, error) {
 	}
 	return sc.SyscallConn()
 }
+
+/*func (c *RebindingUDPConn) ReadICMPErrors(msgs []ipv6.Message) (int, error) {
+	for {
+		sc, ok := c.pconn.(syscall.Conn)
+		a, err := sc.SyscallConn()
+		err := syscall.SetsockoptInt(sc.SyscallConn(), syscall.SOL_IP, syscall.IP_RECVERR, 1)
+		return n, err
+	}
+}*/
