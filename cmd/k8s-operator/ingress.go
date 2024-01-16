@@ -217,6 +217,15 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			continue
 		}
 		for _, p := range rule.HTTP.Paths {
+			// Send a warning if folks use Exact path type - to make
+			// it easier for us to support Exact path type matching
+			// in the future if needed.
+			// https://kubernetes.io/docs/concepts/services-networking/ingress/#path-types
+			if *p.PathType == networkingv1.PathTypeExact {
+				msg := "Exact path type strict matching is currently not supported and requests will be routed as for Prefix path type. This behaviour might change in the future."
+				logger.Warnf(fmt.Sprintf("Unsupported Path type exact for path %s. %s", p.Path, msg))
+				a.recorder.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
+			}
 			addIngressBackend(&p.Backend, p.Path)
 		}
 	}
