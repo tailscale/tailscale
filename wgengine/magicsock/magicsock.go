@@ -1317,7 +1317,7 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
 	} else {
-		if !c.networkDown() {
+		if !c.networkDown() && pmtuShouldLogDiscoTxErr(m, err) {
 			c.logf("magicsock: disco: failed to send %v to %v: %v", disco.MessageSummary(m), dst, err)
 		}
 	}
