@@ -6,12 +6,14 @@ package rate
 import (
 	"flag"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/tstime/mono"
+	"tailscale.com/util/must"
 )
 
 const (
@@ -232,5 +234,28 @@ func BenchmarkValue(b *testing.B) {
 	v := Value{HalfLife: time.Second}
 	for i := 0; i < b.N; i++ {
 		v.Add(1)
+	}
+}
+
+func TestValueMarshal(t *testing.T) {
+	now := mono.Now()
+	tests := []struct {
+		val *Value
+		str string
+	}{
+		{val: &Value{}, str: `{}`},
+		{val: &Value{HalfLife: 5 * time.Minute}, str: `{"halfLife":"` + (5 * time.Minute).String() + `"}`},
+		{val: &Value{value: 12345, updated: now}, str: `{"value":12345,"updated":` + string(must.Get(now.MarshalJSON())) + `}`},
+	}
+	for _, tt := range tests {
+		str := string(must.Get(tt.val.MarshalJSON()))
+		if str != tt.str {
+			t.Errorf("string mismatch: got %v, want %v", str, tt.str)
+		}
+		var val Value
+		must.Do(val.UnmarshalJSON([]byte(str)))
+		if !reflect.DeepEqual(&val, tt.val) {
+			t.Errorf("value mismatch: %+v, want %+v", &val, tt.val)
+		}
 	}
 }

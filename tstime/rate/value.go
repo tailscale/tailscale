@@ -4,6 +4,7 @@
 package rate
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -180,4 +181,42 @@ func (r *Value) rateNow(now mono.Time) float64 {
 // It carries the units of "seconds".
 func (r *Value) normalizedIntegral() float64 {
 	return r.halfLife() / math.Ln2
+}
+
+type jsonValue struct {
+	// TODO: Use v2 "encoding/json" for native time.Duration formatting.
+	HalfLife string    `json:"halfLife,omitempty,omitzero"`
+	Value    float64   `json:"value,omitempty,omitzero"`
+	Updated  mono.Time `json:"updated,omitempty,omitzero"`
+}
+
+func (r *Value) MarshalJSON() ([]byte, error) {
+	if r == nil {
+		return []byte("null"), nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v := jsonValue{Value: r.value, Updated: r.updated}
+	if r.HalfLife > 0 {
+		v.HalfLife = r.HalfLife.String()
+	}
+	return json.Marshal(v)
+}
+
+func (r *Value) UnmarshalJSON(b []byte) error {
+	var v jsonValue
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	halfLife, err := time.ParseDuration(v.HalfLife)
+	if err != nil && v.HalfLife != "" {
+		return fmt.Errorf("invalid halfLife: %w", err)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.HalfLife = halfLife
+	r.value = v.Value
+	r.updated = v.Updated
+	return nil
 }
