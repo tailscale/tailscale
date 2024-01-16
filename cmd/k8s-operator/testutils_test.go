@@ -147,7 +147,13 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations:                annots,
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
-					Labels:                     map[string]string{"app": "1234-UID"},
+					Labels: map[string]string{
+						"tailscale.com/managed":              "true",
+						"tailscale.com/parent-resource":      "test",
+						"tailscale.com/parent-resource-ns":   opts.namespace,
+						"tailscale.com/parent-resource-type": opts.parentType,
+						"app":                                "1234-UID",
+					},
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "proxies",
