@@ -215,6 +215,9 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		Field: client.InNamespace(tsNamespace).AsSelector(),
 	}
 	mgrOpts := manager.Options{
+		// TODO (irbekrm): stricter filtering what we watch/cache/call
+		// reconcilers on. c/r by default starts a watch on any
+		// resources that we GET via the controller manager's client.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:      nsFilter,
