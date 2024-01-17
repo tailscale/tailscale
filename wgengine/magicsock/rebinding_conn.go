@@ -10,9 +10,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 )
 
@@ -178,11 +181,25 @@ func (c *RebindingUDPConn) SyscallConn() (syscall.RawConn, error) {
 	return sc.SyscallConn()
 }
 
-/*func (c *RebindingUDPConn) ReadICMPErrors(msgs []ipv6.Message) (int, error) {
+func (c *RebindingUDPConn) ReadICMPErrors(msgs []ipv6.Message, logf logger.Logf) (int, error) {
 	for {
-		sc, ok := c.pconn.(syscall.Conn)
-		a, err := sc.SyscallConn()
-		err := syscall.SetsockoptInt(sc.SyscallConn(), syscall.SOL_IP, syscall.IP_RECVERR, 1)
-		return n, err
+		rc, err := c.SyscallConn()
+		if err == nil {
+			rc.Control(func(fd uintptr) {
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_IP, syscall.IP_RECVERR, 1)
+				var p = make([]byte, 1500)
+				var oob = make([]byte, 1500)
+				_, oobn, _, _, err := syscall.Recvmsg(int(fd), p, oob, syscall.MSG_ERRQUEUE)
+				if err != nil {
+					logf("magicsock: failed to receive ICMP message %v", err)
+				} else if oobn <= 0 {
+					logf("magicsock: failed to receive ICMP message oobn")
+				}
+				se := (*unix.SockExtendedErr)(unsafe.Pointer(&oob[syscall.SizeofCmsghdr]))
+				if se.Origin == 2 {
+					logf("magicsock: received ICMP error type %v info %v", se.Type, se.Info)
+				}
+			})
+		}
 	}
-}*/
+}
