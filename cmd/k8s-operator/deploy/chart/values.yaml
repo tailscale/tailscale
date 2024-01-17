@@ -15,6 +15,13 @@ oauth: {}
 installCRDs: "true"
 
 operatorConfig:
+  # ACL tag that operator will be tagged with. Operator must be made owner of
+  # these tags
+  # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
+  # Multiple tags are defined as array items and passed to the operator as a comma-separated string
+  defaultTags:
+    - "tag:k8s-operator"
+
   image:
     repo: tailscale/k8s-operator
     # Digest will be prioritized over tag. If neither are set appVersion will be
