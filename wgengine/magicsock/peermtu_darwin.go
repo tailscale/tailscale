@@ -49,7 +49,3 @@ func (c *Conn) getDontFragment(network string) (bool, error) {
 	}
 	return false, err
 }
-
-func (c *Conn) setReceiveICMPErrors(network string, enable bool) error {
-	return nil
-}

@@ -104,15 +104,6 @@ func (c *Conn) UpdatePMTUD() {
 		_ = c.setDontFragment("udp6", false)
 		newStatus = false
 	}
-	err4 = c.setReceiveICMPErrors("udp4", enable)
-	err6 = c.setReceiveICMPErrors("udp6", enable)
-
-	if err4 != nil || err6 != nil {
-		c.logf("[unexpected] magicsock: peermtu: enabling receive ICMP errors to %v failed (v4: %v, v6: %v), disabling", enable, err4, err6)
-		_ = c.setReceiveICMPErrors("udp4", false)
-		_ = c.setReceiveICMPErrors("udp6", false)
-	}
-
 	if debugPMTUD() {
 		c.logf("magicsock: peermtu: peer MTU probes are %v", tstun.WireMTUsToProbe)
 	}
