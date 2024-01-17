@@ -11,6 +11,7 @@ import (
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
 
@@ -33,6 +34,30 @@ func TestUpdateDomains(t *testing.T) {
 	a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
 	if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestUpdateRoutes(t *testing.T) {
+	rc := &routeCollector{}
+	a := NewAppConnector(t.Logf, rc)
+	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+	a.UpdateRoutes(routes)
+
+	if !slices.EqualFunc(routes, rc.routes, prefixEqual) {
+		t.Fatalf("got %v, want %v", rc.routes, routes)
+	}
+}
+
+func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
+	rc := &routeCollector{}
+	a := NewAppConnector(t.Logf, rc)
+	mak.Set(&a.domains, "example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")})
+	rc.routes = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}
+	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+	a.UpdateRoutes(routes)
+
+	if !slices.EqualFunc(routes, rc.routes, prefixEqual) {
+		t.Fatalf("got %v, want %v", rc.routes, routes)
 	}
 }
 
@@ -79,7 +104,19 @@ func TestObserveDNSResponse(t *testing.T) {
 	// don't re-advertise routes that have already been advertised
 	a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
 	if !slices.Equal(rc.routes, wantRoutes) {
-		t.Errorf("got %v; want %v", rc.routes, wantRoutes)
+		t.Errorf("rc.routes: got %v; want %v", rc.routes, wantRoutes)
+	}
+
+	// don't advertise addresses that are already in a control provided route
+	pfx := netip.MustParsePrefix("192.0.2.0/24")
+	a.UpdateRoutes([]netip.Prefix{pfx})
+	wantRoutes = append(wantRoutes, pfx)
+	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.2.1"))
+	if !slices.Equal(rc.routes, wantRoutes) {
+		t.Errorf("rc.routes: got %v; want %v", rc.routes, wantRoutes)
+	}
+	if !slices.Contains(a.domains["example.com"], netip.MustParseAddr("192.0.2.1")) {
+		t.Errorf("missing %v from %v", "192.0.2.1", a.domains["exmaple.com"])
 	}
 }
 
@@ -159,4 +196,19 @@ var _ RouteAdvertiser = (*routeCollector)(nil)
 func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
 	rc.routes = append(rc.routes, pfx)
 	return nil
+}
+
+func (rc *routeCollector) UnadvertiseRoute(pfx netip.Prefix) error {
+	routes := rc.routes
+	rc.routes = rc.routes[:0]
+	for _, r := range routes {
+		if r != pfx {
+			rc.routes = append(rc.routes, r)
+		}
+	}
+	return nil
+}
+
+func prefixEqual(a, b netip.Prefix) bool {
+	return a.Addr().Compare(b.Addr()) == 0 && a.Bits() == b.Bits()
 }

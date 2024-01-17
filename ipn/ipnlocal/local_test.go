@@ -1169,6 +1169,13 @@ func TestRouteAdvertiser(t *testing.T) {
 	if routes.Len() != 1 || routes.At(0) != testPrefix {
 		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
 	}
+
+	must.Do(ra.UnadvertiseRoute(testPrefix))
+
+	routes = b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 0 {
+		t.Fatalf("got routes %v, want none", routes)
+	}
 }
 
 func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
@@ -1349,6 +1356,17 @@ type routeCollector struct {
 
 func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
 	rc.routes = append(rc.routes, pfx)
+	return nil
+}
+
+func (rc *routeCollector) UnadvertiseRoute(pfx netip.Prefix) error {
+	routes := rc.routes
+	rc.routes = rc.routes[:0]
+	for _, r := range routes {
+		if r != pfx {
+			rc.routes = append(rc.routes, r)
+		}
+	}
 	return nil
 }
 

@@ -66,6 +66,8 @@ type AppConnectorAttr struct {
 	// Domains enumerates the domains serviced by the specified app connectors.
 	// Domains can be of the form: example.com, or *.example.com.
 	Domains []string `json:"domains,omitempty"`
+	// Routes enumerates the predetermined routes to be advertised by the specified app connectors.
+	Routes []netip.Prefix `json:"routes,omitempty"`
 	// Connectors enumerates the app connectors which service these domains.
 	// These can either be "*" to match any advertising connector, or a
 	// tag of the form tag:<tag-name>.

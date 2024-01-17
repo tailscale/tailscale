@@ -3446,14 +3446,21 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		})
 	}
 
-	var domains []string
+	var (
+		domains []string
+		routes  []netip.Prefix
+	)
 	for _, attr := range attrs {
 		if slices.Contains(attr.Connectors, "*") || selfHasTag(attr.Connectors) {
 			domains = append(domains, attr.Domains...)
+			routes = append(routes, attr.Routes...)
 		}
 	}
 	slices.Sort(domains)
+	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
 	domains = slices.Compact(domains)
+	routes = slices.Compact(routes)
+	b.appConnector.UpdateRoutes(routes)
 	b.appConnector.UpdateDomains(domains)
 }
 
@@ -5799,6 +5806,30 @@ func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: routes,
+		},
+		AdvertiseRoutesSet: true,
+	})
+	return err
+}
+
+// UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
+// a route advertisement if one is present in the existing routes.
+func (b *LocalBackend) UnadvertiseRoute(ipp netip.Prefix) error {
+	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
+	if !slices.Contains(currentRoutes, ipp) {
+		return nil
+	}
+
+	newRoutes := currentRoutes[:0]
+	for _, r := range currentRoutes {
+		if r != ipp {
+			newRoutes = append(newRoutes, r)
+		}
+	}
+
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: newRoutes,
 		},
 		AdvertiseRoutesSet: true,
 	})
