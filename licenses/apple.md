@@ -1,10 +1,10 @@
-# Tailscale for macOS/iOS dependencies
+# Tailscale for macOS/iOS/tvOS dependencies
 
-The following open source dependencies are used to build Tailscale on [macOS][]
-and [iOS][].  See also the dependencies in the [Tailscale CLI][].
+The following open source dependencies are used to build Tailscale on [macOS][], [iOS][] and [tvOS][].  See also the dependencies in the [Tailscale CLI][].
 
 [macOS]: https://tailscale.com/kb/1016/install-mac/
 [iOS]: https://tailscale.com/kb/1020/install-ios/
+[tvOS]: https://tailscale.com/kb/1280/appletv/
 [Tailscale CLI]: ./tailscale.md
 
 ## Go Packages
