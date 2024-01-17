@@ -28,6 +28,9 @@ type RouteAdvertiser interface {
 	// AdvertiseRoute adds a new route advertisement if the route is not already
 	// being advertised.
 	AdvertiseRoute(netip.Prefix) error
+
+	// UnadvertiseRoute removes a route advertisement.
+	UnadvertiseRoute(netip.Prefix) error
 }
 
 // AppConnector is an implementation of an AppConnector that performs
@@ -45,9 +48,13 @@ type AppConnector struct {
 
 	// mu guards the fields that follow
 	mu sync.Mutex
+
 	// domains is a map of lower case domain names with no trailing dot, to a
 	// list of resolved IP addresses.
 	domains map[string][]netip.Addr
+
+	// controlRoutes is the list of routes that were last supplied by control.
+	controlRoutes []netip.Prefix
 
 	// wildcards is the list of domain strings that match subdomains.
 	wildcards []string
@@ -97,6 +104,42 @@ func (e *AppConnector) UpdateDomains(domains []string) {
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
 }
 
+// UpdateRoutes merges the supplied routes into the currently configured routes. The routes supplied
+// by control for UpdateRoutes are supplemental to the routes discovered by DNS resolution, but are
+// also more often whole ranges. UpdateRoutes will remove any single address routes that are now
+// covered by new ranges.
+func (e *AppConnector) UpdateRoutes(routes []netip.Prefix) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// If there was no change since the last update, no work to do.
+	if slices.Equal(e.controlRoutes, routes) {
+		return
+	}
+
+nextRoute:
+	for _, r := range routes {
+		if err := e.routeAdvertiser.AdvertiseRoute(r); err != nil {
+			e.logf("failed to advertise route: %v: %v", r, err)
+			continue
+		}
+
+		for _, addr := range e.domains {
+			for _, a := range addr {
+				if r.Contains(a) {
+					pfx := netip.PrefixFrom(a, a.BitLen())
+					if err := e.routeAdvertiser.UnadvertiseRoute(pfx); err != nil {
+						e.logf("failed to unadvertise route: %v: %v", pfx, err)
+					}
+					continue nextRoute
+				}
+			}
+		}
+	}
+
+	e.controlRoutes = routes
+}
+
 // Domains returns the currently configured domain list.
 func (e *AppConnector) Domains() views.Slice[string] {
 	e.mu.Lock()
@@ -132,6 +175,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		return
 	}
 
+nextAnswer:
 	for {
 		h, err := p.AnswerHeader()
 		if err == dnsmessage.ErrSectionDone {
@@ -205,6 +249,16 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		}
 		if slices.Contains(addrs, addr) {
 			continue
+		}
+		for _, route := range e.controlRoutes {
+			if route.Contains(addr) {
+				// record the new address associated with the domain for faster matching in subsequent
+				// requests and for diagnostic records.
+				e.mu.Lock()
+				e.domains[domain] = append(addrs, addr)
+				e.mu.Unlock()
+				continue nextAnswer
+			}
 		}
 		if err := e.routeAdvertiser.AdvertiseRoute(netip.PrefixFrom(addr, addr.BitLen())); err != nil {
 			e.logf("failed to advertise route for %s: %v: %v", domain, addr, err)
