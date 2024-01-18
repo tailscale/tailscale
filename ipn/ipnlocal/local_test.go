@@ -1207,8 +1207,10 @@ func TestObserveDNSResponse(t *testing.T) {
 	rc := &routeCollector{}
 	b.appConnector = appc.NewAppConnector(t.Logf, rc)
 	b.appConnector.UpdateDomains([]string{"example.com"})
+	b.appConnector.Wait(context.Background())
 
 	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+	b.appConnector.Wait(context.Background())
 	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 	if !slices.Equal(rc.routes, wantRoutes) {
 		t.Fatalf("got routes %v, want %v", rc.routes, wantRoutes)
@@ -1250,6 +1252,7 @@ func TestReconfigureAppConnector(t *testing.T) {
 	}).View()
 
 	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	b.appConnector.Wait(context.Background())
 
 	want := []string{"example.com"}
 	if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {

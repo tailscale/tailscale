@@ -685,6 +685,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 }
 
 func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
+	ctx := context.Background()
 	var h peerAPIHandler
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
@@ -700,6 +701,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		},
 	}
 	h.ps.b.appConnector.UpdateDomains([]string{"example.com"})
+	h.ps.b.appConnector.Wait(ctx)
 
 	h.ps.resolver = &fakeResolver{}
 	f := filter.NewAllowAllForTest(logger.Discard)
@@ -717,6 +719,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("unexpected status code: %v", w.Code)
 	}
+	h.ps.b.appConnector.Wait(ctx)
 
 	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 	if !slices.Equal(rc.routes, wantRoutes) {

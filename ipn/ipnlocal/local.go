@@ -3460,8 +3460,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
 	domains = slices.Compact(domains)
 	routes = slices.Compact(routes)
-	b.appConnector.UpdateRoutes(routes)
-	b.appConnector.UpdateDomains(domains)
+	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
 }
 
 // authReconfig pushes a new configuration into wgengine, if engine

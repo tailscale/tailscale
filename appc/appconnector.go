@@ -10,6 +10,7 @@
 package appc
 
 import (
+	"context"
 	"net/netip"
 	"slices"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/execqueue"
 )
 
 // RouteAdvertiser is an interface that allows the AppConnector to advertise
@@ -58,6 +60,9 @@ type AppConnector struct {
 
 	// wildcards is the list of domain strings that match subdomains.
 	wildcards []string
+
+	// queue provides ordering for update operations
+	queue execqueue.ExecQueue
 }
 
 // NewAppConnector creates a new AppConnector.
@@ -68,11 +73,33 @@ func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser) *AppConn
 	}
 }
 
-// UpdateDomains replaces the current set of configured domains with the
-// supplied set of domains. Domains must not contain a trailing dot, and should
-// be lower case. If the domain contains a leading '*' label it matches all
-// subdomains of a domain.
+// UpdateDomainsAndRoutes starts an asynchronous update of the configuration
+// given the new domains and routes.
+func (e *AppConnector) UpdateDomainsAndRoutes(domains []string, routes []netip.Prefix) {
+	e.queue.Add(func() {
+		// Add the new routes first.
+		e.updateRoutes(routes)
+		e.updateDomains(domains)
+	})
+}
+
+// UpdateDomains asynchronously replaces the current set of configured domains
+// with the supplied set of domains. Domains must not contain a trailing dot,
+// and should be lower case. If the domain contains a leading '*' label it
+// matches all subdomains of a domain.
 func (e *AppConnector) UpdateDomains(domains []string) {
+	e.queue.Add(func() {
+		e.updateDomains(domains)
+	})
+}
+
+// Wait waits for the currently scheduled asynchronous configuration changes to
+// complete.
+func (e *AppConnector) Wait(ctx context.Context) {
+	e.queue.Wait(ctx)
+}
+
+func (e *AppConnector) updateDomains(domains []string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -104,11 +131,11 @@ func (e *AppConnector) UpdateDomains(domains []string) {
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
 }
 
-// UpdateRoutes merges the supplied routes into the currently configured routes. The routes supplied
+// updateRoutes merges the supplied routes into the currently configured routes. The routes supplied
 // by control for UpdateRoutes are supplemental to the routes discovered by DNS resolution, but are
 // also more often whole ranges. UpdateRoutes will remove any single address routes that are now
 // covered by new ranges.
-func (e *AppConnector) UpdateRoutes(routes []netip.Prefix) {
+func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
