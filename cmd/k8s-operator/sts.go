@@ -22,11 +22,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -51,6 +53,9 @@ const (
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
 	//MagicDNS name of tailnet node.
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
+
+	// Users can set this on a Service or Ingress. This prototype only looks at Services
+	AnnotationProxyClass = "tailscale.com/proxy-class"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
@@ -87,6 +92,8 @@ type tailscaleSTSConfig struct {
 	// Connector specifies a configuration of a Connector instance if that's
 	// what this StatefulSet should be created for.
 	Connector *connector
+
+	ProxyClass string
 }
 
 type connector struct {
@@ -397,7 +404,44 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			}
 		}
 	}
-	container := &ss.Spec.Template.Spec.Containers[0]
+	// if proxyclass is set
+	// get the proxy class
+	// get the pod template thing from there
+	// how to merge?
+	if sts.ProxyClass != "" {
+		proxyClass := &tsapi.ProxyClass{}
+		if err := a.Get(ctx, client.ObjectKeyFromObject(proxyClass), proxyClass); err != nil {
+			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+		// only look at pod spec for this prototype
+		if proxyClass.Spec.StatefulSet != nil && proxyClass.Spec.StatefulSet.Pod != nil && proxyClass.Spec.StatefulSet.Pod.Spec != nil {
+			overlay := proxyClass.Spec.StatefulSet.Pod.Spec
+			// hack to use merge functionality from apimachinery -
+			// we do want the array patching behaviour. We can deal
+			// with marshaling/unmarshaling later (maybe just move
+			// to SSA in which case we can apply the patch bytes as
+			// is)
+			overlayBytes, err := json.Marshal(overlay)
+			if err != nil {
+				return nil, fmt.Errorf("error marshaling overlay pod template: %w", err)
+			}
+			origBytes, err := json.Marshal(&ss.Spec.Template.Spec)
+			if err != nil {
+				return nil, fmt.Errorf("error marshaling original pod spec: %w", err)
+			}
+			mergedBytes, err := strategicpatch.CreateTwoWayMergePatch(origBytes, overlayBytes, &corev1.PodSpec{})
+			if err != nil {
+				return nil, fmt.Errorf("error ")
+			}
+			modifiedSpec := &corev1.PodSpec{}
+			if err := json.Unmarshal(mergedBytes, modifiedSpec); err != nil {
+				return nil, fmt.Errorf("error unmarshaling modified pod spec: %w", err)
+			}
+			ss.Spec.Template.Spec = *modifiedSpec
+		}
+
+	}
+	container := &ss.Spec.Template.Spec.Containers[0] // instead get the one that's named 'tailscale'
 	container.Image = a.proxyImage
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,

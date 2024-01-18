@@ -22,7 +22,7 @@ rules:
   resources: ["ingressclasses"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["tailscale.com"]
-  resources: ["connectors", "connectors/status"]
+  resources: ["connectors", "connectors/status", "proxyclasses", "proxyclasses/status"]
   verbs: ["get", "list", "watch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -186,6 +186,8 @@ rules:
       resources:
         - connectors
         - connectors/status
+        - proxyclasses
+        - proxyclasses/status
       verbs:
         - get
         - list
