@@ -4,6 +4,7 @@
 package appc
 
 import (
+	"context"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -16,8 +17,11 @@ import (
 )
 
 func TestUpdateDomains(t *testing.T) {
+	ctx := context.Background()
 	a := NewAppConnector(t.Logf, nil)
 	a.UpdateDomains([]string{"example.com"})
+
+	a.Wait(ctx)
 	if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
@@ -25,6 +29,7 @@ func TestUpdateDomains(t *testing.T) {
 	addr := netip.MustParseAddr("192.0.0.8")
 	a.domains["example.com"] = append(a.domains["example.com"], addr)
 	a.UpdateDomains([]string{"example.com"})
+	a.Wait(ctx)
 
 	if got, want := a.domains["example.com"], []netip.Addr{addr}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
@@ -32,6 +37,7 @@ func TestUpdateDomains(t *testing.T) {
 
 	// domains are explicitly downcased on set.
 	a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
+	a.Wait(ctx)
 	if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
@@ -41,7 +47,7 @@ func TestUpdateRoutes(t *testing.T) {
 	rc := &routeCollector{}
 	a := NewAppConnector(t.Logf, rc)
 	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
-	a.UpdateRoutes(routes)
+	a.updateRoutes(routes)
 
 	if !slices.EqualFunc(routes, rc.routes, prefixEqual) {
 		t.Fatalf("got %v, want %v", rc.routes, routes)
@@ -54,7 +60,7 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 	mak.Set(&a.domains, "example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")})
 	rc.routes = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}
 	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
-	a.UpdateRoutes(routes)
+	a.updateRoutes(routes)
 
 	if !slices.EqualFunc(routes, rc.routes, prefixEqual) {
 		t.Fatalf("got %v, want %v", rc.routes, routes)
@@ -64,7 +70,7 @@ func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
 func TestDomainRoutes(t *testing.T) {
 	rc := &routeCollector{}
 	a := NewAppConnector(t.Logf, rc)
-	a.UpdateDomains([]string{"example.com"})
+	a.updateDomains([]string{"example.com"})
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 
 	want := map[string][]netip.Addr{
@@ -88,7 +94,7 @@ func TestObserveDNSResponse(t *testing.T) {
 
 	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 
-	a.UpdateDomains([]string{"example.com"})
+	a.updateDomains([]string{"example.com"})
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 	if got, want := rc.routes, wantRoutes; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
@@ -109,7 +115,7 @@ func TestObserveDNSResponse(t *testing.T) {
 
 	// don't advertise addresses that are already in a control provided route
 	pfx := netip.MustParsePrefix("192.0.2.0/24")
-	a.UpdateRoutes([]netip.Prefix{pfx})
+	a.updateRoutes([]netip.Prefix{pfx})
 	wantRoutes = append(wantRoutes, pfx)
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.2.1"))
 	if !slices.Equal(rc.routes, wantRoutes) {
@@ -124,7 +130,7 @@ func TestWildcardDomains(t *testing.T) {
 	rc := &routeCollector{}
 	a := NewAppConnector(t.Logf, rc)
 
-	a.UpdateDomains([]string{"*.example.com"})
+	a.updateDomains([]string{"*.example.com"})
 	a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8"))
 	if got, want := rc.routes, []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
 		t.Errorf("routes: got %v; want %v", got, want)
@@ -133,7 +139,7 @@ func TestWildcardDomains(t *testing.T) {
 		t.Errorf("wildcards: got %v; want %v", got, want)
 	}
 
-	a.UpdateDomains([]string{"*.example.com", "example.com"})
+	a.updateDomains([]string{"*.example.com", "example.com"})
 	if _, ok := a.domains["foo.example.com"]; !ok {
 		t.Errorf("expected foo.example.com to be preserved in domains due to wildcard")
 	}
@@ -142,7 +148,7 @@ func TestWildcardDomains(t *testing.T) {
 	}
 
 	// There was an early regression where the wildcard domain was added repeatedly, this guards against that.
-	a.UpdateDomains([]string{"*.example.com", "example.com"})
+	a.updateDomains([]string{"*.example.com", "example.com"})
 	if len(a.wildcards) != 1 {
 		t.Errorf("expected only one wildcard domain, got %v", a.wildcards)
 	}
