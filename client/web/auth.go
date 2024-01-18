@@ -234,7 +234,11 @@ func (s *Server) newSessionID() (string, error) {
 	return "", errors.New("too many collisions generating new session; please refresh page")
 }
 
-type peerCapabilities map[capFeature]bool // value is true if the peer can edit the given feature
+// peerCapabilities holds information about what a source
+// peer is allowed to edit via the web UI.
+//
+// map value is true if the peer can edit the given feature.
+type peerCapabilities map[capFeature]bool
 
 // canEdit is true if the peerCapabilities grant edit access
 // to the given feature.
