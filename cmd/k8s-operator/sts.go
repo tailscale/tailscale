@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 
+	jsonpatch "github.com/evanphx/json-patch"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,7 @@ import (
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -51,6 +53,9 @@ const (
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
 	//MagicDNS name of tailnet node.
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
+
+	// Users can set this on a Service or Ingress. This prototype only looks at Services
+	AnnotationProxyClass = "tailscale.com/proxy-class"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
@@ -87,6 +92,8 @@ type tailscaleSTSConfig struct {
 	// Connector specifies a configuration of a Connector instance if that's
 	// what this StatefulSet should be created for.
 	Connector *connector
+
+	ProxyClass string
 }
 
 type connector struct {
@@ -397,7 +404,102 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			}
 		}
 	}
-	container := &ss.Spec.Template.Spec.Containers[0]
+	pod := &ss.Spec.Template
+	container := &pod.Spec.Containers[0]
+	// if proxyclass is set
+	// get the proxy class
+	// get the pod template thing from there
+	// how to merge?
+	if sts.ProxyClass != "" {
+		logger.Infof("looking at proxy class %s", sts.ProxyClass)
+		proxyClass := &tsapi.ProxyClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: sts.ProxyClass,
+			},
+		}
+		if err := a.Get(ctx, client.ObjectKeyFromObject(proxyClass), proxyClass); err != nil {
+			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+		logger.Infof("retrieved proxy class %#+v", proxyClass.Spec)
+		// only look at pod spec for this prototype
+		if ssOverlay := proxyClass.Spec.StatefulSet; ssOverlay != nil && ssOverlay.Pod != nil {
+			pod.Labels = ssOverlay.Pod.Labels
+			pod.Annotations = ssOverlay.Pod.Annotations
+			pod.Spec.NodeName = ssOverlay.Pod.NodeName
+			pod.Spec.NodeSelector = ssOverlay.Pod.NodeSelector
+			logger.Infof("Setting pod node selctor: %+#v", ssOverlay.Pod.NodeSelector)
+			pod.Spec.ImagePullSecrets = ssOverlay.Pod.ImagePullSecrets
+			pod.Spec.Tolerations = ssOverlay.Pod.Tolerations
+			if ssOverlay.Pod.PodSecurityContext != nil {
+				pod.Spec.SecurityContext = ssOverlay.Pod.PodSecurityContext
+			}
+			if contOverlay := proxyClass.Spec.StatefulSet.Pod.TailscaleContainer; contOverlay != nil {
+				if contOverlay.SecurityContext != nil {
+					// alternatively we could merge this with the existing security context
+					container.SecurityContext = contOverlay.SecurityContext
+				}
+				container.Resources = contOverlay.Resources
+			}
+			if initContOverlay := proxyClass.Spec.StatefulSet.Pod.TailscaleInitContainer; initContOverlay != nil {
+				if initContOverlay.SecurityContext != nil {
+					pod.Spec.InitContainers[0].SecurityContext = initContOverlay.SecurityContext
+				}
+			}
+			if len(ssOverlay.Pod.Patches) > 0 {
+				logger.Info("applying overlay patches")
+				// logger.Infof("before modifying pod's init containers are %#+v", pod.Spec.InitContainers)
+				// get all patches together
+				var patches []byte
+				for _, patch := range ssOverlay.Pod.Patches {
+					jsonBytes, err := json.Marshal(patch)
+					if err != nil {
+						return nil, fmt.Errorf("error marshaling JSON patch: %w", err)
+					}
+					// there is definitely a better way
+					jsonBytes = []byte("[" + string(jsonBytes) + "]")
+					// patch, err := jsonpatch.DecodePatch(jsonBytes)
+					// if err != nil {
+					// 	return nil, fmt.Errorf("error decoding JSON patch: %w", err)
+					// }
+					if len(patches) == 0 {
+						patches = jsonBytes
+					} else {
+						patches, err = jsonpatch.MergeMergePatches(patches, jsonBytes)
+						if err != nil {
+							return nil, fmt.Errorf("error merging patches: %w", err)
+						}
+					}
+					logger.Infof("patch before merging : %+v\n", string(jsonBytes))
+				}
+
+				// this can be done better
+				podBytes, err := json.Marshal(pod)
+				if err != nil {
+					return nil, fmt.Errorf("error marshaling Pod spec to JSON: %w", err)
+				}
+				logger.Infof("patches before unmarshal: %+#v\n", string(patches))
+				mergePatch, err := jsonpatch.DecodePatch(patches)
+				if err != nil {
+					return nil, fmt.Errorf("error decoding JSON patches: %w", err)
+				}
+				modifiedPodBytes, err := mergePatch.Apply(podBytes)
+				if err != nil {
+					return nil, fmt.Errorf("error applying patch: %w", err)
+				}
+				// modifiedPodBytes, err := jsonpatch.MergePatch(podBytes, patches)
+				// if err != nil {
+				// 	return nil, fmt.Errorf("error updating Pod spec using merge patch: %w", err)
+				// }
+				// if jsonpatch.Equal(podBytes, modifiedPodBytes) {
+				// 	logger.Info("no change was applied")
+				// }
+				logger.Infof("modified pod's init containers are %#+v", string(modifiedPodBytes))
+				if err = json.Unmarshal(modifiedPodBytes, pod); err != nil {
+					return nil, fmt.Errorf("error umarshaling pod bytes: %w", err)
+				}
+			}
+		}
+	}
 	container.Image = a.proxyImage
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
@@ -410,9 +512,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			"app": sts.ParentResourceUID,
 		},
 	}
-	mak.Set(&ss.Spec.Template.Labels, "app", sts.ParentResourceUID)
+	mak.Set(&pod.Labels, "app", sts.ParentResourceUID)
 	for key, val := range sts.ChildResourceLabels {
-		ss.Spec.Template.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
+		pod.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
 	}
 
 	// Generic containerboot configuration options.
@@ -431,12 +533,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		// it is passed via an environment variable. So we need to restart the
 		// container when the value changes. We do this by adding an annotation to
 		// the pod template that contains the last value we set.
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetHostname, sts.Hostname)
+		mak.Set(&pod.Annotations, podAnnotationLastSetHostname, sts.Hostname)
 	}
 	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
 	if shouldDoTailscaledDeclarativeConfig(sts) {
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
-		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+		pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: "tailscaledconfig",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -465,7 +567,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: a.tsFirewallMode,
 		})
 	}
-	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
+	pod.Spec.PriorityClassName = a.proxyPriorityClassName
 
 	// Ingress/egress proxy configuration options.
 	if sts.ClusterTargetIP != "" {
@@ -496,7 +598,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			ReadOnly:  true,
 			MountPath: "/etc/tailscaled",
 		})
-		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+		pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: "serve-config",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{

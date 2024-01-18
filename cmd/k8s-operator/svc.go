@@ -183,6 +183,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Hostname:            hostname,
 		Tags:                tags,
 		ChildResourceLabels: crl,
+		ProxyClass:          svc.GetAnnotations()[AnnotationProxyClass], // nil?
 	}
 
 	a.mu.Lock()

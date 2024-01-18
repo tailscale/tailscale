@@ -1,0 +1,10 @@
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: removeinit
+spec:
+  statefulSet:
+    pod:
+      patches:
+      - op: remove
+        path: "/spec/initContainers/0"
