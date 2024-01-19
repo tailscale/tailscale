@@ -45,6 +45,23 @@ func Test(t *testing.T) {
 	c.Assert(m, qt.DeepEquals, map[string]int{"hello": 2, "baz": 5})
 	Delete(m, "BAZ")
 	c.Assert(m, qt.DeepEquals, map[string]int{"hello": 2})
+	// test cases for AppendSliceElem with int slices
+	appendTestInt := make(map[string][]int)
+	Set(appendTestInt, "firsT", []int{7})
+	c.Assert(appendTestInt, qt.DeepEquals, map[string][]int{"first": {7}})
+	AppendSliceElem(appendTestInt, "firsT", 77)
+	c.Assert(appendTestInt, qt.DeepEquals, map[string][]int{"first": {7, 77}})
+	Set(appendTestInt, "SeCOnd", []int{56})
+	c.Assert(appendTestInt, qt.DeepEquals, map[string][]int{"first": {7, 77}, "second": {56}})
+	AppendSliceElem(appendTestInt, "seCOnd", 563, 23)
+	c.Assert(appendTestInt, qt.DeepEquals, map[string][]int{"first": {7, 77}, "second": {56, 563, 23}})
+	// test cases for AppendSliceElem with string slices
+	appendTestString := make(map[string][]string)
+	Set(appendTestString, "firsTSTRING", []string{"hi"})
+	c.Assert(appendTestString, qt.DeepEquals, map[string][]string{"firststring": {"hi"}})
+	AppendSliceElem(appendTestString, "firsTSTRING", "hello", "bye")
+	c.Assert(appendTestString, qt.DeepEquals, map[string][]string{"firststring": {"hi", "hello", "bye"}})
+
 }
 
 var lowerTests = []struct{ in, want string }{
