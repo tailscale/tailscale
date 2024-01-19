@@ -2,8 +2,8 @@ name: "Kubernetes manifests"
 on:
   pull_request:
    paths: 
-   - './cmd/k8s-operator/'
-   - './k8s-operator/'
+   - './cmd/k8s-operator/**'
+   - './k8s-operator/**'
    - '.github/workflows/kubemanifests.yaml'
 
 # Cancel workflow run if there is a newer push to the same PR for which it is
