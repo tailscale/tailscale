@@ -15,6 +15,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -445,6 +446,74 @@ func Error(code int, msg string, err error) HTTPError {
 // TODO: migrate all users to varz.Handler or promvarz.Handler and remove this.
 func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	varz.Handler(w, r)
+}
+
+// CleanRedirectURL ensures that urlStr is a valid redirect URL to the
+// current server, or one of allowedHosts. Returns the cleaned URL or
+// a validation error.
+func CleanRedirectURL(urlStr string, allowedHosts []string) (*url.URL, error) {
+	// In some places, we unfortunately query-escape the redirect URL
+	// too many times, and end up needing to redirect to a URL that's
+	// still escaped by one level. Try to unescape the input.
+	unescaped, err := url.QueryUnescape(urlStr)
+	if err == nil && unescaped != urlStr {
+		urlStr = unescaped
+	}
+
+	// Go's URL parser and browser URL parsers disagree on the meaning
+	// of malformed HTTP URLs. Given the input https:/evil.com, Go
+	// parses it as hostname="", path="/evil.com". Browsers parse it
+	// as hostname="evil.com", path="". This means that, using
+	// malformed URLs, an attacker could trick us into approving of a
+	// "local" redirect that in fact sends people elsewhere.
+	//
+	// This very blunt check enforces that we'll only process
+	// redirects that are definitely well-formed URLs.
+	//
+	// Note that the check for just / also allows URLs of the form
+	// "//foo.com/bar", which are scheme-relative redirects. These
+	// must be handled with care below when determining whether a
+	// redirect is relative to the current host. Notably,
+	// url.URL.IsAbs reports // URLs as relative, whereas we want to
+	// treat them as absolute redirects and verify the target host.
+	if !hasSafeRedirectPrefix(urlStr) {
+		return nil, fmt.Errorf("invalid redirect URL %q", urlStr)
+	}
+
+	url, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid redirect URL %q: %w", urlStr, err)
+	}
+	// Redirects to self are always allowed. A self redirect must
+	// start with url.Path, all prior URL sections must be empty.
+	isSelfRedirect := url.Scheme == "" && url.Opaque == "" && url.User == nil && url.Host == ""
+	if isSelfRedirect {
+		return url, nil
+	}
+	for _, allowed := range allowedHosts {
+		if strings.EqualFold(allowed, url.Hostname()) {
+			return url, nil
+		}
+	}
+
+	return nil, fmt.Errorf("disallowed target host %q in redirect URL %q", url.Hostname(), urlStr)
+}
+
+// hasSafeRedirectPrefix reports whether url starts with a slash, or
+// one of the case-insensitive strings "http://" or "https://".
+func hasSafeRedirectPrefix(url string) bool {
+	if len(url) >= 1 && url[0] == '/' {
+		return true
+	}
+	const http = "http://"
+	if len(url) >= len(http) && strings.EqualFold(url[:len(http)], http) {
+		return true
+	}
+	const https = "https://"
+	if len(url) >= len(https) && strings.EqualFold(url[:len(https)], https) {
+		return true
+	}
+	return false
 }
 
 // AddBrowserHeaders sets various HTTP security headers for browser-facing endpoints.

@@ -617,3 +617,54 @@ func TestPort80Handler(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanRedirectURL(t *testing.T) {
+	tailscaleHost := []string{"tailscale.com"}
+	tailscaleAndOtherHost := []string{"microsoft.com", "tailscale.com"}
+	localHost := []string{"127.0.0.1", "localhost"}
+	myServer := []string{"myserver"}
+	cases := []struct {
+		url   string
+		hosts []string
+		want  string
+	}{
+		{"http://tailscale.com/foo", tailscaleHost, "http://tailscale.com/foo"},
+		{"http://tailscale.com/foo", tailscaleAndOtherHost, "http://tailscale.com/foo"},
+		{"http://microsoft.com/foo", tailscaleAndOtherHost, "http://microsoft.com/foo"},
+		{"https://tailscale.com/foo", tailscaleHost, "https://tailscale.com/foo"},
+		{"/foo", tailscaleHost, "/foo"},
+		{"//tailscale.com/foo", tailscaleHost, "//tailscale.com/foo"},
+
+		{"/a/foobar", tailscaleHost, "/a/foobar"},
+		{"http://127.0.0.1/a/foobar", localHost, "http://127.0.0.1/a/foobar"},
+		{"http://127.0.0.1:123/a/foobar", localHost, "http://127.0.0.1:123/a/foobar"},
+		{"http://127.0.0.1:31544/a/foobar", localHost, "http://127.0.0.1:31544/a/foobar"},
+		{"http://localhost/a/foobar", localHost, "http://localhost/a/foobar"},
+		{"http://localhost:123/a/foobar", localHost, "http://localhost:123/a/foobar"},
+		{"http://localhost:31544/a/foobar", localHost, "http://localhost:31544/a/foobar"},
+		{"http://myserver/a/foobar", myServer, "http://myserver/a/foobar"},
+		{"http://myserver:123/a/foobar", myServer, "http://myserver:123/a/foobar"},
+		{"http://myserver:31544/a/foobar", myServer, "http://myserver:31544/a/foobar"},
+		{"http://evil.com/foo", tailscaleHost, ""},
+		{"//evil.com", tailscaleHost, ""},
+		{"HttP://tailscale.com", tailscaleHost, "http://tailscale.com"},
+		{"http://TaIlScAlE.CoM/spongebob", tailscaleHost, "http://TaIlScAlE.CoM/spongebob"},
+		{"ftp://tailscale.com", tailscaleHost, ""},
+		{"https:/evil.com", tailscaleHost, ""},                    // regression test for tailscale/corp#892
+		{"%2Fa%2F44869c061701", tailscaleHost, "/a/44869c061701"}, // regression test for tailscale/corp#13288
+		{"https%3A%2Ftailscale.com", tailscaleHost, ""},           // escaped colon-single-slash malformed URL
+	}
+
+	for _, tc := range cases {
+		gotURL, err := CleanRedirectURL(tc.url, tc.hosts)
+		if err != nil {
+			if tc.want != "" {
+				t.Errorf("CleanRedirectURL(%q, %v) got error: %v", tc.url, tc.hosts, err)
+			}
+		} else {
+			if got := gotURL.String(); got != tc.want {
+				t.Errorf("CleanRedirectURL(%q, %v) = %q, want %q", tc.url, tc.hosts, got, tc.want)
+			}
+		}
+	}
+}
