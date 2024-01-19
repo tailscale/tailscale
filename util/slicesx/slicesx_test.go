@@ -97,3 +97,42 @@ func TestEqualSameNil(t *testing.T) {
 	c.Check(EqualSameNil([]string{}, nil), qt.Equals, false)
 	c.Check(EqualSameNil[[]string](nil, nil), qt.Equals, true)
 }
+
+func TestFilter(t *testing.T) {
+	var sl []int
+	for i := 1; i <= 10; i++ {
+		sl = append(sl, i)
+	}
+
+	evens := Filter(nil, sl, func(elem int) bool {
+		return elem%2 == 0
+	})
+
+	want := []int{2, 4, 6, 8, 10}
+	if !reflect.DeepEqual(evens, want) {
+		t.Errorf("evens: got %v, want %v", evens, want)
+	}
+}
+
+func TestFilterNoAllocations(t *testing.T) {
+	var sl []int
+	for i := 1; i <= 10; i++ {
+		sl = append(sl, i)
+	}
+
+	want := []int{2, 4, 6, 8, 10}
+	allocs := testing.AllocsPerRun(1000, func() {
+		src := slices.Clone(sl)
+		evens := Filter(src[:0], src, func(elem int) bool {
+			return elem%2 == 0
+		})
+		if !slices.Equal(evens, want) {
+			t.Errorf("evens: got %v, want %v", evens, want)
+		}
+	})
+
+	// 1 alloc for 'src', nothing else
+	if allocs != 1 {
+		t.Fatalf("got %.4f allocs, want 1", allocs)
+	}
+}
