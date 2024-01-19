@@ -47,6 +47,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # Install a more recent Go that understands modern go.mod content.
+    - name: Install Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: go.mod
+
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v2

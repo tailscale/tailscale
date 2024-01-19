@@ -1,6 +1,8 @@
 module tailscale.com
 
-go 1.21
+go 1.21.1
+
+toolchain go1.21.5
 
 require (
 	filippo.io/mkcert v1.4.4
@@ -92,7 +94,7 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gopkg.in/square/go-jose.v2 v2.6.0
-	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
+	gvisor.dev/gvisor v0.0.0-20240119233241-c9c1d4f9b186
 	honnef.co/go/tools v0.4.6
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/tcpproxy v0.0.0-20231102063150-2862066fc2a9

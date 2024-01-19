@@ -1062,7 +1062,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 			return // Only MagicDNS traffic runs on the service IPs for now.
 		}
 
-		c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
+		c := gonet.NewUDPConn(&wq, ep)
 		go ns.handleMagicDNSUDP(srcAddr, c)
 		return
 	}
@@ -1074,12 +1074,12 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 				ep.Close()
 				return
 			}
-			go h(gonet.NewUDPConn(ns.ipstack, &wq, ep))
+			go h(gonet.NewUDPConn(&wq, ep))
 			return
 		}
 	}
 
-	c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
+	c := gonet.NewUDPConn(&wq, ep)
 	go ns.forwardUDP(c, srcAddr, dstAddr)
 }
 
