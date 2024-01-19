@@ -16,7 +16,7 @@ func TestDockerfileVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^go (\d\.\d+)\r?$`).FindStringSubmatch(string(goMod))
+	m := regexp.MustCompile(`(?m)^go (\d\.\d+)\r?($|\.)`).FindStringSubmatch(string(goMod))
 	if m == nil {
 		t.Fatalf("didn't find go version in go.mod")
 	}
