@@ -49,6 +49,8 @@ spec:
           image: {{ .Values.operatorConfig.image.repo }}{{- if .Values.operatorConfig.image.digest -}}{{ printf "@%s" .Values.operatorConfig.image.digest}}{{- else -}}{{ printf "%s" $operatorTag }}{{- end }}
           imagePullPolicy: {{ .Values.operatorConfig.image.pullPolicy }}
           env:
+            - name: OPERATOR_INITIAL_TAGS
+              value: {{ join "," .Values.operatorConfig.defaultTags }}
             - name: OPERATOR_HOSTNAME
               value: {{ .Values.operatorConfig.hostname }}
             - name: OPERATOR_SECRET
