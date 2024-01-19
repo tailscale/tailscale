@@ -8,9 +8,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -36,6 +38,7 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/metrics"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
@@ -1258,4 +1261,152 @@ func ipPortOfNetstackAddr(a tcpip.Address, port uint16) (ipp netip.AddrPort, ok 
 		return netip.AddrPortFrom(addr, port), true
 	}
 	return netip.AddrPort{}, false
+}
+
+func readStatCounter(sc *tcpip.StatCounter) int64 {
+	vv := sc.Value()
+	if vv > math.MaxInt64 {
+		return int64(math.MaxInt64)
+	}
+	return int64(vv)
+}
+
+// ExpVar returns an expvar variable suitable for registering with expvar.Publish.
+func (ns *Impl) ExpVar() expvar.Var {
+	m := new(metrics.Set)
+
+	// Global metrics
+	stats := ns.ipstack.Stats()
+	m.Set("gauge_dropped_packets", expvar.Func(func() any {
+		return readStatCounter(stats.DroppedPackets)
+	}))
+
+	// IP statistics
+	ipStats := ns.ipstack.Stats().IP
+	ipMetrics := []struct {
+		name  string
+		field *tcpip.StatCounter
+	}{
+		{"packets_received", ipStats.PacketsReceived},
+		{"valid_packets_received", ipStats.ValidPacketsReceived},
+		{"disabled_packets_received", ipStats.DisabledPacketsReceived},
+		{"invalid_destination_addresses_received", ipStats.InvalidDestinationAddressesReceived},
+		{"invalid_source_addresses_received", ipStats.InvalidSourceAddressesReceived},
+		{"packets_delivered", ipStats.PacketsDelivered},
+		{"packets_sent", ipStats.PacketsSent},
+		{"outgoing_packet_errors", ipStats.OutgoingPacketErrors},
+		{"malformed_packets_received", ipStats.MalformedPacketsReceived},
+		{"malformed_fragments_received", ipStats.MalformedFragmentsReceived},
+		{"iptables_prerouting_dropped", ipStats.IPTablesPreroutingDropped},
+		{"iptables_input_dropped", ipStats.IPTablesInputDropped},
+		{"iptables_forward_dropped", ipStats.IPTablesForwardDropped},
+		{"iptables_output_dropped", ipStats.IPTablesOutputDropped},
+		{"iptables_postrouting_dropped", ipStats.IPTablesPostroutingDropped},
+		{"option_timestamp_received", ipStats.OptionTimestampReceived},
+		{"option_record_route_received", ipStats.OptionRecordRouteReceived},
+		{"option_router_alert_received", ipStats.OptionRouterAlertReceived},
+		{"option_unknown_received", ipStats.OptionUnknownReceived},
+	}
+	for _, metric := range ipMetrics {
+		metric := metric
+		m.Set("gauge_ip_"+metric.name, expvar.Func(func() any {
+			return readStatCounter(metric.field)
+		}))
+	}
+
+	// IP forwarding statistics
+	fwdStats := ipStats.Forwarding
+	fwdMetrics := []struct {
+		name  string
+		field *tcpip.StatCounter
+	}{
+		{"unrouteable", fwdStats.Unrouteable},
+		{"exhausted_ttl", fwdStats.ExhaustedTTL},
+		{"initializing_source", fwdStats.InitializingSource},
+		{"link_local_source", fwdStats.LinkLocalSource},
+		{"link_local_destination", fwdStats.LinkLocalDestination},
+		{"packet_too_big", fwdStats.PacketTooBig},
+		{"host_unreachable", fwdStats.HostUnreachable},
+		{"extension_header_problem", fwdStats.ExtensionHeaderProblem},
+		{"unexpected_multicast_input_interface", fwdStats.UnexpectedMulticastInputInterface},
+		{"unknown_output_endpoint", fwdStats.UnknownOutputEndpoint},
+		{"no_multicast_pending_queue_buffer_space", fwdStats.NoMulticastPendingQueueBufferSpace},
+		{"outgoing_device_no_buffer_space", fwdStats.OutgoingDeviceNoBufferSpace},
+		{"errors", fwdStats.Errors},
+	}
+	for _, metric := range fwdMetrics {
+		metric := metric
+		m.Set("gauge_ip_forward_"+metric.name, expvar.Func(func() any {
+			return readStatCounter(metric.field)
+		}))
+	}
+
+	// TCP metrics
+	tcpStats := ns.ipstack.Stats().TCP
+	tcpMetrics := []struct {
+		name  string
+		field *tcpip.StatCounter
+	}{
+		{"active_connection_openings", tcpStats.ActiveConnectionOpenings},
+		{"passive_connection_openings", tcpStats.PassiveConnectionOpenings},
+		{"current_established", tcpStats.CurrentEstablished},
+		{"current_connected", tcpStats.CurrentConnected},
+		{"established_resets", tcpStats.EstablishedResets},
+		{"established_closed", tcpStats.EstablishedClosed},
+		{"established_timeout", tcpStats.EstablishedTimedout},
+		{"listen_overflow_syn_drop", tcpStats.ListenOverflowSynDrop},
+		{"listen_overflow_ack_drop", tcpStats.ListenOverflowAckDrop},
+		{"listen_overflow_syn_cookie_sent", tcpStats.ListenOverflowSynCookieSent},
+		{"listen_overflow_syn_cookie_rcvd", tcpStats.ListenOverflowSynCookieRcvd},
+		{"listen_overflow_invalid_syn_cookie_rcvd", tcpStats.ListenOverflowInvalidSynCookieRcvd},
+		{"failed_connection_attempts", tcpStats.FailedConnectionAttempts},
+		{"valid_segments_received", tcpStats.ValidSegmentsReceived},
+		{"invalid_segments_received", tcpStats.InvalidSegmentsReceived},
+		{"segments_sent", tcpStats.SegmentsSent},
+		{"segment_send_errors", tcpStats.SegmentSendErrors},
+		{"resets_sent", tcpStats.ResetsSent},
+		{"resets_received", tcpStats.ResetsReceived},
+		{"retransmits", tcpStats.Retransmits},
+		{"fast_recovery", tcpStats.FastRecovery},
+		{"sack_recovery", tcpStats.SACKRecovery},
+		{"tlp_recovery", tcpStats.TLPRecovery},
+		{"slow_start_retransmits", tcpStats.SlowStartRetransmits},
+		{"fast_retransmit", tcpStats.FastRetransmit},
+		{"timeouts", tcpStats.Timeouts},
+		{"checksum_errors", tcpStats.ChecksumErrors},
+		{"failed_port_reservations", tcpStats.FailedPortReservations},
+		{"segments_acked_with_dsack", tcpStats.SegmentsAckedWithDSACK},
+		{"spurious_recovery", tcpStats.SpuriousRecovery},
+		{"spurious_rto_recovery", tcpStats.SpuriousRTORecovery},
+		{"gauge_tcp_forward_max_in_flight_drop", tcpStats.ForwardMaxInFlightDrop},
+	}
+	for _, metric := range tcpMetrics {
+		metric := metric
+		m.Set("gauge_tcp_"+metric.name, expvar.Func(func() any {
+			return readStatCounter(metric.field)
+		}))
+	}
+
+	// UDP metrics
+	udpStats := ns.ipstack.Stats().UDP
+	udpMetrics := []struct {
+		name  string
+		field *tcpip.StatCounter
+	}{
+		{"packets_received", udpStats.PacketsReceived},
+		{"unknown_port_errors", udpStats.UnknownPortErrors},
+		{"receive_buffer_errors", udpStats.ReceiveBufferErrors},
+		{"malformed_packets_received", udpStats.MalformedPacketsReceived},
+		{"packets_sent", udpStats.PacketsSent},
+		{"packet_send_errors", udpStats.PacketSendErrors},
+		{"checksum_errors", udpStats.ChecksumErrors},
+	}
+	for _, metric := range udpMetrics {
+		metric := metric
+		m.Set("gauge_udp_"+metric.name, expvar.Func(func() any {
+			return readStatCounter(metric.field)
+		}))
+	}
+
+	return m
 }

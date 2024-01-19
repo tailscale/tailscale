@@ -13,6 +13,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 import (
 	"context"
 	"errors"
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -729,7 +730,7 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	return netstack.Create(logf,
+	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
 		sys.MagicSock.Get(),
@@ -737,6 +738,14 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 		sys.DNSManager.Get(),
 		sys.ProxyMapper(),
 	)
+	if err != nil {
+		return nil, err
+	}
+	// Only register debug info if we have a debug mux
+	if debugMux != nil {
+		expvar.Publish("netstack", ret.ExpVar())
+	}
+	return ret, nil
 }
 
 // mustStartProxyListeners creates listeners for local SOCKS and HTTP
