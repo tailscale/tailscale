@@ -173,16 +173,22 @@ func (s *FileStore) ReadState(id ipn.StateKey) ([]byte, error) {
 }
 
 // WriteState implements the StateStore interface.
-func (s *FileStore) WriteState(id ipn.StateKey, bs []byte) error {
+func (s *FileStore) WriteState(id ipn.StateKey, bs []byte) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if bytes.Equal(s.cache[id], bs) {
+	bs0 := s.cache[id]
+	if bytes.Equal(bs0, bs) {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			s.cache[id] = bs0
+		}
+	}()
 	s.cache[id] = bytes.Clone(bs)
-	bs, err := json.MarshalIndent(s.cache, "", "  ")
+	b, err := json.MarshalIndent(s.cache, "", "  ")
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(s.path, bs, 0600)
+	return atomicfile.WriteFile(s.path, b, 0600)
 }
