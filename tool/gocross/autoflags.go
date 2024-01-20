@@ -191,6 +191,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	env.Set("CC", cc)
 	env.Set("TS_LINK_FAIL_REFLECT", boolStr(failReflect))
 	env.Set("GOROOT", goroot)
+	env.Set("GOTOOLCHAIN", "local")
 
 	if subcommand == "env" {
 		return argv, env, nil
