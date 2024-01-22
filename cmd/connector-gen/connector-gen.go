@@ -27,6 +27,14 @@ func main() {
 		github()
 	case "aws":
 		aws()
+	case "jira":
+		jira()
+	case "confluence":
+		confluence()
+	case "workspace":
+		workspace()
+	case "stripe":
+		stripe()
 	default:
 		help()
 		os.Exit(128)
