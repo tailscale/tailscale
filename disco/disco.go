@@ -227,6 +227,9 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 type Pong struct {
 	TxID [12]byte
 	Src  netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
+	// Padding is the number of 0 bytes at the end of the
+	// message. (It's used to probe path MTU.)
+	Padding int
 }
 
 // pongLen is the length of a marshalled pong message, without the message
@@ -234,7 +237,7 @@ type Pong struct {
 const pongLen = 12 + 16 + 2
 
 func (m *Pong) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
+	ret, d := appendMsgHeader(b, TypePong, v0, pongLen+m.Padding)
 	d = d[copy(d, m.TxID[:]):]
 	ip16 := m.Src.Addr().As16()
 	d = d[copy(d, ip16[:]):]
@@ -247,8 +250,10 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 		return nil, errShort
 	}
 	m = new(Pong)
+	m.Padding = len(p)
 	copy(m.TxID[:], p)
-	p = p[12:]
+	p = p[copy(m.TxID[:], p):]
+	m.Padding -= pongLen
 
 	srcIP, _ := netip.AddrFromSlice(net.IP(p[:16]))
 	p = p[16:]
@@ -263,7 +268,7 @@ func MessageSummary(m Message) string {
 	case *Ping:
 		return fmt.Sprintf("ping tx=%x padding=%v", m.TxID[:6], m.Padding)
 	case *Pong:
-		return fmt.Sprintf("pong tx=%x", m.TxID[:6])
+		return fmt.Sprintf("pong tx=%x padding=%v", m.TxID[:6], m.Padding)
 	case *CallMeMaybe:
 		return "call-me-maybe"
 	default:

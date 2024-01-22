@@ -69,6 +69,15 @@ func TestMarshalAndParse(t *testing.T) {
 			want: "02 00 01 02 03 04 05 06 07 08 09 0a 0b 0c fe d0 00 00 00 00 00 00 00 00 00 00 00 00 00 12 1a 0a",
 		},
 		{
+			name: "pong_with_padding",
+			m: &Pong{
+				TxID:    [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				Src:     mustIPPort("2.3.4.5:1234"),
+				Padding: 3,
+			},
+			want: "02 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 00 00 00 00 00 00 00 00 00 00 ff ff 02 03 04 05 04 d2 00 00 00",
+		},
+		{
 			name: "call_me_maybe",
 			m:    &CallMeMaybe{},
 			want: "03 00",
