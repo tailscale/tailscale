@@ -332,6 +332,86 @@ const (
   </device>
 </root>
 `
+
+	noSupportedServicesRootDesc = `<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:dslforum-org:device:InternetGatewayDevice:1</deviceType>
+    <friendlyName>Fake Router</friendlyName>
+    <manufacturer>Tailscale, Inc</manufacturer>
+    <manufacturerURL>http://www.tailscale.com</manufacturerURL>
+    <modelDescription>Fake Router</modelDescription>
+    <modelName>Test Model</modelName>
+    <modelNumber>v1</modelNumber>
+    <modelURL>http://www.tailscale.com</modelURL>
+    <serialNumber>123456789</serialNumber>
+    <UDN>uuid:11111111-2222-3333-4444-555555555555</UDN>
+    <UPC>000000000001</UPC>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-microsoft-com:service:OSInfo:1</serviceType>
+        <serviceId>urn:microsoft-com:serviceId:OSInfo1</serviceId>
+        <SCPDURL>/osinfo.xml</SCPDURL>
+        <controlURL>/upnp/control/aaaaaaaaaa/osinfo</controlURL>
+        <eventSubURL>/upnp/event/aaaaaaaaaa/osinfo</eventSubURL>
+      </service>
+    </serviceList>
+    <deviceList>
+      <device>
+	<deviceType>urn:schemas-upnp-org:device:WANDevice:1</deviceType>
+        <friendlyName>WANDevice</friendlyName>
+        <manufacturer>Tailscale, Inc</manufacturer>
+	<manufacturerURL>http://www.tailscale.com</manufacturerURL>
+	<modelDescription>Tailscale Test Router</modelDescription>
+	<modelName>Test Model</modelName>
+	<modelNumber>v1</modelNumber>
+	<modelURL>http://www.tailscale.com</modelURL>
+	<serialNumber>123456789</serialNumber>
+	<UDN>uuid:11111111-2222-3333-4444-555555555555</UDN>
+        <UPC>000000000001</UPC>
+        <serviceList>
+          <service>
+            <serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType>
+            <serviceId>urn:upnp-org:serviceId:WANCommonIFC1</serviceId>
+            <controlURL>/ctl/bbbbbbbb</controlURL>
+            <eventSubURL>/evt/bbbbbbbb</eventSubURL>
+            <SCPDURL>/WANCfg.xml</SCPDURL>
+          </service>
+        </serviceList>
+        <deviceList>
+          <device>
+	    <deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType>
+            <friendlyName>WANConnectionDevice</friendlyName>
+	    <manufacturer>Tailscale, Inc</manufacturer>
+	    <manufacturerURL>http://www.tailscale.com</manufacturerURL>
+	    <modelDescription>Tailscale Test Router</modelDescription>
+	    <modelName>Test Model</modelName>
+	    <modelNumber>v1</modelNumber>
+	    <modelURL>http://www.tailscale.com</modelURL>
+	    <serialNumber>123456789</serialNumber>
+	    <UDN>uuid:11111111-2222-3333-4444-555555555555</UDN>
+            <UPC>000000000001</UPC>
+            <serviceList>
+              <service>
+		<serviceType>urn:tailscale:service:SomethingElse:1</serviceType>
+		<serviceId>urn:upnp-org:serviceId:TailscaleSomethingElse</serviceId>
+                <SCPDURL>/desc/SomethingElse.xml</SCPDURL>
+                <controlURL>/ctrlt/SomethingElse_1</controlURL>
+                <eventSubURL>/evt/SomethingElse_1</eventSubURL>
+              </service>
+            </serviceList>
+          </device>
+        </deviceList>
+      </device>
+    </deviceList>
+    <presentationURL>http://127.0.0.1</presentationURL>
+  </device>
+</root>
+`
 )
 
 func TestParseUPnPDiscoResponse(t *testing.T) {
@@ -402,7 +482,12 @@ func TestGetUPnPClient(t *testing.T) {
 		{
 			"huawei",
 			huaweiRootDescXML,
-			// services not supported and thus returns nil, but shouldn't crash
+			"*portmapper.legacyWANPPPConnection1",
+			"saw UPnP type *portmapper.legacyWANPPPConnection1 at http://127.0.0.1:NNN/rootDesc.xml; HG531 V1 (Huawei Technologies Co., Ltd.), method=single\n",
+		},
+		{
+			"not_supported",
+			noSupportedServicesRootDesc,
 			"<nil>",
 			"",
 		},
@@ -563,7 +648,7 @@ func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
 
 	igd.SetUPnPHandler(&upnpServer{
 		t:    t,
-		Desc: huaweiRootDescXML,
+		Desc: noSupportedServicesRootDesc,
 	})
 
 	c := newTestClient(t, igd)
@@ -588,6 +673,57 @@ func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
 	_, ok = c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
 	if ok {
 		t.Fatal("did not expect to get UPnP port mapping")
+	}
+}
+
+// Tests the legacy behaviour with the pre-UPnP standard portmapping service.
+func TestGetUPnPPortMapping_Legacy(t *testing.T) {
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+
+	// This is a very basic fake UPnP server handler.
+	handlers := map[string]any{
+		"AddPortMapping":       testLegacyAddPortMappingResponse,
+		"GetExternalIPAddress": testLegacyGetExternalIPAddressResponse,
+		"GetStatusInfo":        testLegacyGetStatusInfoResponse,
+		"DeletePortMapping":    "", // Do nothing for test
+	}
+
+	igd.SetUPnPHandler(&upnpServer{
+		t:    t,
+		Desc: huaweiRootDescXML,
+		Control: map[string]map[string]any{
+			"/ctrlt/WANPPPConnection_1": handlers,
+		},
+	})
+
+	c := newTestClient(t, igd)
+	defer c.Close()
+	c.debug.VerboseLogs = true
+
+	ctx := context.Background()
+	res, err := c.Probe(ctx)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if !res.UPnP {
+		t.Errorf("didn't detect UPnP")
+	}
+
+	gw, myIP, ok := c.gatewayAndSelfIP()
+	if !ok {
+		t.Fatalf("could not get gateway and self IP")
+	}
+
+	ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+	if !ok {
+		t.Fatal("could not get UPnP port mapping")
+	}
+	if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+		t.Errorf("bad external address; got %v want %v", got, want)
 	}
 }
 
@@ -888,6 +1024,36 @@ const testGetStatusInfoResponse = `<?xml version="1.0"?>
       <NewConnectionStatus>Connected</NewConnectionStatus>
       <NewLastConnectionError>ERROR_NONE</NewLastConnectionError>
       <NewUptime>9999</NewUptime>
+    </u:GetStatusInfoResponse>
+  </s:Body>
+</s:Envelope>
+`
+
+const testLegacyAddPortMappingResponse = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:AddPortMappingResponse xmlns:u="urn:dslforum-org:service:WANPPPConnection:1"/>
+  </s:Body>
+</s:Envelope>
+`
+
+const testLegacyGetExternalIPAddressResponse = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:GetExternalIPAddressResponse xmlns:u="urn:dslforum-org:service:WANPPPConnection:1">
+      <NewExternalIPAddress>123.123.123.123</NewExternalIPAddress>
+    </u:GetExternalIPAddressResponse>
+  </s:Body>
+</s:Envelope>
+`
+
+const testLegacyGetStatusInfoResponse = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:GetStatusInfoResponse xmlns:u="urn:dslforum-org:service:WANPPPConnection:1">
+      <NewConnectionStatus>Connected</NewConnectionStatus>
+      <NewLastConnectionError>ERROR_NONE</NewLastConnectionError>
+      <NewUpTime>9999</NewUpTime>
     </u:GetStatusInfoResponse>
   </s:Body>
 </s:Envelope>
