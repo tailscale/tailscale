@@ -230,6 +230,12 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 
+	if len(web.Handlers) == 0 {
+		logger.Warn("Ingress contains no valid backends")
+		a.recorder.Eventf(ing, corev1.EventTypeWarning, "NoValidBackends", "no valid backends")
+		return nil
+	}
+
 	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
 	var tags []string
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
