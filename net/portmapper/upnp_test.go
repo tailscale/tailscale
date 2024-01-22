@@ -166,6 +166,172 @@ const (
   <disabledForTestURLBase>http://10.0.0.1:2828</disabledForTestURLBase>
 </root>
 `
+
+	// Huawei, https://github.com/tailscale/tailscale/issues/10911
+	huaweiRootDescXML = `<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:dslforum-org:device:InternetGatewayDevice:1</deviceType>
+    <friendlyName>HG531 V1</friendlyName>
+    <manufacturer>Huawei Technologies Co., Ltd.</manufacturer>
+    <manufacturerURL>http://www.huawei.com</manufacturerURL>
+    <modelDescription>Huawei Home Gateway</modelDescription>
+    <modelName>HG531 V1</modelName>
+    <modelNumber>Huawei Model</modelNumber>
+    <modelURL>http://www.huawei.com</modelURL>
+    <serialNumber>G6J8W15326003974</serialNumber>
+    <UDN>uuid:00e0fc37-2626-2828-2600-587f668bdd9a</UDN>
+    <UPC>000000000001</UPC>
+    <serviceList>
+      <service>
+        <serviceType>urn:www-huawei-com:service:DeviceConfig:1</serviceType>
+        <serviceId>urn:www-huawei-com:serviceId:DeviceConfig1</serviceId>
+        <SCPDURL>/desc/DevCfg.xml</SCPDURL>
+        <controlURL>/ctrlt/DeviceConfig_1</controlURL>
+        <eventSubURL>/evt/DeviceConfig_1</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:dslforum-org:service:LANConfigSecurity:1</serviceType>
+        <serviceId>urn:dslforum-org:serviceId:LANConfigSecurity1</serviceId>
+        <SCPDURL>/desc/LANSec.xml</SCPDURL>
+        <controlURL>/ctrlt/LANConfigSecurity_1</controlURL>
+        <eventSubURL>/evt/LANConfigSecurity_1</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType>
+        <serviceId>urn:dslforum-org:serviceId:Layer3Forwarding1</serviceId>
+        <SCPDURL>/desc/L3Fwd.xml</SCPDURL>
+        <controlURL>/ctrlt/Layer3Forwarding_1</controlURL>
+        <eventSubURL>/evt/Layer3Forwarding_1</eventSubURL>
+      </service>
+    </serviceList>
+    <deviceList>
+      <device>
+        <deviceType>urn:dslforum-org:device:WANDevice:1</deviceType>
+        <friendlyName>WANDevice</friendlyName>
+        <manufacturer>Huawei Technologies Co., Ltd.</manufacturer>
+        <manufacturerURL>http://www.huawei.com</manufacturerURL>
+        <modelDescription>Huawei Home Gateway</modelDescription>
+        <modelName>HG531 V1</modelName>
+        <modelNumber>Huawei Model</modelNumber>
+        <modelURL>http://www.huawei.com</modelURL>
+        <serialNumber>G6J8W15326003974</serialNumber>
+        <UDN>uuid:00e0fc37-2626-2828-2601-587f668bdd9a</UDN>
+        <UPC>000000000001</UPC>
+        <serviceList>
+          <service>
+            <serviceType>urn:dslforum-org:service:WANDSLInterfaceConfig:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:WANDSLInterfaceConfig1</serviceId>
+            <SCPDURL>/desc/WanDslIfCfg.xml</SCPDURL>
+            <controlURL>/ctrlt/WANDSLInterfaceConfig_1</controlURL>
+            <eventSubURL>/evt/WANDSLInterfaceConfig_1</eventSubURL>
+          </service>
+          <service>
+            <serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:WANCommonInterfaceConfig1</serviceId>
+            <SCPDURL>/desc/WanCommonIfc1.xml</SCPDURL>
+            <controlURL>/ctrlt/WANCommonInterfaceConfig_1</controlURL>
+            <eventSubURL>/evt/WANCommonInterfaceConfig_1</eventSubURL>
+          </service>
+        </serviceList>
+        <deviceList>
+          <device>
+            <deviceType>urn:dslforum-org:device:WANConnectionDevice:1</deviceType>
+            <friendlyName>WANConnectionDevice</friendlyName>
+            <manufacturer>Huawei Technologies Co., Ltd.</manufacturer>
+            <manufacturerURL>http://www.huawei.com</manufacturerURL>
+            <modelDescription>Huawei Home Gateway</modelDescription>
+            <modelName>HG531 V1</modelName>
+            <modelNumber>Huawei Model</modelNumber>
+            <modelURL>http://www.huawei.com</modelURL>
+            <serialNumber>G6J8W15326003974</serialNumber>
+            <UDN>uuid:00e0fc37-2626-2828-2603-587f668bdd9a</UDN>
+            <UPC>000000000001</UPC>
+            <serviceList>
+              <service>
+                <serviceType>urn:dslforum-org:service:WANPPPConnection:1</serviceType>
+                <serviceId>urn:dslforum-org:serviceId:WANPPPConnection1</serviceId>
+                <SCPDURL>/desc/WanPppConn.xml</SCPDURL>
+                <controlURL>/ctrlt/WANPPPConnection_1</controlURL>
+                <eventSubURL>/evt/WANPPPConnection_1</eventSubURL>
+              </service>
+              <service>
+                <serviceType>urn:dslforum-org:service:WANEthernetConnectionManagement:1</serviceType>
+                <serviceId>urn:dslforum-org:serviceId:WANEthernetConnectionManagement1</serviceId>
+                <SCPDURL>/desc/WanEthConnMgt.xml</SCPDURL>
+                <controlURL>/ctrlt/WANEthernetConnectionManagement_1</controlURL>
+                <eventSubURL>/evt/WANEthernetConnectionManagement_1</eventSubURL>
+              </service>
+              <service>
+                <serviceType>urn:dslforum-org:service:WANDSLLinkConfig:1</serviceType>
+                <serviceId>urn:dslforum-org:serviceId:WANDSLLinkConfig1</serviceId>
+                <SCPDURL>/desc/WanDslLink.xml</SCPDURL>
+                <controlURL>/ctrlt/WANDSLLinkConfig_1</controlURL>
+                <eventSubURL>/evt/WANDSLLinkConfig_1</eventSubURL>
+              </service>
+            </serviceList>
+          </device>
+        </deviceList>
+      </device>
+      <device>
+        <deviceType>urn:dslforum-org:device:LANDevice:1</deviceType>
+        <friendlyName>LANDevice</friendlyName>
+        <manufacturer>Huawei Technologies Co., Ltd.</manufacturer>
+        <manufacturerURL>http://www.huawei.com</manufacturerURL>
+        <modelDescription>Huawei Home Gateway</modelDescription>
+        <modelName>HG531 V1</modelName>
+        <modelNumber>Huawei Model</modelNumber>
+        <modelURL>http://www.huawei.com</modelURL>
+        <serialNumber>G6J8W15326003974</serialNumber>
+        <UDN>uuid:00e0fc37-2626-2828-2602-587f668bdd9a</UDN>
+        <UPC>000000000001</UPC>
+        <serviceList>
+          <service>
+            <serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:WLANConfiguration4</serviceId>
+            <SCPDURL>/desc/WLANCfg.xml</SCPDURL>
+            <controlURL>/ctrlt/WLANConfiguration_4</controlURL>
+            <eventSubURL>/evt/WLANConfiguration_4</eventSubURL>
+          </service>
+          <service>
+            <serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:WLANConfiguration3</serviceId>
+            <SCPDURL>/desc/WLANCfg.xml</SCPDURL>
+            <controlURL>/ctrlt/WLANConfiguration_3</controlURL>
+            <eventSubURL>/evt/WLANConfiguration_3</eventSubURL>
+          </service>
+          <service>
+            <serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:WLANConfiguration2</serviceId>
+            <SCPDURL>/desc/WLANCfg.xml</SCPDURL>
+            <controlURL>/ctrlt/WLANConfiguration_2</controlURL>
+            <eventSubURL>/evt/WLANConfiguration_2</eventSubURL>
+          </service>
+          <service>
+            <serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:WLANConfiguration1</serviceId>
+            <SCPDURL>/desc/WLANCfg.xml</SCPDURL>
+            <controlURL>/ctrlt/WLANConfiguration_1</controlURL>
+            <eventSubURL>/evt/WLANConfiguration_1</eventSubURL>
+          </service>
+          <service>
+            <serviceType>urn:dslforum-org:service:LANHostConfigManagement:1</serviceType>
+            <serviceId>urn:dslforum-org:serviceId:LANHostConfigManagement1</serviceId>
+            <SCPDURL>/desc/LanHostCfgMgmt.xml</SCPDURL>
+            <controlURL>/ctrlt/LANHostConfigManagement_1</controlURL>
+            <eventSubURL>/evt/LANHostConfigManagement_1</eventSubURL>
+          </service>
+        </serviceList>
+      </device>
+    </deviceList>
+    <presentationURL>http://127.0.0.1</presentationURL>
+  </device>
+</root>
+`
 )
 
 func TestParseUPnPDiscoResponse(t *testing.T) {
@@ -233,6 +399,14 @@ func TestGetUPnPClient(t *testing.T) {
 			"*internetgateway2.WANIPConnection1",
 			"saw UPnP type WANIPConnection1 at http://127.0.0.1:NNN/rootDesc.xml; MikroTik Router (MikroTik), method=none\n",
 		},
+		{
+			"huawei",
+			huaweiRootDescXML,
+			// services not supported and thus returns nil, but shouldn't crash
+			"<nil>",
+			"",
+		},
+
 		// TODO(bradfitz): find a PPP one in the wild
 	}
 	for _, tt := range tests {
@@ -372,6 +546,48 @@ func TestGetUPnPPortMapping(t *testing.T) {
 			}
 			t.Logf("external IP: %v", ext)
 		}
+	}
+}
+
+// TestGetUPnPPortMapping_NoValidServices tests that getUPnPPortMapping doesn't
+// crash when a valid UPnP response with no supported services is discovered
+// and parsed.
+//
+// See https://github.com/tailscale/tailscale/issues/10911
+func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+
+	igd.SetUPnPHandler(&upnpServer{
+		t:    t,
+		Desc: huaweiRootDescXML,
+	})
+
+	c := newTestClient(t, igd)
+	defer c.Close()
+	c.debug.VerboseLogs = true
+
+	ctx := context.Background()
+	res, err := c.Probe(ctx)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if !res.UPnP {
+		t.Errorf("didn't detect UPnP")
+	}
+
+	gw, myIP, ok := c.gatewayAndSelfIP()
+	if !ok {
+		t.Fatalf("could not get gateway and self IP")
+	}
+
+	// This shouldn't panic
+	_, ok = c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+	if ok {
+		t.Fatal("did not expect to get UPnP port mapping")
 	}
 }
 
