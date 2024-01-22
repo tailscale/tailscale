@@ -318,6 +318,25 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	}
 }
 
+// trySetSocketBuffer attempts to set SO_SNDBUFFORCE and SO_RECVBUFFORCE which
+// can overcome the limit of net.core.{r,w}mem_max, but require CAP_NET_ADMIN.
+// It falls back to the portable implementation if that fails, which may be
+// silently capped to net.core.{r,w}mem_max.
+func trySetIPRECEVRR(pconn nettype.PacketConn, logf logger.Logf) {
+	if c, ok := pconn.(*net.UDPConn); ok {
+		var errRcv error
+		rc, err := c.SyscallConn()
+		if err == nil {
+			rc.Control(func(fd uintptr) {
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_IP, syscall.IP_RECVERR, 1)
+				if errRcv != nil {
+					logf("magicsock: [warning] failed to enable IP_RECVERR: %v", errRcv)
+				}
+			})
+		}
+	}
+}
+
 // tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
 // and returns two booleans indicating TX and RX UDP offload support.
 func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {

@@ -2380,7 +2380,9 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			}
 		}
 		trySetSocketBuffer(pconn, c.logf)
-
+		if c.peerMTUEnabled.Load() {
+			trySetIPRECEVRR(pconn, c.logf)
+		}
 		// Success.
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)

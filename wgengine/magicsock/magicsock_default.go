@@ -31,6 +31,8 @@ func getGSOSizeFromControl(control []byte) (int, error) {
 
 func setGSOSizeInControl(control *[]byte, gso uint16) {}
 
+func trySetIPRECEVRR(pconn nettype.PacketConn, logf logger.Logf) {}
+
 const (
 	controlMessageSize = 0
 )
