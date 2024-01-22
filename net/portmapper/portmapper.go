@@ -1199,6 +1199,10 @@ var (
 	// received a UPnP response from a port other than the UPnP port.
 	metricUPnPResponseAlternatePort = clientmetric.NewCounter("portmap_upnp_response_alternate_port")
 
+	// metricUPnPSelectLegacy counts the number of times that a legacy
+	// service was found in a UPnP response.
+	metricUPnPSelectLegacy = clientmetric.NewCounter("portmap_upnp_select_legacy")
+
 	// metricUPnPSelectSingle counts the number of times that only a single
 	// UPnP device was available in selectBestService.
 	metricUPnPSelectSingle = clientmetric.NewCounter("portmap_upnp_select_single")

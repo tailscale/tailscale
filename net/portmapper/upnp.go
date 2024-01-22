@@ -289,6 +289,19 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 		clients = append(clients, v)
 	}
 
+	// These are legacy services that were deprecated in 2015, but are
+	// still in use by older devices; try them just in case.
+	legacyClients, _ := goupnp.NewServiceClientsFromRootDevice(ctx, root, loc, urn_LegacyWANPPPConnection_1)
+	metricUPnPSelectLegacy.Add(int64(len(legacyClients)))
+	for _, client := range legacyClients {
+		clients = append(clients, &legacyWANPPPConnection1{client})
+	}
+	legacyClients, _ = goupnp.NewServiceClientsFromRootDevice(ctx, root, loc, urn_LegacyWANIPConnection_1)
+	metricUPnPSelectLegacy.Add(int64(len(legacyClients)))
+	for _, client := range legacyClients {
+		clients = append(clients, &legacyWANIPConnection1{client})
+	}
+
 	// If we have no clients, then return right now; if we only have one,
 	// just select and return it.
 	if len(clients) == 0 {
