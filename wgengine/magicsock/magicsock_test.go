@@ -1220,15 +1220,15 @@ func Test32bitAlignment(t *testing.T) {
 		},
 	}
 
-	if off := unsafe.Offsetof(de.lastRecv); off%8 != 0 {
-		t.Fatalf("endpoint.lastRecv is not 8-byte aligned")
+	if off := unsafe.Offsetof(de.lastRecvWG); off%8 != 0 {
+		t.Fatalf("endpoint.lastRecvWG is not 8-byte aligned")
 	}
 
-	de.noteRecvActivity(netip.AddrPort{}) // verify this doesn't panic on 32-bit
+	de.noteRecvActivity(netip.AddrPort{}, mono.Now()) // verify this doesn't panic on 32-bit
 	if called != 1 {
 		t.Fatal("expected call to noteRecvActivity")
 	}
-	de.noteRecvActivity(netip.AddrPort{})
+	de.noteRecvActivity(netip.AddrPort{}, mono.Now())
 	if called != 1 {
 		t.Error("expected no second call to noteRecvActivity")
 	}

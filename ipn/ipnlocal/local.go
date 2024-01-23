@@ -4556,6 +4556,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 
 	b.MagicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
+	b.MagicConn().SetProbeUDPLifetime(b.ControlKnobs().ProbeUDPLifetime.Load())
 
 	b.setDebugLogsByCapabilityLocked(nm)
 

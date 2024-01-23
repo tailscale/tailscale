@@ -126,7 +126,8 @@ type CapabilityVersion int
 //   - 83: 2023-12-18: Client understands DefaultAutoUpdate
 //   - 84: 2024-01-04: Client understands SeamlessKeyRenewal
 //   - 85: 2024-01-05: Client understands MaxKeyDuration
-const CurrentCapabilityVersion CapabilityVersion = 85
+//   - 86: 2024-01-23: Client understands NodeAttrProbeUDPLifetime
+const CurrentCapabilityVersion CapabilityVersion = 86
 
 type StableID string
 
@@ -2203,6 +2204,10 @@ const (
 	// NodeAttrSeamlessKeyRenewal makes clients enable beta functionality
 	// of renewing node keys without breaking connections.
 	NodeAttrSeamlessKeyRenewal NodeCapability = "seamless-key-renewal"
+
+	// NodeAttrProbeUDPLifetime makes the client probe UDP path lifetime at the
+	// tail end of an active direct connection in magicsock.
+	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
 )
 
 // SetDNSRequest is a request to add a DNS record.
