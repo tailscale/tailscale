@@ -5790,45 +5790,73 @@ var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 // AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
 // route advertisement if one is not already present in the existing routes.
 // If the route is disallowed, ErrDisallowedAutoRoute is returned.
-func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
-	if !allowedAutoRoute(ipp) {
-		return ErrDisallowedAutoRoute
+func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
+	finalRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
+	newRoutes := false
+
+	for _, ipp := range ipps {
+		if !allowedAutoRoute(ipp) {
+			continue
+		}
+		if slices.Contains(finalRoutes, ipp) {
+			continue
+		}
+
+		// If the new prefix is already contained by existing routes, skip it.
+		if coveredRouteRange(finalRoutes, ipp) {
+			continue
+		}
+
+		finalRoutes = append(finalRoutes, ipp)
+		newRoutes = true
 	}
-	currentRoutes := b.Prefs().AdvertiseRoutes()
-	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool {
-		// TODO(raggi): add support for subset checks and avoid subset route creations.
-		return ipp.IsSingleIP() && r.Contains(ipp.Addr()) || r == ipp
-	}) {
+
+	if !newRoutes {
 		return nil
 	}
-	routes := append(currentRoutes.AsSlice(), ipp)
+
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
-			AdvertiseRoutes: routes,
+			AdvertiseRoutes: finalRoutes,
 		},
 		AdvertiseRoutesSet: true,
 	})
 	return err
 }
 
+// coveredRouteRange checks if a route is already included in a slice of
+// prefixes.
+func coveredRouteRange(finalRoutes []netip.Prefix, ipp netip.Prefix) bool {
+	for _, r := range finalRoutes {
+		if ipp.IsSingleIP() {
+			if r.Contains(ipp.Addr()) {
+				return true
+			}
+		} else {
+			if r.Contains(ipp.Addr()) && r.Contains(netipx.PrefixLastIP(ipp)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
 // a route advertisement if one is present in the existing routes.
-func (b *LocalBackend) UnadvertiseRoute(ipp netip.Prefix) error {
+func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
-	if !slices.Contains(currentRoutes, ipp) {
-		return nil
-	}
+	finalRoutes := currentRoutes[:0]
 
-	newRoutes := currentRoutes[:0]
-	for _, r := range currentRoutes {
-		if r != ipp {
-			newRoutes = append(newRoutes, r)
+	for _, ipp := range currentRoutes {
+		if slices.Contains(toRemove, ipp) {
+			continue
 		}
+		finalRoutes = append(finalRoutes, ipp)
 	}
 
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
-			AdvertiseRoutes: newRoutes,
+			AdvertiseRoutes: finalRoutes,
 		},
 		AdvertiseRoutesSet: true,
 	})

@@ -23,6 +23,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
+	"tailscale.com/appc/appctest"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -689,7 +690,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 	var h peerAPIHandler
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	h.ps = &peerAPIServer{
@@ -722,8 +723,8 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 	h.ps.b.appConnector.Wait(ctx)
 
 	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
-	if !slices.Equal(rc.routes, wantRoutes) {
-		t.Errorf("got %v; want %v", rc.routes, wantRoutes)
+	if !slices.Equal(rc.Routes(), wantRoutes) {
+		t.Errorf("got %v; want %v", rc.Routes(), wantRoutes)
 	}
 }
 
