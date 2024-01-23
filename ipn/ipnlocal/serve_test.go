@@ -433,10 +433,11 @@ func TestServeHTTPProxyPath(t *testing.T) {
 				URL: &url.URL{Path: tt.requestPath},
 				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
 			}
-			req = req.WithContext(context.WithValue(req.Context(), serveHTTPContextKey{}, &serveHTTPContext{
-				DestPort: 443,
-				SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"), // random src
-			}))
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(),
+				&serveHTTPContext{
+					DestPort: 443,
+					SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"), // random src
+				}))
 
 			w := httptest.NewRecorder()
 			b.serveWebHandler(w, req)
