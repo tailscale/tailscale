@@ -12,6 +12,7 @@ import (
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/appc/appctest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
@@ -44,31 +45,31 @@ func TestUpdateDomains(t *testing.T) {
 }
 
 func TestUpdateRoutes(t *testing.T) {
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
 	a.updateRoutes(routes)
 
-	if !slices.EqualFunc(routes, rc.routes, prefixEqual) {
-		t.Fatalf("got %v, want %v", rc.routes, routes)
+	if !slices.EqualFunc(routes, rc.Routes(), prefixEqual) {
+		t.Fatalf("got %v, want %v", rc.Routes(), routes)
 	}
 }
 
 func TestUpdateRoutesUnadvertisesContainedRoutes(t *testing.T) {
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 	mak.Set(&a.domains, "example.com", []netip.Addr{netip.MustParseAddr("192.0.2.1")})
-	rc.routes = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}
+	rc.SetRoutes([]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
 	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
 	a.updateRoutes(routes)
 
-	if !slices.EqualFunc(routes, rc.routes, prefixEqual) {
-		t.Fatalf("got %v, want %v", rc.routes, routes)
+	if !slices.EqualFunc(routes, rc.Routes(), prefixEqual) {
+		t.Fatalf("got %v, want %v", rc.Routes(), routes)
 	}
 }
 
 func TestDomainRoutes(t *testing.T) {
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 	a.updateDomains([]string{"example.com"})
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
@@ -83,12 +84,12 @@ func TestDomainRoutes(t *testing.T) {
 }
 
 func TestObserveDNSResponse(t *testing.T) {
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 
 	// a has no domains configured, so it should not advertise any routes
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
-	if got, want := rc.routes, ([]netip.Prefix)(nil); !slices.Equal(got, want) {
+	if got, want := rc.Routes(), ([]netip.Prefix)(nil); !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 
@@ -96,21 +97,21 @@ func TestObserveDNSResponse(t *testing.T) {
 
 	a.updateDomains([]string{"example.com"})
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
-	if got, want := rc.routes, wantRoutes; !slices.Equal(got, want) {
+	if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 
 	wantRoutes = append(wantRoutes, netip.MustParsePrefix("2001:db8::1/128"))
 
 	a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
-	if got, want := rc.routes, wantRoutes; !slices.Equal(got, want) {
+	if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 
 	// don't re-advertise routes that have already been advertised
 	a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
-	if !slices.Equal(rc.routes, wantRoutes) {
-		t.Errorf("rc.routes: got %v; want %v", rc.routes, wantRoutes)
+	if !slices.Equal(rc.Routes(), wantRoutes) {
+		t.Errorf("rc.Routes(): got %v; want %v", rc.Routes(), wantRoutes)
 	}
 
 	// don't advertise addresses that are already in a control provided route
@@ -118,8 +119,8 @@ func TestObserveDNSResponse(t *testing.T) {
 	a.updateRoutes([]netip.Prefix{pfx})
 	wantRoutes = append(wantRoutes, pfx)
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.2.1"))
-	if !slices.Equal(rc.routes, wantRoutes) {
-		t.Errorf("rc.routes: got %v; want %v", rc.routes, wantRoutes)
+	if !slices.Equal(rc.Routes(), wantRoutes) {
+		t.Errorf("rc.Routes(): got %v; want %v", rc.Routes(), wantRoutes)
 	}
 	if !slices.Contains(a.domains["example.com"], netip.MustParseAddr("192.0.2.1")) {
 		t.Errorf("missing %v from %v", "192.0.2.1", a.domains["exmaple.com"])
@@ -127,12 +128,12 @@ func TestObserveDNSResponse(t *testing.T) {
 }
 
 func TestWildcardDomains(t *testing.T) {
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 
 	a.updateDomains([]string{"*.example.com"})
 	a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8"))
-	if got, want := rc.routes, []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
+	if got, want := rc.Routes(), []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
 		t.Errorf("routes: got %v; want %v", got, want)
 	}
 	if got, want := a.wildcards, []string{"example.com"}; !slices.Equal(got, want) {
@@ -191,30 +192,6 @@ func dnsResponse(domain, address string) []byte {
 	return must.Get(b.Finish())
 }
 
-// routeCollector is a test helper that collects the list of routes advertised
-type routeCollector struct {
-	routes []netip.Prefix
-}
-
-// routeCollector implements RouteAdvertiser
-var _ RouteAdvertiser = (*routeCollector)(nil)
-
-func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
-	rc.routes = append(rc.routes, pfx)
-	return nil
-}
-
-func (rc *routeCollector) UnadvertiseRoute(pfx netip.Prefix) error {
-	routes := rc.routes
-	rc.routes = rc.routes[:0]
-	for _, r := range routes {
-		if r != pfx {
-			rc.routes = append(rc.routes, r)
-		}
-	}
-	return nil
-}
-
 func prefixEqual(a, b netip.Prefix) bool {
-	return a.Addr().Compare(b.Addr()) == 0 && a.Bits() == b.Bits()
+	return a == b
 }
