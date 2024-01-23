@@ -10,7 +10,8 @@ import (
 
 // RouteCollector is a test helper that collects the list of routes advertised
 type RouteCollector struct {
-	routes []netip.Prefix
+	routes        []netip.Prefix
+	removedRoutes []netip.Prefix
 }
 
 func (rc *RouteCollector) AdvertiseRoute(pfx ...netip.Prefix) error {
@@ -24,9 +25,16 @@ func (rc *RouteCollector) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 	for _, r := range routes {
 		if !slices.Contains(toRemove, r) {
 			rc.routes = append(rc.routes, r)
+		} else {
+			rc.removedRoutes = append(rc.removedRoutes, r)
 		}
 	}
 	return nil
+}
+
+// RemovedRoutes returns the list of routes that were removed.
+func (rc *RouteCollector) RemovedRoutes() []netip.Prefix {
+	return rc.removedRoutes
 }
 
 // Routes returns the ordered list of routes that were added, including

@@ -45,13 +45,39 @@ func TestUpdateDomains(t *testing.T) {
 }
 
 func TestUpdateRoutes(t *testing.T) {
+	ctx := context.Background()
 	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
-	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+	a.updateDomains([]string{"*.example.com"})
+
+	// This route should be collapsed into the range
+	a.ObserveDNSResponse(dnsResponse("a.example.com.", "192.0.2.1"))
+	a.Wait(ctx)
+
+	if !slices.Equal(rc.Routes(), []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}) {
+		t.Fatalf("got %v, want %v", rc.Routes(), []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
+	}
+
+	// This route should not be collapsed or removed
+	a.ObserveDNSResponse(dnsResponse("b.example.com.", "192.0.0.1"))
+	a.Wait(ctx)
+
+	routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.0.0.1/32")}
 	a.updateRoutes(routes)
 
+	slices.SortFunc(rc.Routes(), prefixCompare)
+	rc.SetRoutes(slices.Compact(rc.Routes()))
+	slices.SortFunc(routes, prefixCompare)
+
+	// Ensure that the non-matching /32 is preserved, even though it's in the domains table.
 	if !slices.EqualFunc(routes, rc.Routes(), prefixEqual) {
-		t.Fatalf("got %v, want %v", rc.Routes(), routes)
+		t.Errorf("added routes: got %v, want %v", rc.Routes(), routes)
+	}
+
+	// Ensure that the contained /32 is removed, replaced by the /24.
+	wantRemoved := []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}
+	if !slices.EqualFunc(rc.RemovedRoutes(), wantRemoved, prefixEqual) {
+		t.Fatalf("unexpected removed routes: %v", rc.RemovedRoutes())
 	}
 }
 
@@ -194,4 +220,11 @@ func dnsResponse(domain, address string) []byte {
 
 func prefixEqual(a, b netip.Prefix) bool {
 	return a == b
+}
+
+func prefixCompare(a, b netip.Prefix) int {
+	if a.Addr().Compare(b.Addr()) == 0 {
+		return a.Bits() - b.Bits()
+	}
+	return a.Addr().Compare(b.Addr())
 }
