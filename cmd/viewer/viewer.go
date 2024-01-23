@@ -40,7 +40,7 @@ func (v {{.ViewName}}) Valid() bool { return v.ж != nil }
 
 // AsStruct returns a clone of the underlying value which aliases no memory with
 // the original.
-func (v {{.ViewName}}) AsStruct() *{{.StructName}}{ 
+func (v {{.ViewName}}) AsStruct() *{{.StructName}}{
 	if v.ж == nil {
 		return nil
 	}
@@ -324,6 +324,7 @@ var (
 	flagCloneFunc = flag.Bool("clonefunc", false, "add a top-level Clone func")
 
 	flagCloneOnlyTypes = flag.String("clone-only-type", "", "comma-separated list of types (a subset of --type) that should only generate a go:generate clone line and not actual views")
+	flagViewOnlyTypes  = flag.String("view-only-type", "", "comma-separated list of types (a subset of --type) that should only generate views and not be added to go:generate for cloner")
 )
 
 func main() {
@@ -336,10 +337,21 @@ func main() {
 	}
 	typeNames := strings.Split(*flagTypes, ",")
 
+	viewOnlyTypes := map[string]bool{}
+	for _, t := range strings.Split(*flagViewOnlyTypes, ",") {
+		viewOnlyTypes[t] = true
+	}
+
 	var flagArgs []string
 	flagArgs = append(flagArgs, fmt.Sprintf("-clonefunc=%v", *flagCloneFunc))
 	if *flagTypes != "" {
-		flagArgs = append(flagArgs, "-type="+*flagTypes)
+		var cloneTypes []string
+		for _, t := range strings.Split(*flagTypes, ",") {
+			if _, ok := viewOnlyTypes[t]; !ok {
+				cloneTypes = append(cloneTypes, t)
+			}
+		}
+		flagArgs = append(flagArgs, "-type="+strings.Join(cloneTypes, ","))
 	}
 	if *flagBuildTags != "" {
 		flagArgs = append(flagArgs, "-tags="+*flagBuildTags)
@@ -373,7 +385,7 @@ func main() {
 				break
 			}
 		}
-		if !hasClone {
+		if !hasClone && !viewOnlyTypes[typeName] {
 			runCloner = true
 		}
 		genView(buf, it, typ, pkg.Types)

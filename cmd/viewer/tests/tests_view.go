@@ -325,6 +325,58 @@ var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Data           []byte
 }{})
 
+// View returns a readonly view of OnlyGetView.
+func (p *OnlyGetView) View() OnlyGetViewView {
+	return OnlyGetViewView{ж: p}
+}
+
+// OnlyGetViewView provides a read-only view over OnlyGetView.
+//
+// Its methods should only be called if `Valid()` returns true.
+type OnlyGetViewView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *OnlyGetView
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v OnlyGetViewView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v OnlyGetViewView) AsStruct() *OnlyGetView {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v OnlyGetViewView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *OnlyGetViewView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x OnlyGetView
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v OnlyGetViewView) SinClonerPorFavor() bool { return v.ж.SinClonerPorFavor }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _OnlyGetViewViewNeedsRegeneration = OnlyGetView(struct {
+	SinClonerPorFavor bool
+}{})
+
 // View returns a readonly view of StructWithEmbedded.
 func (p *StructWithEmbedded) View() StructWithEmbeddedView {
 	return StructWithEmbeddedView{ж: p}

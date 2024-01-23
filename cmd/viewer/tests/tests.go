@@ -9,7 +9,7 @@ import (
 	"net/netip"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded --clone-only-type=OnlyGetClone
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,OnlyGetView,StructWithEmbedded --clone-only-type=OnlyGetClone --view-only-type=OnlyGetView
 
 type StructWithoutPtrs struct {
 	Int int
@@ -60,6 +60,17 @@ type StructWithSlices struct {
 
 type OnlyGetClone struct {
 	SinViewerPorFavor bool
+}
+
+type OnlyGetView struct {
+	SinClonerPorFavor bool
+}
+
+// Custom cloner func
+func (ogv *OnlyGetView) Clone() *OnlyGetView {
+	return &OnlyGetView{
+		SinClonerPorFavor: ogv.SinClonerPorFavor,
+	}
 }
 
 type StructWithEmbedded struct {
