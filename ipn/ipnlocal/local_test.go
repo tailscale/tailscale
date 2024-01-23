@@ -18,6 +18,7 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
+	"tailscale.com/appc/appctest"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -1204,7 +1205,7 @@ func TestObserveDNSResponse(t *testing.T) {
 	// ensure no error when no app connector is configured
 	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 
-	rc := &routeCollector{}
+	rc := &appctest.RouteCollector{}
 	b.appConnector = appc.NewAppConnector(t.Logf, rc)
 	b.appConnector.UpdateDomains([]string{"example.com"})
 	b.appConnector.Wait(context.Background())
@@ -1212,8 +1213,44 @@ func TestObserveDNSResponse(t *testing.T) {
 	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 	b.appConnector.Wait(context.Background())
 	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
-	if !slices.Equal(rc.routes, wantRoutes) {
-		t.Fatalf("got routes %v, want %v", rc.routes, wantRoutes)
+	if !slices.Equal(rc.Routes(), wantRoutes) {
+		t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+	}
+}
+
+func TestCoveredRouteRange(t *testing.T) {
+	tests := []struct {
+		existingRoute netip.Prefix
+		newRoute      netip.Prefix
+		want          bool
+	}{
+		{
+			existingRoute: netip.MustParsePrefix("192.0.0.1/32"),
+			newRoute:      netip.MustParsePrefix("192.0.0.1/32"),
+			want:          true,
+		},
+		{
+			existingRoute: netip.MustParsePrefix("192.0.0.1/32"),
+			newRoute:      netip.MustParsePrefix("192.0.0.2/32"),
+			want:          false,
+		},
+		{
+			existingRoute: netip.MustParsePrefix("192.0.0.0/24"),
+			newRoute:      netip.MustParsePrefix("192.0.0.1/32"),
+			want:          true,
+		},
+		{
+			existingRoute: netip.MustParsePrefix("192.0.0.0/16"),
+			newRoute:      netip.MustParsePrefix("192.0.0.0/24"),
+			want:          true,
+		},
+	}
+
+	for _, tt := range tests {
+		got := coveredRouteRange([]netip.Prefix{tt.existingRoute}, tt.newRoute)
+		if got != tt.want {
+			t.Errorf("coveredRouteRange(%v, %v) = %v, want %v", tt.existingRoute, tt.newRoute, got, tt.want)
+		}
 	}
 }
 
@@ -1350,27 +1387,6 @@ func dnsResponse(domain, address string) []byte {
 		panic("invalid address length")
 	}
 	return must.Get(b.Finish())
-}
-
-// routeCollector is a test helper that collects the list of routes advertised
-type routeCollector struct {
-	routes []netip.Prefix
-}
-
-func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
-	rc.routes = append(rc.routes, pfx)
-	return nil
-}
-
-func (rc *routeCollector) UnadvertiseRoute(pfx netip.Prefix) error {
-	routes := rc.routes
-	rc.routes = rc.routes[:0]
-	for _, r := range routes {
-		if r != pfx {
-			rc.routes = append(rc.routes, r)
-		}
-	}
-	return nil
 }
 
 type errorSyspolicyHandler struct {

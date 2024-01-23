@@ -27,12 +27,12 @@ import (
 // RouteAdvertiser is an interface that allows the AppConnector to advertise
 // newly discovered routes that need to be served through the AppConnector.
 type RouteAdvertiser interface {
-	// AdvertiseRoute adds a new route advertisement if the route is not already
-	// being advertised.
-	AdvertiseRoute(netip.Prefix) error
+	// AdvertiseRoute adds one or more route advertisements skipping any that
+	// are already advertised.
+	AdvertiseRoute(...netip.Prefix) error
 
-	// UnadvertiseRoute removes a route advertisement.
-	UnadvertiseRoute(netip.Prefix) error
+	// UnadvertiseRoute removes any matching route advertisements.
+	UnadvertiseRoute(...netip.Prefix) error
 }
 
 // AppConnector is an implementation of an AppConnector that performs
@@ -144,24 +144,28 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 		return
 	}
 
+	if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+		e.logf("failed to advertise routes: %v: %v", routes, err)
+		return
+	}
+
+	var toRemove []netip.Prefix
+
 nextRoute:
 	for _, r := range routes {
-		if err := e.routeAdvertiser.AdvertiseRoute(r); err != nil {
-			e.logf("failed to advertise route: %v: %v", r, err)
-			continue
-		}
-
 		for _, addr := range e.domains {
 			for _, a := range addr {
 				if r.Contains(a) {
 					pfx := netip.PrefixFrom(a, a.BitLen())
-					if err := e.routeAdvertiser.UnadvertiseRoute(pfx); err != nil {
-						e.logf("failed to unadvertise route: %v: %v", pfx, err)
-					}
+					toRemove = append(toRemove, pfx)
 					continue nextRoute
 				}
 			}
 		}
+	}
+
+	if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+		e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
 	}
 
 	e.controlRoutes = routes
