@@ -1740,6 +1740,10 @@ type MapResponse struct {
 	// Starting with MapRequest.Version 18, nil means unchanged.
 	Node *Node `json:",omitempty"`
 
+	// SuggestedExitNode describes the suggested exit node to use
+	// given the self node's derp region.
+	SuggestedExitNode *Node `json:",omitempty"`
+
 	// DERPMap describe the set of DERP servers available.
 	// A nil value means unchanged.
 	DERPMap *DERPMap `json:",omitempty"`
@@ -2208,6 +2212,9 @@ const (
 	// NodeAttrProbeUDPLifetime makes the client probe UDP path lifetime at the
 	// tail end of an active direct connection in magicsock.
 	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
+
+	// NodeAttrSuggestedExitNode makes clients determine a suggested exit node.
+	NodeAttrSuggestedExitNode NodeCapability = "suggested-exit-node"
 )
 
 // SetDNSRequest is a request to add a DNS record.
