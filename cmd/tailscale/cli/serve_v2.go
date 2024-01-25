@@ -272,7 +272,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			// if foreground mode, create a WatchIPNBus session
 			// and use the nested config for all following operations
 			// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
-			watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+			watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
 			if err != nil {
 				return err
 			}
