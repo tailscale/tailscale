@@ -1,0 +1,14 @@
+[Unit]
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Service]
+ExecStart=/root/hello
+WorkingDirectory=/root
+User=root
+Group=root
+Restart=on-failure
+LimitNOFILE=128000
+
+[Install]
+WantedBy=multi-user.target
