@@ -31,10 +31,12 @@ var (
 //go:embed hello.tmpl.html
 var embeddedTemplate string
 
+var localClient tailscale.LocalClient
+
 func main() {
 	flag.Parse()
 	if *testIP != "" {
-		res, err := tailscale.WhoIs(context.Background(), *testIP)
+		res, err := localClient.WhoIs(context.Background(), *testIP)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -76,7 +78,7 @@ func main() {
 					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 						switch hi.ServerName {
 						case "hello.ts.net":
-							return tailscale.GetCertificate(hi)
+							return localClient.GetCertificate(hi)
 						case "hello.ipn.dev":
 							c, err := tls.LoadX509KeyPair(
 								"/etc/hello/hello.ipn.dev.crt",
@@ -170,7 +172,7 @@ func root(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	who, err := tailscale.WhoIs(r.Context(), r.RemoteAddr)
+	who, err := localClient.WhoIs(r.Context(), r.RemoteAddr)
 	var data tmplData
 	if err != nil {
 		if devMode() {
