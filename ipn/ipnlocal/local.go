@@ -4125,7 +4125,11 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		// TODO(bradfitz): this is called with b.mu held. Not ideal.
 		// If the filesystem gets wedged or something we could block for
 		// a long time. But probably fine.
-		sshHostKeys = b.getSSHHostKeyPublicStrings()
+		var err error
+		sshHostKeys, err = b.getSSHHostKeyPublicStrings()
+		if err != nil {
+			b.logf("warning: unable to get SSH host keys, SSH will appear as disabled for this node: %v", err)
+		}
 	}
 	hi.SSH_HostKeys = sshHostKeys
 
