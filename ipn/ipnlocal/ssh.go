@@ -210,12 +210,16 @@ func (b *LocalBackend) getSystemSSH_HostKeys() (ret map[string]ssh.Signer) {
 	return ret
 }
 
-func (b *LocalBackend) getSSHHostKeyPublicStrings() (ret []string) {
-	signers, _ := b.GetSSH_HostKeys()
-	for _, signer := range signers {
-		ret = append(ret, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
+func (b *LocalBackend) getSSHHostKeyPublicStrings() ([]string, error) {
+	signers, err := b.GetSSH_HostKeys()
+	if err != nil {
+		return nil, err
 	}
-	return ret
+	var keyStrings []string
+	for _, signer := range signers {
+		keyStrings = append(keyStrings, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
+	}
+	return keyStrings, nil
 }
 
 // tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
