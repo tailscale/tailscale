@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	operatorutils "tailscale.com/k8s-operator"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 )
@@ -80,7 +81,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
-	targetIP := a.tailnetTargetAnnotation(svc)
+	targetIP := tailnetTargetAnnotation(svc)
 	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
 	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" && targetFQDN == "" {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
@@ -190,7 +191,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
-	} else if ip := a.tailnetTargetAnnotation(svc); ip != "" {
+	} else if ip := tailnetTargetAnnotation(svc); ip != "" {
 		sts.TailnetTargetIP = ip
 		a.managedEgressProxies.Add(svc.UID)
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
@@ -275,7 +276,7 @@ func validateService(svc *corev1.Service) []string {
 		violations = append(violations, "only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN)
 	}
 	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
-		if !isMagicDNSName(fqdn) {
+		if !operatorutils.IsMagicDNSName(fqdn) {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
@@ -289,7 +290,7 @@ func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
 		return false
 	}
 
-	return a.hasLoadBalancerClass(svc) || a.hasExposeAnnotation(svc)
+	return hasLoadBalancerClass(svc, a.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
 }
 
 func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {
@@ -301,7 +302,7 @@ func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {
 
 // hasExposeAnnotation reports whether Service has the tailscale.com/expose
 // annotation set
-func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
+func hasExposeAnnotation(svc *corev1.Service) bool {
 	return svc != nil && svc.Annotations[AnnotationExpose] == "true"
 }
 
@@ -309,7 +310,7 @@ func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
 // annotation or of the deprecated tailscale.com/ts-tailnet-target-ip
 // annotation. If neither is set, it returns an empty string. If both are set,
 // it returns the value of the new annotation.
-func (a *ServiceReconciler) tailnetTargetAnnotation(svc *corev1.Service) string {
+func tailnetTargetAnnotation(svc *corev1.Service) string {
 	if svc == nil {
 		return ""
 	}
@@ -317,4 +318,11 @@ func (a *ServiceReconciler) tailnetTargetAnnotation(svc *corev1.Service) string 
 		return ip
 	}
 	return svc.Annotations[annotationTailnetTargetIPOld]
+}
+
+func hasLoadBalancerClass(svc *corev1.Service, isDefaultLoadBalancer bool) bool {
+	return svc != nil &&
+		svc.Spec.Type == corev1.ServiceTypeLoadBalancer &&
+		(svc.Spec.LoadBalancerClass != nil && *svc.Spec.LoadBalancerClass == "tailscale" ||
+			svc.Spec.LoadBalancerClass == nil && isDefaultLoadBalancer)
 }

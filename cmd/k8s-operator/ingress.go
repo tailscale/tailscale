@@ -68,7 +68,7 @@ func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get ing: %w", err)
 	}
-	if !ing.DeletionTimestamp.IsZero() || !a.shouldExpose(ing) {
+	if !ing.DeletionTimestamp.IsZero() || !isTailscaleIngress(ing) {
 		logger.Debugf("ingress is being deleted or should not be exposed, cleaning up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, ing)
 	}
@@ -291,7 +291,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	return nil
 }
 
-func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
+func isTailscaleIngress(ing *networkingv1.Ingress) bool {
 	return ing != nil &&
 		ing.Spec.IngressClassName != nil &&
 		*ing.Spec.IngressClassName == tailscaleIngressClassName

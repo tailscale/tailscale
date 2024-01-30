@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
@@ -220,8 +220,12 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		// resources that we GET via the controller manager's client.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}:      nsFilter,
-				&appsv1.StatefulSet{}: nsFilter,
+				&corev1.Secret{}:             nsFilter,
+				&corev1.ServiceAccount{}:     nsFilter,
+				&corev1.ConfigMap{}:          nsFilter,
+				&appsv1.StatefulSet{}:        nsFilter,
+				&appsv1.Deployment{}:         nsFilter,
+				&discoveryv1.EndpointSlice{}: nsFilter,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -291,7 +295,63 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			clock:    tstime.DefaultClock{},
 		})
 	if err != nil {
-		startlog.Fatal("could not create connector reconciler: %v", err)
+		startlog.Fatalf("could not create connector reconciler: %v", err)
+	}
+	// TODO (irbekrm): switch to metadata-only watches for resources whose
+	// spec we don't need to inspect to reduce memory consumption
+	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
+	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.DNSConfig{}).
+		Watches(&appsv1.Deployment{}, nameserverFilter).
+		Watches(&corev1.ConfigMap{}, nameserverFilter).
+		Watches(&corev1.Service{}, nameserverFilter).
+		Watches(&corev1.ServiceAccount{}, nameserverFilter).
+		Complete(&NameserverReconciler{
+			recorder:    eventRecorder,
+			tsNamespace: tsNamespace,
+
+			Client: mgr.GetClient(),
+			logger: zlog.Named("nameserver-reconciler"),
+			clock:  tstime.DefaultClock{},
+		})
+	if err != nil {
+		startlog.Fatalf("could not create nameserver reconciler: %v", err)
+	}
+	lc, err := s.LocalClient()
+	if err != nil {
+		startlog.Fatalf("error retrieving local client: %w", err)
+	}
+	// On DNSConfig changes, reconcile all EndpointSlices in operator namespace.
+	dnsConfigFilter := handler.EnqueueRequestsFromMapFunc(enqueueAllEndpointSlicesInNS(tsNamespace, mgr.GetClient()))
+	// On Secret changes, if it has the tailscale labels and is for an
+	// ingress/egress proxy, reconcile the EndpointSlice for the proxy's
+	// headless Service. We need to watch Secrets because this is where the
+	// dns-records-reconciler reads the MagicDNS name from for ingress
+	// proxies exposed via an annotation.
+	epsForSecretFilter := handler.EnqueueRequestsFromMapFunc(enqueueEndpointSliceForSecret(tsNamespace, mgr.GetClient()))
+	// The only Service changes the dns-records-reconciler is interested in
+	// are changes to svc.status.loadBalancer.ingress.hostname, so only
+	// reconcile proxy EndpointSlices associated with LoadBalancer Services
+	// exposed via Tailscale.
+	epsForServiceFilter := handler.EnqueueRequestsFromMapFunc(enqueueEndpointSliceForService(tsNamespace, mgr.GetClient(), startlog, isDefaultLoadBalancer))
+	// If a tailscale Ingress changes, reconcile the EndpointSlice for the proxy's headless Service.
+	epsForIngressFilter := handler.EnqueueRequestsFromMapFunc(enqueueEndpointSliceForIngress(tsNamespace, mgr.GetClient(), startlog))
+	err = builder.ControllerManagedBy(mgr).
+		For(&discoveryv1.EndpointSlice{}).
+		Watches(&tsapi.DNSConfig{}, dnsConfigFilter).
+		Watches(&corev1.Secret{}, epsForSecretFilter).
+		Watches(&corev1.Service{}, epsForServiceFilter).
+		Watches(&networkingv1.Ingress{}, epsForIngressFilter).
+		Complete(&dnsRecordsReconciler{
+			Client:                mgr.GetClient(),
+			tsNamespace:           tsNamespace,
+			localAPIClient:        lc,
+			logger:                zlog.Named("dns-records-reconciler"),
+			isDefaultLoadBalancer: isDefaultLoadBalancer,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create DNS records reconciler: %v", err)
 	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
@@ -330,14 +390,87 @@ func managedResourceHandlerForType(typ string) handler.MapFunc {
 			{NamespacedName: parentFromObjectLabels(o)},
 		}
 	}
-
 }
 
+func enqueueAllEndpointSlicesInNS(ns string, cl client.Reader) handler.MapFunc {
+	return func(ctx context.Context, _ client.Object) []reconcile.Request {
+		eps := &discoveryv1.EndpointSliceList{}
+		if err := cl.List(ctx, eps, client.InNamespace(ns)); err != nil {
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ep := range eps.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}})
+		}
+		return reqs
+	}
+}
+
+func enqueueEndpointSliceForSecret(ns string, cl client.Client) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		if !isManagedByType(o, "ingress") && !isManagedByType(o, "svc") {
+			return nil
+		}
+		svcName := o.GetName()[:strings.LastIndexAny(o.GetName(), "-")] // secret name is <service-name>-0
+		eps, err := getSingleObject[discoveryv1.EndpointSlice](ctx, cl, ns, map[string]string{discoveryv1.LabelServiceName: svcName})
+		if err != nil || eps == nil {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: eps.Namespace, Name: eps.Name}}}
+	}
+}
+
+func enqueueEndpointSliceForService(ns string, cl client.Client, log *zap.SugaredLogger, isDefaultLoadBalancerClass bool) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		svc, ok := o.(*corev1.Service)
+		if !ok {
+			return nil
+		}
+		if !hasLoadBalancerClass(svc, isDefaultLoadBalancerClass) {
+			return nil
+		}
+		crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
+		return endpointSliceRequests(ctx, cl, ns, crl)
+	}
+}
+
+func enqueueEndpointSliceForIngress(ns string, cl client.Client, log *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		ing, ok := o.(*networkingv1.Ingress)
+		if !ok {
+			return nil
+		}
+		if !isTailscaleIngress(ing) {
+			return nil
+		}
+		crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
+		return endpointSliceRequests(ctx, cl, ns, crl)
+	}
+}
+
+func endpointSliceRequests(ctx context.Context, cl client.Client, ns string, crl map[string]string) []reconcile.Request {
+	// TODO (irbekrm): experiment with indexing endpoint slices in
+	// cache so that they can be directly filtered for a parent
+	// Service- this might be more efficient than filtering than
+	// getting the headless Service each time.
+	svc, err := getSingleObject[corev1.Service](ctx, cl, ns, crl) // get headless Service for proxy
+	if err != nil {
+		return nil
+	}
+	if svc == nil {
+		return nil
+	}
+	epsLabels := map[string]string{discoveryv1.LabelServiceName: svc.Name}
+	eps, err := getSingleObject[discoveryv1.EndpointSlice](ctx, cl, ns, epsLabels)
+	if err != nil || eps == nil {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: eps.Namespace, Name: eps.Name}}}
+}
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 	if isManagedByType(o, "svc") {
 		// If this is a Service managed by a Service we want to enqueue its parent
 		return []reconcile.Request{{NamespacedName: parentFromObjectLabels(o)}}
-
 	}
 	if isManagedResource(o) {
 		// If this is a Servce managed by a resource that is not a Service, we leave it alone
@@ -352,12 +485,4 @@ func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 			},
 		},
 	}
-
-}
-
-// isMagicDNSName reports whether name is a full tailnet node FQDN (with or
-// without final dot).
-func isMagicDNSName(name string) bool {
-	validMagicDNSName := regexp.MustCompile(`^[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.ts\.net\.?$`)
-	return validMagicDNSName.MatchString(name)
 }

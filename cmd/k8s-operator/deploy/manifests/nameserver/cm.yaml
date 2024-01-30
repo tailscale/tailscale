@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dnsconfig
+  labels:
+   app.kubernetes.io/name: tailscale
+   app.kubernetes.io/component: nameserver
