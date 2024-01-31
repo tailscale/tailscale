@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/mak"
 )
 
 // RouteAdvertiser is an interface that allows the AppConnector to advertise
@@ -206,7 +207,16 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		return
 	}
 
-nextAnswer:
+	// cnameChain tracks a chain of CNAMEs for a given query in order to reverse
+	// a CNAME chain back to the original query for flattening. The keys are
+	// CNAME record targets, and the value is the name the record answers, so
+	// for www.example.com CNAME example.com, the map would contain
+	// ["example.com"] = "www.example.com".
+	var cnameChain map[string]string
+
+	// addressRecords is a list of address records found in the response.
+	var addressRecords map[string][]netip.Addr
+
 	for {
 		h, err := p.AnswerHeader()
 		if err == dnsmessage.ErrSectionDone {
@@ -222,83 +232,147 @@ nextAnswer:
 			}
 			continue
 		}
-		if h.Type != dnsmessage.TypeA && h.Type != dnsmessage.TypeAAAA {
+
+		switch h.Type {
+		case dnsmessage.TypeCNAME, dnsmessage.TypeA, dnsmessage.TypeAAAA:
+		default:
 			if err := p.SkipAnswer(); err != nil {
 				return
 			}
 			continue
+
 		}
 
-		domain := h.Name.String()
+		domain := strings.TrimSuffix(strings.ToLower(h.Name.String()), ".")
 		if len(domain) == 0 {
-			return
-		}
-		domain = strings.TrimSuffix(domain, ".")
-		domain = strings.ToLower(domain)
-		e.logf("[v2] observed DNS response for %s", domain)
-
-		e.mu.Lock()
-		addrs, ok := e.domains[domain]
-		// match wildcard domains
-		if !ok {
-			for _, wc := range e.wildcards {
-				if dnsname.HasSuffix(domain, wc) {
-					e.domains[domain] = nil
-					ok = true
-					break
-				}
-			}
-		}
-		e.mu.Unlock()
-
-		if !ok {
-			if err := p.SkipAnswer(); err != nil {
-				return
-			}
 			continue
 		}
 
-		var addr netip.Addr
+		if h.Type == dnsmessage.TypeCNAME {
+			res, err := p.CNAMEResource()
+			if err != nil {
+				return
+			}
+			cname := strings.TrimSuffix(strings.ToLower(res.CNAME.String()), ".")
+			if len(cname) == 0 {
+				continue
+			}
+			mak.Set(&cnameChain, cname, domain)
+			continue
+		}
+
 		switch h.Type {
 		case dnsmessage.TypeA:
 			r, err := p.AResource()
 			if err != nil {
 				return
 			}
-			addr = netip.AddrFrom4(r.A)
+			addr := netip.AddrFrom4(r.A)
+			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		case dnsmessage.TypeAAAA:
 			r, err := p.AAAAResource()
 			if err != nil {
 				return
 			}
-			addr = netip.AddrFrom16(r.AAAA)
+			addr := netip.AddrFrom16(r.AAAA)
+			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
 		default:
 			if err := p.SkipAnswer(); err != nil {
 				return
 			}
 			continue
 		}
-		if slices.Contains(addrs, addr) {
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for domain, addrs := range addressRecords {
+		domain, isRouted := e.findRoutedDomainLocked(domain, cnameChain)
+
+		// domain and none of the CNAMEs in the chain are routed
+		if !isRouted {
 			continue
 		}
-		for _, route := range e.controlRoutes {
-			if route.Contains(addr) {
-				// record the new address associated with the domain for faster matching in subsequent
-				// requests and for diagnostic records.
-				e.mu.Lock()
-				e.domains[domain] = append(addrs, addr)
-				e.mu.Unlock()
-				continue nextAnswer
+
+		// advertise each address we have learned for the routed domain, that
+		// was not already known.
+		for _, addr := range addrs {
+			e.logf("[v2] observed routed DNS response for %s: %s", domain, addr)
+			if e.isAddrKnownLocked(domain, addr) {
+				continue
+			}
+
+			e.scheduleAdvertisement(domain, addr)
+		}
+	}
+}
+
+// starting from the given domain that resolved to an address, find it, or any
+// of the domains in the CNAME chain toward resolving it, that are routed
+// domains, returning the routed domain name and a bool indicating whether a
+// routed domain was found.
+// e.mu must be held.
+func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[string]string) (string, bool) {
+	var isRouted bool
+	for {
+		_, isRouted = e.domains[domain]
+		if isRouted {
+			break
+		}
+
+		// match wildcard domains
+		for _, wc := range e.wildcards {
+			if dnsname.HasSuffix(domain, wc) {
+				e.domains[domain] = nil
+				isRouted = true
+				break
 			}
 		}
+
+		next, ok := cnameChain[domain]
+		if !ok {
+			break
+		}
+		domain = next
+	}
+	return domain, isRouted
+}
+
+// isAddrKnownLocked returns true if the address is known to be associated with
+// the given domain. Known domain tables are updated for covered routes to speed
+// up future matches.
+// e.mu must be held.
+func (e *AppConnector) isAddrKnownLocked(domain string, addr netip.Addr) bool {
+	if slices.Contains(e.domains[domain], addr) {
+		return true
+	}
+	for _, route := range e.controlRoutes {
+		if route.Contains(addr) {
+			// record the new address associated with the domain for faster matching in subsequent
+			// requests and for diagnostic records.
+			e.domains[domain] = append(e.domains[domain], addr)
+			return true
+		}
+	}
+	return false
+
+}
+
+// scheduleAdvertisement schedules an advertisement of the given address
+// associated with the given domain.
+func (e *AppConnector) scheduleAdvertisement(domain string, addr netip.Addr) {
+	e.queue.Add(func() {
 		if err := e.routeAdvertiser.AdvertiseRoute(netip.PrefixFrom(addr, addr.BitLen())); err != nil {
 			e.logf("failed to advertise route for %s: %v: %v", domain, addr, err)
-			continue
+			return
 		}
-		e.logf("[v2] advertised route for %v: %v", domain, addr)
-
 		e.mu.Lock()
-		e.domains[domain] = append(addrs, addr)
-		e.mu.Unlock()
-	}
+		defer e.mu.Unlock()
+
+		if !slices.Contains(e.domains[domain], addr) {
+			e.logf("[v2] advertised route for %v: %v", domain, addr)
+			e.domains[domain] = append(e.domains[domain], addr)
+		}
+	})
 }

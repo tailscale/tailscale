@@ -99,6 +99,7 @@ func TestDomainRoutes(t *testing.T) {
 	a := NewAppConnector(t.Logf, rc)
 	a.updateDomains([]string{"example.com"})
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+	a.Wait(context.Background())
 
 	want := map[string][]netip.Addr{
 		"example.com": {netip.MustParseAddr("192.0.0.8")},
@@ -110,6 +111,7 @@ func TestDomainRoutes(t *testing.T) {
 }
 
 func TestObserveDNSResponse(t *testing.T) {
+	ctx := context.Background()
 	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 
@@ -123,6 +125,26 @@ func TestObserveDNSResponse(t *testing.T) {
 
 	a.updateDomains([]string{"example.com"})
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+	a.Wait(ctx)
+	if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	// a CNAME record chain should result in a route being added if the chain
+	// matches a routed domain.
+	a.updateDomains([]string{"www.example.com", "example.com"})
+	a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.9", "www.example.com.", "chain.example.com.", "example.com."))
+	a.Wait(ctx)
+	wantRoutes = append(wantRoutes, netip.MustParsePrefix("192.0.0.9/32"))
+	if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	// a CNAME record chain should result in a route being added if the chain
+	// even if only found in the middle of the chain
+	a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.10", "outside.example.org.", "www.example.com.", "example.org."))
+	a.Wait(ctx)
+	wantRoutes = append(wantRoutes, netip.MustParsePrefix("192.0.0.10/32"))
 	if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
@@ -130,12 +152,14 @@ func TestObserveDNSResponse(t *testing.T) {
 	wantRoutes = append(wantRoutes, netip.MustParsePrefix("2001:db8::1/128"))
 
 	a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
+	a.Wait(ctx)
 	if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
 
 	// don't re-advertise routes that have already been advertised
 	a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1"))
+	a.Wait(ctx)
 	if !slices.Equal(rc.Routes(), wantRoutes) {
 		t.Errorf("rc.Routes(): got %v; want %v", rc.Routes(), wantRoutes)
 	}
@@ -145,6 +169,7 @@ func TestObserveDNSResponse(t *testing.T) {
 	a.updateRoutes([]netip.Prefix{pfx})
 	wantRoutes = append(wantRoutes, pfx)
 	a.ObserveDNSResponse(dnsResponse("example.com.", "192.0.2.1"))
+	a.Wait(ctx)
 	if !slices.Equal(rc.Routes(), wantRoutes) {
 		t.Errorf("rc.Routes(): got %v; want %v", rc.Routes(), wantRoutes)
 	}
@@ -154,11 +179,13 @@ func TestObserveDNSResponse(t *testing.T) {
 }
 
 func TestWildcardDomains(t *testing.T) {
+	ctx := context.Background()
 	rc := &appctest.RouteCollector{}
 	a := NewAppConnector(t.Logf, rc)
 
 	a.updateDomains([]string{"*.example.com"})
 	a.ObserveDNSResponse(dnsResponse("foo.example.com.", "192.0.0.8"))
+	a.Wait(ctx)
 	if got, want := rc.Routes(), []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}; !slices.Equal(got, want) {
 		t.Errorf("routes: got %v; want %v", got, want)
 	}
@@ -187,6 +214,61 @@ func dnsResponse(domain, address string) []byte {
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
 	b.EnableCompression()
 	b.StartAnswers()
+	switch addr.BitLen() {
+	case 32:
+		b.AResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName(domain),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+				TTL:   0,
+			},
+			dnsmessage.AResource{
+				A: addr.As4(),
+			},
+		)
+	case 128:
+		b.AAAAResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName(domain),
+				Type:  dnsmessage.TypeAAAA,
+				Class: dnsmessage.ClassINET,
+				TTL:   0,
+			},
+			dnsmessage.AAAAResource{
+				AAAA: addr.As16(),
+			},
+		)
+	default:
+		panic("invalid address length")
+	}
+	return must.Get(b.Finish())
+}
+
+func dnsCNAMEResponse(address string, domains ...string) []byte {
+	addr := netip.MustParseAddr(address)
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+	b.EnableCompression()
+	b.StartAnswers()
+
+	if len(domains) >= 2 {
+		for i, domain := range domains[:len(domains)-1] {
+			b.CNAMEResource(
+				dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName(domain),
+					Type:  dnsmessage.TypeCNAME,
+					Class: dnsmessage.ClassINET,
+					TTL:   0,
+				},
+				dnsmessage.CNAMEResource{
+					CNAME: dnsmessage.MustNewName(domains[i+1]),
+				},
+			)
+		}
+	}
+
+	domain := domains[len(domains)-1]
+
 	switch addr.BitLen() {
 	case 32:
 		b.AResource(
