@@ -42,15 +42,17 @@ Tailscale, as opposed to a CLI or a native app.
 		webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
 		webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
 		webf.StringVar(&webArgs.prefix, "prefix", "", "URL prefix added to requests (for cgi or reverse proxies)")
+		webf.BoolVar(&webArgs.readonly, "readonly", false, "run web UI in read-only mode")
 		return webf
 	})(),
 	Exec: runWeb,
 }
 
 var webArgs struct {
-	listen string
-	cgi    bool
-	prefix string
+	listen   string
+	cgi      bool
+	prefix   string
+	readonly bool
 }
 
 func tlsConfigFromEnvironment() *tls.Config {
@@ -94,20 +96,26 @@ func runWeb(ctx context.Context, args []string) error {
 	if prefs, err := localClient.GetPrefs(ctx); err == nil {
 		existingWebClient = prefs.RunWebClient
 	}
-	if !existingWebClient {
+	var startedManagementClient bool // we started the management client
+	if !existingWebClient && !webArgs.readonly {
 		// Also start full client in tailscaled.
 		log.Printf("starting tailscaled web client at %s:%d\n", selfIP.String(), web.ListenPort)
 		if err := setRunWebClient(ctx, true); err != nil {
 			return fmt.Errorf("starting web client in tailscaled: %w", err)
 		}
+		startedManagementClient = true
 	}
 
-	webServer, err := web.NewServer(web.ServerOpts{
+	opts := web.ServerOpts{
 		Mode:        web.LoginServerMode,
 		CGIMode:     webArgs.cgi,
 		PathPrefix:  webArgs.prefix,
 		LocalClient: &localClient,
-	})
+	}
+	if webArgs.readonly {
+		opts.Mode = web.ReadOnlyServerMode
+	}
+	webServer, err := web.NewServer(opts)
 	if err != nil {
 		log.Printf("tailscale.web: %v", err)
 		return err
@@ -117,10 +125,10 @@ func runWeb(ctx context.Context, args []string) error {
 		case <-ctx.Done():
 			// Shutdown the server.
 			webServer.Shutdown()
-			if !webArgs.cgi && !existingWebClient {
+			if !webArgs.cgi && startedManagementClient {
 				log.Println("stopping tailscaled web client")
 				// When not in cgi mode, shut down the tailscaled
-				// web client on cli termination.
+				// web client on cli termination if we started it.
 				if err := setRunWebClient(context.Background(), false); err != nil {
 					log.Printf("stopping tailscaled web client: %v", err)
 				}

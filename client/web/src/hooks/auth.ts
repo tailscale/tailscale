@@ -12,7 +12,7 @@ export enum AuthType {
 export type AuthResponse = {
   authNeeded?: AuthType
   canManageNode: boolean
-  serverMode: "login" | "manage"
+  serverMode: "login" | "readonly" | "manage"
   viewerIdentity?: {
     loginName: string
     nodeName: string

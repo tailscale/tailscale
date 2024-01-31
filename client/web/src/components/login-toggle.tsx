@@ -162,7 +162,19 @@ function LoginPopoverContent({
       </div>
       {!auth.canManageNode && (
         <>
-          {!auth.viewerIdentity ? (
+          {auth.serverMode === "readonly" ? (
+            <p className="text-gray-500 text-xs">
+              This web interface is running in read-only mode.{" "}
+              <a
+                href="https://tailscale.com/s/web-client-read-only"
+                className="text-blue-700"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Learn more &rarr;
+              </a>
+            </p>
+          ) : !auth.viewerIdentity ? (
             // User is not connected over Tailscale.
             // These states are only possible on the login client.
             <>
