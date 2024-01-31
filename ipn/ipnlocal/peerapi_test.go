@@ -803,6 +803,72 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 	}
 }
 
+func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
+	ctx := context.Background()
+	var h peerAPIHandler
+	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
+
+	rc := &appctest.RouteCollector{}
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	h.ps = &peerAPIServer{
+		b: &LocalBackend{
+			e:            eng,
+			pm:           pm,
+			store:        pm.Store(),
+			appConnector: appc.NewAppConnector(t.Logf, rc),
+		},
+	}
+	h.ps.b.appConnector.UpdateDomains([]string{"www.example.com"})
+	h.ps.b.appConnector.Wait(ctx)
+
+	h.ps.resolver = &fakeResolver{build: func(b *dnsmessage.Builder) {
+		b.CNAMEResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName("www.example.com."),
+				Type:  dnsmessage.TypeCNAME,
+				Class: dnsmessage.ClassINET,
+				TTL:   0,
+			},
+			dnsmessage.CNAMEResource{
+				CNAME: dnsmessage.MustNewName("example.com."),
+			},
+		)
+		b.AResource(
+			dnsmessage.ResourceHeader{
+				Name:  dnsmessage.MustNewName("example.com."),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+				TTL:   0,
+			},
+			dnsmessage.AResource{
+				A: [4]byte{192, 0, 0, 8},
+			},
+		)
+	}}
+	f := filter.NewAllowAllForTest(logger.Discard)
+	h.ps.b.setFilter(f)
+
+	if !h.ps.b.OfferingAppConnector() {
+		t.Fatal("expecting to be offering app connector")
+	}
+	if !h.replyToDNSQueries() {
+		t.Errorf("unexpectedly deny; wanted to be a DNS server")
+	}
+
+	w := httptest.NewRecorder()
+	h.handleDNSQuery(w, httptest.NewRequest("GET", "/dns-query?q=www.example.com.", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("unexpected status code: %v", w.Code)
+	}
+	h.ps.b.appConnector.Wait(ctx)
+
+	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
+	if !slices.Equal(rc.Routes(), wantRoutes) {
+		t.Errorf("got %v; want %v", rc.Routes(), wantRoutes)
+	}
+}
+
 type fakeResolver struct {
 	build func(*dnsmessage.Builder)
 }
