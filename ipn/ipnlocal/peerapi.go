@@ -1054,6 +1054,9 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 			return err
 		}
 		if h.Class != dnsmessage.ClassINET {
+			if err := p.SkipAnswer(); err != nil {
+				return err
+			}
 			continue
 		}
 		switch h.Type {
@@ -1075,6 +1078,10 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 				return err
 			}
 			gotIPs = append(gotIPs, r.TXT...)
+		default:
+			if err := p.SkipAnswer(); err != nil {
+				return err
+			}
 		}
 	}
 	j, _ := json.Marshal(gotIPs)
