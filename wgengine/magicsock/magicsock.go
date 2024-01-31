@@ -3008,3 +3008,7 @@ func getPeerMTUsProbedMetric(mtu tstun.WireMTU) *clientmetric.Metric {
 	mm, _ := metricRecvDiscoPeerMTUProbesByMTU.LoadOrInit(key, func() *clientmetric.Metric { return clientmetric.NewCounter(key) })
 	return mm
 }
+
+func (c *Conn) GetLastNetcheckReport() *netcheck.Report {
+	return c.lastNetCheckReport.Load()
+}
