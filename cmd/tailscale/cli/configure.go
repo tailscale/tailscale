@@ -33,6 +33,7 @@ services on the host to use Tailscale in more ways.
 func configureSubcommands() (out []*ffcli.Command) {
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		out = append(out, synologyConfigureCmd)
+		out = append(out, synologyConfigureCertCmd)
 	}
 	return out
 }
