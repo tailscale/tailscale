@@ -12,7 +12,16 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/hashx"
 )
+
+type implsSelfHasher struct {
+	emit uint64
+}
+
+func (s *implsSelfHasher) Hash(h *hashx.Block512) {
+	h.HashUint64(s.emit)
+}
 
 func TestTypeIsMemHashable(t *testing.T) {
 	tests := []struct {
@@ -67,6 +76,7 @@ func TestTypeIsMemHashable(t *testing.T) {
 			false},
 		{[0]chan bool{}, true},
 		{struct{ f [0]func() }{}, true},
+		{&implsSelfHasher{}, false},
 	}
 	for _, tt := range tests {
 		got := typeIsMemHashable(reflect.TypeOf(tt.val))
@@ -102,6 +112,7 @@ func TestTypeIsRecursive(t *testing.T) {
 		{val: unsafe.Pointer(nil), want: false},
 		{val: make(RecursiveChan), want: true},
 		{val: make(chan int), want: false},
+		{val: (*implsSelfHasher)(nil), want: false},
 	}
 	for _, tt := range tests {
 		got := typeIsRecursive(reflect.TypeOf(tt.val))

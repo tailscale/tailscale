@@ -292,6 +292,14 @@ func makeTypeHasher(t reflect.Type) typeHasherFunc {
 		return hashAddr
 	}
 
+	// Types that implement their own hashing.
+	if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface {
+		// A method can be implemented on either the value receiver or pointer receiver.
+		if t.Implements(selfHasherType) || reflect.PointerTo(t).Implements(selfHasherType) {
+			return makeSelfHasherImpl(t)
+		}
+	}
+
 	// Types that can have their memory representation directly hashed.
 	if typeIsMemHashable(t) {
 		return makeMemHasher(t.Size())
@@ -347,6 +355,13 @@ func hashAddr(h *hasher, p pointer) {
 		h.HashUint64(binary.LittleEndian.Uint64(b[:8]))
 		h.HashUint64(binary.LittleEndian.Uint64(b[8:]))
 		h.HashString(z)
+	}
+}
+
+func makeSelfHasherImpl(t reflect.Type) typeHasherFunc {
+	return func(h *hasher, p pointer) {
+		e := p.asValue(t)
+		e.Interface().(SelfHasher).Hash(&h.Block512)
 	}
 }
 

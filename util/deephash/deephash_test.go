@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/hashx"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
@@ -39,6 +40,14 @@ type appendBytes []byte
 
 func (p appendBytes) AppendTo(b []byte) []byte {
 	return append(b, p...)
+}
+
+type implsSelfHasherValueRecv struct {
+	emit uint64
+}
+
+func (s implsSelfHasherValueRecv) Hash(h *hashx.Block512) {
+	h.HashUint64(s.emit)
 }
 
 func TestHash(t *testing.T) {
@@ -169,6 +178,12 @@ func TestHash(t *testing.T) {
 			b[0] = 1
 			return b
 		}()))}, wantEq: false},
+		{in: tuple{&implsSelfHasher{}, &implsSelfHasher{}}, wantEq: true},
+		{in: tuple{(*implsSelfHasher)(nil), (*implsSelfHasher)(nil)}, wantEq: true},
+		{in: tuple{(*implsSelfHasher)(nil), &implsSelfHasher{}}, wantEq: false},
+		{in: tuple{&implsSelfHasher{emit: 1}, &implsSelfHasher{emit: 2}}, wantEq: false},
+		{in: tuple{implsSelfHasherValueRecv{emit: 1}, implsSelfHasherValueRecv{emit: 2}}, wantEq: false},
+		{in: tuple{implsSelfHasherValueRecv{emit: 2}, implsSelfHasherValueRecv{emit: 2}}, wantEq: true},
 	}
 
 	for _, tt := range tests {
