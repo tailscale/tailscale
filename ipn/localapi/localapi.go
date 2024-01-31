@@ -129,6 +129,7 @@ var handler = map[string]localAPIHandler{
 	"update/check":                (*Handler).serveUpdateCheck,
 	"update/install":              (*Handler).serveUpdateInstall,
 	"update/progress":             (*Handler).serveUpdateProgress,
+	"suggest-exit-node":           (*Handler).serveSuggestExitNode,
 }
 
 var (
@@ -2504,3 +2505,19 @@ var (
 	// User-visible LocalAPI endpoints.
 	metricFilePutCalls = clientmetric.NewCounter("localapi_file_put")
 )
+
+func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", http.StatusBadRequest)
+		return
+	}
+	err := h.b.SuggestExitNode()
+	if err != nil {
+		writeErrorJSON(w, err)
+		return
+	}
+}

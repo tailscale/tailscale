@@ -799,6 +799,7 @@ func (p *Prefs) SetExitNodeIP(s string, st *ipnstate.Status) error {
 	if err == nil {
 		p.ExitNodeIP = ip
 	}
+
 	return err
 }
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -106,6 +107,8 @@ import (
 )
 
 var controlDebugFlags = getControlDebugFlags()
+
+const derpPrefix = "127.3.3.40:"
 
 func getControlDebugFlags() []string {
 	if e := envknob.String("TS_DEBUG_CONTROL_FLAGS"); e != "" {
@@ -306,7 +309,8 @@ type LocalBackend struct {
 	clock       tstime.Clock
 
 	// Last ClientVersion received in MapResponse, guarded by mu.
-	lastClientVersion *tailcfg.ClientVersion
+	lastClientVersion    *tailcfg.ClientVersion
+	suggestedExitNodeMap map[tailcfg.NodeID]tailcfg.DERPRegion
 }
 
 type updateStatus struct {
@@ -1431,7 +1435,6 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) 
 			return oldExitNodeID != prefs.ExitNodeID
 		}
 	}
-
 	return prefsChanged
 }
 
@@ -5908,4 +5911,37 @@ func mayDeref[T any](p *T) (v T) {
 		return v
 	}
 	return *p
+}
+
+func (b *LocalBackend) SuggestExitNode() error {
+	//b.mu.Lock()
+	netMap := b.netMap
+	peers := netMap.Peers
+	lastReport := b.MagicConn().GetLastNetcheckReport()
+	var fastestRegionLatency = time.Duration(math.MaxInt64)
+	var preferredExitNodeID tailcfg.StableNodeID
+	for _, peer := range peers {
+		if tsaddr.ContainsExitRoutes(peer.AllowedIPs()) && strings.HasPrefix(peer.DERP(), derpPrefix) {
+			ipp, _ := netip.ParseAddrPort(peer.DERP())
+			regionID := int(ipp.Port())
+			if lastReport.RegionLatency[regionID] < fastestRegionLatency {
+				fastestRegionLatency = lastReport.RegionLatency[regionID]
+				preferredExitNodeID = peer.StableID()
+				b.logf("fastest region latency %v preferred exit node id %v", lastReport.RegionLatency[regionID], peer.StableID())
+			}
+		}
+	}
+	//	b.mu.Unlock()
+	prefs := b.Prefs().AsStruct()
+	prefs.ExitNodeID = preferredExitNodeID
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			ExitNodeID: preferredExitNodeID,
+		},
+		ExitNodeIDSet: true,
+	})
+	if err != nil {
+		return fmt.Errorf("Failed to suggest exit node %v, err %v", preferredExitNodeID, err)
+	}
+	return nil
 }
