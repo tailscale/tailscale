@@ -1218,7 +1218,7 @@ func TestObserveDNSResponse(t *testing.T) {
 	}
 }
 
-func TestCoveredRouteRange(t *testing.T) {
+func TestCoveredRouteRangeNoDefault(t *testing.T) {
 	tests := []struct {
 		existingRoute netip.Prefix
 		newRoute      netip.Prefix
@@ -1244,10 +1244,20 @@ func TestCoveredRouteRange(t *testing.T) {
 			newRoute:      netip.MustParsePrefix("192.0.0.0/24"),
 			want:          true,
 		},
+		{
+			existingRoute: netip.MustParsePrefix("0.0.0.0/0"),
+			newRoute:      netip.MustParsePrefix("192.0.0.0/24"),
+			want:          false,
+		},
+		{
+			existingRoute: netip.MustParsePrefix("::/0"),
+			newRoute:      netip.MustParsePrefix("2001:db8::/32"),
+			want:          false,
+		},
 	}
 
 	for _, tt := range tests {
-		got := coveredRouteRange([]netip.Prefix{tt.existingRoute}, tt.newRoute)
+		got := coveredRouteRangeNoDefault([]netip.Prefix{tt.existingRoute}, tt.newRoute)
 		if got != tt.want {
 			t.Errorf("coveredRouteRange(%v, %v) = %v, want %v", tt.existingRoute, tt.newRoute, got, tt.want)
 		}

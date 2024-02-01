@@ -5808,7 +5808,7 @@ func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 		}
 
 		// If the new prefix is already contained by existing routes, skip it.
-		if coveredRouteRange(finalRoutes, ipp) {
+		if coveredRouteRangeNoDefault(finalRoutes, ipp) {
 			continue
 		}
 
@@ -5829,10 +5829,13 @@ func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 	return err
 }
 
-// coveredRouteRange checks if a route is already included in a slice of
-// prefixes.
-func coveredRouteRange(finalRoutes []netip.Prefix, ipp netip.Prefix) bool {
+// coveredRouteRangeNoDefault checks if a route is already included in a slice of
+// prefixes, ignoring default routes in the range.
+func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bool {
 	for _, r := range finalRoutes {
+		if r == tsaddr.AllIPv4() || r == tsaddr.AllIPv6() {
+			continue
+		}
 		if ipp.IsSingleIP() {
 			if r.Contains(ipp.Addr()) {
 				return true
