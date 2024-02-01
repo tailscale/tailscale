@@ -17,7 +17,50 @@
 //
 // WARNING: This package, like most of the tailscale.com Go module,
 // should be considered Tailscale-internal; we make no API promises.
+//
+// # Cycle detection
+//
+// This package correctly handles cycles in the value graph,
+// but in a way that is potentially pathological in some situations.
+//
+// The algorithm for cycle detection operates by
+// pushing a pointer onto a stack whenever deephash is visiting a pointer and
+// popping the pointer from the stack after deephash is leaving the pointer.
+// Before visiting a new pointer, deephash checks whether it has already been
+// visited on the pointer stack. If so, it hashes the index of the pointer
+// on the stack and avoids visiting the pointer.
+//
+// This algorithm is guaranteed to detect cycles, but may expand pointers
+// more often than a potential alternate algorithm that remembers all pointers
+// ever visited in a map. The current algorithm uses O(D) memory, where D
+// is the maximum depth of the recursion, while the alternate algorithm
+// would use O(P) memory where P is all pointers ever seen, which can be a lot,
+// and most of which may have nothing to do with cycles.
+// Also, the alternate algorithm has to deal with challenges of producing
+// deterministic results when pointers are visited in non-deterministic ways
+// such as when iterating through a Go map. The stack-based algorithm avoids
+// this challenge since the stack is always deterministic regardless of
+// non-deterministic iteration order of Go maps.
+//
+// To concretely see how this algorithm can be pathological,
+// consider the following data structure:
+//
+//	var big *Item = ... // some large data structure that is slow to hash
+//	var manyBig []*Item
+//	for i := 0; i < 1000; i++ {
+//		manyBig = append(manyBig, &big)
+//	}
+//	deephash.Hash(manyBig)
+//
+// Here, the manyBig data structure is not even cyclic.
+// We have the same big *Item being stored multiple times in a []*Item.
+// When deephash hashes []*Item, it hashes each individual *Item
+// not realizing that it had just done the computation earlier.
+// To avoid the pathological situation, Item should implement [SelfHasher] and
+// memoize attempts to hash itself.
 package deephash
+
+// TODO: Add option to teach deephash to memoize the Hash result of particular types?
 
 import (
 	"crypto/sha256"
