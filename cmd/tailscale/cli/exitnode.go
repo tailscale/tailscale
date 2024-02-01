@@ -37,6 +37,16 @@ var exitNodeCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:       "suggest",
+			ShortUsage: "exit-node suggest",
+			ShortHelp:  "Picks the best available exit node",
+			Exec:       runExitNodeSuggest,
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("suggest")
+				return fs
+			})(),
+		},
 	},
 	Exec: func(context.Context, []string) error {
 		return errors.New("exit-node subcommand required; run 'tailscale exit-node -h' for details")
@@ -99,6 +109,14 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "# To use an exit node, use `tailscale set --exit-node=` followed by the hostname or IP")
 
+	return nil
+}
+
+func runExitNodeSuggest(ctx context.Context, args []string) error {
+	err := localClient.SuggestExitNode(ctx)
+	if err != nil {
+		return fmt.Errorf("Failed to suggest exit node. Error: %v", err)
+	}
 	return nil
 }
 

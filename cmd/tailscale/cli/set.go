@@ -64,7 +64,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.StringVar(&setArgs.profileName, "nickname", "", "nickname for the current account")
 	setf.BoolVar(&setArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", false, "accept DNS configuration from the admin panel")
-	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node. Input suggest as the string for Tailscale to pick the best exit node.")
+	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node.")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
@@ -128,19 +128,12 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	}
 
 	if setArgs.exitNodeIP != "" {
-		if setArgs.exitNodeIP == "suggest" {
-			err := localClient.SuggestExitNode(ctx)
-			if err != nil {
-				return err
+		if err := maskedPrefs.Prefs.SetExitNodeIP(setArgs.exitNodeIP, st); err != nil {
+			var e ipn.ExitNodeLocalIPError
+			if errors.As(err, &e) {
+				return fmt.Errorf("%w; did you mean --advertise-exit-node?", err)
 			}
-		} else {
-			if err := maskedPrefs.Prefs.SetExitNodeIP(setArgs.exitNodeIP, st); err != nil {
-				var e ipn.ExitNodeLocalIPError
-				if errors.As(err, &e) {
-					return fmt.Errorf("%w; did you mean --advertise-exit-node?", err)
-				}
-				return err
-			}
+			return err
 		}
 	}
 
