@@ -3010,5 +3010,6 @@ func getPeerMTUsProbedMetric(mtu tstun.WireMTU) *clientmetric.Metric {
 }
 
 func (c *Conn) GetLastNetcheckReport() *netcheck.Report {
-	return c.lastNetCheckReport.Load()
+	report, _ := c.updateNetInfo(c.connCtx)
+	return report
 }

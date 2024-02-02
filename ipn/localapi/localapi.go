@@ -2515,9 +2515,10 @@ func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
-	err := h.b.SuggestExitNode()
+	suggestedExitNodeID, err := h.b.SuggestExitNode()
 	if err != nil {
 		writeErrorJSON(w, err)
 		return
 	}
+	json.NewEncoder(w).Encode(suggestedExitNodeID)
 }

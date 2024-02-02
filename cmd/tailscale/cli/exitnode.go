@@ -16,6 +16,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
@@ -107,15 +108,31 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "# To use an exit node, use `tailscale set --exit-node=` followed by the hostname or IP")
+	fmt.Fprintln(w, "# To use an exit node, use `tailscale set --exit-node=` followed by the hostname or IP. Or `tailscale exit-node suggest` to have Tailscale pick an exit node for you.")
 
 	return nil
 }
 
 func runExitNodeSuggest(ctx context.Context, args []string) error {
-	err := localClient.SuggestExitNode(ctx)
+	var suggestedNodeID *tailcfg.StableNodeID
+	suggestedNodeID, err := localClient.SuggestExitNode(ctx)
+	if suggestedNodeID == nil {
+		fmt.Println("Unable to suggest exit node")
+	} else {
+		fmt.Printf("Chosen exit node id: %v", *suggestedNodeID)
+	}
 	if err != nil {
 		return fmt.Errorf("Failed to suggest exit node. Error: %v", err)
+	}
+	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			ExitNodeID: *suggestedNodeID,
+		},
+		ExitNodeIDSet: true,
+	})
+
+	if err != nil {
+		return fmt.Errorf("Failed to set suggested exit node. Error: %v", err)
 	}
 	return nil
 }

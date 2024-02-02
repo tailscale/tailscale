@@ -1417,12 +1417,16 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
-func (lc *LocalClient) SuggestExitNode(ctx context.Context) error {
+func (lc *LocalClient) SuggestExitNode(ctx context.Context) (*tailcfg.StableNodeID, error) {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-exit-node", 200, nil)
 	if err != nil {
-		return fmt.Errorf("error %w: %s", err, body)
+		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
-	return nil
+	nodeID, err := decodeJSON[tailcfg.StableNodeID](body)
+	if err != nil {
+		return nil, err
+	}
+	return &nodeID, nil
 }
 
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.

@@ -309,8 +309,7 @@ type LocalBackend struct {
 	clock       tstime.Clock
 
 	// Last ClientVersion received in MapResponse, guarded by mu.
-	lastClientVersion    *tailcfg.ClientVersion
-	suggestedExitNodeMap map[tailcfg.NodeID]tailcfg.DERPRegion
+	lastClientVersion *tailcfg.ClientVersion
 }
 
 type updateStatus struct {
@@ -5913,35 +5912,64 @@ func mayDeref[T any](p *T) (v T) {
 	return *p
 }
 
-func (b *LocalBackend) SuggestExitNode() error {
-	//b.mu.Lock()
+func (b *LocalBackend) SuggestExitNode() (*tailcfg.StableNodeID, error) {
+	b.mu.Lock()
 	netMap := b.netMap
+	if netMap == nil {
+		b.mu.Unlock()
+		return nil, errors.New("no netmap")
+	}
 	peers := netMap.Peers
 	lastReport := b.MagicConn().GetLastNetcheckReport()
 	var fastestRegionLatency = time.Duration(math.MaxInt64)
 	var preferredExitNodeID tailcfg.StableNodeID
+	peerRegionMap := make(map[int][]tailcfg.NodeView)
 	for _, peer := range peers {
-		if tsaddr.ContainsExitRoutes(peer.AllowedIPs()) && strings.HasPrefix(peer.DERP(), derpPrefix) {
+		if online := peer.Online(); online != nil && !*online {
+			continue
+		}
+		if tsaddr.ContainsExitRoutes(peer.AllowedIPs()) /*&& strings.HasPrefix(peer.DERP(), derpPrefix)*/ {
 			ipp, _ := netip.ParseAddrPort(peer.DERP())
 			regionID := int(ipp.Port())
-			if lastReport.RegionLatency[regionID] < fastestRegionLatency {
+			regionLatency, ok := lastReport.RegionLatency[regionID]
+			peerRegionMap[regionID] = append(peerRegionMap[regionID], peer)
+			b.logf("region %d latency %v(%v) node id %v", regionID, regionLatency, ok, peer.Name())
+			if ok && regionLatency < fastestRegionLatency {
 				fastestRegionLatency = lastReport.RegionLatency[regionID]
 				preferredExitNodeID = peer.StableID()
 				b.logf("fastest region latency %v preferred exit node id %v", lastReport.RegionLatency[regionID], peer.StableID())
 			}
 		}
 	}
-	//	b.mu.Unlock()
-	prefs := b.Prefs().AsStruct()
-	prefs.ExitNodeID = preferredExitNodeID
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			ExitNodeID: preferredExitNodeID,
-		},
-		ExitNodeIDSet: true,
-	})
-	if err != nil {
-		return fmt.Errorf("Failed to suggest exit node %v, err %v", preferredExitNodeID, err)
+	b.logf("self derp %v", b.netMap.SelfNode.DERP())
+	ipp, _ := netip.ParseAddrPort(netMap.SelfNode.DERP())
+	selfDerpRegionID := int(ipp.Port())
+	b.logf("self derp region id %v", selfDerpRegionID)
+	sameRegionNodes, ok := peerRegionMap[selfDerpRegionID]
+	b.mu.Unlock()
+	if ok {
+		preferredExitNodeID = balancedPick(netMap.SelfNode, sameRegionNodes).StableID()
 	}
-	return nil
+	//b.logf("peer region map %v", peerRegionMap)
+	b.logf("chosen exit node id %v", preferredExitNodeID)
+	if preferredExitNodeID.IsZero() {
+		return &preferredExitNodeID, fmt.Errorf("Unable to choose exit node")
+	}
+	return &preferredExitNodeID, nil
 }
+
+func balancedPick(selfNode tailcfg.NodeView, candidates []tailcfg.NodeView) tailcfg.NodeView {
+	if len(candidates) == 1 {
+		return candidates[0]
+	} else {
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID() < candidates[j].ID() })
+
+		mappedID := selfNode.ID() % 512
+		chosen := candidates[int(math.Floor(float64(mappedID)/512*float64(len(candidates))))]
+		return chosen
+	}
+}
+
+/*func measureLatency(ctx context.Context, derpRegion *DERPRegion, p *ping.Pinger) (time.Duration, error) {
+	node := derpRegion.Nodes[0]
+} */
