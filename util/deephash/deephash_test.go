@@ -42,11 +42,19 @@ func (p appendBytes) AppendTo(b []byte) []byte {
 	return append(b, p...)
 }
 
-type implsSelfHasherValueRecv struct {
+type selfHasherValueRecv struct {
 	emit uint64
 }
 
-func (s implsSelfHasherValueRecv) Hash(h *hashx.Block512) {
+func (s selfHasherValueRecv) Hash(h *hashx.Block512) {
+	h.HashUint64(s.emit)
+}
+
+type selfHasherPointerRecv struct {
+	emit uint64
+}
+
+func (s *selfHasherPointerRecv) Hash(h *hashx.Block512) {
 	h.HashUint64(s.emit)
 }
 
@@ -178,12 +186,12 @@ func TestHash(t *testing.T) {
 			b[0] = 1
 			return b
 		}()))}, wantEq: false},
-		{in: tuple{&implsSelfHasher{}, &implsSelfHasher{}}, wantEq: true},
-		{in: tuple{(*implsSelfHasher)(nil), (*implsSelfHasher)(nil)}, wantEq: true},
-		{in: tuple{(*implsSelfHasher)(nil), &implsSelfHasher{}}, wantEq: false},
-		{in: tuple{&implsSelfHasher{emit: 1}, &implsSelfHasher{emit: 2}}, wantEq: false},
-		{in: tuple{implsSelfHasherValueRecv{emit: 1}, implsSelfHasherValueRecv{emit: 2}}, wantEq: false},
-		{in: tuple{implsSelfHasherValueRecv{emit: 2}, implsSelfHasherValueRecv{emit: 2}}, wantEq: true},
+		{in: tuple{&selfHasherPointerRecv{}, &selfHasherPointerRecv{}}, wantEq: true},
+		{in: tuple{(*selfHasherPointerRecv)(nil), (*selfHasherPointerRecv)(nil)}, wantEq: true},
+		{in: tuple{(*selfHasherPointerRecv)(nil), &selfHasherPointerRecv{}}, wantEq: false},
+		{in: tuple{&selfHasherPointerRecv{emit: 1}, &selfHasherPointerRecv{emit: 2}}, wantEq: false},
+		{in: tuple{selfHasherValueRecv{emit: 1}, selfHasherValueRecv{emit: 2}}, wantEq: false},
+		{in: tuple{selfHasherValueRecv{emit: 2}, selfHasherValueRecv{emit: 2}}, wantEq: true},
 	}
 
 	for _, tt := range tests {

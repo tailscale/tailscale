@@ -7,20 +7,7 @@ import (
 	"net/netip"
 	"reflect"
 	"time"
-
-	"tailscale.com/util/hashx"
 )
-
-// SelfHasher is the interface implemented by types that can compute their own hash
-// by writing values through the given parameter.
-//
-// Implementations of Hash MUST NOT call `Reset` or `Sum` on the provided argument.
-//
-// This interface should not be considered stable and is likely to change in the
-// future.
-type SelfHasher interface {
-	Hash(*hashx.Block512)
-}
 
 var (
 	timeTimeType   = reflect.TypeOf((*time.Time)(nil)).Elem()
