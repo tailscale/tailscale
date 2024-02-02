@@ -18,7 +18,9 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os"
 	"os/exec"
+	"path"
 	"runtime"
 	"slices"
 	"strconv"
@@ -41,6 +43,7 @@ import (
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -107,6 +110,8 @@ var handler = map[string]localAPIHandler{
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
+	"tailfs/fileserver-address":   (*Handler).serveTailfsFileServerAddr,
+	"tailfs/shares":               (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
 	"tka/init":                    (*Handler).serveTKAInit,
@@ -1107,7 +1112,7 @@ func (h *Handler) connIsLocalAdmin() bool {
 		if err != nil {
 			return false
 		}
-		// Short timeout just in case sudo hands for some reason.
+		// Short timeout just in case sudo hangs for some reason.
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := exec.CommandContext(ctx, "sudo", "--other-user="+u.Name, "--list", "tailscale").Run(); err != nil {
@@ -1117,6 +1122,34 @@ func (h *Handler) connIsLocalAdmin() bool {
 
 	default:
 		return false
+	}
+}
+
+func (h *Handler) getUsername() (string, error) {
+	if h.ConnIdentity == nil {
+		h.logf("[unexpected] missing ConnIdentity in LocalAPI Handler")
+		return "", errors.New("missing ConnIdentity")
+	}
+	switch runtime.GOOS {
+	case "windows":
+		tok, err := h.ConnIdentity.WindowsToken()
+		if err != nil {
+			return "", fmt.Errorf("get windows token: %w", err)
+		}
+		defer tok.Close()
+		return tok.Username()
+	case "darwin", "linux":
+		uid, ok := h.ConnIdentity.Creds().UserID()
+		if !ok {
+			return "", errors.New("missing user ID")
+		}
+		u, err := osuser.LookupByUID(uid)
+		if err != nil {
+			return "", fmt.Errorf("lookup user: %w", err)
+		}
+		return u.Username, nil
+	default:
+		return "", errors.New("unsupported OS")
 	}
 }
 
@@ -2496,6 +2529,95 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	ups := h.b.GetSelfUpdateProgress()
 
 	json.NewEncoder(w).Encode(ups)
+}
+
+// serveTailfsFileServerAddr handles updates of the tailfs file server address.
+func (h *Handler) serveTailfsFileServerAddr(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "only PUT allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	h.b.TailfsSetFileServerAddr(string(b))
+	w.WriteHeader(http.StatusCreated)
+}
+
+// serveShares handles the management of tailfs shares.
+func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
+	if !h.b.TailfsSharingEnabled() {
+		http.Error(w, `tailfs sharing not enabled, please add the attribute "tailfs:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case "PUT":
+		var share tailfs.Share
+		err := json.NewDecoder(r.Body).Decode(&share)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		share.Path = path.Clean(share.Path)
+		fi, err := os.Stat(share.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !fi.IsDir() {
+			http.Error(w, "not a directory", http.StatusBadRequest)
+			return
+		}
+		if tailfs.AllowShareAs() {
+			// share as the connected user
+			username, err := h.getUsername()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			share.As = username
+		}
+		err = h.b.TailfsAddShare(&share)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	case "DELETE":
+		var share tailfs.Share
+		err := json.NewDecoder(r.Body).Decode(&share)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		err = h.b.TailfsRemoveShare(share.Name)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "share not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case "GET":
+		shares, err := h.b.TailfsGetShares()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = json.NewEncoder(w).Encode(shares)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+	}
 }
 
 var (

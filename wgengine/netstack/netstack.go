@@ -48,6 +48,7 @@ import (
 	"tailscale.com/proxymap"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -63,8 +64,8 @@ const debugPackets = false
 var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
 var (
-	magicDNSIP   = tsaddr.TailscaleServiceIP()
-	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
+	serviceIP   = tsaddr.TailscaleServiceIP()
+	serviceIPv6 = tsaddr.TailscaleServiceIPv6()
 )
 
 func init() {
@@ -120,18 +121,19 @@ type Impl struct {
 	// It can only be set before calling Start.
 	ProcessSubnets bool
 
-	ipstack   *stack.Stack
-	linkEP    *channel.Endpoint
-	tundev    *tstun.Wrapper
-	e         wgengine.Engine
-	pm        *proxymap.Mapper
-	mc        *magicsock.Conn
-	logf      logger.Logf
-	dialer    *tsdial.Dialer
-	ctx       context.Context        // alive until Close
-	ctxCancel context.CancelFunc     // called on Close
-	lb        *ipnlocal.LocalBackend // or nil
-	dns       *dns.Manager
+	ipstack        *stack.Stack
+	linkEP         *channel.Endpoint
+	tundev         *tstun.Wrapper
+	e              wgengine.Engine
+	pm             *proxymap.Mapper
+	mc             *magicsock.Conn
+	logf           logger.Logf
+	dialer         *tsdial.Dialer
+	ctx            context.Context        // alive until Close
+	ctxCancel      context.CancelFunc     // called on Close
+	lb             *ipnlocal.LocalBackend // or nil
+	dns            *dns.Manager
+	tailfsForLocal *tailfs.FileSystemForLocal // or nil
 
 	peerapiPort4Atomic atomic.Uint32 // uint16 port number for IPv4 peerapi
 	peerapiPort6Atomic atomic.Uint32 // uint16 port number for IPv6 peerapi
@@ -159,7 +161,7 @@ const nicID = 1
 const maxUDPPacketSize = tstun.MaxPacketSize
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, tailfsForLocal *tailfs.FileSystemForLocal) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -239,6 +241,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netip.Addr]int),
 		dns:                 dns,
+		tailfsForLocal:      tailfsForLocal,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
@@ -440,16 +443,16 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		return filter.DropSilently
 	}
 
-	// If it's not traffic to the service IP (i.e. magicDNS) we don't
+	// If it's not traffic to the service IP (e.g. magicDNS or Tailfs) we don't
 	// care; resume processing.
-	if dst := p.Dst.Addr(); dst != magicDNSIP && dst != magicDNSIPv6 {
+	if dst := p.Dst.Addr(); dst != serviceIP && dst != serviceIPv6 {
 		return filter.Accept
 	}
 	// Of traffic to the service IP, we only care about UDP 53, and TCP
-	// on port 80 & 53.
+	// on port 53, 80, and 8080.
 	switch p.IPProto {
 	case ipproto.TCP:
-		if port := p.Dst.Port(); port != 53 && port != 80 {
+		if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 {
 			return filter.Accept
 		}
 	case ipproto.UDP:
@@ -546,12 +549,12 @@ func (ns *Impl) inject() {
 		if b := pkt.NetworkHeader().Slice(); len(b) >= 20 { // min ipv4 header
 			switch b[0] >> 4 { // ip proto field
 			case 4:
-				if srcIP := netaddr.IPv4(b[12], b[13], b[14], b[15]); magicDNSIP == srcIP {
+				if srcIP := netaddr.IPv4(b[12], b[13], b[14], b[15]); serviceIP == srcIP {
 					sendToHost = true
 				}
 			case 6:
 				if len(b) >= 40 { // min ipv6 header
-					if srcIP, ok := netip.AddrFromSlice(net.IP(b[8:24])); ok && magicDNSIPv6 == srcIP {
+					if srcIP, ok := netip.AddrFromSlice(net.IP(b[8:24])); ok && serviceIPv6 == srcIP {
 						sendToHost = true
 					}
 				}
@@ -916,13 +919,24 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		return gonet.NewTCPConn(&wq, ep)
 	}
 
-	// DNS
-	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
+	// Local DNS Service (DNS and WebDAV)
+	hittingServiceIP := dialIP == serviceIP || dialIP == serviceIPv6
+	hittingDNS := hittingServiceIP && reqDetails.LocalPort == 53
+	hittingTailfs := hittingServiceIP && ns.tailfsForLocal != nil && reqDetails.LocalPort == 8080
+	if hittingDNS || hittingTailfs {
 		c := getConnOrReset()
 		if c == nil {
 			return
 		}
-		go ns.dns.HandleTCPConn(c, netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort))
+		addrPort := netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort)
+		if hittingDNS {
+			go ns.dns.HandleTCPConn(c, addrPort)
+		} else if hittingTailfs {
+			err := ns.tailfsForLocal.HandleConn(c, net.TCPAddrFromAddrPort(addrPort))
+			if err != nil {
+				ns.logf("netstack: tailfs.HandleConn: %v", err)
+			}
+		}
 		return
 	}
 
@@ -1056,7 +1070,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 
 	// Handle magicDNS traffic (via UDP) here.
-	if dst := dstAddr.Addr(); dst == magicDNSIP || dst == magicDNSIPv6 {
+	if dst := dstAddr.Addr(); dst == serviceIP || dst == serviceIPv6 {
 		if dstAddr.Port() != 53 {
 			ep.Close()
 			return // Only MagicDNS traffic runs on the service IPs for now.

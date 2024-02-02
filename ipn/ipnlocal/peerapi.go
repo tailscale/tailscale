@@ -38,10 +38,15 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
 	"tailscale.com/wgengine/filter"
+)
+
+const (
+	tailfsPrefix = "/v0/tailfs"
 )
 
 var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
@@ -315,6 +320,10 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/dns-query") {
 		metricDNSCalls.Add(1)
 		h.handleDNSQuery(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, tailfsPrefix) {
+		h.handleServeTailfs(w, r)
 		return
 	}
 	switch r.URL.Path {
@@ -626,7 +635,11 @@ func (h *peerAPIHandler) canIngress() bool {
 }
 
 func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
-	return h.ps.b.PeerCaps(h.remoteAddr.Addr()).HasCapability(wantCap)
+	return h.peerCaps().HasCapability(wantCap)
+}
+
+func (h *peerAPIHandler) peerCaps() tailcfg.PeerCapMap {
+	return h.ps.b.PeerCaps(h.remoteAddr.Addr())
 }
 
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
@@ -1088,6 +1101,41 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 	j = append(j, '\n')
 	w.Write(j)
 	return nil
+}
+
+func (h *peerAPIHandler) handleServeTailfs(w http.ResponseWriter, r *http.Request) {
+	if !h.ps.b.TailfsSharingEnabled() {
+		http.Error(w, "tailfs not enabled", http.StatusNotFound)
+		return
+	}
+
+	capsMap := h.peerCaps()
+	tailfsCaps, ok := capsMap[tailcfg.PeerCapabilityTailfs]
+	if !ok {
+		http.Error(w, "tailfs not permitted", http.StatusForbidden)
+		return
+	}
+
+	rawPerms := make([][]byte, 0, len(tailfsCaps))
+	for _, cap := range tailfsCaps {
+		rawPerms = append(rawPerms, []byte(cap))
+	}
+
+	p, err := tailfs.ParsePermissions(rawPerms)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.ps.b.mu.Lock()
+	fs := h.ps.b.tailfsForRemote
+	h.ps.b.mu.Unlock()
+	if fs == nil {
+		http.Error(w, "tailfs not enabled", http.StatusNotFound)
+		return
+	}
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailfsPrefix)
+	fs.ServeHTTPWithPerms(p, w, r)
 }
 
 // newFakePeerAPIListener creates a new net.Listener that acts like

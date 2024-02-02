@@ -67,6 +67,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -287,6 +288,9 @@ type LocalBackend struct {
 	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
+	tailfsListeners map[netip.AddrPort]*localListener // listeners for local tailfs traffic
+	tailfsForRemote *tailfs.FileSystemForRemote
+
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
@@ -426,6 +430,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 				b.SetComponentDebugLogging(component, until)
 			}
 		}
+	}
+
+	// initialize Tailfs shares from saved state
+	b.mu.Lock()
+	b.tailfsForRemote = tailfs.NewFileSystemForRemote(logf)
+	shares, err := b.tailfsGetSharesLocked()
+	b.mu.Unlock()
+	if err == nil && len(shares) > 0 {
+		b.tailfsForRemote.SetShares(shares)
 	}
 
 	return b, nil
@@ -915,6 +928,7 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.
 	var zero tailcfg.NodeView
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	nid, ok := b.nodeByAddr[ipp.Addr()]
 	if !ok {
 		var ip netip.Addr
@@ -2254,7 +2268,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	b.mu.Lock()
 	b.activeWatchSessions.Add(sessionID)
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialTailfsShares
 	if mask&initialBits != 0 {
 		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
@@ -2269,6 +2283,17 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		}
 		if mask&ipn.NotifyInitialNetMap != 0 {
 			ini.NetMap = b.netMap
+		}
+		if mask&ipn.NotifyInitialTailfsShares != 0 && b.tailfsSharingEnabledLocked() {
+			shares, err := b.tailfsGetSharesLocked()
+			if err != nil {
+				b.logf("unable to notify initial tailfs shares: %v", err)
+			} else {
+				ini.TailfsShares = make(map[string]string, len(shares))
+				for _, share := range shares {
+					ini.TailfsShares[share.Name] = share.Path
+				}
+			}
 		}
 	}
 
@@ -3311,6 +3336,14 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	// TODO(will,sonia): allow customizing web client port ?
 	if dst.Port() == webClientPort && b.ShouldRunWebClient() {
 		return b.handleWebClientConn, opts
+	}
+	if dst.Port() == TailfsLocalPort {
+		fs, ok := b.sys.TailfsForLocal.GetOK()
+		if ok {
+			return func(conn net.Conn) error {
+				return fs.HandleConn(conn, conn.RemoteAddr())
+			}, opts
+		}
 	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
 		return func(c net.Conn) error {
@@ -4608,6 +4641,11 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			delete(b.nodeByAddr, k)
 		}
 	}
+
+	if b.tailfsSharingEnabledLocked() {
+		b.updateTailfsPeersLocked(nm)
+		b.tailfsNotifyCurrentSharesLocked()
+	}
 }
 
 func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
@@ -4615,20 +4653,45 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 		b.peers = nil
 		return
 	}
+
 	// First pass, mark everything unwanted.
 	for k := range b.peers {
 		b.peers[k] = tailcfg.NodeView{}
 	}
+
 	// Second pass, add everything wanted.
 	for _, p := range nm.Peers {
 		mak.Set(&b.peers, p.ID(), p)
 	}
+
 	// Third pass, remove deleted things.
 	for k, v := range b.peers {
 		if !v.Valid() {
 			delete(b.peers, k)
 		}
 	}
+}
+
+// tailfsTransport is an http.RoundTripper that uses the latest value of
+// b.Dialer().PeerAPITransport() for each round trip and imposes a short
+// dial timeout to avoid hanging on connecting to offline/unreachable hosts.
+type tailfsTransport struct {
+	b *LocalBackend
+}
+
+func (t *tailfsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// dialTimeout is fairly aggressive to avoid hangs on contacting offline or
+	// unreachable hosts.
+	dialTimeout := 1 * time.Second // TODO(oxtoacart): tune this
+
+	tr := t.b.Dialer().PeerAPITransport().Clone()
+	dialContext := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+		return dialContext(ctxWithTimeout, network, addr)
+	}
+	return tr.RoundTrip(req)
 }
 
 // setDebugLogsByCapabilityLocked sets debug logging based on the self node's
@@ -4701,6 +4764,10 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		if !b.sys.IsNetstack() {
 			b.updateWebClientListenersLocked()
 		}
+	}
+
+	if !b.sys.IsNetstack() {
+		b.updateTailfsListenersLocked()
 	}
 
 	b.reloadServeConfigLocked(prefs)
