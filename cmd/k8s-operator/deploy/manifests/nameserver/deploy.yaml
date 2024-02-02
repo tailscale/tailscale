@@ -26,12 +26,12 @@ spec:
           protocol: UDP
           containerPort: 1053
         volumeMounts:
-        - name: dnsconfig
+        - name: dnsrecords
           mountPath: /config
       restartPolicy: Always
       serviceAccount: nameserver
       serviceAccountName: nameserver
       volumes:
-      - name: dnsconfig
+      - name: dnsrecords
         configMap:
-          name: dnsconfig
+          name: dnsrecords

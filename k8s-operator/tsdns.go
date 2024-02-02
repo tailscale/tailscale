@@ -5,12 +5,18 @@
 
 package kube
 
-const Alpha1Version = "v1alpha1"
+const (
+	Alpha1Version = "v1alpha1"
+
+	DNSRecordsCMName = "dnsrecords"
+	DNSRecordsCMKey  = "records.json"
+)
 
 type Records struct {
 	// Version is the version of this Records configuration. Version is
-	// intended to be used by ./cmd/k8s-nameserver to determine whether it
-	// can read this records configuration.
+	// written by the operator, i.e when it first populates the Records.
+	// k8s-nameserver must verify that it knows how to parse a given
+	// version.
 	Version string `json:"version"`
 	// IP4 contains a mapping of DNS names to IPv4 address(es).
 	IP4 map[string][]string `json:"ip4"`
