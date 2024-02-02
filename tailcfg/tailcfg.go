@@ -1345,6 +1345,8 @@ const (
 	// PeerCapabilityWebUI grants the ability for a peer to edit features from the
 	// device Web UI.
 	PeerCapabilityWebUI PeerCapability = "tailscale.com/cap/webui"
+	// PeerCapabilityTailfs grants the ability for a peer to access tailfs shares.
+	PeerCapabilityTailfs PeerCapability = "tailscale.com/cap/tailfs"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
@@ -2087,7 +2089,7 @@ const (
 	CapabilitySSHRuleIn          NodeCapability = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs NodeCapability = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 	CapabilityDebug              NodeCapability = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
-	CapabilityHTTPS              NodeCapability = "https"                                           // https cert provisioning enabled on tailnet
+	CapabilityHTTPS              NodeCapability = "https"
 
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more
@@ -2208,6 +2210,9 @@ const (
 	// NodeAttrProbeUDPLifetime makes the client probe UDP path lifetime at the
 	// tail end of an active direct connection in magicsock.
 	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
+
+	// NodeAttrsTailfsSharingEnabled enables sharing via Tailfs.
+	NodeAttrsTailfsSharingEnabled NodeCapability = "tailfs:share"
 )
 
 // SetDNSRequest is a request to add a DNS record.

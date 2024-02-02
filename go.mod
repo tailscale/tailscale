@@ -22,6 +22,7 @@ require (
 	github.com/dave/patsy v0.0.0-20210517141501-957256f50cba
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
+	github.com/djherbis/times v1.6.0
 	github.com/dsnet/try v0.0.3
 	github.com/evanw/esbuild v0.19.11
 	github.com/frankban/quicktest v1.14.6
@@ -41,6 +42,7 @@ require (
 	github.com/iancoleman/strcase v0.3.0
 	github.com/illarion/gonotify v1.0.1
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2
+	github.com/jellydator/ttlcache/v3 v3.1.0
 	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86
 	github.com/jsimonetti/rtnetlink v1.4.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
@@ -65,11 +67,13 @@ require (
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/golang-x-crypto v0.0.0-20240108194725-7ce1f622c780
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
+	github.com/tailscale/gowebdav v0.0.0-20240130173557-d49b872b5126
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20240102155253-bf50773ba734
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240208184856-443a64766f61
 	github.com/tailscale/wireguard-go v0.0.0-20231121184858-cc193a0b3272
+	github.com/tailscale/xnet v0.0.0-20240117122442-62b9a7c569f9
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0

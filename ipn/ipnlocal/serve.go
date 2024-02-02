@@ -62,7 +62,7 @@ type serveHTTPContext struct {
 //
 // This is not used in userspace-networking mode.
 //
-// localListener is used by tailscale serve (TCP only) as well as the built-in web client.
+// localListener is used by tailscale serve (TCP only), the built-in web client and tailfs.
 // Most serve traffic and peer traffic for the web client are intercepted by netstack.
 // This listener exists purely for connections from the machine itself, as that goes via the kernel,
 // so we need to be in the kernel's listening/routing tables.
