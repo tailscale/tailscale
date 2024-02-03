@@ -162,7 +162,9 @@ func main() {
 		log.Fatal("set either the envvar TS_API_KEY or TS_OAUTH_ID and TS_OAUTH_SECRET")
 	}
 	var client *http.Client
-	if oiok {
+	if oiok && (oauthId != "" || oauthSecret != "") {
+		// Both should ideally be set, but if either are non-empty it means the user had an intent
+		// to set _something_, so they should receive the oauth error flow.
 		oauthConfig := &clientcredentials.Config{
 			ClientID:     oauthId,
 			ClientSecret: oauthSecret,
