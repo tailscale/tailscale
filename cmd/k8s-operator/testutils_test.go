@@ -54,6 +54,7 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "false"},
 			{Name: "TS_AUTH_ONCE", Value: "true"},
+			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
 		},
 		SecurityContext: &corev1.SecurityContext{
