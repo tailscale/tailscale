@@ -1991,7 +1991,7 @@ func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(wrappedKey))
 }
 
@@ -2045,7 +2045,7 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "network-lock disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
@@ -2069,7 +2069,7 @@ func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "network-lock local disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
@@ -2391,7 +2391,7 @@ func (h *Handler) serveDebugCapture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 	h.b.StreamDebugCapture(r.Context(), w)
 }
