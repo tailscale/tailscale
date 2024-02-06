@@ -39,6 +39,9 @@ func ByteSliceOf[T ~[]byte](x T) ByteSlice[T] {
 	return ByteSlice[T]{x}
 }
 
+// MapKey returns a unique key for a slice, based on its address and length.
+func (v ByteSlice[T]) MapKey() SliceMapKey[byte] { return mapKey(v.ж) }
+
 // Len returns the length of the slice.
 func (v ByteSlice[T]) Len() int {
 	return len(v.ж)
@@ -168,6 +171,22 @@ func (v SliceView[T, V]) SliceTo(i int) SliceView[T, V] { return SliceView[T, V]
 // Slice returns v[i:j]
 func (v SliceView[T, V]) Slice(i, j int) SliceView[T, V] { return SliceView[T, V]{v.ж[i:j]} }
 
+// SliceMapKey represents a comparable unique key for a slice, based on its
+// address and length. It can be used to key maps by slices but should only be
+// used when the underlying slice is immutable.
+//
+// Empty and nil slices have different keys.
+type SliceMapKey[T any] struct {
+	// t is the address of the first element, or nil if the slice is nil or
+	// empty.
+	t *T
+	// n is the length of the slice, or -1 if the slice is nil.
+	n int
+}
+
+// MapKey returns a unique key for a slice, based on its address and length.
+func (v SliceView[T, V]) MapKey() SliceMapKey[T] { return mapKey(v.ж) }
+
 // AppendTo appends the underlying slice values to dst.
 func (v SliceView[T, V]) AppendTo(dst []V) []V {
 	for _, x := range v.ж {
@@ -188,6 +207,20 @@ type Slice[T any] struct {
 	// It is named distinctively to make you think of how dangerous it is to escape
 	// to callers. You must not let callers be able to mutate it.
 	ж []T
+}
+
+// MapKey returns a unique key for a slice, based on its address and length.
+func (v Slice[T]) MapKey() SliceMapKey[T] { return mapKey(v.ж) }
+
+// mapKey returns a unique key for a slice, based on its address and length.
+func mapKey[T any](x []T) SliceMapKey[T] {
+	if x == nil {
+		return SliceMapKey[T]{nil, -1}
+	}
+	if len(x) == 0 {
+		return SliceMapKey[T]{nil, 0}
+	}
+	return SliceMapKey[T]{&x[0], len(x)}
 }
 
 // SliceOf returns a Slice for the provided slice for immutable values.
