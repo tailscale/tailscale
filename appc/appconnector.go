@@ -52,8 +52,8 @@ type AppConnector struct {
 	// mu guards the fields that follow
 	mu sync.Mutex
 
-	// domains is a map of lower case domain names with no trailing dot, to a
-	// list of resolved IP addresses.
+	// domains is a map of lower case domain names with no trailing dot, to an
+	// ordered list of resolved IP addresses.
 	domains map[string][]netip.Addr
 
 	// controlRoutes is the list of routes that were last supplied by control.
@@ -297,14 +297,15 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 
 		// advertise each address we have learned for the routed domain, that
 		// was not already known.
+		var toAdvertise []netip.Prefix
 		for _, addr := range addrs {
-			e.logf("[v2] observed routed DNS response for %s: %s", domain, addr)
-			if e.isAddrKnownLocked(domain, addr) {
-				continue
+			if !e.isAddrKnownLocked(domain, addr) {
+				toAdvertise = append(toAdvertise, netip.PrefixFrom(addr, addr.BitLen()))
 			}
-
-			e.scheduleAdvertisement(domain, addr)
 		}
+
+		e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
+		e.scheduleAdvertisement(domain, toAdvertise...)
 	}
 }
 
@@ -344,35 +345,58 @@ func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[stri
 // up future matches.
 // e.mu must be held.
 func (e *AppConnector) isAddrKnownLocked(domain string, addr netip.Addr) bool {
-	if slices.Contains(e.domains[domain], addr) {
+	if e.hasDomainAddrLocked(domain, addr) {
 		return true
 	}
 	for _, route := range e.controlRoutes {
 		if route.Contains(addr) {
 			// record the new address associated with the domain for faster matching in subsequent
 			// requests and for diagnostic records.
-			e.domains[domain] = append(e.domains[domain], addr)
+			e.addDomainAddrLocked(domain, addr)
 			return true
 		}
 	}
 	return false
-
 }
 
 // scheduleAdvertisement schedules an advertisement of the given address
 // associated with the given domain.
-func (e *AppConnector) scheduleAdvertisement(domain string, addr netip.Addr) {
+func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Prefix) {
 	e.queue.Add(func() {
-		if err := e.routeAdvertiser.AdvertiseRoute(netip.PrefixFrom(addr, addr.BitLen())); err != nil {
-			e.logf("failed to advertise route for %s: %v: %v", domain, addr, err)
+		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
+			e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
 			return
 		}
 		e.mu.Lock()
 		defer e.mu.Unlock()
 
-		if !slices.Contains(e.domains[domain], addr) {
-			e.logf("[v2] advertised route for %v: %v", domain, addr)
-			e.domains[domain] = append(e.domains[domain], addr)
+		for _, route := range routes {
+			if !route.IsSingleIP() {
+				continue
+			}
+			addr := route.Addr()
+			if !e.hasDomainAddrLocked(domain, addr) {
+				e.addDomainAddrLocked(domain, addr)
+				e.logf("[v2] advertised route for %v: %v", domain, addr)
+			}
 		}
 	})
+}
+
+// hasDomainAddrLocked returns true if the address has been observed in a
+// resolution of domain.
+func (e *AppConnector) hasDomainAddrLocked(domain string, addr netip.Addr) bool {
+	_, ok := slices.BinarySearchFunc(e.domains[domain], addr, compareAddr)
+	return ok
+}
+
+// addDomainAddrLocked adds the address to the list of addresses resolved for
+// domain and ensures the list remains sorted. Does not attempt to deduplicate.
+func (e *AppConnector) addDomainAddrLocked(domain string, addr netip.Addr) {
+	e.domains[domain] = append(e.domains[domain], addr)
+	slices.SortFunc(e.domains[domain], compareAddr)
+}
+
+func compareAddr(l, r netip.Addr) int {
+	return l.Compare(r)
 }
