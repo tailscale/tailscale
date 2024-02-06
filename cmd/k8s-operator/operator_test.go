@@ -68,7 +68,7 @@ func TestLoadBalancerClass(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, opts))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(opts))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
@@ -209,7 +209,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -233,7 +233,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	}
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 
 	// Change the tailscale-target-fqdn annotation which should update the
@@ -319,7 +319,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -343,7 +343,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	}
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 
 	// Change the tailscale-target-ip annotation which should update the
@@ -426,7 +426,7 @@ func TestAnnotations(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -534,7 +534,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
@@ -579,7 +579,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 	// ... but the service should have a LoadBalancer status.
 
@@ -665,7 +665,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
@@ -728,7 +728,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 
 	want = &corev1.Service{
@@ -806,7 +806,7 @@ func TestCustomHostname(t *testing.T) {
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -964,7 +964,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
 
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	o := configOpts{
 		stsName:         shortName,
 		secretName:      fullName,

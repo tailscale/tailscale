@@ -953,9 +953,6 @@ type settings struct {
 	// If set to true and, if this containerboot instance is a Kubernetes
 	// ingress proxy, set up rules to forward incoming cluster traffic to be
 	// forwarded to the ingress target in cluster.
-	// For L7 proxies via Ingress resource this means forwarding cluster
-	// traffic to this node's tailnet IP. For L3 proxies via Service this
-	// means forwarding cluster traffic to the ingress target.
 	AllowProxyingClusterTrafficViaIngress bool
 	// PodIP is the IP of the Pod if running in Kubernetes. This is used
 	// when setting up rules to proxy cluster traffic to cluster ingress
