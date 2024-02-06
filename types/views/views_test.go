@@ -166,3 +166,40 @@ func TestSliceEqual(t *testing.T) {
 		t.Error("got a[:2] == a[:1]")
 	}
 }
+
+// TestSliceMapKey tests that the MapKey method returns the same key for slices
+// with the same underlying slice and different keys for different slices or
+// with same underlying slice but different bounds.
+func TestSliceMapKey(t *testing.T) {
+	underlying := []string{"foo", "bar"}
+	nilSlice := SliceOf[string](nil)
+	empty := SliceOf([]string{})
+	u1 := SliceOf(underlying)
+	u2 := SliceOf(underlying)
+	u3 := SliceOf([]string{"foo", "bar"}) // different underlying slice
+
+	sub1 := u1.Slice(0, 1)
+	sub2 := u1.Slice(1, 2)
+	sub3 := u1.Slice(0, 2)
+
+	wantSame := []Slice[string]{u1, u2, sub3}
+	for i := 1; i < len(wantSame); i++ {
+		s0, si := wantSame[0], wantSame[i]
+		k0 := s0.MapKey()
+		ki := si.MapKey()
+		if ki != k0 {
+			t.Fatalf("wantSame[%d, %+v, %q) != wantSame[0, %+v, %q)", i, ki, si.AsSlice(), k0, s0.AsSlice())
+		}
+	}
+
+	wantDiff := []Slice[string]{nilSlice, empty, sub1, sub2, sub3, u3}
+	for i := 0; i < len(wantDiff); i++ {
+		for j := i + 1; j < len(wantDiff); j++ {
+			si, sj := wantDiff[i], wantDiff[j]
+			ki, kj := wantDiff[i].MapKey(), wantDiff[j].MapKey()
+			if ki == kj {
+				t.Fatalf("wantDiff[%d, %+v, %q] == wantDiff[%d, %+v, %q] ", i, ki, si.AsSlice(), j, kj, sj.AsSlice())
+			}
+		}
+	}
+}
