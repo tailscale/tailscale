@@ -26,6 +26,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/envknob"
+	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
@@ -185,18 +186,18 @@ type BucketedStatsOptions struct {
 
 	// If non-nil, Started maintains a counter of all requests which
 	// have begun processing.
-	Started *expvar.Map
+	Started *metrics.LabelMap
 
 	// If non-nil, Finished maintains a counter of all requests which
 	// have finished processing (that is, the HTTP handler has returned).
-	Finished *expvar.Map
+	Finished *metrics.LabelMap
 }
 
 // normalizePathRegex matches components in a HTTP request path
 // that should be replaced.
 //
 // See: https://regex101.com/r/WIfpaR/1 for the explainer and test cases.
-var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/]){2,})")
+var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/]){2,}|((n|k|u|L|t|S)[a-zA-Z0-9]{5,}(CNTRL|Djz1H|LV5CY|mxgaY|jNy1b)))")
 
 // NormalizedPath returns the given path with the following modifications:
 //
@@ -205,6 +206,7 @@ var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/
 //     replaced by an ellipsis
 //   - any path component containing a period with at least two characters
 //     after the period (i.e. an email or domain)
+//   - any path component consisting of a common Tailscale Stable ID.
 func NormalizedPath(p string) string {
 	// Fastpath: No hex sequences in there we might have to trim.
 	// Avoids allocating.
