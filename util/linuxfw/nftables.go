@@ -7,6 +7,7 @@
 package linuxfw
 
 import (
+	"cmp"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"github.com/josharian/native"
 	"golang.org/x/sys/unix"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/cmpx"
 )
 
 // DebugNetfilter prints debug information about netfilter rules to the
@@ -54,18 +54,18 @@ func DebugNetfilter(logf logger.Logf) error {
 			for _, ex := range rule.Exprs {
 				switch v := ex.(type) {
 				case *expr.Meta:
-					key := cmpx.Or(metaKeyNames[v.Key], "UNKNOWN")
+					key := cmp.Or(metaKeyNames[v.Key], "UNKNOWN")
 					logf("netfilter:     Meta: key=%s source_register=%v register=%d", key, v.SourceRegister, v.Register)
 
 				case *expr.Cmp:
-					op := cmpx.Or(cmpOpNames[v.Op], "UNKNOWN")
+					op := cmp.Or(cmpOpNames[v.Op], "UNKNOWN")
 					logf("netfilter:     Cmp: op=%s register=%d data=%s", op, v.Register, formatMaybePrintable(v.Data))
 
 				case *expr.Counter:
 					// don't print
 
 				case *expr.Verdict:
-					kind := cmpx.Or(verdictNames[v.Kind], "UNKNOWN")
+					kind := cmp.Or(verdictNames[v.Kind], "UNKNOWN")
 					logf("netfilter:     Verdict: kind=%s data=%s", kind, v.Chain)
 
 				case *expr.Target:

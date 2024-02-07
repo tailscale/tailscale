@@ -5,6 +5,7 @@
 package main // import "tailscale.com/cmd/derper"
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -34,7 +35,6 @@ import (
 	"tailscale.com/net/stunserver"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
-	"tailscale.com/util/cmpx"
 )
 
 var (
@@ -369,7 +369,7 @@ func defaultMeshPSKFile() string {
 }
 
 func rateLimitedListenAndServeTLS(srv *http.Server) error {
-	ln, err := net.Listen("tcp", cmpx.Or(srv.Addr, ":https"))
+	ln, err := net.Listen("tcp", cmp.Or(srv.Addr, ":https"))
 	if err != nil {
 		return err
 	}

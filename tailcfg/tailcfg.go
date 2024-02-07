@@ -7,6 +7,7 @@ package tailcfg
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,6 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/slicesx"
 )
@@ -475,7 +475,7 @@ func (n *Node) IsTagged() bool {
 
 // SharerOrUser Sharer if set, else User.
 func (n *Node) SharerOrUser() UserID {
-	return cmpx.Or(n.Sharer, n.User)
+	return cmp.Or(n.Sharer, n.User)
 }
 
 // IsTagged reports whether the node has any tags.

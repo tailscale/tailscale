@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"crypto/x509"
 	"encoding/json"
 	"net/http/httptest"
@@ -18,7 +19,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/must"
 )
 
@@ -111,7 +111,7 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 			rec := httptest.NewRecorder()
 			handleC2NTLSCertStatus(b, rec, httptest.NewRequest("GET", "/tls-cert-status?domain="+url.QueryEscape(tt.domain), nil))
 			res := rec.Result()
-			wantStatus := cmpx.Or(tt.wantStatus, 200)
+			wantStatus := cmp.Or(tt.wantStatus, 200)
 			if res.StatusCode != wantStatus {
 				t.Fatalf("status code = %v; want %v. Body: %s", res.Status, wantStatus, rec.Body.Bytes())
 			}

@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	_ "embed"
@@ -21,7 +22,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/web"
 	"tailscale.com/ipn"
-	"tailscale.com/util/cmpx"
 )
 
 var webCmd = &ffcli.Command{
@@ -160,5 +160,5 @@ func setRunWebClient(ctx context.Context, val bool) error {
 // urlOfListenAddr parses a given listen address into a formatted URL
 func urlOfListenAddr(addr string) string {
 	host, port, _ := net.SplitHostPort(addr)
-	return fmt.Sprintf("http://%s", net.JoinHostPort(cmpx.Or(host, "127.0.0.1"), port))
+	return fmt.Sprintf("http://%s", net.JoinHostPort(cmp.Or(host, "127.0.0.1"), port))
 }

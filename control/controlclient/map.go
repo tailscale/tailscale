@@ -4,6 +4,7 @@
 package controlclient
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,7 +27,6 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
@@ -130,7 +130,7 @@ func (ms *mapSession) occasionallyPrintSummary(summary string) {
 }
 
 func (ms *mapSession) clock() tstime.Clock {
-	return cmpx.Or[tstime.Clock](ms.altClock, tstime.StdClock{})
+	return cmp.Or[tstime.Clock](ms.altClock, tstime.StdClock{})
 }
 
 func (ms *mapSession) Close() {
@@ -171,7 +171,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	}
 
 	// Call Node.InitDisplayNames on any changed nodes.
-	initDisplayNames(cmpx.Or(resp.Node.View(), ms.lastNode), resp)
+	initDisplayNames(cmp.Or(resp.Node.View(), ms.lastNode), resp)
 
 	ms.patchifyPeersChanged(resp)
 
