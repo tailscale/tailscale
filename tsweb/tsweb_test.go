@@ -11,12 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/tstest"
+	"tailscale.com/util/must"
 	"tailscale.com/util/vizerror"
 )
 
@@ -666,5 +668,31 @@ func TestCleanRedirectURL(t *testing.T) {
 				t.Errorf("CleanRedirectURL(%q, %v) = %q, want %q", tc.url, tc.hosts, got, tc.want)
 			}
 		}
+	}
+}
+
+func TestBucket(t *testing.T) {
+	tcs := []struct {
+		path string
+		want string
+	}{
+		{"/map", "/map"},
+		{"/key?v=63", "/key"},
+		{"/map/a87e865a9d1c7", "/map/…"},
+		{"/machine/37fc1acb57f256b69b0d76749d814d91c68b241057c6b127fee3df37e4af111e", "/machine/…"},
+		{"/machine/37fc1acb57f256b69b0d76749d814d91c68b241057c6b127fee3df37e4af111e/map", "/machine/…/map"},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.path, func(t *testing.T) {
+			o := BucketedStatsOptions{}
+			bucket := (&o).bucketForRequest(&http.Request{
+				URL: must.Get(url.Parse(tc.path)),
+			})
+
+			if bucket != tc.want {
+				t.Errorf("bucket for %q was %q, want %q", tc.path, bucket, tc.want)
+			}
+		})
 	}
 }
