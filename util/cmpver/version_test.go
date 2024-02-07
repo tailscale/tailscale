@@ -163,16 +163,31 @@ func TestCompare(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got := cmpver.Compare(test.v1, test.v2)
 			if got != test.want {
-				t.Errorf("Compare(%v, %v) = %v, want %v", test.v1, test.v2, got, test.want)
+				t.Errorf("Compare(%q, %q) = %v, want %v", test.v1, test.v2, got, test.want)
 			}
+
 			// Reversing the comparison should reverse the outcome.
 			got2 := cmpver.Compare(test.v2, test.v1)
 			if got2 != -test.want {
-				t.Errorf("Compare(%v, %v) = %v, want %v", test.v2, test.v1, got2, -test.want)
+				t.Errorf("Compare(%q, %q) = %v, want %v", test.v2, test.v1, got2, -test.want)
 			}
+
+			if got, want := cmpver.Less(test.v1, test.v2), test.want < 0; got != want {
+				t.Errorf("Less(%q, %q) = %v, want %v", test.v1, test.v2, got, want)
+			}
+			if got, want := cmpver.Less(test.v2, test.v1), test.want > 0; got != want {
+				t.Errorf("Less(%q, %q) = %v, want %v", test.v2, test.v1, got, want)
+			}
+			if got, want := cmpver.LessEq(test.v1, test.v2), test.want <= 0; got != want {
+				t.Errorf("LessEq(%q, %q) = %v, want %v", test.v1, test.v2, got, want)
+			}
+			if got, want := cmpver.LessEq(test.v2, test.v1), test.want >= 0; got != want {
+				t.Errorf("LessEq(%q, %q) = %v, want %v", test.v2, test.v1, got, want)
+			}
+
 			// Check that version comparison does not allocate.
 			if n := testing.AllocsPerRun(100, func() { cmpver.Compare(test.v1, test.v2) }); n > 0 {
-				t.Errorf("Compare(%v, %v) got %v allocs per run", test.v1, test.v2, n)
+				t.Errorf("Compare(%q, %q) got %v allocs per run", test.v1, test.v2, n)
 			}
 		})
 	}
