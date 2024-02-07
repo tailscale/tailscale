@@ -681,6 +681,9 @@ func TestBucket(t *testing.T) {
 		{"/map/a87e865a9d1c7", "/map/…"},
 		{"/machine/37fc1acb57f256b69b0d76749d814d91c68b241057c6b127fee3df37e4af111e", "/machine/…"},
 		{"/machine/37fc1acb57f256b69b0d76749d814d91c68b241057c6b127fee3df37e4af111e/map", "/machine/…/map"},
+		{"/api/v2/tailnet/jeremiah@squish.com/devices", "/api/v2/tailnet/…/devices"},
+		{"/machine/ssh/wait/5227109621243650/to/7111899293970143/a/a9e4e04cc01b", "/machine/ssh/wait/…/to/…/a/…"},
+		{"/a/831a4bf39856?refreshed=true", "/a/…"},
 	}
 
 	for _, tc := range tcs {
