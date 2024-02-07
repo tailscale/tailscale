@@ -686,6 +686,7 @@ func TestBucket(t *testing.T) {
 		{"/a/831a4bf39856?refreshed=true", "/a/…"},
 		{"/c2n/nxaaa1CNTRL", "/c2n/…"},
 		{"/api/v2/tailnet/blueberries.com/keys/kxaDK21CNTRL", "/api/v2/tailnet/…/keys/…"},
+		{"/api/v2/tailnet/bloop@passkey/devices", "/api/v2/tailnet/…/devices"},
 	}
 
 	for _, tc := range tcs {

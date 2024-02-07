@@ -196,8 +196,8 @@ type BucketedStatsOptions struct {
 // normalizePathRegex matches components in a HTTP request path
 // that should be replaced.
 //
-// See: https://regex101.com/r/WIfpaR/1 for the explainer and test cases.
-var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/]){2,}|((n|k|u|L|t|S)[a-zA-Z0-9]{5,}(CNTRL|Djz1H|LV5CY|mxgaY|jNy1b)))")
+// See: https://regex101.com/r/WIfpaR/3 for the explainer and test cases.
+var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/]){2,}|((n|k|u|L|t|S)[a-zA-Z0-9]{5,}(CNTRL|Djz1H|LV5CY|mxgaY|jNy1b))|(([^\\/])+\\@passkey))")
 
 // NormalizedPath returns the given path with the following modifications:
 //
@@ -206,7 +206,8 @@ var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/
 //     replaced by an ellipsis
 //   - any path component containing a period with at least two characters
 //     after the period (i.e. an email or domain)
-//   - any path component consisting of a common Tailscale Stable ID.
+//   - any path component consisting of a common Tailscale Stable ID
+//   - any path segment *@passkey.
 func NormalizedPath(p string) string {
 	// Fastpath: No hex sequences in there we might have to trim.
 	// Avoids allocating.
