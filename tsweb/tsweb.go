@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,6 +176,52 @@ type ReturnHandler interface {
 	ServeHTTPReturn(http.ResponseWriter, *http.Request) error
 }
 
+// BucketedStatsOptions describes tsweb handler options surrounding
+// the generation of metrics, grouped into buckets.
+type BucketedStatsOptions struct {
+	// Bucket returns which bucket the given request is in.
+	// If nil, [NormalizedPath] is used to compute the bucket.
+	Bucket func(req *http.Request) string
+
+	// If non-nil, Started maintains a counter of all requests which
+	// have begun processing.
+	Started *expvar.Map
+
+	// If non-nil, Finished maintains a counter of all requests which
+	// have finished processing (that is, the HTTP handler has returned).
+	Finished *expvar.Map
+}
+
+var (
+	hexSequenceRegex = regexp.MustCompile("[a-fA-F0-9]{9,}")
+)
+
+// NormalizedPath returns the given path with any query parameters
+// removed, and any hex strings of 9 or more characters replaced
+// with an ellipsis.
+func NormalizedPath(p string) string {
+	// Fastpath: No hex sequences in there we might have to trim.
+	// Avoids allocating.
+	if hexSequenceRegex.FindStringIndex(p) == nil {
+		b, _, _ := strings.Cut(p, "?")
+		return b
+	}
+
+	// If we got here, there's at least one hex sequences we need to
+	// replace with an ellipsis.
+	replaced := hexSequenceRegex.ReplaceAllString(p, "…")
+	b, _, _ := strings.Cut(replaced, "?")
+	return b
+}
+
+func (o *BucketedStatsOptions) bucketForRequest(r *http.Request) string {
+	if o.Bucket != nil {
+		return o.Bucket(r)
+	}
+
+	return NormalizedPath(r.URL.Path)
+}
+
 type HandlerOptions struct {
 	QuietLoggingIfSuccessful bool // if set, do not log successfully handled HTTP requests (200 and 304 status codes)
 	Logf                     logger.Logf
@@ -188,6 +235,10 @@ type HandlerOptions struct {
 	// codes for handled responses.
 	// The keys are HTTP numeric response codes e.g. 200, 404, ...
 	StatusCodeCountersFull *expvar.Map
+
+	// If non-nil, BucketedStats computes and exposes statistics
+	// for each bucket based on the contained parameters.
+	BucketedStats *BucketedStatsOptions
 
 	// OnError is called if the handler returned a HTTPError. This
 	// is intended to be used to present pretty error pages if
@@ -248,6 +299,14 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		UserAgent:  r.UserAgent(),
 		Referer:    r.Referer(),
 		RequestID:  RequestIDFromContext(r.Context()),
+	}
+
+	var bucket string
+	if bs := h.opts.BucketedStats; bs != nil {
+		bucket = bs.bucketForRequest(r)
+		if bs.Started != nil {
+			bs.Started.Add(bucket, 1)
+		}
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
@@ -330,6 +389,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			msg.Code = http.StatusInternalServerError
 			http.Error(lw, errorMessage, msg.Code)
 		}
+	}
+
+	if bs := h.opts.BucketedStats; bs != nil && bs.Finished != nil {
+		bs.Finished.Add(bucket, 1)
 	}
 
 	if !h.opts.QuietLoggingIfSuccessful || (msg.Code != http.StatusOK && msg.Code != http.StatusNotModified) {
