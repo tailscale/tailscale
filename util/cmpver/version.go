@@ -24,6 +24,20 @@ import (
 	"strings"
 )
 
+// Less reports whether v1 is less than v2.
+//
+// Note that "12" is less than "12.0".
+func Less(v1, v2 string) bool {
+	return Compare(v1, v2) < 0
+}
+
+// LessEq reports whether v1 is less than or equal to v2.
+//
+// Note that "12" is less than "12.0".
+func LessEq(v1, v2 string) bool {
+	return Compare(v1, v2) <= 0
+}
+
 func isnum(r rune) bool {
 	return r >= '0' && r <= '9'
 }
@@ -32,9 +46,12 @@ func notnum(r rune) bool {
 	return !isnum(r)
 }
 
-// Compare returns an integer comparing two strings as version
-// numbers. The result will be 0 if v1==v2, -1 if v1 < v2, and +1 if
-// v1 > v2.
+// Compare returns an integer comparing two strings as version numbers.
+// The result will be -1, 0, or 1 representing the sign of v1 - v2:
+//
+//	Compare(v1, v2)  < 0  if v1  < v2
+//	                == 0  if v1 == v2
+//	                 > 0  if v1  > v2
 func Compare(v1, v2 string) int {
 	var (
 		f1, f2 string
