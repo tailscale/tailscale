@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +24,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
 )
 
@@ -316,7 +316,7 @@ func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 	// their netmap. We've historically (2021-01..2023-08) always shown the
 	// sharer's name in the UI. Perhaps we want to show both here? But the CLI's
 	// a bit space constrained.
-	uid := cmpx.Or(ps.AltSharerUserID, ps.UserID)
+	uid := cmp.Or(ps.AltSharerUserID, ps.UserID)
 	if uid.IsZero() {
 		return "-"
 	}

@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/netip"
 	"reflect"
@@ -16,7 +17,6 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cloudenv"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
 )
 
@@ -330,7 +330,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			verOS := cmpx.Or(tt.os, "linux")
+			verOS := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
 			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {

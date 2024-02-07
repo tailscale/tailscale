@@ -7,6 +7,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/util/cmpx"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 		log.Fatal("at least one tag must be specified")
 	}
 
-	baseURL := cmpx.Or(os.Getenv("TS_BASE_URL"), "https://api.tailscale.com")
+	baseURL := cmp.Or(os.Getenv("TS_BASE_URL"), "https://api.tailscale.com")
 
 	credentials := clientcredentials.Config{
 		ClientID:     clientID,

@@ -5,6 +5,7 @@
 package varz
 
 import (
+	"cmp"
 	"expvar"
 	"fmt"
 	"io"
@@ -18,7 +19,6 @@ import (
 	"time"
 
 	"tailscale.com/metrics"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/version"
 )
 
@@ -100,10 +100,10 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 
 	switch v := kv.Value.(type) {
 	case *expvar.Int:
-		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmpx.Or(typ, "counter"), name, v.Value())
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "counter"), name, v.Value())
 		return
 	case *expvar.Float:
-		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmpx.Or(typ, "gauge"), name, v.Value())
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmp.Or(typ, "gauge"), name, v.Value())
 		return
 	case *metrics.Set:
 		v.Do(func(kv expvar.KeyValue) {
@@ -192,7 +192,7 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 		// IntMap uses expvar.Map on the inside, which presorts
 		// keys. The output ordering is deterministic.
 		v.Do(func(kv expvar.KeyValue) {
-			fmt.Fprintf(w, "%s{%s=%q} %v\n", name, cmpx.Or(v.Label, "label"), kv.Key, kv.Value)
+			fmt.Fprintf(w, "%s{%s=%q} %v\n", name, cmp.Or(v.Label, "label"), kv.Key, kv.Value)
 		})
 	case *metrics.Histogram:
 		v.PromExport(w, name)

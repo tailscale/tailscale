@@ -5,6 +5,7 @@ package cli
 
 import (
 	"bytes"
+	stdcmp "cmp"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -24,7 +25,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/version/distro"
 )
 
@@ -758,7 +758,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var warnBuf tstest.MemLogger
-			goos := cmpx.Or(tt.goos, "linux")
+			goos := stdcmp.Or(tt.goos, "linux")
 			st := tt.st
 			if st == nil {
 				st = new(ipnstate.Status)

@@ -7,6 +7,7 @@ package tailscale
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -37,7 +38,6 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
-	"tailscale.com/util/cmpx"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -479,7 +479,7 @@ func (lc *LocalClient) DebugPortmap(ctx context.Context, opts *DebugPortmapOpts)
 		opts = &DebugPortmapOpts{}
 	}
 
-	vals.Set("duration", cmpx.Or(opts.Duration, 5*time.Second).String())
+	vals.Set("duration", cmp.Or(opts.Duration, 5*time.Second).String())
 	vals.Set("type", opts.Type)
 	vals.Set("log_http", strconv.FormatBool(opts.LogHTTP))
 

@@ -5,6 +5,7 @@ package ipnlocal
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -29,7 +30,6 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
@@ -157,7 +157,7 @@ func TestGetServeHandler(t *testing.T) {
 				},
 				TLS: &tls.ConnectionState{ServerName: serverName},
 			}
-			port := cmpx.Or(tt.port, 443)
+			port := cmp.Or(tt.port, 443)
 			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
 				DestPort: port,
 			}))

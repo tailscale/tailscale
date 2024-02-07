@@ -7,6 +7,7 @@ package tsweb
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"expvar"
@@ -30,7 +31,6 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/vizerror"
 )
 
@@ -156,7 +156,7 @@ func (h Port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Redirect authorized user to the debug handler.
 		path = "/debug/"
 	}
-	host := cmpx.Or(h.FQDN, r.Host)
+	host := cmp.Or(h.FQDN, r.Host)
 	target := "https://" + host + path
 	http.Redirect(w, r, target, http.StatusFound)
 }
