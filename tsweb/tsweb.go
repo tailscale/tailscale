@@ -192,24 +192,30 @@ type BucketedStatsOptions struct {
 	Finished *expvar.Map
 }
 
-var (
-	hexSequenceRegex = regexp.MustCompile("[a-fA-F0-9]{9,}")
-)
+// normalizePathRegex matches components in a HTTP request path
+// that should be replaced.
+//
+// See: https://regex101.com/r/WIfpaR/1 for the explainer and test cases.
+var normalizePathRegex = regexp.MustCompile("([a-fA-F0-9]{9,}|([^\\/])+\\.([^\\/]){2,})")
 
-// NormalizedPath returns the given path with any query parameters
-// removed, and any hex strings of 9 or more characters replaced
-// with an ellipsis.
+// NormalizedPath returns the given path with the following modifications:
+//
+//   - any query parameters are removed
+//   - any path component with a hex string of 9 or more characters is
+//     replaced by an ellipsis
+//   - any path component containing a period with at least two characters
+//     after the period (i.e. an email or domain)
 func NormalizedPath(p string) string {
 	// Fastpath: No hex sequences in there we might have to trim.
 	// Avoids allocating.
-	if hexSequenceRegex.FindStringIndex(p) == nil {
+	if normalizePathRegex.FindStringIndex(p) == nil {
 		b, _, _ := strings.Cut(p, "?")
 		return b
 	}
 
 	// If we got here, there's at least one hex sequences we need to
 	// replace with an ellipsis.
-	replaced := hexSequenceRegex.ReplaceAllString(p, "…")
+	replaced := normalizePathRegex.ReplaceAllString(p, "…")
 	b, _, _ := strings.Cut(replaced, "?")
 	return b
 }
