@@ -293,6 +293,17 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	if err != nil {
 		startlog.Fatal("could not create connector reconciler: %v", err)
 	}
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.ProxyClass{}).
+		Complete(&ProxyClassReconciler{
+			Client:   mgr.GetClient(),
+			recorder: eventRecorder,
+			logger:   zlog.Named("proxyclass-reconciler"),
+			clock:    tstime.DefaultClock{},
+		})
+	if err != nil {
+		startlog.Fatal("could not create proxyclass reconciler: %v", err)
+	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
@@ -321,6 +332,7 @@ func parentFromObjectLabels(o client.Object) types.NamespacedName {
 		Name:      ls[LabelParentName],
 	}
 }
+
 func managedResourceHandlerForType(typ string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
 		if !isManagedByType(o, typ) {
