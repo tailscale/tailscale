@@ -15,7 +15,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/mak"
 )
 
 func TestLoadBalancerClass(t *testing.T) {
@@ -69,7 +71,7 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, then verify reconcile again and verify
@@ -210,7 +212,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
@@ -234,7 +236,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 	// Change the tailscale-target-fqdn annotation which should update the
 	// StatefulSet
@@ -320,7 +322,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
@@ -344,7 +346,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 	// Change the tailscale-target-ip annotation which should update the
 	// StatefulSet
@@ -427,7 +429,7 @@ func TestAnnotations(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
@@ -535,7 +537,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, since it would have normally happened at
@@ -580,7 +582,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 	// ... but the service should have a LoadBalancer status.
 
 	want = &corev1.Service{
@@ -666,7 +668,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, then verify reconcile again and verify
@@ -729,7 +731,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 	want = &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -807,7 +809,7 @@ func TestCustomHostname(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, o))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
@@ -920,7 +922,104 @@ func TestCustomPriorityClassName(t *testing.T) {
 		clusterTargetIP:   "10.20.30.40",
 	}
 
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
+}
+
+func TestProxyClassForService(t *testing.T) {
+	// Setup
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
+		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
+			Labels:      map[string]string{"foo": "bar"},
+			Annotations: map[string]string{"bar.io/foo": "some-val"},
+			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc).
+		WithStatusSubresource(pc).
+		Build()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// 1. A new tailscale LoadBalancer Service is created without any
+	// ProxyClass. Resources get created for it as usual.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+	})
+	expectReconciled(t, sr, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	opts := configOpts{
+		stsName:         shortName,
+		secretName:      fullName,
+		namespace:       "default",
+		parentType:      "svc",
+		hostname:        "default-test",
+		clusterTargetIP: "10.20.30.40",
+	}
+	expectEqual(t, fc, expectedSecret(t, opts))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
+	expectEqual(t, fc, expectedSTS(t, fc, opts))
+
+	// 2. The Service gets updated with tailscale.com/proxy-class label
+	// pointing at the 'custom-metadata' ProxyClass. The ProxyClass is not
+	// yet ready, so no changes are actually applied to the proxy resources.
+	mustUpdate(t, fc, "default", "test", func(svc *corev1.Service) {
+		mak.Set(&svc.Labels, LabelProxyClass, "custom-metadata")
+	})
+	expectReconciled(t, sr, "default", "test")
+	expectEqual(t, fc, expectedSTS(t, fc, opts))
+
+	// 3. ProxyClass is set to Ready, the Service gets reconciled by the
+	// services-reconciler and the customization from the ProxyClass is
+	// applied to the proxy resources.
+	mustUpdateStatus(t, fc, "", "custom-metadata", func(pc *tsapi.ProxyClass) {
+		pc.Status = tsapi.ProxyClassStatus{
+			Conditions: []tsapi.ConnectorCondition{{
+				Status:             metav1.ConditionTrue,
+				Type:               tsapi.ProxyClassready,
+				ObservedGeneration: pc.Generation,
+			}}}
+	})
+	opts.proxyClass = pc.Name
+	expectReconciled(t, sr, "default", "test")
+	expectEqual(t, fc, expectedSTS(t, fc, opts))
+
+	// 4. tailscale.com/proxy-class label is removed from the Service, the
+	// configuration from the ProxyClass is removed from the cluster
+	// resources.
+	mustUpdate(t, fc, "default", "test", func(svc *corev1.Service) {
+		delete(svc.Labels, LabelProxyClass)
+	})
+	opts.proxyClass = ""
+	expectReconciled(t, sr, "default", "test")
+	expectEqual(t, fc, expectedSTS(t, fc, opts))
 }
 
 func TestDefaultLoadBalancer(t *testing.T) {
@@ -973,7 +1072,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
 	}
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 }
 
 func TestProxyFirewallMode(t *testing.T) {
@@ -1026,7 +1125,7 @@ func TestProxyFirewallMode(t *testing.T) {
 		firewallMode:    "nftables",
 		clusterTargetIP: "10.20.30.40",
 	}
-	expectEqual(t, fc, expectedSTS(o))
+	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 }
 

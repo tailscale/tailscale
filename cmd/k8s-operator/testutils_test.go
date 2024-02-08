@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -47,9 +48,11 @@ type configOpts struct {
 	confFileHash                                   string
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
+	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
 }
 
-func expectedSTS(opts configOpts) *appsv1.StatefulSet {
+func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
+	t.Helper()
 	tsContainer := corev1.Container{
 		Name:  "tailscale",
 		Image: "tailscale/tailscale",
@@ -141,7 +144,7 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 		})
 		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"})
 	}
-	return &appsv1.StatefulSet{
+	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
 			APIVersion: "apps/v1",
@@ -194,9 +197,20 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 			},
 		},
 	}
+	// If opts.proxyClass is set, retrieve the ProxyClass and apply
+	// configuration from that to the StatefulSet.
+	if opts.proxyClass != "" {
+		t.Logf("applying configuration from ProxyClass %s", opts.proxyClass)
+		proxyClass := new(tsapi.ProxyClass)
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: opts.proxyClass}, proxyClass); err != nil {
+			t.Fatalf("error getting ProxyClass: %v", err)
+		}
+		return applyProxyClassToStatefulSet(proxyClass, ss)
+	}
+	return ss
 }
 
-func expectedSTSUserspace(opts configOpts) *appsv1.StatefulSet {
+func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
 	tsContainer := corev1.Container{
 		Name:  "tailscale",
 		Image: "tailscale/tailscale",
@@ -213,7 +227,7 @@ func expectedSTSUserspace(opts configOpts) *appsv1.StatefulSet {
 	annots := make(map[string]string)
 	volumes := []corev1.Volume{{Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}}}
 	annots["tailscale.com/operator-last-set-hostname"] = opts.hostname
-	return &appsv1.StatefulSet{
+	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
 			APIVersion: "apps/v1",
@@ -255,6 +269,17 @@ func expectedSTSUserspace(opts configOpts) *appsv1.StatefulSet {
 			},
 		},
 	}
+	// If opts.proxyClass is set, retrieve the ProxyClass and apply
+	// configuration from that to the StatefulSet.
+	if opts.proxyClass != "" {
+		t.Logf("applying configuration from ProxyClass %s", opts.proxyClass)
+		proxyClass := new(tsapi.ProxyClass)
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: opts.proxyClass}, proxyClass); err != nil {
+			t.Fatalf("error getting ProxyClass: %v", err)
+		}
+		return applyProxyClassToStatefulSet(proxyClass, ss)
+	}
+	return ss
 }
 
 func expectedHeadlessService(name string, parentType string) *corev1.Service {
