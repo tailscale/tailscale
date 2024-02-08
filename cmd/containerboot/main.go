@@ -123,6 +123,7 @@ func main() {
 		UserspaceMode:            defaultBool("TS_USERSPACE", true),
 		StateDir:                 defaultEnv("TS_STATE_DIR", ""),
 		AcceptDNS:                defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		WebUI:                    defaultEnvBoolPointer("TS_WEBUI"),
 		KubeSecret:               defaultEnv("TS_KUBE_SECRET", "tailscale"),
 		SOCKSProxyAddr:           defaultEnv("TS_SOCKS5_SERVER", ""),
 		HTTPProxyAddr:            defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
@@ -703,6 +704,11 @@ func tailscaleSet(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
+	if cfg.WebUI != nil && *cfg.WebUI {
+		args = append(args, "--webclient=true")
+	} else {
+		args = append(args, "--webclient=false")
+	}
 	log.Printf("Running 'tailscale set'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
@@ -889,6 +895,7 @@ type settings struct {
 	UserspaceMode            bool
 	StateDir                 string
 	AcceptDNS                *bool
+	WebUI                    *bool
 	KubeSecret               string
 	SOCKSProxyAddr           string
 	HTTPProxyAddr            string
