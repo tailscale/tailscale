@@ -241,8 +241,9 @@ type LocalBackend struct {
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
 	keyExpired       bool
-	authURL          string // cleared on Notify
-	authURLSticky    string // not cleared on Notify
+	authURL          string    // cleared on Notify
+	authURLSticky    string    // not cleared on Notify
+	authURLTime      time.Time // when the authURL was received from the control server
 	interact         bool
 	egg              bool
 	prevIfState      *interfaces.State
@@ -1096,6 +1097,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if st.URL != "" {
 		b.authURL = st.URL
 		b.authURLSticky = st.URL
+		b.authURLTime = b.clock.Now()
 	}
 	if (wasBlocked || b.seamlessRenewalEnabled()) && st.LoginFinished() {
 		// Interactive login finished successfully (URL visited).
@@ -2784,11 +2786,15 @@ func (b *LocalBackend) StartLoginInteractive() {
 	b.assertClientLocked()
 	b.interact = true
 	url := b.authURL
+	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
 	cc := b.cc
 	b.mu.Unlock()
 	b.logf("StartLoginInteractive: url=%v", url != "")
 
-	if url != "" {
+	// Only use an authURL if it was sent down from control in the last
+	// 6 days and 23 hours. Avoids using a stale URL that is no longer valid
+	// server-side. Server-side URLs expire after 7 days.
+	if url != "" && timeSinceAuthURLCreated < ((7*24*time.Hour)-(1*time.Hour)) {
 		b.popBrowserAuthNow()
 	} else {
 		cc.Login(nil, b.loginFlags|controlclient.LoginInteractive)
@@ -4166,6 +4172,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 	if newState == ipn.Running {
 		b.authURL = ""
 		b.authURLSticky = ""
+		b.authURLTime = time.Time{}
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
@@ -4408,6 +4415,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.keyExpired = false
 	b.authURL = ""
 	b.authURLSticky = ""
+	b.authURLTime = time.Time{}
 	b.activeLogin = ""
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
 	b.enterStateLockedOnEntry(ipn.Stopped)
