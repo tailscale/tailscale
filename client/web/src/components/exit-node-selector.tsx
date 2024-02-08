@@ -180,7 +180,7 @@ export default function ExitNodeSelector({
       )}
       {pending && (
         <p className="text-white p-3">
-          Pending approval to run as exit node. This device won't be usable as
+          Pending approval to run as exit node. This device won’t be usable as
           an exit node until then.
         </p>
       )}

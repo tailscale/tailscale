@@ -190,7 +190,7 @@ function LoginPopoverContent({
                     ) : (
                       // ACLs allow access, but user can't connect.
                       <>
-                        Cannot access this device's Tailscale IP. Make sure you
+                        Cannot access this device’s Tailscale IP. Make sure you
                         are connected to your tailnet, and that your policy file
                         allows access.
                       </>
@@ -209,7 +209,7 @@ function LoginPopoverContent({
                 // User can connect to Tailcale IP; sign in when ready.
                 <>
                   <p className="text-gray-500 text-xs">
-                    You can see most of this device's details. To make changes,
+                    You can see most of this device’s details. To make changes,
                     you need to sign in.
                   </p>
                   {isHTTPS && (
