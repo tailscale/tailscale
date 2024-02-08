@@ -1,0 +1,15 @@
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyClass
+metadata:
+  name: prod
+spec:
+  statefulSet:
+    annotations:
+      platform-component: infra 
+    pod:
+      labels:
+        team: eng
+      nodeSelector:
+        beta.kubernetes.io/os: "linux"
+      imagePullSecrets:
+      - name: "foo"

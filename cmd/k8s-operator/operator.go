@@ -233,7 +233,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
 	svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
-	// If a ProxyClassChanges, enqueue all Services labelled with that
+	// If a ProxyClassChanges, enqueue all Services labeled with that
 	// ProxyClass's name.
 	proxyClassFilterForSvc := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForSvc(mgr.GetClient(), startlog))
 
@@ -266,7 +266,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		startlog.Fatalf("could not create service reconciler: %v", err)
 	}
 	ingressChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("ingress"))
-	// If a ProxyClassChanges, enqueue all Ingresses labelled with that
+	// If a ProxyClassChanges, enqueue all Ingresses labeled with that
 	// ProxyClass's name.
 	proxyClassFilterForIngress := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForIngress(mgr.GetClient(), startlog))
 	err = builder.
@@ -357,7 +357,7 @@ func managedResourceHandlerForType(typ string) handler.MapFunc {
 }
 
 // proxyClassHandlerForSvc returns a handler that, for a given ProxyClass,
-// returns a list of reconcile requests for all Services labelled with
+// returns a list of reconcile requests for all Services labeled with
 // tailscale.com/proxy-class: <proxy class name>.
 func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
@@ -378,7 +378,7 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger) handle
 }
 
 // proxyClassHandlerForIngress returns a handler that, for a given ProxyClass,
-// returns a list of reconcile requests for all Ingresses labelled with
+// returns a list of reconcile requests for all Ingresses labeled with
 // tailscale.com/proxy-class: <proxy class name>.
 func proxyClassHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
@@ -399,8 +399,8 @@ func proxyClassHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) ha
 }
 
 // proxyClassHandlerForConnector returns a handler that, for a given ProxyClass,
-// returns a list of reconcile requests for all Connectors labelled with
-// tailscale.com/proxy-class: <proxy class name>.
+// returns a list of reconcile requests for all Connectors that have
+// .spec.proxyClass set.
 func proxyClassHandlerForConnector(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		connList := new(tsapi.ConnectorList)

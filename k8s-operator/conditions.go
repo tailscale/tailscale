@@ -31,7 +31,7 @@ func RemoveConnectorCondition(conn *tsapi.Connector, conditionType tsapi.Connect
 	})
 }
 
-// SetDNSConfigCondition ensures that DNSConfig status has a condition with the
+// SetProxyClassCondition ensures that ProxyClass status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.
 func SetProxyClassCondition(pc *tsapi.ProxyClass, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {

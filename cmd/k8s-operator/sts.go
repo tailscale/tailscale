@@ -646,11 +646,20 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 		base.Resources = overlay.Resources
 		return base
 	}
-	ss.Spec.Template.Spec.Containers[0] = updateContainer(wantsPod.TailscaleContainer, ss.Spec.Template.Spec.Containers[0])
-	if initContainers := ss.Spec.Template.Spec.InitContainers; len(initContainers) == 1 {
-		ss.Spec.Template.Spec.InitContainers[0] = updateContainer(wantsPod.TailscaleInitContainer, initContainers[0])
+	for i, c := range ss.Spec.Template.Spec.Containers {
+		if c.Name == "tailscale" {
+			ss.Spec.Template.Spec.Containers[i] = updateContainer(wantsPod.TailscaleContainer, ss.Spec.Template.Spec.Containers[i])
+			break
+		}
 	}
-
+	if initContainers := ss.Spec.Template.Spec.InitContainers; len(initContainers) > 0 {
+		for i, c := range initContainers {
+			if c.Name == "sysctler" {
+				ss.Spec.Template.Spec.InitContainers[i] = updateContainer(wantsPod.TailscaleInitContainer, initContainers[i])
+				break
+			}
+		}
+	}
 	return ss
 }
 
