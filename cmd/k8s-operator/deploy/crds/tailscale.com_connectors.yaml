@@ -54,6 +54,9 @@ spec:
                   description: Hostname is the tailnet hostname that should be assigned to the Connector node. If unset, hostname defaults to <connector name>-connector. Hostname can contain lower case letters, numbers and dashes, it must not start or end with a dash and must be between 2 and 63 characters long.
                   type: string
                   pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
+                proxyClass:
+                  description: ProxyClass is the name of the ProxyClass custom resource that contains configuration options that should be applied to the resources created for this Connector. If unset, the operator will create resources with the default configuration.
+                  type: string
                 subnetRouter:
                   description: SubnetRouter defines subnet routes that the Connector node should expose to tailnet. If unset, none are exposed. https://tailscale.com/kb/1019/subnets/
                   type: object

@@ -68,6 +68,12 @@ type ConnectorSpec struct {
 	// and 63 characters long.
 	// +optional
 	Hostname Hostname `json:"hostname,omitempty"`
+	// ProxyClass is the name of the ProxyClass custom resource that
+	// contains configuration options that should be applied to the
+	// resources created for this Connector. If unset, the operator will
+	// create resources with the default configuration.
+	// +optional
+	ProxyClass string `json:"proxyClass,omitempty"`
 	// SubnetRouter defines subnet routes that the Connector node should
 	// expose to tailnet. If unset, none are exposed.
 	// https://tailscale.com/kb/1019/subnets/
@@ -180,5 +186,6 @@ type ConnectorCondition struct {
 type ConnectorConditionType string
 
 const (
-	ConnectorReady ConnectorConditionType = `ConnectorReady`
+	ConnectorReady  ConnectorConditionType = `ConnectorReady`
+	ProxyClassready ConnectorConditionType = `ProxyClassReady`
 )
