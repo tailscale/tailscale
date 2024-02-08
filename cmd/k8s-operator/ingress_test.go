@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -101,7 +102,7 @@ func TestTailscaleIngress(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
-	expectEqual(t, fc, expectedSTSUserspace(opts))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 
 	// 2. Ingress status gets updated with ingress proxy's MagicDNS name
 	// once that becomes available.
@@ -125,7 +126,7 @@ func TestTailscaleIngress(t *testing.T) {
 	})
 	opts.shouldEnableForwardingClusterTrafficViaIngress = true
 	expectReconciled(t, ingR, "default", "test")
-	expectEqual(t, fc, expectedSTS(opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
 	// 4. Resources get cleaned up when Ingress class is unset
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
@@ -136,4 +137,134 @@ func TestTailscaleIngress(t *testing.T) {
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+}
+
+func TestTailscaleIngressWithProxyClass(t *testing.T) {
+	// Setup
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
+		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
+			Labels:      map[string]string{"foo": "bar"},
+			Annotations: map[string]string{"bar.io/foo": "some-val"},
+			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+	}
+	tsIngressClass := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "tailscale"}, Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"}}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc, tsIngressClass).
+		WithStatusSubresource(pc).
+		Build()
+	ft := &fakeTSClient{}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// 1. Ingress is created with no ProxyClass specified, default proxy
+	// resources get configured.
+	ing := &networkingv1.Ingress{
+		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To("tailscale"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "test",
+					Port: networkingv1.ServiceBackendPort{
+						Number: 8080,
+					},
+				},
+			},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"default-test"}},
+			},
+		},
+	}
+	mustCreate(t, fc, ing)
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "1.2.3.4",
+			Ports: []corev1.ServicePort{{
+				Port: 8080,
+				Name: "http"},
+			},
+		},
+	})
+
+	expectReconciled(t, ingR, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
+	opts := configOpts{
+		stsName:    shortName,
+		secretName: fullName,
+		namespace:  "default",
+		parentType: "ingress",
+		hostname:   "default-test",
+	}
+	serveConfig := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{"${TS_CERT_DOMAIN}:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://1.2.3.4:8080/"}}}},
+	}
+	opts.serveConfig = serveConfig
+
+	expectEqual(t, fc, expectedSecret(t, opts))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+
+	// 2. Ingress is updated to specify a ProxyClass, ProxyClass is not yet
+	// ready, so proxy resource configuration does not change.
+	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
+		mak.Set(&ing.ObjectMeta.Labels, LabelProxyClass, "custom-metadata")
+	})
+	expectReconciled(t, ingR, "default", "test")
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+
+	// 3. ProxyClass is set to Ready by proxy-class reconciler. Ingress get
+	// reconciled and configuration from the ProxyClass is applied to the
+	// created proxy resources.
+	mustUpdateStatus(t, fc, "", "custom-metadata", func(pc *tsapi.ProxyClass) {
+		pc.Status = tsapi.ProxyClassStatus{
+			Conditions: []tsapi.ConnectorCondition{{
+				Status:             metav1.ConditionTrue,
+				Type:               tsapi.ProxyClassready,
+				ObservedGeneration: pc.Generation,
+			}}}
+	})
+	expectReconciled(t, ingR, "default", "test")
+	opts.proxyClass = pc.Name
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+
+	// 4. tailscale.com/proxy-class label is removed from the Ingress, the
+	// Ingress gets reconciled and the custom ProxyClass configuration is
+	// removed from the proxy resources.
+	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
+		delete(ing.ObjectMeta.Labels, LabelProxyClass)
+	})
+	expectReconciled(t, ingR, "default", "test")
+	opts.proxyClass = ""
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 }
