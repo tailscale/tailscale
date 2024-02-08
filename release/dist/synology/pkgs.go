@@ -44,7 +44,11 @@ func (t *target) Build(b *dist.Build) ([]string, error) {
 func (t *target) buildSPK(b *dist.Build, inner *innerPkg) ([]string, error) {
 	filename := fmt.Sprintf("tailscale-%s-%s-%d-dsm%d.spk", t.filenameArch, b.Version.Short, b.Version.Synology[t.dsmMajorVersion], t.dsmMajorVersion)
 	out := filepath.Join(b.Out, filename)
-	log.Printf("Building %s", filename)
+	if t.packageCenter {
+		log.Printf("Building %s (for package center)", filename)
+	} else {
+		log.Printf("Building %s (for sideloading)", filename)
+	}
 
 	privFile := fmt.Sprintf("privilege-dsm%d", t.dsmMajorVersion)
 	if t.packageCenter && t.dsmMajorVersion == 7 {

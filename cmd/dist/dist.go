@@ -33,6 +33,9 @@ func getTargets() ([]dist.Target, error) {
 	// Since only we can provide packages to Synology for
 	// distribution, we default to building the "sideload" variant of
 	// packages that we distribute on pkgs.tailscale.com.
+	//
+	// To build for package center, run
+	// ./tool/go run ./cmd/dist build --synology-package-center synology
 	ret = append(ret, synology.Targets(synologyPackageCenter, nil)...)
 	return ret, nil
 }
