@@ -41,7 +41,7 @@ export default function LoginView({ data }: { data: NodeData }) {
         <>
           <div className="mb-6">
             <p className="text-gray-700">
-              Your device's key has expired. Reauthenticate this device by
+              Your device’s key has expired. Reauthenticate this device by
               logging in again, or{" "}
               <a
                 href="https://tailscale.com/kb/1028/key-expiry"

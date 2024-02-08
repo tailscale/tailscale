@@ -61,7 +61,7 @@ export function ChangelogText({ version }: { version?: string }) {
       <a href="https://tailscale.com/changelog/" className="link">
         release notes
       </a>{" "}
-      to find out what's new!
+      to find out what’s new!
     </>
   )
 }

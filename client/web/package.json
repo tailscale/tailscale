@@ -25,6 +25,7 @@
     "autoprefixer": "^10.4.15",
     "eslint": "^8.23.1",
     "eslint-config-react-app": "^7.0.1",
+    "eslint-plugin-curly-quotes": "^1.0.4",
     "jsdom": "^23.0.1",
     "postcss": "^8.4.31",
     "prettier": "^2.5.1",
@@ -50,9 +51,11 @@
       "react-app"
     ],
     "plugins": [
+      "curly-quotes",
       "react-hooks"
     ],
     "rules": {
+      "curly-quotes/no-straight-quotes": "warn",
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "error"
     },
