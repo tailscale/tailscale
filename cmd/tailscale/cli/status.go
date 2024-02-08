@@ -228,8 +228,8 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	Stdout.Write(buf.Bytes())
 	if locBasedExitNode {
-		println()
-		println("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
+		outln()
+		printf("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
 	}
 	if len(st.Health) > 0 {
 		outln()
