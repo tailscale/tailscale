@@ -31,20 +31,22 @@ import (
 // confgOpts contains configuration options for creating cluster resources for
 // Tailscale proxies.
 type configOpts struct {
-	stsName                    string
-	secretName                 string
-	hostname                   string
-	namespace                  string
-	parentType                 string
-	priorityClassName          string
-	firewallMode               string
-	tailnetTargetIP            string
-	tailnetTargetFQDN          string
-	clusterTargetIP            string
-	subnetRoutes               string
-	isExitNode                 bool
-	shouldUseDeclarativeConfig bool // tailscaled in proxy should be configured using config file
-	confFileHash               string
+	stsName                                        string
+	secretName                                     string
+	hostname                                       string
+	namespace                                      string
+	parentType                                     string
+	priorityClassName                              string
+	firewallMode                                   string
+	tailnetTargetIP                                string
+	tailnetTargetFQDN                              string
+	clusterTargetIP                                string
+	subnetRoutes                                   string
+	isExitNode                                     bool
+	shouldUseDeclarativeConfig                     bool // tailscaled in proxy should be configured using config file
+	confFileHash                                   string
+	serveConfig                                    *ipn.ServeConfig
+	shouldEnableForwardingClusterTrafficViaIngress bool
 }
 
 func expectedSTS(opts configOpts) *appsv1.StatefulSet {
@@ -54,6 +56,7 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "false"},
 			{Name: "TS_AUTH_ONCE", Value: "true"},
+			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
 		},
 		SecurityContext: &corev1.SecurityContext{
@@ -62,6 +65,12 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 			},
 		},
 		ImagePullPolicy: "Always",
+	}
+	if opts.shouldEnableForwardingClusterTrafficViaIngress {
+		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
+			Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
+			Value: "true",
+		})
 	}
 	annots := make(map[string]string)
 	var volumes []corev1.Volume
@@ -122,6 +131,16 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 		})
 		annots["tailscale.com/operator-last-set-cluster-ip"] = opts.clusterTargetIP
 	}
+	if opts.serveConfig != nil {
+		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
+			Name:  "TS_SERVE_CONFIG",
+			Value: "/etc/tailscaled/serve-config",
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Path: "serve-config", Key: "serve-config"}}}},
+		})
+		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"})
+	}
 	return &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
@@ -177,7 +196,68 @@ func expectedSTS(opts configOpts) *appsv1.StatefulSet {
 	}
 }
 
-func expectedHeadlessService(name string) *corev1.Service {
+func expectedSTSUserspace(opts configOpts) *appsv1.StatefulSet {
+	tsContainer := corev1.Container{
+		Name:  "tailscale",
+		Image: "tailscale/tailscale",
+		Env: []corev1.EnvVar{
+			{Name: "TS_USERSPACE", Value: "true"},
+			{Name: "TS_AUTH_ONCE", Value: "true"},
+			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
+			{Name: "TS_HOSTNAME", Value: opts.hostname},
+			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
+		},
+		ImagePullPolicy: "Always",
+		VolumeMounts:    []corev1.VolumeMount{{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"}},
+	}
+	annots := make(map[string]string)
+	volumes := []corev1.Volume{{Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}}}
+	annots["tailscale.com/operator-last-set-hostname"] = opts.hostname
+	return &appsv1.StatefulSet{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "StatefulSet",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.stsName,
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				"tailscale.com/managed":              "true",
+				"tailscale.com/parent-resource":      "test",
+				"tailscale.com/parent-resource-ns":   opts.namespace,
+				"tailscale.com/parent-resource-type": opts.parentType,
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr.To[int32](1),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "1234-UID"},
+			},
+			ServiceName: opts.stsName,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations:                annots,
+					DeletionGracePeriodSeconds: ptr.To[int64](10),
+					Labels: map[string]string{
+						"tailscale.com/managed":              "true",
+						"tailscale.com/parent-resource":      "test",
+						"tailscale.com/parent-resource-ns":   opts.namespace,
+						"tailscale.com/parent-resource-type": opts.parentType,
+						"app":                                "1234-UID",
+					},
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "proxies",
+					PriorityClassName:  opts.priorityClassName,
+					Containers:         []corev1.Container{tsContainer},
+					Volumes:            volumes,
+				},
+			},
+		},
+	}
+}
+
+func expectedHeadlessService(name string, parentType string) *corev1.Service {
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
@@ -191,7 +271,7 @@ func expectedHeadlessService(name string) *corev1.Service {
 				"tailscale.com/managed":              "true",
 				"tailscale.com/parent-resource":      "test",
 				"tailscale.com/parent-resource-ns":   "default",
-				"tailscale.com/parent-resource-type": "svc",
+				"tailscale.com/parent-resource-type": parentType,
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -219,6 +299,13 @@ func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 			Name:      opts.secretName,
 			Namespace: "operator-ns",
 		},
+	}
+	if opts.serveConfig != nil {
+		serveConfigBs, err := json.Marshal(opts.serveConfig)
+		if err != nil {
+			t.Fatalf("error marshalling serve config: %v", err)
+		}
+		mak.Set(&s.StringData, "serve-config", string(serveConfigBs))
 	}
 	if !opts.shouldUseDeclarativeConfig {
 		mak.Set(&s.StringData, "authkey", "secret-authkey")
@@ -383,6 +470,13 @@ type fakeTSClient struct {
 	sync.Mutex
 	keyRequests []tailscale.KeyCapabilities
 	deleted     []string
+}
+type fakeTSNetServer struct {
+	certDomains []string
+}
+
+func (f *fakeTSNetServer) CertDomains() []string {
+	return f.certDomains
 }
 
 func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error) {

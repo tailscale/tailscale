@@ -255,6 +255,10 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		ChildResourceLabels: crl,
 	}
 
+	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
+		sts.ForwardClusterTrafficViaL7IngressProxy = true
+	}
+
 	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
 		return fmt.Errorf("failed to provision: %w", err)
 	}

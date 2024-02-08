@@ -55,6 +55,15 @@
 //     and not `tailscale up` or `tailscale set`.
 //     The config file contents are currently read once on container start.
 //     NB: This env var is currently experimental and the logic will likely change!
+//   - EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS: if set to true
+//     and if this containerboot instance is an L7 ingress proxy (created by
+//     the Kubernetes operator), set up rules to allow proxying cluster traffic,
+//     received on the Pod IP of this node, to the ingress target in the cluster.
+//     This, in conjunction with MagicDNS name resolution in cluster, can be
+//     useful for cases where a cluster workload needs to access a target in
+//     cluster using the same hostname (in this case, the MagicDNS name of the ingress proxy)
+//     as a non-cluster workload on tailnet.
+//     This is only meant to be configured by the Kubernetes operator.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -108,29 +117,31 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 func main() {
 	log.SetPrefix("boot: ")
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
-
 	cfg := &settings{
-		AuthKey:                  defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:                 defaultEnv("TS_HOSTNAME", ""),
-		Routes:                   defaultEnvStringPointer("TS_ROUTES"),
-		ServeConfigPath:          defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTo:                  defaultEnv("TS_DEST_IP", ""),
-		TailnetTargetIP:          defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		TailnetTargetFQDN:        defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
-		DaemonExtraArgs:          defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:                defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:             os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:            defaultBool("TS_USERSPACE", true),
-		StateDir:                 defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:                defaultEnvBoolPointer("TS_ACCEPT_DNS"),
-		KubeSecret:               defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:           defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:            defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:                   defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:                 defaultBool("TS_AUTH_ONCE", false),
-		Root:                     defaultEnv("TS_TEST_ONLY_ROOT", "/"),
-		TailscaledConfigFilePath: defaultEnv("EXPERIMENTAL_TS_CONFIGFILE_PATH", ""),
+		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
+		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
+		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
+		ProxyTo:                               defaultEnv("TS_DEST_IP", ""),
+		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
+		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		KubeSecret:                            defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
+		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		TailscaledConfigFilePath:              defaultEnv("EXPERIMENTAL_TS_CONFIGFILE_PATH", ""),
+		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
+		PodIP:                                 defaultEnv("POD_IP", ""),
 	}
+
 	if err := cfg.validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
@@ -330,7 +341,7 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != ""
+		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
@@ -365,6 +376,7 @@ authLoop:
 		}
 	}()
 	var wg sync.WaitGroup
+
 runLoop:
 	for {
 		select {
@@ -449,6 +461,18 @@ runLoop:
 					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
 					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
 						log.Fatalf("installing egress proxy rules: %v", err)
+					}
+				}
+				// If this is a L7 cluster ingress proxy (set up
+				// by Kubernetes operator) and proxying of
+				// cluster traffic to the ingress target is
+				// enabled, set up proxy rule each time the
+				// tailnet IPs of this node change (including
+				// the first time they become available).
+				if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) > 0 {
+					log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
+					if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
+						log.Fatalf("installing rules to forward traffic to node's tailnet IP: %v", err)
 					}
 				}
 				currentIPs = newCurrentIPs
@@ -837,6 +861,35 @@ func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []net
 	return nil
 }
 
+// installTSForwardingRuleForDestination accepts a destination address and a
+// list of node's tailnet addresses, sets up rules to forward traffic for
+// destination to the tailnet IP matching the destination IP family.
+// Destination can be Pod IP of this node.
+func installTSForwardingRuleForDestination(ctx context.Context, dstFilter string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+	dst, err := netip.ParseAddr(dstFilter)
+	if err != nil {
+		return err
+	}
+	var local netip.Addr
+	for _, pfx := range tsIPs {
+		if !pfx.IsSingleIP() {
+			continue
+		}
+		if pfx.Addr().Is4() != dst.Is4() {
+			continue
+		}
+		local = pfx.Addr()
+		break
+	}
+	if !local.IsValid() {
+		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstFilter, tsIPs)
+	}
+	if err := nfr.AddDNATRule(dst, local); err != nil {
+		return fmt.Errorf("installing rule for forwarding traffic to tailnet IP: %w", err)
+	}
+	return nil
+}
+
 func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
@@ -897,6 +950,14 @@ type settings struct {
 	Root                     string
 	KubernetesCanPatch       bool
 	TailscaledConfigFilePath string
+	// If set to true and, if this containerboot instance is a Kubernetes
+	// ingress proxy, set up rules to forward incoming cluster traffic to be
+	// forwarded to the ingress target in cluster.
+	AllowProxyingClusterTrafficViaIngress bool
+	// PodIP is the IP of the Pod if running in Kubernetes. This is used
+	// when setting up rules to proxy cluster traffic to cluster ingress
+	// target.
+	PodIP string
 }
 
 func (s *settings) validate() error {
@@ -919,6 +980,15 @@ func (s *settings) validate() error {
 	}
 	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
 		return errors.New("EXPERIMENTAL_TS_CONFIGFILE_PATH cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
+	}
+	if s.AllowProxyingClusterTrafficViaIngress && s.UserspaceMode {
+		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is not supported in userspace mode")
+	}
+	if s.AllowProxyingClusterTrafficViaIngress && s.ServeConfigPath == "" {
+		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is set but this is not a cluster ingress proxy")
+	}
+	if s.AllowProxyingClusterTrafficViaIngress && s.PodIP == "" {
+		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is set but POD_IP is not set")
 	}
 	return nil
 }

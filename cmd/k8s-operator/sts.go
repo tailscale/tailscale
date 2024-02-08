@@ -29,7 +29,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsnet"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -55,6 +54,19 @@ const (
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
 
+	// If set to true, set up iptables/nftables rules in the proxy forward
+	// cluster traffic to the tailnet IP of that proxy. This can only be set
+	// on an Ingress. This is useful in cases where a cluster target needs
+	// to be able to reach a cluster workload exposed to tailnet via Ingress
+	// using the same hostname as a tailnet workload (in this case, the
+	// MagicDNS name of the ingress proxy). This annotation is experimental.
+	// If it is set to true, the proxy set up for Ingress, will run
+	// tailscale in non-userspace, with NET_ADMIN cap for tailscale
+	// container and will also run a privileged init container that enables
+	// forwarding.
+	// Eventually this behaviour might become the default.
+	AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy = "tailscale.com/experimental-forward-cluster-traffic-via-ingress"
+
 	// Annotations set by the operator on pods to trigger restarts when the
 	// hostname, IP, FQDN or tailscaled config changes.
 	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
@@ -74,8 +86,11 @@ type tailscaleSTSConfig struct {
 	ParentResourceUID   string
 	ChildResourceLabels map[string]string
 
-	ServeConfig     *ipn.ServeConfig
-	ClusterTargetIP string // ingress target
+	ServeConfig     *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
+	ClusterTargetIP string           // ingress target
+	// If set to true, operator should configure containerboot to forward
+	// cluster traffic via the proxy set up for Kubernetes Ingress.
+	ForwardClusterTrafficViaL7IngressProxy bool
 
 	TailnetTargetIP string // egress target IP
 
@@ -95,10 +110,13 @@ type connector struct {
 	// isExitNode defines whether this Connector should act as an exit node.
 	isExitNode bool
 }
+type tsnetServer interface {
+	CertDomains() []string
+}
 
 type tailscaleSTSReconciler struct {
 	client.Client
-	tsnetServer            *tsnet.Server
+	tsnetServer            tsnetServer
 	tsClient               tsClient
 	defaultTags            []string
 	operatorNamespace      string
@@ -381,7 +399,7 @@ var userspaceProxyYaml []byte
 
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
 	var ss appsv1.StatefulSet
-	if sts.ServeConfig != nil {
+	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
 		}
@@ -422,6 +440,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: proxySecret,
 		},
 	)
+	if sts.ForwardClusterTrafficViaL7IngressProxy {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
+			Value: "true",
+		})
+	}
 	if !shouldDoTailscaledDeclarativeConfig(sts) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_HOSTNAME",
