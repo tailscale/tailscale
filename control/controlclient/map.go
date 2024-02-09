@@ -538,7 +538,7 @@ var nodeFields = sync.OnceValue(getNodeFields)
 
 // getNodeFields returns the fails of tailcfg.Node.
 func getNodeFields() []string {
-	rt := reflect.TypeOf((*tailcfg.Node)(nil)).Elem()
+	rt := reflect.TypeFor[tailcfg.Node]()
 	ret := make([]string, rt.NumField())
 	for i := 0; i < rt.NumField(); i++ {
 		ret[i] = rt.Field(i).Name

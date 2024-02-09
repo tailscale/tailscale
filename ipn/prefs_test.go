@@ -64,7 +64,7 @@ func TestPrefsEqual(t *testing.T) {
 		"NetfilterKind",
 		"Persist",
 	}
-	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
+	if have := fieldsOf(reflect.TypeFor[Prefs]()); !reflect.DeepEqual(have, prefsHandles) {
 		t.Errorf("Prefs.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, prefsHandles)
 	}
@@ -615,14 +615,14 @@ func TestLoadPrefsFileWithZeroInIt(t *testing.T) {
 
 func TestMaskedPrefsFields(t *testing.T) {
 	have := map[string]bool{}
-	for _, f := range fieldsOf(reflect.TypeOf(Prefs{})) {
+	for _, f := range fieldsOf(reflect.TypeFor[Prefs]()) {
 		if f == "Persist" {
 			// This one can't be edited.
 			continue
 		}
 		have[f] = true
 	}
-	for _, f := range fieldsOf(reflect.TypeOf(MaskedPrefs{})) {
+	for _, f := range fieldsOf(reflect.TypeFor[MaskedPrefs]()) {
 		if f == "Prefs" {
 			continue
 		}
@@ -644,8 +644,8 @@ func TestMaskedPrefsFields(t *testing.T) {
 
 	// And also make sure they line up in the right order, which
 	// ApplyEdits assumes.
-	pt := reflect.TypeOf(Prefs{})
-	mt := reflect.TypeOf(MaskedPrefs{})
+	pt := reflect.TypeFor[Prefs]()
+	mt := reflect.TypeFor[MaskedPrefs]()
 	for i := 0; i < mt.NumField(); i++ {
 		name := mt.Field(i).Name
 		if i == 0 {

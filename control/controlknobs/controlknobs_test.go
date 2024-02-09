@@ -15,7 +15,7 @@ func TestAsDebugJSON(t *testing.T) {
 	}
 	k := new(Knobs)
 	got := k.AsDebugJSON()
-	if want := reflect.TypeOf(Knobs{}).NumField(); len(got) != want {
+	if want := reflect.TypeFor[Knobs]().NumField(); len(got) != want {
 		t.Errorf("AsDebugJSON map has %d fields; want %v", len(got), want)
 	}
 }

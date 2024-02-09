@@ -26,7 +26,7 @@ func TestConfigEqual(t *testing.T) {
 		"SubnetRoutes", "SNATSubnetRoutes", "NetfilterMode",
 		"NetfilterKind",
 	}
-	configType := reflect.TypeOf(Config{})
+	configType := reflect.TypeFor[Config]()
 	configFields := []string{}
 	for i := 0; i < configType.NumField(); i++ {
 		configFields = append(configFields, configType.Field(i).Name)

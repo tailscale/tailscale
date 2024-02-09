@@ -72,7 +72,7 @@ func (m NodeMutationLastSeen) Apply(n *tailcfg.Node) {
 
 var peerChangeFields = sync.OnceValue(func() []reflect.StructField {
 	var fields []reflect.StructField
-	rt := reflect.TypeOf((*tailcfg.PeerChange)(nil)).Elem()
+	rt := reflect.TypeFor[tailcfg.PeerChange]()
 	for i := 0; i < rt.NumField(); i++ {
 		fields = append(fields, rt.Field(i))
 	}
