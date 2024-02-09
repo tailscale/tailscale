@@ -156,13 +156,7 @@ func TestHash(t *testing.T) {
 		{in: tuple{netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 168, 0, 1}), 1234), netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 168, 0, 1}), 1235)}, wantEq: false},
 		{in: tuple{netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 168, 0, 1}), 1234), netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 168, 0, 2}), 1234)}, wantEq: false},
 		{in: tuple{netip.Prefix{}, netip.Prefix{}}, wantEq: true},
-
-		// In go1.21 PrefixFrom will now return a zero value Prefix if the
-		// provided Addr is unspecified. This is a change from previous
-		// behavior, so we disable this test for now.
-		// TODO(#8419): renable after go1.21 is released.
-		// {in: tuple{netip.Prefix{}, netip.PrefixFrom(netip.Addr{}, 1)}, wantEq: true},
-
+		{in: tuple{netip.Prefix{}, netip.PrefixFrom(netip.Addr{}, 1)}, wantEq: true},
 		{in: tuple{netip.Prefix{}, netip.PrefixFrom(netip.AddrFrom4([4]byte{}), 0)}, wantEq: false},
 		{in: tuple{netip.PrefixFrom(netip.AddrFrom4([4]byte{}), 1), netip.PrefixFrom(netip.AddrFrom4([4]byte{}), 1)}, wantEq: true},
 		{in: tuple{netip.PrefixFrom(netip.AddrFrom4([4]byte{192, 168, 0, 1}), 1), netip.PrefixFrom(netip.AddrFrom4([4]byte{192, 168, 0, 1}), 1)}, wantEq: true},
