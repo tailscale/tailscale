@@ -9,7 +9,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/blake2s"
@@ -39,17 +38,9 @@ func (h *AUMHash) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// TODO(https://go.dev/issue/53693): Use base32.Encoding.AppendEncode instead.
-func base32AppendEncode(enc *base32.Encoding, dst, src []byte) []byte {
-	n := enc.EncodedLen(len(src))
-	dst = slices.Grow(dst, n)
-	enc.Encode(dst[len(dst):][:n], src)
-	return dst[:len(dst)+n]
-}
-
 // AppendText implements encoding.TextAppender.
 func (h AUMHash) AppendText(b []byte) ([]byte, error) {
-	return base32AppendEncode(base32StdNoPad, b, h[:]), nil
+	return base32StdNoPad.AppendEncode(b, h[:]), nil
 }
 
 // MarshalText implements encoding.TextMarshaler.
