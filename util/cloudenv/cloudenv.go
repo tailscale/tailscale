@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/syncs"
+	"tailscale.com/types/lazy"
 )
 
 // CommonNonRoutableMetadataIP is the IP address of the metadata server
@@ -40,9 +42,10 @@ const AzureResolverIP = "168.63.129.16"
 type Cloud string
 
 const (
-	AWS   = Cloud("aws")   // Amazon Web Services (EC2 in particular)
-	Azure = Cloud("azure") // Microsoft Azure
-	GCP   = Cloud("gcp")   // Google Cloud
+	AWS          = Cloud("aws")          // Amazon Web Services (EC2 in particular)
+	Azure        = Cloud("azure")        // Microsoft Azure
+	GCP          = Cloud("gcp")          // Google Cloud
+	DigitalOcean = Cloud("digitalocean") // DigitalOcean
 )
 
 // ResolverIP returns the cloud host's recursive DNS server or the
@@ -55,8 +58,25 @@ func (c Cloud) ResolverIP() string {
 		return AWSResolverIP
 	case Azure:
 		return AzureResolverIP
+	case DigitalOcean:
+		return getDigitalOceanResolver()
 	}
 	return ""
+}
+
+var (
+	// https://docs.digitalocean.com/support/check-your-droplets-network-configuration/
+	digitalOceanResolvers = []string{"67.207.67.2", "67.207.67.3"}
+	digitalOceanResolver  lazy.SyncValue[string]
+)
+
+func getDigitalOceanResolver() string {
+	// Randomly select one of the available resolvers so we don't overload
+	// one of them by sending all traffic there.
+	return digitalOceanResolver.Get(func() string {
+		rn := rand.New(rand.NewSource(time.Now().UnixNano()))
+		return digitalOceanResolvers[rn.Intn(len(digitalOceanResolvers))]
+	})
 }
 
 // HasInternalTLD reports whether c is a cloud environment
@@ -98,6 +118,12 @@ func getCloud() Cloud {
 			return AWS
 		}
 
+		sysVendor := readFileTrimmed("/sys/class/dmi/id/sys_vendor")
+		if sysVendor == "DigitalOcean" {
+			return DigitalOcean
+		}
+		// TODO(andrew): "Vultr" is also valid if we need it
+
 		prod := readFileTrimmed("/sys/class/dmi/id/product_name")
 		if prod == "Google Compute Engine" {
 			return GCP
@@ -109,6 +135,7 @@ func getCloud() Cloud {
 			// Azure, or maybe all Hyper-V?
 			hitMetadata = true
 		}
+
 	default:
 		// TODO(bradfitz): use Win32_SystemEnclosure from WMI or something on
 		// Windows to see if it's a physical machine and skip the cloud check
