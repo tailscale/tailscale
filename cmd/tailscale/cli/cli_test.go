@@ -802,7 +802,7 @@ func TestPrefFlagMapping(t *testing.T) {
 		}
 	}
 
-	prefType := reflect.TypeOf(ipn.Prefs{})
+	prefType := reflect.TypeFor[ipn.Prefs]()
 	for i := 0; i < prefType.NumField(); i++ {
 		prefName := prefType.Field(i).Name
 		if prefHasFlag[prefName] {

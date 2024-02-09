@@ -20,7 +20,7 @@ var (
 )
 
 func getPeerStatsOffset(name string) uintptr {
-	peerType := reflect.TypeOf(device.Peer{})
+	peerType := reflect.TypeFor[device.Peer]()
 	field, ok := peerType.FieldByName(name)
 	if !ok {
 		panic("no " + name + " field in device.Peer")

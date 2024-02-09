@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	timeTimeType   = reflect.TypeOf((*time.Time)(nil)).Elem()
-	netipAddrType  = reflect.TypeOf((*netip.Addr)(nil)).Elem()
-	selfHasherType = reflect.TypeOf((*SelfHasher)(nil)).Elem()
+	timeTimeType   = reflect.TypeFor[time.Time]()
+	netipAddrType  = reflect.TypeFor[netip.Addr]()
+	selfHasherType = reflect.TypeFor[SelfHasher]()
 )
 
 // typeIsSpecialized reports whether this type has specialized hashing.

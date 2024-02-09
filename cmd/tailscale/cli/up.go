@@ -726,7 +726,7 @@ func init() {
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefsOfFlag[flagName] = prefNames
-	prefType := reflect.TypeOf(ipn.Prefs{})
+	prefType := reflect.TypeFor[ipn.Prefs]()
 	for _, pref := range prefNames {
 		t := prefType
 		for _, name := range strings.Split(pref, ".") {

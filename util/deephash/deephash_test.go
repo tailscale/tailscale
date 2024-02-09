@@ -823,7 +823,7 @@ func TestHashMapAcyclic(t *testing.T) {
 
 	hb := &hashBuffer{Hash: sha256.New()}
 
-	hash := lookupTypeHasher(reflect.TypeOf(m))
+	hash := lookupTypeHasher(reflect.TypeFor[map[int]string]())
 	for i := 0; i < 20; i++ {
 		va := reflect.ValueOf(&m).Elem()
 		hb.Reset()

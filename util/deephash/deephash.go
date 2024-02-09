@@ -248,7 +248,7 @@ func Hash[T any](v *T) Sum {
 	// Always treat the Hash input as if it were an interface by including
 	// a hash of the type. This ensures that hashing of two different types
 	// but with the same value structure produces different hashes.
-	t := reflect.TypeOf(v).Elem()
+	t := reflect.TypeFor[T]()
 	h.hashType(t)
 	if v == nil {
 		h.HashUint8(0) // indicates nil
@@ -300,8 +300,7 @@ func ExcludeFields[T any](fields ...string) Option {
 }
 
 func newFieldFilter[T any](include bool, fields []string) Option {
-	var zero T
-	t := reflect.TypeOf(&zero).Elem()
+	t := reflect.TypeFor[T]()
 	fieldSet := set.Set[string]{}
 	for _, f := range fields {
 		if _, ok := t.FieldByName(f); !ok {
@@ -321,12 +320,11 @@ func newFieldFilter[T any](include bool, fields []string) Option {
 // be removed in the future, along with documentation about their precedence
 // when combined.
 func HasherForType[T any](opts ...Option) func(*T) Sum {
-	var v *T
 	seedOnce.Do(initSeed)
 	if len(opts) > 1 {
 		panic("HasherForType only accepts one optional argument") // for now
 	}
-	t := reflect.TypeOf(v).Elem()
+	t := reflect.TypeFor[T]()
 	var hash typeHasherFunc
 	for _, o := range opts {
 		switch o := o.(type) {

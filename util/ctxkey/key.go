@@ -24,11 +24,6 @@ import (
 	"reflect"
 )
 
-// TODO(https://go.dev/issue/60088): Use reflect.TypeFor instead.
-func reflectTypeFor[T any]() reflect.Type {
-	return reflect.TypeOf((*T)(nil)).Elem()
-}
-
 // Key is a generic key type associated with a specific value type.
 //
 // A zero Key is valid where the Value type itself is used as the context key.
@@ -65,7 +60,7 @@ func New[Value any](name string, defaultValue Value) Key[Value] {
 	// since newly allocated pointers are globally unique within a process.
 	key := Key[Value]{name: new(stringer[string])}
 	if name == "" {
-		name = reflectTypeFor[Value]().String()
+		name = reflect.TypeFor[Value]().String()
 	}
 	key.name.v = name
 	if v := reflect.ValueOf(defaultValue); v.IsValid() && !v.IsZero() {
@@ -78,7 +73,7 @@ func New[Value any](name string, defaultValue Value) Key[Value] {
 func (key Key[Value]) contextKey() any {
 	if key.name == nil {
 		// Use the reflect.Type of the Value (implies key not created by New).
-		return reflectTypeFor[Value]()
+		return reflect.TypeFor[Value]()
 	} else {
 		// Use the name pointer directly (implies key created by New).
 		return key.name
@@ -119,7 +114,7 @@ func (key Key[Value]) Has(ctx context.Context) (ok bool) {
 // String returns the name of the key.
 func (key Key[Value]) String() string {
 	if key.name == nil {
-		return reflectTypeFor[Value]().String()
+		return reflect.TypeFor[Value]().String()
 	}
 	return key.name.String()
 }

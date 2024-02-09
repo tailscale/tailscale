@@ -13,7 +13,7 @@ import (
 
 func TestResolverEqual(t *testing.T) {
 	var fieldNames []string
-	for _, field := range reflect.VisibleFields(reflect.TypeOf(Resolver{})) {
+	for _, field := range reflect.VisibleFields(reflect.TypeFor[Resolver]()) {
 		fieldNames = append(fieldNames, field.Name)
 	}
 	sort.Strings(fieldNames)

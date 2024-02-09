@@ -67,7 +67,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"AppConnector",
 		"Location",
 	}
-	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
+	if have := fieldsOf(reflect.TypeFor[Hostinfo]()); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, hiHandles)
 	}
@@ -364,7 +364,7 @@ func TestNodeEqual(t *testing.T) {
 		"DataPlaneAuditLogID", "Expired", "SelfNodeV4MasqAddrForThisPeer",
 		"SelfNodeV6MasqAddrForThisPeer", "IsWireGuardOnly", "ExitNodeDNSResolvers",
 	}
-	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
+	if have := fieldsOf(reflect.TypeFor[Node]()); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, nodeHandles)
 	}
@@ -632,7 +632,7 @@ func TestNetInfoFields(t *testing.T) {
 		"DERPLatency",
 		"FirewallMode",
 	}
-	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
+	if have := fieldsOf(reflect.TypeFor[NetInfo]()); !reflect.DeepEqual(have, handled) {
 		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, handled)
 	}
