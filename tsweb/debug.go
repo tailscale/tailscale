@@ -46,7 +46,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	ret := &DebugHandler{
 		mux: mux,
 	}
-	mux.Handle("/debug/", ret)
+	mux.Handle("GET /debug/", ret)
 
 	ret.KVFunc("Uptime", func() any { return varz.Uptime() })
 	ret.KV("Version", version.Long())
