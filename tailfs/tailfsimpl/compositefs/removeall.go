@@ -7,7 +7,7 @@ import (
 	"context"
 	"os"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 // RemoveAll implements webdav.File. The root of this file system is read-only,

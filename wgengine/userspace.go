@@ -203,9 +203,9 @@ type Config struct {
 	// SetSubsystem, if non-nil, is called for each new subsystem created, just before a successful return.
 	SetSubsystem func(any)
 
-	// EnableTailfs, if true, will cause the engine to expose a Tailfs listener
-	// at 100.100.100.100:8080
-	EnableTailfs bool
+	// TailFSForLocal, if populated, will cause the engine to expose a TailFS
+	// listener at 100.100.100.100:8080.
+	TailFSForLocal tailfs.FileSystemForLocal
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -451,8 +451,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
-		if conf.EnableTailfs {
-			conf.SetSubsystem(tailfs.NewFileSystemForLocal(e.logf))
+		if conf.TailFSForLocal != nil {
+			conf.SetSubsystem(conf.TailFSForLocal)
 		}
 	}
 

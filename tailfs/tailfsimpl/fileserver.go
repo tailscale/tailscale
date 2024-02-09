@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tailfs
+package tailfsimpl
 
 import (
 	"net"
@@ -9,11 +9,11 @@ import (
 	"sync"
 
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 // FileServer is a standalone WebDAV server that dynamically serves up shares.
-// It's typically used in a separate process from the actual Tailfs server to
+// It's typically used in a separate process from the actual TailFS server to
 // serve up files as an unprivileged user.
 type FileServer struct {
 	l             net.Listener

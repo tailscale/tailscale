@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 	"tailscale.com/tstest"
 )
 

@@ -1418,25 +1418,25 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
-// TailfsSetFileServerAddr instructs Tailfs to use the server at addr to access
+// TailFSSetFileServerAddr instructs TailFS to use the server at addr to access
 // the filesystem. This is used on platforms like Windows and MacOS to let
-// Tailfs know to use the file server running in the GUI app.
-func (lc *LocalClient) TailfsSetFileServerAddr(ctx context.Context, addr string) error {
+// TailFS know to use the file server running in the GUI app.
+func (lc *LocalClient) TailFSSetFileServerAddr(ctx context.Context, addr string) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/fileserver-address", http.StatusCreated, strings.NewReader(addr))
 	return err
 }
 
-// TailfsShareAdd adds the given share to the list of shares that Tailfs will
+// TailFSShareAdd adds the given share to the list of shares that TailFS will
 // serve to remote nodes. If a share with the same name already exists, the
 // existing share is replaced/updated.
-func (lc *LocalClient) TailfsShareAdd(ctx context.Context, share *tailfs.Share) error {
+func (lc *LocalClient) TailFSShareAdd(ctx context.Context, share *tailfs.Share) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/shares", http.StatusCreated, jsonBody(share))
 	return err
 }
 
-// TailfsShareRemove removes the share with the given name from the list of
-// shares that Tailfs will serve to remote nodes.
-func (lc *LocalClient) TailfsShareRemove(ctx context.Context, name string) error {
+// TailFSShareRemove removes the share with the given name from the list of
+// shares that TailFS will serve to remote nodes.
+func (lc *LocalClient) TailFSShareRemove(ctx context.Context, name string) error {
 	_, err := lc.send(
 		ctx,
 		"DELETE",
@@ -1448,9 +1448,9 @@ func (lc *LocalClient) TailfsShareRemove(ctx context.Context, name string) error
 	return err
 }
 
-// TailfsShareList returns the list of shares that Tailfs is currently serving
+// TailFSShareList returns the list of shares that TailFS is currently serving
 // to remote nodes.
-func (lc *LocalClient) TailfsShareList(ctx context.Context) (map[string]*tailfs.Share, error) {
+func (lc *LocalClient) TailFSShareList(ctx context.Context) (map[string]*tailfs.Share, error) {
 	result, err := lc.get200(ctx, "/localapi/v0/tailfs/shares")
 	if err != nil {
 		return nil, err

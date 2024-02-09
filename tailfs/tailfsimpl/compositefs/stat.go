@@ -7,7 +7,7 @@ import (
 	"context"
 	"io/fs"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 // Stat implements webdav.FileSystem.

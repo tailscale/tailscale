@@ -110,7 +110,7 @@ var handler = map[string]localAPIHandler{
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
-	"tailfs/fileserver-address":   (*Handler).serveTailfsFileServerAddr,
+	"tailfs/fileserver-address":   (*Handler).serveTailFSFileServerAddr,
 	"tailfs/shares":               (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
@@ -2531,8 +2531,8 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ups)
 }
 
-// serveTailfsFileServerAddr handles updates of the tailfs file server address.
-func (h *Handler) serveTailfsFileServerAddr(w http.ResponseWriter, r *http.Request) {
+// serveTailFSFileServerAddr handles updates of the tailfs file server address.
+func (h *Handler) serveTailFSFileServerAddr(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "PUT" {
 		http.Error(w, "only PUT allowed", http.StatusMethodNotAllowed)
 		return
@@ -2544,13 +2544,13 @@ func (h *Handler) serveTailfsFileServerAddr(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.b.TailfsSetFileServerAddr(string(b))
+	h.b.TailFSSetFileServerAddr(string(b))
 	w.WriteHeader(http.StatusCreated)
 }
 
 // serveShares handles the management of tailfs shares.
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
-	if !h.b.TailfsSharingEnabled() {
+	if !h.b.TailFSSharingEnabled() {
 		http.Error(w, `tailfs sharing not enabled, please add the attribute "tailfs:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusInternalServerError)
 		return
 	}
@@ -2581,7 +2581,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			}
 			share.As = username
 		}
-		err = h.b.TailfsAddShare(&share)
+		err = h.b.TailFSAddShare(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2594,7 +2594,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		err = h.b.TailfsRemoveShare(share.Name)
+		err = h.b.TailFSRemoveShare(share.Name)
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "share not found", http.StatusNotFound)
@@ -2605,7 +2605,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "GET":
-		shares, err := h.b.TailfsGetShares()
+		shares, err := h.b.TailFSGetShares()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -5,7 +5,7 @@
 
 //go:build windows || darwin
 
-package tailfs
+package tailfsimpl
 
 import (
 	"context"

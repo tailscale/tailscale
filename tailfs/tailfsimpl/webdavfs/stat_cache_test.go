@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 	"tailscale.com/tstest"
 )
 

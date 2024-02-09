@@ -1345,8 +1345,8 @@ const (
 	// PeerCapabilityWebUI grants the ability for a peer to edit features from the
 	// device Web UI.
 	PeerCapabilityWebUI PeerCapability = "tailscale.com/cap/webui"
-	// PeerCapabilityTailfs grants the ability for a peer to access tailfs shares.
-	PeerCapabilityTailfs PeerCapability = "tailscale.com/cap/tailfs"
+	// PeerCapabilityTailFS grants the ability for a peer to access tailfs shares.
+	PeerCapabilityTailFS PeerCapability = "tailscale.com/cap/tailfs"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
@@ -2211,8 +2211,8 @@ const (
 	// tail end of an active direct connection in magicsock.
 	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
 
-	// NodeAttrsTailfsSharingEnabled enables sharing via Tailfs.
-	NodeAttrsTailfsSharingEnabled NodeCapability = "tailfs:share"
+	// NodeAttrsTailFSSharingEnabled enables sharing via TailFS.
+	NodeAttrsTailFSSharingEnabled NodeCapability = "tailfs:share"
 )
 
 // SetDNSRequest is a request to add a DNS record.

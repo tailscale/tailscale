@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	tailfsPrefix = "/v0/tailfs"
+	tailFSPrefix = "/v0/tailfs"
 )
 
 var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
@@ -322,8 +322,8 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDNSQuery(w, r)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, tailfsPrefix) {
-		h.handleServeTailfs(w, r)
+	if strings.HasPrefix(r.URL.Path, tailFSPrefix) {
+		h.handleServeTailFS(w, r)
 		return
 	}
 	switch r.URL.Path {
@@ -1103,14 +1103,14 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 	return nil
 }
 
-func (h *peerAPIHandler) handleServeTailfs(w http.ResponseWriter, r *http.Request) {
-	if !h.ps.b.TailfsSharingEnabled() {
+func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Request) {
+	if !h.ps.b.TailFSSharingEnabled() {
 		http.Error(w, "tailfs not enabled", http.StatusNotFound)
 		return
 	}
 
 	capsMap := h.peerCaps()
-	tailfsCaps, ok := capsMap[tailcfg.PeerCapabilityTailfs]
+	tailfsCaps, ok := capsMap[tailcfg.PeerCapabilityTailFS]
 	if !ok {
 		http.Error(w, "tailfs not permitted", http.StatusForbidden)
 		return
@@ -1127,14 +1127,12 @@ func (h *peerAPIHandler) handleServeTailfs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.ps.b.mu.Lock()
-	fs := h.ps.b.tailfsForRemote
-	h.ps.b.mu.Unlock()
-	if fs == nil {
+	fs, ok := h.ps.b.sys.TailFSForRemote.GetOK()
+	if !ok {
 		http.Error(w, "tailfs not enabled", http.StatusNotFound)
 		return
 	}
-	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailfsPrefix)
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailFSPrefix)
 	fs.ServeHTTPWithPerms(p, w, r)
 }
 
