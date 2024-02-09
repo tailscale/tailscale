@@ -477,7 +477,7 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	session, whois, status, sErr := s.getSession(r)
 
 	if whois != nil {
-		caps, err := toPeerCapabilities(whois)
+		caps, err := toPeerCapabilities(status, whois)
 		if err != nil {
 			http.Error(w, sErr.Error(), http.StatusInternalServerError)
 			return

@@ -450,7 +450,7 @@ func TestServeAuth(t *testing.T) {
 		NodeName:      remoteNode.Node.Name,
 		NodeIP:        remoteIP,
 		ProfilePicURL: user.ProfilePicURL,
-		Capabilities:  peerCapabilities{},
+		Capabilities:  peerCapabilities{capFeatureAll: true},
 	}
 
 	testControlURL := &defaultControlURL
@@ -1099,19 +1099,52 @@ func TestRequireTailscaleIP(t *testing.T) {
 }
 
 func TestPeerCapabilities(t *testing.T) {
+	userOwnedStatus := &ipnstate.Status{Self: &ipnstate.PeerStatus{UserID: tailcfg.UserID(1)}}
+	tags := views.SliceOf[string]([]string{"tag:server"})
+	tagOwnedStatus := &ipnstate.Status{Self: &ipnstate.PeerStatus{Tags: &tags}}
+
 	// Testing web.toPeerCapabilities
 	toPeerCapsTests := []struct {
 		name     string
+		status   *ipnstate.Status
 		whois    *apitype.WhoIsResponse
 		wantCaps peerCapabilities
 	}{
 		{
 			name:     "empty-whois",
+			status:   userOwnedStatus,
 			whois:    nil,
 			wantCaps: peerCapabilities{},
 		},
 		{
-			name: "no-webui-caps",
+			name:   "user-owned-node-non-owner-caps-ignored",
+			status: userOwnedStatus,
+			whois: &apitype.WhoIsResponse{
+				UserProfile: &tailcfg.UserProfile{ID: tailcfg.UserID(2)},
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{},
+		},
+		{
+			name:   "user-owned-node-owner-caps-ignored",
+			status: userOwnedStatus,
+			whois: &apitype.WhoIsResponse{
+				UserProfile: &tailcfg.UserProfile{ID: tailcfg.UserID(1)},
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{capFeatureAll: true}, // should just have wildcard
+		},
+		{
+			name:   "tag-owned-no-webui-caps",
+			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityDebugPeer: []tailcfg.RawMessage{},
@@ -1120,7 +1153,8 @@ func TestPeerCapabilities(t *testing.T) {
 			wantCaps: peerCapabilities{},
 		},
 		{
-			name: "one-webui-cap",
+			name:   "tag-owned-one-webui-cap",
+			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
@@ -1134,7 +1168,8 @@ func TestPeerCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name: "multiple-webui-cap",
+			name:   "tag-owned-multiple-webui-cap",
+			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
@@ -1151,7 +1186,8 @@ func TestPeerCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name: "case=insensitive-caps",
+			name:   "tag-owned-case-insensitive-caps",
+			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
@@ -1165,7 +1201,8 @@ func TestPeerCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name: "random-canEdit-contents-dont-error",
+			name:   "tag-owned-random-canEdit-contents-dont-error",
+			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
@@ -1178,7 +1215,8 @@ func TestPeerCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name: "no-canEdit-section",
+			name:   "tag-owned-no-canEdit-section",
+			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
@@ -1191,7 +1229,7 @@ func TestPeerCapabilities(t *testing.T) {
 	}
 	for _, tt := range toPeerCapsTests {
 		t.Run("toPeerCapabilities-"+tt.name, func(t *testing.T) {
-			got, err := toPeerCapabilities(tt.whois)
+			got, err := toPeerCapabilities(tt.status, tt.whois)
 			if err != nil {
 				t.Fatalf("unexpected: %v", err)
 			}

@@ -269,11 +269,22 @@ type capRule struct {
 
 // toPeerCapabilities parses out the web ui capabilities from the
 // given whois response.
-func toPeerCapabilities(whois *apitype.WhoIsResponse) (peerCapabilities, error) {
-	caps := peerCapabilities{}
+func toPeerCapabilities(status *ipnstate.Status, whois *apitype.WhoIsResponse) (peerCapabilities, error) {
 	if whois == nil {
-		return caps, nil
+		return peerCapabilities{}, nil
 	}
+
+	if !status.Self.IsTagged() {
+		// User owned nodes are only ever manageable by the owner.
+		if status.Self.UserID != whois.UserProfile.ID {
+			return peerCapabilities{}, nil
+		} else {
+			return peerCapabilities{capFeatureAll: true}, nil // owner can edit all features
+		}
+	}
+
+	// For tagged nodes, we actually look at the granted capabilities.
+	caps := peerCapabilities{}
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](whois.CapMap, tailcfg.PeerCapabilityWebUI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal capability: %v", err)
