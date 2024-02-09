@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 type writeOnlyFile struct {

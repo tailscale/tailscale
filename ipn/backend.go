@@ -66,7 +66,7 @@ const (
 	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
 
 	NotifyNoPrivateKeys       // if set, private keys that would normally be sent in updates are zeroed out
-	NotifyInitialTailfsShares // if set, the first Notify message (sent immediately) will contain the current Tailfs Shares
+	NotifyInitialTailFSShares // if set, the first Notify message (sent immediately) will contain the current TailFS Shares
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -122,11 +122,12 @@ type Notify struct {
 	// is available.
 	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
 
-	// Full set of current TailfsShares that we're publishing as name->path.
-	// Some client applications, like the MacOS and Windows clients, will
-	// listen for updates to this and handle serving these shares under the
-	// identity of the unprivileged user that is running the application.
-	TailfsShares map[string]string `json:",omitempty"`
+	// TailFSShares tracks the full set of current TailFSShares that we're
+	// publishing as name->path. Some client applications, like the MacOS and
+	// Windows clients, will listen for updates to this and handle serving
+	// these shares under the identity of the unprivileged user that is running
+	// the application.
+	TailFSShares map[string]string `json:",omitempty"`
 
 	// type is mirrored in xcode/Shared/IPN.swift
 }

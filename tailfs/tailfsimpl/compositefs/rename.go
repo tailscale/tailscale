@@ -7,7 +7,7 @@ import (
 	"context"
 	"os"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 // Rename implements interface webdav.FileSystem. The root of this file system

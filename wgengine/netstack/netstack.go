@@ -133,7 +133,7 @@ type Impl struct {
 	ctxCancel      context.CancelFunc     // called on Close
 	lb             *ipnlocal.LocalBackend // or nil
 	dns            *dns.Manager
-	tailfsForLocal *tailfs.FileSystemForLocal // or nil
+	tailFSForLocal tailfs.FileSystemForLocal // or nil
 
 	peerapiPort4Atomic atomic.Uint32 // uint16 port number for IPv4 peerapi
 	peerapiPort6Atomic atomic.Uint32 // uint16 port number for IPv6 peerapi
@@ -161,7 +161,7 @@ const nicID = 1
 const maxUDPPacketSize = tstun.MaxPacketSize
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, tailfsForLocal *tailfs.FileSystemForLocal) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, tailFSForLocal tailfs.FileSystemForLocal) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -241,7 +241,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netip.Addr]int),
 		dns:                 dns,
-		tailfsForLocal:      tailfsForLocal,
+		tailFSForLocal:      tailFSForLocal,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
@@ -443,7 +443,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		return filter.DropSilently
 	}
 
-	// If it's not traffic to the service IP (e.g. magicDNS or Tailfs) we don't
+	// If it's not traffic to the service IP (e.g. magicDNS or TailFS) we don't
 	// care; resume processing.
 	if dst := p.Dst.Addr(); dst != serviceIP && dst != serviceIPv6 {
 		return filter.Accept
@@ -922,8 +922,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// Local DNS Service (DNS and WebDAV)
 	hittingServiceIP := dialIP == serviceIP || dialIP == serviceIPv6
 	hittingDNS := hittingServiceIP && reqDetails.LocalPort == 53
-	hittingTailfs := hittingServiceIP && ns.tailfsForLocal != nil && reqDetails.LocalPort == 8080
-	if hittingDNS || hittingTailfs {
+	hittingTailFS := hittingServiceIP && ns.tailFSForLocal != nil && reqDetails.LocalPort == 8080
+	if hittingDNS || hittingTailFS {
 		c := getConnOrReset()
 		if c == nil {
 			return
@@ -931,8 +931,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		addrPort := netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort)
 		if hittingDNS {
 			go ns.dns.HandleTCPConn(c, addrPort)
-		} else if hittingTailfs {
-			err := ns.tailfsForLocal.HandleConn(c, net.TCPAddrFromAddrPort(addrPort))
+		} else if hittingTailFS {
+			err := ns.tailFSForLocal.HandleConn(c, net.TCPAddrFromAddrPort(addrPort))
 			if err != nil {
 				ns.logf("netstack: tailfs.HandleConn: %v", err)
 			}

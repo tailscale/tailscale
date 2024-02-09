@@ -19,7 +19,7 @@ import (
 	"github.com/tailscale/gowebdav"
 	"github.com/tailscale/xnet/webdav"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )

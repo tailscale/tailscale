@@ -52,7 +52,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
-	"tailscale.com/tailfs"
+	"tailscale.com/tailfs/tailfsimpl"
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
@@ -141,7 +141,7 @@ var subCommands = map[string]func([]string) error{
 	"uninstall-system-daemon": uninstallSystemDaemon,
 	"debug":                   debugModeFunc,
 	"be-child":                beChild,
-	"serve-tailfs":            serveTailfs,
+	"serve-tailfs":            serveTailFS,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -403,6 +403,8 @@ func run() (err error) {
 		debugMux = newDebugMux()
 	}
 
+	sys.Set(tailfsimpl.NewFileSystemForRemote(logf))
+
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
 
@@ -625,12 +627,12 @@ var tstunNew = tstun.New
 
 func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack bool, err error) {
 	conf := wgengine.Config{
-		ListenPort:   args.port,
-		NetMon:       sys.NetMon.Get(),
-		Dialer:       sys.Dialer.Get(),
-		SetSubsystem: sys.Set,
-		ControlKnobs: sys.ControlKnobs(),
-		EnableTailfs: true,
+		ListenPort:     args.port,
+		NetMon:         sys.NetMon.Get(),
+		Dialer:         sys.Dialer.Get(),
+		SetSubsystem:   sys.Set,
+		ControlKnobs:   sys.ControlKnobs(),
+		TailFSForLocal: tailfsimpl.NewFileSystemForLocal(logf),
 	}
 
 	onlyNetstack = name == "userspace-networking"
@@ -733,7 +735,7 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	tfs, _ := sys.TailfsForLocal.GetOK()
+	tfs, _ := sys.TailFSForLocal.GetOK()
 	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -809,21 +811,21 @@ func beChild(args []string) error {
 	return f(args[1:])
 }
 
-// serveTailfs serves one or more tailfs on localhost using the WebDAV
+// serveTailFS serves one or more tailfs on localhost using the WebDAV
 // protocol. On UNIX and MacOS tailscaled environment, tailfs spawns child
 // tailscaled processes in serve-tailfs mode in order to access the fliesystem
 // as specific (usually unprivileged) users.
 //
-// serveTailfs prints the address on which it's listening to stdout so that the
+// serveTailFS prints the address on which it's listening to stdout so that the
 // parent process knows where to connect to.
-func serveTailfs(args []string) error {
+func serveTailFS(args []string) error {
 	if len(args) == 0 {
 		return errors.New("missing shares")
 	}
 	if len(args)%2 != 0 {
 		return errors.New("need <sharename> <path> pairs")
 	}
-	s, err := tailfs.NewFileServer()
+	s, err := tailfsimpl.NewFileServer()
 	if err != nil {
 		return fmt.Errorf("unable to start tailfs FileServer: %v", err)
 	}

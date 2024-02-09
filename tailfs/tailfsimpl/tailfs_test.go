@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tailfs
+package tailfsimpl
 
 import (
 	"context"
@@ -20,8 +20,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/tailfs/shared"
-	"tailscale.com/tailfs/webdavfs"
+	"tailscale.com/tailfs"
+	"tailscale.com/tailfs/tailfsimpl/shared"
+	"tailscale.com/tailfs/tailfsimpl/webdavfs"
 	"tailscale.com/tstest"
 )
 
@@ -38,10 +39,10 @@ const (
 func init() {
 	// set AllowShareAs() to false so that we don't try to use sub-processes
 	// for access files on disk.
-	disallowShareAs = true
+	tailfs.DisallowShareAs = true
 }
 
-// The tests in this file simulate real-life Tailfs scenarios, but without
+// The tests in this file simulate real-life TailFS scenarios, but without
 // going over the Tailscale network stack.
 func TestDirectoryListing(t *testing.T) {
 	s := newSystem(t)
@@ -51,9 +52,9 @@ func TestDirectoryListing(t *testing.T) {
 	s.checkDirList("root directory should contain the one and only domain once a remote has been set", "/", domain)
 	s.checkDirList("domain should contain its only remote", shared.Join(domain), remote1)
 	s.checkDirList("remote with no shares should be empty", shared.Join(domain, remote1))
-	s.addShare(remote1, share11, PermissionReadWrite)
+	s.addShare(remote1, share11, tailfs.PermissionReadWrite)
 	s.checkDirList("remote with one share should contain that share", shared.Join(domain, remote1), share11)
-	s.addShare(remote1, share12, PermissionReadOnly)
+	s.addShare(remote1, share12, tailfs.PermissionReadOnly)
 	s.checkDirList("remote with two shares should contain both in lexicographical order", shared.Join(domain, remote1), share12, share11)
 	s.checkDirListIncremental("remote with two shares should contain both in lexicographical order even when reading directory incrementally", shared.Join(domain, remote1), share12, share11)
 
@@ -73,12 +74,12 @@ func TestFileManipulation(t *testing.T) {
 	defer s.stop()
 
 	s.addRemote(remote1)
-	s.addShare(remote1, share11, PermissionReadWrite)
+	s.addShare(remote1, share11, tailfs.PermissionReadWrite)
 	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
 	s.checkFileStatus(remote1, share11, file111)
 	s.checkFileContents(remote1, share11, file111)
 
-	s.addShare(remote1, share12, PermissionReadOnly)
+	s.addShare(remote1, share12, tailfs.PermissionReadOnly)
 	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, "hello world", false)
 
 	s.writeFile("writing file to non-existent remote should fail", "non-existent", share11, file111, "hello world", false)
@@ -92,7 +93,7 @@ func TestFileOps(t *testing.T) {
 	defer s.stop()
 
 	s.addRemote(remote1)
-	s.addShare(remote1, share11, PermissionReadWrite)
+	s.addShare(remote1, share11, tailfs.PermissionReadWrite)
 	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
 	fi, err := s.fs.Stat(context.Background(), pathTo(remote1, share11, file111))
 	if err != nil {
@@ -204,7 +205,7 @@ func TestFileRewind(t *testing.T) {
 	defer s.stop()
 
 	s.addRemote(remote1)
-	s.addShare(remote1, share11, PermissionReadWrite)
+	s.addShare(remote1, share11, tailfs.PermissionReadWrite)
 
 	// Create a file slightly longer than our max rewind buffer of 512
 	fileLength := webdavfs.MaxRewindBuffer + 1
@@ -267,7 +268,7 @@ type remote struct {
 	fs          *FileSystemForRemote
 	fileServer  *FileServer
 	shares      map[string]string
-	permissions map[string]Permission
+	permissions map[string]tailfs.Permission
 	mu          sync.RWMutex
 }
 
@@ -343,15 +344,15 @@ func (s *system) addRemote(name string) {
 		fileServer:  fileServer,
 		fs:          NewFileSystemForRemote(log.Printf),
 		shares:      make(map[string]string),
-		permissions: make(map[string]Permission),
+		permissions: make(map[string]tailfs.Permission),
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
 	go http.Serve(l, r)
 	s.remotes[name] = r
 
-	remotes := make([]*Remote, 0, len(s.remotes))
+	remotes := make([]*tailfs.Remote, 0, len(s.remotes))
 	for name, r := range s.remotes {
-		remotes = append(remotes, &Remote{
+		remotes = append(remotes, &tailfs.Remote{
 			Name: name,
 			URL:  fmt.Sprintf("http://%s", r.l.Addr()),
 		})
@@ -359,7 +360,7 @@ func (s *system) addRemote(name string) {
 	s.local.fs.SetRemotes(domain, remotes, &http.Transport{})
 }
 
-func (s *system) addShare(remoteName, shareName string, permission Permission) {
+func (s *system) addShare(remoteName, shareName string, permission tailfs.Permission) {
 	r, ok := s.remotes[remoteName]
 	if !ok {
 		s.t.Fatalf("unknown remote %q", remoteName)
@@ -369,9 +370,9 @@ func (s *system) addShare(remoteName, shareName string, permission Permission) {
 	r.shares[shareName] = f
 	r.permissions[shareName] = permission
 
-	shares := make(map[string]*Share, len(r.shares))
+	shares := make(map[string]*tailfs.Share, len(r.shares))
 	for shareName, folder := range r.shares {
-		shares[shareName] = &Share{
+		shares[shareName] = &tailfs.Share{
 			Name: shareName,
 			Path: folder,
 		}

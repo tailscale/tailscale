@@ -24,9 +24,9 @@ import (
 )
 
 const (
-	// TailfsLocalPort is the port on which the Tailfs listens for location
+	// TailFSLocalPort is the port on which the TailFS listens for location
 	// connections on quad 100.
-	TailfsLocalPort = 8080
+	TailFSLocalPort = 8080
 
 	tailfsSharesStateKey = ipn.StateKey("_tailfs-shares")
 )
@@ -36,27 +36,25 @@ var (
 	errInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
 )
 
-// TailfsSharingEnabled reports whether sharing to remote nodes via tailfs is
+// TailFSSharingEnabled reports whether sharing to remote nodes via tailfs is
 // enabled. This is currently based on checking for the tailfs:share node
 // attribute.
-func (b *LocalBackend) TailfsSharingEnabled() bool {
+func (b *LocalBackend) TailFSSharingEnabled() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.tailfsSharingEnabledLocked()
+	return b.tailFSSharingEnabledLocked()
 }
 
-func (b *LocalBackend) tailfsSharingEnabledLocked() bool {
-	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailfsSharingEnabled)
+func (b *LocalBackend) tailFSSharingEnabledLocked() bool {
+	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailFSSharingEnabled)
 }
 
-// TailfsSetFileServerAddr tells tailfs to use the given address for connecting
+// TailFSSetFileServerAddr tells tailfs to use the given address for connecting
 // to the tailfs.FileServer that's exposing local files as an unprivileged
 // user.
-func (b *LocalBackend) TailfsSetFileServerAddr(addr string) error {
-	b.mu.Lock()
-	fs := b.tailfsForRemote
-	b.mu.Unlock()
-	if fs == nil {
+func (b *LocalBackend) TailFSSetFileServerAddr(addr string) error {
+	fs, ok := b.sys.TailFSForRemote.GetOK()
+	if !ok {
 		return errors.New("tailfs not enabled")
 	}
 
@@ -64,11 +62,11 @@ func (b *LocalBackend) TailfsSetFileServerAddr(addr string) error {
 	return nil
 }
 
-// TailfsAddShare adds the given share if no share with that name exists, or
+// TailFSAddShare adds the given share if no share with that name exists, or
 // replaces the existing share if one with the same name already exists.
 // To avoid potential incompatibilities across file systems, share names are
 // limited to alphanumeric characters and the underscore _.
-func (b *LocalBackend) TailfsAddShare(share *tailfs.Share) error {
+func (b *LocalBackend) TailFSAddShare(share *tailfs.Share) error {
 	var err error
 	share.Name, err = normalizeShareName(share.Name)
 	if err != nil {
@@ -104,11 +102,12 @@ func normalizeShareName(name string) (string, error) {
 }
 
 func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]string, error) {
-	if b.tailfsForRemote == nil {
+	fs, ok := b.sys.TailFSForRemote.GetOK()
+	if !ok {
 		return nil, errors.New("tailfs not enabled")
 	}
 
-	shares, err := b.tailfsGetSharesLocked()
+	shares, err := b.tailFSGetSharesLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -121,17 +120,21 @@ func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]str
 	if err != nil {
 		return nil, fmt.Errorf("write state: %w", err)
 	}
-	b.tailfsForRemote.SetShares(shares)
+	fs.SetShares(shares)
 
 	return shareNameMap(shares), nil
 }
 
-// TailfsRemoveShare removes the named share. Share names are forced to
+// TailFSRemoveShare removes the named share. Share names are forced to
 // lowercase.
-func (b *LocalBackend) TailfsRemoveShare(name string) error {
+func (b *LocalBackend) TailFSRemoveShare(name string) error {
 	// Force all share names to lowercase to avoid potential incompatibilities
 	// with clients that don't support case-sensitive filenames.
-	name = strings.ToLower(name)
+	var err error
+	name, err = normalizeShareName(name)
+	if err != nil {
+		return err
+	}
 
 	b.mu.Lock()
 	shares, err := b.tailfsRemoveShareLocked(name)
@@ -145,11 +148,12 @@ func (b *LocalBackend) TailfsRemoveShare(name string) error {
 }
 
 func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]string, error) {
-	if b.tailfsForRemote == nil {
+	fs, ok := b.sys.TailFSForRemote.GetOK()
+	if !ok {
 		return nil, errors.New("tailfs not enabled")
 	}
 
-	shares, err := b.tailfsGetSharesLocked()
+	shares, err := b.tailFSGetSharesLocked()
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +170,7 @@ func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]string, 
 	if err != nil {
 		return nil, fmt.Errorf("write state: %w", err)
 	}
-	b.tailfsForRemote.SetShares(shares)
+	fs.SetShares(shares)
 
 	return shareNameMap(shares), nil
 }
@@ -182,13 +186,13 @@ func shareNameMap(sharesByName map[string]*tailfs.Share) map[string]string {
 // tailfsNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
 // about the latest set of shares, supplied as a map of name -> directory.
 func (b *LocalBackend) tailfsNotifyShares(shares map[string]string) {
-	b.send(ipn.Notify{TailfsShares: shares})
+	b.send(ipn.Notify{TailFSShares: shares})
 }
 
-// tailfsNotifyCurrentSharesLocked sends an ipn.Notify with the current set of
-// tailfs shares.
-func (b *LocalBackend) tailfsNotifyCurrentSharesLocked() {
-	shares, err := b.tailfsGetSharesLocked()
+// tailFSNotifyCurrentSharesLocked sends an ipn.Notify with the current set of
+// TailFS shares.
+func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
+	shares, err := b.tailFSGetSharesLocked()
 	if err != nil {
 		b.logf("error notifying current tailfs shares: %v", err)
 		return
@@ -197,15 +201,16 @@ func (b *LocalBackend) tailfsNotifyCurrentSharesLocked() {
 	go b.tailfsNotifyShares(shareNameMap(shares))
 }
 
-// TailfsGetShares() returns the current set of shares from the state store.
-func (b *LocalBackend) TailfsGetShares() (map[string]*tailfs.Share, error) {
+// TailFSGetShares returns the current set of shares from the state store,
+// stored under ipn.StateKey("_tailfs-shares").
+func (b *LocalBackend) TailFSGetShares() (map[string]*tailfs.Share, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.tailfsGetSharesLocked()
+	return b.tailFSGetSharesLocked()
 }
 
-func (b *LocalBackend) tailfsGetSharesLocked() (map[string]*tailfs.Share, error) {
+func (b *LocalBackend) tailFSGetSharesLocked() (map[string]*tailfs.Share, error) {
 	data, err := b.store.ReadState(tailfsSharesStateKey)
 	if err != nil {
 		if errors.Is(err, ipn.ErrStateNotExist) {
@@ -223,27 +228,27 @@ func (b *LocalBackend) tailfsGetSharesLocked() (map[string]*tailfs.Share, error)
 	return shares, nil
 }
 
-// updateTailfsListenersLocked creates listeners on the local Tailfs port.
+// updateTailFSListenersLocked creates listeners on the local TailFS port.
 // This is needed to properly route local traffic when using kernel networking
 // mode.
-func (b *LocalBackend) updateTailfsListenersLocked() {
+func (b *LocalBackend) updateTailFSListenersLocked() {
 	if b.netMap == nil {
 		return
 	}
 
 	addrs := b.netMap.GetAddresses()
-	oldListeners := b.tailfsListeners
+	oldListeners := b.tailFSListeners
 	newListeners := make(map[netip.AddrPort]*localListener, addrs.Len())
 	for i := range addrs.LenIter() {
-		if fs, ok := b.sys.TailfsForLocal.GetOK(); ok {
-			addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), TailfsLocalPort)
-			if sl, ok := b.tailfsListeners[addrPort]; ok {
+		if fs, ok := b.sys.TailFSForLocal.GetOK(); ok {
+			addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), TailFSLocalPort)
+			if sl, ok := b.tailFSListeners[addrPort]; ok {
 				newListeners[addrPort] = sl
 				delete(oldListeners, addrPort)
 				continue // already listening
 			}
 
-			sl := b.newTailfsListener(context.Background(), fs, addrPort, b.logf)
+			sl := b.newTailFSListener(context.Background(), fs, addrPort, b.logf)
 			newListeners[addrPort] = sl
 			go sl.Run()
 		}
@@ -255,9 +260,9 @@ func (b *LocalBackend) updateTailfsListenersLocked() {
 	}
 }
 
-// newTailfsListener returns a listener for local connections to a tailfs
+// newTailFSListener returns a listener for local connections to a tailfs
 // WebDAV FileSystem.
-func (b *LocalBackend) newTailfsListener(ctx context.Context, fs *tailfs.FileSystemForLocal, ap netip.AddrPort, logf logger.Logf) *localListener {
+func (b *LocalBackend) newTailFSListener(ctx context.Context, fs tailfs.FileSystemForLocal, ap netip.AddrPort, logf logger.Logf) *localListener {
 	ctx, cancel := context.WithCancel(ctx)
 	return &localListener{
 		b:      b,
@@ -273,10 +278,10 @@ func (b *LocalBackend) newTailfsListener(ctx context.Context, fs *tailfs.FileSys
 	}
 }
 
-// updateTailfsPeersLocked sets all applicable peers from the netmap as tailfs
+// updateTailFSPeersLocked sets all applicable peers from the netmap as tailfs
 // remotes.
-func (b *LocalBackend) updateTailfsPeersLocked(nm *netmap.NetworkMap) {
-	fs, ok := b.sys.TailfsForLocal.GetOK()
+func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
+	fs, ok := b.sys.TailFSForLocal.GetOK()
 	if !ok {
 		return
 	}
@@ -284,7 +289,7 @@ func (b *LocalBackend) updateTailfsPeersLocked(nm *netmap.NetworkMap) {
 	tailfsRemotes := make([]*tailfs.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
 		peerID := p.ID()
-		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailfsPrefix[1:])
+		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailFSPrefix[1:])
 		tailfsRemotes = append(tailfsRemotes, &tailfs.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,
@@ -314,5 +319,5 @@ func (b *LocalBackend) updateTailfsPeersLocked(nm *netmap.NetworkMap) {
 			},
 		})
 	}
-	fs.SetRemotes(b.netMap.Domain, tailfsRemotes, &tailfsTransport{b: b})
+	fs.SetRemotes(b.netMap.Domain, tailfsRemotes, &tailFSTransport{b: b})
 }

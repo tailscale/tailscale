@@ -7,7 +7,7 @@ import (
 	"context"
 	"os"
 
-	"tailscale.com/tailfs/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 // Mkdir implements webdav.Filesystem. The root of this file system is

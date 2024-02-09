@@ -15,6 +15,7 @@ import (
 	"time"
 
 	. "tailscale.com/tailcfg"
+	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
@@ -841,4 +842,15 @@ func TestRawMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		BadDeps: map[string]string{
+			// Make sure we don't again accidentally bring in a dependency on
+			// TailFS or its transitive dependencies
+			"tailscale.com/tailfs/tailfsimpl": "https://github.com/tailscale/tailscale/pull/10631",
+			"github.com/tailscale/gowebdav":   "https://github.com/tailscale/tailscale/pull/10631",
+		},
+	}.Check(t)
 }
