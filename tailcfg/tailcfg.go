@@ -2211,8 +2211,11 @@ const (
 	// tail end of an active direct connection in magicsock.
 	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
 
-	// NodeAttrsTailFSSharingEnabled enables sharing via TailFS.
-	NodeAttrsTailFSSharingEnabled NodeCapability = "tailfs:share"
+	// NodeAttrsTailFSShare enables sharing via TailFS.
+	NodeAttrsTailFSShare NodeCapability = "tailfs:share"
+
+	// NodeAttrsTailFSAccess enables accessing shares via TailFS.
+	NodeAttrsTailFSAccess NodeCapability = "tailfs:access"
 )
 
 // SetDNSRequest is a request to add a DNS record.
