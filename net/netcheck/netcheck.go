@@ -1730,3 +1730,48 @@ var (
 	metricSTUNRecv6 = clientmetric.NewCounter("netcheck_stun_recv_ipv6")
 	metricHTTPSend  = clientmetric.NewCounter("netcheck_https_measure")
 )
+
+func (c *Client) MeasureICMPLatency(ctx context.Context, candidates []*tailcfg.NodeView) map[*tailcfg.NodeView]time.Duration {
+	p := ping.New(ctx, c.logf, netns.Listener(c.logf, c.NetMon))
+	defer p.Close()
+	var wg sync.WaitGroup
+	var results map[*tailcfg.NodeView]time.Duration
+	wg.Add(len(candidates))
+	for _, candidate := range candidates {
+		go func(candidate *tailcfg.NodeView) {
+			defer wg.Done()
+			if d, err := c.measureNodeICMPLatency(ctx, candidate, p); err != nil {
+				c.logf("error %v node %v", err, candidate.Name())
+			} else {
+				results[candidate] = d
+				c.logf("results %v", results)
+			}
+		}(candidate)
+	}
+
+	wg.Wait()
+	return results
+}
+
+func (c *Client) measureNodeICMPLatency(ctx context.Context, node *tailcfg.NodeView, p *ping.Pinger) (time.Duration, error) {
+	// Get the IPAddr by asking for the UDP address that we would use for
+	// STUN and then using that IP.
+	//
+	// TODO(andrew-d): this is a bit ugly
+	var nodeAddr netip.Addr
+	for i := range node.Addresses().LenIter() {
+		p := node.Addresses().At(i)
+		if p.Addr().Is4() {
+			nodeAddr = p.Addr()
+			break
+		}
+	}
+
+	addr := &net.IPAddr{
+		IP:   net.IP(nodeAddr.AsSlice()),
+		Zone: nodeAddr.Zone(),
+	}
+	// Use the unique node.Name field as the packet data to reduce the
+	// likelihood that we get a mismatched echo response.
+	return p.Send(ctx, addr, []byte(node.Name()))
+}

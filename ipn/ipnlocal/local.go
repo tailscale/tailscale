@@ -5920,19 +5920,24 @@ func (b *LocalBackend) SuggestExitNode() (*tailcfg.StableNodeID, error) {
 		return nil, errors.New("no netmap")
 	}
 	peers := netMap.Peers
-	lastReport := b.MagicConn().GetLastNetcheckReport()
+	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	var fastestRegionLatency = time.Duration(math.MaxInt64)
 	var preferredExitNodeID tailcfg.StableNodeID
 	peerRegionMap := make(map[int][]tailcfg.NodeView)
+	b.logf("preferred self node derp %v", lastReport.PreferredDERP)
+	b.logf("preferred self node derp name %v", netMap.DERPMap.Regions[lastReport.PreferredDERP])
+	var mullvadCandidates []*tailcfg.NodeView
 	for _, peer := range peers {
 		if online := peer.Online(); online != nil && !*online {
 			continue
 		}
-		if peer.Hostinfo().Location() != nil {
-			b.logf("location %v %v", peer.Hostinfo().Location().Longitude, peer.Hostinfo().Location().Latitude)
-		}
 		if tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
 			ipp, _ := netip.ParseAddrPort(peer.DERP())
+			if peer.DERP() == "" {
+				if peer.Hostinfo().Location().Country == "USA" {
+					mullvadCandidates = append(mullvadCandidates, &peer)
+				}
+			}
 			regionID := int(ipp.Port())
 			regionLatency, ok := lastReport.RegionLatency[regionID]
 			peerRegionMap[regionID] = append(peerRegionMap[regionID], peer)
@@ -5948,6 +5953,8 @@ func (b *LocalBackend) SuggestExitNode() (*tailcfg.StableNodeID, error) {
 		}
 	}
 	b.logf("self derp %v", b.netMap.SelfNode.DERP())
+	result := b.MagicConn().MeasureNodeICMPLatency(b.ctx, mullvadCandidates)
+	b.logf("result %v", result)
 	ipp, _ := netip.ParseAddrPort(netMap.SelfNode.DERP())
 	selfDerpRegionID := int(ipp.Port())
 	b.logf("self derp region id %v", selfDerpRegionID)

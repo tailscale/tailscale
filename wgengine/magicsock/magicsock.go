@@ -3009,7 +3009,15 @@ func getPeerMTUsProbedMetric(mtu tstun.WireMTU) *clientmetric.Metric {
 	return mm
 }
 
-func (c *Conn) GetLastNetcheckReport() *netcheck.Report {
-	report, _ := c.updateNetInfo(c.connCtx)
-	return report
+func (c *Conn) GetLastNetcheckReport(ctx context.Context) *netcheck.Report {
+	nr, err := c.updateNetInfo(ctx)
+	if err != nil {
+		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
+		return nil
+	}
+	return nr
+}
+
+func (c *Conn) MeasureNodeICMPLatency(ctx context.Context, candidates []*tailcfg.NodeView) map[*tailcfg.NodeView]time.Duration {
+	return c.netChecker.MeasureICMPLatency(ctx, candidates)
 }
