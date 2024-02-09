@@ -240,7 +240,7 @@ type sortedKVs struct {
 //
 // This will evolve over time, or perhaps be replaced.
 func Handler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
 	s := sortedKVsPool.Get().(*sortedKVs)
 	defer sortedKVsPool.Put(s)
