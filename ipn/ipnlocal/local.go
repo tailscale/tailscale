@@ -432,7 +432,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	// initialize TailFS shares from saved state
 	fs, ok := b.sys.TailFSForRemote.GetOK()
-	if !ok {
+	if ok {
 		b.mu.Lock()
 		shares, err := b.tailFSGetSharesLocked()
 		b.mu.Unlock()
