@@ -3341,6 +3341,10 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		fs, ok := b.sys.TailFSForLocal.GetOK()
 		if ok {
 			return func(conn net.Conn) error {
+				if !b.TailFSAccessEnabled() {
+					conn.Close()
+					return nil
+				}
 				return fs.HandleConn(conn, conn.RemoteAddr())
 			}, opts
 		}

@@ -46,7 +46,20 @@ func (b *LocalBackend) TailFSSharingEnabled() bool {
 }
 
 func (b *LocalBackend) tailFSSharingEnabledLocked() bool {
-	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailFSSharingEnabled)
+	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailFSShare)
+}
+
+// TailFSAccessEnabled reports whether accessing TailFS shares on remote nodes
+// is enabled. This is currently based on checking for the tailfs:access node
+// attribute.
+func (b *LocalBackend) TailFSAccessEnabled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tailFSAccessEnabledLocked()
+}
+
+func (b *LocalBackend) tailFSAccessEnabledLocked() bool {
+	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailFSAccess)
 }
 
 // TailFSSetFileServerAddr tells tailfs to use the given address for connecting
@@ -272,6 +285,10 @@ func (b *LocalBackend) newTailFSListener(ctx context.Context, fs tailfs.FileSyst
 		logf:   logf,
 
 		handler: func(conn net.Conn) error {
+			if !b.TailFSAccessEnabled() {
+				conn.Close()
+				return nil
+			}
 			return fs.HandleConn(conn, conn.RemoteAddr())
 		},
 		bo: backoff.NewBackoff(fmt.Sprintf("tailfs-listener-%d", ap.Port()), logf, 30*time.Second),

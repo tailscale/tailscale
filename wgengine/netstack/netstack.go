@@ -932,6 +932,10 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		if hittingDNS {
 			go ns.dns.HandleTCPConn(c, addrPort)
 		} else if hittingTailFS {
+			if !ns.lb.TailFSAccessEnabled() {
+				c.Close()
+				return
+			}
 			err := ns.tailFSForLocal.HandleConn(c, net.TCPAddrFromAddrPort(addrPort))
 			if err != nil {
 				ns.logf("netstack: tailfs.HandleConn: %v", err)
