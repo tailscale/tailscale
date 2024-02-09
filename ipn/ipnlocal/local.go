@@ -241,8 +241,8 @@ type LocalBackend struct {
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
 	keyExpired       bool
-	authURL          string    // cleared on Notify
-	authURLSticky    string    // not cleared on Notify
+	authURLToPop     string    // URL to open for users ("BrowseToURL"); cleared on Notify
+	authURL          string    // stored auth URL; displayed in 'tailscale status'; not cleared on Notify
 	authURLTime      time.Time // when the authURL was received from the control server
 	interact         bool
 	egg              bool
@@ -720,7 +720,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.Version = version.Long()
 		s.TUN = !b.sys.IsNetstack()
 		s.BackendState = b.state.String()
-		s.AuthURL = b.authURLSticky
+		s.AuthURL = b.authURL
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
 			if cv := b.lastClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
@@ -1095,8 +1095,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		}
 	}
 	if st.URL != "" {
+		b.authURLToPop = st.URL
 		b.authURL = st.URL
-		b.authURLSticky = st.URL
 		b.authURLTime = b.clock.Now()
 	}
 	if (wasBlocked || b.seamlessRenewalEnabled()) && st.LoginFinished() {
@@ -2261,7 +2261,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 			ini.SessionID = sessionID
 			ini.State = ptr.To(b.state)
 			if b.state == ipn.NeedsLogin {
-				ini.BrowseToURL = ptr.To(b.authURLSticky)
+				ini.BrowseToURL = ptr.To(b.authURL)
 			}
 		}
 		if mask&ipn.NotifyInitialPrefs != 0 {
@@ -2440,9 +2440,9 @@ func (b *LocalBackend) sendFileNotify() {
 // to the connected frontend, if any.
 func (b *LocalBackend) popBrowserAuthNow() {
 	b.mu.Lock()
-	url := b.authURL
+	url := b.authURLToPop
 	b.interact = false
-	b.authURL = "" // but NOT clearing authURLSticky
+	b.authURLToPop = "" // but NOT clearing authURL
 	b.mu.Unlock()
 
 	b.logf("popBrowserAuthNow: url=%v", url != "")
@@ -2785,7 +2785,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	b.mu.Lock()
 	b.assertClientLocked()
 	b.interact = true
-	url := b.authURL
+	url := b.authURLToPop
 	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
 	cc := b.cc
 	b.mu.Unlock()
@@ -4168,10 +4168,10 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 	prefs := b.pm.CurrentPrefs()
 	netMap := b.netMap
 	activeLogin := b.activeLogin
-	authURL := b.authURL
+	authURLToPop := b.authURLToPop
 	if newState == ipn.Running {
+		b.authURLToPop = ""
 		b.authURL = ""
-		b.authURLSticky = ""
 		b.authURLTime = time.Time{}
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
@@ -4192,7 +4192,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 
 	switch newState {
 	case ipn.NeedsLogin:
-		systemd.Status("Needs login: %s", authURL)
+		systemd.Status("Needs login: %s", authURLToPop)
 		if b.seamlessRenewalEnabled() {
 			break
 		}
@@ -4204,7 +4204,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 			b.logf("Reconfig(down): %v", err)
 		}
 
-		if authURL == "" {
+		if authURLToPop == "" {
 			systemd.Status("Stopped; run 'tailscale up' to log in")
 		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
@@ -4413,8 +4413,8 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 		b.currentUser = nil
 	}
 	b.keyExpired = false
+	b.authURLToPop = ""
 	b.authURL = ""
-	b.authURLSticky = ""
 	b.authURLTime = time.Time{}
 	b.activeLogin = ""
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
