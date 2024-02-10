@@ -5,7 +5,7 @@ package webdavfs
 
 import (
 	"io/fs"
-	"path/filepath"
+	"path"
 	"sync"
 	"time"
 
@@ -54,8 +54,8 @@ func (c *statCache) set(parentPath string, infos []fs.FileInfo) {
 	defer c.mu.Unlock()
 
 	for _, info := range infos {
-		path := filepath.Join(parentPath, filepath.Base(info.Name()))
-		c.cache.Set(path, info, ttlcache.DefaultTTL)
+		p := path.Join(parentPath, path.Base(info.Name()))
+		c.cache.Set(p, info, ttlcache.DefaultTTL)
 	}
 }
 
