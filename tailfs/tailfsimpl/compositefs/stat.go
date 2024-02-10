@@ -11,7 +11,7 @@ import (
 )
 
 // Stat implements webdav.FileSystem.
-func (cfs *CompositeFileSystem) Stat(ctx context.Context, name string) (fs.FileInfo, error) {
+func (cfs *FS) Stat(ctx context.Context, name string) (fs.FileInfo, error) {
 	if shared.IsRoot(name) {
 		// Root is a directory
 		// always use now() as the modified time to bust caches

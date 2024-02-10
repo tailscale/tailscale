@@ -13,7 +13,7 @@ import (
 // RemoveAll implements webdav.File. The root of this file system is read-only,
 // so attempting to call RemoveAll on the root will fail with os.ErrPermission.
 // RemoveAll within a child will be handled by the respective child.
-func (cfs *CompositeFileSystem) RemoveAll(ctx context.Context, name string) error {
+func (cfs *FS) RemoveAll(ctx context.Context, name string) error {
 	if shared.IsRoot(name) {
 		// root directory is read-only
 		return os.ErrPermission

@@ -13,7 +13,7 @@ import (
 )
 
 // OpenFile implements interface webdav.Filesystem.
-func (cfs *CompositeFileSystem) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
+func (cfs *FS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
 	if !shared.IsRoot(name) {
 		pathInfo, err := cfs.pathInfoFor(name)
 		if err != nil {

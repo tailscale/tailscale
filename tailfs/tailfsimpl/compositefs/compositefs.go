@@ -1,7 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package compositefs provides a webdav.FileSystem that is composi
+// Package compositefs provides a webdav.FileSystem that combines multiple
+// child webdav.FileSystems. See [FS] for details.
 package compositefs
 
 import (
@@ -20,7 +21,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// Child is a child filesystem of a CompositeFileSystem
+// Child is a child filesystem of an FS.
 type Child struct {
 	// Name is the name of the child
 	Name string
@@ -38,26 +39,26 @@ func (c *Child) isAvailable() bool {
 	return c.Available()
 }
 
-// Options specifies options for configuring a CompositeFileSystem.
+// Options specifies options for configuring an FS.
 type Options struct {
 	// Logf specifies a logging function to use
 	Logf logger.Logf
-	// StatChildren, if true, causes the CompositeFileSystem to stat its child
-	// folders when generating a root directory listing. This gives more
-	// accurate information but increases latency.
+	// StatChildren, if true, causes the FS to stat its child folders when
+	// generating a root directory listing. This gives more accurate
+	// information but increases latency.
 	StatChildren bool
 	// Clock, if specified, determines the current time. If not specified, we
 	// default to time.Now().
 	Clock tstime.Clock
 }
 
-// New constructs a CompositeFileSystem that logs using the given logf.
-func New(opts Options) *CompositeFileSystem {
+// New constructs an FS that logs using the given logf.
+func New(opts Options) *FS {
 	logf := opts.Logf
 	if logf == nil {
 		logf = log.Printf
 	}
-	fs := &CompositeFileSystem{
+	fs := &FS{
 		logf:         logf,
 		statChildren: opts.StatChildren,
 	}
@@ -69,20 +70,20 @@ func New(opts Options) *CompositeFileSystem {
 	return fs
 }
 
-// CompositeFileSystem is a webdav.FileSystem that is composed of multiple
-// child webdav.FileSystems. Each child is identified by a name and appears
-// as a folder within the root of the CompositeFileSystem, with the children
+// FS is a webdav.FileSystem that is composed of multiple child
+// webdav.FileSystems. Each child is identified by a name and appears
+// as a folder within the root of the FS, with the children
 // sorted lexicographically by name.
 //
-// Children in a CompositeFileSystem can only be added or removed via calls to
+// Children in an FS can only be added or removed via calls to
 // the AddChild and RemoveChild methods, they cannot be added via operations
 // on the webdav.FileSystem interface like filesystem.Mkdir or filesystem.OpenFile.
-// In other words, the root of the CompositeFileSystem acts as read-only, not
+// In other words, the root of the FS acts as read-only, not
 // permitting the addition, removal or renaming of folders.
 //
 // Rename is only supported within a single child. Renaming across children
 // is not supported, as it wouldn't be possible to perform it atomically.
-type CompositeFileSystem struct {
+type FS struct {
 	logf         logger.Logf
 	statChildren bool
 	now          func() time.Time
@@ -94,7 +95,7 @@ type CompositeFileSystem struct {
 
 // AddChild ads a single child with the given name, replacing any existing
 // child with the same name.
-func (cfs *CompositeFileSystem) AddChild(child *Child) {
+func (cfs *FS) AddChild(child *Child) {
 	cfs.childrenMu.Lock()
 	oldIdx, oldChild := cfs.findChildLocked(child.Name)
 	if oldChild != nil {
@@ -116,7 +117,7 @@ func (cfs *CompositeFileSystem) AddChild(child *Child) {
 }
 
 // RemoveChild removes the child with the given name, if it exists.
-func (cfs *CompositeFileSystem) RemoveChild(name string) {
+func (cfs *FS) RemoveChild(name string) {
 	cfs.childrenMu.Lock()
 	oldPos, oldChild := cfs.findChildLocked(name)
 	if oldChild != nil {
@@ -139,7 +140,7 @@ func (cfs *CompositeFileSystem) RemoveChild(name string) {
 
 // SetChildren replaces the entire existing set of children with the given
 // ones.
-func (cfs *CompositeFileSystem) SetChildren(children ...*Child) {
+func (cfs *FS) SetChildren(children ...*Child) {
 	slices.SortFunc(children, func(a, b *Child) int {
 		return strings.Compare(a.Name, b.Name)
 	})
@@ -159,7 +160,7 @@ func (cfs *CompositeFileSystem) SetChildren(children ...*Child) {
 
 // GetChild returns the child with the given name and a boolean indicating
 // whether or not it was found.
-func (cfs *CompositeFileSystem) GetChild(name string) (webdav.FileSystem, bool) {
+func (cfs *FS) GetChild(name string) (webdav.FileSystem, bool) {
 	_, child := cfs.findChildLocked(name)
 	if child == nil {
 		return nil, false
@@ -167,7 +168,7 @@ func (cfs *CompositeFileSystem) GetChild(name string) (webdav.FileSystem, bool) 
 	return child.FS, true
 }
 
-func (cfs *CompositeFileSystem) findChildLocked(name string) (int, *Child) {
+func (cfs *FS) findChildLocked(name string) (int, *Child) {
 	var child *Child
 	i, found := slices.BinarySearchFunc(cfs.children, name, func(child *Child, name string) int {
 		return strings.Compare(child.Name, name)
@@ -179,10 +180,10 @@ func (cfs *CompositeFileSystem) findChildLocked(name string) (int, *Child) {
 }
 
 // pathInfoFor returns a pathInfo for the given filename. If the filename
-// refers to a Child that does not exist within this CompositeFileSystem,
-// it will return the error os.ErrNotExist. Even when returning an error,
-// it will still return a complete pathInfo.
-func (cfs *CompositeFileSystem) pathInfoFor(name string) (pathInfo, error) {
+// refers to a Child that does not exist within this FS, it will return the
+// error os.ErrNotExist. Even when returning an error, it will still return
+// a complete pathInfo.
+func (cfs *FS) pathInfoFor(name string) (pathInfo, error) {
 	cfs.childrenMu.Lock()
 	defer cfs.childrenMu.Unlock()
 
@@ -211,7 +212,7 @@ type pathInfo struct {
 	pathOnChild string
 }
 
-func (cfs *CompositeFileSystem) Close() error {
+func (cfs *FS) Close() error {
 	cfs.childrenMu.Lock()
 	children := cfs.children
 	cfs.childrenMu.Unlock()

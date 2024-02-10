@@ -14,7 +14,7 @@ import (
 // read-only, so any attempts to make directories within the root will fail
 // with os.ErrPermission. Attempts to make directories within one of the child
 // filesystems will be handled by the respective child.
-func (cfs *CompositeFileSystem) Mkdir(ctx context.Context, name string, perm os.FileMode) error {
+func (cfs *FS) Mkdir(ctx context.Context, name string, perm os.FileMode) error {
 	if shared.IsRoot(name) {
 		// root directory already exists, consider this okay
 		return nil

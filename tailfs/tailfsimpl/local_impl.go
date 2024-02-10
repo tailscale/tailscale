@@ -44,7 +44,7 @@ func NewFileSystemForLocal(logf logger.Logf) *FileSystemForLocal {
 // provides a unified WebDAV interface to remote TailFS shares on other nodes.
 type FileSystemForLocal struct {
 	logf     logger.Logf
-	cfs      *compositefs.CompositeFileSystem
+	cfs      *compositefs.FS
 	listener *connListener
 }
 
@@ -93,7 +93,7 @@ func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*tailfs.Remote,
 		domainChild = compositefs.New(compositefs.Options{Logf: s.logf})
 		s.cfs.SetChildren(&compositefs.Child{Name: domain, FS: domainChild})
 	}
-	domainChild.(*compositefs.CompositeFileSystem).SetChildren(children...)
+	domainChild.(*compositefs.FS).SetChildren(children...)
 }
 
 // Close() stops serving the WebDAV content

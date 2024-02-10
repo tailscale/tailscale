@@ -59,8 +59,8 @@ type webdavFS struct {
 }
 
 // New creates a new webdav.FileSystem backed by the given gowebdav.Client.
-// If cacheTTL is greater than zero, the filesystem will cache results from
-// Stat calls for the given duration.
+// If [opts.StatCacheTTL] is greater than zero, the filesystem will cache
+// results from Stat calls for the given duration.
 func New(opts Options) webdav.FileSystem {
 	if opts.Logf == nil {
 		opts.Logf = log.Printf

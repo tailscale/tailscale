@@ -15,7 +15,7 @@ import (
 // filesystem will fail with os.ErrPermission. Renaming across children is not
 // supported and will fail with os.ErrPermission. Renaming within a child will
 // be handled by the respective child.
-func (cfs *CompositeFileSystem) Rename(ctx context.Context, oldName, newName string) error {
+func (cfs *FS) Rename(ctx context.Context, oldName, newName string) error {
 	if shared.IsRoot(oldName) || shared.IsRoot(newName) {
 		// root directory is read-only
 		return os.ErrPermission
