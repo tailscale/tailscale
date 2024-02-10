@@ -136,12 +136,16 @@ var (
 	createBIRDClient      func(string) (wgengine.BIRDClient, error) // non-nil on some platforms
 )
 
-var subCommands = map[string]func([]string) error{
-	"install-system-daemon":   installSystemDaemon,
-	"uninstall-system-daemon": uninstallSystemDaemon,
-	"debug":                   debugModeFunc,
-	"be-child":                beChild,
-	"serve-tailfs":            serveTailFS,
+// Note - we use function pointers for subcommands so that subcommands like
+// installSystemDaemon and uninstallSystemDaemon can be assigned platform-
+// specific variants.
+
+var subCommands = map[string]*func([]string) error{
+	"install-system-daemon":   &installSystemDaemon,
+	"uninstall-system-daemon": &uninstallSystemDaemon,
+	"debug":                   &debugModeFunc,
+	"be-child":                &beChildFunc,
+	"serve-tailfs":            &serveTailFSFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -173,12 +177,12 @@ func main() {
 
 	if len(os.Args) > 1 {
 		sub := os.Args[1]
-		if fn, ok := subCommands[sub]; ok {
-			if fn == nil {
+		if fp, ok := subCommands[sub]; ok {
+			if fp == nil {
 				log.SetFlags(0)
 				log.Fatalf("%s not available on %v", sub, runtime.GOOS)
 			}
-			if err := fn(os.Args[2:]); err != nil {
+			if err := (*fp)(os.Args[2:]); err != nil {
 				log.SetFlags(0)
 				log.Fatal(err)
 			}
@@ -799,6 +803,8 @@ func mustStartProxyListeners(socksAddr, httpAddr string) (socksListener, httpLis
 	return socksListener, httpListener
 }
 
+var beChildFunc = beChild
+
 func beChild(args []string) error {
 	if len(args) == 0 {
 		return errors.New("missing mode argument")
@@ -810,6 +816,8 @@ func beChild(args []string) error {
 	}
 	return f(args[1:])
 }
+
+var serveTailFSFunc = serveTailFS
 
 // serveTailFS serves one or more tailfs on localhost using the WebDAV
 // protocol. On UNIX and MacOS tailscaled environment, tailfs spawns child
