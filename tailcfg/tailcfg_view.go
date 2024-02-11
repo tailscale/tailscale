@@ -1435,7 +1435,6 @@ func (v UserProfileView) LoginName() string             { return v.ж.LoginName 
 func (v UserProfileView) DisplayName() string           { return v.ж.DisplayName }
 func (v UserProfileView) ProfilePicURL() string         { return v.ж.ProfilePicURL }
 func (v UserProfileView) Roles() emptyStructJSONSlice   { return v.ж.Roles }
-func (v UserProfileView) Groups() views.Slice[string]   { return views.SliceOf(v.ж.Groups) }
 func (v UserProfileView) Equal(v2 UserProfileView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -1445,5 +1444,4 @@ var _UserProfileViewNeedsRegeneration = UserProfile(struct {
 	DisplayName   string
 	ProfilePicURL string
 	Roles         emptyStructJSONSlice
-	Groups        []string
 }{})
