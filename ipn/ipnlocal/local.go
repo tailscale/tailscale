@@ -287,8 +287,6 @@ type LocalBackend struct {
 	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
 
-	tailFSListeners map[netip.AddrPort]*localListener // listeners for local tailfs traffic
-
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
@@ -4768,10 +4766,6 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		if !b.sys.IsNetstack() {
 			b.updateWebClientListenersLocked()
 		}
-	}
-
-	if !b.sys.IsNetstack() {
-		b.updateTailFSListenersLocked()
 	}
 
 	b.reloadServeConfigLocked(prefs)

@@ -919,10 +919,10 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		return gonet.NewTCPConn(&wq, ep)
 	}
 
-	// Local DNS Service (DNS and WebDAV)
+	// Local Services (DNS and WebDAV)
 	hittingServiceIP := dialIP == serviceIP || dialIP == serviceIPv6
 	hittingDNS := hittingServiceIP && reqDetails.LocalPort == 53
-	hittingTailFS := hittingServiceIP && ns.tailFSForLocal != nil && reqDetails.LocalPort == 8080
+	hittingTailFS := hittingServiceIP && ns.tailFSForLocal != nil && reqDetails.LocalPort == ipnlocal.TailFSLocalPort
 	if hittingDNS || hittingTailFS {
 		c := getConnOrReset()
 		if c == nil {
