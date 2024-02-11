@@ -4,22 +4,16 @@
 package ipnlocal
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/netip"
 	"os"
 	"regexp"
 	"strings"
-	"time"
 
 	"tailscale.com/ipn"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailfs"
-	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 )
 
@@ -239,60 +233,6 @@ func (b *LocalBackend) tailFSGetSharesLocked() (map[string]*tailfs.Share, error)
 	}
 
 	return shares, nil
-}
-
-// updateTailFSListenersLocked creates listeners on the local TailFS port.
-// This is needed to properly route local traffic when using kernel networking
-// mode.
-func (b *LocalBackend) updateTailFSListenersLocked() {
-	if b.netMap == nil {
-		return
-	}
-
-	addrs := b.netMap.GetAddresses()
-	oldListeners := b.tailFSListeners
-	newListeners := make(map[netip.AddrPort]*localListener, addrs.Len())
-	for i := range addrs.LenIter() {
-		if fs, ok := b.sys.TailFSForLocal.GetOK(); ok {
-			addrPort := netip.AddrPortFrom(addrs.At(i).Addr(), TailFSLocalPort)
-			if sl, ok := b.tailFSListeners[addrPort]; ok {
-				newListeners[addrPort] = sl
-				delete(oldListeners, addrPort)
-				continue // already listening
-			}
-
-			sl := b.newTailFSListener(context.Background(), fs, addrPort, b.logf)
-			newListeners[addrPort] = sl
-			go sl.Run()
-		}
-	}
-
-	// At this point, anything left in oldListeners can be stopped.
-	for _, sl := range oldListeners {
-		sl.cancel()
-	}
-}
-
-// newTailFSListener returns a listener for local connections to a tailfs
-// WebDAV FileSystem.
-func (b *LocalBackend) newTailFSListener(ctx context.Context, fs tailfs.FileSystemForLocal, ap netip.AddrPort, logf logger.Logf) *localListener {
-	ctx, cancel := context.WithCancel(ctx)
-	return &localListener{
-		b:      b,
-		ap:     ap,
-		ctx:    ctx,
-		cancel: cancel,
-		logf:   logf,
-
-		handler: func(conn net.Conn) error {
-			if !b.TailFSAccessEnabled() {
-				conn.Close()
-				return nil
-			}
-			return fs.HandleConn(conn, conn.RemoteAddr())
-		},
-		bo: backoff.NewBackoff(fmt.Sprintf("tailfs-listener-%d", ap.Port()), logf, 30*time.Second),
-	}
 }
 
 // updateTailFSPeersLocked sets all applicable peers from the netmap as tailfs
