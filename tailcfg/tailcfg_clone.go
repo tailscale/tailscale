@@ -586,7 +586,6 @@ func (src *UserProfile) Clone() *UserProfile {
 	}
 	dst := new(UserProfile)
 	*dst = *src
-	dst.Groups = append(src.Groups[:0:0], src.Groups...)
 	return dst
 }
 
@@ -597,7 +596,6 @@ var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
 	DisplayName   string
 	ProfilePicURL string
 	Roles         emptyStructJSONSlice
-	Groups        []string
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.

@@ -106,7 +106,7 @@ type CapabilityVersion int
 //   - 63: 2023-06-08: Client understands SSHAction.AllowRemotePortForwarding.
 //   - 64: 2023-07-11: Client understands s/CapabilityTailnetLockAlpha/CapabilityTailnetLock
 //   - 65: 2023-07-12: Client understands DERPMap.HomeParams + incremental DERPMap updates with params
-//   - 66: 2023-07-23: UserProfile.Groups added (available via WhoIs)
+//   - 66: 2023-07-23: UserProfile.Groups added (available via WhoIs) (removed in 87)
 //   - 67: 2023-07-25: Client understands PeerCapMap
 //   - 68: 2023-08-09: Client has dedicated updateRoutine; MapRequest.Stream true means ignore Hostinfo+Endpoints
 //   - 69: 2023-08-16: removed Debug.LogHeap* + GoroutineDumpURL; added c2n /debug/logheap
@@ -127,7 +127,8 @@ type CapabilityVersion int
 //   - 84: 2024-01-04: Client understands SeamlessKeyRenewal
 //   - 85: 2024-01-05: Client understands MaxKeyDuration
 //   - 86: 2024-01-23: Client understands NodeAttrProbeUDPLifetime
-const CurrentCapabilityVersion CapabilityVersion = 86
+//   - 87: 2024-02-11: UserProfile.Groups removed (added in 66)
+const CurrentCapabilityVersion CapabilityVersion = 87
 
 type StableID string
 
@@ -198,13 +199,6 @@ type UserProfile struct {
 	// Roles exists for legacy reasons, to keep old macOS clients
 	// happy. It JSON marshals as [].
 	Roles emptyStructJSONSlice
-
-	// Groups contains group identifiers for any group that this user is
-	// a part of and that the coordination server is configured to tell
-	// your node about. (Thus, it may be empty or incomplete.)
-	// There's no semantic difference between a nil and an empty list.
-	// The list is always sorted.
-	Groups []string `json:",omitempty"`
 }
 
 func (p *UserProfile) Equal(p2 *UserProfile) bool {
@@ -217,8 +211,7 @@ func (p *UserProfile) Equal(p2 *UserProfile) bool {
 	return p.ID == p2.ID &&
 		p.LoginName == p2.LoginName &&
 		p.DisplayName == p2.DisplayName &&
-		p.ProfilePicURL == p2.ProfilePicURL &&
-		(len(p.Groups) == 0 && len(p2.Groups) == 0 || reflect.DeepEqual(p.Groups, p2.Groups))
+		p.ProfilePicURL == p2.ProfilePicURL
 }
 
 type emptyStructJSONSlice struct{}

@@ -19,7 +19,6 @@ func (src *Persist) Clone() *Persist {
 	}
 	dst := new(Persist)
 	*dst = *src
-	dst.UserProfile = *src.UserProfile.Clone()
 	dst.DisallowedTKAStateIDs = append(src.DisallowedTKAStateIDs[:0:0], src.DisallowedTKAStateIDs...)
 	return dst
 }
