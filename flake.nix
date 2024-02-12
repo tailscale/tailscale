@@ -62,7 +62,7 @@
     # So really, this flake is for tailscale devs to dogfood with, if
     # you're an end user you should be prepared for this flake to not
     # build periodically.
-    tailscale = pkgs: pkgs.buildGo121Module rec {
+    tailscale = pkgs: pkgs.buildGo122Module rec {
       name = "tailscale";
 
       src = ./.;
@@ -112,7 +112,7 @@
           gotools
           graphviz
           perl
-          go_1_21
+          go_1_22
           yarn
         ];
       };
