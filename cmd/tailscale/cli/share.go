@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	shareAddUsage    = "[ALPHA] share add <name> <path>"
-	shareRemoveUsage = "[ALPHA] share remove <name>"
-	shareListUsage   = "[ALPHA] share list"
+	shareAddUsage    = "share add <name> <path>"
+	shareRemoveUsage = "share remove <name>"
+	shareListUsage   = "share list"
 )
 
 var shareCmd = &ffcli.Command{
@@ -34,18 +34,18 @@ var shareCmd = &ffcli.Command{
 		{
 			Name:      "add",
 			Exec:      runShareAdd,
-			ShortHelp: "add a share",
+			ShortHelp: "[ALPHA] add a share",
 			UsageFunc: usageFunc,
 		},
 		{
 			Name:      "remove",
-			ShortHelp: "remove a share",
+			ShortHelp: "[ALPHA] remove a share",
 			Exec:      runShareRemove,
 			UsageFunc: usageFunc,
 		},
 		{
 			Name:      "list",
-			ShortHelp: "list current shares",
+			ShortHelp: "[ALPHA] list current shares",
 			Exec:      runShareList,
 			UsageFunc: usageFunc,
 		},
