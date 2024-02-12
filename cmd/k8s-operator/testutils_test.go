@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
@@ -508,4 +509,12 @@ func (c *fakeTSClient) Deleted() []string {
 	c.Lock()
 	defer c.Unlock()
 	return c.deleted
+}
+
+type fakeTSLocalClient struct {
+	whoisResponse *apitype.WhoIsResponse
+}
+
+func (f *fakeTSLocalClient) WhoIs(context.Context, string) (*apitype.WhoIsResponse, error) {
+	return f.whoisResponse, nil
 }

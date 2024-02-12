@@ -20,7 +20,9 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -220,8 +222,12 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		// resources that we GET via the controller manager's client.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}:      nsFilter,
-				&appsv1.StatefulSet{}: nsFilter,
+				&corev1.Secret{}:             nsFilter,
+				&corev1.ServiceAccount{}:     nsFilter,
+				&corev1.ConfigMap{}:          nsFilter,
+				&appsv1.StatefulSet{}:        nsFilter,
+				&appsv1.Deployment{}:         nsFilter,
+				&discoveryv1.EndpointSlice{}: nsFilter,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -291,11 +297,216 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			clock:    tstime.DefaultClock{},
 		})
 	if err != nil {
-		startlog.Fatal("could not create connector reconciler: %v", err)
+		startlog.Fatalf("could not create connector reconciler: %v", err)
+	}
+	// TODO (irbekrm): switch to metadata-only watches for resources whose
+	// spec we don't need to inspect to reduce memory consumption
+	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
+	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.DNSConfig{}).
+		Watches(&appsv1.Deployment{}, nameserverFilter).
+		Watches(&corev1.ConfigMap{}, nameserverFilter).
+		Watches(&corev1.Service{}, nameserverFilter).
+		Watches(&corev1.ServiceAccount{}, nameserverFilter).
+		Complete(&NameserverReconciler{
+			recorder:    eventRecorder,
+			tsNamespace: tsNamespace,
+
+			Client: mgr.GetClient(),
+			logger: zlog.Named("nameserver-reconciler"),
+			clock:  tstime.DefaultClock{},
+		})
+	if err != nil {
+		startlog.Fatalf("could not create nameserver reconciler: %v", err)
+	}
+	lc, err := s.LocalClient()
+	if err != nil {
+		startlog.Fatalf("error retrieving local client: %w", err)
+	}
+	logger := startlog.Named("dns-records-reconciler-event-handlers")
+	// On EndpointSlice events, if it is an EndpointSlice for an
+	// ingress/egress proxy headless Service, reconcile the headless
+	// Service.
+	dnsRREpsOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerEndpointSliceHandler)
+	// On DNSConfig changes, reconcile all headless Services for
+	// ingress/egress proxies in operator namespace.
+	dnsRRDNSConfigOpts := handler.EnqueueRequestsFromMapFunc(enqueueAllIngressEgressProxySvcsInNS(tsNamespace, mgr.GetClient(), logger))
+	// On Secret events, if it is a state Secret for tailscale ingress proxy
+	// configured via Service annotation, reconcile the proxy's headless
+	// Service.
+	dnsRRSecretsOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerSecretsHandler(tsNamespace, mgr.GetClient(), logger))
+	// On Service events, if it is an ingress/egress proxy headless Service, reconcile it.
+	dnsRRServiceOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerServiceHandler(tsNamespace, mgr.GetClient(), isDefaultLoadBalancer, logger))
+	// On Ingress events, if it is a tailscale Ingress, reconcile the proxy
+	// headless Service.
+	dnsRRIngressOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerIngressHandler(tsNamespace, mgr.GetClient(), logger))
+	err = builder.ControllerManagedBy(mgr).
+		Named("dns-records-reconciler").
+		Watches(&corev1.Service{}, dnsRRServiceOpts).
+		Watches(&networkingv1.Ingress{}, dnsRRIngressOpts).
+		Watches(&discoveryv1.EndpointSlice{}, dnsRREpsOpts).
+		Watches(&tsapi.DNSConfig{}, dnsRRDNSConfigOpts).
+		Watches(&corev1.Secret{}, dnsRRSecretsOpts).
+		Complete(&dnsRecordsReconciler{
+			Client:                mgr.GetClient(),
+			tsNamespace:           tsNamespace,
+			localAPIClient:        lc,
+			logger:                zlog.Named("dns-records-reconciler"),
+			isDefaultLoadBalancer: isDefaultLoadBalancer,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create DNS records reconciler: %v", err)
 	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
+	}
+}
+
+// enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
+// ingress/egress proxy headless Service found in the provided namespace.
+func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, _ client.Object) []reconcile.Request {
+		reqs := make([]reconcile.Request, 0)
+
+		// Get all headless Services for proxies configured using Service.
+		svcProxyLabels := map[string]string{
+			LabelManaged:    "true",
+			LabelParentType: "svc",
+		}
+		svcHeadlessSvcList := &corev1.ServiceList{}
+		if err := cl.List(ctx, svcHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(svcProxyLabels)); err != nil {
+			logger.Errorf("error listing headless Services for tailscale ingress/egress Services in operator namespace: %v", err)
+			return nil
+		}
+		for _, svc := range svcHeadlessSvcList.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
+		}
+
+		// Get all headless Services for proxies configured using Ingress.
+		ingProxyLabels := map[string]string{
+			LabelManaged:    "true",
+			LabelParentType: "ingress",
+		}
+		ingHeadlessSvcList := &corev1.ServiceList{}
+		if err := cl.List(ctx, ingHeadlessSvcList, client.InNamespace(ns), client.MatchingLabels(ingProxyLabels)); err != nil {
+			logger.Errorf("error listing headless Services for tailscale Ingresses in operator namespace: %v", err)
+			return nil
+		}
+		for _, svc := range ingHeadlessSvcList.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
+		}
+		return reqs
+	}
+}
+
+// dnsRecordsReconcilerSecretsHandler filters Secret events for which
+// dns-records-reconciler should reconcile. The only Secrets that
+// dns-records-reconciler is interested in, are state Secrets for ingress
+// proxies exposed via a Service annotation, because for these proxies MagicDNS
+// names are read from state Secrets. If a Secret is a state Secret for an
+// annotated cluster ingress Service, dnsRecordsReconcilerSecretsHandler returns
+// a reconcile request for the proxy's headless Service.
+func dnsRecordsReconcilerSecretsHandler(ns string, cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		// Filter out events for unrelated Secrets.
+		if !isManagedByType(o, "svc") {
+			return nil
+		}
+		labels := o.GetLabels()
+		svc := &corev1.Service{}
+		err := cl.Get(ctx, types.NamespacedName{Namespace: labels[LabelParentNamespace], Name: labels[LabelParentName]}, svc)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			logger.Errorf("error getting headless Service for Secret event")
+			return nil
+		}
+		if !hasExposeAnnotation(svc) {
+			return nil
+		}
+		// Calculate the proxy headless Service's name from the Secret name.
+		idx := strings.LastIndex(o.GetName(), "-") // Secret names are in form '<headless-service-name>-<number>'
+		if idx == -1 {
+			return nil
+		}
+		svcName := o.GetName()[:idx]
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: svcName, Namespace: o.GetNamespace()}}}
+	}
+}
+
+// dnsRecordsReconciler filters EndpointSlice events for which
+// dns-records-reconciler should reconcile a headless Service. The only events
+// it should reconcile are those for EndpointSlices associated with proxy
+// headless Services.
+func dnsRecordsReconcilerEndpointSliceHandler(ctx context.Context, o client.Object) []reconcile.Request {
+	if !isManagedByType(o, "svc") && !isManagedByType(o, "ingress") {
+		return nil
+	}
+	headlessSvcName, ok := o.GetLabels()[discoveryv1.LabelServiceName] // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: headlessSvcName}}}
+}
+
+// dnsRecordsReconcilerServiceHandler filters Service events for which
+// dns-records-reconciler should reconcile. If the event is for a cluster
+// ingress/cluster egress proxy's headless Service, returns the Service for
+// reconcile. If event is for a tailscale LoadBalancer Service, return the
+// headless Service in front of the proxy for reconcile.
+func dnsRecordsReconcilerServiceHandler(ns string, cl client.Client, isDefaultLoadbalancer bool, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		if !isManagedByType(o, "svc") && !isManagedByType(o, "ingress") {
+			// Check if it is a tailscale LoadBalancer Service. We need to
+			// trigger updates when those change as the change might be
+			// adding of a MagicDNS name to its status.
+			svc, ok := o.(*corev1.Service)
+			if !ok {
+				return nil
+			}
+			if isTailscaleLoadBalancerService(svc, isDefaultLoadbalancer) {
+				labels := childResourceLabels(svc.Name, svc.Namespace, "svc")
+				headlessSvc, err := getSingleObject[corev1.Service](ctx, cl, ns, labels)
+				if err != nil {
+					logger.Errorf("error getting headless Service for tailscale LoadBalancer Service: %v", err)
+					return nil
+				}
+				if headlessSvc == nil {
+					return nil
+				}
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}}
+			}
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}}}
+	}
+}
+
+// dnsRecordsReconcilerIngressHandler filters Ingress events to ensure that
+// dns-records-reconciler only reconciles on tailscale Ingress events. When an
+// event is observed on a tailscale Ingress, reconcile the proxy headless Service.
+func dnsRecordsReconcilerIngressHandler(ns string, cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		ing, ok := o.(*networkingv1.Ingress)
+		if !ok {
+			return nil
+		}
+		if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != "tailscale" {
+			return nil
+		}
+		proxyResourceLabels := childResourceLabels(ing.Name, ing.Namespace, "ingress")
+		headlessSvc, err := getSingleObject[corev1.Service](ctx, cl, ns, proxyResourceLabels)
+		if err != nil {
+			logger.Errorf("error getting headless Service from parent labels: %v", err)
+			return nil
+		}
+		if headlessSvc == nil {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}}
 	}
 }
 
@@ -321,6 +532,7 @@ func parentFromObjectLabels(o client.Object) types.NamespacedName {
 		Name:      ls[LabelParentName],
 	}
 }
+
 func managedResourceHandlerForType(typ string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
 		if !isManagedByType(o, typ) {
@@ -330,7 +542,6 @@ func managedResourceHandlerForType(typ string) handler.MapFunc {
 			{NamespacedName: parentFromObjectLabels(o)},
 		}
 	}
-
 }
 
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
@@ -352,7 +563,6 @@ func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 			},
 		},
 	}
-
 }
 
 // isMagicDNSName reports whether name is a full tailnet node FQDN (with or

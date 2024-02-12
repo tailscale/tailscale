@@ -191,6 +191,16 @@ rules:
         - list
         - watch
         - update
+    - apiGroups:
+        - tailscale.com
+      resources:
+        - dnsconfigs
+        - dnsconfigs/status
+      verbs:
+        - get
+        - list
+        - watch
+        - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -215,12 +225,29 @@ rules:
         - ""
       resources:
         - secrets
+        - serviceaccounts
+        - configmaps
       verbs:
         - '*'
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
+        - watch
     - apiGroups:
         - apps
       resources:
         - statefulsets
+        - deployments
+      verbs:
+        - '*'
+    - apiGroups:
+        - discovery.k8s.io
+      resources:
+        - endpointslices
       verbs:
         - '*'
 ---
