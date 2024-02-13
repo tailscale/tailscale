@@ -19,58 +19,62 @@ func randIP() netip.Addr {
 	return netip.AddrFrom4([4]byte{b, b, b, b})
 }
 
-func randRouteData() *winipcfg.RouteData {
-	return &winipcfg.RouteData{
-		Destination: netip.PrefixFrom(randIP(), rand.Intn(30)+1),
-		NextHop:     randIP(),
-		Metric:      uint32(rand.Intn(3)),
+func randRouteData() *routeData {
+	return &routeData{
+		RouteData: winipcfg.RouteData{
+			Destination: netip.PrefixFrom(randIP(), rand.Intn(30)+1),
+			NextHop:     randIP(),
+			Metric:      uint32(rand.Intn(3)),
+		},
 	}
 }
 
+type W = winipcfg.RouteData
+
 func TestRouteLess(t *testing.T) {
-	type D = winipcfg.RouteData
+	type D = routeData
 	ipnet := netip.MustParsePrefix
 	tests := []struct {
-		ri, rj *winipcfg.RouteData
+		ri, rj *routeData
 		want   bool
 	}{
 		{
-			ri:   &D{Metric: 1},
-			rj:   &D{Metric: 2},
+			ri:   &D{RouteData: W{Metric: 1}},
+			rj:   &D{RouteData: W{Metric: 2}},
 			want: true,
 		},
 		{
-			ri:   &D{Destination: ipnet("1.1.0.0/16"), Metric: 2},
-			rj:   &D{Destination: ipnet("2.2.0.0/16"), Metric: 1},
+			ri:   &D{RouteData: W{Destination: ipnet("1.1.0.0/16"), Metric: 2}},
+			rj:   &D{RouteData: W{Destination: ipnet("2.2.0.0/16"), Metric: 1}},
 			want: true,
 		},
 		{
-			ri:   &D{Destination: ipnet("1.1.0.0/16"), Metric: 1},
-			rj:   &D{Destination: ipnet("2.2.0.0/16"), Metric: 1},
+			ri:   &D{RouteData: W{Destination: ipnet("1.1.0.0/16"), Metric: 1}},
+			rj:   &D{RouteData: W{Destination: ipnet("2.2.0.0/16"), Metric: 1}},
 			want: true,
 		},
 		{
-			ri:   &D{Destination: ipnet("1.1.0.0/32"), Metric: 2},
-			rj:   &D{Destination: ipnet("1.1.0.0/16"), Metric: 1},
+			ri:   &D{RouteData: W{Destination: ipnet("1.1.0.0/32"), Metric: 2}},
+			rj:   &D{RouteData: W{Destination: ipnet("1.1.0.0/16"), Metric: 1}},
 			want: true,
 		},
 		{
-			ri:   &D{Destination: ipnet("1.1.0.0/32"), Metric: 1},
-			rj:   &D{Destination: ipnet("1.1.0.0/16"), Metric: 1},
+			ri:   &D{RouteData: W{Destination: ipnet("1.1.0.0/32"), Metric: 1}},
+			rj:   &D{RouteData: W{Destination: ipnet("1.1.0.0/16"), Metric: 1}},
 			want: true,
 		},
 		{
-			ri:   &D{Destination: ipnet("1.1.0.0/16"), Metric: 1, NextHop: netip.MustParseAddr("3.3.3.3")},
-			rj:   &D{Destination: ipnet("1.1.0.0/16"), Metric: 1, NextHop: netip.MustParseAddr("4.4.4.4")},
+			ri:   &D{RouteData: W{Destination: ipnet("1.1.0.0/16"), Metric: 1, NextHop: netip.MustParseAddr("3.3.3.3")}},
+			rj:   &D{RouteData: W{Destination: ipnet("1.1.0.0/16"), Metric: 1, NextHop: netip.MustParseAddr("4.4.4.4")}},
 			want: true,
 		},
 	}
 	for i, tt := range tests {
-		got := routeDataLess(tt.ri, tt.rj)
+		got := tt.ri.Less(tt.rj)
 		if got != tt.want {
 			t.Errorf("%v. less = %v; want %v", i, got, tt.want)
 		}
-		back := routeDataLess(tt.rj, tt.ri)
+		back := tt.rj.Less(tt.ri)
 		if back && got {
 			t.Errorf("%v. less both ways", i)
 		}
@@ -81,7 +85,7 @@ func TestRouteDataLessConsistent(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		ri := randRouteData()
 		rj := randRouteData()
-		if routeDataLess(ri, rj) && routeDataLess(rj, ri) {
+		if ri.Less(rj) && rj.Less(ri) {
 			t.Fatalf("both compare less to each other:\n\t%#v\nand\n\t%#v", ri, rj)
 		}
 	}
@@ -139,7 +143,7 @@ func TestDeltaNets(t *testing.T) {
 	}
 }
 
-func formatRouteData(rds []*winipcfg.RouteData) string {
+func formatRouteData(rds []*routeData) string {
 	var b strings.Builder
 	for _, rd := range rds {
 		b.WriteString(fmt.Sprintf("%+v", rd))
@@ -147,12 +151,12 @@ func formatRouteData(rds []*winipcfg.RouteData) string {
 	return b.String()
 }
 
-func equalRouteDatas(a, b []*winipcfg.RouteData) bool {
+func equalRouteDatas(a, b []*routeData) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if routeDataCompare(a[i], b[i]) != 0 {
+		if a[i].Compare(b[i]) != 0 {
 			return false
 		}
 	}
@@ -166,33 +170,33 @@ func ipnet4(ip string, bits int) netip.Prefix {
 func TestFilterRoutes(t *testing.T) {
 	var h0 netip.Addr
 
-	in := []*winipcfg.RouteData{
+	in := []*routeData{
 		// LinkLocal and Loopback routes.
-		{ipnet4("169.254.0.0", 16), h0, 1},
-		{ipnet4("169.254.255.255", 32), h0, 1},
-		{ipnet4("127.0.0.0", 8), h0, 1},
-		{ipnet4("127.255.255.255", 32), h0, 1},
+		{RouteData: W{ipnet4("169.254.0.0", 16), h0, 1}},
+		{RouteData: W{ipnet4("169.254.255.255", 32), h0, 1}},
+		{RouteData: W{ipnet4("127.0.0.0", 8), h0, 1}},
+		{RouteData: W{ipnet4("127.255.255.255", 32), h0, 1}},
 		// Local LAN routes.
-		{ipnet4("192.168.0.0", 24), h0, 1},
-		{ipnet4("192.168.0.255", 32), h0, 1},
-		{ipnet4("192.168.1.0", 25), h0, 1},
-		{ipnet4("192.168.1.127", 32), h0, 1},
+		{RouteData: W{ipnet4("192.168.0.0", 24), h0, 1}},
+		{RouteData: W{ipnet4("192.168.0.255", 32), h0, 1}},
+		{RouteData: W{ipnet4("192.168.1.0", 25), h0, 1}},
+		{RouteData: W{ipnet4("192.168.1.127", 32), h0, 1}},
 		// Some random other route.
-		{ipnet4("192.168.2.23", 32), h0, 1},
+		{RouteData: W{ipnet4("192.168.2.23", 32), h0, 1}},
 		// Our own tailscale address.
-		{ipnet4("100.100.100.100", 32), h0, 1},
+		{RouteData: W{ipnet4("100.100.100.100", 32), h0, 1}},
 		// Other tailscale addresses.
-		{ipnet4("100.100.100.101", 32), h0, 1},
-		{ipnet4("100.100.100.102", 32), h0, 1},
+		{RouteData: W{ipnet4("100.100.100.101", 32), h0, 1}},
+		{RouteData: W{ipnet4("100.100.100.102", 32), h0, 1}},
 	}
-	want := []*winipcfg.RouteData{
-		{ipnet4("169.254.0.0", 16), h0, 1},
-		{ipnet4("127.0.0.0", 8), h0, 1},
-		{ipnet4("192.168.0.0", 24), h0, 1},
-		{ipnet4("192.168.1.0", 25), h0, 1},
-		{ipnet4("192.168.2.23", 32), h0, 1},
-		{ipnet4("100.100.100.101", 32), h0, 1},
-		{ipnet4("100.100.100.102", 32), h0, 1},
+	want := []*routeData{
+		{RouteData: W{ipnet4("169.254.0.0", 16), h0, 1}},
+		{RouteData: W{ipnet4("127.0.0.0", 8), h0, 1}},
+		{RouteData: W{ipnet4("192.168.0.0", 24), h0, 1}},
+		{RouteData: W{ipnet4("192.168.1.0", 25), h0, 1}},
+		{RouteData: W{ipnet4("192.168.2.23", 32), h0, 1}},
+		{RouteData: W{ipnet4("100.100.100.101", 32), h0, 1}},
+		{RouteData: W{ipnet4("100.100.100.102", 32), h0, 1}},
 	}
 
 	got := filterRoutes(in, mustCIDRs("100.100.100.100/32"))
@@ -206,25 +210,25 @@ func TestDeltaRouteData(t *testing.T) {
 	h1 := netip.MustParseAddr("99.99.99.99")
 	h2 := netip.MustParseAddr("99.99.9.99")
 
-	a := []*winipcfg.RouteData{
-		{ipnet4("1.2.3.4", 32), h0, 1},
-		{ipnet4("1.2.3.4", 24), h1, 2},
-		{ipnet4("1.2.3.4", 24), h2, 1},
-		{ipnet4("1.2.3.5", 32), h0, 1},
+	a := []*routeData{
+		{RouteData: W{ipnet4("1.2.3.4", 32), h0, 1}},
+		{RouteData: W{ipnet4("1.2.3.4", 24), h1, 2}},
+		{RouteData: W{ipnet4("1.2.3.4", 24), h2, 1}},
+		{RouteData: W{ipnet4("1.2.3.5", 32), h0, 1}},
 	}
-	b := []*winipcfg.RouteData{
-		{ipnet4("1.2.3.5", 32), h0, 1},
-		{ipnet4("1.2.3.4", 24), h1, 2},
-		{ipnet4("1.2.3.4", 24), h2, 2},
+	b := []*routeData{
+		{RouteData: W{ipnet4("1.2.3.5", 32), h0, 1}},
+		{RouteData: W{ipnet4("1.2.3.4", 24), h1, 2}},
+		{RouteData: W{ipnet4("1.2.3.4", 24), h2, 2}},
 	}
 	add, del := deltaRouteData(a, b)
 
-	wantAdd := []*winipcfg.RouteData{
-		{ipnet4("1.2.3.4", 24), h2, 2},
+	wantAdd := []*routeData{
+		{RouteData: W{ipnet4("1.2.3.4", 24), h2, 2}},
 	}
-	wantDel := []*winipcfg.RouteData{
-		{ipnet4("1.2.3.4", 32), h0, 1},
-		{ipnet4("1.2.3.4", 24), h2, 1},
+	wantDel := []*routeData{
+		{RouteData: W{ipnet4("1.2.3.4", 32), h0, 1}},
+		{RouteData: W{ipnet4("1.2.3.4", 24), h2, 1}},
 	}
 
 	if !equalRouteDatas(add, wantAdd) {
