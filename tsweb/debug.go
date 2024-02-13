@@ -39,20 +39,20 @@ type DebugHandler struct {
 // Debugger returns the DebugHandler registered on mux at /debug/,
 // creating it if necessary.
 func Debugger(mux *http.ServeMux) *DebugHandler {
-	h, pattern := mux.Handler(&http.Request{Method: "GET", URL: &url.URL{Path: "/debug/"}})
-	if d, ok := h.(*DebugHandler); ok && pattern == "GET /debug/" {
+	h, pat := mux.Handler(&http.Request{URL: &url.URL{Path: "/debug/"}})
+	if d, ok := h.(*DebugHandler); ok && pat == "/debug/" {
 		return d
 	}
 	ret := &DebugHandler{
 		mux: mux,
 	}
-	mux.Handle("GET /debug/", ret)
+	mux.Handle("/debug/", ret)
 
 	ret.KVFunc("Uptime", func() any { return varz.Uptime() })
 	ret.KV("Version", version.Long())
-	ret.Handle("GET vars", "Metrics (Go)", expvar.Handler())
-	ret.Handle("GET varz", "Metrics (Prometheus)", http.HandlerFunc(promvarz.Handler))
-	ret.Handle("GET pprof/", "pprof (index)", http.HandlerFunc(pprof.Index))
+	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
+	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(promvarz.Handler))
+	ret.Handle("pprof/", "pprof (index)", http.HandlerFunc(pprof.Index))
 	// the CPU profile handler is special because it responds
 	// streamily, unlike every other pprof handler. This means it's
 	// not made available through pprof.Index the way all the other
@@ -63,7 +63,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	ret.HandleSilent("pprof/profile", http.HandlerFunc(pprof.Profile))
 	ret.URL("/debug/pprof/goroutine?debug=1", "Goroutines (collapsed)")
 	ret.URL("/debug/pprof/goroutine?debug=2", "Goroutines (full)")
-	ret.Handle("GET gc", "force GC", http.HandlerFunc(gcHandler))
+	ret.Handle("gc", "force GC", http.HandlerFunc(gcHandler))
 	hostname, err := os.Hostname()
 	if err == nil {
 		ret.KV("Machine", hostname)
@@ -98,7 +98,7 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *DebugHandler) handle(slug string, handler http.Handler) string {
-	href := "GET /debug/" + slug
+	href := "/debug/" + slug
 	d.mux.Handle(href, Protected(debugBrowserHeaderHandler(handler)))
 	return href
 }
