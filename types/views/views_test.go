@@ -151,6 +151,15 @@ func TestLenIter(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Errorf("got %q; want %q", got, orig)
 	}
+	x := 0
+	n := testing.AllocsPerRun(10000, func() {
+		for range v.LenIter() {
+			x++
+		}
+	})
+	if n > 0 {
+		t.Errorf("allocs = %v; want 0", n)
+	}
 }
 
 func TestSliceEqual(t *testing.T) {
