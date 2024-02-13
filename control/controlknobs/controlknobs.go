@@ -73,6 +73,9 @@ type Knobs struct {
 	// ProbeUDPLifetime is whether the node should probe UDP path lifetime on
 	// the tail end of an active direct connection in magicsock.
 	ProbeUDPLifetime atomic.Bool
+
+	// SuggestExitNode is whether the exit node suggestion feature can be used.
+	SuggestExitNode atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -100,6 +103,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		forceNfTables                 = has(tailcfg.NodeAttrLinuxMustUseNfTables)
 		seamlessKeyRenewal            = has(tailcfg.NodeAttrSeamlessKeyRenewal)
 		probeUDPLifetime              = has(tailcfg.NodeAttrProbeUDPLifetime)
+		suggestExitNode               = has(tailcfg.NodeAttrSuggestExitNode)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -122,6 +126,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.LinuxForceNfTables.Store(forceNfTables)
 	k.SeamlessKeyRenewal.Store(seamlessKeyRenewal)
 	k.ProbeUDPLifetime.Store(probeUDPLifetime)
+	k.SuggestExitNode.Store(suggestExitNode)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -145,5 +150,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"LinuxForceNfTables":            k.LinuxForceNfTables.Load(),
 		"SeamlessKeyRenewal":            k.SeamlessKeyRenewal.Load(),
 		"ProbeUDPLifetime":              k.ProbeUDPLifetime.Load(),
+		"SuggestExitNode":               k.SuggestExitNode.Load(),
 	}
 }

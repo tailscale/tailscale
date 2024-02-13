@@ -1460,6 +1460,19 @@ func (lc *LocalClient) TailFSShareList(ctx context.Context) (map[string]*tailfs.
 	return shares, err
 }
 
+// SuggestDERPExitNode returns the tailcfg.StableNodeID of a suggested exit node to connect to.
+func (lc *LocalClient) SuggestDERPExitNode(ctx context.Context) (tailcfg.StableNodeID, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-derp-exit-node", 200, nil)
+	if err != nil {
+		return "", fmt.Errorf("error %w: %s", err, body)
+	}
+	nodeID, err := decodeJSON[tailcfg.StableNodeID](body)
+	if err != nil {
+		return "", err
+	}
+	return nodeID, nil
+}
+
 // IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
 // It's returned by LocalClient.WatchIPNBus.
 //

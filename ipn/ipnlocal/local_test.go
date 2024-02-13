@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -2169,6 +2171,327 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)
 			if want, got := tt.after, b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
 				t.Errorf("got: %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestSuggestDerpExitNode(t *testing.T) {
+	tests := []struct {
+		name       string
+		lastReport netcheck.Report
+		netMap     netmap.NetworkMap
+		wantValue  tailcfg.StableNodeID
+		wantError  error
+	}{
+		{
+			name: "2 derp based exit nodes in same region",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+				},
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+						4: {},
+						5: {},
+						6: {},
+						7: {},
+						8: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+				},
+			},
+			wantValue: tailcfg.StableNodeID("2"),
+		},
+		{
+			name: "2 derp based exit nodes, different regions, no latency measurements",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+						4: {},
+						5: {},
+						6: {},
+						7: {},
+						8: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						DERP:     "127.3.3.40:2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+				},
+			},
+			wantValue: tailcfg.StableNodeID("2"),
+		},
+		{
+			name: "no derp based exit nodes",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+						4: {},
+						5: {},
+						6: {},
+						7: {},
+						8: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+				},
+			},
+			wantError: errNoExitNodes,
+		},
+		{
+			name: "no exit nodes",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+						4: {},
+						5: {},
+						6: {},
+						7: {},
+						8: {},
+					},
+				},
+			},
+			wantError: errNoExitNodes,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := suggestDERPExitNode(&tt.lastReport, &tt.netMap, rand.New(rand.NewSource(10)))
+			if got != tt.wantValue || err != tt.wantError {
+				t.Errorf("got value %v error %v want %v error %v", got, err, tt.wantValue, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestSuggestExitNodeSortRegions(t *testing.T) {
+	tests := []struct {
+		name       string
+		regions    []int
+		lastReport netcheck.Report
+		wantValue  []int
+	}{
+		{
+			name:    "list of regions and netcheck report has latency values",
+			regions: []int{1, 3, 5},
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 3,
+					3: 2,
+					5: 1,
+				},
+			},
+			wantValue: []int{5, 3, 1},
+		},
+		{
+			name:    "empty list of regions",
+			regions: []int{},
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{},
+			},
+			wantValue: []int{},
+		},
+		{
+			name:    "list of regions and netcheck report doesn't have all regions' values",
+			regions: []int{1, 3, 5},
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					3: 1,
+					5: 0,
+				},
+			},
+			wantValue: []int{3, 1, 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sortRegions(tt.regions, &tt.lastReport)
+			if !reflect.DeepEqual(got, tt.wantValue) {
+				t.Errorf("got value %v want %v", got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestSuggestExitNodePick(t *testing.T) {
+	tests := []struct {
+		name       string
+		candidates []tailcfg.NodeView
+		rng        *rand.Rand
+		wantValue  tailcfg.NodeView
+		wantError  error
+	}{
+		{
+			name: ">1 candidates",
+			candidates: []tailcfg.NodeView{
+				(&tailcfg.Node{
+					ID:       2,
+					StableID: "2",
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+					},
+				}).View(),
+				(&tailcfg.Node{
+					ID:       3,
+					StableID: "3",
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+					},
+				}).View(),
+			},
+			rng: rand.New(rand.NewSource(2)),
+			wantValue: (&tailcfg.Node{
+				ID:       2,
+				StableID: "2",
+				AllowedIPs: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+				},
+			}).View(),
+		},
+		{
+			name:       "<1 candidates",
+			candidates: []tailcfg.NodeView{},
+			rng:        rand.New(rand.NewSource(2)),
+			wantValue:  (&tailcfg.Node{}).View(),
+			wantError:  errUnableToPick,
+		},
+		{
+			name: "1 candidate",
+			candidates: []tailcfg.NodeView{
+				(&tailcfg.Node{
+					ID:       2,
+					StableID: "2",
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+					},
+				}).View(),
+			},
+			rng: rand.New(rand.NewSource(2)),
+			wantValue: (&tailcfg.Node{
+				ID:       2,
+				StableID: "2",
+				AllowedIPs: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+				},
+			}).View(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := pick(tt.candidates, tt.rng)
+			if !reflect.DeepEqual(got, tt.wantValue) || err != tt.wantError {
+				t.Errorf("got value %v error %v want %v error %v", got, err, tt.wantValue, tt.wantError)
 			}
 		})
 	}

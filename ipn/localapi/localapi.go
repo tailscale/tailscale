@@ -134,6 +134,7 @@ var handler = map[string]localAPIHandler{
 	"update/check":                (*Handler).serveUpdateCheck,
 	"update/install":              (*Handler).serveUpdateInstall,
 	"update/progress":             (*Handler).serveUpdateProgress,
+	"suggest-derp-exit-node":      (*Handler).serveSuggestDERPExitNode,
 }
 
 var (
@@ -2626,3 +2627,21 @@ var (
 	// User-visible LocalAPI endpoints.
 	metricFilePutCalls = clientmetric.NewCounter("localapi_file_put")
 )
+
+// serveSuggestDerpExitNode serves a POST endpoint for returning a suggested exit node.
+func (h *Handler) serveSuggestDERPExitNode(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", http.StatusBadRequest)
+		return
+	}
+	suggestedExitNodeID, err := h.b.SuggestDERPExitNode()
+	if err != nil {
+		writeErrorJSON(w, err)
+		return
+	}
+	json.NewEncoder(w).Encode(suggestedExitNodeID)
+}
