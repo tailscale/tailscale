@@ -39,8 +39,8 @@ type DebugHandler struct {
 // Debugger returns the DebugHandler registered on mux at /debug/,
 // creating it if necessary.
 func Debugger(mux *http.ServeMux) *DebugHandler {
-	h, pat := mux.Handler(&http.Request{URL: &url.URL{Path: "/debug/"}})
-	if d, ok := h.(*DebugHandler); ok && pat == "/debug/" {
+	h, pattern := mux.Handler(&http.Request{Method: "GET", URL: &url.URL{Path: "/debug/"}})
+	if d, ok := h.(*DebugHandler); ok && pattern == "GET /debug/" {
 		return d
 	}
 	ret := &DebugHandler{
