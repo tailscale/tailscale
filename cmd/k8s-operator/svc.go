@@ -20,6 +20,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	tsoperator "tailscale.com/k8s-operator"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 )
@@ -155,6 +157,17 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		a.logger.Error(msg)
 		return nil
 	}
+
+	proxyClass := proxyClassForObject(svc)
+	if proxyClass != "" {
+		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
+			return fmt.Errorf("error verifying ProxyClass for Service: %w", err)
+		} else if !ready {
+			logger.Infof("ProxyClass %s specified for the Service, but is not (yet) Ready, waiting..", proxyClass)
+			return nil
+		}
+	}
+
 	hostname, err := nameForService(svc)
 	if err != nil {
 		return err
@@ -183,6 +196,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Hostname:            hostname,
 		Tags:                tags,
 		ChildResourceLabels: crl,
+		ProxyClass:          proxyClass,
 	}
 
 	a.mu.Lock()
@@ -317,4 +331,16 @@ func (a *ServiceReconciler) tailnetTargetAnnotation(svc *corev1.Service) string 
 		return ip
 	}
 	return svc.Annotations[annotationTailnetTargetIPOld]
+}
+
+func proxyClassForObject(o client.Object) string {
+	return o.GetLabels()[LabelProxyClass]
+}
+
+func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool, error) {
+	proxyClass := new(tsapi.ProxyClass)
+	if err := cl.Get(ctx, types.NamespacedName{Name: name}, proxyClass); err != nil {
+		return false, fmt.Errorf("error getting ProxyClass %s: %w", name, err)
+	}
+	return tsoperator.ProxyClassIsReady(proxyClass), nil
 }

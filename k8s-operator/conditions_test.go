@@ -19,8 +19,8 @@ import (
 func TestSetConnectorCondition(t *testing.T) {
 	cn := tsapi.Connector{}
 	clock := tstest.NewClock(tstest.ClockOpts{})
-	fakeNow := metav1.NewTime(clock.Now())
-	fakePast := metav1.NewTime(clock.Now().Add(-5 * time.Minute))
+	fakeNow := metav1.NewTime(clock.Now().Truncate(time.Second))
+	fakePast := metav1.NewTime(clock.Now().Truncate(time.Second).Add(-5 * time.Minute))
 	zl, err := zap.NewDevelopment()
 	assert.Nil(t, err)
 

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -22,11 +23,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	tsoperator "tailscale.com/k8s-operator"
+	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -35,10 +39,19 @@ import (
 )
 
 const (
+	// Labels that the operator sets on StatefulSets and Pods. If you add a
+	// new label here, do also add it to tailscaleManagedLabels var to
+	// ensure that it does not get overwritten by ProxyClass configuration.
 	LabelManaged         = "tailscale.com/managed"
 	LabelParentType      = "tailscale.com/parent-resource-type"
 	LabelParentName      = "tailscale.com/parent-resource"
 	LabelParentNamespace = "tailscale.com/parent-resource-ns"
+
+	// LabelProxyClass can be set by users on Connectors, tailscale
+	// Ingresses and Services that define cluster ingress or cluster egress,
+	// to specify that configuration in this ProxyClass should be applied to
+	// resources created for the Connector, Ingress or Service.
+	LabelProxyClass = "tailscale.com/proxy-class"
 
 	FinalizerName = "tailscale.com/finalizer"
 
@@ -68,7 +81,10 @@ const (
 	AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy = "tailscale.com/experimental-forward-cluster-traffic-via-ingress"
 
 	// Annotations set by the operator on pods to trigger restarts when the
-	// hostname, IP, FQDN or tailscaled config changes.
+	// hostname, IP, FQDN or tailscaled config changes. If you add a new
+	// annotation here, also add it to tailscaleManagedAnnotations var to
+	// ensure that it does not get removed when a ProxyClass configuration
+	// is applied.
 	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
 	podAnnotationLastSetHostname          = "tailscale.com/operator-last-set-hostname"
 	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
@@ -79,6 +95,13 @@ const (
 	// tailscaledConfigKey is the name of the key in proxy Secret Data that
 	// holds the tailscaled config contents.
 	tailscaledConfigKey = "tailscaled"
+)
+
+var (
+	// tailscaleManagedLabels are label keys that tailscale operator sets on StatefulSets and Pods.
+	tailscaleManagedLabels = []string{LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
+	// tailscaleManagedAnnotations are annotation keys that tailscale operator sets on StatefulSets and Pods.
+	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetHostname, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
 )
 
 type tailscaleSTSConfig struct {
@@ -102,6 +125,8 @@ type tailscaleSTSConfig struct {
 	// Connector specifies a configuration of a Connector instance if that's
 	// what this StatefulSet should be created for.
 	Connector *connector
+
+	ProxyClass string
 }
 
 type connector struct {
@@ -398,10 +423,10 @@ var proxyYaml []byte
 var userspaceProxyYaml []byte
 
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
-	var ss appsv1.StatefulSet
+	ss := new(appsv1.StatefulSet)
 	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal userspace proxy spec: %v", err)
 		}
 	} else {
 		if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
@@ -415,12 +440,25 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			}
 		}
 	}
-	container := &ss.Spec.Template.Spec.Containers[0]
+	pod := &ss.Spec.Template
+	container := &pod.Spec.Containers[0]
+	proxyClass := new(tsapi.ProxyClass)
+	if sts.ProxyClass != "" {
+		if err := a.Get(ctx, types.NamespacedName{Name: sts.ProxyClass}, proxyClass); err != nil {
+			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+		if !tsoperator.ProxyClassIsReady(proxyClass) {
+			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting..")
+			return nil, nil
+		}
+	}
 	container.Image = a.proxyImage
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
-		Labels:    sts.ChildResourceLabels,
+	}
+	for key, val := range sts.ChildResourceLabels {
+		mak.Set(&ss.ObjectMeta.Labels, key, val)
 	}
 	ss.Spec.ServiceName = headlessSvc.Name
 	ss.Spec.Selector = &metav1.LabelSelector{
@@ -428,9 +466,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			"app": sts.ParentResourceUID,
 		},
 	}
-	mak.Set(&ss.Spec.Template.Labels, "app", sts.ParentResourceUID)
+	mak.Set(&pod.Labels, "app", sts.ParentResourceUID)
 	for key, val := range sts.ChildResourceLabels {
-		ss.Spec.Template.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
+		pod.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
 	}
 
 	// Generic containerboot configuration options.
@@ -455,12 +493,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		// it is passed via an environment variable. So we need to restart the
 		// container when the value changes. We do this by adding an annotation to
 		// the pod template that contains the last value we set.
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetHostname, sts.Hostname)
+		mak.Set(&pod.Annotations, podAnnotationLastSetHostname, sts.Hostname)
 	}
 	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
 	if shouldDoTailscaledDeclarativeConfig(sts) {
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
-		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+		pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: "tailscaledconfig",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -489,7 +527,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: a.tsFirewallMode,
 		})
 	}
-	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
+	pod.Spec.PriorityClassName = a.proxyPriorityClassName
 
 	// Ingress/egress proxy configuration options.
 	if sts.ClusterTargetIP != "" {
@@ -520,7 +558,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			ReadOnly:  true,
 			MountPath: "/etc/tailscaled",
 		})
-		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+		pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: "serve-config",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -534,7 +572,95 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		})
 	}
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
-	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
+	if sts.ProxyClass != "" {
+		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClass)
+		ss = applyProxyClassToStatefulSet(proxyClass, ss)
+	}
+	updateSS := func(s *appsv1.StatefulSet) {
+		s.Spec = ss.Spec
+		s.ObjectMeta.Labels = ss.Labels
+		s.ObjectMeta.Annotations = ss.Annotations
+	}
+	return createOrUpdate(ctx, a.Client, a.operatorNamespace, ss, updateSS)
+}
+
+// mergeStatefulSetLabelsOrAnnots returns a map that contains all keys/values
+// present in 'custom' map as well as those keys/values from the current map
+// whose keys are present in the 'managed' map. The reason why this merge is
+// necessary is to ensure that labels/annotations applied from a ProxyClass get removed
+// if they are removed from a ProxyClass or if the ProxyClass no longer applies
+// to this StatefulSet whilst any tailscale managed labels/annotations remain present.
+func mergeStatefulSetLabelsOrAnnots(current, custom map[string]string, managed []string) map[string]string {
+	if custom == nil {
+		custom = make(map[string]string)
+	}
+	if current == nil {
+		return custom
+	}
+	for key, val := range current {
+		if slices.Contains(managed, key) {
+			custom[key] = val
+		}
+	}
+	return custom
+}
+
+func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) *appsv1.StatefulSet {
+	if pc == nil || ss == nil || pc.Spec.StatefulSet == nil {
+		return ss
+	}
+
+	// Update StatefulSet metadata.
+	if wantsSSLabels := pc.Spec.StatefulSet.Labels; len(wantsSSLabels) > 0 {
+		ss.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Labels, wantsSSLabels, tailscaleManagedLabels)
+	}
+	if wantsSSAnnots := pc.Spec.StatefulSet.Annotations; len(wantsSSAnnots) > 0 {
+		ss.ObjectMeta.Annotations = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Annotations, wantsSSAnnots, tailscaleManagedAnnotations)
+	}
+
+	// Update Pod fields.
+	if pc.Spec.StatefulSet.Pod == nil {
+		return ss
+	}
+	wantsPod := pc.Spec.StatefulSet.Pod
+	if wantsPodLabels := wantsPod.Labels; len(wantsPodLabels) > 0 {
+		ss.Spec.Template.ObjectMeta.Labels = mergeStatefulSetLabelsOrAnnots(ss.Spec.Template.ObjectMeta.Labels, wantsPodLabels, tailscaleManagedLabels)
+	}
+	if wantsPodAnnots := wantsPod.Annotations; len(wantsPodAnnots) > 0 {
+		ss.Spec.Template.ObjectMeta.Annotations = mergeStatefulSetLabelsOrAnnots(ss.Spec.Template.ObjectMeta.Annotations, wantsPodAnnots, tailscaleManagedAnnotations)
+	}
+	ss.Spec.Template.Spec.SecurityContext = wantsPod.SecurityContext
+	ss.Spec.Template.Spec.ImagePullSecrets = wantsPod.ImagePullSecrets
+	ss.Spec.Template.Spec.NodeName = wantsPod.NodeName
+	ss.Spec.Template.Spec.NodeSelector = wantsPod.NodeSelector
+	ss.Spec.Template.Spec.Tolerations = wantsPod.Tolerations
+
+	// Update containers.
+	updateContainer := func(overlay *tsapi.Container, base corev1.Container) corev1.Container {
+		if overlay == nil {
+			return base
+		}
+		if overlay.SecurityContext != nil {
+			base.SecurityContext = overlay.SecurityContext
+		}
+		base.Resources = overlay.Resources
+		return base
+	}
+	for i, c := range ss.Spec.Template.Spec.Containers {
+		if c.Name == "tailscale" {
+			ss.Spec.Template.Spec.Containers[i] = updateContainer(wantsPod.TailscaleContainer, ss.Spec.Template.Spec.Containers[i])
+			break
+		}
+	}
+	if initContainers := ss.Spec.Template.Spec.InitContainers; len(initContainers) > 0 {
+		for i, c := range initContainers {
+			if c.Name == "sysctler" {
+				ss.Spec.Template.Spec.InitContainers[i] = updateContainer(wantsPod.TailscaleInitContainer, initContainers[i])
+				break
+			}
+		}
+	}
+	return ss
 }
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if

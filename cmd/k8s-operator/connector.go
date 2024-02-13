@@ -164,6 +164,17 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		hostname = string(cn.Spec.Hostname)
 	}
 	crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
+
+	proxyClass := cn.Spec.ProxyClass
+	if proxyClass != "" {
+		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
+			return fmt.Errorf("error verifying ProxyClass for Connector: %w", err)
+		} else if !ready {
+			logger.Infof("ProxyClass %s specified for the Connector, but is not (yet) Ready, waiting..", proxyClass)
+			return nil
+		}
+	}
+
 	sts := &tailscaleSTSConfig{
 		ParentResourceName:  cn.Name,
 		ParentResourceUID:   string(cn.UID),
@@ -173,6 +184,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		Connector: &connector{
 			isExitNode: cn.Spec.ExitNode,
 		},
+		ProxyClass: proxyClass,
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
