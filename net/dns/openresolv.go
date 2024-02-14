@@ -10,20 +10,40 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"tailscale.com/types/logger"
 )
 
 // openresolvManager manages DNS configuration using the openresolv
 // implementation of the `resolvconf` program.
-type openresolvManager struct{}
+type openresolvManager struct {
+	logf logger.Logf
+}
 
-func newOpenresolvManager() (openresolvManager, error) {
-	return openresolvManager{}, nil
+func newOpenresolvManager(logf logger.Logf) (openresolvManager, error) {
+	return openresolvManager{logf}, nil
+}
+
+func (m openresolvManager) logCmdErr(cmd *exec.Cmd, err error) {
+	if err == nil {
+		return
+	}
+
+	commandStr := fmt.Sprintf("path=%q args=%q", cmd.Path, cmd.Args)
+	exerr, ok := err.(*exec.ExitError)
+	if !ok {
+		m.logf("error running command %s: %v", commandStr, err)
+		return
+	}
+
+	m.logf("error running command %s stderr=%q exitCode=%d: %v", commandStr, exerr.Stderr, exerr.ExitCode(), err)
 }
 
 func (m openresolvManager) deleteTailscaleConfig() error {
 	cmd := exec.Command("resolvconf", "-f", "-d", "tailscale")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		m.logCmdErr(cmd, err)
 		return fmt.Errorf("running %s: %s", cmd, out)
 	}
 	return nil
@@ -41,6 +61,7 @@ func (m openresolvManager) SetDNS(config OSConfig) error {
 	cmd.Stdin = &stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		m.logCmdErr(cmd, err)
 		return fmt.Errorf("running %s: %s", cmd, out)
 	}
 	return nil
@@ -83,6 +104,7 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 	cmd := exec.Command("resolvconf", args...)
 	cmd.Stdout = &buf
 	if err := cmd.Run(); err != nil {
+		m.logCmdErr(cmd, err)
 		return OSConfig{}, err
 	}
 	return readResolv(&buf)
