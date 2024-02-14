@@ -167,6 +167,10 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 		return up.updateWindows, true
 	case "linux":
 		switch distro.Get() {
+		case distro.NixOS:
+			// NixOS packages are immutable and managed with a system-wide
+			// configuration.
+			return up.updateNixos, false
 		case distro.Synology:
 			// Synology updates use our own pkgs.tailscale.com instead of the
 			// Synology Package Center. We should eventually get to a regular
@@ -520,6 +524,13 @@ func (up *Updater) updateArchLike() error {
 	// https://github.com/tailscale/tailscale/issues/6995#issuecomment-1687080106
 	return errors.New(`individual package updates are not supported on Arch-based distros, only full-system updates are: https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported.
 you can use "pacman --sync --refresh --sysupgrade" or "pacman -Syu" to upgrade the system, including Tailscale.`)
+}
+
+func (up *Updater) updateNixos() error {
+	// NixOS package updates are managed on a system level and not individually.
+	// Direct users to update their nix channel or nixpkgs flake input to
+	// receive the latest version.
+	return errors.New(`individual package updates are not supported on NixOS installations. Update your system channel or flake inputs to get the latest Tailscale version from nixpkgs.`)
 }
 
 const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
