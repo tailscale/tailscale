@@ -8,7 +8,7 @@ package ipnauth
 import (
 	"net"
 
-	"inet.af/peercred"
+	"github.com/tailscale/peercred"
 	"tailscale.com/types/logger"
 )
 

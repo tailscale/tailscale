@@ -12,7 +12,7 @@ import (
 	"net/netip"
 	"slices"
 
-	"inet.af/tcpproxy"
+	"github.com/inetaf/tcpproxy"
 	"tailscale.com/net/netutil"
 )
 

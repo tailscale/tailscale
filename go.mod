@@ -41,6 +41,7 @@ require (
 	github.com/hdevalence/ed25519consensus v0.2.0
 	github.com/iancoleman/strcase v0.3.0
 	github.com/illarion/gonotify v1.0.1
+	github.com/inetaf/tcpproxy v0.0.0-20240214030015-3ce58045626c
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2
 	github.com/jellydator/ttlcache/v3 v3.1.0
 	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86
@@ -71,7 +72,9 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20240102155253-bf50773ba734
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
+	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240208184856-443a64766f61
+	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20231121184858-cc193a0b3272
 	github.com/tailscale/xnet v0.0.0-20240117122442-62b9a7c569f9
 	github.com/tc-hib/winres v0.2.1
@@ -98,9 +101,6 @@ require (
 	gopkg.in/square/go-jose.v2 v2.6.0
 	gvisor.dev/gvisor v0.0.0-20240119233241-c9c1d4f9b186
 	honnef.co/go/tools v0.4.6
-	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
-	inet.af/tcpproxy v0.0.0-20231102063150-2862066fc2a9
-	inet.af/wf v0.0.0-20221017222439-36129f591884
 	k8s.io/api v0.29.1
 	k8s.io/apimachinery v0.29.1
 	k8s.io/apiserver v0.29.1
