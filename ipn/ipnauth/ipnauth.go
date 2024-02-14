@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"strconv"
 
-	"inet.af/peercred"
+	"github.com/tailscale/peercred"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/safesocket"

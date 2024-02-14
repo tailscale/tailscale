@@ -10,8 +10,8 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/tailscale/wf"
 	"golang.org/x/sys/windows"
-	"inet.af/wf"
 	"tailscale.com/net/netaddr"
 )
 
