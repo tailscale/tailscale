@@ -39,6 +39,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/doctor"
+	"tailscale.com/doctor/ethtool"
 	"tailscale.com/doctor/permissions"
 	"tailscale.com/doctor/routetable"
 	"tailscale.com/envknob"
@@ -5511,6 +5512,7 @@ func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
 	checks = append(checks,
 		permissions.Check{},
 		routetable.Check{},
+		ethtool.Check{},
 	)
 
 	// Print a log message if any of the global DNS resolvers are Tailscale
