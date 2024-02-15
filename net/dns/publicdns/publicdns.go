@@ -153,6 +153,11 @@ func addDoH(ipStr, base string) {
 	dohIPsOfBase[base] = append(dohIPsOfBase[base], ip)
 }
 
+const (
+	wikimediaDNSv4 = "185.71.138.138"
+	wikimediaDNSv6 = "2001:67c:930::1"
+)
+
 // populate is called once to initialize the knownDoH and dohIPsOfBase maps.
 func populate() {
 	// Cloudflare
@@ -240,6 +245,9 @@ func populate() {
 	addDoH("2606:1a40::4", "https://freedns.controld.com/family")
 	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
 
+	// Wikimedia
+	addDoH(wikimediaDNSv4, "https://wikimedia-dns.org/dns-query")
+	addDoH(wikimediaDNSv6, "https://wikimedia-dns.org/dns-query")
 }
 
 var (
@@ -269,6 +277,9 @@ var (
 	controlDv6RangeB = netip.MustParsePrefix("2606:1a40:1::/48")
 	controlDv4One    = netip.MustParseAddr("76.76.2.22")
 	controlDv4Two    = netip.MustParseAddr("76.76.10.22")
+	// Wikimedia DNS server IPs (anycast)
+	wikimediaDNSv4Addr = netip.MustParseAddr(wikimediaDNSv4)
+	wikimediaDNSv6Addr = netip.MustParseAddr(wikimediaDNSv6)
 )
 
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
@@ -301,5 +312,6 @@ func IPIsDoHOnlyServer(ip netip.Addr) bool {
 	return nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) ||
 		nextDNSv4RangeA.Contains(ip) || nextDNSv4RangeB.Contains(ip) ||
 		controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) ||
-		ip.String() == controlDv4One.String() || ip.String() == controlDv4Two.String()
+		ip.String() == controlDv4One.String() || ip.String() == controlDv4Two.String() ||
+		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr
 }
