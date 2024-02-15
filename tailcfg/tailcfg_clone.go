@@ -407,6 +407,8 @@ var _DERPRegionCloneNeedsRegeneration = DERPRegion(struct {
 	RegionName string
 	Avoid      bool
 	Nodes      []*DERPNode
+	Latitude   float64
+	Longitude  float64
 }{})
 
 // Clone makes a deep copy of DERPMap.
@@ -576,6 +578,8 @@ var _LocationCloneNeedsRegeneration = Location(struct {
 	City        string
 	CityCode    string
 	Priority    int
+	Longitude   float64
+	Latitude    float64
 }{})
 
 // Clone makes a deep copy of UserProfile.

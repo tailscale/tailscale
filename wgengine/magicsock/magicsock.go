@@ -3008,3 +3008,13 @@ func getPeerMTUsProbedMetric(mtu tstun.WireMTU) *clientmetric.Metric {
 	mm, _ := metricRecvDiscoPeerMTUProbesByMTU.LoadOrInit(key, func() *clientmetric.Metric { return clientmetric.NewCounter(key) })
 	return mm
 }
+
+// GetLastNetcheckReport returns the last netcheck report.
+func (c *Conn) GetLastNetcheckReport(ctx context.Context) *netcheck.Report {
+	nr, err := c.updateNetInfo(ctx)
+	if err != nil {
+		c.logf("magicsock.Conn.determineEndpoints: updateNetInfo: %v", err)
+		return nil
+	}
+	return nr
+}

@@ -105,7 +105,9 @@ type DERPRegion struct {
 	// for a user/network pick the first one (as they should, when
 	// things are healthy), the inter-cluster routing is minimal
 	// to zero.
-	Nodes []*DERPNode
+	Nodes     []*DERPNode
+	Latitude  float64
+	Longitude float64
 }
 
 // DERPNode describes a DERP packet relay node running within a DERPRegion.

@@ -13,6 +13,8 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -57,6 +59,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -5989,4 +5992,92 @@ func mayDeref[T any](p *T) (v T) {
 		return v
 	}
 	return *p
+}
+
+// productionRNG is used for randomly picking an exit node in SuggestDERPExitNode.
+var productionRNG = rand.New(rand.NewSource(rand.Int63()))
+
+const derpPrefix = "127.3.3.40:"
+
+func suggestDERPExitNode(lastReport *netcheck.Report, netMap *netmap.NetworkMap, rng *rand.Rand) (tailcfg.StableNodeID, error) {
+	peers := netMap.Peers
+	var preferredExitNodeID tailcfg.StableNodeID
+	peerRegionMap := make(map[int][]tailcfg.NodeView)
+	var sortedRegions []int
+	for r := range netMap.DERPMap.Regions {
+		sortedRegions = append(sortedRegions, r)
+	}
+	derpRegionLat := netMap.DERPMap.Regions[netMap.SelfNode.Hostinfo().NetInfo().PreferredDERP()].Latitude
+	derpRegionLong := netMap.DERPMap.Regions[netMap.SelfNode.Hostinfo().NetInfo().PreferredDERP()].Longitude
+	var mullvadCandidates []tailcfg.NodeView
+	sortedRegions = sortRegions(sortedRegions, lastReport)
+
+	for _, peer := range peers {
+		if online := peer.Online(); online != nil && !*online {
+			continue
+		}
+		if tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
+			if peer.DERP() == "" {
+				if longLatDistance([]float64{derpRegionLat, derpRegionLong}, []float64{peer.Hostinfo().Location().Latitude, peer.Hostinfo().Location().Longitude}) < 1300000 {
+					mullvadCandidates = append(mullvadCandidates, peer)
+				}
+			}
+			ipp, _ := netip.ParseAddrPort(peer.DERP())
+			if peer.DERP() == "" || !strings.HasPrefix(peer.DERP(), derpPrefix) {
+				continue
+			}
+			regionID := int(ipp.Port())
+			peerRegionMap[regionID] = append(peerRegionMap[regionID], peer)
+		}
+	}
+
+	for _, r := range sortedRegions {
+		peers, ok := peerRegionMap[r]
+		if ok {
+			preferredExitNodeID = pick(peers, rng).StableID()
+			break
+		}
+	}
+	if preferredExitNodeID.IsZero() {
+		return preferredExitNodeID, fmt.Errorf("Unable to choose exit node")
+	}
+	return preferredExitNodeID, nil
+}
+
+// pick randomly selects a tailcfg.NodeView given a list of tailcfg.NodeView and rand.Rand.
+func pick(candidates []tailcfg.NodeView, rng *rand.Rand) tailcfg.NodeView {
+	if len(candidates) == 1 {
+		return candidates[0]
+	} else {
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID() < candidates[j].ID() })
+		chosen := candidates[rng.Intn(len(candidates))]
+		return chosen
+	}
+}
+
+// sortRegions returns a list of sorted regions by ascending latency given a list of region IDs and a netcheck report.
+func sortRegions(regions []int, lastReport *netcheck.Report) []int {
+	sort.Slice(regions, func(i, j int) bool {
+		iLatency, iOk := lastReport.RegionLatency[regions[i]]
+		if !iOk || iLatency == 0 {
+			iLatency = math.MaxInt
+		}
+		jLatency, jOk := lastReport.RegionLatency[regions[j]]
+		if !jOk || jLatency == 0 {
+			jLatency = math.MaxInt
+		}
+		return iLatency < jLatency
+	})
+	return regions
+}
+
+func longLatDistance(firstDistance []float64, secondDistance []float64) float64 {
+	diffLat := (firstDistance[0] - secondDistance[0]) * math.Pi / 180
+	diffLong := (firstDistance[1] - secondDistance[1]) * math.Pi / 180
+	latRadians1 := firstDistance[0] * math.Pi / 180
+	latRadians2 := secondDistance[0] * math.Pi / 180
+	a := math.Pow(math.Sin(diffLat)/2, 2) + math.Pow(math.Sin(diffLong)/2, 2)*math.Cos(latRadians1)*math.Cos(latRadians2)
+	earthRadius := float64(6371000) // earth radius is 6371000 meters
+	c := 2 * math.Asin(math.Sqrt(a))
+	return earthRadius * c
 }
