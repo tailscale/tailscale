@@ -20,6 +20,7 @@ import (
 
 	"context"
 
+	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/util/ctxkey"
 )
@@ -392,4 +393,26 @@ func TestLogger(tb TBLogger) Logf {
 		tb.Helper()
 		tb.Logf("    ... "+format, args...)
 	}
+}
+
+// HTTPServerLogFilter is an io.Writer that can be used as the
+// net/http.Server.ErrorLog logger, and will filter out noisy, low-signal
+// messages that clutter up logs.
+type HTTPServerLogFilter struct {
+	Inner Logf
+}
+
+func (lf HTTPServerLogFilter) Write(p []byte) (int, error) {
+	b := mem.B(p)
+	if mem.HasSuffix(b, mem.S(": EOF\n")) ||
+		mem.HasSuffix(b, mem.S(": i/o timeout\n")) ||
+		mem.HasSuffix(b, mem.S(": read: connection reset by peer\n")) ||
+		mem.HasSuffix(b, mem.S(": remote error: tls: bad certificate\n")) ||
+		mem.HasSuffix(b, mem.S(": tls: first record does not look like a TLS handshake\n")) {
+		// Skip this log message, but say that we processed it
+		return len(p), nil
+	}
+
+	lf.Inner("%s", p)
+	return len(p), nil
 }
