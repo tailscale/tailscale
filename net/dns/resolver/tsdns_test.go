@@ -233,7 +233,7 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	return r.Query(context.Background(), query, netip.AddrPort{})
+	return r.Query(context.Background(), query, "udp", netip.AddrPort{})
 }
 
 func mustIP(str string) netip.Addr {
@@ -315,7 +315,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func newResolver(t testing.TB) *Resolver {
-	return New(t.Logf, nil /* no network monitor */, nil /* no link selector */, new(tsdial.Dialer))
+	return New(t.Logf, nil /* no network monitor */, nil /* no link selector */, new(tsdial.Dialer), nil /* no control knobs */)
 }
 
 func TestResolveLocal(t *testing.T) {
@@ -1016,7 +1016,7 @@ func TestForwardLinkSelection(t *testing.T) {
 			return "special"
 		}
 		return ""
-	}), new(tsdial.Dialer))
+	}), new(tsdial.Dialer), nil /* no control knobs */)
 
 	// Test non-special IP.
 	if got, err := fwd.packetListener(netip.Addr{}); err != nil {

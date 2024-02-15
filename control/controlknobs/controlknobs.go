@@ -48,6 +48,10 @@ type Knobs struct {
 
 	// PeerMTUEnable is whether the node should do peer path MTU discovery.
 	PeerMTUEnable atomic.Bool
+
+	// DisableDNSForwarderTCPRetries is whether the DNS forwarder should
+	// skip retrying truncated queries over TCP.
+	DisableDNSForwarderTCPRetries atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -61,14 +65,15 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		return ok || slices.Contains(selfNodeAttrs, attr)
 	}
 	var (
-		keepFullWG          = has(tailcfg.NodeAttrDebugDisableWGTrim)
-		disableDRPO         = has(tailcfg.NodeAttrDebugDisableDRPO)
-		disableUPnP         = has(tailcfg.NodeAttrDisableUPnP)
-		randomizeClientPort = has(tailcfg.NodeAttrRandomizeClientPort)
-		disableDeltaUpdates = has(tailcfg.NodeAttrDisableDeltaUpdates)
-		oneCGNAT            opt.Bool
-		forceBackgroundSTUN = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
-		peerMTUEnable       = has(tailcfg.NodeAttrPeerMTUEnable)
+		keepFullWG                    = has(tailcfg.NodeAttrDebugDisableWGTrim)
+		disableDRPO                   = has(tailcfg.NodeAttrDebugDisableDRPO)
+		disableUPnP                   = has(tailcfg.NodeAttrDisableUPnP)
+		randomizeClientPort           = has(tailcfg.NodeAttrRandomizeClientPort)
+		disableDeltaUpdates           = has(tailcfg.NodeAttrDisableDeltaUpdates)
+		oneCGNAT                      opt.Bool
+		forceBackgroundSTUN           = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
+		peerMTUEnable                 = has(tailcfg.NodeAttrPeerMTUEnable)
+		dnsForwarderDisableTCPRetries = has(tailcfg.NodeAttrDNSForwarderDisableTCPRetries)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -85,6 +90,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.ForceBackgroundSTUN.Store(forceBackgroundSTUN)
 	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 	k.PeerMTUEnable.Store(peerMTUEnable)
+	k.DisableDNSForwarderTCPRetries.Store(dnsForwarderDisableTCPRetries)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -94,13 +100,14 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"DisableUPnP":         k.DisableUPnP.Load(),
-		"DisableDRPO":         k.DisableDRPO.Load(),
-		"KeepFullWGConfig":    k.KeepFullWGConfig.Load(),
-		"RandomizeClientPort": k.RandomizeClientPort.Load(),
-		"OneCGNAT":            k.OneCGNAT.Load(),
-		"ForceBackgroundSTUN": k.ForceBackgroundSTUN.Load(),
-		"DisableDeltaUpdates": k.DisableDeltaUpdates.Load(),
-		"PeerMTUEnable":       k.PeerMTUEnable.Load(),
+		"DisableUPnP":                   k.DisableUPnP.Load(),
+		"DisableDRPO":                   k.DisableDRPO.Load(),
+		"KeepFullWGConfig":              k.KeepFullWGConfig.Load(),
+		"RandomizeClientPort":           k.RandomizeClientPort.Load(),
+		"OneCGNAT":                      k.OneCGNAT.Load(),
+		"ForceBackgroundSTUN":           k.ForceBackgroundSTUN.Load(),
+		"DisableDeltaUpdates":           k.DisableDeltaUpdates.Load(),
+		"PeerMTUEnable":                 k.PeerMTUEnable.Load(),
+		"DisableDNSForwarderTCPRetries": k.DisableDNSForwarderTCPRetries.Load(),
 	}
 }

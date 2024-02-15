@@ -51,6 +51,7 @@ const (
 	LabelMagicsockConnUDP6   Label = 9  // wgengine/magicsock/magicsock.go
 	LabelNetlogLogger        Label = 10 // wgengine/netlog/logger.go
 	LabelSockstatlogLogger   Label = 11 // log/sockstatlog/logger.go
+	LabelDNSForwarderTCP     Label = 12 // net/dns/resolver/forwarder.go
 )
 
 // WithSockStats instruments a context so that sockets created with it will
