@@ -258,3 +258,23 @@ func TestAsJSON(t *testing.T) {
 		t.Errorf("allocs = %v; want max 2", n)
 	}
 }
+
+func TestHTTPServerLogFilter(t *testing.T) {
+	var buf bytes.Buffer
+	logf := func(format string, args ...any) {
+		t.Logf("[logf] "+format, args...)
+		fmt.Fprintf(&buf, format, args...)
+	}
+
+	lf := HTTPServerLogFilter{logf}
+	quietLogger := log.New(lf, "", 0)
+
+	quietLogger.Printf("foo bar")
+	quietLogger.Printf("http: TLS handshake error from %s:%d: EOF", "1.2.3.4", 9999)
+	quietLogger.Printf("baz")
+
+	const want = "foo bar\nbaz\n"
+	if s := buf.String(); s != want {
+		t.Errorf("got buf=%q, want %q", s, want)
+	}
+}

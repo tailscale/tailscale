@@ -26,7 +26,6 @@ import (
 	"syscall"
 	"time"
 
-	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
@@ -36,6 +35,7 @@ import (
 	"tailscale.com/net/stunserver"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 var (
@@ -235,7 +235,7 @@ func main() {
 		KeepAlive: *tcpKeepAlive,
 	}
 
-	quietLogger := log.New(logFilter{}, "", 0)
+	quietLogger := log.New(logger.HTTPServerLogFilter{Inner: log.Printf}, "", 0)
 	httpsrv := &http.Server{
 		Addr:     *addr,
 		Handler:  mux,
@@ -451,23 +451,4 @@ func (l *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	l.numAccepts.Add(1)
 	return cn, nil
-}
-
-// logFilter is used to filter out useless error logs that are logged to
-// the net/http.Server.ErrorLog logger.
-type logFilter struct{}
-
-func (logFilter) Write(p []byte) (int, error) {
-	b := mem.B(p)
-	if mem.HasSuffix(b, mem.S(": EOF\n")) ||
-		mem.HasSuffix(b, mem.S(": i/o timeout\n")) ||
-		mem.HasSuffix(b, mem.S(": read: connection reset by peer\n")) ||
-		mem.HasSuffix(b, mem.S(": remote error: tls: bad certificate\n")) ||
-		mem.HasSuffix(b, mem.S(": tls: first record does not look like a TLS handshake\n")) {
-		// Skip this log message, but say that we processed it
-		return len(p), nil
-	}
-
-	log.Printf("%s", p)
-	return len(p), nil
 }
