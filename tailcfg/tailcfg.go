@@ -687,7 +687,9 @@ type Location struct {
 	//
 	// A value of 0 means the exit node does not have a priority
 	// preference. A negative int is not allowed.
-	Priority int `json:",omitempty"`
+	Priority  int     `json:",omitempty"`
+	Longitude float64 `json:",omitempty"`
+	Latitude  float64 `json:",omitempty"`
 }
 
 // Hostinfo contains a summary of a Tailscale host.
