@@ -510,6 +510,11 @@ func (l *Logger) StartFlush() {
 // logtailDisabled is whether logtail uploads to logcatcher are disabled.
 var logtailDisabled atomic.Bool
 
+// Enable enables logtail uploads for the lifetime of the process.
+func Enable() {
+	logtailDisabled.Store(false)
+}
+
 // Disable disables logtail uploads for the lifetime of the process.
 func Disable() {
 	logtailDisabled.Store(true)

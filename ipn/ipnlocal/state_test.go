@@ -91,10 +91,11 @@ func (nt *notifyThrottler) drain(count int) []ipn.Notify {
 // in the controlclient.Client, so by controlling it, we can check that
 // the state machine works as expected.
 type mockControl struct {
-	tb     testing.TB
-	logf   logger.Logf
-	opts   controlclient.Options
-	paused atomic.Bool
+	tb         testing.TB
+	logf       logger.Logf
+	opts       controlclient.Options
+	paused     atomic.Bool
+	isSleeping atomic.Bool
 
 	mu          sync.Mutex
 	machineKey  key.MachinePrivate
@@ -234,6 +235,18 @@ func (cc *mockControl) SetPaused(paused bool) {
 	} else {
 		cc.called("unpause")
 	}
+}
+
+func (cc *mockControl) SetSleepMode(enabled bool) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.isSleeping.Store(enabled)
+}
+
+func (cc *mockControl) IsSleeping() bool {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.isSleeping.Load()
 }
 
 func (cc *mockControl) AuthCantContinue() bool {

@@ -53,6 +53,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -580,7 +581,12 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest()))
+	shouldPause := (b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest())
+	if b.cc.IsSleeping() && shouldPause == false {
+		// Leave things untouched if a request to un-pause comes in while we should be sleeping.
+		return
+	}
+	b.cc.SetPaused(shouldPause)
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.
@@ -5325,6 +5331,17 @@ func peerCanProxyDNS(p tailcfg.NodeView) bool {
 		}
 	}
 	return false
+}
+
+func (b *LocalBackend) SetSleep(enabled bool) {
+	b.logf("SetSleep: enabled = %v", enabled)
+	b.cc.SetSleepMode(enabled)
+	b.MagicConn().SetHomeless(enabled)
+	if enabled {
+		logtail.Disable()
+	} else {
+		logtail.Enable()
+	}
 }
 
 func (b *LocalBackend) DebugRebind() error {
