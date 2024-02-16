@@ -351,6 +351,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/v0/doctor":
 		h.handleServeDoctor(w, r)
+		return
 	case "/v0/sockstats":
 		h.handleServeSockStats(w, r)
 		return
