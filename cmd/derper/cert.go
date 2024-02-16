@@ -87,17 +87,19 @@ func (m *manualCertManager) TLSConfig() *tls.Config {
 	}
 }
 
+// 去掉域名验证相关
 func (m *manualCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if hi.ServerName != m.hostname {
-		return nil, fmt.Errorf("cert mismatch with hostname: %q", hi.ServerName)
-	}
+	// if hi.ServerName != m.hostname {
+	// 	return nil, fmt.Errorf("cert mismatch with hostname: %q", hi.ServerName)
+	// }
 
 	// Return a shallow copy of the cert so the caller can append to its
 	// Certificate field.
-	certCopy := new(tls.Certificate)
-	*certCopy = *m.cert
-	certCopy.Certificate = certCopy.Certificate[:len(certCopy.Certificate):len(certCopy.Certificate)]
-	return certCopy, nil
+	// certCopy := new(tls.Certificate)
+	// *certCopy = *m.cert
+	// certCopy.Certificate = certCopy.Certificate[:len(certCopy.Certificate):len(certCopy.Certificate)]
+	// return certCopy, nil
+	return m.cert, nil
 }
 
 func (m *manualCertManager) HTTPHandler(fallback http.Handler) http.Handler {
