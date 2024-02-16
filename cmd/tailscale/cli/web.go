@@ -99,7 +99,7 @@ func runWeb(ctx context.Context, args []string) error {
 	var startedManagementClient bool // we started the management client
 	if !existingWebClient && !webArgs.readonly {
 		// Also start full client in tailscaled.
-		log.Printf("starting tailscaled web client at %s:%d\n", selfIP.String(), web.ListenPort)
+		log.Printf("starting tailscaled web client at http://%s:%d\n", selfIP.String(), web.ListenPort)
 		if err := setRunWebClient(ctx, true); err != nil {
 			return fmt.Errorf("starting web client in tailscaled: %w", err)
 		}
