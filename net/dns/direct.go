@@ -16,11 +16,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version/distro"
@@ -371,7 +373,33 @@ func (m *directManager) GetBaseConfig() (OSConfig, error) {
 		fileToRead = backupConf
 	}
 
-	return m.readResolvFile(fileToRead)
+	oscfg, err := m.readResolvFile(fileToRead)
+	if err != nil {
+		return OSConfig{}, err
+	}
+
+	// On some systems, the backup configuration file is actually a
+	// symbolic link to something owned by another DNS service (commonly,
+	// resolved). Thus, it can be updated out from underneath us to contain
+	// the Tailscale service IP, which results in an infinite loop of us
+	// trying to send traffic to resolved, which sends back to us, and so
+	// on. To solve this, drop the Tailscale service IP from the base
+	// configuration; we do this in all situations since there's
+	// essentially no world where we want to forward to ourselves.
+	//
+	// See: https://github.com/tailscale/tailscale/issues/7816
+	var removed bool
+	oscfg.Nameservers = slices.DeleteFunc(oscfg.Nameservers, func(ip netip.Addr) bool {
+		if ip == tsaddr.TailscaleServiceIP() || ip == tsaddr.TailscaleServiceIPv6() {
+			removed = true
+			return true
+		}
+		return false
+	})
+	if removed {
+		m.logf("[v1] dropped Tailscale IP from base config that was a symlink")
+	}
+	return oscfg, nil
 }
 
 func (m *directManager) Close() error {
