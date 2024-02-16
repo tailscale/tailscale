@@ -769,6 +769,11 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) 
 	}
 	tr.DialContext = MakeDialFunc(netMon, logf)
 
+	// We're uploading logs ideally infrequently, with specific timing that will
+	// change over time. Try to keep the connection open, to avoid repeatedly
+	// paying the cost of TLS setup.
+	tr.IdleConnTimeout = time.Hour
+
 	// We're contacting exactly 1 hostname, so the default's 100
 	// max idle conns is very high for our needs. Even 2 is
 	// probably double what we need:
