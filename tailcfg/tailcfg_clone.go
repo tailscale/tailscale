@@ -405,6 +405,8 @@ var _DERPRegionCloneNeedsRegeneration = DERPRegion(struct {
 	RegionID   int
 	RegionCode string
 	RegionName string
+	Latitude   float64
+	Longitude  float64
 	Avoid      bool
 	Nodes      []*DERPNode
 }{})
@@ -575,6 +577,8 @@ var _LocationCloneNeedsRegeneration = Location(struct {
 	CountryCode string
 	City        string
 	CityCode    string
+	Latitude    float64
+	Longitude   float64
 	Priority    int
 }{})
 
