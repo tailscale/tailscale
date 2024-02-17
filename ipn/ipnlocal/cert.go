@@ -688,23 +688,8 @@ func checkCertDomain(st *ipnstate.Status, domain string) error {
 			return nil
 		}
 	}
-	// Transitional way while server doesn't yet populate CertDomains: also permit the client
-	// attempting Self.DNSName.
-	okay := st.CertDomains[:len(st.CertDomains):len(st.CertDomains)]
-	if st.Self != nil {
-		if v := strings.Trim(st.Self.DNSName, "."); v != "" {
-			if v == domain {
-				return nil
-			}
-			okay = append(okay, v)
-		}
-	}
-	switch len(okay) {
-	case 0:
+	if len(st.CertDomains) == 0 {
 		return errors.New("your Tailscale account does not support getting TLS certs")
-	case 1:
-		return fmt.Errorf("invalid domain %q; only %q is permitted", domain, okay[0])
-	default:
-		return fmt.Errorf("invalid domain %q; must be one of %q", domain, okay)
 	}
+	return fmt.Errorf("invalid domain %q; must be one of %q", domain, st.CertDomains)
 }
