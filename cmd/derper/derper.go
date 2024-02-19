@@ -32,6 +32,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/metrics"
+	"tailscale.com/net/ktimeout"
 	"tailscale.com/net/stunserver"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
@@ -59,6 +60,11 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	// tcpKeepAlive is intentionally long, to reduce battery cost. There is an L7 keepalive on a higher frequency schedule.
+	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
+	// tcpUserTimeout is intentionally short, so that hung connections are cleaned up promptly. DERPs should be nearby users.
+	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
 )
 
 var (
@@ -220,6 +226,15 @@ func main() {
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
 
+	// Longer lived DERP connections send an application layer keepalive. Note
+	// if the keepalive is hit, the user timeout will take precedence over the
+	// keepalive counter, so the probe if unanswered will take effect promptly,
+	// this is less tolerant of high loss, but high loss is unexpected.
+	lc := net.ListenConfig{
+		Control:   ktimeout.UserTimeout(*tcpUserTimeout),
+		KeepAlive: *tcpKeepAlive,
+	}
+
 	quietLogger := log.New(logFilter{}, "", 0)
 	httpsrv := &http.Server{
 		Addr:     *addr,
@@ -296,7 +311,12 @@ func main() {
 					// duration exceeds server's WriteTimeout".
 					WriteTimeout: 5 * time.Minute,
 				}
-				err := port80srv.ListenAndServe()
+				ln, err := lc.Listen(context.Background(), "tcp", port80srv.Addr)
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer ln.Close()
+				err = port80srv.Serve(ln)
 				if err != nil {
 					if err != http.ErrServerClosed {
 						log.Fatal(err)
@@ -307,7 +327,12 @@ func main() {
 		err = rateLimitedListenAndServeTLS(httpsrv)
 	} else {
 		log.Printf("derper: serving on %s", *addr)
-		err = httpsrv.ListenAndServe()
+		var ln net.Listener
+		ln, err = lc.Listen(context.Background(), "tcp", httpsrv.Addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = httpsrv.Serve(ln)
 	}
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
