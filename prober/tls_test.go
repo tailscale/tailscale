@@ -85,7 +85,7 @@ func TestTLSConnection(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 
-	err = probeTLS(context.Background(), srv.Listener.Addr().String())
+	err = probeTLS(context.Background(), "fail.example.com", srv.Listener.Addr().String())
 	// The specific error message here is platform-specific ("certificate is not trusted"
 	// on macOS and "certificate signed by unknown authority" on Linux), so only check
 	// that it contains the word 'certificate'.
