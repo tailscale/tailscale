@@ -78,6 +78,10 @@ spec:
           - name: oauth
             mountPath: /oauth
             readOnly: true
+          ports:
+          - name: keyserver
+            containerPort: 8443
+            protocol: TCP
       {{- with .Values.operatorConfig.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

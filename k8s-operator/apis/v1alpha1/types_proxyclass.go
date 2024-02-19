@@ -62,6 +62,11 @@ type StatefulSet struct {
 	// Configuration for the proxy Pod.
 	// +optional
 	Pod *Pod `json:"pod,omitempty"`
+	// In future: allow users to tell the operator that spec.replicas for a
+	// statefulset should be unset to allow HPA manage this field (i.e if
+	// users set it to 0 here, unset the replicas field).
+	//  +optional
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 type Pod struct {

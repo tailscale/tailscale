@@ -222,6 +222,8 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:      nsFilter,
 				&appsv1.StatefulSet{}: nsFilter,
+				// TODO (irberkrm): cahce metadata only for Pods
+				&corev1.Pod{}: nsFilter,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -316,6 +318,16 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	if err != nil {
 		startlog.Fatal("could not create proxyclass reconciler: %v", err)
 	}
+	// TODO: maybe put in a better place, but this needs rest config and c/r client
+	ks := &keyServer{
+		Client:            mgr.GetClient(),
+		restConfig:        mgr.GetConfig(),
+		logger:            zlog.Named("keyserver"),
+		tsNamespace:       tsNamespace,
+		defaultDeviceTags: strings.Split(tags, ","), // or do differently
+		tsClient:          tsClient,
+	}
+	go ks.runKeyServer()
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)

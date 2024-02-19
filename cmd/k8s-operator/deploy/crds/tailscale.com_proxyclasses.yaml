@@ -452,6 +452,9 @@ spec:
                               value:
                                 description: Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty, otherwise just a regular string.
                                 type: string
+                    replicas:
+                      type: integer
+                      format: int32
             status:
               type: object
               properties:

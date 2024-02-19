@@ -127,6 +127,10 @@ func (c *Client) secretURL(name string) string {
 	return fmt.Sprintf("%s/api/v1/namespaces/%s/secrets/%s", c.url, c.ns, name)
 }
 
+func (c *Client) tokenRequestURL() string {
+	return fmt.Sprintf("%s/api/v1/namespaces/%s/serviceaccounts/proxies/token", c.url, c.ns)
+}
+
 func getError(resp *http.Response) error {
 	if resp.StatusCode == 200 || resp.StatusCode == 201 {
 		// These are the only success codes returned by the Kubernetes API.
@@ -154,7 +158,11 @@ func setHeader(key, value string) func(*http.Request) {
 // If the request fails with a 401, the token is expired and a new one is
 // requested.
 func (c *Client) doRequest(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error {
-	req, err := c.newRequest(ctx, method, url, in)
+	tk, err := c.getOrRenewToken()
+	if err != nil {
+		return err
+	}
+	req, err := c.newRequest(ctx, method, url, in, tk)
 	if err != nil {
 		return err
 	}
@@ -178,11 +186,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, in, out any,
 	return nil
 }
 
-func (c *Client) newRequest(ctx context.Context, method, url string, in any) (*http.Request, error) {
-	tk, err := c.getOrRenewToken()
-	if err != nil {
-		return nil, err
-	}
+func (c *Client) newRequest(ctx context.Context, method, url string, in any, token string) (*http.Request, error) {
 	var body io.Reader
 	if in != nil {
 		switch in := in.(type) {
@@ -204,7 +208,7 @@ func (c *Client) newRequest(ctx context.Context, method, url string, in any) (*h
 		req.Header.Add("Content-Type", "application/json")
 	}
 	req.Header.Add("Accept", "application/json")
-	req.Header.Add("Authorization", "Bearer "+tk)
+	req.Header.Add("Authorization", "Bearer "+token)
 	return req, nil
 }
 
@@ -217,6 +221,28 @@ func (c *Client) GetSecret(ctx context.Context, name string) (*Secret, error) {
 	return s, nil
 }
 
+func (c *Client) GetOrCreateSecret(ctx context.Context, name string) (*Secret, error) {
+	secret, err := c.GetSecret(ctx, name)
+	if err != nil {
+		if st, ok := err.(*Status); ok && st.Code == 404 {
+			secret = &Secret{
+				TypeMeta: TypeMeta{
+					APIVersion: "v1",
+					Kind:       "Secret",
+				},
+				ObjectMeta: ObjectMeta{
+					Name: name,
+				},
+			}
+			if err := c.CreateSecret(ctx, secret); err != nil {
+				return nil, fmt.Errorf("error creating Secret: %w", err)
+			}
+		}
+	}
+	return secret, nil
+
+}
+
 // CreateSecret creates a secret in the Kubernetes API.
 func (c *Client) CreateSecret(ctx context.Context, s *Secret) error {
 	s.Namespace = c.ns
@@ -226,6 +252,28 @@ func (c *Client) CreateSecret(ctx context.Context, s *Secret) error {
 // UpdateSecret updates a secret in the Kubernetes API.
 func (c *Client) UpdateSecret(ctx context.Context, s *Secret) error {
 	return c.doRequest(ctx, "PUT", c.secretURL(s.Name), s, nil)
+}
+
+func (c *Client) CreateTokenForPod(ctx context.Context, name string, audiences []string) (string, error) {
+	tReq := &TokenRequest{
+		Spec: TokenRequestSpec{
+			BoundObjectRef: &BoundObjectReference{
+				Kind: "Pod",
+				Name: name,
+			},
+		},
+	}
+	if len(audiences) != 0 {
+		tReq.Spec.Audiences = audiences
+	}
+	err := c.doRequest(ctx, "POST", c.tokenRequestURL(), tReq, tReq)
+	if err != nil {
+		return "", fmt.Errorf("error creating a token: %w", err)
+	}
+	if tReq.Status.Token == "" {
+		return "", fmt.Errorf("Kubernetes did not give us a token, full request: %+#v\n", tReq)
+	}
+	return tReq.Status.Token, nil
 }
 
 // JSONPatch is a JSON patch operation.

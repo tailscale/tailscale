@@ -64,6 +64,12 @@
 //     cluster using the same hostname (in this case, the MagicDNS name of the ingress proxy)
 //     as a non-cluster workload on tailnet.
 //     This is only meant to be configured by the Kubernetes operator.
+//   - EXPERIMENTAL_AUTH_KEYS_ENDPOINT: if set and if running in Kubernetes, auth
+//     key will be retrieved by POST request to the endpoint passing service
+//     account token as an auth token. This is used by the Tailscale Kubernetes
+//     operator who also runs the endpoint.
+//     Tailscale IP range to DNAT to.
+//   - EXPERIMENTAL_TS_VIP // i.e 1.2.3.4
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -80,8 +86,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -140,6 +148,10 @@ func main() {
 		TailscaledConfigFilePath:              defaultEnv("EXPERIMENTAL_TS_CONFIGFILE_PATH", ""),
 		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
 		PodIP:                                 defaultEnv("POD_IP", ""),
+		PodName:                               defaultEnv("POD_NAME", ""),
+		KeysEndpoint:                          defaultEnv("EXPERIMENTAL_AUTH_KEYS_ENDPOINT", ""),
+		KubeStateSecret:                       defaultEnv("EXPERIMENTAL_KUBE_STATE_SECRET", ""),
+		TSVIP:                                 defaultEnv("EXPERIMENTAL_TS_VIP", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -180,7 +192,10 @@ func main() {
 		}
 		cfg.KubernetesCanPatch = canPatch
 
-		if cfg.AuthKey == "" && !isOneStepConfig(cfg) {
+		// TODO: check that can do token request maybe?
+
+		// TODO: did I break something here?
+		if authKeySourceIsKubeSecret(cfg) {
 			key, err := findKeyInKubeSecret(bootCtx, cfg.KubeSecret)
 			if err != nil {
 				log.Fatalf("Getting authkey from kube secret: %v", err)
@@ -252,6 +267,18 @@ func main() {
 		}
 		didLogin = true
 		w.Close()
+		if cfg.KeysEndpoint != "" {
+			log.Printf("Creating Tailscale authkey by calling %s", cfg.KeysEndpoint)
+			key, err := getAuthKey(context.Background(), cfg)
+			if err != nil {
+				log.Fatalf("error getting Tailscale auth key: %v", err)
+			}
+			// TODO: this will not work with declarative config file
+			// that wants the auth key in there- figure out how to
+			// fix
+			// (So for now this does not work with Connector proxies)
+			cfg.AuthKey = string(key)
+		}
 		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %v", err)
 		}
@@ -262,6 +289,8 @@ func main() {
 		return nil
 	}
 
+	// Never with the Tailscale Kubernetes operator as it always sets
+	// cfg.AuthOnce=true
 	if isTwoStepConfigAlwaysAuth(cfg) {
 		if err := authTailscale(); err != nil {
 			log.Fatalf("failed to auth tailscale: %v", err)
@@ -279,13 +308,17 @@ authLoop:
 			switch *n.State {
 			case ipn.NeedsLogin:
 				if isOneStepConfig(cfg) {
-					// This could happen if this is the
-					// first time tailscaled was run for
-					// this device and the auth key was not
-					// passed via the configfile.
+					// if state secret is set, delete it to
+					// ensure that we start from a clean
+					// slate on next restart. This could
+					// happen if this is the first time
+					// tailscaled was run for this device
+					// and the auth key was not passed via
+					// the configfile.
 					log.Fatalf("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file.")
 				}
 				if err := authTailscale(); err != nil {
+					// delete state secret if set
 					log.Fatalf("failed to auth tailscale: %v", err)
 				}
 			case ipn.NeedsMachineAuth:
@@ -376,6 +409,18 @@ authLoop:
 		}
 	}()
 	var wg sync.WaitGroup
+	// We only need to do this once. Backend target change or VIP change
+	// comes in via env var change which would trigger restart.
+	if cfg.ProxyTo != "" && cfg.TSVIP != "" {
+		netIP, err := netip.ParsePrefix(cfg.TSVIP)
+		if err != nil {
+			log.Fatalf("error parsing VIP %s: %v", cfg.TSVIP, err)
+		}
+		log.Printf("Installing proxy rules for a virtual tailnet IP: %s", cfg.TSVIP)
+		if err := installIngressForwardingRule(ctx, cfg.ProxyTo, []netip.Prefix{netIP}, nfr); err != nil {
+			log.Fatalf("installing ingress proxy rules: %v", err)
+		}
+	}
 
 runLoop:
 	for {
@@ -441,7 +486,7 @@ runLoop:
 					}
 					currentEgressIPs = newCurentEgressIPs
 				}
-				if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
+				if cfg.ProxyTo != "" && cfg.TSVIP == "" && len(addrs) > 0 && ipsHaveChanged {
 					log.Printf("Installing proxy rules")
 					if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
 						log.Fatalf("installing ingress proxy rules: %v", err)
@@ -639,10 +684,18 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 func tailscaledArgs(cfg *settings) []string {
 	args := []string{"--socket=" + cfg.Socket}
 	switch {
-	case cfg.InKubernetes && cfg.KubeSecret != "":
-		args = append(args, "--state=kube:"+cfg.KubeSecret)
-		if cfg.StateDir == "" {
-			cfg.StateDir = "/tmp"
+	case cfg.InKubernetes:
+		if cfg.KeysEndpoint != "" {
+			stateSecretName := fmt.Sprintf("ts-state-%s", cfg.PodName)
+			args = append(args, "--state=kube:"+stateSecretName)
+			if cfg.StateDir == "" {
+				cfg.StateDir = "/tmp"
+			}
+		} else if cfg.KubeSecret != "" {
+			args = append(args, "--state=kube:"+cfg.KubeSecret)
+			if cfg.StateDir == "" {
+				cfg.StateDir = "/tmp"
+			}
 		}
 		fallthrough
 	case cfg.StateDir != "":
@@ -895,6 +948,9 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	if err != nil {
 		return err
 	}
+	// local can be either the Tailnet IP address of this Tailscale device
+	// or it can be a tailnet virtual IP that this tailnet node is a backend
+	// for.
 	var local netip.Addr
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
@@ -943,6 +999,7 @@ type settings struct {
 	StateDir                 string
 	AcceptDNS                *bool
 	KubeSecret               string
+	KubeStateSecret          string
 	SOCKSProxyAddr           string
 	HTTPProxyAddr            string
 	Socket                   string
@@ -957,7 +1014,10 @@ type settings struct {
 	// PodIP is the IP of the Pod if running in Kubernetes. This is used
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
-	PodIP string
+	PodIP        string
+	PodName      string
+	KeysEndpoint string
+	TSVIP        string
 }
 
 func (s *settings) validate() error {
@@ -989,6 +1049,9 @@ func (s *settings) validate() error {
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.PodIP == "" {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is set but POD_IP is not set")
+	}
+	if s.KeysEndpoint != "" && !s.InKubernetes {
+		return errors.New("EXPERIMENTAL_AUTH_KEYS_ENDPOINT is set, but the containerboot does not appear to be running on kube")
 	}
 	return nil
 }
@@ -1088,4 +1151,38 @@ func isTwoStepConfigAlwaysAuth(cfg *settings) bool {
 // configured in a single step by running 'tailscaled <config opts>'
 func isOneStepConfig(cfg *settings) bool {
 	return cfg.TailscaledConfigFilePath != ""
+}
+
+func authKeySourceIsKubeSecret(cfg *settings) bool {
+	return cfg.InKubernetes && cfg.AuthKey == "" && cfg.KeysEndpoint == ""
+}
+
+func getAuthKey(ctx context.Context, cfg *settings) ([]byte, error) {
+	client := http.Client{}
+	// TODO: somewhere check that this has permissions to create a token
+	token, err := kc.CreateTokenForPod(ctx, cfg.PodName, []string{"ts-keyserver"})
+	if err != nil {
+		return nil, fmt.Errorf("error generating token: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.KeysEndpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creating new HTTP request: %v", err)
+	}
+	req.Header.Add("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error requesting auth key from URL %s: %w", cfg.KeysEndpoint, err)
+	}
+	defer resp.Body.Close()
+	respBs, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %w", err)
+	}
+	if resp.StatusCode != 200 { // 200 is the only success code returned by the keyserver
+		return nil, fmt.Errorf("auth key response %s with unexpected status code %d", string(respBs), resp.StatusCode)
+	}
+	if len(respBs) == 0 {
+		return nil, errors.New("unexpected empty response")
+	}
+	return respBs, nil
 }

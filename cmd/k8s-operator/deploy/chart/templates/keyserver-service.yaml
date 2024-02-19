@@ -1,0 +1,16 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: keyserver
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+  - port: 8443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    app: operator
+  type: ClusterIP

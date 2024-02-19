@@ -67,6 +67,9 @@ const (
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
 
+	// Tailnet VIP that this proxy should satisfy
+	AnnotationTSVIP = "tailscale.com/expose-via-vip"
+
 	// If set to true, set up iptables/nftables rules in the proxy forward
 	// cluster traffic to the tailnet IP of that proxy. This can only be set
 	// on an Ingress. This is useful in cases where a cluster target needs
@@ -127,6 +130,7 @@ type tailscaleSTSConfig struct {
 	Connector *connector
 
 	ProxyClass string
+	TSVIP      string // a tailnet VIP that should route to this proxy
 }
 
 type connector struct {
@@ -308,9 +312,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		return "", "", err
 	}
 
-	var (
-		authKey, hash string
-	)
+	var hash string
 	if orig == nil {
 		// Secret doesn't exist yet, create one. Initially it contains
 		// only the Tailscale authkey, but once Tailscale starts it'll
@@ -327,21 +329,23 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		}
 		// Create API Key secret which is going to be used by the statefulset
 		// to authenticate with Tailscale.
-		logger.Debugf("creating authkey for new tailscale proxy")
-		tags := stsC.Tags
-		if len(tags) == 0 {
-			tags = a.defaultTags
-		}
-		authKey, err = a.newAuthKey(ctx, tags)
-		if err != nil {
-			return "", "", err
-		}
+		// logger.Debugf("creating authkey for new tailscale proxy")
+		// tags := stsC.Tags
+		// if len(tags) == 0 {
+		// 	tags = a.defaultTags
+		// }
+		// authKey, err = a.newAuthKey(ctx, tags)
+		// if err != nil {
+		// 	return "", "", err
+		// }
 	}
-	if !shouldDoTailscaledDeclarativeConfig(stsC) && authKey != "" {
-		mak.Set(&secret.StringData, "authkey", authKey)
-	}
+	// if !shouldDoTailscaledDeclarativeConfig(stsC) && authKey != "" {
+	// 	mak.Set(&secret.StringData, "authkey", authKey)
+	// }
+
+	// TODO: this is going to be broken now, fix
 	if shouldDoTailscaledDeclarativeConfig(stsC) {
-		confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig)
+		confFileBytes, h, err := tailscaledConfig(stsC, "", orig)
 		if err != nil {
 			return "", "", fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -484,6 +488,17 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: "true",
 		})
 	}
+	if sts.TSVIP != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "EXPERIMENTAL_TS_VIP",
+			Value: sts.TSVIP + "/32",
+		})
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_ROUTES",
+			Value: sts.TSVIP + "/32",
+		})
+
+	}
 	if !shouldDoTailscaledDeclarativeConfig(sts) {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_HOSTNAME",
@@ -528,6 +543,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		})
 	}
 	pod.Spec.PriorityClassName = a.proxyPriorityClassName
+
+	keyURL := fmt.Sprintf("http://keyserver.%s.svc.cluster.local:8443/keys", a.operatorNamespace)
+	container.Env = append(container.Env, corev1.EnvVar{
+		Name:  "EXPERIMENTAL_AUTH_KEYS_ENDPOINT",
+		Value: keyURL,
+	})
 
 	// Ingress/egress proxy configuration options.
 	if sts.ClusterTargetIP != "" {
@@ -616,6 +637,10 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 	}
 	if wantsSSAnnots := pc.Spec.StatefulSet.Annotations; len(wantsSSAnnots) > 0 {
 		ss.ObjectMeta.Annotations = mergeStatefulSetLabelsOrAnnots(ss.ObjectMeta.Annotations, wantsSSAnnots, tailscaleManagedAnnotations)
+	}
+
+	if pc.Spec.StatefulSet.Replicas != nil {
+		ss.Spec.Replicas = pc.Spec.StatefulSet.Replicas
 	}
 
 	// Update Pod fields.

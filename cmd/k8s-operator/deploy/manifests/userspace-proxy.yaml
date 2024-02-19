@@ -22,3 +22,7 @@ spec:
               value: "true"
             - name: TS_AUTH_ONCE
               value: "true"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name

@@ -3,7 +3,9 @@
 
 package kube
 
-import "time"
+import (
+	"time"
+)
 
 // Note: The API types are copied from k8s.io/api{,machinery} to not introduce a
 // module dependency on the Kubernetes API as it pulls in many more dependencies.
@@ -145,6 +147,31 @@ type Secret struct {
 	// data value here. Described in https://tools.ietf.org/html/rfc4648#section-4
 	// +optional
 	Data map[string][]byte `json:"data,omitempty"`
+}
+
+type TokenRequest struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata"`
+	Spec       TokenRequestSpec   `json:"spec"`
+	Status     TokenRequestStatus `json:"status,omitempty"`
+}
+
+type TokenRequestSpec struct {
+	Audiences         []string              `json:"audiences"`
+	ExpirationSeconds *int64                `json:"expirationSeconds"`
+	BoundObjectRef    *BoundObjectReference `json:"boundObjectRef"`
+}
+
+// BoundObjectReference is a reference to an object that a token is bound to.
+type BoundObjectReference struct {
+	Kind       string `json:"kind,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	Name       string `json:"name,omitempty"`
+}
+
+type TokenRequestStatus struct {
+	Token             string    `json:"token"`
+	ExpirationSeconds time.Time `json:"expirationSeconds"`
 }
 
 // Status is a return value for calls that don't return other objects.

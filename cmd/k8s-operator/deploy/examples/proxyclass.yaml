@@ -4,6 +4,7 @@ metadata:
   name: prod
 spec:
   statefulSet:
+    replicas: 2
     annotations:
       platform-component: infra 
     pod:

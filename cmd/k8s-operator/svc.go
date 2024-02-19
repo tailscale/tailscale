@@ -197,6 +197,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Tags:                tags,
 		ChildResourceLabels: crl,
 		ProxyClass:          proxyClass,
+		TSVIP:               a.tailnetVIPForService(svc),
 	}
 
 	a.mu.Lock()
@@ -335,6 +336,13 @@ func (a *ServiceReconciler) tailnetTargetAnnotation(svc *corev1.Service) string 
 
 func proxyClassForObject(o client.Object) string {
 	return o.GetLabels()[LabelProxyClass]
+}
+
+func (a *ServiceReconciler) tailnetVIPForService(svc *corev1.Service) string {
+	if !a.shouldExpose(svc) || svc.Annotations == nil {
+		return ""
+	}
+	return svc.GetAnnotations()[AnnotationTSVIP]
 }
 
 func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool, error) {

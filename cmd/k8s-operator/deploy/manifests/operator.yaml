@@ -603,6 +603,9 @@ spec:
                                                     type: object
                                                 type: array
                                         type: object
+                                    replicas:
+                                        format: int32
+                                        type: integer
                                 type: object
                         required:
                             - statefulSet
@@ -693,6 +696,34 @@ rules:
         - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+    name: tailscale-keyserver
+rules:
+    - apiGroups:
+        - authentication.k8s.io
+      resources:
+        - tokenreviews
+      verbs:
+        - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+    name: proxies-token
+rules:
+    - apiGroups:
+        - ""
+      resourceNames:
+        - proxies
+      resources:
+        - serviceaccounts/token
+        - serviceaccounts
+      verbs:
+        - create
+        - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
     name: tailscale-operator
@@ -700,6 +731,19 @@ roleRef:
     apiGroup: rbac.authorization.k8s.io
     kind: ClusterRole
     name: tailscale-operator
+subjects:
+    - kind: ServiceAccount
+      name: operator
+      namespace: tailscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+    name: tailscale-keyserver
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: tailscale-keyserver
 subjects:
     - kind: ServiceAccount
       name: operator
@@ -727,6 +771,21 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+    name: keyserver
+    namespace: tailscale
+rules:
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
+        - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
     name: proxies
     namespace: tailscale
 rules:
@@ -754,6 +813,20 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
+    name: keyserver
+    namespace: tailscale
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: keyserver
+subjects:
+    - kind: ServiceAccount
+      name: operator
+      namespace: tailscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
     name: proxies
     namespace: tailscale
 roleRef:
@@ -764,6 +837,34 @@ subjects:
     - kind: ServiceAccount
       name: proxies
       namespace: tailscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+    name: proxies-token
+    namespace: tailscale
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: proxies-token
+subjects:
+    - kind: ServiceAccount
+      name: proxies
+      namespace: tailscale
+---
+apiVersion: v1
+kind: Service
+metadata:
+    name: keyserver
+    namespace: tailscale
+spec:
+    ports:
+        - port: 8443
+          protocol: TCP
+          targetPort: 8443
+    selector:
+        app: operator
+    type: ClusterIP
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -811,6 +912,10 @@ spec:
                   image: tailscale/k8s-operator:unstable
                   imagePullPolicy: Always
                   name: operator
+                  ports:
+                    - containerPort: 8443
+                      name: keyserver
+                      protocol: TCP
                   volumeMounts:
                     - mountPath: /oauth
                       name: oauth

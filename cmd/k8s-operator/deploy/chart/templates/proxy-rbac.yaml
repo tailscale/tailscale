@@ -30,3 +30,32 @@ roleRef:
   kind: Role
   name: proxies
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: proxies-token
+rules:
+- apiGroups: [""]
+  resources:
+  - "serviceaccounts/token"
+  - "serviceaccounts" # needed?
+  verbs:
+  - "create"
+  - "get"
+  resourceNames:
+  - "proxies"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxies-token
+  namespace: {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: proxies
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: proxies-token
+  apiGroup: rbac.authorization.k8s.io
