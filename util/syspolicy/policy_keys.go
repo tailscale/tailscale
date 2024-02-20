@@ -72,4 +72,15 @@ const (
 	// Key is a string value that specifies an option: "always", "never", "user-decides".
 	// The default is "user-decides" unless otherwise stated.
 	PostureChecking Key = "PostureChecking"
+
+	// ManagedByOrganizationName indicates the name of the organization managing the Tailscale
+	// install. It is displayed inside the client UI in a prominent location.
+	ManagedByOrganizationName Key = "ManagedByOrganizationName"
+	// ManagedByCaption is an info message displayed inside the client UI as a caption when
+	// ManagedByOrganizationName is set. It can be used to provide a pointer to support resources
+	// for Tailscale within the organization.
+	ManagedByCaption Key = "ManagedByCaption"
+	// ManagedByCaption is a valid URL pointing to a support help desk for Tailscale within the
+	// organization. A button in the client UI provides easy access to this URL.
+	ManagedByURL Key = "ManagedByURL"
 )

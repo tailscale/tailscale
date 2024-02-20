@@ -24,6 +24,9 @@ var stringKeys = []Key{
 	AutoUpdateVisibility,
 	KeyExpirationNoticeTime,
 	PostureChecking,
+	ManagedByOrganizationName,
+	ManagedByCaption,
+	ManagedByURL,
 }
 
 var boolKeys = []Key{
