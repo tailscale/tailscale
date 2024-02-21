@@ -10,10 +10,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tailscale/xnet/webdav"
 	"tailscale.com/tailfs"
-	"tailscale.com/tailfs/tailfsimpl/compositefs"
-	"tailscale.com/tailfs/tailfsimpl/webdavfs"
+	"tailscale.com/tailfs/tailfsimpl/compositedav"
+	"tailscale.com/tailfs/tailfsimpl/dirfs"
 	"tailscale.com/types/logger"
 )
 
@@ -32,8 +31,11 @@ func NewFileSystemForLocal(logf logger.Logf) *FileSystemForLocal {
 		logf = log.Printf
 	}
 	fs := &FileSystemForLocal{
-		logf:     logf,
-		cfs:      compositefs.New(compositefs.Options{Logf: logf}),
+		logf: logf,
+		h: &compositedav.Handler{
+			Logf:      logf,
+			StatCache: &compositedav.StatCache{TTL: statCacheTTL},
+		},
 		listener: newConnListener(),
 	}
 	fs.startServing()
@@ -44,17 +46,12 @@ func NewFileSystemForLocal(logf logger.Logf) *FileSystemForLocal {
 // provides a unified WebDAV interface to remote TailFS shares on other nodes.
 type FileSystemForLocal struct {
 	logf     logger.Logf
-	cfs      *compositefs.CompositeFileSystem
+	h        *compositedav.Handler
 	listener *connListener
 }
 
 func (s *FileSystemForLocal) startServing() {
-	hs := &http.Server{
-		Handler: &webdav.Handler{
-			FileSystem: s.cfs,
-			LockSystem: webdav.NewMemLS(),
-		},
-	}
+	hs := &http.Server{Handler: s.h}
 	go func() {
 		err := hs.Serve(s.listener)
 		if err != nil {
@@ -73,31 +70,24 @@ func (s *FileSystemForLocal) HandleConn(conn net.Conn, remoteAddr net.Addr) erro
 // using a map of name -> url. If transport is specified, that transport
 // will be used to connect to these remotes.
 func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*tailfs.Remote, transport http.RoundTripper) {
-	children := make([]*compositefs.Child, 0, len(remotes))
+	children := make([]*compositedav.Child, 0, len(remotes))
 	for _, remote := range remotes {
-		opts := webdavfs.Options{
-			URL:          remote.URL,
-			Transport:    transport,
-			StatCacheTTL: statCacheTTL,
-			Logf:         s.logf,
-		}
-		children = append(children, &compositefs.Child{
-			Name:      remote.Name,
-			FS:        webdavfs.New(opts),
-			Available: remote.Available,
+		children = append(children, &compositedav.Child{
+			Child: &dirfs.Child{
+				Name:      remote.Name,
+				Available: remote.Available,
+			},
+			BaseURL:   remote.URL,
+			Transport: transport,
 		})
 	}
 
-	domainChild, found := s.cfs.GetChild(domain)
-	if !found {
-		domainChild = compositefs.New(compositefs.Options{Logf: s.logf})
-		s.cfs.SetChildren(&compositefs.Child{Name: domain, FS: domainChild})
-	}
-	domainChild.(*compositefs.CompositeFileSystem).SetChildren(children...)
+	s.h.SetChildren(domain, children...)
 }
 
 // Close() stops serving the WebDAV content
 func (s *FileSystemForLocal) Close() error {
-	s.cfs.Close()
-	return s.listener.Close()
+	err := s.listener.Close()
+	s.h.Close()
+	return err
 }

@@ -36,7 +36,7 @@ func TestDeps(t *testing.T) {
 			// Make sure we don't again accidentally bring in a dependency on
 			// TailFS or its transitive dependencies
 			"tailscale.com/tailfs/tailfsimpl": "https://github.com/tailscale/tailscale/pull/10631",
-			"github.com/tailscale/gowebdav":   "https://github.com/tailscale/tailscale/pull/10631",
+			"github.com/studio-b12/gowebdav":  "https://github.com/tailscale/tailscale/pull/10631",
 		},
 	}.Check(t)
 }

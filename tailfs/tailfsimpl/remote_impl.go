@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,9 +22,9 @@ import (
 	"github.com/tailscale/xnet/webdav"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailfs"
-	"tailscale.com/tailfs/tailfsimpl/compositefs"
+	"tailscale.com/tailfs/tailfsimpl/compositedav"
+	"tailscale.com/tailfs/tailfsimpl/dirfs"
 	"tailscale.com/tailfs/tailfsimpl/shared"
-	"tailscale.com/tailfs/tailfsimpl/webdavfs"
 	"tailscale.com/types/logger"
 )
 
@@ -34,7 +35,7 @@ func NewFileSystemForRemote(logf logger.Logf) *FileSystemForRemote {
 	fs := &FileSystemForRemote{
 		logf:        logf,
 		lockSystem:  webdav.NewMemLS(),
-		fileSystems: make(map[string]webdav.FileSystem),
+		children:    make(map[string]*compositedav.Child),
 		userServers: make(map[string]*userServer),
 	}
 	return fs
@@ -50,7 +51,7 @@ type FileSystemForRemote struct {
 	mu             sync.RWMutex
 	fileServerAddr string
 	shares         map[string]*tailfs.Share
-	fileSystems    map[string]webdav.FileSystem
+	children       map[string]*compositedav.Child
 	userServers    map[string]*userServer
 }
 
@@ -81,27 +82,29 @@ func (s *FileSystemForRemote) SetShares(shares map[string]*tailfs.Share) {
 		}
 	}
 
-	fileSystems := make(map[string]webdav.FileSystem, len(shares))
+	children := make(map[string]*compositedav.Child, len(shares))
 	for _, share := range shares {
-		fileSystems[share.Name] = s.buildWebDAVFS(share)
+		children[share.Name] = s.buildChild(share)
 	}
 
 	s.mu.Lock()
 	s.shares = shares
-	oldFileSystems := s.fileSystems
 	oldUserServers := s.userServers
-	s.fileSystems = fileSystems
+	oldChildren := s.children
+	s.children = children
 	s.userServers = userServers
 	s.mu.Unlock()
 
 	s.stopUserServers(oldUserServers)
-	s.closeFileSystems(oldFileSystems)
+	s.closeChildren(oldChildren)
 }
 
-func (s *FileSystemForRemote) buildWebDAVFS(share *tailfs.Share) webdav.FileSystem {
-	return webdavfs.New(webdavfs.Options{
-		Logf: s.logf,
-		URL:  fmt.Sprintf("http://%v/%v", hex.EncodeToString([]byte(share.Name)), share.Name),
+func (s *FileSystemForRemote) buildChild(share *tailfs.Share) *compositedav.Child {
+	return &compositedav.Child{
+		Child: &dirfs.Child{
+			Name: share.Name,
+		},
+		BaseURL: fmt.Sprintf("http://%v/%v", hex.EncodeToString([]byte(share.Name)), url.PathEscape(share.Name)),
 		Transport: &http.Transport{
 			Dial: func(_, shareAddr string) (net.Conn, error) {
 				shareNameHex, _, err := net.SplitHostPort(shareAddr)
@@ -151,8 +154,7 @@ func (s *FileSystemForRemote) buildWebDAVFS(share *tailfs.Share) webdav.FileSyst
 				return safesocket.Connect(addr)
 			},
 		},
-		StatRoot: true,
-	})
+	}
 }
 
 // ServeHTTPWithPerms implements tailfs.FileSystemForRemote.
@@ -173,29 +175,23 @@ func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions tailfs.Permissions,
 	}
 
 	s.mu.RLock()
-	fileSystems := s.fileSystems
+	childrenMap := s.children
 	s.mu.RUnlock()
 
-	children := make([]*compositefs.Child, 0, len(fileSystems))
+	children := make([]*compositedav.Child, 0, len(childrenMap))
 	// filter out shares to which the connecting principal has no access
-	for name, fs := range fileSystems {
+	for name, child := range childrenMap {
 		if permissions.For(name) == tailfs.PermissionNone {
 			continue
 		}
 
-		children = append(children, &compositefs.Child{Name: name, FS: fs})
+		children = append(children, child)
 	}
 
-	cfs := compositefs.New(
-		compositefs.Options{
-			Logf:         s.logf,
-			StatChildren: true,
-		})
-	cfs.SetChildren(children...)
-	h := webdav.Handler{
-		FileSystem: cfs,
-		LockSystem: s.lockSystem,
+	h := compositedav.Handler{
+		Logf: s.logf,
 	}
+	h.SetChildren("", children...)
 	h.ServeHTTP(w, r)
 }
 
@@ -207,14 +203,9 @@ func (s *FileSystemForRemote) stopUserServers(userServers map[string]*userServer
 	}
 }
 
-func (s *FileSystemForRemote) closeFileSystems(fileSystems map[string]webdav.FileSystem) {
-	for _, fs := range fileSystems {
-		closer, ok := fs.(interface{ Close() error })
-		if ok {
-			if err := closer.Close(); err != nil {
-				s.logf("error closing tailfs filesystem: %v", err)
-			}
-		}
+func (s *FileSystemForRemote) closeChildren(children map[string]*compositedav.Child) {
+	for _, child := range children {
+		child.CloseIdleConnections()
 	}
 }
 
@@ -222,11 +213,13 @@ func (s *FileSystemForRemote) closeFileSystems(fileSystems map[string]webdav.Fil
 func (s *FileSystemForRemote) Close() error {
 	s.mu.Lock()
 	userServers := s.userServers
-	fileSystems := s.fileSystems
+	children := s.children
+	s.userServers = make(map[string]*userServer)
+	s.children = make(map[string]*compositedav.Child)
 	s.mu.Unlock()
 
 	s.stopUserServers(userServers)
-	s.closeFileSystems(fileSystems)
+	s.closeChildren(children)
 	return nil
 }
 
