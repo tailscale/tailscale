@@ -50,7 +50,7 @@ func RenamedFileInfo(ctx context.Context, name string, fi fs.FileInfo) *StaticFi
 	}
 
 	return &StaticFileInfo{
-		Named:          name,
+		Named:          Base(name),
 		Sized:          fi.Size(),
 		Moded:          fi.Mode(),
 		BirthedTime:    birthTime,
@@ -63,7 +63,7 @@ func RenamedFileInfo(ctx context.Context, name string, fi fs.FileInfo) *StaticFi
 // ReadOnlyDirInfo returns a static fs.FileInfo for a read-only directory
 func ReadOnlyDirInfo(name string, ts time.Time) *StaticFileInfo {
 	return &StaticFileInfo{
-		Named:       name,
+		Named:       Base(name),
 		Sized:       0,
 		Moded:       0555,
 		BirthedTime: ts,

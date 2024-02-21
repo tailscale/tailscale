@@ -40,3 +40,11 @@ func Join(parts ...string) string {
 func IsRoot(p string) bool {
 	return p == "" || p == sepString
 }
+
+// Base is like path.Base except that it returns "" for the root folder
+func Base(p string) string {
+	if IsRoot(p) {
+		return ""
+	}
+	return path.Base(p)
+}
