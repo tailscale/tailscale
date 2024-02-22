@@ -4,8 +4,8 @@
 import cx from "classnames"
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAPI } from "src/api"
-import { ReactComponent as Check } from "src/assets/icons/check.svg"
-import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
+import Check from "src/assets/icons/check.svg?react"
+import ChevronDown from "src/assets/icons/chevron-down.svg?react"
 import useExitNodes, {
   noExitNode,
   runAsExitNode,

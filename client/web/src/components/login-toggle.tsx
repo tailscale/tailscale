@@ -3,9 +3,9 @@
 
 import cx from "classnames"
 import React, { useCallback, useEffect, useState } from "react"
-import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
-import { ReactComponent as Eye } from "src/assets/icons/eye.svg"
-import { ReactComponent as User } from "src/assets/icons/user.svg"
+import ChevronDown from "src/assets/icons/chevron-down.svg?react"
+import Eye from "src/assets/icons/eye.svg?react"
+import User from "src/assets/icons/user.svg?react"
 import { AuthResponse, AuthType } from "src/hooks/auth"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"

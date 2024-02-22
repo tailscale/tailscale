@@ -4,7 +4,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import cx from "classnames"
 import React, { Component, ComponentProps, FormEvent } from "react"
-import { ReactComponent as X } from "src/assets/icons/x.svg"
+import X from "src/assets/icons/x.svg?react"
 import Button from "src/ui/button"
 import PortalContainerContext from "src/ui/portal-container-context"
 import { isObject } from "src/utils/util"

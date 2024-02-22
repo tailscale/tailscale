@@ -10,7 +10,7 @@ import React, {
   useState,
 } from "react"
 import { createPortal } from "react-dom"
-import { ReactComponent as X } from "src/assets/icons/x.svg"
+import X from "src/assets/icons/x.svg?react"
 import { noop } from "src/utils/util"
 import { create } from "zustand"
 import { shallow } from "zustand/shallow"

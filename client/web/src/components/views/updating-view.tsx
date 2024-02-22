@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
-import { ReactComponent as CheckCircleIcon } from "src/assets/icons/check-circle.svg"
-import { ReactComponent as XCircleIcon } from "src/assets/icons/x-circle.svg"
+import CheckCircleIcon from "src/assets/icons/check-circle.svg?react"
+import XCircleIcon from "src/assets/icons/x-circle.svg?react"
 import { ChangelogText } from "src/components/update-available"
 import { UpdateState, useInstallUpdate } from "src/hooks/self-update"
 import { VersionInfo } from "src/types"

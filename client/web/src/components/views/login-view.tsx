@@ -3,7 +3,7 @@
 
 import React, { useState } from "react"
 import { useAPI } from "src/api"
-import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
+import TailscaleIcon from "src/assets/icons/tailscale-icon.svg?react"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Collapsible from "src/ui/collapsible"
