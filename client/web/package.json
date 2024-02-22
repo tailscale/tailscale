@@ -21,7 +21,7 @@
   "devDependencies": {
     "@types/react": "^18.0.20",
     "@types/react-dom": "^18.0.6",
-    "@vitejs/plugin-react-swc": "^3.3.2",
+    "@vitejs/plugin-react-swc": "^3.6.0",
     "autoprefixer": "^10.4.15",
     "eslint": "^8.23.1",
     "eslint-config-react-app": "^7.0.1",
