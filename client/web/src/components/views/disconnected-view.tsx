@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
-import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
+import TailscaleIcon from "src/assets/icons/tailscale-icon.svg?react"
 
 /**
  * DisconnectedView is rendered after node logout.

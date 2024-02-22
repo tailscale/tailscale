@@ -3,7 +3,7 @@
 
 import * as Primitive from "@radix-ui/react-collapsible"
 import React, { useState } from "react"
-import { ReactComponent as ChevronDown } from "src/assets/icons/chevron-down.svg"
+import ChevronDown from "src/assets/icons/chevron-down.svg?react"
 
 type CollapsibleProps = {
   trigger?: string

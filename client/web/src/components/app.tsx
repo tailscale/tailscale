@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 import React from "react"
-import { ReactComponent as TailscaleIcon } from "src/assets/icons/tailscale-icon.svg"
+import TailscaleIcon from "src/assets/icons/tailscale-icon.svg?react"
 import LoginToggle from "src/components/login-toggle"
 import DeviceDetailsView from "src/components/views/device-details-view"
 import DisconnectedView from "src/components/views/disconnected-view"
