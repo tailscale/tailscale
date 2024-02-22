@@ -49,3 +49,10 @@ export function isPromise<T = unknown>(val: unknown): val is Promise<T> {
   }
   return typeof val === "object" && "then" in val
 }
+
+/**
+ * isHTTPS reports whether the current page is loaded over HTTPS.
+ */
+export function isHTTPS() {
+  return window.location.protocol === "https:"
+}
