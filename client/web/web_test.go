@@ -622,7 +622,7 @@ func TestServeAuth(t *testing.T) {
 			name:          "no-session",
 			path:          "/api/auth",
 			wantStatus:    http.StatusOK,
-			wantResp:      &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi, ServerMode: ManageServerMode},
+			wantResp:      &authResponse{ViewerIdentity: vi, ServerMode: ManageServerMode},
 			wantNewCookie: false,
 			wantSession:   nil,
 		},
@@ -647,7 +647,7 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{AuthNeeded: tailscaleAuth, ViewerIdentity: vi, ServerMode: ManageServerMode},
+			wantResp:   &authResponse{ViewerIdentity: vi, ServerMode: ManageServerMode},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
@@ -695,7 +695,7 @@ func TestServeAuth(t *testing.T) {
 			path:       "/api/auth",
 			cookie:     successCookie,
 			wantStatus: http.StatusOK,
-			wantResp:   &authResponse{CanManageNode: true, ViewerIdentity: vi, ServerMode: ManageServerMode},
+			wantResp:   &authResponse{Authorized: true, ViewerIdentity: vi, ServerMode: ManageServerMode},
 			wantSession: &browserSession{
 				ID:            successCookie,
 				SrcNode:       remoteNode.Node.ID,
@@ -1219,9 +1219,10 @@ func TestPeerCapabilities(t *testing.T) {
 			status: userOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				UserProfile: &tailcfg.UserProfile{ID: tailcfg.UserID(2)},
+				Node:        &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
-						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+						"{\"canEdit\":[\"ssh\",\"subnets\"]}",
 					},
 				},
 			},
@@ -1232,9 +1233,10 @@ func TestPeerCapabilities(t *testing.T) {
 			status: userOwnedStatus,
 			whois: &apitype.WhoIsResponse{
 				UserProfile: &tailcfg.UserProfile{ID: tailcfg.UserID(1)},
+				Node:        &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
-						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+						"{\"canEdit\":[\"ssh\",\"subnets\"]}",
 					},
 				},
 			},
@@ -1244,6 +1246,7 @@ func TestPeerCapabilities(t *testing.T) {
 			name:   "tag-owned-no-webui-caps",
 			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityDebugPeer: []tailcfg.RawMessage{},
 				},
@@ -1254,71 +1257,87 @@ func TestPeerCapabilities(t *testing.T) {
 			name:   "tag-owned-one-webui-cap",
 			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
-						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
+						"{\"canEdit\":[\"ssh\",\"subnets\"]}",
 					},
 				},
 			},
 			wantCaps: peerCapabilities{
-				capFeatureSSH:    true,
-				capFeatureSubnet: true,
+				capFeatureSSH:     true,
+				capFeatureSubnets: true,
 			},
 		},
 		{
 			name:   "tag-owned-multiple-webui-cap",
 			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
-						"{\"canEdit\":[\"ssh\",\"subnet\"]}",
-						"{\"canEdit\":[\"subnet\",\"exitnode\",\"*\"]}",
+						"{\"canEdit\":[\"ssh\",\"subnets\"]}",
+						"{\"canEdit\":[\"subnets\",\"exitnodes\",\"*\"]}",
 					},
 				},
 			},
 			wantCaps: peerCapabilities{
-				capFeatureSSH:      true,
-				capFeatureSubnet:   true,
-				capFeatureExitNode: true,
-				capFeatureAll:      true,
+				capFeatureSSH:       true,
+				capFeatureSubnets:   true,
+				capFeatureExitNodes: true,
+				capFeatureAll:       true,
 			},
 		},
 		{
 			name:   "tag-owned-case-insensitive-caps",
 			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
-						"{\"canEdit\":[\"SSH\",\"sUBnet\"]}",
+						"{\"canEdit\":[\"SSH\",\"sUBnets\"]}",
 					},
 				},
 			},
 			wantCaps: peerCapabilities{
-				capFeatureSSH:    true,
-				capFeatureSubnet: true,
+				capFeatureSSH:     true,
+				capFeatureSubnets: true,
 			},
 		},
 		{
-			name:   "tag-owned-random-canEdit-contents-dont-error",
+			name:   "tag-owned-random-canEdit-contents-get-dropped",
 			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
 						"{\"canEdit\":[\"unknown-feature\"]}",
 					},
 				},
 			},
-			wantCaps: peerCapabilities{
-				"unknown-feature": true,
-			},
+			wantCaps: peerCapabilities{},
 		},
 		{
 			name:   "tag-owned-no-canEdit-section",
 			status: tagOwnedStatus,
 			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1)},
 				CapMap: tailcfg.PeerCapMap{
 					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
 						"{\"canDoSomething\":[\"*\"]}",
+					},
+				},
+			},
+			wantCaps: peerCapabilities{},
+		},
+		{
+			name:   "tagged-source-caps-ignored",
+			status: tagOwnedStatus,
+			whois: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{ID: tailcfg.NodeID(1), Tags: tags.AsSlice()},
+				CapMap: tailcfg.PeerCapMap{
+					tailcfg.PeerCapabilityWebUI: []tailcfg.RawMessage{
+						"{\"canEdit\":[\"ssh\",\"subnets\"]}",
 					},
 				},
 			},
@@ -1347,36 +1366,33 @@ func TestPeerCapabilities(t *testing.T) {
 			name: "empty-caps",
 			caps: nil,
 			wantCanEdit: map[capFeature]bool{
-				capFeatureAll:      false,
-				capFeatureFunnel:   false,
-				capFeatureSSH:      false,
-				capFeatureSubnet:   false,
-				capFeatureExitNode: false,
-				capFeatureAccount:  false,
+				capFeatureAll:       false,
+				capFeatureSSH:       false,
+				capFeatureSubnets:   false,
+				capFeatureExitNodes: false,
+				capFeatureAccount:   false,
 			},
 		},
 		{
 			name: "some-caps",
 			caps: peerCapabilities{capFeatureSSH: true, capFeatureAccount: true},
 			wantCanEdit: map[capFeature]bool{
-				capFeatureAll:      false,
-				capFeatureFunnel:   false,
-				capFeatureSSH:      true,
-				capFeatureSubnet:   false,
-				capFeatureExitNode: false,
-				capFeatureAccount:  true,
+				capFeatureAll:       false,
+				capFeatureSSH:       true,
+				capFeatureSubnets:   false,
+				capFeatureExitNodes: false,
+				capFeatureAccount:   true,
 			},
 		},
 		{
 			name: "wildcard-in-caps",
 			caps: peerCapabilities{capFeatureAll: true, capFeatureAccount: true},
 			wantCanEdit: map[capFeature]bool{
-				capFeatureAll:      true,
-				capFeatureFunnel:   true,
-				capFeatureSSH:      true,
-				capFeatureSubnet:   true,
-				capFeatureExitNode: true,
-				capFeatureAccount:  true,
+				capFeatureAll:       true,
+				capFeatureSSH:       true,
+				capFeatureSubnets:   true,
+				capFeatureExitNodes: true,
+				capFeatureAccount:   true,
 			},
 		},
 	}

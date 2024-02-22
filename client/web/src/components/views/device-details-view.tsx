@@ -8,6 +8,7 @@ import ACLTag from "src/components/acl-tag"
 import * as Control from "src/components/control-components"
 import NiceIP from "src/components/nice-ip"
 import { UpdateAvailableNotification } from "src/components/update-available"
+import { AuthResponse, canEdit } from "src/hooks/auth"
 import { NodeData } from "src/types"
 import Button from "src/ui/button"
 import Card from "src/ui/card"
@@ -16,11 +17,11 @@ import QuickCopy from "src/ui/quick-copy"
 import { useLocation } from "wouter"
 
 export default function DeviceDetailsView({
-  readonly,
   node,
+  auth,
 }: {
-  readonly: boolean
   node: NodeData
+  auth: AuthResponse
 }) {
   return (
     <>
@@ -37,11 +38,11 @@ export default function DeviceDetailsView({
                 })}
               />
             </div>
-            {!readonly && <DisconnectDialog />}
+            {canEdit("account", auth) && <DisconnectDialog />}
           </div>
         </Card>
         {node.Features["auto-update"] &&
-          !readonly &&
+          canEdit("account", auth) &&
           node.ClientVersion &&
           !node.ClientVersion.RunningLatest && (
             <UpdateAvailableNotification details={node.ClientVersion} />

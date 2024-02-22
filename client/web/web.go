@@ -568,9 +568,9 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	case path == "/routes" && r.Method == httpm.POST:
 		peerAllowed := func(d postRoutesRequest, p peerCapabilities) bool {
-			if d.SetExitNode && !p.canEdit(capFeatureExitNode) {
+			if d.SetExitNode && !p.canEdit(capFeatureExitNodes) {
 				return false
-			} else if d.SetRoutes && !p.canEdit(capFeatureSubnet) {
+			} else if d.SetRoutes && !p.canEdit(capFeatureSubnets) {
 				return false
 			}
 			return true
@@ -622,18 +622,11 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "invalid endpoint", http.StatusNotFound)
 }
 
-type authType string
-
-var (
-	synoAuth      authType = "synology"  // user needs a SynoToken for subsequent API calls
-	tailscaleAuth authType = "tailscale" // user needs to complete Tailscale check mode
-)
-
 type authResponse struct {
-	AuthNeeded     authType        `json:"authNeeded,omitempty"` // filled when user needs to complete a specific type of auth
-	CanManageNode  bool            `json:"canManageNode"`
-	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitempty"`
 	ServerMode     ServerMode      `json:"serverMode"`
+	Authorized     bool            `json:"authorized"` // has an authorized management session
+	ViewerIdentity *viewerIdentity `json:"viewerIdentity,omitempty"`
+	NeedsSynoAuth  bool            `json:"needsSynoAuth,omitempty"`
 }
 
 // viewerIdentity is the Tailscale identity of the source node
@@ -652,9 +645,11 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 	var resp authResponse
 	resp.ServerMode = s.mode
 	session, whois, status, sErr := s.getSession(r)
+	var caps peerCapabilities
 
 	if whois != nil {
-		caps, err := toPeerCapabilities(status, whois)
+		var err error
+		caps, err = toPeerCapabilities(status, whois)
 		if err != nil {
 			http.Error(w, sErr.Error(), http.StatusInternalServerError)
 			return
@@ -681,7 +676,7 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !authorized {
-				resp.AuthNeeded = synoAuth
+				resp.NeedsSynoAuth = true
 				writeJSON(w, resp)
 				return
 			}
@@ -697,21 +692,17 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case sErr != nil && errors.Is(sErr, errNotUsingTailscale):
-		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
-		resp.AuthNeeded = ""
+		resp.Authorized = false // restricted to the readonly view
 	case sErr != nil && errors.Is(sErr, errNotOwner):
-		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_not_owner", 1)
-		resp.AuthNeeded = ""
+		resp.Authorized = false // restricted to the readonly view
 	case sErr != nil && errors.Is(sErr, errTaggedLocalSource):
-		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_local_tag", 1)
-		resp.AuthNeeded = ""
+		resp.Authorized = false // restricted to the readonly view
 	case sErr != nil && errors.Is(sErr, errTaggedRemoteSource):
-		// Restricted to the readonly view, no auth action to take.
 		s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote_tag", 1)
-		resp.AuthNeeded = ""
+		resp.Authorized = false // restricted to the readonly view
 	case sErr != nil && !errors.Is(sErr, errNoSession):
 		// Any other error.
 		http.Error(w, sErr.Error(), http.StatusInternalServerError)
@@ -722,16 +713,26 @@ func (s *Server) serveAPIAuth(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.lc.IncrementCounter(r.Context(), "web_client_managing_remote", 1)
 		}
-		resp.CanManageNode = true
-		resp.AuthNeeded = ""
+		// User has a valid session. They're now authorized to edit if they
+		// have any edit capabilities. In practice, they won't be sent through
+		// the auth flow if they don't have edit caps, but their ACL granted
+		// permissions may change at any time. The frontend views and backend
+		// endpoints are always restricted to their current capabilities in
+		// addition to a valid session.
+		//
+		// But, we also check the caps here for a better user experience on
+		// the frontend login toggle, which uses resp.Authorized to display
+		// "viewing" vs "managing" copy. If they don't have caps, we want to
+		// display "viewing" even if they have a valid session.
+		resp.Authorized = !caps.isEmpty()
 	default:
-		// whois being nil implies local as the request did not come over Tailscale
 		if whois == nil || (whois.Node.StableID == status.Self.ID) {
+			// whois being nil implies local as the request did not come over Tailscale.
 			s.lc.IncrementCounter(r.Context(), "web_client_viewing_local", 1)
 		} else {
 			s.lc.IncrementCounter(r.Context(), "web_client_viewing_remote", 1)
 		}
-		resp.AuthNeeded = tailscaleAuth
+		resp.Authorized = false // not yet authorized
 	}
 
 	writeJSON(w, resp)
