@@ -691,7 +691,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 	if err != nil {
 		return fmt.Errorf("receive client key: %v", err)
 	}
-	if err := s.verifyClient(clientKey, clientInfo); err != nil {
+	if err := s.verifyClient(ctx, clientKey, clientInfo); err != nil {
 		return fmt.Errorf("client %x rejected: %v", clientKey, err)
 	}
 
@@ -1116,11 +1116,11 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-func (s *Server) verifyClient(clientKey key.NodePublic, info *clientInfo) error {
+func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo) error {
 	if !s.verifyClients {
 		return nil
 	}
-	status, err := tailscale.Status(context.TODO())
+	status, err := tailscale.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to query local tailscaled status: %w", err)
 	}
