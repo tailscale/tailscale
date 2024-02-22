@@ -7,6 +7,7 @@ package derp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
@@ -40,6 +41,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
@@ -144,9 +146,13 @@ type Server struct {
 	avgQueueDuration             *uint64          // In milliseconds; accessed atomically
 	tcpRtt                       metrics.LabelMap // histogram
 
-	// verifyClients only accepts client connections to the DERP server if the clientKey is a
-	// known peer in the network, as specified by a running tailscaled's client's LocalAPI.
-	verifyClients bool
+	// verifyClientsLocalTailscaled only accepts client connections to the DERP
+	// server if the clientKey is a known peer in the network, as specified by a
+	// running tailscaled's client's LocalAPI.
+	verifyClientsLocalTailscaled bool
+
+	verifyClientsURL         string
+	verifyClientsURLFailOpen bool
 
 	mu       sync.Mutex
 	closed   bool
@@ -353,7 +359,20 @@ func (s *Server) SetMeshKey(v string) {
 //
 // It must be called before serving begins.
 func (s *Server) SetVerifyClient(v bool) {
-	s.verifyClients = v
+	s.verifyClientsLocalTailscaled = v
+}
+
+// SetVerifyClientURL sets the admission controller URL to use for verifying clients.
+// If empty, all clients are accepted (unless restricted by SetVerifyClient checking
+// against tailscaled).
+func (s *Server) SetVerifyClientURL(v string) {
+	s.verifyClientsURL = v
+}
+
+// SetVerifyClientURLFailOpen sets whether to allow clients to connect if the
+// admission controller URL is unreachable.
+func (s *Server) SetVerifyClientURLFailOpen(v bool) {
+	s.verifyClientsURLFailOpen = v
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
@@ -691,7 +710,9 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 	if err != nil {
 		return fmt.Errorf("receive client key: %v", err)
 	}
-	if err := s.verifyClient(ctx, clientKey, clientInfo); err != nil {
+
+	clientAP, _ := netip.ParseAddrPort(remoteAddr)
+	if err := s.verifyClient(ctx, clientKey, clientInfo, clientAP.Addr()); err != nil {
 		return fmt.Errorf("client %x rejected: %v", clientKey, err)
 	}
 
@@ -1116,21 +1137,60 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
-func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo) error {
-	if !s.verifyClients {
-		return nil
+// verifyClient checks whether the client is allowed to connect to the derper,
+// depending on how & whether the server's been configured to verify.
+func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo, clientIP netip.Addr) error {
+	// tailscaled-based verification:
+	if s.verifyClientsLocalTailscaled {
+		status, err := tailscale.Status(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to query local tailscaled status: %w", err)
+		}
+		if clientKey == status.Self.PublicKey {
+			return nil
+		}
+		if _, exists := status.Peer[clientKey]; !exists {
+			return fmt.Errorf("client %v not in set of peers", clientKey)
+		}
 	}
-	status, err := tailscale.Status(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to query local tailscaled status: %w", err)
+
+	// admission controller-based verification:
+	if s.verifyClientsURL != "" {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		jreq, err := json.Marshal(&tailcfg.DERPAdmitClientRequest{
+			NodePublic: clientKey,
+			Source:     clientIP,
+		})
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", s.verifyClientsURL, bytes.NewReader(jreq))
+		if err != nil {
+			return err
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			if s.verifyClientsURLFailOpen {
+				s.logf("admission controller unreachable; allowing client %v", clientKey)
+				return nil
+			}
+			return err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return fmt.Errorf("admission controller: %v", res.Status)
+		}
+		var jres tailcfg.DERPAdmitClientResponse
+		if err := json.NewDecoder(io.LimitReader(res.Body, 4<<10)).Decode(&jres); err != nil {
+			return err
+		}
+		if !jres.Allow {
+			return fmt.Errorf("admission controller: %v/%v not allowed", clientKey, clientIP)
+		}
+		// TODO(bradfitz): add policy for configurable bandwidth rate per client?
 	}
-	if clientKey == status.Self.PublicKey {
-		return nil
-	}
-	if _, exists := status.Peer[clientKey]; !exists {
-		return fmt.Errorf("client %v not in set of peers", clientKey)
-	}
-	// TODO(bradfitz): add policy for configurable bandwidth rate per client?
 	return nil
 }
 

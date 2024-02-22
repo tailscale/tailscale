@@ -3,7 +3,12 @@
 
 package tailcfg
 
-import "sort"
+import (
+	"net/netip"
+	"sort"
+
+	"tailscale.com/types/key"
+)
 
 // DERPMap describes the set of DERP packet relay servers that are available.
 type DERPMap struct {
@@ -176,3 +181,17 @@ type DERPNode struct {
 
 // DotInvalid is a fake DNS TLD used in tests for an invalid hostname.
 const DotInvalid = ".invalid"
+
+// DERPAdmitClientRequest is the JSON request body of a POST to derper's
+// --verify-client-url admission controller URL.
+type DERPAdmitClientRequest struct {
+	NodePublic key.NodePublic // key to query for admission
+	Source     netip.Addr     // derp client's IP address
+}
+
+// DERPAdmitClientResponse is the response to a DERPAdmitClientRequest.
+type DERPAdmitClientResponse struct {
+	Allow bool // whether to permit client
+
+	// TODO(bradfitz,maisem): bandwidth limits, etc?
+}
