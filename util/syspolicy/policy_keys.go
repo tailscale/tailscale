@@ -42,10 +42,11 @@ const (
 	// The default is "show" unless otherwise stated. Enforcement of these
 	// policies is typically performed by the UI code for the relevant operating
 	// system.
-	AdminConsoleVisibility   Key = "AdminConsole"
-	NetworkDevicesVisibility Key = "NetworkDevices"
-	TestMenuVisibility       Key = "TestMenu"
-	UpdateMenuVisibility     Key = "UpdateMenu"
+	AdminConsoleVisibility    Key = "AdminConsole"
+	NetworkDevicesVisibility  Key = "NetworkDevices"
+	TestMenuVisibility        Key = "TestMenu"
+	UpdateMenuVisibility      Key = "UpdateMenu"
+	ResetToDefaultsVisibility Key = "ResetToDefaults"
 	// RunExitNodeVisibility controls if the "run as exit node" menu item is
 	// visible, without controlling the setting itself. This is preserved for
 	// backwards compatibility but prefer EnableRunExitNode in new deployments.
@@ -80,7 +81,7 @@ const (
 	// ManagedByOrganizationName is set. It can be used to provide a pointer to support resources
 	// for Tailscale within the organization.
 	ManagedByCaption Key = "ManagedByCaption"
-	// ManagedByCaption is a valid URL pointing to a support help desk for Tailscale within the
+	// ManagedByURL is a valid URL pointing to a support help desk for Tailscale within the
 	// organization. A button in the client UI provides easy access to this URL.
 	ManagedByURL Key = "ManagedByURL"
 )
