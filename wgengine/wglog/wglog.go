@@ -52,6 +52,13 @@ func NewLogger(logf logger.Logf) *Logger {
 			// See https://github.com/tailscale/tailscale/issues/1388.
 			return
 		}
+		if strings.Contains(format, "Adding allowedip") {
+			// Drop. See https://github.com/tailscale/corp/issues/17532.
+			// AppConnectors (as one example) may have many subnet routes, and
+			// the messaging related to these is not specific enough to be
+			// useful.
+			return
+		}
 		replace := ret.replace.Load()
 		if replace == nil {
 			// No replacements specified; log as originally planned.
