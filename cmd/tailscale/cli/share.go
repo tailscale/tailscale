@@ -140,9 +140,24 @@ func buildShareLongHelp() string {
 
 var shareLongHelpBase = `Tailscale share allows you to share directories with other machines on your tailnet.
 
+In order to share folders, your node needs to have the node attribute "tailfs:share".
+
+In order to access shares, your node needs to have the node attribute "tailfs:access".
+
+For example, to enable sharing and accessing shares for all member nodes:
+
+  "nodeAttrs": [
+    {
+      "target": ["autogroup:member"],
+      "attr": [
+        "tailfs:share",
+        "tailfs:access",
+      ],
+    }]
+
 Each share is identified by a name and points to a directory at a specific path. For example, to share the path /Users/me/Documents under the name "docs", you would run:
 
-	$ tailscale share add docs /Users/me/Documents
+  $ tailscale share add docs /Users/me/Documents
 
 Note that the system forces share names to lowercase to avoid problems with clients that don't support case-sensitive filenames.
 
@@ -150,57 +165,59 @@ Share names may only contain the letters a-z, underscore _, parentheses (), or s
 
 All Tailscale shares have a globally unique path consisting of the tailnet, the machine name and the share name. For example, if the above share was created on the machine "mylaptop" on the tailnet "mydomain.com", the share's path would be:
 
-	/mydomain.com/mylaptop/docs
+  /mydomain.com/mylaptop/docs
 
 In order to access this share, other machines on the tailnet can connect to the above path on a WebDAV server running at 100.100.100.100:8080, for example:
 
-	http://100.100.100.100:8080/mydomain.com/mylaptop/docs
+  http://100.100.100.100:8080/mydomain.com/mylaptop/docs
 
 Permissions to access shares are controlled via ACLs. For example, to give yourself read/write access and give the group "home" read-only access to the above share, use the below ACL grants:
 
-	{
-		"src": ["mylogin@domain.com"],
-		"dst": ["mylaptop's ip address"],
-		"app": {
-			"tailscale.com/cap/tailfs": [{
-				"shares": ["docs"],
-				"access": "rw"
-			}]
-		}
-	},
-	{
-		"src": ["group:home"],
-		"dst": ["mylaptop"],
-		"app": {
-			"tailscale.com/cap/tailfs": [{
-				"shares": ["docs"],
-				"access": "ro"
-			}]
-		}
-	}
+  "grants": [
+    {
+      "src": ["mylogin@domain.com"],
+      "dst": ["mylaptop's ip address"],
+      "app": {
+        "tailscale.com/cap/tailfs": [{
+          "shares": ["docs"],
+          "access": "rw"
+        }]
+      }
+    },
+    {
+      "src": ["group:home"],
+      "dst": ["mylaptop"],
+      "app": {
+        "tailscale.com/cap/tailfs": [{
+          "shares": ["docs"],
+          "access": "ro"
+        }]
+      }
+    }]
 
 To categorically give yourself access to all your shares, you can use the below ACL grant:
-	{
-		"src": ["autogroup:member"],
-		"dst": ["autogroup:self"],
-		"app": {
-			"tailscale.com/cap/tailfs": [{
-				"shares": ["*"],
-				"access": "rw"
-			}]
-		}
-	},
 
+  "grants": [
+    {
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self"],
+      "app": {
+        "tailscale.com/cap/tailfs": [{
+          "shares": ["*"],
+          "access": "rw"
+        }]
+      }
+    }]
 
 Whenever either you or anyone in the group "home" connects to the share, they connect as if they are using your local machine user. They'll be able to read the same files as your user and if they create files, those files will be owned by your user.%s
 
 You can remove shares by name, for example you could remove the above share by running:
 
-	$ tailscale share remove docs
+  $ tailscale share remove docs
 
 You can get a list of currently published shares by running:
 
-	$ tailscale share list`
+  $ tailscale share list`
 
 var shareLongHelpAs = `
 
