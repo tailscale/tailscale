@@ -5,6 +5,7 @@
     "module": "ES2020",
     "strict": true,
     "sourceMap": true,
+    "skipLibCheck": true,
     "isolatedModules": true,
     "moduleResolution": "node",
     "forceConsistentCasingInFileNames": true,

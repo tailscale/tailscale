@@ -1,6 +1,5 @@
 /// <reference types="vitest" />
 import { createLogger, defineConfig } from "vite"
-import rewrite from "vite-plugin-rewrite-all"
 import svgr from "vite-plugin-svgr"
 import paths from "vite-tsconfig-paths"
 
@@ -24,11 +23,6 @@ export default defineConfig({
   plugins: [
     paths(),
     svgr(),
-    // By default, the Vite dev server doesn't handle dots
-    // in path names and treats them as static files.
-    // This plugin changes Vite's routing logic to fix this.
-    // See: https://github.com/vitejs/vite/issues/2415
-    rewrite(),
   ],
   build: {
     outDir: "build",
