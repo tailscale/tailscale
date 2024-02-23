@@ -428,7 +428,7 @@ var userspaceProxyYaml []byte
 
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
-	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
+	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true && sts.TSVIP == "" { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal userspace proxy spec: %v", err)
 		}

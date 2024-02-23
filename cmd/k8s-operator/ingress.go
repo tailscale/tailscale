@@ -155,6 +155,16 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	// magic443 is a fake hostname that we can use to tell containerboot to swap
 	// out with the real hostname once it's known.
 	const magic443 = "${TS_CERT_DOMAIN}:443"
+
+	tlsHostname := ""
+	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
+		tlsHostname = ing.Spec.TLS[0].Hosts[0]
+	}
+	tlsHost := ipn.HostPort(fmt.Sprintf("%s:443", tlsHostname))
+	if tlsHostname == "" {
+		tlsHost = magic443
+	}
+
 	sc := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{
 			443: {
@@ -162,18 +172,18 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			},
 		},
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
-			magic443: {
+			tlsHost: {
 				Handlers: map[string]*ipn.HTTPHandler{},
 			},
 		},
 	}
 	if opt.Bool(ing.Annotations[AnnotationFunnel]).EqualBool(true) {
 		sc.AllowFunnel = map[ipn.HostPort]bool{
-			magic443: true,
+			tlsHost: true,
 		}
 	}
 
-	web := sc.Web[magic443]
+	web := sc.Web[tlsHost]
 	addIngressBackend := func(b *networkingv1.IngressBackend, path string) {
 		if b == nil {
 			return
@@ -216,14 +226,10 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")
 
-	var tlsHost string // hostname or FQDN or empty
-	if ing.Spec.TLS != nil && len(ing.Spec.TLS) > 0 && len(ing.Spec.TLS[0].Hosts) > 0 {
-		tlsHost = ing.Spec.TLS[0].Hosts[0]
-	}
 	for _, rule := range ing.Spec.Rules {
 		// Host is optional, but if it's present it must match the TLS host
 		// otherwise we ignore the rule.
-		if rule.Host != "" && rule.Host != tlsHost {
+		if rule.Host != "" && rule.Host != tlsHostname {
 			a.recorder.Eventf(ing, corev1.EventTypeWarning, "InvalidIngressBackend", "rule with host %q ignored, unsupported", rule.Host)
 			continue
 		}
@@ -253,10 +259,9 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		tags = strings.Split(tstr, ",")
 	}
 	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if tlsHost != "" {
-		hostname, _, _ = strings.Cut(tlsHost, ".")
-	}
-
+	// if tlsHost != "" {
+	// 	hostname, _, _ = strings.Cut(tlsHost, ".")
+	// }
 	sts := &tailscaleSTSConfig{
 		Hostname:            hostname,
 		ParentResourceName:  ing.Name,
@@ -265,6 +270,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Tags:                tags,
 		ChildResourceLabels: crl,
 		ProxyClass:          proxyClass,
+		TSVIP:               a.tailnetVIPForIngress(ing),
 	}
 
 	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
@@ -305,6 +311,13 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to update ingress status: %w", err)
 	}
 	return nil
+}
+
+func (a *IngressReconciler) tailnetVIPForIngress(ing *networkingv1.Ingress) string {
+	if !a.shouldExpose(ing) || ing.Annotations == nil {
+		return ""
+	}
+	return ing.GetAnnotations()[AnnotationTSVIP]
 }
 
 func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {

@@ -3299,9 +3299,13 @@ func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Con
 	return
 }
 
-func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
+func (b *LocalBackend) isLocallyAvailable(ip netip.Addr) bool {
 	nm := b.NetMap()
-	return nm != nil && views.SliceContains(nm.GetAddresses(), netip.PrefixFrom(ip, ip.BitLen()))
+	if nm == nil {
+		return false
+	}
+	pfx := netip.PrefixFrom(ip, ip.BitLen())
+	return views.SliceContains(nm.SelfNode.AllowedIPs(), pfx)
 }
 
 var (
@@ -3319,7 +3323,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		}
 		return b.HandleQuad100Port80Conn, opts
 	}
-	if !b.isLocalIP(dst.Addr()) {
+	if !b.isLocallyAvailable(dst.Addr()) {
 		return nil, nil
 	}
 	if dst.Port() == 22 && b.ShouldRunSSH() {
