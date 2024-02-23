@@ -54,6 +54,10 @@ type Client interface {
 	// TODO: It might be better to simply shutdown the controlclient and
 	// make a new one when it's time to unpause.
 	SetPaused(bool)
+	// SetSleepMode pauses the control client and prevents anybody else
+	// from unpausing it until SetSleepMode(false) is called again
+	SetSleepMode(bool)
+	IsSleeping() bool
 	// AuthCantContinue returns whether authentication is blocked. If it
 	// is, you either need to visit the auth URL (previously sent in a
 	// Status callback) or call the Login function appropriately.

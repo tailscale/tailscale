@@ -139,6 +139,7 @@ type Auto struct {
 	loginGoal      *LoginGoal  // non-nil if some login activity is desired
 	inMapPoll      bool        // true once we get the first MapResponse in a stream; false when HTTP response ends
 	state          State       // TODO(bradfitz): delete this, make it computed by method from other state
+	isSleeping     bool        // whether we are ZZZing
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap and update requests
@@ -198,6 +199,16 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 	c.unregisterHealthWatch = health.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
 
+}
+
+func (c *Auto) SetSleepMode(enabled bool) {
+	c.logf("setSleepMode(%v)", enabled)
+	c.isSleeping = enabled
+	c.SetPaused(enabled)
+}
+
+func (c *Auto) IsSleeping() bool {
+	return c.isSleeping
 }
 
 // SetPaused controls whether HTTP activity should be paused.

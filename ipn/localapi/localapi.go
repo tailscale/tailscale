@@ -110,6 +110,7 @@ var handler = map[string]localAPIHandler{
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
+	"set-sleep":                   (*Handler).serveSetSleep,
 	"tailfs/fileserver-address":   (*Handler).serveTailFSFileServerAddr,
 	"tailfs/shares":               (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
@@ -573,6 +574,10 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		h.b.MagicConn().SetHomeless(true)
 	case "derp-unset-homeless":
 		h.b.MagicConn().SetHomeless(false)
+	case "sleep-set":
+		h.b.SetSleep(true)
+	case "sleep-unset":
+		h.b.SetSleep(false)
 	case "rebind":
 		err = h.b.DebugRebind()
 	case "restun":
@@ -1693,6 +1698,20 @@ func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "done\n")
+}
+
+func (h *Handler) serveSetSleep(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", http.StatusBadRequest)
+		return
+	}
+	h.b.SetSleep(r.FormValue("sleep") == "true")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct{}{})
 }
 
 func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
