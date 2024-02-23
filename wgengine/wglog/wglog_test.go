@@ -64,6 +64,23 @@ func TestLogger(t *testing.T) {
 	}
 }
 
+func TestSuppressLogs(t *testing.T) {
+	var logs []string
+	logf := func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	x := wglog.NewLogger(logf)
+	x.DeviceLogger.Verbosef("pass")
+	x.DeviceLogger.Verbosef("UAPI: Adding allowedip")
+
+	if len(logs) != 1 {
+		t.Fatalf("got %d logs, want 1", len(logs))
+	}
+	if logs[0] != "wg: [v2] pass" {
+		t.Errorf("got %q, want \"wg: [v2] pass\"", logs[0])
+	}
+}
+
 func stringer(s string) stringerString {
 	return stringerString(s)
 }
