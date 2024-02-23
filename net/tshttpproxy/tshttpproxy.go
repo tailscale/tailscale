@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
+	"tailscale.com/util/mak"
 )
 
 // InvalidateCache invalidates the package-level cache for ProxyFromEnvironment.
@@ -117,10 +118,33 @@ func SetSelfProxy(addrs ...string) {
 // For example, WPAD PAC files on Windows.
 var sysProxyFromEnv func(*http.Request) (*url.URL, error)
 
+// These variables track whether we've printed a log message for a given proxy
+// URL; we only print them once to avoid log spam.
+var (
+	logMessageMu      sync.Mutex
+	logMessagePrinted map[string]bool
+)
+
 // ProxyFromEnvironment is like the standard library's http.ProxyFromEnvironment
 // but additionally does OS-specific proxy lookups if the environment variables
 // alone don't specify a proxy.
-func ProxyFromEnvironment(req *http.Request) (*url.URL, error) {
+func ProxyFromEnvironment(req *http.Request) (ret *url.URL, _ error) {
+	defer func() {
+		if ret == nil {
+			return
+		}
+
+		ss := ret.String()
+
+		logMessageMu.Lock()
+		defer logMessageMu.Unlock()
+		if logMessagePrinted[ss] {
+			return
+		}
+		log.Printf("tshttpproxy: using proxy %q for URL: %q", ss, req.URL.String())
+		mak.Set(&logMessagePrinted, ss, true)
+	}()
+
 	localProxyFunc := getProxyFunc()
 	u, err := localProxyFunc(req.URL)
 	if u != nil && err == nil {
