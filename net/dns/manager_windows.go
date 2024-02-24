@@ -92,7 +92,7 @@ func (m *windowsManager) openInterfaceKey(pfx winutil.RegistryPathPrefix) (regis
 func (m *windowsManager) muteKeyNotFoundIfClosing(err error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.closing || (err != windows.ERROR_FILE_NOT_FOUND && err != windows.ERROR_PATH_NOT_FOUND) {
+	if !m.closing || (!errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND)) {
 		return err
 	}
 

@@ -678,7 +678,7 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.ctxCancel()
 	b.e.Close()
-	b.e.Wait()
+	<-b.e.Done()
 }
 
 func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {

@@ -89,10 +89,11 @@ type Engine interface {
 	// new Engine.
 	Close()
 
-	// Wait waits until the Engine's Close method is called or the
-	// engine aborts with an error. You don't have to call this.
-	// TODO: return an error?
-	Wait()
+	// Done returns a channel that is closed when the Engine's
+	// Close method is called, the engine aborts with an error,
+	// or it shuts down due to the closure of the underlying device.
+	// You don't have to call this.
+	Done() <-chan struct{}
 
 	// SetNetworkMap informs the engine of the latest network map
 	// from the server. The network map's DERPMap field should be

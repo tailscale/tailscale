@@ -432,13 +432,26 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 	if sigPipe != nil {
 		signal.Ignore(sigPipe)
 	}
+	wgEngineCreated := make(chan struct{})
 	go func() {
-		select {
-		case s := <-interrupt:
-			logf("tailscaled got signal %v; shutting down", s)
-			cancel()
-		case <-ctx.Done():
-			// continue
+		var wgEngineClosed <-chan struct{}
+		wgEngineCreated := wgEngineCreated // local shadow
+		for {
+			select {
+			case s := <-interrupt:
+				logf("tailscaled got signal %v; shutting down", s)
+				cancel()
+				return
+			case <-wgEngineClosed:
+				logf("wgengine has been closed; shutting down")
+				cancel()
+				return
+			case <-wgEngineCreated:
+				wgEngineClosed = sys.Engine.Get().Done()
+				wgEngineCreated = nil
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -464,6 +477,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
 			srv.SetLocalBackend(lb)
+			close(wgEngineCreated)
 			return
 		}
 		lbErr.Store(err) // before the following cancel
