@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,6 +39,9 @@ type windowsManager struct {
 	guid       string
 	nrptDB     *nrptRuleDatabase
 	wslManager *wslManager
+
+	mu      sync.Mutex
+	closing bool
 }
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
@@ -64,12 +68,35 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 }
 
 func (m *windowsManager) openInterfaceKey(pfx winutil.RegistryPathPrefix) (registry.Key, error) {
+	var key registry.Key
+	var err error
 	path := pfx.WithSuffix(m.guid)
-	key, err := winutil.OpenKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
+
+	m.mu.Lock()
+	closing := m.closing
+	m.mu.Unlock()
+	if closing {
+		// Do not wait for the interface key to appear if the manager is being closed.
+		// If it's being closed due to the removal of the wintun adapter,
+		// the key would already be gone by now and will not reappear until tailscaled is restarted.
+		key, err = registry.OpenKey(registry.LOCAL_MACHINE, string(path), registry.SET_VALUE)
+	} else {
+		key, err = winutil.OpenKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("opening %s: %w", path, err)
 	}
 	return key, nil
+}
+
+func (m *windowsManager) muteKeyNotFoundIfClosing(err error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.closing || (err != windows.ERROR_FILE_NOT_FOUND && err != windows.ERROR_PATH_NOT_FOUND) {
+		return err
+	}
+
+	return nil
 }
 
 func delValue(key registry.Key, name string) error {
@@ -205,7 +232,7 @@ func (m *windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname
 
 	key4, err := m.openInterfaceKey(winutil.IPv4TCPIPInterfacePrefix)
 	if err != nil {
-		return err
+		return m.muteKeyNotFoundIfClosing(err)
 	}
 	defer key4.Close()
 
@@ -227,7 +254,7 @@ func (m *windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname
 
 	key6, err := m.openInterfaceKey(winutil.IPv6TCPIPInterfacePrefix)
 	if err != nil {
-		return err
+		return m.muteKeyNotFoundIfClosing(err)
 	}
 	defer key6.Close()
 
@@ -387,6 +414,14 @@ func (m *windowsManager) SupportsSplitDNS() bool {
 }
 
 func (m *windowsManager) Close() error {
+	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closing = true
+	m.mu.Unlock()
+
 	err := m.SetDNS(OSConfig{})
 	if m.nrptDB != nil {
 		m.nrptDB.Close()
@@ -407,7 +442,7 @@ func (m *windowsManager) disableDynamicUpdates() error {
 	for _, prefix := range prefixen {
 		k, err := m.openInterfaceKey(prefix)
 		if err != nil {
-			return err
+			return m.muteKeyNotFoundIfClosing(err)
 		}
 		defer k.Close()
 
@@ -426,7 +461,7 @@ func (m *windowsManager) disableDynamicUpdates() error {
 func (m *windowsManager) setSingleDWORD(prefix winutil.RegistryPathPrefix, value string, data uint32) error {
 	k, err := m.openInterfaceKey(prefix)
 	if err != nil {
-		return err
+		return m.muteKeyNotFoundIfClosing(err)
 	}
 	defer k.Close()
 	return k.SetDWordValue(value, data)
