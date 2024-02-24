@@ -39,7 +39,7 @@ type Peer struct {
 	AllowedIPs          []netip.Prefix
 	V4MasqAddr          *netip.Addr // if non-nil, masquerade IPv4 traffic to this peer using this address
 	V6MasqAddr          *netip.Addr // if non-nil, masquerade IPv6 traffic to this peer using this address
-	PersistentKeepalive uint16
+	PersistentKeepalive uint16      // in seconds between keep-alives; 0 to disable
 	// wireguard-go's endpoint for this peer. It should always equal Peer.PublicKey.
 	// We represent it explicitly so that we can detect if they diverge and recover.
 	// There is no need to set WGEndpoint explicitly when constructing a Peer by hand.
