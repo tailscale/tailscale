@@ -208,7 +208,7 @@ jobs:
       env:
         HOME: "/tmp"
         TMPDIR: "/tmp"
-        XDB_CACHE_HOME: "/var/lib/ghrunner/cache"
+        XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
 
   race-build:
     runs-on: ubuntu-22.04
