@@ -150,8 +150,8 @@ func (e *watchdogEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	return ret, ok
 }
 
-func (e *watchdogEngine) Wait() {
-	e.wrap.Wait()
+func (e *watchdogEngine) Done() <-chan struct{} {
+	return e.wrap.Done()
 }
 
 func (e *watchdogEngine) InstallCaptureHook(cb capture.Callback) {
