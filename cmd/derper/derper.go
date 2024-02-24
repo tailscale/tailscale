@@ -324,7 +324,7 @@ func main() {
 				}
 			}()
 		}
-		err = rateLimitedListenAndServeTLS(httpsrv)
+		err = rateLimitedListenAndServeTLS(httpsrv, &lc)
 	} else {
 		log.Printf("derper: serving on %s", *addr)
 		var ln net.Listener
@@ -397,8 +397,8 @@ func defaultMeshPSKFile() string {
 	return ""
 }
 
-func rateLimitedListenAndServeTLS(srv *http.Server) error {
-	ln, err := net.Listen("tcp", cmp.Or(srv.Addr, ":https"))
+func rateLimitedListenAndServeTLS(srv *http.Server, lc *net.ListenConfig) error {
+	ln, err := lc.Listen(context.Background(), "tcp", cmp.Or(srv.Addr, ":https"))
 	if err != nil {
 		return err
 	}
