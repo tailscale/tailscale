@@ -405,6 +405,9 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
 			IdleConnTimeout:   dohTransportTimeout,
+			// On mobile platforms TCP KeepAlive is disabled in the dialer,
+			// ensure that we timeout if the connection appears to be hung.
+			ResponseHeaderTimeout: 10 * time.Second,
 			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
 				if !strings.HasPrefix(netw, "tcp") {
 					return nil, fmt.Errorf("unexpected network %q", netw)
