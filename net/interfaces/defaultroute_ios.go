@@ -21,8 +21,9 @@ func UpdateLastKnownDefaultRouteInterface(ifName string) {
 	if ifName == "" {
 		return
 	}
-	lastKnownDefaultRouteIfName.Store(ifName)
-	log.Printf("defaultroute_ios: update from Swift, ifName = %s", ifName)
+	if old := lastKnownDefaultRouteIfName.Swap(ifName); old != ifName {
+		log.Printf("defaultroute_ios: update from Swift, ifName = %s (was %s)", ifName, old)
+	}
 }
 
 func defaultRoute() (d DefaultRouteDetails, err error) {
@@ -56,13 +57,13 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 			}
 
 			if !ifc.IsUp() {
-				log.Println("defaultroute_ios: %s is down", name)
+				log.Printf("defaultroute_ios: %s is down", name)
 				return nil
 			}
 
 			addrs, _ := ifc.Addrs()
 			if len(addrs) == 0 {
-				log.Println("defaultroute_ios: %s has no addresses", name)
+				log.Printf("defaultroute_ios: %s has no addresses", name)
 				return nil
 			}
 			return &ifc
@@ -76,7 +77,6 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	if swiftIfName := lastKnownDefaultRouteIfName.Load(); swiftIfName != "" {
 		ifc := getInterfaceByName(swiftIfName)
 		if ifc != nil {
-			log.Printf("defaultroute_ios: using %s (provided by Swift)", ifc.Name)
 			d.InterfaceName = ifc.Name
 			d.InterfaceIndex = ifc.Index
 			return d, nil
