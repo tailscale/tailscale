@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -277,4 +278,25 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 		})
 	}
 	fs.SetRemotes(b.netMap.Domain, tailfsRemotes, &tailFSTransport{b: b})
+}
+
+func (b *LocalBackend) tailFSConfigureAutomount(old, new ipn.AutomountPrefs) {
+	oldPath := filepath.Clean(old.PathOrDefault())
+	settingsChanged := !new.Equals(old)
+
+	if old.Enabled && pathExists(oldPath) && settingsChanged {
+		b.logf("Unmounting shares from %q", oldPath)
+		tailfs.UnmountShares(oldPath)
+	}
+
+	newPath := filepath.Clean(new.PathOrDefault())
+	if new.Enabled && !pathExists(newPath) {
+		b.logf("Mounting shares at %q as %q", newPath, new.AsUser)
+		tailfs.MountShares(newPath, new.AsUser)
+	}
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

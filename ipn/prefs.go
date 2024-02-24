@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -222,6 +223,10 @@ type Prefs struct {
 	// Linux-only.
 	NetfilterKind string
 
+	// AutomountShares configures automatic mounting of the TailFS file system
+	// at a local path.
+	AutomountShares AutomountPrefs
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -259,6 +264,34 @@ type AppConnectorPrefs struct {
 	Advertise bool
 }
 
+// AutomountPrefs are the settings for automounting TailFS shares.
+type AutomountPrefs struct {
+	// Enabled specifies whether or not automounting is enabled.
+	Enabled bool
+
+	// The path at which we mount. If blank, we default to an os-specific
+	// location like /Volumes/tailscale.
+	Path string
+
+	// AsUser specifies the user who will own the mounted folder.
+	AsUser string
+}
+
+// PathOrDefault returns the configured Path or the os-specific
+// [tailfs.DefaultAutomountPath] if no Path was specified.
+func (am AutomountPrefs) PathOrDefault() string {
+	if am.Path != "" {
+		return am.Path
+	}
+	return tailfs.DefaultAutomountPath()
+}
+
+func (am1 AutomountPrefs) Equals(am2 AutomountPrefs) bool {
+	return am1.Enabled == am2.Enabled &&
+		am1.Path == am2.Path &&
+		am1.AsUser == am2.AsUser
+}
+
 // MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
 //
 // Each FooSet field maps to a corresponding Foo field in Prefs. FooSet can be
@@ -293,6 +326,7 @@ type MaskedPrefs struct {
 	AppConnectorSet           bool                `json:",omitempty"`
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
+	AutomountSharesSet        bool                `json:",omitempty"`
 }
 
 type AutoUpdatePrefsMask struct {
@@ -498,6 +532,7 @@ func (p *Prefs) pretty(goos string) string {
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
+	sb.WriteString(p.AutomountShares.Pretty())
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -556,7 +591,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
-		p.NetfilterKind == p2.NetfilterKind
+		p.NetfilterKind == p2.NetfilterKind &&
+		p.AutomountShares.Equals(p2.AutomountShares)
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
@@ -574,6 +610,16 @@ func (ap AppConnectorPrefs) Pretty() string {
 		return "appconnector=advertise "
 	}
 	return ""
+}
+
+func (am AutomountPrefs) Pretty() string {
+	if !am.Enabled {
+		return "automount=off "
+	}
+	if am.Path != "" {
+		return fmt.Sprintf("automount=%s ", am.Path)
+	}
+	return "automount=on "
 }
 
 func compareIPNets(a, b []netip.Prefix) bool {

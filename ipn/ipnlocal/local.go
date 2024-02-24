@@ -1847,6 +1847,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// use logout instead.
 		cc.Login(nil, controlclient.LoginDefault)
 	}
+
+	b.tailFSConfigureAutomount(ipn.AutomountPrefs{}, prefs.AutomountShares())
 	b.stateMachine()
 	return nil
 }
@@ -3261,6 +3263,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.authReconfig()
 	}
 
+	b.tailFSConfigureAutomount(oldp.AutomountShares(), prefs.AutomountShares())
 	b.send(ipn.Notify{Prefs: &prefs})
 	return prefs
 }
