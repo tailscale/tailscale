@@ -1793,7 +1793,7 @@ func nodesEqual(x, y views.Slice[tailcfg.NodeView]) bool {
 	if x.Len() != y.Len() {
 		return false
 	}
-	for i := range x.LenIter() {
+	for i := range x.Len() {
 		if !x.At(i).Equal(y.At(i)) {
 			return false
 		}
@@ -2056,7 +2056,7 @@ func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 			fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 		}
 
-		for i := range n.AllowedIPs().LenIter() {
+		for i := range n.AllowedIPs().Len() {
 			a := n.AllowedIPs().At(i)
 			if a.IsSingleIP() {
 				fmt.Fprintf(w, "aip=%v ", a.Addr())
@@ -2064,7 +2064,7 @@ func (c *Conn) logEndpointCreated(n tailcfg.NodeView) {
 				fmt.Fprintf(w, "aip=%v ", a)
 			}
 		}
-		for i := range n.Endpoints().LenIter() {
+		for i := range n.Endpoints().Len() {
 			ep := n.Endpoints().At(i)
 			fmt.Fprintf(w, "ep=%v ", ep)
 		}

@@ -77,11 +77,6 @@ func (v ByteSlice[T]) AppendTo(dst T) T {
 	return append(dst, v.ж...)
 }
 
-// LenIter returns a slice the same length as the v.Len().
-// The caller can then range over it to get the valid indexes.
-// It does not allocate.
-func (v ByteSlice[T]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
-
 // At returns the byte at index `i` of the slice.
 func (v ByteSlice[T]) At(i int) byte { return v.ж[i] }
 
@@ -153,11 +148,6 @@ func (v SliceView[T, V]) IsNil() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
 func (v SliceView[T, V]) Len() int { return len(v.ж) }
-
-// LenIter returns a slice the same length as the v.Len().
-// The caller can then range over it to get the valid indexes.
-// It does not allocate.
-func (v SliceView[T, V]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
 
 // At returns a View of the element at index `i` of the slice.
 func (v SliceView[T, V]) At(i int) V { return v.ж[i].View() }
@@ -244,11 +234,6 @@ func (v Slice[T]) IsNil() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
 func (v Slice[T]) Len() int { return len(v.ж) }
-
-// LenIter returns a slice the same length as the v.Len().
-// The caller can then range over it to get the valid indexes.
-// It does not allocate.
-func (v Slice[T]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
 
 // At returns the element at index `i` of the slice.
 func (v Slice[T]) At(i int) T { return v.ж[i] }

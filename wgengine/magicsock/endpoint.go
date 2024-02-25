@@ -1366,7 +1366,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 }
 
 func (de *endpoint) setEndpointsLocked(eps interface {
-	LenIter() []struct{}
+	Len() int
 	At(i int) netip.AddrPort
 }) {
 	for _, st := range de.endpointState {
@@ -1374,7 +1374,7 @@ func (de *endpoint) setEndpointsLocked(eps interface {
 	}
 
 	var newIpps []netip.AddrPort
-	for i := range eps.LenIter() {
+	for i := range eps.Len() {
 		if i > math.MaxInt16 {
 			// Seems unlikely.
 			break
