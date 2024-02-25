@@ -88,11 +88,12 @@ func TestTailscaleIngress(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
-		stsName:    shortName,
-		secretName: fullName,
-		namespace:  "default",
-		parentType: "ingress",
-		hostname:   "default-test",
+		stsName:      shortName,
+		secretName:   fullName,
+		namespace:    "default",
+		parentType:   "ingress",
+		hostname:     "default-test",
+		confFileHash: "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -125,6 +126,9 @@ func TestTailscaleIngress(t *testing.T) {
 		mak.Set(&ing.ObjectMeta.Annotations, AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy, "true")
 	})
 	opts.shouldEnableForwardingClusterTrafficViaIngress = true
+	// configfile hash changed at this point in test env only because we
+	// lost auth key due to how changes are applied in test client.
+	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
 	expectReconciled(t, ingR, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -219,11 +223,12 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
-		stsName:    shortName,
-		secretName: fullName,
-		namespace:  "default",
-		parentType: "ingress",
-		hostname:   "default-test",
+		stsName:      shortName,
+		secretName:   fullName,
+		namespace:    "default",
+		parentType:   "ingress",
+		hostname:     "default-test",
+		confFileHash: "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -256,6 +261,9 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = pc.Name
+	// configfile hash changed at this point in test env only because we
+	// lost auth key due to how changes are applied in test client.
+	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
 	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 
 	// 4. tailscale.com/proxy-class label is removed from the Ingress, the

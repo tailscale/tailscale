@@ -44,7 +44,6 @@ type configOpts struct {
 	clusterTargetIP                                string
 	subnetRoutes                                   string
 	isExitNode                                     bool
-	shouldUseDeclarativeConfig                     bool // tailscaled in proxy should be configured using config file
 	confFileHash                                   string
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
@@ -58,9 +57,9 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		Image: "tailscale/tailscale",
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "false"},
-			{Name: "TS_AUTH_ONCE", Value: "true"},
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
+			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 		},
 		SecurityContext: &corev1.SecurityContext{
 			Capabilities: &corev1.Capabilities{
@@ -77,37 +76,28 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 	}
 	annots := make(map[string]string)
 	var volumes []corev1.Volume
-	if opts.shouldUseDeclarativeConfig {
-		volumes = []corev1.Volume{
-			{
-				Name: "tailscaledconfig",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: opts.secretName,
-						Items: []corev1.KeyToPath{
-							{
-								Key:  "tailscaled",
-								Path: "tailscaled",
-							},
+	volumes = []corev1.Volume{
+		{
+			Name: "tailscaledconfig",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: opts.secretName,
+					Items: []corev1.KeyToPath{
+						{
+							Key:  "tailscaled",
+							Path: "tailscaled",
 						},
 					},
 				},
 			},
-		}
-		tsContainer.VolumeMounts = []corev1.VolumeMount{{
-			Name:      "tailscaledconfig",
-			ReadOnly:  true,
-			MountPath: "/etc/tsconfig",
-		}}
-		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
-			Name:  "EXPERIMENTAL_TS_CONFIGFILE_PATH",
-			Value: "/etc/tsconfig/tailscaled",
-		})
-		annots["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
-	} else {
-		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{Name: "TS_HOSTNAME", Value: opts.hostname})
-		annots["tailscale.com/operator-last-set-hostname"] = opts.hostname
+		},
 	}
+	tsContainer.VolumeMounts = []corev1.VolumeMount{{
+		Name:      "tailscaledconfig",
+		ReadOnly:  true,
+		MountPath: "/etc/tsconfig",
+	}}
+	annots["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
 	if opts.firewallMode != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
@@ -211,22 +201,43 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 }
 
 func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
+	t.Helper()
 	tsContainer := corev1.Container{
 		Name:  "tailscale",
 		Image: "tailscale/tailscale",
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "true"},
-			{Name: "TS_AUTH_ONCE", Value: "true"},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
-			{Name: "TS_HOSTNAME", Value: opts.hostname},
+			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
 		},
 		ImagePullPolicy: "Always",
-		VolumeMounts:    []corev1.VolumeMount{{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"}},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "tailscaledconfig", ReadOnly: true, MountPath: "/etc/tsconfig"},
+			{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"},
+		},
 	}
-	annots := make(map[string]string)
-	volumes := []corev1.Volume{{Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}}}
-	annots["tailscale.com/operator-last-set-hostname"] = opts.hostname
+	volumes := []corev1.Volume{
+		{
+			Name: "tailscaledconfig",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: opts.secretName,
+					Items: []corev1.KeyToPath{
+						{
+							Key:  "tailscaled",
+							Path: "tailscaled",
+						},
+					},
+				},
+			},
+		},
+		{Name: "serve-config",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName,
+					Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}},
+		},
+	}
 	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
@@ -250,7 +261,6 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			ServiceName: opts.stsName,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Annotations:                annots,
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
 					Labels: map[string]string{
 						"tailscale.com/managed":              "true",
@@ -259,6 +269,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 						"tailscale.com/parent-resource-type": opts.parentType,
 						"app":                                "1234-UID",
 					},
+					Annotations: map[string]string{"tailscale.com/operator-last-set-config-file-hash": opts.confFileHash},
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "proxies",
@@ -310,11 +321,6 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 
 func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 	t.Helper()
-	labels := map[string]string{
-		"tailscale.com/managed":              "true",
-		"tailscale.com/parent-resource":      "test",
-		"tailscale.com/parent-resource-type": opts.parentType,
-	}
 	s := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
@@ -332,37 +338,40 @@ func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 		}
 		mak.Set(&s.StringData, "serve-config", string(serveConfigBs))
 	}
-	if !opts.shouldUseDeclarativeConfig {
-		mak.Set(&s.StringData, "authkey", "secret-authkey")
-		labels["tailscale.com/parent-resource-ns"] = opts.namespace
-	} else {
-		conf := &ipn.ConfigVAlpha{
-			Version:   "alpha0",
-			AcceptDNS: "false",
-			Hostname:  &opts.hostname,
-			Locked:    "false",
-			AuthKey:   ptr.To("secret-authkey"),
+	conf := &ipn.ConfigVAlpha{
+		Version:   "alpha0",
+		AcceptDNS: "false",
+		Hostname:  &opts.hostname,
+		Locked:    "false",
+		AuthKey:   ptr.To("secret-authkey"),
+	}
+	var routes []netip.Prefix
+	if opts.subnetRoutes != "" || opts.isExitNode {
+		r := opts.subnetRoutes
+		if opts.isExitNode {
+			r = "0.0.0.0/0,::/0," + r
 		}
-		var routes []netip.Prefix
-		if opts.subnetRoutes != "" || opts.isExitNode {
-			r := opts.subnetRoutes
-			if opts.isExitNode {
-				r = "0.0.0.0/0,::/0," + r
+		for _, rr := range strings.Split(r, ",") {
+			prefix, err := netip.ParsePrefix(rr)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for _, rr := range strings.Split(r, ",") {
-				prefix, err := netip.ParsePrefix(rr)
-				if err != nil {
-					t.Fatal(err)
-				}
-				routes = append(routes, prefix)
-			}
+			routes = append(routes, prefix)
 		}
-		conf.AdvertiseRoutes = routes
-		b, err := json.Marshal(conf)
-		if err != nil {
-			t.Fatalf("error marshalling tailscaled config")
-		}
-		mak.Set(&s.StringData, "tailscaled", string(b))
+	}
+	conf.AdvertiseRoutes = routes
+	b, err := json.Marshal(conf)
+	if err != nil {
+		t.Fatalf("error marshalling tailscaled config")
+	}
+	mak.Set(&s.StringData, "tailscaled", string(b))
+	labels := map[string]string{
+		"tailscale.com/managed":              "true",
+		"tailscale.com/parent-resource":      "test",
+		"tailscale.com/parent-resource-ns":   "default",
+		"tailscale.com/parent-resource-type": opts.parentType,
+	}
+	if opts.parentType == "connector" {
 		labels["tailscale.com/parent-resource-ns"] = "" // Connector is cluster scoped
 	}
 	s.Labels = labels
