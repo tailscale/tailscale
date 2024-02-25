@@ -108,16 +108,16 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		}
 	}
 
-	timer := time.AfterFunc(tcpTimeoutBeforeDebug, func() {
-		e.onOpenTimeout(flow)
-	})
-
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, dup := e.pendOpen[flow]; dup {
 		// Duplicates are expected when the OS retransmits. Ignore.
 		return
 	}
+
+	timer := time.AfterFunc(tcpTimeoutBeforeDebug, func() {
+		e.onOpenTimeout(flow)
+	})
 	mak.Set(&e.pendOpen, flow, &pendingOpenFlow{timer: timer})
 
 	return filter.Accept
