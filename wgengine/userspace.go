@@ -1012,12 +1012,13 @@ var ErrEngineClosing = errors.New("engine closing; no status")
 
 func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
 	e.wgLock.Lock()
-	if e.wgdev == nil {
-		e.wgLock.Unlock()
+	dev := e.wgdev
+	e.wgLock.Unlock()
+
+	if dev == nil {
 		return status, false
 	}
-	peer := e.wgdev.LookupPeer(pk.Raw32())
-	e.wgLock.Unlock()
+	peer := dev.LookupPeer(pk.Raw32())
 	if peer == nil {
 		return status, false
 	}
