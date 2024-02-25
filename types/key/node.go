@@ -284,11 +284,10 @@ func (k NodePublic) WriteRawWithoutAllocating(bw *bufio.Writer) error {
 // Raw32 returns k encoded as 32 raw bytes.
 //
 // Deprecated: only needed for a single legacy use in the control
-// server, don't add more uses.
+// server and a few places in the wireguard-go API; don't add
+// more uses.
 func (k NodePublic) Raw32() [32]byte {
-	var ret [32]byte
-	copy(ret[:], k.k[:])
-	return ret
+	return k.k
 }
 
 // Less reports whether k orders before other, using an undocumented
