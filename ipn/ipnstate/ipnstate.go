@@ -196,6 +196,10 @@ type PeerStatusLite struct {
 	LastHandshake time.Time
 	// NodeKey is this peer's public node key.
 	NodeKey key.NodePublic
+	// HandshakeAttempts is how many failed attempts there have been at
+	// completing the current WireGuard handshake. This resets to zero on every
+	// successful handshake.
+	HandshakeAttempts uint32
 }
 
 // PeerStatus describes a peer node and its current state.
