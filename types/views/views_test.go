@@ -141,27 +141,6 @@ func TestViewUtils(t *testing.T) {
 		qt.Equals, true)
 }
 
-func TestLenIter(t *testing.T) {
-	orig := []string{"foo", "bar"}
-	var got []string
-	v := SliceOf(orig)
-	for i := range v.LenIter() {
-		got = append(got, v.At(i))
-	}
-	if !reflect.DeepEqual(orig, got) {
-		t.Errorf("got %q; want %q", got, orig)
-	}
-	x := 0
-	n := testing.AllocsPerRun(10000, func() {
-		for range v.LenIter() {
-			x++
-		}
-	})
-	if n > 0 {
-		t.Errorf("allocs = %v; want 0", n)
-	}
-}
-
 func TestSliceEqual(t *testing.T) {
 	a := SliceOf([]string{"foo", "bar"})
 	b := SliceOf([]string{"foo", "bar"})

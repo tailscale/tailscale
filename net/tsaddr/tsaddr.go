@@ -203,7 +203,7 @@ func NewContainsIPFunc(addrs views.Slice[netip.Prefix]) func(ip netip.Addr) bool
 	}
 	// General case:
 	m := map[netip.Addr]bool{}
-	for i := range addrs.LenIter() {
+	for i := range addrs.Len() {
 		m[addrs.At(i).Addr()] = true
 	}
 	return func(ip netip.Addr) bool { return m[ip] }
@@ -229,7 +229,7 @@ func PrefixIs6(p netip.Prefix) bool { return p.Addr().Is6() }
 // IPv6 /0 route.
 func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 	var v4, v6 bool
-	for i := range rr.LenIter() {
+	for i := range rr.Len() {
 		r := rr.At(i)
 		if r == allIPv4 {
 			v4 = true
@@ -243,7 +243,7 @@ func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 // ContainsNonExitSubnetRoutes reports whether v contains Subnet
 // Routes other than ExitNode Routes.
 func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
-	for i := range rr.LenIter() {
+	for i := range rr.Len() {
 		if rr.At(i).Bits() != 0 {
 			return true
 		}
@@ -274,7 +274,7 @@ func SortPrefixes(p []netip.Prefix) {
 // in that match f.
 func FilterPrefixesCopy(in views.Slice[netip.Prefix], f func(netip.Prefix) bool) []netip.Prefix {
 	var out []netip.Prefix
-	for i := range in.LenIter() {
+	for i := range in.Len() {
 		if v := in.At(i); f(v) {
 			out = append(out, v)
 		}

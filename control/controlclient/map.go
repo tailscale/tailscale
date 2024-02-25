@@ -728,7 +728,7 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				return nil, false
 			}
 
-			for i := range va.LenIter() {
+			for i := range va.Len() {
 				if !va.At(i).Equal(vb.At(i)) {
 					return nil, false
 				}
