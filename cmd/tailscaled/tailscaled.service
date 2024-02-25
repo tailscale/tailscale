@@ -20,5 +20,24 @@ CacheDirectory=tailscale
 CacheDirectoryMode=0750
 Type=notify
 
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectProc=ptraceable
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+PrivateTmp=true
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=true
+LockPersonality=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=~@clock @cpu-emulation @debug @module @mount @obsolete @privileged @raw-io @reboot @resources @swap
+
 [Install]
 WantedBy=multi-user.target
