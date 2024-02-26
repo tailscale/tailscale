@@ -755,6 +755,8 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 	// Only register debug info if we have a debug mux
 	if debugMux != nil {
 		expvar.Publish("netstack", ret.ExpVar())
+
+		debugMux.HandleFunc("/debug/netstack/tcp-forwarder", ret.DebugTCPForwarder)
 	}
 	return ret, nil
 }
