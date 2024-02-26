@@ -53,6 +53,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -247,14 +248,39 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGaurd = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
+	stacksForMetrics.Store(ns, struct{}{})
 	return ns, nil
 }
 
 func (ns *Impl) Close() error {
+	stacksForMetrics.Delete(ns)
 	ns.ctxCancel()
 	ns.ipstack.Close()
 	ns.ipstack.Wait()
 	return nil
+}
+
+// A single process might have several netstacks running at the same time.
+// Exported clientmetric counters will have a sum of counters of all of them.
+var stacksForMetrics syncs.Map[*Impl, struct{}]
+
+func init() {
+	// Please take care to avoid exporting clientmetrics with the same metric
+	// names as the ones used by Impl.ExpVar. Both get exposed via the same HTTP
+	// endpoint, and name collisions will result in Prometheus scraping errors.
+	clientmetric.NewCounterFunc("netstack_tcp_forward_dropped_attempts", func() int64 {
+		var total uint64
+		stacksForMetrics.Range(func(ns *Impl, _ struct{}) bool {
+			delta := ns.ipstack.Stats().TCP.ForwardMaxInFlightDrop.Value()
+			if total+delta > math.MaxInt64 {
+				total = math.MaxInt64
+				return false
+			}
+			total += delta
+			return true
+		})
+		return int64(total)
+	})
 }
 
 // wrapProtoHandler returns protocol handler h wrapped in a version
@@ -1295,7 +1321,7 @@ func (ns *Impl) ExpVar() expvar.Var {
 
 	// Global metrics
 	stats := ns.ipstack.Stats()
-	m.Set("gauge_dropped_packets", expvar.Func(func() any {
+	m.Set("counter_dropped_packets", expvar.Func(func() any {
 		return readStatCounter(stats.DroppedPackets)
 	}))
 
@@ -1327,7 +1353,7 @@ func (ns *Impl) ExpVar() expvar.Var {
 	}
 	for _, metric := range ipMetrics {
 		metric := metric
-		m.Set("gauge_ip_"+metric.name, expvar.Func(func() any {
+		m.Set("counter_ip_"+metric.name, expvar.Func(func() any {
 			return readStatCounter(metric.field)
 		}))
 	}
@@ -1354,7 +1380,7 @@ func (ns *Impl) ExpVar() expvar.Var {
 	}
 	for _, metric := range fwdMetrics {
 		metric := metric
-		m.Set("gauge_ip_forward_"+metric.name, expvar.Func(func() any {
+		m.Set("counter_ip_forward_"+metric.name, expvar.Func(func() any {
 			return readStatCounter(metric.field)
 		}))
 	}
@@ -1367,8 +1393,6 @@ func (ns *Impl) ExpVar() expvar.Var {
 	}{
 		{"active_connection_openings", tcpStats.ActiveConnectionOpenings},
 		{"passive_connection_openings", tcpStats.PassiveConnectionOpenings},
-		{"current_established", tcpStats.CurrentEstablished},
-		{"current_connected", tcpStats.CurrentConnected},
 		{"established_resets", tcpStats.EstablishedResets},
 		{"established_closed", tcpStats.EstablishedClosed},
 		{"established_timeout", tcpStats.EstablishedTimedout},
@@ -1396,14 +1420,20 @@ func (ns *Impl) ExpVar() expvar.Var {
 		{"segments_acked_with_dsack", tcpStats.SegmentsAckedWithDSACK},
 		{"spurious_recovery", tcpStats.SpuriousRecovery},
 		{"spurious_rto_recovery", tcpStats.SpuriousRTORecovery},
-		{"gauge_tcp_forward_max_in_flight_drop", tcpStats.ForwardMaxInFlightDrop},
+		{"forward_max_in_flight_drop", tcpStats.ForwardMaxInFlightDrop},
 	}
 	for _, metric := range tcpMetrics {
 		metric := metric
-		m.Set("gauge_tcp_"+metric.name, expvar.Func(func() any {
+		m.Set("counter_tcp_"+metric.name, expvar.Func(func() any {
 			return readStatCounter(metric.field)
 		}))
 	}
+	m.Set("gauge_tcp_current_established", expvar.Func(func() any {
+		return readStatCounter(tcpStats.CurrentEstablished)
+	}))
+	m.Set("gauge_tcp_current_connected", expvar.Func(func() any {
+		return readStatCounter(tcpStats.CurrentConnected)
+	}))
 
 	// UDP metrics
 	udpStats := ns.ipstack.Stats().UDP
@@ -1421,7 +1451,7 @@ func (ns *Impl) ExpVar() expvar.Var {
 	}
 	for _, metric := range udpMetrics {
 		metric := metric
-		m.Set("gauge_udp_"+metric.name, expvar.Func(func() any {
+		m.Set("counter_udp_"+metric.name, expvar.Func(func() any {
 			return readStatCounter(metric.field)
 		}))
 	}
