@@ -4,6 +4,7 @@ go 1.22.0
 
 require (
 	filippo.io/mkcert v1.4.4
+	fybrik.io/crdoc v0.6.3
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.1.0
