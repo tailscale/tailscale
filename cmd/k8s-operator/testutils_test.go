@@ -49,6 +49,7 @@ type configOpts struct {
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
 	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
+	operatorVersion                                string
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -197,6 +198,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			},
 		},
 	}
+	mak.Set(&ss.ObjectMeta.Annotations, annotationOperatorVersion, opts.operatorVersion)
 	// If opts.proxyClass is set, retrieve the ProxyClass and apply
 	// configuration from that to the StatefulSet.
 	if opts.proxyClass != "" {
@@ -269,6 +271,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			},
 		},
 	}
+	mak.Set(&ss.ObjectMeta.Annotations, annotationOperatorVersion, opts.operatorVersion)
 	// If opts.proxyClass is set, retrieve the ProxyClass and apply
 	// configuration from that to the StatefulSet.
 	if opts.proxyClass != "" {

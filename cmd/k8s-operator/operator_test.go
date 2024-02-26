@@ -868,6 +868,67 @@ func TestCustomHostname(t *testing.T) {
 	expectEqual(t, fc, want)
 }
 
+func TestOperatorVersion(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+			operatorVersion:   "v1.2.3",
+		},
+		logger: zl.Sugar(),
+	}
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/expose": "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	o := configOpts{
+		stsName:         shortName,
+		secretName:      fullName,
+		namespace:       "default",
+		parentType:      "svc",
+		hostname:        "default-test",
+		clusterTargetIP: "10.20.30.40",
+		operatorVersion: "v1.2.3",
+	}
+	expectEqual(t, fc, expectedSTS(t, fc, o))
+
+	// value of annotationOperatorVersion changes when a new version of the
+	// operator re-syncs the proxy.
+	sr.ssr.operatorVersion = "v1.2.4"
+	expectReconciled(t, sr, "default", "test")
+	o.operatorVersion = "v1.2.4"
+	expectEqual(t, fc, expectedSTS(t, fc, o))
+}
+
 func TestCustomPriorityClassName(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}

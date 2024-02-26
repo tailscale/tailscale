@@ -55,7 +55,7 @@ const (
 
 	FinalizerName = "tailscale.com/finalizer"
 
-	// Annotations settable by users on services.
+	// Annotations settable by users on Services.
 	AnnotationExpose             = "tailscale.com/expose"
 	AnnotationTags               = "tailscale.com/tags"
 	AnnotationHostname           = "tailscale.com/hostname"
@@ -92,6 +92,8 @@ const (
 	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
 	podAnnotationLastSetConfigFileHash = "tailscale.com/operator-last-set-config-file-hash"
 
+	annotationOperatorVersion = "tailscale.com/operator-last-version" // version of tailscale operator that last updated this component
+
 	// tailscaledConfigKey is the name of the key in proxy Secret Data that
 	// holds the tailscaled config contents.
 	tailscaledConfigKey = "tailscaled"
@@ -101,7 +103,7 @@ var (
 	// tailscaleManagedLabels are label keys that tailscale operator sets on StatefulSets and Pods.
 	tailscaleManagedLabels = []string{LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
 	// tailscaleManagedAnnotations are annotation keys that tailscale operator sets on StatefulSets and Pods.
-	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetHostname, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
+	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetHostname, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash, annotationOperatorVersion}
 )
 
 type tailscaleSTSConfig struct {
@@ -148,6 +150,7 @@ type tailscaleSTSReconciler struct {
 	proxyImage             string
 	proxyPriorityClassName string
 	tsFirewallMode         string
+	operatorVersion        string // current version of the operator as returned by tailscale.com/version
 }
 
 func (sts tailscaleSTSReconciler) validate() error {
@@ -571,6 +574,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			},
 		})
 	}
+	mak.Set(&ss.ObjectMeta.Annotations, annotationOperatorVersion, a.operatorVersion)
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	if sts.ProxyClass != "" {
 		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClass)
