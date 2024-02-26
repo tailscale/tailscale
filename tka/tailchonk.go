@@ -201,10 +201,6 @@ func ChonkDir(dir string) (*FS, error) {
 		return nil, fmt.Errorf("chonk directory %q is a file", dir)
 	}
 
-	// TODO(tom): *FS marks AUMs as deleted but does not actually
-	// delete them, to avoid data loss in the event of a bug.
-	// Implement deletion after we are fairly sure in the implementation.
-
 	return &FS{base: dir}, nil
 }
 
@@ -218,6 +214,9 @@ func ChonkDir(dir string) (*FS, error) {
 // much smaller than JSON for AUMs. The 'keyasint' thing isn't essential
 // but again it saves a bunch of bytes.
 type fsHashInfo struct {
+	// diskHash specifies the AUMHash this structure describes.
+	diskHash AUMHash
+
 	Children    []AUMHash `cbor:"1,keyasint"`
 	AUM         *AUM      `cbor:"2,keyasint"`
 	CreatedUnix int64     `cbor:"3,keyasint,omitempty"`
@@ -344,6 +343,7 @@ func (c *FS) get(h AUMHash) (*fsHashInfo, error) {
 	if out.AUM != nil && out.AUM.Hash() != h {
 		return nil, fmt.Errorf("%s: AUM does not match file name hash %s", f.Name(), out.AUM.Hash())
 	}
+	out.diskHash = h
 	return &out, nil
 }
 
@@ -378,6 +378,104 @@ func (c *FS) AllAUMs() ([]AUMHash, error) {
 		}
 	})
 	return out, err
+}
+
+// CollectGarbage frees up disk space by removing purged AUMs
+// and files which contain no data.
+func (c *FS) CollectGarbage(maxAge time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Collect the list of all stored hashes which are marked
+	// for deletion & old enough to delete.
+	var (
+		deletionCandidates = make(map[AUMHash]*fsHashInfo)
+		purgeBefore        = time.Now().Add(-maxAge)
+	)
+	err := c.scanHashes(func(info *fsHashInfo) {
+		// Mark for deletion all hashes which are explicitly purged, or
+		// hashes that store no data.
+		purged := info.PurgedUnix > 0 && time.Unix(info.PurgedUnix, 0).Before(purgeBefore)
+		if purged || (info.AUM == nil && len(info.Children) == 0) {
+			deletionCandidates[info.diskHash] = info
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	// TODO: consistency check that no deletion candidate is the last active
+	// ancestor nor a parent is the last active ancestor.
+
+	for h, info := range deletionCandidates {
+
+		// First, if we store the parent, remove the reference to this
+		// hash as a child.
+		if info.AUM != nil {
+			if parent, haveParent := info.AUM.Parent(); haveParent {
+				dir, base := c.aumDir(parent)
+				_, err := os.Stat(filepath.Join(dir, base))
+				parentExists := err == nil
+
+				if parentExists {
+					err := c.commit(parent, func(info *fsHashInfo) {
+						newChildren := make([]AUMHash, 0, len(info.Children))
+						for _, c := range info.Children {
+							if c != h {
+								newChildren = append(newChildren, c)
+							}
+						}
+						info.Children = newChildren
+					})
+					if err != nil {
+						return fmt.Errorf("mutating parent %x of %x: %v", parent, h, err)
+					}
+				}
+			}
+		}
+
+		dir, base := c.aumDir(h)
+		path := filepath.Join(dir, base)
+		if len(info.Children) == 0 {
+			// This hash has no dependencies.
+			//
+			// Technically, info.Children could be stale, because if this hash was
+			// someones parent then that someone would have removed their hash from
+			// the list. Because thats only ever a deletion tho, this is still safe,
+			// staleness will result in us not deleting this file but it will be
+			// deleted next time.
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("removing dead entry: %w", err)
+			}
+			continue
+		}
+
+		// This hash has children it needs to keep track of, so might not
+		// be able to be deleted outright.
+		var delete bool
+		err := c.commit(h, func(info *fsHashInfo) {
+			info.AUM = nil // in all cases this hash shouldnt store its own AUM info
+			newChildren := make([]AUMHash, 0, len(info.Children))
+			for _, c := range info.Children {
+				if _, deleted := deletionCandidates[c]; !deleted {
+					newChildren = append(newChildren, c)
+				}
+			}
+			info.Children = newChildren
+			delete = len(newChildren) == 0
+		})
+		if err != nil {
+			return fmt.Errorf("mutating entry %x: %v", h, err)
+		}
+
+		if delete {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("removing empty entry: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
