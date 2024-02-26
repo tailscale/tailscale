@@ -204,7 +204,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@v4
     - name: Run VM tests
-      run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
+      run: rm -rf /tmp/.cache/tailscale-go && ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
       env:
         HOME: "/tmp"
         TMPDIR: "/tmp"
