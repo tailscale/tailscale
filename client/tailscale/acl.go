@@ -270,6 +270,14 @@ type UserRuleMatch struct {
 	Users      []string `json:"users"`
 	Ports      []string `json:"ports"`
 	LineNumber int      `json:"lineNumber"`
+
+	// Postures is a list of posture policies that are
+	// associated with this match. The rules can be looked
+	// up in the ACLPreviewResponse parent struct.
+	// The source of the list is from srcPosture on
+	// an ACL or Grant rule:
+	// https://tailscale.com/kb/1288/device-posture#posture-conditions
+	Postures []string `json:"postures"`
 }
 
 // ACLPreviewResponse is the response type of previewACLPostRequest
@@ -277,6 +285,12 @@ type ACLPreviewResponse struct {
 	Matches    []UserRuleMatch `json:"matches"`    // ACL rules that match the specified user or ipport.
 	Type       string          `json:"type"`       // The request type: currently only "user" or "ipport".
 	PreviewFor string          `json:"previewFor"` // A specific user or ipport.
+
+	// Postures is a map of postures and associated rules that apply
+	// to this preview.
+	// For more details about the posture mapping, see:
+	// https://tailscale.com/kb/1288/device-posture#postures
+	Postures map[string][]string `json:"postures,omitempty"`
 }
 
 // ACLPreview is the response type of PreviewACLForUser, PreviewACLForIPPort, PreviewACLHuJSONForUser, and PreviewACLHuJSONForIPPort
@@ -284,6 +298,12 @@ type ACLPreview struct {
 	Matches []UserRuleMatch `json:"matches"`
 	User    string          `json:"user,omitempty"`   // Filled if response of PreviewACLForUser or PreviewACLHuJSONForUser
 	IPPort  string          `json:"ipport,omitempty"` // Filled if response of PreviewACLForIPPort or PreviewACLHuJSONForIPPort
+
+	// Postures is a map of postures and associated rules that apply
+	// to this preview.
+	// For more details about the posture mapping, see:
+	// https://tailscale.com/kb/1288/device-posture#postures
+	Postures map[string][]string `json:"postures,omitempty"`
 }
 
 func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, previewType string, previewFor string) (res *ACLPreviewResponse, err error) {
@@ -341,8 +361,9 @@ func (c *Client) PreviewACLForUser(ctx context.Context, acl ACL, user string) (r
 	}
 
 	return &ACLPreview{
-		Matches: b.Matches,
-		User:    b.PreviewFor,
+		Matches:  b.Matches,
+		User:     b.PreviewFor,
+		Postures: b.Postures,
 	}, nil
 }
 
@@ -369,8 +390,9 @@ func (c *Client) PreviewACLForIPPort(ctx context.Context, acl ACL, ipport netip.
 	}
 
 	return &ACLPreview{
-		Matches: b.Matches,
-		IPPort:  b.PreviewFor,
+		Matches:  b.Matches,
+		IPPort:   b.PreviewFor,
+		Postures: b.Postures,
 	}, nil
 }
 
@@ -394,8 +416,9 @@ func (c *Client) PreviewACLHuJSONForUser(ctx context.Context, acl ACLHuJSON, use
 	}
 
 	return &ACLPreview{
-		Matches: b.Matches,
-		User:    b.PreviewFor,
+		Matches:  b.Matches,
+		User:     b.PreviewFor,
+		Postures: b.Postures,
 	}, nil
 }
 
@@ -419,8 +442,9 @@ func (c *Client) PreviewACLHuJSONForIPPort(ctx context.Context, acl ACLHuJSON, i
 	}
 
 	return &ACLPreview{
-		Matches: b.Matches,
-		IPPort:  b.PreviewFor,
+		Matches:  b.Matches,
+		IPPort:   b.PreviewFor,
+		Postures: b.Postures,
 	}, nil
 }
 
