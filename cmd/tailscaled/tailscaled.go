@@ -791,10 +791,8 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Only register debug info if we have a debug mux
-	if debugMux != nil {
-		expvar.Publish("netstack", ret.ExpVar())
-	}
+	// These are exposed via the local debug server, c2n, peerapi and localapi.
+	expvar.Publish("netstack", ret.ExpVar())
 	return ret, nil
 }
 
