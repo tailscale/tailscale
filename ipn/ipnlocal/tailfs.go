@@ -80,6 +80,25 @@ func (b *LocalBackend) TailFSAddShare(share *tailfs.Share) error {
 		return err
 	}
 
+	// Make sure share is actually a directory.
+	dir, err := os.Open(share.Name)
+	if err != nil {
+		return err
+	}
+	fi, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%q is not a directory", share.Name)
+	}
+	// Immediately access each share to prompt the user for file access on
+	// platforms that require it (e.g. MacOS sandboxed).
+	_, err = dir.ReadDir(1)
+	if err != nil {
+		return err
+	}
+
 	b.mu.Lock()
 	shares, err := b.tailfsAddShareLocked(share)
 	b.mu.Unlock()
