@@ -73,7 +73,7 @@ require (
 	github.com/tailscale/mkctr v0.0.0-20240102155253-bf50773ba734
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
-	github.com/tailscale/web-client-prebuilt v0.0.0-20240208184856-443a64766f61
+	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20231121184858-cc193a0b3272
 	github.com/tailscale/xnet v0.0.0-20240117122442-62b9a7c569f9
