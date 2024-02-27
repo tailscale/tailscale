@@ -6,15 +6,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
@@ -1174,5 +1178,136 @@ func Test_isMagicDNSName(t *testing.T) {
 				t.Errorf("isMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_serviceHandlerForIngress(t *testing.T) {
+	fc := fake.NewFakeClient()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. An event on a headless Service for a tailscale Ingress results in
+	// the Ingress being reconciled.
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ing-1",
+			Namespace: "ns-1",
+		},
+		Spec: networkingv1.IngressSpec{IngressClassName: ptr.To(tailscaleIngressClassName)},
+	})
+	svc1 := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "headless-1",
+			Namespace: "tailscale",
+			Labels: map[string]string{
+				LabelManaged:         "true",
+				LabelParentName:      "ing-1",
+				LabelParentNamespace: "ns-1",
+				LabelParentType:      "ingress",
+			},
+		},
+	}
+	mustCreate(t, fc, svc1)
+	wantReqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-1", Name: "ing-1"}}}
+	gotReqs := serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), svc1)
+	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
+		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
+	}
+
+	// 2. An event on a Service that is the default backend for a tailscale
+	// Ingress results in the Ingress being reconciled.
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ing-2",
+			Namespace: "ns-2",
+		},
+		Spec: networkingv1.IngressSpec{
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{Name: "def-backend"},
+			},
+			IngressClassName: ptr.To(tailscaleIngressClassName),
+		},
+	})
+	backendSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "def-backend",
+			Namespace: "ns-2",
+		},
+	}
+	mustCreate(t, fc, backendSvc)
+	wantReqs = []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-2", Name: "ing-2"}}}
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), backendSvc)
+	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
+		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
+	}
+
+	// 3. An event on a Service that is one of the non-default backends for
+	// a tailscale Ingress results in the Ingress being reconciled.
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ing-3",
+			Namespace: "ns-3",
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: ptr.To(tailscaleIngressClassName),
+			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{
+					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}}}},
+			}}}},
+		},
+	})
+	backendSvc2 := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "backend",
+			Namespace: "ns-3",
+		},
+	}
+	mustCreate(t, fc, backendSvc2)
+	wantReqs = []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-3", Name: "ing-3"}}}
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), backendSvc2)
+	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
+		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
+	}
+
+	// 4. An event on a Service that is a backend for an Ingress that is not
+	// tailscale Ingress does not result in an Ingress reconcile.
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ing-4",
+			Namespace: "ns-4",
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{
+					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "non-ts-backend"}}}},
+			}}}},
+		},
+	})
+	nonTSBackend := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "non-ts-backend",
+			Namespace: "ns-4",
+		},
+	}
+	mustCreate(t, fc, nonTSBackend)
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), nonTSBackend)
+	if len(gotReqs) > 0 {
+		t.Errorf("unexpected reconcile request for a Service that does not belong to a Tailscale Ingress: %#+v\n", gotReqs)
+	}
+
+	// 5. An event on a Service not related to any Ingress does not result
+	// in an Ingress reconcile.
+	someSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "some-svc",
+			Namespace: "ns-4",
+		},
+	}
+	mustCreate(t, fc, someSvc)
+	gotReqs = serviceHandlerForIngress(fc, zl.Sugar())(context.Background(), someSvc)
+	if len(gotReqs) > 0 {
+		t.Errorf("unexpected reconcile request for a Service that does not belong to any Ingress: %#+v\n", gotReqs)
 	}
 }

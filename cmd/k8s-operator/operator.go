@@ -272,12 +272,14 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	// If a ProxyClassChanges, enqueue all Ingresses labeled with that
 	// ProxyClass's name.
 	proxyClassFilterForIngress := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForIngress(mgr.GetClient(), startlog))
+	// Enque Ingress if a managed Service or backend Service associated with a tailscale Ingress changes.
+	svcHandlerForIngress := handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngress(mgr.GetClient(), startlog))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
 		Watches(&appsv1.StatefulSet{}, ingressChildFilter).
 		Watches(&corev1.Secret{}, ingressChildFilter).
-		Watches(&corev1.Service{}, ingressChildFilter).
+		Watches(&corev1.Service{}, svcHandlerForIngress).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForIngress).
 		Complete(&IngressReconciler{
 			ssr:      ssr,
@@ -422,6 +424,46 @@ func proxyClassHandlerForConnector(cl client.Client, logger *zap.SugaredLogger) 
 	}
 }
 
+// serviceHandlerForIngress returns a handler for Service events for ingress
+// reconciler that ensures that if the Service associated with an event is of
+// interest to the reconciler, the associated Ingress(es) gets be reconciled.
+// The Services of interest are backend Services for tailscale Ingress and
+// managed Services for an StatefulSet for a proxy configured for tailscale
+// Ingress
+func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		if isManagedByType(o, "ingress") {
+			ingName := parentFromObjectLabels(o)
+			return []reconcile.Request{{NamespacedName: ingName}}
+		}
+		ingList := networkingv1.IngressList{}
+		if err := cl.List(ctx, &ingList, client.InNamespace(o.GetNamespace())); err != nil {
+			logger.Debugf("error listing Ingresses: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, ing := range ingList.Items {
+			if ing.Spec.IngressClassName == nil || *ing.Spec.IngressClassName != tailscaleIngressClassName {
+				return nil
+			}
+			if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil && ing.Spec.DefaultBackend.Service.Name == o.GetName() {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+			}
+			for _, rule := range ing.Spec.Rules {
+				if rule.HTTP == nil {
+					continue
+				}
+				for _, path := range rule.HTTP.Paths {
+					if path.Backend.Service != nil && path.Backend.Service.Name == o.GetName() {
+						reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ing)})
+					}
+				}
+			}
+		}
+		return reqs
+	}
+}
+
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 	if isManagedByType(o, "svc") {
 		// If this is a Service managed by a Service we want to enqueue its parent
@@ -440,7 +482,6 @@ func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 			},
 		},
 	}
-
 }
 
 // isMagicDNSName reports whether name is a full tailnet node FQDN (with or
