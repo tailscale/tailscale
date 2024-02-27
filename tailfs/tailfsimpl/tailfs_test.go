@@ -5,6 +5,7 @@ package tailfsimpl
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -142,7 +143,7 @@ func newSystem(t *testing.T) *system {
 		}
 	}()
 
-	client := gowebdav.NewClient(fmt.Sprintf("http://%s", l.Addr()), "", "")
+	client := gowebdav.NewAuthClient(fmt.Sprintf("http://%s", l.Addr()), &noopAuthorizer{})
 	client.SetTransport(&http.Transport{DisableKeepAlives: true})
 	s := &system{
 		t:       t,
@@ -374,4 +375,34 @@ func fileInfoToStatic(fi fs.FileInfo, fixupMode bool) fs.FileInfo {
 
 func pathTo(remote, share, name string) string {
 	return path.Join(domain, remote, share, name)
+}
+
+// noopAuthorizer implements gowebdav.Authorizer. It does no actual
+// authorizing. We use it in place of gowebdav's built-in authorizer in order
+// to avoid a race condition in that authorizer.
+type noopAuthorizer struct{}
+
+func (a *noopAuthorizer) NewAuthenticator(body io.Reader) (gowebdav.Authenticator, io.Reader) {
+	return &noopAuthenticator{}, nil
+}
+
+func (a *noopAuthorizer) AddAuthenticator(key string, fn gowebdav.AuthFactory) {
+}
+
+type noopAuthenticator struct{}
+
+func (a *noopAuthenticator) Authorize(c *http.Client, rq *http.Request, path string) error {
+	return nil
+}
+
+func (a *noopAuthenticator) Verify(c *http.Client, rs *http.Response, path string) (redo bool, err error) {
+	return false, nil
+}
+
+func (a *noopAuthenticator) Clone() gowebdav.Authenticator {
+	return &noopAuthenticator{}
+}
+
+func (a *noopAuthenticator) Close() error {
+	return nil
 }
