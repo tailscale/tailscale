@@ -33,20 +33,27 @@ var RequestIDKey ctxkey.Key[RequestID]
 // or generate a new one.
 const RequestIDHeader = "X-Tailscale-Request-Id"
 
+// GenerateRequestID generates a new request ID with the current format.
+func GenerateRequestID() RequestID {
+	// REQ-1 indicates the version of the RequestID pattern. It is
+	// currently arbitrary but allows for forward compatible
+	// transitions if needed.
+	return RequestID("REQ-1" + uuid.NewString())
+}
+
 // SetRequestID is an HTTP middleware that injects a RequestID in the
 // *http.Request Context. The value of that request id is either retrieved from
 // the RequestIDHeader or a randomly generated one if not exists. Inner
 // handlers can retrieve this ID from the RequestIDFromContext function.
 func SetRequestID(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get(RequestIDHeader)
-		if id == "" {
-			// REQ-1 indicates the version of the RequestID pattern. It is
-			// currently arbitrary but allows for forward compatible
-			// transitions if needed.
-			id = "REQ-1" + uuid.NewString()
+		var rid RequestID
+		if id := r.Header.Get(RequestIDHeader); id != "" {
+			rid = RequestID(id)
+		} else {
+			rid = GenerateRequestID()
 		}
-		ctx := RequestIDKey.WithValue(r.Context(), RequestID(id))
+		ctx := RequestIDKey.WithValue(r.Context(), rid)
 		r = r.WithContext(ctx)
 		h.ServeHTTP(w, r)
 	})
