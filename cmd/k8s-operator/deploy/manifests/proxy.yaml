@@ -28,8 +28,6 @@ spec:
           env:
             - name: TS_USERSPACE
               value: "false"
-            - name: TS_AUTH_ONCE
-              value: "true"
             - name: POD_IP
               valueFrom:
                 fieldRef:

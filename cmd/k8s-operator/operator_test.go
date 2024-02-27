@@ -67,6 +67,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, opts))
@@ -208,6 +209,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		parentType:        "svc",
 		tailnetTargetFQDN: tailnetTargetFQDN,
 		hostname:          "default-test",
+		confFileHash:      "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -318,6 +320,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		parentType:      "svc",
 		tailnetTargetIP: tailnetTargetIP,
 		hostname:        "default-test",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -425,6 +428,7 @@ func TestAnnotations(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -533,6 +537,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -581,6 +586,8 @@ func TestAnnotationIntoLB(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
+	// (although configfile hash will change in test env only because we lose auth key due to out test not syncing secret.StringData -> secret.Data)
+	o.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 	// ... but the service should have a LoadBalancer status.
@@ -664,6 +671,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -730,6 +738,10 @@ func TestLBIntoAnnotation(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 
+	// configfile hash changes on a re-apply in this case in tests only as
+	// we lose the auth key due to the test apply not syncing
+	// secret.StringData -> Data.
+	o.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 
@@ -805,6 +817,7 @@ func TestCustomHostname(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "reindeer-flotilla",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "42376226c7d76ed6d6318315dc6c402f7d993bc0b01a5b0e6c8a833106b7509e",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -920,6 +933,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 		hostname:          "tailscale-critical",
 		priorityClassName: "custom-priority-class-name",
 		clusterTargetIP:   "10.20.30.40",
+		confFileHash:      "13cdef0d5f6f0f2406af028710ea1e0f99f65aba4021e4e70ac75a73cf141fd1",
 	}
 
 	expectEqual(t, fc, expectedSTS(t, fc, o))
@@ -982,6 +996,7 @@ func TestProxyClassForService(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
@@ -1008,6 +1023,10 @@ func TestProxyClassForService(t *testing.T) {
 			}}}
 	})
 	opts.proxyClass = pc.Name
+	// configfile hash changes on a second apply in test env only because we
+	// lose auth key due to out test not syncing secret.StringData ->
+	// secret.Data
+	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -1071,6 +1090,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 }
@@ -1124,6 +1144,7 @@ func TestProxyFirewallMode(t *testing.T) {
 		hostname:        "default-test",
 		firewallMode:    "nftables",
 		clusterTargetIP: "10.20.30.40",
+		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 

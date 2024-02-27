@@ -86,7 +86,6 @@ const (
 	// ensure that it does not get removed when a ProxyClass configuration
 	// is applied.
 	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
-	podAnnotationLastSetHostname          = "tailscale.com/operator-last-set-hostname"
 	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
 	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
 	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
@@ -101,7 +100,7 @@ var (
 	// tailscaleManagedLabels are label keys that tailscale operator sets on StatefulSets and Pods.
 	tailscaleManagedLabels = []string{LabelManaged, LabelParentType, LabelParentName, LabelParentNamespace, "app"}
 	// tailscaleManagedAnnotations are annotation keys that tailscale operator sets on StatefulSets and Pods.
-	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetHostname, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
+	tailscaleManagedAnnotations = []string{podAnnotationLastSetClusterIP, podAnnotationLastSetTailnetTargetIP, podAnnotationLastSetTailnetTargetFQDN, podAnnotationLastSetConfigFileHash}
 )
 
 type tailscaleSTSConfig struct {
@@ -312,9 +311,9 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		authKey, hash string
 	)
 	if orig == nil {
-		// Secret doesn't exist yet, create one. Initially it contains
-		// only the Tailscale authkey, but once Tailscale starts it'll
-		// also store the daemon state.
+		// Initially it contains only tailscaled config, but when the
+		// proxy starts, it will also store there the state, certs and
+		// ACME account key.
 		sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, stsC.ChildResourceLabels)
 		if err != nil {
 			return "", "", err
@@ -337,17 +336,13 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			return "", "", err
 		}
 	}
-	if !shouldDoTailscaledDeclarativeConfig(stsC) && authKey != "" {
-		mak.Set(&secret.StringData, "authkey", authKey)
+	confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig)
+	if err != nil {
+		return "", "", fmt.Errorf("error creating tailscaled config: %w", err)
 	}
-	if shouldDoTailscaledDeclarativeConfig(stsC) {
-		confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig)
-		if err != nil {
-			return "", "", fmt.Errorf("error creating tailscaled config: %w", err)
-		}
-		hash = h
-		mak.Set(&secret.StringData, tailscaledConfigKey, string(confFileBytes))
-	}
+	hash = h
+	mak.Set(&secret.StringData, tailscaledConfigKey, string(confFileBytes))
+
 	if stsC.ServeConfig != nil {
 		j, err := json.Marshal(stsC.ServeConfig)
 		if err != nil {
@@ -477,6 +472,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_KUBE_SECRET",
 			Value: proxySecret,
 		},
+		corev1.EnvVar{
+			Name:  "EXPERIMENTAL_TS_CONFIGFILE_PATH",
+			Value: "/etc/tsconfig/tailscaled",
+		},
 	)
 	if sts.ForwardClusterTrafficViaL7IngressProxy {
 		container.Env = append(container.Env, corev1.EnvVar{
@@ -484,42 +483,25 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: "true",
 		})
 	}
-	if !shouldDoTailscaledDeclarativeConfig(sts) {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_HOSTNAME",
-			Value: sts.Hostname,
-		})
-		// containerboot currently doesn't have a way to re-read the hostname/ip as
-		// it is passed via an environment variable. So we need to restart the
-		// container when the value changes. We do this by adding an annotation to
-		// the pod template that contains the last value we set.
-		mak.Set(&pod.Annotations, podAnnotationLastSetHostname, sts.Hostname)
-	}
 	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
-	if shouldDoTailscaledDeclarativeConfig(sts) {
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
-		pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
-			Name: "tailscaledconfig",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: proxySecret,
-					Items: []corev1.KeyToPath{{
-						Key:  tailscaledConfigKey,
-						Path: tailscaledConfigKey,
-					}},
-				},
+	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
+	pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+		Name: "tailscaledconfig",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: proxySecret,
+				Items: []corev1.KeyToPath{{
+					Key:  tailscaledConfigKey,
+					Path: tailscaledConfigKey,
+				}},
 			},
-		})
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      "tailscaledconfig",
-			ReadOnly:  true,
-			MountPath: "/etc/tsconfig",
-		})
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "EXPERIMENTAL_TS_CONFIGFILE_PATH",
-			Value: "/etc/tsconfig/tailscaled",
-		})
-	}
+		},
+	})
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      "tailscaledconfig",
+		ReadOnly:  true,
+		MountPath: "/etc/tsconfig",
+	})
 
 	if a.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
@@ -827,11 +809,4 @@ func nameForService(svc *corev1.Service) (string, error) {
 
 func isValidFirewallMode(m string) bool {
 	return m == "auto" || m == "nftables" || m == "iptables"
-}
-
-// shouldDoTailscaledDeclarativeConfig determines whether the proxy instance
-// should be configured to run tailscaled only with a all config opts passed to
-// tailscaled.
-func shouldDoTailscaledDeclarativeConfig(stsC *tailscaleSTSConfig) bool {
-	return stsC.Connector != nil
 }

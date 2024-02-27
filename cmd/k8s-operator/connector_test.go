@@ -67,14 +67,13 @@ func TestConnector(t *testing.T) {
 	fullName, shortName := findGenName(t, fc, "", "test", "connector")
 
 	opts := configOpts{
-		stsName:                    shortName,
-		secretName:                 fullName,
-		parentType:                 "connector",
-		hostname:                   "test-connector",
-		shouldUseDeclarativeConfig: true,
-		isExitNode:                 true,
-		subnetRoutes:               "10.40.0.0/14",
-		confFileHash:               "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
+		stsName:      shortName,
+		secretName:   fullName,
+		parentType:   "connector",
+		hostname:     "test-connector",
+		isExitNode:   true,
+		subnetRoutes: "10.40.0.0/14",
+		confFileHash: "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
@@ -152,13 +151,12 @@ func TestConnector(t *testing.T) {
 	fullName, shortName = findGenName(t, fc, "", "test", "connector")
 
 	opts = configOpts{
-		stsName:                    shortName,
-		secretName:                 fullName,
-		parentType:                 "connector",
-		shouldUseDeclarativeConfig: true,
-		subnetRoutes:               "10.40.0.0/14",
-		hostname:                   "test-connector",
-		confFileHash:               "57d922331890c9b1c8c6ae664394cb254334c551d9cd9db14537b5d9da9fb17e",
+		stsName:      shortName,
+		secretName:   fullName,
+		parentType:   "connector",
+		subnetRoutes: "10.40.0.0/14",
+		hostname:     "test-connector",
+		confFileHash: "57d922331890c9b1c8c6ae664394cb254334c551d9cd9db14537b5d9da9fb17e",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
@@ -239,14 +237,13 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	fullName, shortName := findGenName(t, fc, "", "test", "connector")
 
 	opts := configOpts{
-		stsName:                    shortName,
-		secretName:                 fullName,
-		parentType:                 "connector",
-		hostname:                   "test-connector",
-		shouldUseDeclarativeConfig: true,
-		isExitNode:                 true,
-		subnetRoutes:               "10.40.0.0/14",
-		confFileHash:               "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
+		stsName:      shortName,
+		secretName:   fullName,
+		parentType:   "connector",
+		hostname:     "test-connector",
+		isExitNode:   true,
+		subnetRoutes: "10.40.0.0/14",
+		confFileHash: "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
