@@ -151,6 +151,18 @@ type Impl struct {
 	// TCP connections, so they can be unregistered when connections are
 	// closed.
 	connsOpenBySubnetIP map[netip.Addr]int
+
+	// Debug information for the TCP forwarding code; all fields protected
+	// by tcpDebugMu.
+	tcpDebugMu      sync.Mutex
+	inFlightDialCtr int
+	inFlightDials   map[int]tcpDialInfo // keyed by a random integer
+}
+
+type tcpDialInfo struct {
+	clientRemoteIP netip.Addr
+	dialAddr       netip.AddrPort
+	start          time.Time
 }
 
 const nicID = 1
@@ -243,6 +255,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		connsOpenBySubnetIP: make(map[netip.Addr]int),
 		dns:                 dns,
 		tailFSForLocal:      tailFSForLocal,
+		inFlightDials:       make(map[int]tcpDialInfo),
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
@@ -1007,6 +1020,24 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
+func (ns *Impl) debugForwardedTCP(clientRemoteIP netip.Addr, remote netip.AddrPort) func() {
+	ns.tcpDebugMu.Lock()
+	debugKey := ns.inFlightDialCtr
+	ns.inFlightDialCtr++
+	ns.inFlightDials[debugKey] = tcpDialInfo{
+		clientRemoteIP: clientRemoteIP,
+		dialAddr:       remote,
+		start:          time.Now(),
+	}
+	ns.tcpDebugMu.Unlock()
+
+	return func() {
+		ns.tcpDebugMu.Lock()
+		delete(ns.inFlightDials, debugKey)
+		ns.tcpDebugMu.Unlock()
+	}
+}
+
 func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
 	dialAddrStr := dialAddr.String()
 	if debugNetstack() {
@@ -1034,9 +1065,13 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 		cancel()
 	}()
 
+	// Insert debug info, and remove it once we've dialed our outbound conn.
+	debugDialDone := ns.debugForwardedTCP(clientRemoteIP, dialAddr)
+
 	// Attempt to dial the outbound connection before we accept the inbound one.
 	var stdDialer net.Dialer
 	server, err := stdDialer.DialContext(ctx, "tcp", dialAddrStr)
+	debugDialDone()
 	if err != nil {
 		ns.logf("netstack: could not connect to local server at %s: %v", dialAddr.String(), err)
 		return
