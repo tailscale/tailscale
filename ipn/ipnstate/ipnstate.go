@@ -203,11 +203,6 @@ type PeerStatusLite struct {
 	// since this peer was last known to WireGuard. (Tailscale removes peers
 	// from the wireguard peer that are idle.)
 	LastHandshake time.Time
-
-	// HandshakeAttempts is how many failed attempts there have been at
-	// completing the current WireGuard handshake. This resets to zero on every
-	// successful handshake.
-	HandshakeAttempts uint32
 }
 
 // PeerStatus describes a peer node and its current state.

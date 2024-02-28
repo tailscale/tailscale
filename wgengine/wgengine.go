@@ -11,11 +11,13 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgint"
 )
 
 // Status is the Engine status.
@@ -83,6 +85,10 @@ type Engine interface {
 	// RequestStatus requests a WireGuard status update right
 	// away, sent to the callback registered via SetStatusCallback.
 	RequestStatus()
+
+	// PeerByKey returns the WireGuard status of the provided peer.
+	// If the peer is not found, ok is false.
+	PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool)
 
 	// Close shuts down this wireguard instance, remove any routes
 	// it added, etc. To bring it up again later, you'll need a
