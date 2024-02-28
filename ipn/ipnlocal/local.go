@@ -3311,13 +3311,24 @@ var (
 // TCPHandlerForDst returns a TCP handler for connections to dst, or nil if
 // no handler is needed. It also returns a list of TCP socket options to
 // apply to the socket before calling the handler.
+// TCPHandlerForDst is called both for connections to our node's local IP
+// as well as to the service IP (quad 100).
 func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c net.Conn) error, opts []tcpip.SettableSocketOption) {
-	if dst.Port() == 80 && (dst.Addr() == magicDNSIP || dst.Addr() == magicDNSIPv6) {
-		if b.ShouldRunWebClient() {
-			return b.handleWebClientConn, opts
+	// First handle internal connections to the service IP
+	hittingServiceIP := dst.Addr() == magicDNSIP || dst.Addr() == magicDNSIPv6
+	if hittingServiceIP {
+		switch dst.Port() {
+		case 80:
+			if b.ShouldRunWebClient() {
+				return b.handleWebClientConn, opts
+			}
+			return b.HandleQuad100Port80Conn, opts
+		case TailFSLocalPort:
+			return b.handleTailFSConn, opts
 		}
-		return b.HandleQuad100Port80Conn, opts
 	}
+
+	// Then handle external connections to the local IP.
 	if !b.isLocalIP(dst.Addr()) {
 		return nil, nil
 	}
@@ -3335,18 +3346,6 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	if dst.Port() == webClientPort && b.ShouldRunWebClient() {
 		return b.handleWebClientConn, opts
 	}
-	if dst.Port() == TailFSLocalPort {
-		fs, ok := b.sys.TailFSForLocal.GetOK()
-		if ok {
-			return func(conn net.Conn) error {
-				if !b.TailFSAccessEnabled() {
-					conn.Close()
-					return nil
-				}
-				return fs.HandleConn(conn, conn.RemoteAddr())
-			}, opts
-		}
-	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
 		return func(c net.Conn) error {
 			b.handlePeerAPIConn(src, dst, c)
@@ -3357,6 +3356,15 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		return handler, opts
 	}
 	return nil, nil
+}
+
+func (b *LocalBackend) handleTailFSConn(conn net.Conn) error {
+	fs, ok := b.sys.TailFSForLocal.GetOK()
+	if !ok || !b.TailFSAccessEnabled() {
+		conn.Close()
+		return nil
+	}
+	return fs.HandleConn(conn, conn.RemoteAddr())
 }
 
 func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
