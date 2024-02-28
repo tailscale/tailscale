@@ -12,9 +12,9 @@ import (
 // Various debugging and experimental tweakables, set by environment
 // variable.
 var (
-	// debugDisco prints verbose logs of active discovery events as
+	// debugDiscoEnv prints verbose logs of active discovery events as
 	// they happen.
-	debugDisco = envknob.RegisterBool("TS_DEBUG_DISCO")
+	debugDiscoEnv = envknob.RegisterBool("TS_DEBUG_DISCO")
 	// debugPeerMap prints verbose logs of changes to the peermap.
 	debugPeerMap = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_PEERMAP")
 	// debugOmitLocalAddresses removes all local interface addresses
