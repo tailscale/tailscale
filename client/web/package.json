@@ -6,6 +6,7 @@
     "node": "18.16.1",
     "yarn": "1.22.19"
   },
+  "type": "module",
   "private": true,
   "dependencies": {
     "@radix-ui/react-collapsible": "^1.0.3",
