@@ -93,6 +93,12 @@ func (p *Prober) Run(name string, interval time.Duration, labels map[string]stri
 		mEndTime:     prometheus.NewDesc("end_secs", "Latest probe end time (seconds since epoch)", nil, l),
 		mLatency:     prometheus.NewDesc("latency_millis", "Latest probe latency (ms)", nil, l),
 		mResult:      prometheus.NewDesc("result", "Latest probe result (1 = success, 0 = failure)", nil, l),
+		mAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "attempts_total", Help: "Total number of probing attempts", ConstLabels: l,
+		}, []string{"status"}),
+		mSeconds: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "seconds_total", Help: "Total amount of time spent executing the probe", ConstLabels: l,
+		}, []string{"status"}),
 	}
 
 	prometheus.WrapRegistererWithPrefix(p.namespace+"_", p.metrics).MustRegister(probe.metrics)
@@ -185,6 +191,8 @@ type Probe struct {
 	mEndTime   *prometheus.Desc
 	mLatency   *prometheus.Desc
 	mResult    *prometheus.Desc
+	mAttempts  *prometheus.CounterVec
+	mSeconds   *prometheus.CounterVec
 
 	mu        sync.Mutex
 	start     time.Time     // last time doProbe started
@@ -282,10 +290,15 @@ func (p *Probe) recordEnd(start time.Time, err error) {
 	p.end = end
 	p.succeeded = err == nil
 	p.lastErr = err
+	latency := end.Sub(p.start)
 	if p.succeeded {
-		p.latency = end.Sub(p.start)
+		p.latency = latency
+		p.mAttempts.WithLabelValues("ok").Inc()
+		p.mSeconds.WithLabelValues("ok").Add(latency.Seconds())
 	} else {
 		p.latency = 0
+		p.mAttempts.WithLabelValues("fail").Inc()
+		p.mSeconds.WithLabelValues("fail").Add(latency.Seconds())
 	}
 }
 
@@ -334,6 +347,8 @@ func (p *Probe) Describe(ch chan<- *prometheus.Desc) {
 	ch <- p.mEndTime
 	ch <- p.mResult
 	ch <- p.mLatency
+	p.mAttempts.Describe(ch)
+	p.mSeconds.Describe(ch)
 }
 
 // Collect implements prometheus.Collector.
@@ -356,6 +371,8 @@ func (p *Probe) Collect(ch chan<- prometheus.Metric) {
 	if p.latency > 0 {
 		ch <- prometheus.MustNewConstMetric(p.mLatency, prometheus.GaugeValue, float64(p.latency.Milliseconds()))
 	}
+	p.mAttempts.Collect(ch)
+	p.mSeconds.Collect(ch)
 }
 
 // ticker wraps a time.Ticker in a way that can be faked for tests.
