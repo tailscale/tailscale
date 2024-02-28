@@ -188,14 +188,22 @@ func (s *Status) Peers() []key.NodePublic {
 }
 
 type PeerStatusLite struct {
-	// TxBytes/RxBytes is the total number of bytes transmitted to/received from this peer.
-	TxBytes, RxBytes int64
-	// LastHandshake is the last time a handshake succeeded with this peer.
-	// (Or we got key confirmation via the first data message,
-	// which is approximately the same thing.)
-	LastHandshake time.Time
 	// NodeKey is this peer's public node key.
 	NodeKey key.NodePublic
+
+	// TxBytes/RxBytes are the total number of bytes transmitted to/received
+	// from this peer.
+	TxBytes, RxBytes int64
+
+	// LastHandshake is the last time a handshake succeeded with this peer. (Or
+	// we got key confirmation via the first data message, which is
+	// approximately the same thing.)
+	//
+	// The time.Time zero value means that no handshake has succeeded, at least
+	// since this peer was last known to WireGuard. (Tailscale removes peers
+	// from the wireguard peer that are idle.)
+	LastHandshake time.Time
+
 	// HandshakeAttempts is how many failed attempts there have been at
 	// completing the current WireGuard handshake. This resets to zero on every
 	// successful handshake.
