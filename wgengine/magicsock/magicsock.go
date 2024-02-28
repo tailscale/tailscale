@@ -60,6 +60,7 @@ import (
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/wgengine/capture"
+	"tailscale.com/wgengine/wgint"
 )
 
 const (
@@ -298,6 +299,10 @@ type Conn struct {
 	// onPortUpdate is called with the new port when magicsock rebinds to
 	// a new port.
 	onPortUpdate func(port uint16, network string)
+
+	// getPeerByKey optionally specifies a function to look up a peer's
+	// wireguard state by its public key. If nil, it's not used.
+	getPeerByKey func(key.NodePublic) (_ wgint.Peer, ok bool)
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -367,6 +372,11 @@ type Options struct {
 	// OnPortUpdate is called with the new port when magicsock rebinds to
 	// a new port.
 	OnPortUpdate func(port uint16, network string)
+
+	// PeerByKeyFunc optionally specifies a function to look up a peer's
+	// WireGuard state by its public key. If nil, it's not used.
+	// In regular use, this will be wgengine.(*userspaceEngine).PeerByKey.
+	PeerByKeyFunc func(key.NodePublic) (_ wgint.Peer, ok bool)
 }
 
 func (o *Options) logf() logger.Logf {
@@ -440,6 +450,7 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 	c.netMon = opts.NetMon
 	c.onPortUpdate = opts.OnPortUpdate
+	c.getPeerByKey = opts.PeerByKeyFunc
 
 	if err := c.rebind(keepCurrentPort); err != nil {
 		return nil, err

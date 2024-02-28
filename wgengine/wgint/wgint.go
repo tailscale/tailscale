@@ -8,6 +8,7 @@ package wgint
 import (
 	"reflect"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -49,24 +50,59 @@ func getPeerHandshakeAttemptsOffset() uintptr {
 	return field.Offset + field2.Offset
 }
 
-// PeerLastHandshakeNano returns the last handshake time in nanoseconds since the
+// peerLastHandshakeNano returns the last handshake time in nanoseconds since the
 // unix epoch.
-func PeerLastHandshakeNano(peer *device.Peer) int64 {
+func peerLastHandshakeNano(peer *device.Peer) int64 {
 	return (*atomic.Int64)(unsafe.Add(unsafe.Pointer(peer), offHandshake)).Load()
 }
 
-// PeerRxBytes returns the number of bytes received from this peer.
-func PeerRxBytes(peer *device.Peer) uint64 {
+// peerRxBytes returns the number of bytes received from this peer.
+func peerRxBytes(peer *device.Peer) uint64 {
 	return (*atomic.Uint64)(unsafe.Add(unsafe.Pointer(peer), offRxBytes)).Load()
 }
 
-// PeerTxBytes returns the number of bytes sent to this peer.
-func PeerTxBytes(peer *device.Peer) uint64 {
+// peerTxBytes returns the number of bytes sent to this peer.
+func peerTxBytes(peer *device.Peer) uint64 {
 	return (*atomic.Uint64)(unsafe.Add(unsafe.Pointer(peer), offTxBytes)).Load()
 }
 
-// PeerHandshakeAttempts returns the number of WireGuard handshake attempts
+// peerHandshakeAttempts returns the number of WireGuard handshake attempts
 // made for the current handshake. It resets to zero before every new handshake.
-func PeerHandshakeAttempts(peer *device.Peer) uint32 {
+func peerHandshakeAttempts(peer *device.Peer) uint32 {
 	return (*atomic.Uint32)(unsafe.Add(unsafe.Pointer(peer), offHandshakeAttempts)).Load()
+}
+
+// Peer is a wrapper around a wireguard-go device.Peer pointer.
+type Peer struct {
+	p *device.Peer
+}
+
+// PeerOf returns a Peer wrapper around a wireguard-go device.Peer.
+func PeerOf(p *device.Peer) Peer {
+	return Peer{p}
+}
+
+// LastHandshake returns the last handshake time.
+//
+// If the handshake has never happened, it returns the zero value.
+func (p Peer) LastHandshake() time.Time {
+	if n := peerLastHandshakeNano(p.p); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
+}
+
+func (p Peer) IsValid() bool { return p.p != nil }
+
+// TxBytes returns the number of bytes sent to this peer.
+func (p Peer) TxBytes() uint64 { return peerTxBytes(p.p) }
+
+// RxBytes returns the number of bytes received from this peer.
+func (p Peer) RxBytes() uint64 { return peerRxBytes(p.p) }
+
+// HandshakeAttempts returns the number of failed WireGuard handshake attempts
+// made for the current handshake. It resets to zero before every new handshake
+// and after a successful handshake.
+func (p Peer) HandshakeAttempts() uint32 {
+	return peerHandshakeAttempts(p.p)
 }

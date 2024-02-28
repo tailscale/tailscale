@@ -1011,25 +1011,30 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 
 var ErrEngineClosing = errors.New("engine closing; no status")
 
-func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
+func (e *userspaceEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {
 	e.wgLock.Lock()
 	dev := e.wgdev
 	e.wgLock.Unlock()
 
 	if dev == nil {
-		return status, false
+		return wgint.Peer{}, false
 	}
-	peer := dev.LookupPeer(pk.Raw32())
+	peer := dev.LookupPeer(pubKey.Raw32())
 	if peer == nil {
+		return wgint.Peer{}, false
+	}
+	return wgint.PeerOf(peer), true
+}
+
+func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
+	peer, ok := e.PeerByKey(pk)
+	if !ok {
 		return status, false
 	}
 	status.NodeKey = pk
-	status.RxBytes = int64(wgint.PeerRxBytes(peer))
-	status.TxBytes = int64(wgint.PeerTxBytes(peer))
-	status.HandshakeAttempts = wgint.PeerHandshakeAttempts(peer)
-	if nano := wgint.PeerLastHandshakeNano(peer); nano != 0 {
-		status.LastHandshake = time.Unix(0, nano)
-	}
+	status.RxBytes = int64(peer.RxBytes())
+	status.TxBytes = int64(peer.TxBytes())
+	status.LastHandshake = peer.LastHandshake()
 	return status, true
 }
 
