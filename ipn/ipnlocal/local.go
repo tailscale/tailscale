@@ -252,8 +252,8 @@ type LocalBackend struct {
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
 	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
-	notifyWatchers   set.HandleSet[*watchSession]
-	lastStatusTime   time.Time // status.AsOf value of the last processed status update
+	notifyWatchers   map[string]*watchSession          // by session ID
+	lastStatusTime   time.Time                         // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
 	// intermediate buffered directory for "pick-up" later. If
@@ -278,9 +278,8 @@ type LocalBackend struct {
 	capForcedNetfilter string
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
-	serveConfig         ipn.ServeConfigView // or !Valid if none
-	activeWatchSessions set.Set[string]     // of WatchIPN SessionID
+	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
+	serveConfig       ipn.ServeConfigView // or !Valid if none
 
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
@@ -382,7 +381,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		gotPortPollRes:      make(chan struct{}),
 		loginFlags:          loginFlags,
 		clock:               clock,
-		activeWatchSessions: make(set.Set[string]),
 		selfUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
 		lastSelfUpdateState: ipnstate.UpdateFinished,
 	}
@@ -2266,7 +2264,6 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	var ini *ipn.Notify
 
 	b.mu.Lock()
-	b.activeWatchSessions.Add(sessionID)
 
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialTailFSShares
 	if mask&initialBits != 0 {
@@ -2297,13 +2294,12 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		}
 	}
 
-	handle := b.notifyWatchers.Add(&watchSession{ch, sessionID})
+	mak.Set(&b.notifyWatchers, sessionID, &watchSession{ch, sessionID})
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
-		delete(b.notifyWatchers, handle)
-		delete(b.activeWatchSessions, sessionID)
+		delete(b.notifyWatchers, sessionID)
 		b.mu.Unlock()
 	}()
 
@@ -4768,8 +4764,9 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	}
 
 	// remove inactive sessions
-	maps.DeleteFunc(conf.Foreground, func(s string, sc *ipn.ServeConfig) bool {
-		return !b.activeWatchSessions.Contains(s)
+	maps.DeleteFunc(conf.Foreground, func(sessionID string, sc *ipn.ServeConfig) bool {
+		_, ok := b.notifyWatchers[sessionID]
+		return !ok
 	})
 
 	b.serveConfig = conf.View()
