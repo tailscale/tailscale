@@ -1025,8 +1025,10 @@ func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.
 	status.NodeKey = pk
 	status.RxBytes = int64(wgint.PeerRxBytes(peer))
 	status.TxBytes = int64(wgint.PeerTxBytes(peer))
-	status.LastHandshake = time.Unix(0, wgint.PeerLastHandshakeNano(peer))
 	status.HandshakeAttempts = wgint.PeerHandshakeAttempts(peer)
+	if nano := wgint.PeerLastHandshakeNano(peer); nano != 0 {
+		status.LastHandshake = time.Unix(0, nano)
+	}
 	return status, true
 }
 
