@@ -68,6 +68,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -2286,9 +2287,9 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 			if err != nil {
 				b.logf("unable to notify initial tailfs shares: %v", err)
 			} else {
-				ini.TailFSShares = make(map[string]string, len(shares))
+				ini.TailFSShares = make(map[string]*tailfs.Share, len(shares))
 				for _, share := range shares {
-					ini.TailFSShares[share.Name] = share.Path
+					ini.TailFSShares[share.Name] = share
 				}
 			}
 		}

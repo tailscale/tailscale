@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"strings"
@@ -108,7 +109,7 @@ func normalizeShareName(name string) (string, error) {
 	return name, nil
 }
 
-func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]string, error) {
+func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]*tailfs.Share, error) {
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
 		return nil, errors.New("tailfs not enabled")
@@ -129,7 +130,7 @@ func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]str
 	}
 	fs.SetShares(shares)
 
-	return shareNameMap(shares), nil
+	return maps.Clone(shares), nil
 }
 
 // TailFSRemoveShare removes the named share. Share names are forced to
@@ -154,7 +155,7 @@ func (b *LocalBackend) TailFSRemoveShare(name string) error {
 	return nil
 }
 
-func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]string, error) {
+func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]*tailfs.Share, error) {
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
 		return nil, errors.New("tailfs not enabled")
@@ -179,20 +180,12 @@ func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]string, 
 	}
 	fs.SetShares(shares)
 
-	return shareNameMap(shares), nil
-}
-
-func shareNameMap(sharesByName map[string]*tailfs.Share) map[string]string {
-	sharesMap := make(map[string]string, len(sharesByName))
-	for _, share := range sharesByName {
-		sharesMap[share.Name] = share.Path
-	}
-	return sharesMap
+	return maps.Clone(shares), nil
 }
 
 // tailfsNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
 // about the latest set of shares, supplied as a map of name -> directory.
-func (b *LocalBackend) tailfsNotifyShares(shares map[string]string) {
+func (b *LocalBackend) tailfsNotifyShares(shares map[string]*tailfs.Share) {
 	b.send(ipn.Notify{TailFSShares: shares})
 }
 
@@ -205,7 +198,7 @@ func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
 		return
 	}
 	// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
-	go b.tailfsNotifyShares(shareNameMap(shares))
+	go b.tailfsNotifyShares(maps.Clone(shares))
 }
 
 // TailFSGetShares returns the current set of shares from the state store,

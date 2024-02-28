@@ -21,16 +21,16 @@ func AllowShareAs() bool {
 // Share configures a folder to be shared through TailFS.
 type Share struct {
 	// Name is how this share appears on remote nodes.
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 
 	// Path is the path to the directory on this machine that's being shared.
-	Path string `json:"path"`
+	Path string `json:"path,omitempty"`
 
 	// As is the UNIX or Windows username of the local account used for this
 	// share. File read/write permissions are enforced based on this username.
 	// Can be left blank to use the default value of "whoever is running the
 	// Tailscale GUI".
-	As string `json:"who"`
+	As string `json:"who,omitempty"`
 
 	// BookmarkData contains security-scoped bookmark data for the Sandboxed
 	// Mac application. The Sandboxed Mac application gains permission to
@@ -38,7 +38,7 @@ type Share struct {
 	// picker. In order to retain access to it across restarts, it needs to
 	// hold on to a security-scoped bookmark. That bookmark is stored here. See
 	// https://developer.apple.com/documentation/security/app_sandbox/accessing_files_from_the_macos_app_sandbox#4144043
-	BookmarkData []byte `json:"bookmarkData"`
+	BookmarkData []byte `json:"bookmarkData,omitempty"`
 }
 
 // FileSystemForRemote is the TailFS filesystem exposed to remote nodes. It
