@@ -31,6 +31,14 @@ type Share struct {
 	// Can be left blank to use the default value of "whoever is running the
 	// Tailscale GUI".
 	As string `json:"who"`
+
+	// BookmarkData contains security-scoped bookmark data for the Sandboxed
+	// Mac application. The Sandboxed Mac application gains permission to
+	// access the Share's folder as a result of a user selecting it in a file
+	// picker. In order to retain access to it across restarts, it needs to
+	// hold on to a security-scoped bookmark. That bookmark is stored here. See
+	// https://developer.apple.com/documentation/security/app_sandbox/accessing_files_from_the_macos_app_sandbox#4144043
+	BookmarkData []byte `json:"bookmarkData"`
 }
 
 // FileSystemForRemote is the TailFS filesystem exposed to remote nodes. It
