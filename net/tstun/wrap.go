@@ -160,8 +160,8 @@ type Wrapper struct {
 	// PreFilterPacketInboundFromWireGuard is the inbound filter function that runs before the main filter
 	// and therefore sees the packets that may be later dropped by it.
 	PreFilterPacketInboundFromWireGuard FilterFunc
-	// PostFilterPacketInboundFromWireGaurd is the inbound filter function that runs after the main filter.
-	PostFilterPacketInboundFromWireGaurd FilterFunc
+	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
+	PostFilterPacketInboundFromWireGuard FilterFunc
 	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by netstack to hook
 	// packets that should be handled by netstack. If set, this filter runs before
@@ -1047,8 +1047,8 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 		return filter.Drop
 	}
 
-	if t.PostFilterPacketInboundFromWireGaurd != nil {
-		if res := t.PostFilterPacketInboundFromWireGaurd(p, t); res.IsDrop() {
+	if t.PostFilterPacketInboundFromWireGuard != nil {
+		if res := t.PostFilterPacketInboundFromWireGuard(p, t); res.IsDrop() {
 			return res
 		}
 	}
