@@ -684,7 +684,8 @@ func newTestBackend(t *testing.T) *LocalBackend {
 
 	b.netMap = &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
-			Name: "example.ts.net",
+			Name:         "example.ts.net",
+			Capabilities: []tailcfg.NodeCapability{tailcfg.NodeAttrsTailFSAccess},
 		}).View(),
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
 			tailcfg.UserID(1): {

@@ -922,25 +922,13 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// Local Services (DNS and WebDAV)
 	hittingServiceIP := dialIP == serviceIP || dialIP == serviceIPv6
 	hittingDNS := hittingServiceIP && reqDetails.LocalPort == 53
-	hittingTailFS := hittingServiceIP && ns.tailFSForLocal != nil && reqDetails.LocalPort == ipnlocal.TailFSLocalPort
-	if hittingDNS || hittingTailFS {
+	if hittingDNS {
 		c := getConnOrReset()
 		if c == nil {
 			return
 		}
 		addrPort := netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort)
-		if hittingDNS {
-			go ns.dns.HandleTCPConn(c, addrPort)
-		} else if hittingTailFS {
-			if !ns.lb.TailFSAccessEnabled() {
-				c.Close()
-				return
-			}
-			err := ns.tailFSForLocal.HandleConn(c, net.TCPAddrFromAddrPort(addrPort))
-			if err != nil {
-				ns.logf("netstack: tailfs.HandleConn: %v", err)
-			}
-		}
+		go ns.dns.HandleTCPConn(c, addrPort)
 		return
 	}
 
