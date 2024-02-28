@@ -1,7 +1,7 @@
-const plugin = require("tailwindcss/plugin")
-const styles = require("./styles.json")
+import plugin from "tailwindcss/plugin"
+import styles from "./styles.json"
 
-module.exports = {
+const config = {
   theme: {
     screens: {
       sm: "420px",
@@ -96,20 +96,22 @@ module.exports = {
   plugins: [
     plugin(function ({ addVariant }) {
       addVariant("state-open", [
-        '&[data-state="open"]',
-        '[data-state="open"] &',
+        "&[data-state=“open”]",
+        "[data-state=“open”] &",
       ])
       addVariant("state-closed", [
-        '&[data-state="closed"]',
-        '[data-state="closed"] &',
+        "&[data-state=“closed”]",
+        "[data-state=“closed”] &",
       ])
       addVariant("state-delayed-open", [
-        '&[data-state="delayed-open"]',
-        '[data-state="delayed-open"] &',
+        "&[data-state=“delayed-open”]",
+        "[data-state=“delayed-open”] &",
       ])
-      addVariant("state-active", ['&[data-state="active"]'])
-      addVariant("state-inactive", ['&[data-state="inactive"]'])
+      addVariant("state-active", ["&[data-state=“active”]"])
+      addVariant("state-inactive", ["&[data-state=“inactive”]"])
     }),
   ],
   content: ["./src/**/*.html", "./src/**/*.{ts,tsx}", "./index.html"],
 }
+
+export default config
