@@ -25,6 +25,8 @@ type Single[K comparable, V any] struct {
 	ServeExpired bool
 }
 
+var _ Cache[int, int] = (*Single[int, int])(nil)
+
 // Get will return the cached value, if any, or fill the cache by calling f and
 // return the corresponding value. If f returns an error and c.ServeExpired is
 // true, then a previous expired value can be returned with no error.
