@@ -320,7 +320,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
-	ns.tundev.PostFilterPacketInboundFromWireGaurd = ns.injectInbound
+	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
 	return ns, nil
