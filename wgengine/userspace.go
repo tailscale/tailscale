@@ -1051,7 +1051,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
 	for _, key := range peerKeys {
-		if status, found := e.getPeerStatusLite(key); found {
+		if status, ok := e.getPeerStatusLite(key); ok {
 			peers = append(peers, status)
 		}
 	}
