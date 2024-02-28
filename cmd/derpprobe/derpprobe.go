@@ -19,18 +19,31 @@ import (
 )
 
 var (
-	derpMapURL = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://)")
-	listen     = flag.String("listen", ":8030", "HTTP listen address")
-	probeOnce  = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
-	spread     = flag.Bool("spread", true, "whether to spread probing over time")
-	interval   = flag.Duration("interval", 15*time.Second, "probe interval")
+	derpMapURL   = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://)")
+	listen       = flag.String("listen", ":8030", "HTTP listen address")
+	probeOnce    = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
+	spread       = flag.Bool("spread", true, "whether to spread probing over time")
+	interval     = flag.Duration("interval", 15*time.Second, "probe interval")
+	meshInterval = flag.Duration("mesh-interval", 15*time.Second, "mesh probe interval")
+	stunInterval = flag.Duration("stun-interval", 15*time.Second, "STUN probe interval")
+	tlsInterval  = flag.Duration("tls-interval", 15*time.Second, "TLS probe interval")
+	bwInterval   = flag.Duration("bw-interval", 0, "bandwidth probe interval (0 = no bandwidth probing)")
+	bwSize       = flag.Int64("bw-probe-size-bytes", 1_000_000, "bandwidth probe size")
 )
 
 func main() {
 	flag.Parse()
 
 	p := prober.New().WithSpread(*spread).WithOnce(*probeOnce).WithMetricNamespace("derpprobe")
-	dp, err := prober.DERP(p, *derpMapURL, *interval, *interval, *interval)
+	opts := []prober.DERPOpt{
+		prober.WithMeshProbing(*meshInterval),
+		prober.WithSTUNProbing(*stunInterval),
+		prober.WithTLSProbing(*tlsInterval),
+	}
+	if *bwInterval > 0 {
+		opts = append(opts, prober.WithBandwidthProbing(*bwInterval, *bwSize))
+	}
+	dp, err := prober.DERP(p, *derpMapURL, opts...)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -53,6 +66,7 @@ func main() {
 	mux := http.NewServeMux()
 	tsweb.Debugger(mux)
 	mux.HandleFunc("/", http.HandlerFunc(serveFunc(p)))
+	log.Printf("Listening on %s", *listen)
 	log.Fatal(http.ListenAndServe(*listen, mux))
 }
 
