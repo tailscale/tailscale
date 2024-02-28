@@ -524,6 +524,9 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 // current server, or one of allowedHosts. Returns the cleaned URL or
 // a validation error.
 func CleanRedirectURL(urlStr string, allowedHosts []string) (*url.URL, error) {
+	if urlStr == "" {
+		return &url.URL{}, nil
+	}
 	// In some places, we unfortunately query-escape the redirect URL
 	// too many times, and end up needing to redirect to a URL that's
 	// still escaped by one level. Try to unescape the input.
