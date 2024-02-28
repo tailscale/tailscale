@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1040,9 +1041,8 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	e.mu.Lock()
 	closing := e.closing
-	peerKeys := make([]key.NodePublic, len(e.peerSequence))
-	copy(peerKeys, e.peerSequence)
-	localAddrs := append([]tailcfg.Endpoint(nil), e.endpoints...)
+	peerKeys := slices.Clone(e.peerSequence)
+	localAddrs := slices.Clone(e.endpoints)
 	e.mu.Unlock()
 
 	if closing {
