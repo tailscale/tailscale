@@ -5,12 +5,14 @@ package prober
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/stun"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -35,10 +38,15 @@ type derpProber struct {
 	meshInterval time.Duration
 	tlsInterval  time.Duration
 
+	// Optional bandwidth probing.
+	bwInterval  time.Duration
+	bwProbeSize int64
+
 	// Probe functions that can be overridden for testing.
 	tlsProbeFn  func(string) ProbeFunc
 	udpProbeFn  func(string, int) ProbeFunc
 	meshProbeFn func(string, string) ProbeFunc
+	bwProbeFn   func(string, string, int64) ProbeFunc
 
 	sync.Mutex
 	lastDERPMap   *tailcfg.DERPMap
@@ -47,20 +55,57 @@ type derpProber struct {
 	probes        map[string]*Probe
 }
 
+type DERPOpt func(*derpProber)
+
+// WithBandwidthProbing enables bandwidth probing. When enabled, a payload of
+// `size` bytes will be regularly transferred through each DERP server, and each
+// pair of DERP servers in every region.
+func WithBandwidthProbing(interval time.Duration, size int64) DERPOpt {
+	return func(d *derpProber) {
+		d.bwInterval = interval
+		d.bwProbeSize = size
+	}
+}
+
+// WithMeshProbing enables mesh probing. When enabled, a small message will be
+// transferred through each DERP server and each pair of DERP servers.
+func WithMeshProbing(interval time.Duration) DERPOpt {
+	return func(d *derpProber) {
+		d.meshInterval = interval
+	}
+}
+
+// WithSTUNProbing enables STUN/UDP probing, with a STUN request being sent
+// to each DERP server every `interval`.
+func WithSTUNProbing(interval time.Duration) DERPOpt {
+	return func(d *derpProber) {
+		d.udpInterval = interval
+	}
+}
+
+// WithTLSProbing enables TLS probing that will check TLS certificate on port
+// 443 of each DERP server every `interval`.
+func WithTLSProbing(interval time.Duration) DERPOpt {
+	return func(d *derpProber) {
+		d.tlsInterval = interval
+	}
+}
+
 // DERP creates a new derpProber.
-func DERP(p *Prober, derpMapURL string, udpInterval, meshInterval, tlsInterval time.Duration) (*derpProber, error) {
+func DERP(p *Prober, derpMapURL string, opts ...DERPOpt) (*derpProber, error) {
 	d := &derpProber{
-		p:            p,
-		derpMapURL:   derpMapURL,
-		udpInterval:  udpInterval,
-		meshInterval: meshInterval,
-		tlsInterval:  tlsInterval,
-		tlsProbeFn:   TLS,
-		nodes:        make(map[string]*tailcfg.DERPNode),
-		probes:       make(map[string]*Probe),
+		p:          p,
+		derpMapURL: derpMapURL,
+		tlsProbeFn: TLS,
+		nodes:      make(map[string]*tailcfg.DERPNode),
+		probes:     make(map[string]*Probe),
+	}
+	for _, o := range opts {
+		o(d)
 	}
 	d.udpProbeFn = d.ProbeUDP
 	d.meshProbeFn = d.probeMesh
+	d.bwProbeFn = d.probeBandwidth
 	return d, nil
 }
 
@@ -84,42 +129,59 @@ func (d *derpProber) ProbeMap(ctx context.Context) error {
 				"hostname":  server.HostName,
 			}
 
-			n := fmt.Sprintf("derp/%s/%s/tls", region.RegionCode, server.Name)
-			wantProbes[n] = true
-			if d.probes[n] == nil {
-				log.Printf("adding DERP TLS probe for %s (%s)", server.Name, region.RegionName)
-
-				derpPort := 443
-				if server.DERPPort != 0 {
-					derpPort = server.DERPPort
-				}
-
-				d.probes[n] = d.p.Run(n, d.tlsInterval, labels, d.tlsProbeFn(fmt.Sprintf("%s:%d", server.HostName, derpPort)))
-			}
-
-			for idx, ipStr := range []string{server.IPv6, server.IPv4} {
-				n = fmt.Sprintf("derp/%s/%s/udp", region.RegionCode, server.Name)
-				if idx == 0 {
-					n = n + "6"
-				}
-
-				if ipStr == "" || server.STUNPort == -1 {
-					continue
-				}
-
+			if d.tlsInterval > 0 {
+				n := fmt.Sprintf("derp/%s/%s/tls", region.RegionCode, server.Name)
 				wantProbes[n] = true
 				if d.probes[n] == nil {
-					log.Printf("adding DERP UDP probe for %s (%s)", server.Name, n)
-					d.probes[n] = d.p.Run(n, d.udpInterval, labels, d.udpProbeFn(ipStr, server.STUNPort))
+					log.Printf("adding DERP TLS probe for %s (%s) every %v", server.Name, region.RegionName, d.tlsInterval)
+					derpPort := cmp.Or(server.DERPPort, 443)
+					d.probes[n] = d.p.Run(n, d.tlsInterval, labels, d.tlsProbeFn(fmt.Sprintf("%s:%d", server.HostName, derpPort)))
+				}
+			}
+
+			if d.udpInterval > 0 {
+				for idx, ipStr := range []string{server.IPv6, server.IPv4} {
+					n := fmt.Sprintf("derp/%s/%s/udp", region.RegionCode, server.Name)
+					if idx == 0 {
+						n += "6"
+					}
+
+					if ipStr == "" || server.STUNPort == -1 {
+						continue
+					}
+
+					wantProbes[n] = true
+					if d.probes[n] == nil {
+						log.Printf("adding DERP UDP probe for %s (%s) every %v", server.Name, n, d.udpInterval)
+						d.probes[n] = d.p.Run(n, d.udpInterval, labels, d.udpProbeFn(ipStr, server.STUNPort))
+					}
 				}
 			}
 
 			for _, to := range region.Nodes {
-				n = fmt.Sprintf("derp/%s/%s/%s/mesh", region.RegionCode, server.Name, to.Name)
-				wantProbes[n] = true
-				if d.probes[n] == nil {
-					log.Printf("adding DERP mesh probe for %s->%s (%s)", server.Name, to.Name, region.RegionName)
-					d.probes[n] = d.p.Run(n, d.meshInterval, labels, d.meshProbeFn(server.HostName, to.HostName))
+				if d.meshInterval > 0 {
+					n := fmt.Sprintf("derp/%s/%s/%s/mesh", region.RegionCode, server.Name, to.Name)
+					wantProbes[n] = true
+					if d.probes[n] == nil {
+						log.Printf("adding DERP mesh probe for %s->%s (%s) every %v", server.Name, to.Name, region.RegionName, d.meshInterval)
+						d.probes[n] = d.p.Run(n, d.meshInterval, labels, d.meshProbeFn(server.Name, to.Name))
+					}
+				}
+
+				if d.bwInterval > 0 && d.bwProbeSize > 0 {
+					bwLabels := maps.Clone(labels)
+					bwLabels["probe_size_bytes"] = fmt.Sprintf("%d", d.bwProbeSize)
+					if server.Name == to.Name {
+						bwLabels["derp_path"] = "single"
+					} else {
+						bwLabels["derp_path"] = "mesh"
+					}
+					n := fmt.Sprintf("derp/%s/%s/%s/bw", region.RegionCode, server.Name, to.Name)
+					wantProbes[n] = true
+					if d.probes[n] == nil {
+						log.Printf("adding DERP bandwidth probe for %s->%s (%s) %v bytes every %v", server.Name, to.Name, region.RegionName, d.bwProbeSize, d.bwInterval)
+						d.probes[n] = d.p.Run(n, d.bwInterval, bwLabels, d.bwProbeFn(server.Name, to.Name, d.bwProbeSize))
+					}
 				}
 			}
 		}
@@ -136,26 +198,52 @@ func (d *derpProber) ProbeMap(ctx context.Context) error {
 	return nil
 }
 
+// probeMesh returs a probe func that sends a test packet through a pair of DERP
+// servers (or just one server, if 'from' and 'to' are the same). 'from' and 'to'
+// are expected to be names (DERPNode.Name) of two DERP servers in the same region.
 func (d *derpProber) probeMesh(from, to string) ProbeFunc {
 	return func(ctx context.Context) error {
-		d.Lock()
-		dm := d.lastDERPMap
-		fromN, ok := d.nodes[from]
-		if !ok {
-			d.Unlock()
-			return fmt.Errorf("could not find derp node %s", from)
+		fromN, toN, err := d.getNodePair(from, to)
+		if err != nil {
+			return err
 		}
-		toN, ok := d.nodes[to]
-		if !ok {
-			d.Unlock()
-			return fmt.Errorf("could not find derp node %s", to)
-		}
-		d.Unlock()
 
+		dm := d.lastDERPMap
 		return derpProbeNodePair(ctx, dm, fromN, toN)
 	}
 }
 
+// probeBandwidth returs a probe func that sends a payload of a given size
+// through a pair of DERP servers (or just one server, if 'from' and 'to' are
+// the same). 'from' and 'to' are expected to be names (DERPNode.Name) of two
+// DERP servers in the same region.
+func (d *derpProber) probeBandwidth(from, to string, size int64) ProbeFunc {
+	return func(ctx context.Context) error {
+		fromN, toN, err := d.getNodePair(from, to)
+		if err != nil {
+			return err
+		}
+		return derpProbeBandwidth(ctx, d.lastDERPMap, fromN, toN, size)
+	}
+}
+
+// getNodePair returns DERPNode objects for two DERP servers based on their
+// short names.
+func (d *derpProber) getNodePair(n1, n2 string) (ret1, ret2 *tailcfg.DERPNode, _ error) {
+	d.Lock()
+	defer d.Unlock()
+	ret1, ok := d.nodes[n1]
+	if !ok {
+		return nil, nil, fmt.Errorf("could not find derp node %s", n1)
+	}
+	ret2, ok = d.nodes[n2]
+	if !ok {
+		return nil, nil, fmt.Errorf("could not find derp node %s", n2)
+	}
+	return ret1, ret2, nil
+}
+
+// updateMap refreshes the locally-cached DERP map.
 func (d *derpProber) updateMap(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", d.derpMapURL, nil)
 	if err != nil {
@@ -189,13 +277,13 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 	d.nodes = make(map[string]*tailcfg.DERPNode)
 	for _, reg := range d.lastDERPMap.Regions {
 		for _, n := range reg.Nodes {
-			if existing, ok := d.nodes[n.HostName]; ok {
+			if existing, ok := d.nodes[n.Name]; ok {
 				return fmt.Errorf("derpmap has duplicate nodes: %+v and %+v", existing, n)
 			}
 			// Allow the prober to monitor nodes marked as
 			// STUN only in the default map
 			n.STUNOnly = false
-			d.nodes[n.HostName] = n
+			d.nodes[n.Name] = n
 		}
 	}
 	return nil
@@ -257,13 +345,17 @@ func derpProbeUDP(ctx context.Context, ipStr string, port int) error {
 	return nil
 }
 
-func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode) (err error) {
-	fromc, err := newConn(ctx, dm, from)
+// derpProbeBandwidth sends a payload of a given size between two local
+// DERP clients connected to two DERP servers.
+func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode, size int64) (err error) {
+	// This probe uses clients with isProber=false to avoid spamming the derper logs with every packet
+	// sent by the bandwidth probe.
+	fromc, err := newConn(ctx, dm, from, false)
 	if err != nil {
 		return err
 	}
 	defer fromc.Close()
-	toc, err := newConn(ctx, dm, to)
+	toc, err := newConn(ctx, dm, to, false)
 	if err != nil {
 		return err
 	}
@@ -276,71 +368,147 @@ func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailc
 		time.Sleep(100 * time.Millisecond) // pretty arbitrary
 	}
 
-	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc); err != nil {
+	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, size); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
 		return fmt.Errorf("%s -> %s: %w",
 			fromc.SelfPublicKey().ShortString(),
 			toc.SelfPublicKey().ShortString(), err)
 	}
-	return err
+	return nil
 }
 
-func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client) error {
-	// Make a random packet
-	pkt := make([]byte, 8)
-	crand.Read(pkt)
+// derpProbeNodePair sends a small packet between two local DERP clients
+// connected to two DERP servers.
+func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode) (err error) {
+	fromc, err := newConn(ctx, dm, from, true)
+	if err != nil {
+		return err
+	}
+	defer fromc.Close()
+	toc, err := newConn(ctx, dm, to, true)
+	if err != nil {
+		return err
+	}
+	defer toc.Close()
 
-	// Send the random packet.
-	sendc := make(chan error, 1)
-	go func() {
-		sendc <- fromc.Send(toc.SelfPublicKey(), pkt)
-	}()
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("timeout sending via %q: %w", from.Name, ctx.Err())
-	case err := <-sendc:
-		if err != nil {
-			return fmt.Errorf("error sending via %q: %w", from.Name, err)
-		}
+	// Wait a bit for from's node to hear about to existing on the
+	// other node in the region, in the case where the two nodes
+	// are different.
+	if from.Name != to.Name {
+		time.Sleep(100 * time.Millisecond) // pretty arbitrary
 	}
 
-	// Receive the random packet.
-	recvc := make(chan any, 1) // either derp.ReceivedPacket or error
+	const meshProbePacketSize = 8
+	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, meshProbePacketSize); err != nil {
+		// Record pubkeys on failed probes to aid investigation.
+		return fmt.Errorf("%s -> %s: %w",
+			fromc.SelfPublicKey().ShortString(),
+			toc.SelfPublicKey().ShortString(), err)
+	}
+	return nil
+}
+
+// probePackets stores a pregenerated slice of probe packets keyed by their total size.
+var probePackets syncs.Map[int64, [][]byte]
+
+// packetsForSize returns a slice of packet payloads with a given total size.
+func packetsForSize(size int64) [][]byte {
+	// For a small payload, create a unique random packet.
+	if size <= derp.MaxPacketSize {
+		pkt := make([]byte, size)
+		crand.Read(pkt)
+		return [][]byte{pkt}
+	}
+
+	// For a large payload, create a bunch of packets once and re-use them
+	// across probes.
+	pkts, _ := probePackets.LoadOrInit(size, func() [][]byte {
+		const packetSize = derp.MaxPacketSize
+		var pkts [][]byte
+		for remaining := size; remaining > 0; remaining -= packetSize {
+			pkt := make([]byte, min(remaining, packetSize))
+			crand.Read(pkt)
+			pkts = append(pkts, pkt)
+		}
+		return pkts
+	})
+	return pkts
+}
+
+// runDerpProbeNodePair takes two DERP clients (fromc and toc) connected to two
+// DERP servers (from and to) and sends a test payload of a given size from one
+// to another.
+func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client, size int64) error {
+	// To avoid derper dropping enqueued packets, limit the number of packets in flight.
+	// The value here is slightly smaller than perClientSendQueueDepth in derp_server.go
+	inFlight := syncs.NewSemaphore(30)
+
+	pkts := packetsForSize(size)
+
+	// Send the packets.
+	sendc := make(chan error, 1)
 	go func() {
+		for idx, pkt := range pkts {
+			inFlight.AcquireContext(ctx)
+			if err := fromc.Send(toc.SelfPublicKey(), pkt); err != nil {
+				sendc <- fmt.Errorf("sending packet %d: %w", idx, err)
+				return
+			}
+		}
+	}()
+
+	// Receive the packets.
+	recvc := make(chan error, 1)
+	go func() {
+		defer close(recvc) // to break out of 'select' below.
+		idx := 0
 		for {
 			m, err := toc.Recv()
 			if err != nil {
-				recvc <- err
+				recvc <- fmt.Errorf("after %d data packets: %w", idx, err)
 				return
 			}
 			switch v := m.(type) {
 			case derp.ReceivedPacket:
-				recvc <- v
+				inFlight.Release()
+				if v.Source != fromc.SelfPublicKey() {
+					recvc <- fmt.Errorf("got data packet %d from unexpected source, %v", idx, v.Source)
+					return
+				}
+				if got, want := v.Data, pkts[idx]; !bytes.Equal(got, want) {
+					recvc <- fmt.Errorf("unexpected data packet %d (out of %d)", idx, len(pkts))
+					return
+				}
+				idx += 1
+				if idx == len(pkts) {
+					return
+				}
+
+			case derp.KeepAliveMessage:
+				// Silently ignore.
 			default:
 				log.Printf("%v: ignoring Recv frame type %T", to.Name, v)
 				// Loop.
 			}
 		}
 	}()
+
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("timeout receiving from %q: %w", to.Name, ctx.Err())
-	case v := <-recvc:
-		if err, ok := v.(error); ok {
+		return fmt.Errorf("timeout: %w", ctx.Err())
+	case err := <-sendc:
+		if err != nil {
+			return fmt.Errorf("error sending via %q: %w", from.Name, err)
+		}
+	case err := <-recvc:
+		if err != nil {
 			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
-		}
-		p := v.(derp.ReceivedPacket)
-		if p.Source != fromc.SelfPublicKey() {
-			return fmt.Errorf("got data packet from unexpected source, %v", p.Source)
-		}
-		if !bytes.Equal(p.Data, pkt) {
-			return fmt.Errorf("unexpected data packet %q", p.Data)
 		}
 	}
 	return nil
 }
 
-func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*derphttp.Client, error) {
+func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode, isProber bool) (*derphttp.Client, error) {
 	// To avoid spamming the log with regular connection messages.
 	l := logger.Filtered(log.Printf, func(s string) bool {
 		return !strings.Contains(s, "derphttp.Client.Connect: connecting to")
@@ -355,7 +523,7 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*de
 			Nodes:      []*tailcfg.DERPNode{n},
 		}
 	})
-	dc.IsProber = true
+	dc.IsProber = isProber
 	err := dc.Connect(ctx)
 	if err != nil {
 		return nil, err
