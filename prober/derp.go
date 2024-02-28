@@ -152,9 +152,7 @@ func (d *derpProber) probeMesh(from, to string) ProbeFunc {
 		}
 		d.Unlock()
 
-		// TODO: instead of ignoring latency, export it as a separate metric.
-		_, err := derpProbeNodePair(ctx, dm, fromN, toN)
-		return err
+		return derpProbeNodePair(ctx, dm, fromN, toN)
 	}
 }
 
@@ -205,15 +203,14 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 
 func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeFunc {
 	return func(ctx context.Context) error {
-		_, err := derpProbeUDP(ctx, ipaddr, port)
-		return err
+		return derpProbeUDP(ctx, ipaddr, port)
 	}
 }
 
-func derpProbeUDP(ctx context.Context, ipStr string, port int) (latency time.Duration, err error) {
+func derpProbeUDP(ctx context.Context, ipStr string, port int) error {
 	pc, err := net.ListenPacket("udp", ":0")
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer pc.Close()
 	uc := pc.(*net.UDPConn)
@@ -228,7 +225,7 @@ func derpProbeUDP(ctx context.Context, ipStr string, port int) (latency time.Dur
 		ip := net.ParseIP(ipStr)
 		_, err := uc.WriteToUDP(req, &net.UDPAddr{IP: ip, Port: port})
 		if err != nil {
-			return 0, err
+			return err
 		}
 		// Binding requests and responses are fairly small (~40 bytes),
 		// but in practice a STUN response can be up to the size of the
@@ -240,38 +237,35 @@ func derpProbeUDP(ctx context.Context, ipStr string, port int) (latency time.Dur
 		d := time.Since(t0)
 		if err != nil {
 			if ctx.Err() != nil {
-				return 0, fmt.Errorf("timeout reading from %v: %v", ip, err)
+				return fmt.Errorf("timeout reading from %v: %v", ip, err)
 			}
 			if d < time.Second {
-				return 0, fmt.Errorf("error reading from %v: %v", ip, err)
+				return fmt.Errorf("error reading from %v: %v", ip, err)
 			}
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		txBack, _, err := stun.ParseResponse(buf[:n])
 		if err != nil {
-			return 0, fmt.Errorf("parsing STUN response from %v: %v", ip, err)
+			return fmt.Errorf("parsing STUN response from %v: %v", ip, err)
 		}
 		if txBack != tx {
-			return 0, fmt.Errorf("read wrong tx back from %v", ip)
-		}
-		if latency == 0 || d < latency {
-			latency = d
+			return fmt.Errorf("read wrong tx back from %v", ip)
 		}
 		break
 	}
-	return latency, nil
+	return nil
 }
 
-func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode) (latency time.Duration, err error) {
+func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode) (err error) {
 	fromc, err := newConn(ctx, dm, from)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer fromc.Close()
 	toc, err := newConn(ctx, dm, to)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer toc.Close()
 
@@ -282,22 +276,19 @@ func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailc
 		time.Sleep(100 * time.Millisecond) // pretty arbitrary
 	}
 
-	latency, err = runDerpProbeNodePair(ctx, from, to, fromc, toc)
-	if err != nil {
+	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
-		err = fmt.Errorf("%s -> %s: %w",
+		return fmt.Errorf("%s -> %s: %w",
 			fromc.SelfPublicKey().ShortString(),
 			toc.SelfPublicKey().ShortString(), err)
 	}
-	return latency, err
+	return err
 }
 
-func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client) (latency time.Duration, err error) {
+func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client) error {
 	// Make a random packet
 	pkt := make([]byte, 8)
 	crand.Read(pkt)
-
-	t0 := time.Now()
 
 	// Send the random packet.
 	sendc := make(chan error, 1)
@@ -306,10 +297,10 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 	}()
 	select {
 	case <-ctx.Done():
-		return 0, fmt.Errorf("timeout sending via %q: %w", from.Name, ctx.Err())
+		return fmt.Errorf("timeout sending via %q: %w", from.Name, ctx.Err())
 	case err := <-sendc:
 		if err != nil {
-			return 0, fmt.Errorf("error sending via %q: %w", from.Name, err)
+			return fmt.Errorf("error sending via %q: %w", from.Name, err)
 		}
 	}
 
@@ -333,20 +324,20 @@ func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc
 	}()
 	select {
 	case <-ctx.Done():
-		return 0, fmt.Errorf("timeout receiving from %q: %w", to.Name, ctx.Err())
+		return fmt.Errorf("timeout receiving from %q: %w", to.Name, ctx.Err())
 	case v := <-recvc:
 		if err, ok := v.(error); ok {
-			return 0, fmt.Errorf("error receiving from %q: %w", to.Name, err)
+			return fmt.Errorf("error receiving from %q: %w", to.Name, err)
 		}
 		p := v.(derp.ReceivedPacket)
 		if p.Source != fromc.SelfPublicKey() {
-			return 0, fmt.Errorf("got data packet from unexpected source, %v", p.Source)
+			return fmt.Errorf("got data packet from unexpected source, %v", p.Source)
 		}
 		if !bytes.Equal(p.Data, pkt) {
-			return 0, fmt.Errorf("unexpected data packet %q", p.Data)
+			return fmt.Errorf("unexpected data packet %q", p.Data)
 		}
 	}
-	return time.Since(t0), nil
+	return nil
 }
 
 func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*derphttp.Client, error) {
