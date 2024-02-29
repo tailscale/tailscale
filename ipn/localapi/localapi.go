@@ -110,6 +110,7 @@ var handler = map[string]localAPIHandler{
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
+	"set-gui-visible":             (*Handler).serveSetGUIVisible,
 	"tailfs/fileserver-address":   (*Handler).serveTailFSFileServerAddr,
 	"tailfs/shares":               (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
@@ -1902,6 +1903,27 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(j)
+}
+
+func (h *Handler) serveSetGUIVisible(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type setGUIVisibleRequest struct {
+		IsVisible bool   // whether the Tailscale client UI is now presented to the user
+		SessionID string // the last SessionID sent to the client in ipn.Notify.SessionID
+	}
+	var req setGUIVisibleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	// TODO(bradfitz): use `req.IsVisible == true` to flush netmap
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {
