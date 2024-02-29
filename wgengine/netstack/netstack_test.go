@@ -580,6 +580,13 @@ func TestTCPForwardLimits(t *testing.T) {
 		t.Logf("got connection in progress")
 	}
 
+	// Inject another packet, which will be deduplicated and thus not
+	// increment our counter.
+	parsed.Decode(pkt)
+	if resp := impl.injectInbound(&parsed, impl.tundev); resp != filter.DropSilently {
+		t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
+	}
+
 	// Verify that we now have a single in-flight address in our map.
 	impl.mu.Lock()
 	inFlight := maps.Clone(impl.connsInFlightByClient)
@@ -633,8 +640,11 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 	destAddr := netip.MustParseAddr("192.0.2.1")
 
 	// Helpers
+	var port uint16 = 1234
 	mustInjectPacket := func() {
-		pkt := tcp4syn(t, client, destAddr, 1234, 4567)
+		pkt := tcp4syn(t, client, destAddr, port, 4567)
+		port++ // to avoid deduplication based on endpoint
+
 		var parsed packet.Parsed
 		parsed.Decode(pkt)
 
