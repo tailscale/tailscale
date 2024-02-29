@@ -665,6 +665,7 @@ func (up *Updater) updateAlpineLike() (err error) {
 
 func parseAlpinePackageVersion(out []byte) (string, error) {
 	s := bufio.NewScanner(bytes.NewReader(out))
+	var maxVer string
 	for s.Scan() {
 		// The line should look like this:
 		// tailscale-1.44.2-r0 description:
@@ -676,7 +677,13 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 		if len(parts) < 3 {
 			return "", fmt.Errorf("malformed info line: %q", line)
 		}
-		return parts[1], nil
+		ver := parts[1]
+		if cmpver.Compare(ver, maxVer) == 1 {
+			maxVer = ver
+		}
+	}
+	if maxVer != "" {
+		return maxVer, nil
 	}
 	return "", errors.New("tailscale version not found in output")
 }
