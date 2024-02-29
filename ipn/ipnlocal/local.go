@@ -308,6 +308,10 @@ type LocalBackend struct {
 
 	// Last ClientVersion received in MapResponse, guarded by mu.
 	lastClientVersion *tailcfg.ClientVersion
+
+	// notifyTailFSSharesOnce is used to only send one initial notification
+	// with the latest set of TailFS shares.
+	notifyTailFSSharesOnce sync.Once
 }
 
 type updateStatus struct {
@@ -431,9 +435,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	// initialize TailFS shares from saved state
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if ok {
-		b.mu.Lock()
-		shares, err := b.tailFSGetSharesLocked()
-		b.mu.Unlock()
+		shares, err := b.TailFSGetShares()
 		if err == nil && len(shares) > 0 {
 			fs.SetShares(shares)
 		}
@@ -2283,7 +2285,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 			ini.NetMap = b.netMap
 		}
 		if mask&ipn.NotifyInitialTailFSShares != 0 && b.tailFSSharingEnabledLocked() {
-			shares, err := b.tailFSGetSharesLocked()
+			shares, err := b.TailFSGetShares()
 			if err != nil {
 				b.logf("unable to notify initial tailfs shares: %v", err)
 			} else {
@@ -4669,7 +4671,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	if b.tailFSSharingEnabledLocked() {
 		b.updateTailFSPeersLocked(nm)
-		b.tailFSNotifyCurrentSharesLocked()
+		b.tailFSNotifyCurrentSharesOnce()
 	}
 }
 
