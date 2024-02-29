@@ -22,6 +22,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
 	"tailscale.com/paths"
 	"tailscale.com/version/distro"
@@ -197,6 +198,7 @@ change in the future.
 			whoisCmd,
 			debugCmd,
 			driveCmd,
+			idTokenCmd,
 		},
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
@@ -205,11 +207,6 @@ change in the future.
 			}
 			return flag.ErrHelp
 		},
-	}
-	if envknob.UseWIPCode() {
-		rootCmd.Subcommands = append(rootCmd.Subcommands,
-			idTokenCmd,
-		)
 	}
 
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
@@ -222,6 +219,8 @@ change in the future.
 		}
 		return true
 	})
+
+	ffcomplete.Inject(rootCmd, func(c *ffcli.Command) { c.LongHelp = hidden + c.LongHelp }, usageFunc)
 	return rootCmd
 }
 
@@ -303,9 +302,12 @@ func usageFunc(c *ffcli.Command) string {
 	return usageFuncOpt(c, true)
 }
 
+// hidden is the prefix that hides subcommands and flags from --help output when
+// found at the start of the subcommand's LongHelp or flag's Usage.
+const hidden = "HIDDEN: "
+
 func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 	var b strings.Builder
-	const hiddenPrefix = "HIDDEN: "
 
 	if c.ShortHelp != "" {
 		fmt.Fprintf(&b, "%s\n\n", c.ShortHelp)
@@ -319,8 +321,7 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 	}
 	fmt.Fprintf(&b, "\n")
 
-	if c.LongHelp != "" {
-		help, _ := strings.CutPrefix(c.LongHelp, hiddenPrefix)
+	if help := strings.TrimPrefix(c.LongHelp, hidden); help != "" {
 		fmt.Fprintf(&b, "%s\n\n", help)
 	}
 
@@ -328,7 +329,7 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 		fmt.Fprintf(&b, "SUBCOMMANDS\n")
 		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
 		for _, subcommand := range c.Subcommands {
-			if strings.HasPrefix(subcommand.LongHelp, hiddenPrefix) {
+			if strings.HasPrefix(subcommand.LongHelp, hidden) {
 				continue
 			}
 			fmt.Fprintf(tw, "  %s\t%s\n", subcommand.Name, subcommand.ShortHelp)
@@ -343,7 +344,7 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 		c.FlagSet.VisitAll(func(f *flag.Flag) {
 			var s string
 			name, usage := flag.UnquoteUsage(f)
-			if strings.HasPrefix(usage, hiddenPrefix) {
+			if strings.HasPrefix(usage, hidden) {
 				return
 			}
 			if isBoolFlag(f) {

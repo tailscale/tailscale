@@ -24,9 +24,9 @@ import (
 var configureHostCmd = &ffcli.Command{
 	Name:       "configure-host",
 	Exec:       runConfigureSynology,
-	ShortUsage: "tailscale configure-host",
+	ShortUsage: "tailscale configure-host\n" + synologyConfigureCmd.ShortUsage,
 	ShortHelp:  synologyConfigureCmd.ShortHelp,
-	LongHelp:   synologyConfigureCmd.LongHelp,
+	LongHelp:   hidden + synologyConfigureCmd.LongHelp,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("configure-host")
 		return fs

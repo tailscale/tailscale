@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"net/netip"
 	"os/exec"
+	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/web"
 	"tailscale.com/clientupdate"
+	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -74,8 +76,23 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.advertiseConnector, "advertise-connector", false, "offer to be an app connector for domain specific internet traffic for the tailnet")
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
-	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "HIDDEN: allow management plane to gather device posture information")
+	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
+
+	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
+		st, err := localClient.Status(context.Background())
+		if err != nil {
+			return nil, 0, err
+		}
+		nodes := make([]string, 0, len(st.Peer))
+		for _, node := range st.Peer {
+			if !node.ExitNodeOption {
+				continue
+			}
+			nodes = append(nodes, strings.TrimSuffix(node.DNSName, "."))
+		}
+		return nodes, ffcomplete.ShellCompDirectiveNoFileComp, nil
+	})
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
