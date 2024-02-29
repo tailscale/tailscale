@@ -347,6 +347,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		NetMon:           e.netMon,
 		ControlKnobs:     conf.ControlKnobs,
 		OnPortUpdate:     onPortUpdate,
+		PeerByKeyFunc:    e.PeerByKey,
 	}
 
 	var err error
