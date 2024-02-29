@@ -18,6 +18,8 @@ spec:
       value: "{{TS_KUBE_SECRET}}"
     - name: TS_USERSPACE
       value: "false"
+    - name: TS_DEBUG_FIREWALL_MODE
+      value: auto
     - name: TS_AUTHKEY
       valueFrom:
         secretKeyRef:
