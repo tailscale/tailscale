@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"regexp"
 	"strings"
@@ -115,7 +114,7 @@ func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]*ta
 		return nil, errors.New("tailfs not enabled")
 	}
 
-	shares, err := b.tailFSGetSharesLocked()
+	shares, err := b.TailFSGetShares()
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +129,7 @@ func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]*ta
 	}
 	fs.SetShares(shares)
 
-	return maps.Clone(shares), nil
+	return shares, nil
 }
 
 // TailFSRemoveShare removes the named share. Share names are forced to
@@ -161,7 +160,7 @@ func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]*tailfs.
 		return nil, errors.New("tailfs not enabled")
 	}
 
-	shares, err := b.tailFSGetSharesLocked()
+	shares, err := b.TailFSGetShares()
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +179,7 @@ func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]*tailfs.
 	}
 	fs.SetShares(shares)
 
-	return maps.Clone(shares), nil
+	return shares, nil
 }
 
 // tailfsNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
@@ -189,28 +188,24 @@ func (b *LocalBackend) tailfsNotifyShares(shares map[string]*tailfs.Share) {
 	b.send(ipn.Notify{TailFSShares: shares})
 }
 
-// tailFSNotifyCurrentSharesLocked sends an ipn.Notify with the current set of
-// TailFS shares.
-func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
-	shares, err := b.tailFSGetSharesLocked()
-	if err != nil {
-		b.logf("error notifying current tailfs shares: %v", err)
-		return
-	}
-	// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
-	go b.tailfsNotifyShares(maps.Clone(shares))
+// tailFSNotifyCurrentSharesOnce sends a one-time ipn.Notify with the current
+// set of TailFS shares.
+func (b *LocalBackend) tailFSNotifyCurrentSharesOnce() {
+	b.notifyTailFSSharesOnce.Do(func() {
+		shares, err := b.TailFSGetShares()
+		if err != nil {
+			b.logf("error notifying current tailfs shares: %v", err)
+			return
+		}
+		// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
+		go b.tailfsNotifyShares(shares)
+	})
 }
 
 // TailFSGetShares returns the current set of shares from the state store,
-// stored under ipn.StateKey("_tailfs-shares").
+// stored under ipn.StateKey("_tailfs-shares"). The caller owns this map and
+// is free to mutate it.
 func (b *LocalBackend) TailFSGetShares() (map[string]*tailfs.Share, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.tailFSGetSharesLocked()
-}
-
-func (b *LocalBackend) tailFSGetSharesLocked() (map[string]*tailfs.Share, error) {
 	data, err := b.store.ReadState(tailfsSharesStateKey)
 	if err != nil {
 		if errors.Is(err, ipn.ErrStateNotExist) {
