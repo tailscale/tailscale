@@ -173,7 +173,7 @@ func (n *nftablesRunner) DNATNonTailscaleTraffic(tunname string, dst netip.Addr)
 			},
 		},
 	}
-	n.conn.AddRule(dnatRule)
+	n.conn.InsertRule(dnatRule)
 	return n.conn.Flush()
 }
 
