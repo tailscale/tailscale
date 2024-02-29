@@ -37,7 +37,7 @@ while [ "$#" -gt 1 ]; do
 	--extra-small)
 		shift
 		ldflags="$ldflags -w -s"
-		tags="${tags:+$tags,}ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube"
+		tags="${tags:+$tags,}ts_omit_aws,ts_omit_bird,ts_omit_tap,ts_omit_kube,ts_omit_completion"
 		;;
 	--box)
 		shift
