@@ -3,8 +3,6 @@
 
 set -eu
 
-REV=$(cat go.toolchain.rev)
-
 OUT=$(mktemp -d -t nar-hash-XXXXXX)
 rm -rf $OUT
 
