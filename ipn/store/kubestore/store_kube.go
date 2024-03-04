@@ -7,6 +7,7 @@ package kubestore
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -100,6 +101,19 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 		return err
 	}
 	if s.canPatch {
+		if len(secret.Data) == 0 { // if user has pre-created a blank Secret
+			m := []kube.JSONPatch{
+				{
+					Op:    "add",
+					Path:  "/data",
+					Value: map[string][]byte{sanitizeKey(id): bs},
+				},
+			}
+			if err := s.client.JSONPatchSecret(ctx, s.secretName, m); err != nil {
+				return fmt.Errorf("error patching Secret %s with a /data field: %v", s.secretName, err)
+			}
+			return nil
+		}
 		m := []kube.JSONPatch{
 			{
 				Op:    "add",
@@ -108,7 +122,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 			},
 		}
 		if err := s.client.JSONPatchSecret(ctx, s.secretName, m); err != nil {
-			return err
+			return fmt.Errorf("error patching Secret %s with /data/%s field", s.secretName, sanitizeKey(id))
 		}
 		return nil
 	}

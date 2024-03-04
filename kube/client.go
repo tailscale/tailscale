@@ -240,7 +240,7 @@ func (c *client) UpdateSecret(ctx context.Context, s *Secret) error {
 }
 
 // JSONPatch is a JSON patch operation.
-// It currently (2023-03-02) only supports the "remove" operation.
+// It currently (2023-03-02) only supports "add" and "remove" operations.
 //
 // https://tools.ietf.org/html/rfc6902
 type JSONPatch struct {
@@ -278,7 +278,7 @@ func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *
 
 // CheckSecretPermissions checks the secret access permissions of the current
 // pod. It returns an error if the basic permissions tailscale needs are
-// missing, and reports whether the patch permission is additionally present.
+// missing, and reports whether the patch and create permissions are additionally present.
 //
 // Errors encountered during the access checking process are logged, but ignored
 // so that the pod tries to fail alive if the permissions exist and there's just
