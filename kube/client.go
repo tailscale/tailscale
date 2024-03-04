@@ -338,3 +338,10 @@ func (c *client) checkPermission(ctx context.Context, verb, secretName string) (
 	}
 	return res.Status.Allowed, nil
 }
+
+func IsNotFoundErr(err error) bool {
+	if st, ok := err.(*Status); ok && st.Code == 404 {
+		return true
+	}
+	return false
+}

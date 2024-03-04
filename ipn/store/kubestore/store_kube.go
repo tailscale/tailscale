@@ -83,7 +83,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
-		if st, ok := err.(*kube.Status); ok && st.Code == 404 {
+		if kube.IsNotFoundErr(err) {
 			return s.client.CreateSecret(ctx, &kube.Secret{
 				TypeMeta: kube.TypeMeta{
 					APIVersion: "v1",
