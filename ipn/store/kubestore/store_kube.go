@@ -18,7 +18,7 @@ import (
 
 // Store is an ipn.StateStore that uses a Kubernetes Secret for persistence.
 type Store struct {
-	client     *kube.Client
+	client     kube.Client
 	canPatch   bool
 	secretName string
 }
@@ -29,7 +29,7 @@ func New(_ logger.Logf, secretName string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	canPatch, err := c.CheckSecretPermissions(context.Background(), secretName)
+	canPatch, _, err := c.CheckSecretPermissions(context.Background(), secretName)
 	if err != nil {
 		return nil, err
 	}
