@@ -1747,6 +1747,19 @@ func TestBetterAddr(t *testing.T) {
 			b:    al("192.168.0.1:555", 100*ms),
 			want: false,
 		},
+
+		// Link-local unicast addresses are preferred over other
+		// private IPs, but not as much as localhost addresses.
+		{
+			a:    al("[fe80::ce8:474a:a27e:113b]:555", 101*ms),
+			b:    al("[fd89:1a8a:8888:9999:aaaa:bbbb:cccc:dddd]:555", 100*ms),
+			want: true,
+		},
+		{
+			a:    al("[fe80::ce8:474a:a27e:113b]:555", 101*ms),
+			b:    al("[::1]:555", 100*ms),
+			want: false,
+		},
 	}
 	for i, tt := range tests {
 		got := betterAddr(tt.a, tt.b)
