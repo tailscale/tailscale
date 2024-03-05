@@ -2214,6 +2214,10 @@ const (
 
 	// NodeAttrsTailFSAccess enables accessing shares via TailFS.
 	NodeAttrsTailFSAccess NodeCapability = "tailfs:access"
+
+	// NodeAttrsSuggestExitNode is applied to each exit node which the control plane has determined
+	// is a recommended exit node.
+	NodeAttrsSuggestExitNode NodeCapability = "suggest-exit-node"
 )
 
 // SetDNSRequest is a request to add a DNS record.
