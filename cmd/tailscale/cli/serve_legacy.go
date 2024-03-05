@@ -642,6 +642,9 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 // Examples:
 //   - tailscale status
 //   - tailscale status --json
+//
+// TODO(tyler,marwan,sonia): `status` should also report foreground configs,
+// currently only reports background config.
 func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 	sc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
