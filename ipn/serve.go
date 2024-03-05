@@ -15,6 +15,7 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/mak"
 )
 
 // ServeConfigKey returns a StateKey that stores the
@@ -251,6 +252,111 @@ func (sc *ServeConfig) FindConfig(port uint16) (*ServeConfig, bool) {
 		}
 	}
 	return nil, false
+}
+
+// SetWebHandler sets the given HTTPHandler at the specified host, port,
+// and mount in the serve config. sc.TCP is also updated to reflect web
+// serving usage of the given port.
+func (sc *ServeConfig) SetWebHandler(handler *HTTPHandler, host string, port uint16, mount string, useTLS bool) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+	mak.Set(&sc.TCP, port, &TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
+
+	hp := HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
+	if _, ok := sc.Web[hp]; !ok {
+		mak.Set(&sc.Web, hp, new(WebServerConfig))
+	}
+	mak.Set(&sc.Web[hp].Handlers, mount, handler)
+
+	// TODO(tylersmalley): handle multiple web handlers from foreground mode
+	for k, v := range sc.Web[hp].Handlers {
+		if v == handler {
+			continue
+		}
+		// If the new mount point ends in / and another mount point
+		// shares the same prefix, remove the other handler.
+		// (e.g. /foo/ overwrites /foo)
+		// The opposite example is also handled.
+		m1 := strings.TrimSuffix(mount, "/")
+		m2 := strings.TrimSuffix(k, "/")
+		if m1 == m2 {
+			delete(sc.Web[hp].Handlers, k)
+		}
+	}
+}
+
+// SetTCPForwarding sets the fwdAddr (IP:port form) to which to forward
+// connections from the given port. If terminateTLS is true, TLS connections
+// are terminated with only the given host name permitted before passing them
+// to the fwdAddr.
+func (sc *ServeConfig) SetTCPForwarding(port uint16, fwdAddr string, terminateTLS bool, host string) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+	mak.Set(&sc.TCP, port, &TCPPortHandler{TCPForward: fwdAddr})
+	if terminateTLS {
+		sc.TCP[port].TerminateTLS = host
+	}
+}
+
+// SetFunnel sets the sc.AllowFunnel value for the given host and port.
+func (sc *ServeConfig) SetFunnel(host string, port uint16, setOn bool) {
+	if sc == nil {
+		sc = new(ServeConfig)
+	}
+	hp := HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
+
+	// TODO(tylersmalley): should ensure there is no other conflicting funnel
+	// TODO(tylersmalley): add error handling for if toggling for existing sc
+	if setOn {
+		mak.Set(&sc.AllowFunnel, hp, true)
+	} else if _, exists := sc.AllowFunnel[hp]; exists {
+		delete(sc.AllowFunnel, hp)
+		// Clear map mostly for testing.
+		if len(sc.AllowFunnel) == 0 {
+			sc.AllowFunnel = nil
+		}
+	}
+}
+
+// RemoveWebHandler deletes the web handlers at all of the given mount points
+// for the provided host and port in the serve config. If cleanupFunnel is
+// true, this also removes the funnel value for this port if no handlers remain.
+func (sc *ServeConfig) RemoveWebHandler(host string, port uint16, mounts []string, cleanupFunnel bool) {
+	hp := HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
+
+	// Delete existing handler, then cascade delete if empty.
+	for _, m := range mounts {
+		delete(sc.Web[hp].Handlers, m)
+	}
+	if len(sc.Web[hp].Handlers) == 0 {
+		delete(sc.Web, hp)
+		delete(sc.TCP, port)
+		if cleanupFunnel {
+			delete(sc.AllowFunnel, hp) // disable funnel if no mounts remain for the port
+		}
+	}
+
+	// Clear empty maps, mostly for testing.
+	if len(sc.Web) == 0 {
+		sc.Web = nil
+	}
+	if len(sc.TCP) == 0 {
+		sc.TCP = nil
+	}
+	if len(sc.AllowFunnel) == 0 {
+		sc.AllowFunnel = nil
+	}
+}
+
+// RemoveTCPForwarding deletes the TCP forwarding configuration for the given
+// port from the serve config.
+func (sc *ServeConfig) RemoveTCPForwarding(port uint16) {
+	delete(sc.TCP, port)
+	if len(sc.TCP) == 0 {
+		sc.TCP = nil
+	}
 }
 
 // IsFunnelOn reports whether if ServeConfig is currently allowing funnel

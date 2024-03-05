@@ -528,29 +528,7 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		return errors.New("cannot serve web; already serving TCP")
 	}
 
-	mak.Set(&sc.TCP, srvPort, &ipn.TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
-
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-	if _, ok := sc.Web[hp]; !ok {
-		mak.Set(&sc.Web, hp, new(ipn.WebServerConfig))
-	}
-	mak.Set(&sc.Web[hp].Handlers, mount, h)
-
-	// TODO: handle multiple web handlers from foreground mode
-	for k, v := range sc.Web[hp].Handlers {
-		if v == h {
-			continue
-		}
-		// If the new mount point ends in / and another mount point
-		// shares the same prefix, remove the other handler.
-		// (e.g. /foo/ overwrites /foo)
-		// The opposite example is also handled.
-		m1 := strings.TrimSuffix(mount, "/")
-		m2 := strings.TrimSuffix(k, "/")
-		if m1 == m2 {
-			delete(sc.Web[hp].Handlers, k)
-		}
-	}
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
 
 	return nil
 }
@@ -581,11 +559,7 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
-	mak.Set(&sc.TCP, srcPort, &ipn.TCPPortHandler{TCPForward: dstURL.Host})
-
-	if terminateTLS {
-		sc.TCP[srcPort].TerminateTLS = dnsName
-	}
+	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, dnsName)
 
 	return nil
 }
@@ -599,14 +573,10 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 		sc = new(ipn.ServeConfig)
 	}
 
-	// TODO: should ensure there is no other conflicting funnel
-	// TODO: add error handling for if toggling for existing sc
-	if allowFunnel {
-		mak.Set(&sc.AllowFunnel, hp, true)
-	} else if _, exists := sc.AllowFunnel[hp]; exists {
-		fmt.Fprintf(e.stderr(), "Removing Funnel for %s\n", hp)
-		delete(sc.AllowFunnel, hp)
+	if _, exists := sc.AllowFunnel[hp]; exists && !allowFunnel {
+		fmt.Fprintf(e.stderr(), "Removing Funnel for %s:%s\n", dnsName, hp)
 	}
+	sc.SetFunnel(dnsName, srvPort, allowFunnel)
 }
 
 // unsetServe removes the serve config for the given serve port.
@@ -795,34 +765,7 @@ func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort u
 		}
 	}
 
-	// delete existing handler, then cascade delete if empty
-	for _, m := range mounts {
-		delete(sc.Web[hp].Handlers, m)
-	}
-	if len(sc.Web[hp].Handlers) == 0 {
-		delete(sc.Web, hp)
-		delete(sc.AllowFunnel, hp)
-		delete(sc.TCP, srvPort)
-	}
-
-	// clear empty maps mostly for testing
-	if len(sc.Web) == 0 {
-		sc.Web = nil
-	}
-
-	if len(sc.TCP) == 0 {
-		sc.TCP = nil
-	}
-
-	// disable funnel if no remaining mounts exist for the serve port
-	if sc.Web == nil && sc.TCP == nil {
-		delete(sc.AllowFunnel, hp)
-	}
-
-	if len(sc.AllowFunnel) == 0 {
-		sc.AllowFunnel = nil
-	}
-
+	sc.RemoveWebHandler(dnsName, srvPort, mounts, true)
 	return nil
 }
 
@@ -838,11 +781,7 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 	if sc.IsServingWeb(src) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
-	delete(sc.TCP, src)
-	// clear map mostly for testing
-	if len(sc.TCP) == 0 {
-		sc.TCP = nil
-	}
+	sc.RemoveTCPForwarding(src)
 	return nil
 }
 

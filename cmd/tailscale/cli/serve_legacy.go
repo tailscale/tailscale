@@ -27,7 +27,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/mak"
 	"tailscale.com/version"
 )
 
@@ -357,35 +356,12 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 	if err != nil {
 		return err
 	}
-	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
-
 	if sc.IsTCPForwardingOnPort(srvPort) {
 		fmt.Fprintf(os.Stderr, "error: cannot serve web; already serving TCP\n")
 		return errHelp
 	}
 
-	mak.Set(&sc.TCP, srvPort, &ipn.TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
-
-	if _, ok := sc.Web[hp]; !ok {
-		mak.Set(&sc.Web, hp, new(ipn.WebServerConfig))
-	}
-	mak.Set(&sc.Web[hp].Handlers, mount, h)
-
-	for k, v := range sc.Web[hp].Handlers {
-		if v == h {
-			continue
-		}
-		// If the new mount point ends in / and another mount point
-		// shares the same prefix, remove the other handler.
-		// (e.g. /foo/ overwrites /foo)
-		// The opposite example is also handled.
-		m1 := strings.TrimSuffix(mount, "/")
-		m2 := strings.TrimSuffix(k, "/")
-		if m1 == m2 {
-			delete(sc.Web[hp].Handlers, k)
-			continue
-		}
-	}
+	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS)
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
@@ -444,19 +420,7 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, srvPort uint16, mou
 	if !sc.WebHandlerExists(hp, mount) {
 		return errors.New("error: handler does not exist")
 	}
-	// delete existing handler, then cascade delete if empty
-	delete(sc.Web[hp].Handlers, mount)
-	if len(sc.Web[hp].Handlers) == 0 {
-		delete(sc.Web, hp)
-		delete(sc.TCP, srvPort)
-	}
-	// clear empty maps mostly for testing
-	if len(sc.Web) == 0 {
-		sc.Web = nil
-	}
-	if len(sc.TCP) == 0 {
-		sc.TCP = nil
-	}
+	sc.RemoveWebHandler(dnsName, srvPort, []string{mount}, false)
 	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 		return err
 	}
@@ -592,15 +556,12 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 		return fmt.Errorf("cannot serve TCP; already serving web on %d", srcPort)
 	}
 
-	mak.Set(&sc.TCP, srcPort, &ipn.TCPPortHandler{TCPForward: fwdAddr})
-
 	dnsName, err := e.getSelfDNSName(ctx)
 	if err != nil {
 		return err
 	}
-	if terminateTLS {
-		sc.TCP[srcPort].TerminateTLS = dnsName
-	}
+
+	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, dnsName)
 
 	if !reflect.DeepEqual(cursc, sc) {
 		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
@@ -626,11 +587,7 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
 	if ph := sc.GetTCPPortHandler(src); ph != nil {
-		delete(sc.TCP, src)
-		// clear map mostly for testing
-		if len(sc.TCP) == 0 {
-			sc.TCP = nil
-		}
+		sc.RemoveTCPForwarding(src)
 		return e.lc.SetServeConfig(ctx, sc)
 	}
 	return errors.New("error: serve config does not exist")
