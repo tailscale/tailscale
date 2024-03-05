@@ -15,7 +15,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/mak"
 )
 
 var funnelCmd = func() *ffcli.Command {
@@ -114,15 +113,8 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 		// Nothing to do.
 		return nil
 	}
-	if on {
-		mak.Set(&sc.AllowFunnel, hp, true)
-	} else {
-		delete(sc.AllowFunnel, hp)
-		// clear map mostly for testing
-		if len(sc.AllowFunnel) == 0 {
-			sc.AllowFunnel = nil
-		}
-	}
+	sc.SetFunnel(dnsName, port, on)
+
 	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 		return err
 	}
