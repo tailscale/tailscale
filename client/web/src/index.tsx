@@ -13,6 +13,7 @@ import { createRoot } from "react-dom/client"
 import { swrConfig } from "src/api"
 import App from "src/components/app"
 import ToastProvider from "src/ui/toaster"
+import Tooltip from "src/ui/tooltip"
 import { SWRConfig } from "swr"
 
 declare var window: any
@@ -29,9 +30,11 @@ const root = createRoot(rootEl)
 root.render(
   <React.StrictMode>
     <SWRConfig value={swrConfig}>
-      <ToastProvider>
-        <App />
-      </ToastProvider>
+      <Tooltip.Provider>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </Tooltip.Provider>
     </SWRConfig>
   </React.StrictMode>
 )

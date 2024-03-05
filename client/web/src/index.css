@@ -193,6 +193,22 @@
   }
 
   /**
+   * .radio applies default styles to input[type="radio"] form elements.
+   */
+
+  .radio {
+    @apply appearance-none w-4 h-4 rounded-full border border-gray-300 shrink-0 shadow-form;
+  }
+
+  .radio:checked {
+    @apply border-blue-500 border-[5px];
+  }
+
+  .radio:focus {
+    @apply focus-visible:ring focus-visible:outline-none;
+  }
+
+  /**
    * .toggle applies "Toggle" UI styles to input[type="checkbox"] form elements.
    * You can use the -large and -small modifiers for size variants.
    */
@@ -454,6 +470,40 @@
 
   .link-underline:hover {
     @apply opacity-75;
+  }
+
+  /**
+   * .dropdown applies styles for the dropdown-menu.tsx component.
+   */
+
+  .dropdown {
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+    box-shadow: 0 0 0 1px rgba(136, 152, 170, 0.1),
+      0 15px 35px 0 rgba(49, 49, 93, 0.1), 0 5px 15px 0 rgba(0, 0, 0, 0.08);
+  }
+
+  .dropdown[data-state="open"] {
+    @apply animate-scale-in;
+  }
+
+  .dropdown[data-state="closed"] {
+    @apply animate-scale-out;
+  }
+
+  /**
+   * .tooltip wraps all the styles for hover tooltips
+   */
+
+   .tooltip {
+    @apply flex flex-col gap-2;
+    @apply font-sans font-normal tracking-normal normal-case text-gray-700;
+    @apply rounded-md border border-gray-300/75 bg-gray-0 px-3 py-2;
+    @apply z-50 max-w-[18rem] text-[0.8rem];
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.04);
+  }
+
+  .tooltip code {
+    @apply text-xs;
   }
 }
 

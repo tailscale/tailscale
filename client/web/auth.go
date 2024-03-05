@@ -281,6 +281,8 @@ const (
 	capFeatureSSH       capFeature = "ssh"       // grants peer SSH server management
 	capFeatureSubnets   capFeature = "subnets"   // grants peer subnet routes management
 	capFeatureExitNodes capFeature = "exitnodes" // grants peer ability to advertise-as and use exit nodes
+	capFeatureServe     capFeature = "serve"     // grants peer ability to share resources over Tailscale Serve
+	capFeatureFunnel    capFeature = "funnel"    // grants peer ability to share resources over Tailscale Funnel
 	capFeatureAccount   capFeature = "account"   // grants peer ability to turn on auto updates and log out of node
 )
 
@@ -292,6 +294,8 @@ var validCaps []capFeature = []capFeature{
 	capFeatureSSH,
 	capFeatureSubnets,
 	capFeatureExitNodes,
+	capFeatureServe,
+	capFeatureFunnel,
 	capFeatureAccount,
 }
 

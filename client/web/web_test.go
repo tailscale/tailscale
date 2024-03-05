@@ -99,8 +99,8 @@ func TestServeAPI(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t,
-		map[string]*apitype.WhoIsResponse{
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{
+		whoIs: map[string]*apitype.WhoIsResponse{
 			remoteIPWithAllCapabilities: {
 				Node:        &tailcfg.Node{StableID: "node1"},
 				UserProfile: remoteUser,
@@ -111,10 +111,9 @@ func TestServeAPI(t *testing.T) {
 				UserProfile: remoteUser,
 			},
 		},
-		func() *ipnstate.PeerStatus { return self },
-		func() *ipn.Prefs { return prefs },
-		nil,
-	)
+		self:  func() *ipnstate.PeerStatus { return self },
+		prefs: func() *ipn.Prefs { return prefs },
+	})
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -282,7 +281,10 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t, tailnetNodes, func() *ipnstate.PeerStatus { return selfNode }, nil, nil)
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{
+		whoIs: tailnetNodes,
+		self:  func() *ipnstate.PeerStatus { return selfNode },
+	})
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -446,12 +448,10 @@ func TestAuthorizeRequest(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t,
-		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
-		func() *ipnstate.PeerStatus { return self },
-		nil,
-		nil,
-	)
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{
+		whoIs: map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
+		self:  func() *ipnstate.PeerStatus { return self },
+	})
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -555,14 +555,11 @@ func TestServeAuth(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t,
-		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
-		func() *ipnstate.PeerStatus { return self },
-		func() *ipn.Prefs {
-			return &ipn.Prefs{ControlURL: *testControlURL}
-		},
-		nil,
-	)
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{
+		whoIs: map[string]*apitype.WhoIsResponse{remoteIP: remoteNode},
+		self:  func() *ipnstate.PeerStatus { return self },
+		prefs: func() *ipn.Prefs { return &ipn.Prefs{ControlURL: *testControlURL} },
+	})
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -896,16 +893,12 @@ func TestServeAPIAuthMetricLogging(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t,
-		map[string]*apitype.WhoIsResponse{remoteIP: remoteNode, localIP: localNode, otherIP: otherNode, localTaggedIP: localTaggedNode, remoteTaggedIP: remoteTaggedNode},
-		func() *ipnstate.PeerStatus { return self },
-		func() *ipn.Prefs {
-			return &ipn.Prefs{ControlURL: *testControlURL}
-		},
-		func(metricName string) {
-			loggedMetrics = append(loggedMetrics, metricName)
-		},
-	)
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{
+		whoIs:         map[string]*apitype.WhoIsResponse{remoteIP: remoteNode, localIP: localNode, otherIP: otherNode, localTaggedIP: localTaggedNode, remoteTaggedIP: remoteTaggedNode},
+		self:          func() *ipnstate.PeerStatus { return self },
+		prefs:         func() *ipn.Prefs { return &ipn.Prefs{ControlURL: *testControlURL} },
+		metricCapture: func(metricName string) { loggedMetrics = append(loggedMetrics, metricName) },
+	})
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -1120,7 +1113,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-	localapi := mockLocalAPI(t, nil, func() *ipnstate.PeerStatus { return self }, nil, nil)
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{self: func() *ipnstate.PeerStatus { return self }})
 	defer localapi.Close()
 	go localapi.Serve(lal)
 
@@ -1407,6 +1400,525 @@ func TestPeerCapabilities(t *testing.T) {
 	}
 }
 
+func TestServeItemsEndpoints(t *testing.T) {
+	ctx := context.Background()
+
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+
+	fg := map[string]*ipn.ServeConfig{
+		"sessionID": {TCP: map[uint16]*ipn.TCPPortHandler{
+			4443: {TCPForward: "http://127.0.0.1:3001"},
+		}},
+	}
+	localapi := mockLocalAPI(t, mockLocalAPIOpts{
+		self: func() *ipnstate.PeerStatus {
+			return &ipnstate.PeerStatus{
+				DNSName: "s",
+				Capabilities: []tailcfg.NodeCapability{
+					tailcfg.CapabilityFunnelPorts + "?ports=80,443,8080,10000",
+					tailcfg.CapabilityHTTPS,
+					tailcfg.NodeAttrFunnel,
+				}}
+		},
+		// Starting config with a foreground session.
+		serveConfig: &ipn.ServeConfig{Foreground: fg},
+	})
+	defer localapi.Close()
+	go localapi.Serve(lal)
+
+	lc := &tailscale.LocalClient{Dial: lal.Dial}
+	s := &Server{lc: lc}
+
+	tests := []struct {
+		name            string
+		action          string // PATCH or DELETE
+		item            serveItem
+		wantErr         string
+		wantServeConfig ipn.ServeConfig
+	}{
+		{
+			name:   "add-a-new-serve-web-item",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "3000"},
+				Destination: serveDestination{Protocol: "https", Port: 443},
+				ShareType:   "serve",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+				},
+			},
+		}, {
+			name:   "add-a-new-funnel-web-item-with-invalid-port",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "4000"},
+				Destination: serveDestination{Protocol: "https", Port: 8000},
+				ShareType:   "funnel",
+			},
+			wantErr: "port 8000 is not allowed for funnel; allowed ports are: 80,443,8080,10000", // TODO(sonia): should be piping the allowed ports to the FE dropdown
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+				},
+			},
+		}, {
+			name:   "add-a-new-funnel-web-item",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "4000"},
+				Destination: serveDestination{Protocol: "https", Port: 8080},
+				ShareType:   "funnel",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:4000"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:8080"): true,
+				},
+			},
+		}, {
+			name:   "add-a-new-tcp-serve-item",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 8999, Path: "/something"}, // path should be ignored
+				ShareType:   "serve",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTPS: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:4000"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:8080"): true,
+				},
+			},
+		}, {
+			name:   "add-a-new-plaintext-item",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "plainText", Value: "hello world"},
+				Destination: serveDestination{Protocol: "http", Port: 80, Path: "/hi"},
+				ShareType:   "serve",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTPS: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:4000"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:8080"): true,
+				},
+			},
+		}, {
+			name:   "port-already-in-use",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "plainText", Value: "another text"},
+				Destination: serveDestination{Protocol: "http", Port: 8080, Path: "/"},
+				ShareType:   "serve",
+			},
+			wantErr: "port already in use",
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTPS: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:4000"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:8080"): true,
+				},
+			},
+		}, {
+			name:   "edit-existing-item",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "plainText", Value: "another text"},
+				Destination: serveDestination{Protocol: "http", Port: 8080, Path: "/"},
+				ShareType:   "serve", // was previously "funnel"
+				IsEdit:      true,
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTP: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "switch-serve-to-funnel",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "3000"},
+				Destination: serveDestination{Protocol: "https", Port: 443, Path: "/"},
+				ShareType:   "funnel", // was previously "serve"
+				IsEdit:      true,
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTP: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:443"): true,
+				},
+			},
+		}, {
+			name:   "delete-existing-item-wrong-protocol",
+			action: "DELETE",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpServer", Value: "3000"},
+				Destination: serveDestination{Protocol: "http", Port: 443, Path: "/"},
+				ShareType:   "serve",
+			},
+			wantErr: "not serving http on given port",
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443:  {HTTPS: true},
+					8080: {HTTP: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}},
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:443"): true,
+				},
+			},
+		}, {
+			name:   "delete-existing-funnel-item",
+			action: "DELETE",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpServer", Value: "3000"},
+				Destination: serveDestination{Protocol: "https", Port: 443, Path: "/"},
+				ShareType:   "funnel",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					8999: {TCPForward: "127.0.0.1:5000"},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "delete-existing-serve-item",
+			action: "DELETE",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 8999},
+				ShareType:   "serve",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "add-a-new-terminated-tls-tcp-item",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tls-terminated-tcp", Port: 443, Path: "/something"}, // path should be ignored
+				ShareType:   "funnel",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000", TerminateTLS: "s"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:443"): true,
+				},
+			},
+		}, {
+			name:   "switch-tls-terminated-to-non-tls-terminated",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 443, Path: "/something"}, // path should be ignored
+				ShareType:   "funnel",
+				IsEdit:      true,
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					ipn.HostPort("s:443"): true,
+				},
+			},
+		}, {
+			name:   "switch-tcp-to-web",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "https", Port: 443, Path: "/something"},
+				ShareType:   "serve",
+				IsEdit:      true,
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+					ipn.HostPort("s:443"):  {Handlers: map[string]*ipn.HTTPHandler{"/something": {Proxy: "http://127.0.0.1:5000"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "switch-web-to-tcp",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 443},
+				ShareType:   "serve",
+				IsEdit:      true,
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "edit-port-that-does-not-exist",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 4444},
+				ShareType:   "serve",
+				IsEdit:      true,
+			},
+			wantErr: "no current configuration at port",
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "add-port-that-foreground-is-using",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 4443},
+				ShareType:   "serve",
+			},
+			wantErr: "port already in use by foreground process",
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "edit-port-that-foreground-is-using",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "tcp", Port: 4443},
+				ShareType:   "serve",
+				IsEdit:      true,
+			},
+			wantErr: "port already in use by foreground process",
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "invalid-path-web-serve",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "https", Port: 4445, Path: "."},
+				ShareType:   "serve",
+			},
+			wantErr: "invalid mount point \"/.\"",
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+				},
+				AllowFunnel: nil,
+			},
+		}, {
+			name:   "path-gets-slash-prefix-added",
+			action: "PATCH",
+			item: serveItem{
+				Target:      serveTarget{Type: "localHttpPort", Value: "5000"},
+				Destination: serveDestination{Protocol: "https", Port: 4445, Path: "my-path"},
+				ShareType:   "serve",
+			},
+			wantServeConfig: ipn.ServeConfig{
+				Foreground: fg,
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					8080: {HTTP: true},
+					80:   {HTTP: true},
+					443:  {TCPForward: "127.0.0.1:5000"},
+					4445: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort("s:8080"): {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "another text"}}},
+					ipn.HostPort("s:80"):   {Handlers: map[string]*ipn.HTTPHandler{"/hi": {Text: "hello world"}}},
+					ipn.HostPort("s:4445"): {Handlers: map[string]*ipn.HTTPHandler{"/my-path": {Proxy: "http://127.0.0.1:5000"}}},
+				},
+				AllowFunnel: nil,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotErr string
+			switch tt.action {
+			case "PATCH":
+				if err := s.servePatchServeItem(ctx, tt.item); err != nil {
+					gotErr = err.Error()
+				}
+			case "DELETE":
+				if err := s.serveDeleteServeItem(ctx, tt.item); err != nil {
+					gotErr = err.Error()
+				}
+			}
+			if tt.wantErr != gotErr {
+				t.Errorf("wrong error; want=%q, got=%q", tt.wantErr, gotErr)
+			}
+			gotServeConfig, err := lc.GetServeConfig(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(*gotServeConfig, tt.wantServeConfig); diff != "" {
+				t.Errorf("wrong serve config; (-got+want):%v", diff)
+			}
+		})
+	}
+}
+
 var (
 	defaultControlURL   = "https://controlplane.tailscale.com"
 	testAuthPath        = "/a/12345"
@@ -1414,13 +1926,21 @@ var (
 	testAuthPathError   = "/a/will-error"
 )
 
+type mockLocalAPIOpts struct {
+	whoIs         map[string]*apitype.WhoIsResponse
+	self          func() *ipnstate.PeerStatus
+	prefs         func() *ipn.Prefs
+	serveConfig   *ipn.ServeConfig
+	metricCapture func(string)
+}
+
 // mockLocalAPI constructs a test localapi handler that can be used
 // to simulate localapi responses without a functioning tailnet.
 //
 // self accepts a function that resolves to a self node status,
 // so that tests may swap out the /localapi/v0/status response
 // as desired.
-func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self func() *ipnstate.PeerStatus, prefs func() *ipn.Prefs, metricCapture func(string)) *http.Server {
+func mockLocalAPI(t *testing.T, opts mockLocalAPIOpts) *http.Server {
 	return &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/localapi/v0/whois":
@@ -1428,17 +1948,17 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 			if addr == "" {
 				t.Fatalf("/whois call missing \"addr\" query")
 			}
-			if node := whoIs[addr]; node != nil {
+			if node := opts.whoIs[addr]; node != nil {
 				writeJSON(w, &node)
 				return
 			}
 			http.Error(w, "not a node", http.StatusUnauthorized)
 			return
 		case "/localapi/v0/status":
-			writeJSON(w, ipnstate.Status{Self: self()})
+			writeJSON(w, ipnstate.Status{Self: opts.self()})
 			return
 		case "/localapi/v0/prefs":
-			writeJSON(w, prefs())
+			writeJSON(w, opts.prefs())
 			return
 		case "/localapi/v0/upload-client-metrics":
 			type metricName struct {
@@ -1450,12 +1970,25 @@ func mockLocalAPI(t *testing.T, whoIs map[string]*apitype.WhoIsResponse, self fu
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}
-			metricCapture(metricNames[0].Name)
+			opts.metricCapture(metricNames[0].Name)
 			writeJSON(w, struct{}{})
 			return
 		case "/localapi/v0/logout":
 			fmt.Fprintf(w, "success")
 			return
+		case "/localapi/v0/serve-config":
+			switch r.Method {
+			case httpm.GET:
+				writeJSON(w, opts.serveConfig)
+				return
+			case httpm.POST:
+				opts.serveConfig = &ipn.ServeConfig{}
+				if err := json.NewDecoder(r.Body).Decode(&opts.serveConfig); err != nil {
+					http.Error(w, "invalid JSON body", http.StatusBadRequest)
+					return
+				}
+				return
+			}
 		default:
 			t.Fatalf("unhandled localapi test endpoint %q, add to localapi handler func in test", r.URL.Path)
 		}
