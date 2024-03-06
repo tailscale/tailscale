@@ -496,6 +496,12 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if t := st.KeyExpiry; t != nil {
 		e.KeyExpiry = ptr.To(*t)
 	}
+	if v := st.CapMap; v != nil {
+		e.CapMap = v
+	}
+	if v := st.Capabilities; v != nil {
+		e.Capabilities = v
+	}
 	e.Location = st.Location
 }
 

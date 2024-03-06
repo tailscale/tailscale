@@ -894,6 +894,14 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			ExitNode:        p.StableID() != "" && p.StableID() == exitNodeID,
 			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
 			Location:        p.Hostinfo().Location(),
+			Capabilities:    p.Capabilities().AsSlice(),
+		}
+		if cm := p.CapMap(); cm.Len() > 0 {
+			ps.CapMap = make(tailcfg.NodeCapMap, cm.Len())
+			cm.Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
+				ps.CapMap[k] = v.AsSlice()
+				return true
+			})
 		}
 		peerStatusFromNode(ps, p)
 
