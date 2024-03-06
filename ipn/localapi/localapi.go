@@ -153,6 +153,16 @@ func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, netMon *netmon.Monit
 	return &Handler{b: b, logf: logf, netMon: netMon, backendLogID: logID, clock: tstime.StdClock{}}
 }
 
+func init() {
+	ipnlocal.NewC2NLocalAPIHandler = func(b *ipnlocal.LocalBackend, logf logger.Logf, netMon *netmon.Monitor, logID logid.PublicID) http.Handler {
+		h := NewHandler(b, logf, netMon, logID)
+		h.PermitRead, h.PermitWrite = true, true
+		h.PermitCert = false
+		h.ConnIdentity = &ipnauth.ConnIdentity{}
+		return h
+	}
+}
+
 type Handler struct {
 	// RequiredPassword, if non-empty, forces all HTTP
 	// requests to have HTTP basic auth with this password.

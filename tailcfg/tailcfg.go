@@ -129,7 +129,8 @@ type CapabilityVersion int
 //   - 86: 2024-01-23: Client understands NodeAttrProbeUDPLifetime
 //   - 87: 2024-02-11: UserProfile.Groups removed (added in 66)
 //   - 88: 2024-03-05: Client understands NodeAttrSuggestExitNode
-const CurrentCapabilityVersion CapabilityVersion = 88
+//   - 89: 2024-03-07: c2n remote config prefs
+const CurrentCapabilityVersion CapabilityVersion = 89
 
 type StableID string
 

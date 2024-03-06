@@ -56,6 +56,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
+	RemoteConfig           bool
 	Persist                *persist.Persist
 }{})
 

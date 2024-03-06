@@ -62,6 +62,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AppConnector",
 		"PostureChecking",
 		"NetfilterKind",
+		"RemoteConfig",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeFor[Prefs]()); !reflect.DeepEqual(have, prefsHandles) {
@@ -434,6 +435,11 @@ func TestPrefsPretty(t *testing.T) {
 			Prefs{ShieldsUp: true},
 			"windows",
 			"Prefs{ra=false mesh=false dns=false want=false shields=true update=off Persist=nil}",
+		},
+		{
+			Prefs{RemoteConfig: true},
+			"windows",
+			"Prefs{ra=false mesh=false dns=false want=false remoteconfig=true update=off Persist=nil}",
 		},
 		{
 			Prefs{AllowSingleHosts: true},
