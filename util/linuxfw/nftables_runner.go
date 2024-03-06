@@ -551,12 +551,15 @@ func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
-	supportsV6NAT := supportsV6 && checkSupportsV6NAT()
-
 	var nft6 *nftable
+
 	if supportsV6 {
-		logf("v6nat availability: %v", supportsV6NAT)
 		nft6 = &nftable{Proto: nftables.TableFamilyIPv6}
+		// Kernel support for nftables was added after support for IPv6
+		// NAT, so no need for a separate IPv6 NAT support check.
+		// https://tldp.org/HOWTO/Linux+IPv6-HOWTO/ch18s04.html
+		// https://wiki.nftables.org/wiki-nftables/index.php/Building_and_installing_nftables_from_sources
+		logf("v6nat availability: true")
 	}
 
 	// TODO(KevinLiang10): convert iptables rule to nftable rules if they exist in the iptables
@@ -566,7 +569,7 @@ func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 		nft4:           nft4,
 		nft6:           nft6,
 		v6Available:    supportsV6,
-		v6NATAvailable: supportsV6NAT,
+		v6NATAvailable: supportsV6, // if nftables are supported, IPv6 NAT is supported
 	}, nil
 }
 
