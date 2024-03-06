@@ -18,6 +18,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/tailfs"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 	"tailscale.com/version"
@@ -56,6 +57,8 @@ type setArgsT struct {
 	updateCheck            bool
 	updateApply            bool
 	postureChecking        bool
+	automountEnabled       bool
+	automountPath          string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -76,6 +79,12 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "HIDDEN: allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "run a web interface for managing this node, served over Tailscale at port 5252")
+	automountDisclaimer := ""
+	if !tailfs.AutomountSupported() {
+		automountDisclaimer = "(NOT AVAILABLE ON THIS SYSTEM) "
+	}
+	setf.BoolVar(&setArgs.automountEnabled, "automount-enabled", false, fmt.Sprintf("%sautomatically mount Tailscale shares", automountDisclaimer))
+	setf.StringVar(&setArgs.automountPath, "automount-path", "", fmt.Sprintf(`%spath at which to automount shares, leave blank to default to %q`, automountDisclaimer, tailfs.DefaultAutomountPath()))
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -124,6 +133,10 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 				Advertise: setArgs.advertiseConnector,
 			},
 			PostureChecking: setArgs.postureChecking,
+			AutomountShares: ipn.AutomountPrefs{
+				Enabled: setArgs.automountEnabled,
+				Path:    setArgs.automountPath,
+			},
 		},
 	}
 
@@ -150,6 +163,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	})
 	if maskedPrefs.IsEmpty() {
 		return flag.ErrHelp
+	}
+	if maskedPrefs.AutomountSharesSet && !tailfs.AutomountSupported() {
+		return errors.New("flag automount-enabled is not supported on this system")
 	}
 
 	curPrefs, err := localClient.GetPrefs(ctx)

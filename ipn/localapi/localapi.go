@@ -1374,6 +1374,15 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if mp.AutomountSharesSet {
+			// Set AutomountShares user to the connecting username.
+			var err error
+			mp.AutomountShares.AsUser, err = h.getUsername()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		var err error
 		prefs, err = h.b.EditPrefs(mp)
 		if err != nil {
