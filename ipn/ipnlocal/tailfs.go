@@ -238,6 +238,13 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 
 	tailfsRemotes := make([]*tailfs.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
+		// Exclude mullvad exit nodes from list of TailFS peers
+		// TODO(oxtoacart) - once we have a better mechanism for finding only accessible sharers
+		// (see below) we can remove this logic.
+		if strings.HasSuffix(p.Name(), ".mullvad.ts.net.") {
+			continue
+		}
+
 		peerID := p.ID()
 		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailFSPrefix[1:])
 		tailfsRemotes = append(tailfsRemotes, &tailfs.Remote{
