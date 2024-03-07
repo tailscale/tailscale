@@ -48,10 +48,38 @@ func IsSandboxedMacOS() bool {
 	return IsMacAppStore() || IsMacSysExt()
 }
 
+// IsMacSys reports whether this process is part of the Standalone variant of
+// Tailscale for macOS, either the main GUI process (non-sandboxed) or the
+// system extension (sandboxed).
+func IsMacSys() bool {
+	return IsMacSysExt() || IsMacSysApp()
+}
+
+var isMacSysApp lazy.SyncValue[bool]
+
+// IsMacSysApp reports whether this process is the main, non-sandboxed GUI process
+// that ships with the Standalone variant of Tailscale for macOS.
+func IsMacSysApp() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+
+	return isMacSysApp.Get(func() bool {
+		exe, err := os.Executable()
+		if err != nil {
+			return false
+		}
+		// Check that this is the GUI binary, and it is not sandboxed. The GUI binary
+		// shipped in the App Store will always have the App Sandbox enabled.
+		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") && !IsMacAppSandboxEnabled()
+	})
+}
+
 var isMacSysExt lazy.SyncValue[bool]
 
-// IsMacSysExt whether this binary is from the standalone "System
-// Extension" (a.k.a. "macsys") version of Tailscale for macOS.
+// IsMacSysExt reports whether this binary is the system extension shipped as part of
+// the standalone "System Extension" (a.k.a. "macsys") version of Tailscale
+// for macOS.
 func IsMacSysExt() bool {
 	if runtime.GOOS != "darwin" {
 		return false
@@ -68,6 +96,19 @@ func IsMacSysExt() bool {
 	})
 }
 
+var isMacAppSandboxEnabled lazy.SyncValue[bool]
+
+// IsMacAppSandboxEnabled reports whether this process is subject to the App Sandbox
+// on macOS.
+func IsMacAppSandboxEnabled() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return isMacAppSandboxEnabled.Get(func() bool {
+		return os.Getenv("APP_SANDBOX_CONTAINER_ID") != ""
+	})
+}
+
 var isMacAppStore lazy.SyncValue[bool]
 
 // IsMacAppStore whether this binary is from the App Store version of Tailscale
@@ -80,6 +121,11 @@ func IsMacAppStore() bool {
 		// Both macsys and app store versions can run CLI executable with
 		// suffix /Contents/MacOS/Tailscale. Check $HOME to filter out running
 		// as macsys.
+		if !IsMacAppSandboxEnabled() {
+			// If no sandbox found, we're definitely not on an App Store release, as you cannot push
+			// anything to the App Store that has the App Sandbox disabled.
+			return false
+		}
 		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
 			return false
 		}
