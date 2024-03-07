@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -206,13 +207,14 @@ func (s *system) addShare(remoteName, shareName string, permission tailfs.Permis
 	r.shares[shareName] = f
 	r.permissions[shareName] = permission
 
-	shares := make(map[string]*tailfs.Share, len(r.shares))
+	shares := make([]*tailfs.Share, 0, len(r.shares))
 	for shareName, folder := range r.shares {
-		shares[shareName] = &tailfs.Share{
+		shares = append(shares, &tailfs.Share{
 			Name: shareName,
 			Path: folder,
-		}
+		})
 	}
+	slices.SortFunc(shares, tailfs.CompareShares)
 	r.fs.SetShares(shares)
 	r.fileServer.SetShares(r.shares)
 }

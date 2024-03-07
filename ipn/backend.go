@@ -15,6 +15,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/views"
 )
 
 type State int
@@ -124,12 +125,12 @@ type Notify struct {
 	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
 
 	// TailFSShares tracks the full set of current TailFSShares that we're
-	// publishing as name->share. Some client applications, like the MacOS and
-	// Windows clients, will listen for updates to this and handle serving
-	// these shares under the identity of the unprivileged user that is running
-	// the application. A nil value here means that we're not broadcasting
-	// shares information, an empty value means that there are no shares.
-	TailFSShares map[string]*tailfs.Share
+	// publishing. Some client applications, like the MacOS and Windows clients,
+	// will listen for updates to this and handle serving these shares under
+	// the identity of the unprivileged user that is running the application. A
+	// nil value here means that we're not broadcasting shares information, an
+	// empty value means that there are no shares.
+	TailFSShares views.SliceView[*tailfs.Share, tailfs.ShareView]
 
 	// type is mirrored in xcode/Shared/IPN.swift
 }

@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ type FileSystemForRemote struct {
 	// them, acquire a read lock before reading any of them.
 	mu             sync.RWMutex
 	fileServerAddr string
-	shares         map[string]*tailfs.Share
+	shares         []*tailfs.Share
 	children       map[string]*compositedav.Child
 	userServers    map[string]*userServer
 }
@@ -64,8 +65,9 @@ func (s *FileSystemForRemote) SetFileServerAddr(addr string) {
 	s.mu.Unlock()
 }
 
-// SetShares implements tailfs.FileSystemForRemote.
-func (s *FileSystemForRemote) SetShares(shares map[string]*tailfs.Share) {
+// SetShares implements tailfs.FileSystemForRemote. Shares must be sorted
+// according to tailfs.CompareShares.
+func (s *FileSystemForRemote) SetShares(shares []*tailfs.Share) {
 	userServers := make(map[string]*userServer)
 	if tailfs.AllowShareAs() {
 		// Set up per-user server by running the current executable as an
@@ -131,7 +133,13 @@ func (s *FileSystemForRemote) buildChild(share *tailfs.Share) *compositedav.Chil
 				shareName := string(shareNameBytes)
 
 				s.mu.RLock()
-				share, shareFound := s.shares[shareName]
+				var share *tailfs.Share
+				i, shareFound := slices.BinarySearchFunc(s.shares, shareName, func(s *tailfs.Share, name string) int {
+					return strings.Compare(s.Name, name)
+				})
+				if shareFound {
+					share = s.shares[i]
+				}
 				userServers := s.userServers
 				fileServerAddr := s.fileServerAddr
 				s.mu.RUnlock()

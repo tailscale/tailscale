@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -93,18 +92,10 @@ func runShareList(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v", shareListUsage)
 	}
 
-	sharesMap, err := localClient.TailFSShareList(ctx)
+	shares, err := localClient.TailFSShareList(ctx)
 	if err != nil {
 		return err
 	}
-	shares := make([]*tailfs.Share, 0, len(sharesMap))
-	for _, share := range sharesMap {
-		shares = append(shares, share)
-	}
-
-	sort.Slice(shares, func(i, j int) bool {
-		return shares[i].Name < shares[j].Name
-	})
 
 	longestName := 4 // "name"
 	longestPath := 4 // "path"

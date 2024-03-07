@@ -4,10 +4,8 @@
 package ipnlocal
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -15,14 +13,13 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailfs"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 )
 
 const (
 	// TailFSLocalPort is the port on which the TailFS listens for location
 	// connections on quad 100.
 	TailFSLocalPort = 8080
-
-	tailfsSharesStateKey = ipn.StateKey("_tailfs-shares")
 )
 
 var (
@@ -81,13 +78,13 @@ func (b *LocalBackend) TailFSAddShare(share *tailfs.Share) error {
 	}
 
 	b.mu.Lock()
-	shares, err := b.tailfsAddShareLocked(share)
+	shares, err := b.tailFSAddShareLocked(share)
 	b.mu.Unlock()
 	if err != nil {
 		return err
 	}
 
-	b.tailfsNotifyShares(shares)
+	b.tailFSNotifyShares(shares)
 	return nil
 }
 
@@ -108,28 +105,38 @@ func normalizeShareName(name string) (string, error) {
 	return name, nil
 }
 
-func (b *LocalBackend) tailfsAddShareLocked(share *tailfs.Share) (map[string]*tailfs.Share, error) {
+func (b *LocalBackend) tailFSAddShareLocked(share *tailfs.Share) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+	existingShares := b.pm.prefs.TailFSShares()
+
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
-		return nil, errors.New("tailfs not enabled")
+		return existingShares, errors.New("tailfs not enabled")
 	}
 
-	shares, err := b.TailFSGetShares()
-	if err != nil {
-		return nil, err
+	addedShare := false
+	var shares []*tailfs.Share
+	for i := 0; i < existingShares.Len(); i++ {
+		existing := existingShares.At(i)
+		if existing.Name() != share.Name {
+			if !addedShare && existing.Name() > share.Name {
+				// Add share in order
+				shares = append(shares, share)
+				addedShare = true
+			}
+			shares = append(shares, existing.AsStruct())
+		}
 	}
-	shares[share.Name] = share
-	data, err := json.Marshal(shares)
-	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
+	if !addedShare {
+		shares = append(shares, share)
 	}
-	err = b.store.WriteState(tailfsSharesStateKey, data)
+
+	err := b.tailFSSetSharesLocked(shares)
 	if err != nil {
-		return nil, fmt.Errorf("write state: %w", err)
+		return existingShares, err
 	}
 	fs.SetShares(shares)
 
-	return shares, nil
+	return b.pm.prefs.TailFSShares(), nil
 }
 
 // TailFSRemoveShare removes the named share. Share names are forced to
@@ -144,83 +151,102 @@ func (b *LocalBackend) TailFSRemoveShare(name string) error {
 	}
 
 	b.mu.Lock()
-	shares, err := b.tailfsRemoveShareLocked(name)
+	shares, err := b.tailFSRemoveShareLocked(name)
 	b.mu.Unlock()
 	if err != nil {
 		return err
 	}
 
-	b.tailfsNotifyShares(shares)
+	b.tailFSNotifyShares(shares)
 	return nil
 }
 
-func (b *LocalBackend) tailfsRemoveShareLocked(name string) (map[string]*tailfs.Share, error) {
+func (b *LocalBackend) tailFSRemoveShareLocked(name string) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+	existingShares := b.pm.prefs.TailFSShares()
+
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
-		return nil, errors.New("tailfs not enabled")
+		return existingShares, errors.New("tailfs not enabled")
 	}
 
-	shares, err := b.TailFSGetShares()
-	if err != nil {
-		return nil, err
+	var shares []*tailfs.Share
+	for i := 0; i < existingShares.Len(); i++ {
+		existing := existingShares.At(i)
+		if existing.Name() != name {
+			shares = append(shares, existing.AsStruct())
+		}
 	}
-	_, shareExists := shares[name]
-	if !shareExists {
-		return nil, os.ErrNotExist
-	}
-	delete(shares, name)
-	data, err := json.Marshal(shares)
+
+	err := b.tailFSSetSharesLocked(shares)
 	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
-	}
-	err = b.store.WriteState(tailfsSharesStateKey, data)
-	if err != nil {
-		return nil, fmt.Errorf("write state: %w", err)
+		return existingShares, err
 	}
 	fs.SetShares(shares)
 
-	return shares, nil
+	return b.pm.prefs.TailFSShares(), nil
 }
 
-// tailfsNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
-// about the latest set of shares, supplied as a map of name -> directory.
-func (b *LocalBackend) tailfsNotifyShares(shares map[string]*tailfs.Share) {
+func (b *LocalBackend) tailFSSetSharesLocked(shares []*tailfs.Share) error {
+	prefs := b.pm.prefs.AsStruct()
+	prefs.ApplyEdits(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			TailFSShares: shares,
+		},
+		TailFSSharesSet: true,
+	})
+	return b.pm.setPrefsLocked(prefs.View())
+}
+
+// tailFSNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
+// about the latest list of shares.
+func (b *LocalBackend) tailFSNotifyShares(shares views.SliceView[*tailfs.Share, tailfs.ShareView]) {
 	b.send(ipn.Notify{TailFSShares: shares})
 }
 
-// tailFSNotifyCurrentSharesOnce sends a one-time ipn.Notify with the current
-// set of TailFS shares.
-func (b *LocalBackend) tailFSNotifyCurrentSharesOnce() {
-	b.notifyTailFSSharesOnce.Do(func() {
-		shares, err := b.TailFSGetShares()
-		if err != nil {
-			b.logf("error notifying current tailfs shares: %v", err)
-			return
-		}
+// tailFSNotifyCurrentSharesLocked sends an ipn.Notify if the current set of
+// shares has changed since the last notification.
+func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
+	var shares views.SliceView[*tailfs.Share, tailfs.ShareView]
+	if b.tailFSSharingEnabledLocked() {
+		// Only populate shares if sharing is enabled.
+		shares = b.pm.prefs.TailFSShares()
+	}
+
+	lastNotified := b.lastNotifiedTailFSShares.Load()
+	if lastNotified == nil || !tailFSShareViewsEqual(lastNotified, shares) {
 		// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
-		go b.tailfsNotifyShares(shares)
-	})
+		if shares.IsNil() {
+			// set to a non-nil value to indicate we have 0 shares
+			shares = views.SliceOfViews(make([]*tailfs.Share, 0))
+		}
+		go b.tailFSNotifyShares(shares)
+	}
 }
 
-// TailFSGetShares returns the current set of shares from the state store,
-// stored under ipn.StateKey("_tailfs-shares"). The caller owns this map and
-// is free to mutate it.
-func (b *LocalBackend) TailFSGetShares() (map[string]*tailfs.Share, error) {
-	data, err := b.store.ReadState(tailfsSharesStateKey)
-	if err != nil {
-		if errors.Is(err, ipn.ErrStateNotExist) {
-			return make(map[string]*tailfs.Share), nil
+func tailFSShareViewsEqual(a *views.SliceView[*tailfs.Share, tailfs.ShareView], b views.SliceView[*tailfs.Share, tailfs.ShareView]) bool {
+	if a == nil {
+		return false
+	}
+
+	if a.Len() != b.Len() {
+		return false
+	}
+
+	for i := 0; i < a.Len(); i++ {
+		if !tailfs.ShareViewsEqual(a.At(i), b.At(i)) {
+			return false
 		}
-		return nil, fmt.Errorf("read state: %w", err)
 	}
 
-	var shares map[string]*tailfs.Share
-	err = json.Unmarshal(data, &shares)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
+	return true
+}
 
-	return shares, nil
+// TailFSGetShares() gets the current list of TailFS shares, sorted by name.
+func (b *LocalBackend) TailFSGetShares() views.SliceView[*tailfs.Share, tailfs.ShareView] {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.pm.prefs.TailFSShares()
 }
 
 // updateTailFSPeersLocked sets all applicable peers from the netmap as tailfs
@@ -231,7 +257,17 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 		return
 	}
 
-	tailfsRemotes := make([]*tailfs.Remote, 0, len(nm.Peers))
+	var tailFSRemotes []*tailfs.Remote
+	if b.tailFSAccessEnabledLocked() {
+		// Only populate peers if access is enabled, otherwise leave blank.
+		tailFSRemotes = b.tailFSRemotesFromPeers(nm)
+	}
+
+	fs.SetRemotes(b.netMap.Domain, tailFSRemotes, &tailFSTransport{b: b})
+}
+
+func (b *LocalBackend) tailFSRemotesFromPeers(nm *netmap.NetworkMap) []*tailfs.Remote {
+	tailFSRemotes := make([]*tailfs.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
 		// Exclude mullvad exit nodes from list of TailFS peers
 		// TODO(oxtoacart) - once we have a better mechanism for finding only accessible sharers
@@ -242,7 +278,7 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 
 		peerID := p.ID()
 		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailFSPrefix[1:])
-		tailfsRemotes = append(tailfsRemotes, &tailfs.Remote{
+		tailFSRemotes = append(tailFSRemotes, &tailfs.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,
 			Available: func() bool {
@@ -271,5 +307,5 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 			},
 		})
 	}
-	fs.SetRemotes(b.netMap.Domain, tailfsRemotes, &tailFSTransport{b: b})
+	return tailFSRemotes
 }

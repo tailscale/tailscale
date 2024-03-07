@@ -1450,12 +1450,12 @@ func (lc *LocalClient) TailFSShareRemove(ctx context.Context, name string) error
 
 // TailFSShareList returns the list of shares that TailFS is currently serving
 // to remote nodes.
-func (lc *LocalClient) TailFSShareList(ctx context.Context) (map[string]*tailfs.Share, error) {
+func (lc *LocalClient) TailFSShareList(ctx context.Context) ([]*tailfs.Share, error) {
 	result, err := lc.get200(ctx, "/localapi/v0/tailfs/shares")
 	if err != nil {
 		return nil, err
 	}
-	var shares map[string]*tailfs.Share
+	var shares []*tailfs.Share
 	err = json.Unmarshal(result, &shares)
 	return shares, err
 }

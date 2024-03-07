@@ -62,6 +62,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AppConnector",
 		"PostureChecking",
 		"NetfilterKind",
+		"TailFSShares",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeFor[Prefs]()); !reflect.DeepEqual(have, prefsHandles) {
