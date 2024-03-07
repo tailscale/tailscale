@@ -172,6 +172,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			switch elem.String() {
 			case "byte":
 				args.FieldType = it.QualifiedName(fieldType)
+				it.Import("tailscale.com/types/views")
 				writeTemplate("byteSliceField")
 			default:
 				args.FieldType = it.QualifiedName(elem)
