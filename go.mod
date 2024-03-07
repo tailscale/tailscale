@@ -93,14 +93,14 @@ require (
 	golang.org/x/net v0.20.0
 	golang.org/x/oauth2 v0.16.0
 	golang.org/x/sync v0.6.0
-	golang.org/x/sys v0.16.0
+	golang.org/x/sys v0.17.0
 	golang.org/x/term v0.16.0
 	golang.org/x/time v0.5.0
 	golang.org/x/tools v0.17.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gopkg.in/square/go-jose.v2 v2.6.0
-	gvisor.dev/gvisor v0.0.0-20240119233241-c9c1d4f9b186
+	gvisor.dev/gvisor v0.0.0-20240306221502-ee1e1f6070e3
 	honnef.co/go/tools v0.4.6
 	k8s.io/api v0.29.1
 	k8s.io/apimachinery v0.29.1
