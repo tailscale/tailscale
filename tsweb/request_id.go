@@ -25,6 +25,12 @@ import (
 // opaque string. The current implementation uses a UUID.
 type RequestID string
 
+// String returns the string format of the request ID, for use in e.g. setting
+// a [http.Header].
+func (r RequestID) String() string {
+	return string(r)
+}
+
 // RequestIDKey stores and loads [RequestID] values within a [context.Context].
 var RequestIDKey ctxkey.Key[RequestID]
 
