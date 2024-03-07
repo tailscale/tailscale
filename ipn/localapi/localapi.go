@@ -2627,12 +2627,8 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "GET":
-		shares, err := h.b.TailFSGetShares()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		err = json.NewEncoder(w).Encode(shares)
+		shares := h.b.TailFSGetShares()
+		err := json.NewEncoder(w).Encode(shares)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

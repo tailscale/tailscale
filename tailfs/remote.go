@@ -3,8 +3,12 @@
 
 package tailfs
 
+//go:generate go run tailscale.com/cmd/viewer --type=Share --clonefunc
+
 import (
+	"bytes"
 	"net/http"
+	"strings"
 )
 
 var (
@@ -41,6 +45,39 @@ type Share struct {
 	BookmarkData []byte `json:"bookmarkData,omitempty"`
 }
 
+func ShareViewsEqual(a, b ShareView) bool {
+	if !a.Valid() && !b.Valid() {
+		return true
+	}
+	if !a.Valid() || !b.Valid() {
+		return false
+	}
+	return a.Name() == b.Name() && a.Path() == b.Path() && a.As() == b.As() && a.BookmarkData().Equal(b.ж.BookmarkData)
+}
+
+func SharesEqual(a, b *Share) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Name == b.Name && a.Path == b.Path && a.As == b.As && bytes.Equal(a.BookmarkData, b.BookmarkData)
+}
+
+func CompareShares(a, b *Share) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	return strings.Compare(a.Name, b.Name)
+}
+
 // FileSystemForRemote is the TailFS filesystem exposed to remote nodes. It
 // provides a unified WebDAV interface to local directories that have been
 // shared.
@@ -56,7 +93,7 @@ type FileSystemForRemote interface {
 	// AllowShareAs() reports true, we will use one subprocess per user to
 	// access the filesystem (see userServer). Otherwise, we will use the file
 	// server configured via SetFileServerAddr.
-	SetShares(shares map[string]*Share)
+	SetShares(shares []*Share)
 
 	// ServeHTTPWithPerms behaves like the similar method from http.Handler but
 	// also accepts a Permissions map that captures the permissions of the
