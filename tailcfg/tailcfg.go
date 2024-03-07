@@ -128,7 +128,8 @@ type CapabilityVersion int
 //   - 85: 2024-01-05: Client understands MaxKeyDuration
 //   - 86: 2024-01-23: Client understands NodeAttrProbeUDPLifetime
 //   - 87: 2024-02-11: UserProfile.Groups removed (added in 66)
-const CurrentCapabilityVersion CapabilityVersion = 87
+//   - 88: 2024-03-05: Client understands NodeAttrSuggestExitNode
+const CurrentCapabilityVersion CapabilityVersion = 88
 
 type StableID string
 
@@ -2215,9 +2216,9 @@ const (
 	// NodeAttrsTailFSAccess enables accessing shares via TailFS.
 	NodeAttrsTailFSAccess NodeCapability = "tailfs:access"
 
-	// NodeAttrsSuggestExitNode is applied to each exit node which the control plane has determined
+	// NodeAttrSuggestExitNode is applied to each exit node which the control plane has determined
 	// is a recommended exit node.
-	NodeAttrsSuggestExitNode NodeCapability = "suggest-exit-node"
+	NodeAttrSuggestExitNode NodeCapability = "suggest-exit-node"
 )
 
 // SetDNSRequest is a request to add a DNS record.
