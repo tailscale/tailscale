@@ -258,6 +258,18 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// config is empty, then we need to fallback to SplitDNS mode.
 		ocfg.MatchDomains = cfg.matchDomains()
 	} else {
+		// On iOS, check if all route names point to resources inside the tailnet. If so,
+		// we can set those names as MatchDomains to enable a split DNS configuration
+		// which will help preserve battery life.
+		// Because on iOS MatchDomains must equal SearchDomains, we cannot do this when
+		// we have any Routes outside the tailnet. Otherwise when app connectors are enabled,
+		// a query for 'work-laptop' might lead to search domain expansion, resolving
+		// as 'work-laptop.aws.com' for example.
+		if runtime.GOOS == "ios" && m.iosCanUseMatchDomains(rcfg) {
+			for r := range rcfg.Routes {
+				ocfg.MatchDomains = append(ocfg.MatchDomains, r)
+			}
+		}
 		var defaultRoutes []*dnstype.Resolver
 		for _, ip := range baseCfg.Nameservers {
 			defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
@@ -267,6 +279,28 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 
 	return rcfg, ocfg, nil
+}
+
+// iosCanUseMatchDomains returns true if the given resolver.Config only contains routes
+// that do not specify a set of custom resolver(s), i.e. they can be resolved locally.
+// If so, we can ask iOS to use the Tailscale resolver exclusively to resolve Routes,
+// instead of setting ourselves as the global DNS resolver, which forces all DNS queries
+// to go to Tailscale.
+func (m *Manager) iosCanUseMatchDomains(rcfg resolver.Config) bool {
+	for route, resolvers := range rcfg.Routes {
+		if route.WithoutTrailingDot() == "ts.net" {
+			// Ignore the "ts.net" route here. It always specifies the corp resolvers but
+			// its presence is not an issue, as ts.net is a search domain.
+			continue
+		}
+		if len(resolvers) != 0 {
+			// Found a route that requires custom resolvers, we have to be the global DNS
+			// resolver.
+			return false
+		}
+	}
+	// No routes have specified one or more resolvers, we can set MatchDomains.
+	return true
 }
 
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
