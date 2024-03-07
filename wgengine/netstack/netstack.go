@@ -357,11 +357,11 @@ func init() {
 	})
 }
 
-type protocolHandlerFunc func(stack.TransportEndpointID, stack.PacketBufferPtr) bool
+type protocolHandlerFunc func(stack.TransportEndpointID, *stack.PacketBuffer) bool
 
 // wrapUDPProtocolHandler wraps the protocol handler we pass to netstack for UDP.
 func (ns *Impl) wrapUDPProtocolHandler(h protocolHandlerFunc) protocolHandlerFunc {
-	return func(tei stack.TransportEndpointID, pb stack.PacketBufferPtr) bool {
+	return func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) bool {
 		addr := tei.LocalAddress
 		ip, ok := netip.AddrFromSlice(addr.AsSlice())
 		if !ok {
@@ -390,7 +390,7 @@ func (ns *Impl) wrapTCPProtocolHandler(h protocolHandlerFunc) protocolHandlerFun
 	// passes through our acceptTCP handler/etc. If false, then the packet
 	// is dropped and the TCP connection is rejected (typically with an
 	// ICMP Port Unreachable or ICMP Protocol Unreachable message).
-	return func(tei stack.TransportEndpointID, pb stack.PacketBufferPtr) (handled bool) {
+	return func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) (handled bool) {
 		localIP, ok := netip.AddrFromSlice(tei.LocalAddress.AsSlice())
 		if !ok {
 			ns.logf("netstack: could not parse local address for incoming connection")
