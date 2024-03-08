@@ -14,7 +14,7 @@ import (
 
 var downCmd = &ffcli.Command{
 	Name:       "down",
-	ShortUsage: "down",
+	ShortUsage: "tailscale down",
 	ShortHelp:  "Disconnect from Tailscale",
 
 	Exec:    runDown,

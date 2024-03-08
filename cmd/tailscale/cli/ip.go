@@ -16,7 +16,7 @@ import (
 
 var ipCmd = &ffcli.Command{
 	Name:       "ip",
-	ShortUsage: "ip [-1] [-4] [-6] [peer hostname or ip address]",
+	ShortUsage: "tailscale ip [-1] [-4] [-6] [peer hostname or ip address]",
 	ShortHelp:  "Show Tailscale IP addresses",
 	LongHelp:   "Show Tailscale IP addresses for peer. Peer defaults to the current machine.",
 	Exec:       runIP,

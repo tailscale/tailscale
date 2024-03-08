@@ -26,7 +26,7 @@ import (
 
 var sshCmd = &ffcli.Command{
 	Name:       "ssh",
-	ShortUsage: "ssh [user@]<host> [args...]",
+	ShortUsage: "tailscale ssh [user@]<host> [args...]",
 	ShortHelp:  "SSH to a Tailscale machine",
 	LongHelp: strings.TrimSpace(`
 

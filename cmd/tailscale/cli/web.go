@@ -26,7 +26,7 @@ import (
 
 var webCmd = &ffcli.Command{
 	Name:       "web",
-	ShortUsage: "web [flags]",
+	ShortUsage: "tailscale web [flags]",
 	ShortHelp:  "Run a web server for controlling Tailscale",
 
 	LongHelp: strings.TrimSpace(`

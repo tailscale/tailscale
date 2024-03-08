@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	shareAddUsage    = "share add <name> <path>"
-	shareRemoveUsage = "share remove <name>"
-	shareListUsage   = "share list"
+	shareAddUsage    = "tailscale share add <name> <path>"
+	shareRemoveUsage = "tailscale share remove <name>"
+	shareListUsage   = "tailscale share list"
 )
 
 var shareCmd = &ffcli.Command{

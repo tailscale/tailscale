@@ -17,26 +17,22 @@ import (
 )
 
 var switchCmd = &ffcli.Command{
-	Name:      "switch",
-	ShortHelp: "Switches to a different Tailscale account",
+	Name:       "switch",
+	ShortUsage: "tailscale switch <id>",
+	ShortHelp:  "Switches to a different Tailscale account",
+	LongHelp: `"tailscale switch" switches between logged in accounts. You can
+use the ID that's returned from 'tailnet switch -list'
+to pick which profile you want to switch to. Alternatively, you
+can use the Tailnet or the account names to switch as well.
+
+This command is currently in alpha and may change in the future.`,
+
 	FlagSet: func() *flag.FlagSet {
 		fs := flag.NewFlagSet("switch", flag.ExitOnError)
 		fs.BoolVar(&switchArgs.list, "list", false, "list available accounts")
 		return fs
 	}(),
 	Exec: switchProfile,
-	UsageFunc: func(*ffcli.Command) string {
-		return `USAGE
-  switch <id>
-  switch --list
-
-"tailscale switch" switches between logged in accounts. You can
-use the ID that's returned from 'tailnet switch -list'
-to pick which profile you want to switch to. Alternatively, you
-can use the Tailnet or the account names to switch as well.
-
-This command is currently in alpha and may change in the future.`
-	},
 }
 
 var switchArgs struct {

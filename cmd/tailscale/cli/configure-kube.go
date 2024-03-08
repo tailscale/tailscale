@@ -27,7 +27,7 @@ func init() {
 var configureKubeconfigCmd = &ffcli.Command{
 	Name:       "kubeconfig",
 	ShortHelp:  "[ALPHA] Connect to a Kubernetes cluster using a Tailscale Auth Proxy",
-	ShortUsage: "kubeconfig <hostname-or-fqdn>",
+	ShortUsage: "tailscale configure kubeconfig <hostname-or-fqdn>",
 	LongHelp: strings.TrimSpace(`
 Run this command to configure kubectl to connect to a Kubernetes cluster over Tailscale.
 

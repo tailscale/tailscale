@@ -12,7 +12,7 @@ import (
 
 var idTokenCmd = &ffcli.Command{
 	Name:       "id-token",
-	ShortUsage: "id-token <aud>",
+	ShortUsage: "tailscale id-token <aud>",
 	ShortHelp:  "fetch an OIDC id-token for the Tailscale machine",
 	Exec:       runIDToken,
 }

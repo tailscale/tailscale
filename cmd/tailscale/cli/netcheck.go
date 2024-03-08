@@ -28,7 +28,7 @@ import (
 
 var netcheckCmd = &ffcli.Command{
 	Name:       "netcheck",
-	ShortUsage: "netcheck",
+	ShortUsage: "tailscale netcheck",
 	ShortHelp:  "Print an analysis of local network conditions",
 	Exec:       runNetcheck,
 	FlagSet: (func() *flag.FlagSet {

@@ -44,12 +44,12 @@ func newServeLegacyCommand(e *serveEnv) *ffcli.Command {
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers",
 		ShortUsage: strings.Join([]string{
-			"serve http:<port> <mount-point> <source> [off]",
-			"serve https:<port> <mount-point> <source> [off]",
-			"serve tcp:<port> tcp://localhost:<local-port> [off]",
-			"serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]",
-			"serve status [--json]",
-			"serve reset",
+			"tailscale serve http:<port> <mount-point> <source> [off]",
+			"tailscale serve https:<port> <mount-point> <source> [off]",
+			"tailscale serve tcp:<port> tcp://localhost:<local-port> [off]",
+			"tailscale serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]",
+			"tailscale serve status [--json]",
+			"tailscale serve reset",
 		}, "\n  "),
 		LongHelp: strings.TrimSpace(`
 *** BETA; all of this is subject to change ***

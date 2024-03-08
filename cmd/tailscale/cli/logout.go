@@ -13,7 +13,7 @@ import (
 
 var logoutCmd = &ffcli.Command{
 	Name:       "logout",
-	ShortUsage: "logout [flags]",
+	ShortUsage: "tailscale logout",
 	ShortHelp:  "Disconnect from Tailscale and expire current node key",
 
 	LongHelp: strings.TrimSpace(`

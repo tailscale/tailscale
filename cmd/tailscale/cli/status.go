@@ -29,7 +29,7 @@ import (
 
 var statusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "status [--active] [--web] [--json]",
+	ShortUsage: "tailscale status [--active] [--web] [--json]",
 	ShortHelp:  "Show state of tailscaled and its connections",
 	LongHelp: strings.TrimSpace(`
 
