@@ -3,14 +3,12 @@
 
 set -eu
 
-REV=$(cat go.toolchain.rev)
-
 OUT=$(mktemp -d -t nar-hash-XXXXXX)
-rm -rf $OUT
+rm -rf "$OUT"
 
-./tool/go mod vendor -o $OUT
-./tool/go run tailscale.com/cmd/nardump --sri $OUT >go.mod.sri
-rm -rf $OUT
+./tool/go mod vendor -o "$OUT"
+./tool/go run tailscale.com/cmd/nardump --sri "$OUT" >go.mod.sri
+rm -rf "$OUT"
 
 # nix-direnv only watches the top-level nix file for changes. As a
 # result, when we change a referenced SRI file, we have to cause some

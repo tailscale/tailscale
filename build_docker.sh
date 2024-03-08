@@ -20,9 +20,9 @@
 set -eu
 
 # Use the "go" binary from the "tool" directory (which is github.com/tailscale/go)
-export PATH=$PWD/tool:$PATH
+export PATH="$PWD"/tool:"$PATH"
 
-eval $(./build_dist.sh shellvars)
+eval "$(./build_dist.sh shellvars)"
 
 DEFAULT_TARGET="client"
 DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
