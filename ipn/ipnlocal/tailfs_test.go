@@ -20,11 +20,11 @@ func TestNormalizeShareName(t *testing.T) {
 		},
 		{
 			name: "",
-			err:  errInvalidShareName,
+			err:  ErrInvalidShareName,
 		},
 		{
 			name: "generally good except for .",
-			err:  errInvalidShareName,
+			err:  ErrInvalidShareName,
 		},
 	}
 	for _, tt := range tests {

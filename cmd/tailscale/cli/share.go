@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	shareAddUsage    = "share add <name> <path>"
+	shareSetUsage    = "share set <name> <path>"
+	shareRenameUsage = "share rename <oldname> <newname>"
 	shareRemoveUsage = "share remove <name>"
 	shareListUsage   = "share list"
 )
@@ -23,7 +24,7 @@ var shareCmd = &ffcli.Command{
 	Name:      "share",
 	ShortHelp: "Share a directory with your tailnet",
 	ShortUsage: strings.Join([]string{
-		shareAddUsage,
+		shareSetUsage,
 		shareRemoveUsage,
 		shareListUsage,
 	}, "\n  "),
@@ -31,9 +32,15 @@ var shareCmd = &ffcli.Command{
 	UsageFunc: usageFuncNoDefaultValues,
 	Subcommands: []*ffcli.Command{
 		{
-			Name:      "add",
-			Exec:      runShareAdd,
-			ShortHelp: "[ALPHA] add a share",
+			Name:      "set",
+			Exec:      runShareSet,
+			ShortHelp: "[ALPHA] set a share",
+			UsageFunc: usageFunc,
+		},
+		{
+			Name:      "rename",
+			ShortHelp: "[ALPHA] rename a share",
+			Exec:      runShareRename,
 			UsageFunc: usageFunc,
 		},
 		{
@@ -54,20 +61,20 @@ var shareCmd = &ffcli.Command{
 	},
 }
 
-// runShareAdd is the entry point for the "tailscale share add" command.
-func runShareAdd(ctx context.Context, args []string) error {
+// runShareSet is the entry point for the "tailscale share set" command.
+func runShareSet(ctx context.Context, args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: tailscale %v", shareAddUsage)
+		return fmt.Errorf("usage: tailscale %v", shareSetUsage)
 	}
 
 	name, path := args[0], args[1]
 
-	err := localClient.TailFSShareAdd(ctx, &tailfs.Share{
+	err := localClient.TailFSShareSet(ctx, &tailfs.Share{
 		Name: name,
 		Path: path,
 	})
 	if err == nil {
-		fmt.Printf("Added share %q at %q\n", name, path)
+		fmt.Printf("Set share %q at %q\n", name, path)
 	}
 	return err
 }
@@ -82,6 +89,21 @@ func runShareRemove(ctx context.Context, args []string) error {
 	err := localClient.TailFSShareRemove(ctx, name)
 	if err == nil {
 		fmt.Printf("Removed share %q\n", name)
+	}
+	return err
+}
+
+// runShareRename is the entry point for the "tailscale share rename" command.
+func runShareRename(ctx context.Context, args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: tailscale %v", shareRenameUsage)
+	}
+	oldName := args[0]
+	newName := args[1]
+
+	err := localClient.TailFSShareRename(ctx, oldName, newName)
+	if err == nil {
+		fmt.Printf("Renamed share %q to %q\n", oldName, newName)
 	}
 	return err
 }
@@ -148,7 +170,7 @@ For example, to enable sharing and accessing shares for all member nodes:
 
 Each share is identified by a name and points to a directory at a specific path. For example, to share the path /Users/me/Documents under the name "docs", you would run:
 
-  $ tailscale share add docs /Users/me/Documents
+  $ tailscale share set docs /Users/me/Documents
 
 Note that the system forces share names to lowercase to avoid problems with clients that don't support case-sensitive filenames.
 
@@ -202,9 +224,13 @@ To categorically give yourself access to all your shares, you can use the below 
 
 Whenever either you or anyone in the group "home" connects to the share, they connect as if they are using your local machine user. They'll be able to read the same files as your user and if they create files, those files will be owned by your user.%s
 
+You can rename shares, for example you could rename the above share by running:
+
+  $ tailscale share rename docs newdocs
+
 You can remove shares by name, for example you could remove the above share by running:
 
-  $ tailscale share remove docs
+  $ tailscale share remove newdocs
 
 You can get a list of currently published shares by running:
 
@@ -214,4 +240,4 @@ var shareLongHelpAs = `
 
 If you want a share to be accessed as a different user, you can use sudo to accomplish this. For example, to create the aforementioned share as "theuser", you could run:
 
-	$ sudo -u theuser tailscale share add docs /Users/theuser/Documents`
+	$ sudo -u theuser tailscale share set docs /Users/theuser/Documents`
