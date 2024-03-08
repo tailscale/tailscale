@@ -6,7 +6,9 @@ package ipnlocal
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"tailscale.com/ipn"
@@ -24,7 +26,8 @@ const (
 
 var (
 	shareNameRegex      = regexp.MustCompile(`^[a-z0-9_\(\) ]+$`)
-	errInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
+	ErrTailFSNotEnabled = errors.New("TailFS not enabled")
+	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
 )
 
 // TailFSSharingEnabled reports whether sharing to remote nodes via tailfs is
@@ -59,18 +62,18 @@ func (b *LocalBackend) tailFSAccessEnabledLocked() bool {
 func (b *LocalBackend) TailFSSetFileServerAddr(addr string) error {
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
-		return errors.New("tailfs not enabled")
+		return ErrTailFSNotEnabled
 	}
 
 	fs.SetFileServerAddr(addr)
 	return nil
 }
 
-// TailFSAddShare adds the given share if no share with that name exists, or
-// replaces the existing share if one with the same name already exists.
-// To avoid potential incompatibilities across file systems, share names are
+// TailFSSetShare adds the given share if no share with that name exists, or
+// replaces the existing share if one with the same name already exists. To
+// avoid potential incompatibilities across file systems, share names are
 // limited to alphanumeric characters and the underscore _.
-func (b *LocalBackend) TailFSAddShare(share *tailfs.Share) error {
+func (b *LocalBackend) TailFSSetShare(share *tailfs.Share) error {
 	var err error
 	share.Name, err = normalizeShareName(share.Name)
 	if err != nil {
@@ -78,7 +81,7 @@ func (b *LocalBackend) TailFSAddShare(share *tailfs.Share) error {
 	}
 
 	b.mu.Lock()
-	shares, err := b.tailFSAddShareLocked(share)
+	shares, err := b.tailFSSetShareLocked(share)
 	b.mu.Unlock()
 	if err != nil {
 		return err
@@ -99,18 +102,18 @@ func normalizeShareName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 
 	if !shareNameRegex.MatchString(name) {
-		return "", errInvalidShareName
+		return "", ErrInvalidShareName
 	}
 
 	return name, nil
 }
 
-func (b *LocalBackend) tailFSAddShareLocked(share *tailfs.Share) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+func (b *LocalBackend) tailFSSetShareLocked(share *tailfs.Share) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
 	existingShares := b.pm.prefs.TailFSShares()
 
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
-		return existingShares, errors.New("tailfs not enabled")
+		return existingShares, ErrTailFSNotEnabled
 	}
 
 	addedShare := false
@@ -130,6 +133,70 @@ func (b *LocalBackend) tailFSAddShareLocked(share *tailfs.Share) (views.SliceVie
 		shares = append(shares, share)
 	}
 
+	err := b.tailFSSetSharesLocked(shares)
+	if err != nil {
+		return existingShares, err
+	}
+	fs.SetShares(shares)
+
+	return b.pm.prefs.TailFSShares(), nil
+}
+
+// TailFSRenameShare renames the share at old name to new name. To avoid
+// potential incompatibilities across file systems, the new share name is
+// limited to alphanumeric characters and the underscore _.
+// Any of the following will result in an error.
+// - no share found under old name
+// - new share name contains disallowed characters
+// - share already exists under new name
+func (b *LocalBackend) TailFSRenameShare(oldName, newName string) error {
+	var err error
+	newName, err = normalizeShareName(newName)
+	if err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	shares, err := b.tailFSRenameShareLocked(oldName, newName)
+	b.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	b.tailFSNotifyShares(shares)
+	return nil
+}
+
+func (b *LocalBackend) tailFSRenameShareLocked(oldName, newName string) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+	existingShares := b.pm.prefs.TailFSShares()
+
+	fs, ok := b.sys.TailFSForRemote.GetOK()
+	if !ok {
+		return existingShares, ErrTailFSNotEnabled
+	}
+
+	found := false
+	var shares []*tailfs.Share
+	for i := 0; i < existingShares.Len(); i++ {
+		existing := existingShares.At(i)
+		if existing.Name() == newName {
+			return existingShares, os.ErrExist
+		}
+		if existing.Name() == oldName {
+			share := existing.AsStruct()
+			share.Name = newName
+			shares = append(shares, share)
+			found = true
+		} else {
+			shares = append(shares, existing.AsStruct())
+		}
+	}
+
+	if !found {
+		return existingShares, os.ErrNotExist
+	}
+
+	slices.SortFunc(shares, tailfs.CompareShares)
 	err := b.tailFSSetSharesLocked(shares)
 	if err != nil {
 		return existingShares, err
@@ -166,15 +233,22 @@ func (b *LocalBackend) tailFSRemoveShareLocked(name string) (views.SliceView[*ta
 
 	fs, ok := b.sys.TailFSForRemote.GetOK()
 	if !ok {
-		return existingShares, errors.New("tailfs not enabled")
+		return existingShares, ErrTailFSNotEnabled
 	}
 
+	found := false
 	var shares []*tailfs.Share
 	for i := 0; i < existingShares.Len(); i++ {
 		existing := existingShares.At(i)
 		if existing.Name() != name {
 			shares = append(shares, existing.AsStruct())
+		} else {
+			found = true
 		}
+	}
+
+	if !found {
+		return existingShares, os.ErrNotExist
 	}
 
 	err := b.tailFSSetSharesLocked(shares)
