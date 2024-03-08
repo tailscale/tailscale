@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -42,12 +43,21 @@ func (t *target) Build(b *dist.Build) ([]string, error) {
 }
 
 func (t *target) buildSPK(b *dist.Build, inner *innerPkg) ([]string, error) {
-	filename := fmt.Sprintf("tailscale-%s-%s-%d-dsm%d.spk", t.filenameArch, b.Version.Short, b.Version.Synology[t.dsmMajorVersion], t.dsmMajorVersion)
+	synoVersion := b.Version.Synology[t.dsmMajorVersion]
+	filename := fmt.Sprintf("tailscale-%s-%s-%d-dsm%d.spk", t.filenameArch, b.Version.Short, synoVersion, t.dsmMajorVersion)
 	out := filepath.Join(b.Out, filename)
 	if t.packageCenter {
 		log.Printf("Building %s (for package center)", filename)
 	} else {
 		log.Printf("Building %s (for sideloading)", filename)
+	}
+
+	if synoVersion > 2147483647 {
+		// Synology requires that version number is within int32 range.
+		// Erroring here if we create a build with a higher version.
+		// In this case, we'll want to adjust the VersionInfo.Synology logic in
+		// the mkversion package.
+		return nil, errors.New("syno version exceeds int32 range")
 	}
 
 	privFile := fmt.Sprintf("privilege-dsm%d", t.dsmMajorVersion)
