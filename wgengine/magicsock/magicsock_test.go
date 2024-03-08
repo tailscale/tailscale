@@ -41,9 +41,11 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
 	"tailscale.com/net/stun/stuntest"
@@ -3013,6 +3015,121 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 			}
 			if !test.wantDERP && derpAddr.IsValid() {
 				t.Errorf("%s: derpAddr returned is valid, will be sent to DERP", test.desc)
+			}
+		})
+	}
+}
+
+func TestMaybeSetNearestDERP(t *testing.T) {
+	derpMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				RegionID:   1,
+				RegionCode: "test",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t1",
+						RegionID: 1,
+						HostName: "test-node.unused",
+						IPv4:     "127.0.0.1",
+						IPv6:     "none",
+					},
+				},
+			},
+			21: {
+				RegionID:   21,
+				RegionCode: "tor",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "21b",
+						RegionID: 21,
+						HostName: "tor.test-node.unused",
+						IPv4:     "127.0.0.1",
+						IPv6:     "none",
+					},
+				},
+			},
+			31: {
+				RegionID:   31,
+				RegionCode: "fallback",
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "31b",
+						RegionID: 31,
+						HostName: "fallback.test-node.unused",
+						IPv4:     "127.0.0.1",
+						IPv6:     "none",
+					},
+				},
+			},
+		},
+	}
+
+	// Ensure that our fallback code always picks a deterministic value.
+	tstest.Replace(t, &pickDERPFallbackForTests, func() int { return 31 })
+
+	// Actually test this code path.
+	tstest.Replace(t, &checkControlHealthDuringNearestDERPInTests, true)
+
+	testCases := []struct {
+		name               string
+		old                int
+		reportDERP         int
+		connectedToControl bool
+		want               int
+	}{
+		{
+			name:               "connected_with_report_derp",
+			old:                1,
+			reportDERP:         21,
+			connectedToControl: true,
+			want:               21,
+		},
+		{
+			name:               "not_connected_with_report_derp",
+			old:                1,
+			reportDERP:         21,
+			connectedToControl: false,
+			want:               1, // no change
+		},
+		{
+			name:               "connected_no_derp",
+			old:                1,
+			reportDERP:         0,
+			connectedToControl: true,
+			want:               1, // no change
+		},
+		{
+			name:               "connected_no_derp_fallback",
+			old:                0,
+			reportDERP:         0,
+			connectedToControl: true,
+			want:               31, // deterministic fallback
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn()
+			c.logf = t.Logf
+			c.myDerp = tt.old
+			c.derpMap = derpMap
+
+			report := &netcheck.Report{PreferredDERP: tt.reportDERP}
+
+			oldConnected := health.GetInPollNetMap()
+			if tt.connectedToControl != oldConnected {
+				if tt.connectedToControl {
+					health.GotStreamedMapResponse()
+					t.Cleanup(health.SetOutOfPollNetMap)
+				} else {
+					health.SetOutOfPollNetMap()
+					t.Cleanup(health.GotStreamedMapResponse)
+				}
+			}
+
+			got := c.maybeSetNearestDERP(report)
+			if got != tt.want {
+				t.Errorf("got new DERP region %d, want %d", got, tt.want)
 			}
 		})
 	}
