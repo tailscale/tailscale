@@ -2571,9 +2571,14 @@ func (h *Handler) serveTailFSFileServerAddr(w http.ResponseWriter, r *http.Reque
 }
 
 // serveShares handles the management of tailfs shares.
+//
+// PUT - adds or updates an existing share
+// DELETE - removes a share
+// GET - gets a list of all shares, sorted by name
+// POST - renames an existing share
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	if !h.b.TailFSSharingEnabled() {
-		http.Error(w, `tailfs sharing not enabled, please add the attribute "tailfs:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusInternalServerError)
+		http.Error(w, `tailfs sharing not enabled, please add the attribute "tailfs:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusForbidden)
 		return
 	}
 	switch r.Method {
@@ -2603,23 +2608,51 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			}
 			share.As = username
 		}
-		err = h.b.TailFSAddShare(&share)
+		err = h.b.TailFSSetShare(&share)
 		if err != nil {
+			if errors.Is(err, ipnlocal.ErrInvalidShareName) {
+				http.Error(w, "invalid share name", http.StatusBadRequest)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 	case "DELETE":
-		var share tailfs.Share
-		err := json.NewDecoder(r.Body).Decode(&share)
+		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		err = h.b.TailFSRemoveShare(share.Name)
+		err = h.b.TailFSRemoveShare(string(b))
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "share not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case "POST":
+		var names [2]string
+		err := json.NewDecoder(r.Body).Decode(&names)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		err = h.b.TailFSRenameShare(names[0], names[1])
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "share not found", http.StatusNotFound)
+				return
+			}
+			if os.IsExist(err) {
+				http.Error(w, "share name already used", http.StatusBadRequest)
+				return
+			}
+			if errors.Is(err, ipnlocal.ErrInvalidShareName) {
+				http.Error(w, "invalid share name", http.StatusBadRequest)
 				return
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)

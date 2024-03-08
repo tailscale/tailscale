@@ -1426,10 +1426,10 @@ func (lc *LocalClient) TailFSSetFileServerAddr(ctx context.Context, addr string)
 	return err
 }
 
-// TailFSShareAdd adds the given share to the list of shares that TailFS will
-// serve to remote nodes. If a share with the same name already exists, the
-// existing share is replaced/updated.
-func (lc *LocalClient) TailFSShareAdd(ctx context.Context, share *tailfs.Share) error {
+// TailFSShareSet adds or updates the given share in the list of shares that
+// TailFS will serve to remote nodes. If a share with the same name already
+// exists, the existing share is replaced/updated.
+func (lc *LocalClient) TailFSShareSet(ctx context.Context, share *tailfs.Share) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/shares", http.StatusCreated, jsonBody(share))
 	return err
 }
@@ -1442,9 +1442,18 @@ func (lc *LocalClient) TailFSShareRemove(ctx context.Context, name string) error
 		"DELETE",
 		"/localapi/v0/tailfs/shares",
 		http.StatusNoContent,
-		jsonBody(&tailfs.Share{
-			Name: name,
-		}))
+		strings.NewReader(name))
+	return err
+}
+
+// TailFSShareRename renames the share from old to new name.
+func (lc *LocalClient) TailFSShareRename(ctx context.Context, oldName, newName string) error {
+	_, err := lc.send(
+		ctx,
+		"POST",
+		"/localapi/v0/tailfs/shares",
+		http.StatusNoContent,
+		jsonBody([2]string{oldName, newName}))
 	return err
 }
 
