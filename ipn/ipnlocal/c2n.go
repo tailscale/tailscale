@@ -26,9 +26,13 @@ import (
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/set"
@@ -72,6 +76,10 @@ var c2nHandlers = map[methodAndPath]c2nHandler{
 
 	// Linux netfilter.
 	req("POST /netfilter-kind"): handleC2NSetNetfilterKind,
+
+	// Remote config
+	req("/remote-config/prefs"): handleC2NRemoteConfigPrefs,
+	// TODO(bradfitz): more (but not all) LocalAPI proxies for remote-config
 }
 
 type c2nHandler func(*LocalBackend, http.ResponseWriter, *http.Request)
@@ -568,4 +576,34 @@ func handleC2NTLSCertStatus(b *LocalBackend, w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, ret)
+}
+
+// NewC2NLocalAPIHandler is initialized by the localapi package's init func.
+// It returns a new http.Handler that serves LocalAPI for c2n.
+var NewC2NLocalAPIHandler func(b *LocalBackend, logf logger.Logf, netMon *netmon.Monitor, logID logid.PublicID) http.Handler
+
+func handleC2NRemoteConfigPrefs(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	prefs := b.Prefs()
+	if !prefs.Valid() || !prefs.RemoteConfig() {
+		http.Error(w, "remote config not enabled", http.StatusForbidden)
+		return
+	}
+	if NewC2NLocalAPIHandler == nil {
+		http.Error(w, "remote config not wired up", http.StatusInternalServerError)
+		return
+	}
+	var newPath string
+	switch r.URL.Path {
+	case "/remote-config/prefs":
+		newPath = "/localapi/v0/prefs"
+	default:
+		http.Error(w, "unsupported path", http.StatusBadRequest)
+		return
+	}
+	r2 := r.WithContext(r.Context())
+	r2.URL = ptr.To(*r.URL) // shallow clone
+	r2.URL.Path = newPath
+
+	h := NewC2NLocalAPIHandler(b, b.logf, b.sys.NetMon.Get(), b.backendLogID)
+	h.ServeHTTP(w, r2)
 }

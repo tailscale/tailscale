@@ -222,6 +222,10 @@ type Prefs struct {
 	// Linux-only.
 	NetfilterKind string
 
+	// RemoteConfig specifies whether to allow the control server to
+	// manage this node's settings.
+	RemoteConfig bool
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -293,6 +297,7 @@ type MaskedPrefs struct {
 	AppConnectorSet           bool                `json:",omitempty"`
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
+	RemoteConfigSet           bool                `json:",omitempty"`
 }
 
 type AutoUpdatePrefsMask struct {
@@ -467,6 +472,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
+	if p.RemoteConfig {
+		sb.WriteString("remoteconfig=true ")
+	}
 	if p.ExitNodeIP.IsValid() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
 	} else if !p.ExitNodeID.IsZero() {
@@ -549,6 +557,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
 		p.ForceDaemon == p2.ForceDaemon &&
+		p.RemoteConfig == p2.RemoteConfig &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist) &&

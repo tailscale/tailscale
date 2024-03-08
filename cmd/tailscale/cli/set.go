@@ -56,6 +56,7 @@ type setArgsT struct {
 	updateCheck            bool
 	updateApply            bool
 	postureChecking        bool
+	remoteConfig           bool
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -76,6 +77,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "HIDDEN: allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "run a web interface for managing this node, served over Tailscale at port 5252")
+	setf.BoolVar(&setArgs.remoteConfig, "remote-config", false, "HIDDEN: allow talinet admins to manage this node's settings")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -116,6 +118,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
 			ForceDaemon:            setArgs.forceDaemon,
+			RemoteConfig:           setArgs.remoteConfig,
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
 				Apply: opt.NewBool(setArgs.updateApply),
@@ -148,6 +151,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			advertiseRoutesSet = true
 		}
 	})
+
 	if maskedPrefs.IsEmpty() {
 		return flag.ErrHelp
 	}
