@@ -23,6 +23,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -31,6 +32,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/sysresources"
+	"tailscale.com/util/testenv"
 )
 
 // useDerpRoute reports whether magicsock should enable the DERP
@@ -85,7 +87,10 @@ type activeDerp struct {
 	createTime time.Time
 }
 
-var processStartUnixNano = time.Now().UnixNano()
+var (
+	processStartUnixNano     = time.Now().UnixNano()
+	pickDERPFallbackForTests func() int
+)
 
 // pickDERPFallback returns a non-zero but deterministic DERP node to
 // connect to.  This is only used if netcheck couldn't find the
@@ -121,9 +126,57 @@ func (c *Conn) pickDERPFallback() int {
 		return c.myDerp
 	}
 
+	if pickDERPFallbackForTests != nil {
+		return pickDERPFallbackForTests()
+	}
+
 	h := fnv.New64()
 	fmt.Fprintf(h, "%p/%d", c, processStartUnixNano) // arbitrary
 	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]
+}
+
+// This allows existing tests to pass, but allows us to still test the
+// behaviour during tests.
+var checkControlHealthDuringNearestDERPInTests = false
+
+// maybeSetNearestDERP selects and changes the nearest/preferred DERP server
+// based on the netcheck report and other heuristics. It returns the DERP
+// region that it selected and set (via setNearestDERP).
+//
+// c.mu must NOT be held.
+func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) {
+	// Don't change our PreferredDERP if we don't have a connection to
+	// control; if we don't, then we can't inform peers about a DERP home
+	// change, which breaks all connectivity. Even if this DERP region is
+	// down, changing our home DERP isn't correct since peers can't
+	// discover that change.
+	//
+	// See https://github.com/tailscale/corp/issues/18095
+	//
+	// For tests, always assume we're connected to control unless we're
+	// explicitly testing this behaviour.
+	var connectedToControl bool
+	if testenv.InTest() && !checkControlHealthDuringNearestDERPInTests {
+		connectedToControl = true
+	} else {
+		connectedToControl = health.GetInPollNetMap()
+	}
+	if !connectedToControl {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.myDerp
+	}
+
+	preferredDERP = report.PreferredDERP
+	if preferredDERP == 0 {
+		// Perhaps UDP is blocked. Pick a deterministic but arbitrary
+		// one.
+		preferredDERP = c.pickDERPFallback()
+	}
+	if !c.setNearestDERP(preferredDERP) {
+		preferredDERP = 0
+	}
+	return
 }
 
 func (c *Conn) derpRegionCodeLocked(regionID int) string {
