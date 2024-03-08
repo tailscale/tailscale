@@ -90,7 +90,7 @@ func checkSupportsV6NAT(ipt *iptables.IPTables, logf logger.Logf) bool {
 	if ipt == nil || ipt.Proto() != iptables.ProtocolIPv6 {
 		return false
 	}
-	natListErr, _ := ipt.ListChains("nat")
+	_, natListErr := ipt.ListChains("nat")
 	if natListErr == nil {
 		return true
 	}
