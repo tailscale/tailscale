@@ -73,10 +73,30 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		if err != nil {
 			return nil, err
 		}
-		supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
-		logf("v6nat = %v", supportsV6NAT)
+		supportsV6 = checkSupportsV6Filter(ipt6, logf)
+		if supportsV6 {
+			supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
+		}
+		logf("v6filter = %v, v6nat = %v", supportsV6, supportsV6NAT)
 	}
 	return &iptablesRunner{ipt4, ipt6, supportsV6, supportsV6NAT}, nil
+}
+
+// checkSupportsV6Filter returns whether the system has a "filter" table in the
+// IPv6 tables. Some container environments such as GitHub codespaces have
+// limited local IPv6 support, and containers containing ip6tables, but do not
+// have kernel support for IPv6 filtering.
+// We will not enable IPv6 in these instances.
+func checkSupportsV6Filter(ipt *iptables.IPTables, logf logger.Logf) bool {
+	if ipt == nil {
+		return false
+	}
+	_, filterListErr := ipt.ListChains("filter")
+	if filterListErr == nil {
+		return true
+	}
+	logf("ipv6 unavailable due to missing filter table: %s", filterListErr)
+	return false
 }
 
 // checkSupportsV6NAT returns whether the system has a "nat" table in the
