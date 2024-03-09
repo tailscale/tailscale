@@ -46,6 +46,7 @@ import (
 	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -546,6 +547,7 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
+	varz.Handler(w, r)
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 

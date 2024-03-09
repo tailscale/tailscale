@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/set"
@@ -146,6 +147,7 @@ func handleC2NDebugPrefs(b *LocalBackend, w http.ResponseWriter, r *http.Request
 
 func handleC2NDebugMetrics(_ *LocalBackend, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+	varz.Handler(w, r)
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
