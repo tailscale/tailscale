@@ -24,7 +24,7 @@ func SetConnectorCondition(cn *tsapi.Connector, conditionType tsapi.ConnectorCon
 	cn.Status.Conditions = conds
 }
 
-// RemoveConnectorCondition will remove condition of the given type.
+// RemoveConnectorCondition will remove condition of the given type if it exists.
 func RemoveConnectorCondition(conn *tsapi.Connector, conditionType tsapi.ConnectorConditionType) {
 	conn.Status.Conditions = slices.DeleteFunc(conn.Status.Conditions, func(cond tsapi.ConnectorCondition) bool {
 		return cond.Type == conditionType
@@ -37,6 +37,14 @@ func RemoveConnectorCondition(conn *tsapi.Connector, conditionType tsapi.Connect
 func SetProxyClassCondition(pc *tsapi.ProxyClass, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
 	conds := updateCondition(pc.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
 	pc.Status.Conditions = conds
+}
+
+// SetDNSConfigCondition ensures that DNSConfig status has a condition with the
+// given attributes. LastTransitionTime gets set every time condition's status
+// changes
+func SetDNSConfigCondition(dnsCfg *tsapi.DNSConfig, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(dnsCfg.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
+	dnsCfg.Status.Conditions = conds
 }
 
 func updateCondition(conds []tsapi.ConnectorCondition, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []tsapi.ConnectorCondition {
@@ -61,8 +69,9 @@ func updateCondition(conds []tsapi.ConnectorCondition, conditionType tsapi.Conne
 	}
 
 	cond := conds[idx] // update the existing condition
-	// If this update doesn't contain a state transition, we don't update
-	// the conditions LastTransitionTime to Now().
+
+	// If this update doesn't contain a state transition, don't update last
+	// transition time.
 	if cond.Status == status {
 		newCondition.LastTransitionTime = cond.LastTransitionTime
 	} else {
@@ -81,4 +90,15 @@ func ProxyClassIsReady(pc *tsapi.ProxyClass) bool {
 	}
 	cond := pc.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pc.Generation
+}
+
+func DNSCfgIsReady(cfg *tsapi.DNSConfig) bool {
+	idx := xslices.IndexFunc(cfg.Status.Conditions, func(cond tsapi.ConnectorCondition) bool {
+		return cond.Type == tsapi.NameserverReady
+	})
+	if idx == -1 {
+		return false
+	}
+	cond := cfg.Status.Conditions[idx]
+	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == cfg.Generation
 }

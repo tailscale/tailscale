@@ -98,5 +98,4 @@ func TestSetConnectorCondition(t *testing.T) {
 			},
 		},
 	})
-
 }
