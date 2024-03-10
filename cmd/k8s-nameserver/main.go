@@ -86,8 +86,8 @@ func main() {
 	dns.HandleFunc(tsNetDomain, ns.handleFunc())
 
 	// Listen for DNS queries over UDP and TCP.
-	udpSig := make(chan any)
-	tcpSig := make(chan any)
+	udpSig := make(chan os.Signal)
+	tcpSig := make(chan os.Signal)
 	go listenAndServe("udp", addr, udpSig)
 	go listenAndServe("tcp", addr, tcpSig)
 	sig := make(chan os.Signal, 1)
@@ -248,7 +248,7 @@ func (n *nameserver) resetRecords() error {
 }
 
 // listenAndServe starts a DNS server for the provided network and address.
-func listenAndServe(net, addr string, shutdown chan any) {
+func listenAndServe(net, addr string, shutdown chan os.Signal) {
 	s := &dns.Server{Addr: addr, Net: net}
 	go func() {
 		<-shutdown

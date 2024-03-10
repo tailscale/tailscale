@@ -24,7 +24,7 @@ func TestNameserver(t *testing.T) {
 	}{
 		{
 			name: "A record query, record exists",
-			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): []net.IP{{1, 2, 3, 4}}},
+			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeA}},
 				MsgHdr:   dns.MsgHdr{Id: 1, RecursionDesired: true},
@@ -46,7 +46,7 @@ func TestNameserver(t *testing.T) {
 		},
 		{
 			name: "A record query, record does not exist",
-			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): []net.IP{{1, 2, 3, 4}}},
+			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "baz.bar.com", Qtype: dns.TypeA}},
 				MsgHdr:   dns.MsgHdr{Id: 1},
@@ -64,7 +64,7 @@ func TestNameserver(t *testing.T) {
 		},
 		{
 			name: "A record query, but the name is not a valid FQDN",
-			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): []net.IP{{1, 2, 3, 4}}},
+			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "foo..bar.com", Qtype: dns.TypeA}},
 				MsgHdr:   dns.MsgHdr{Id: 1},
@@ -80,7 +80,7 @@ func TestNameserver(t *testing.T) {
 		},
 		{
 			name: "AAAA record query",
-			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): []net.IP{{1, 2, 3, 4}}},
+			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeAAAA}},
 				MsgHdr:   dns.MsgHdr{Id: 1},
@@ -96,7 +96,7 @@ func TestNameserver(t *testing.T) {
 		},
 		{
 			name: "AAAA record query",
-			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): []net.IP{{1, 2, 3, 4}}},
+			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeAAAA}},
 				MsgHdr:   dns.MsgHdr{Id: 1},
@@ -112,7 +112,7 @@ func TestNameserver(t *testing.T) {
 		},
 		{
 			name: "CNAME record query",
-			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): []net.IP{{1, 2, 3, 4}}},
+			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeCNAME}},
 				MsgHdr:   dns.MsgHdr{Id: 1},
@@ -153,29 +153,29 @@ func TestResetRecords(t *testing.T) {
 		{
 			name:     "previously empty nameserver.ip4 gets set",
 			config:   []byte(`{"version": "v1alpha1", "ip4": {"foo.bar.com": ["1.2.3.4"]}}`),
-			wantsIp4: map[dnsname.FQDN][]net.IP{"foo.bar.com.": []net.IP{{1, 2, 3, 4}}},
+			wantsIp4: map[dnsname.FQDN][]net.IP{"foo.bar.com.": {{1, 2, 3, 4}}},
 		},
 		{
 			name:     "nameserver.ip4 gets reset",
-			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": []net.IP{{1, 1, 3, 3}}},
+			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": {{1, 1, 3, 3}}},
 			config:   []byte(`{"version": "v1alpha1", "ip4": {"foo.bar.com": ["1.2.3.4"]}}`),
-			wantsIp4: map[dnsname.FQDN][]net.IP{"foo.bar.com.": []net.IP{{1, 2, 3, 4}}},
+			wantsIp4: map[dnsname.FQDN][]net.IP{"foo.bar.com.": {{1, 2, 3, 4}}},
 		},
 		{
 			name:     "configuration with incompatible version",
-			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": []net.IP{{1, 1, 3, 3}}},
+			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": {{1, 1, 3, 3}}},
 			config:   []byte(`{"version": "v1beta1", "ip4": {"foo.bar.com": ["1.2.3.4"]}}`),
-			wantsIp4: map[dnsname.FQDN][]net.IP{"baz.bar.com.": []net.IP{{1, 1, 3, 3}}},
+			wantsIp4: map[dnsname.FQDN][]net.IP{"baz.bar.com.": {{1, 1, 3, 3}}},
 			wantsErr: true,
 		},
 		{
 			name:     "nameserver.ip4 gets reset to empty config when no configuration is provided",
-			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": []net.IP{{1, 1, 3, 3}}},
+			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": {{1, 1, 3, 3}}},
 			wantsIp4: make(map[dnsname.FQDN][]net.IP),
 		},
 		{
 			name:     "nameserver.ip4 gets reset to empty config when the provided configuration is empty",
-			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": []net.IP{{1, 1, 3, 3}}},
+			hasIp4:   map[dnsname.FQDN][]net.IP{"baz.bar.com.": {{1, 1, 3, 3}}},
 			config:   []byte(`{"version": "v1alpha1", "ip4": {}}`),
 			wantsIp4: make(map[dnsname.FQDN][]net.IP),
 		},
