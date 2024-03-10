@@ -2367,6 +2367,20 @@ func (b *LocalBackend) DebugNotify(n ipn.Notify) {
 	b.send(n)
 }
 
+// DebugNotifyLastNetMap injects a fake notify message to clients,
+// repeating whatever the last netmap was.
+//
+// It should only be used via the LocalAPI's debug handler.
+func (b *LocalBackend) DebugNotifyLastNetMap() {
+	b.mu.Lock()
+	nm := b.netMap
+	b.mu.Unlock()
+
+	if nm != nil {
+		b.send(ipn.Notify{NetMap: nm})
+	}
+}
+
 // DebugForceNetmapUpdate forces a full no-op netmap update of the current
 // netmap in all the various subsystems (wireguard, magicsock, LocalBackend).
 //
