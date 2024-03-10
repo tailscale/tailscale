@@ -50,7 +50,7 @@ type nameserver struct {
 	// configReader returns the latest desired configuration (host records)
 	// for the nameserver. By default it gets set to a reader that reads
 	// from a Kubernetes ConfigMap mounted at /config, but this can be
-	// overriden in tests.
+	// overridden in tests.
 	configReader configReaderFunc
 	// configWatcher is a watcher that returns an event when the desired
 	// configuration has changed and the nameserver should update the

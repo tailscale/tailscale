@@ -1153,7 +1153,6 @@ func TestProxyFirewallMode(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 
 }
-
 func Test_isMagicDNSName(t *testing.T) {
 	tests := []struct {
 		in   string
