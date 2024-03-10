@@ -599,6 +599,8 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		h.b.DebugNotify(n)
+	case "notify-last-netmap":
+		h.b.DebugNotifyLastNetMap()
 	case "break-tcp-conns":
 		err = h.b.DebugBreakTCPConns()
 	case "break-derp-conns":
