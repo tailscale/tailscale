@@ -28,11 +28,11 @@ import (
 const (
 	domain = `test$%domain.com`
 
-	remote1 = `remote$%1`
-	remote2 = `_remote$%2`
-	share11 = `share$%11`
-	share12 = `_share$%12`
-	file111 = `file$%111.txt`
+	remote1 = `rem ote$%1`
+	remote2 = `_rem ote$%2`
+	share11 = `sha re$%11`
+	share12 = `_sha re$%12`
+	file111 = `fi le$%111.txt`
 )
 
 func init() {
