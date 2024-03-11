@@ -400,7 +400,14 @@ func TestStateMachine(t *testing.T) {
 	// Attempted non-interactive login with no key; indicate that
 	// the user needs to visit a login URL.
 	t.Logf("\n\nLogin (url response)")
-	notifies.expect(1)
+
+	notifies.expect(2)
+	b.EditPrefs(&ipn.MaskedPrefs{
+		ControlURLSet: true,
+		Prefs: ipn.Prefs{
+			ControlURL: "https://localhost:1/",
+		},
+	})
 	url1 := "https://localhost:1/1"
 	cc.send(nil, url1, false, nil)
 	{
@@ -409,11 +416,11 @@ func TestStateMachine(t *testing.T) {
 		// ...but backend eats that notification, because the user
 		// didn't explicitly request interactive login yet, and
 		// we're already in NeedsLogin state.
-		nn := notifies.drain(1)
+		nn := notifies.drain(2)
 
-		c.Assert(nn[0].Prefs, qt.IsNotNil)
-		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsTrue)
-		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
+		c.Assert(nn[1].Prefs, qt.IsNotNil)
+		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsTrue)
+		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -775,12 +782,18 @@ func TestStateMachine(t *testing.T) {
 	// We want to try logging in as a different user, while Stopped.
 	// First, start the login process (without logging out first).
 	t.Logf("\n\nLoginDifferent")
-	notifies.expect(1)
+	notifies.expect(2)
+	b.EditPrefs(&ipn.MaskedPrefs{
+		ControlURLSet: true,
+		Prefs: ipn.Prefs{
+			ControlURL: "https://localhost:1/",
+		},
+	})
 	b.StartLoginInteractive()
 	url3 := "https://localhost:1/3"
 	cc.send(nil, url3, false, nil)
 	{
-		nn := notifies.drain(1)
+		nn := notifies.drain(2)
 		// It might seem like WantRunning should switch to true here,
 		// but that would be risky since we already have a valid
 		// user account. It might try to reconnect to the old account
@@ -789,8 +802,8 @@ func TestStateMachine(t *testing.T) {
 		// Because the login hasn't yet completed, the old login
 		// is still valid, so it's correct that we stay paused.
 		cc.assertCalls("Login")
-		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
-		c.Assert(*nn[0].BrowseToURL, qt.Equals, url3)
+		c.Assert(nn[1].BrowseToURL, qt.IsNotNil)
+		c.Assert(*nn[1].BrowseToURL, qt.Equals, url3)
 	}
 
 	// Now, let's complete the interactive login, using a different
