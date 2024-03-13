@@ -403,6 +403,12 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
+	// Issue 11405: enable IP forwarding on gokrazy.
+	advertisingRoutes := len(cfg.SubnetRoutes) > 0
+	if distro.Get() == distro.Gokrazy && advertisingRoutes {
+		r.enableIPForwarding()
+	}
+
 	return multierr.New(errs...)
 }
 
@@ -909,6 +915,28 @@ func (r *linuxRouter) upInterface() error {
 		return fmt.Errorf("bringing interface up, %w", err)
 	}
 	return netlink.LinkSetUp(link)
+}
+
+func (r *linuxRouter) enableIPForwarding() {
+	sysctls := map[string]string{
+		"net.ipv4.ip_forward":          "1",
+		"net.ipv6.conf.all.forwarding": "1",
+	}
+	for k, v := range sysctls {
+		if err := writeSysctl(k, v); err != nil {
+			r.logf("warning: %v", k, v, err)
+			continue
+		}
+		r.logf("sysctl(%v=%v): ok", k, v)
+	}
+}
+
+func writeSysctl(key, val string) error {
+	fn := "/proc/sys/" + strings.Replace(key, ".", "/", -1)
+	if err := os.WriteFile(fn, []byte(val), 0644); err != nil {
+		return fmt.Errorf("sysctl(%v=%v): %v", key, val, err)
+	}
+	return nil
 }
 
 // downInterface sets the tunnel interface administratively down.
