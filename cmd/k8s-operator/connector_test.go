@@ -73,7 +73,7 @@ func TestConnector(t *testing.T) {
 		hostname:     "test-connector",
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
-		confFileHash: "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
+		confFileHash: "9c66c269f3aa779e4e63ca414c147fd419caa62f9220a535da619f21b6bdf2b9",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
@@ -83,7 +83,7 @@ func TestConnector(t *testing.T) {
 		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"10.40.0.0/14", "10.44.0.0/20"}
 	})
 	opts.subnetRoutes = "10.40.0.0/14,10.44.0.0/20"
-	opts.confFileHash = "fb6c4daf67425f983985750cd8d6f2beae77e614fcb34176604571f5623d6862"
+	opts.confFileHash = "ff6e3c6ca4188a1eeab248397cd8155f08b5530ae0bf1bf0fcc7f28bdfee3217"
 	expectReconciled(t, cr, "", "test")
 
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
@@ -93,7 +93,7 @@ func TestConnector(t *testing.T) {
 		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"10.44.0.0/20"}
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
-	opts.confFileHash = "bacba177bcfe3849065cf6fee53d658a9bb4144197ac5b861727d69ea99742bb"
+	opts.confFileHash = "2e06dc5fc2b05207007dcc89a5b31b9f4362299af24aa2110d16481dba5d338b"
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -102,7 +102,7 @@ func TestConnector(t *testing.T) {
 		conn.Spec.SubnetRouter = nil
 	})
 	opts.subnetRoutes = ""
-	opts.confFileHash = "7c421a99128eb80e79a285a82702f19f8f720615542a15bd794858a6275d8079"
+	opts.confFileHash = "4697dc19021cf7ce95feeaa49af81f1ac81420ef0023acdd1689df272d134c60"
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -113,7 +113,7 @@ func TestConnector(t *testing.T) {
 		}
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
-	opts.confFileHash = "bacba177bcfe3849065cf6fee53d658a9bb4144197ac5b861727d69ea99742bb"
+	opts.confFileHash = "2e06dc5fc2b05207007dcc89a5b31b9f4362299af24aa2110d16481dba5d338b"
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -156,7 +156,7 @@ func TestConnector(t *testing.T) {
 		parentType:   "connector",
 		subnetRoutes: "10.40.0.0/14",
 		hostname:     "test-connector",
-		confFileHash: "57d922331890c9b1c8c6ae664394cb254334c551d9cd9db14537b5d9da9fb17e",
+		confFileHash: "341dc67b44be0c81a0f31f2d3b9ae67084e88435894a0543b04d7fd97bfedf24",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
@@ -166,7 +166,7 @@ func TestConnector(t *testing.T) {
 		conn.Spec.ExitNode = true
 	})
 	opts.isExitNode = true
-	opts.confFileHash = "1499b591fd97a50f0330db6ec09979792c49890cf31f5da5bb6a3f50dba1e77a"
+	opts.confFileHash = "8f6a5d5895cc8a1ff7896d25ac5794b44f4d3c0e74588cab4674ecb323a676dc"
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -243,7 +243,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		hostname:     "test-connector",
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
-		confFileHash: "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
+		confFileHash: "9c66c269f3aa779e4e63ca414c147fd419caa62f9220a535da619f21b6bdf2b9",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
@@ -272,7 +272,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	// We lose the auth key on second reconcile, because in code it's set to
 	// StringData, but is actually read from Data. This works with a real
 	// API server, but not with our test setup here.
-	opts.confFileHash = "1499b591fd97a50f0330db6ec09979792c49890cf31f5da5bb6a3f50dba1e77a"
+	opts.confFileHash = "8f6a5d5895cc8a1ff7896d25ac5794b44f4d3c0e74588cab4674ecb323a676dc"
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 

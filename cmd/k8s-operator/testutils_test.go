@@ -25,6 +25,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -48,6 +49,7 @@ type configOpts struct {
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
 	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
+	acceptRoutes                                   bool   // --accept-routes
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -339,11 +341,12 @@ func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 		mak.Set(&s.StringData, "serve-config", string(serveConfigBs))
 	}
 	conf := &ipn.ConfigVAlpha{
-		Version:   "alpha0",
-		AcceptDNS: "false",
-		Hostname:  &opts.hostname,
-		Locked:    "false",
-		AuthKey:   ptr.To("secret-authkey"),
+		Version:      "alpha0",
+		AcceptDNS:    "false",
+		Hostname:     &opts.hostname,
+		Locked:       "false",
+		AuthKey:      ptr.To("secret-authkey"),
+		AcceptRoutes: opt.NewBool(opts.acceptRoutes),
 	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {

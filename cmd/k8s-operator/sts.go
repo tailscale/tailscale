@@ -55,17 +55,18 @@ const (
 
 	FinalizerName = "tailscale.com/finalizer"
 
-	// Annotations settable by users on services.
+	// Annotations settable by users on tailscale Services.
 	AnnotationExpose             = "tailscale.com/expose"
-	AnnotationTags               = "tailscale.com/tags"
 	AnnotationHostname           = "tailscale.com/hostname"
 	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
-	//MagicDNS name of tailnet node.
-	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
+	AnnotationTailnetTargetFQDN  = "tailscale.com/tailnet-fqdn"
 
-	// Annotations settable by users on ingresses.
+	// Annotations settable by users on tailscale Ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
+
+	// Annotations settable by users on tailscale Ingresses and Services.
+	AnnotationTags = "tailscale.com/tags"
 
 	// If set to true, set up iptables/nftables rules in the proxy forward
 	// cluster traffic to the tailnet IP of that proxy. This can only be set
@@ -134,6 +135,7 @@ type connector struct {
 	// isExitNode defines whether this Connector should act as an exit node.
 	isExitNode bool
 }
+
 type tsnetServer interface {
 	CertDomains() []string
 }
@@ -171,11 +173,22 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
 
-	secretName, tsConfigHash, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
+	proxyClass := new(tsapi.ProxyClass)
+	if sts.ProxyClass != "" {
+		if err := a.Get(ctx, types.NamespacedName{Name: sts.ProxyClass}, proxyClass); err != nil {
+			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+		if !tsoperator.ProxyClassIsReady(proxyClass) {
+			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting..")
+			return nil, nil
+		}
+	}
+
+	secretName, tsConfigHash, err := a.createOrGetSecret(ctx, logger, sts, hsvc, proxyClass)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
-	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName, tsConfigHash)
+	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName, tsConfigHash, proxyClass)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
@@ -288,7 +301,7 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
-func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (string, string, error) {
+func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service, pc *tsapi.ProxyClass) (string, string, error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			// Hardcode a -0 suffix so that in future, if we support
@@ -336,7 +349,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			return "", "", err
 		}
 	}
-	confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig)
+	confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig, pc)
 	if err != nil {
 		return "", "", fmt.Errorf("error creating tailscaled config: %w", err)
 	}
@@ -417,7 +430,7 @@ var proxyYaml []byte
 //go:embed deploy/manifests/userspace-proxy.yaml
 var userspaceProxyYaml []byte
 
-func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string) (*appsv1.StatefulSet, error) {
+func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string, proxyClass *tsapi.ProxyClass) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
 	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
 		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
@@ -437,16 +450,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	}
 	pod := &ss.Spec.Template
 	container := &pod.Spec.Containers[0]
-	proxyClass := new(tsapi.ProxyClass)
-	if sts.ProxyClass != "" {
-		if err := a.Get(ctx, types.NamespacedName{Name: sts.ProxyClass}, proxyClass); err != nil {
-			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
-		}
-		if !tsoperator.ProxyClassIsReady(proxyClass) {
-			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting..")
-			return nil, nil
-		}
-	}
 	container.Image = a.proxyImage
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
@@ -648,12 +651,16 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 // tailscaledConfig takes a proxy config, a newly generated auth key if
 // generated and a Secret with the previous proxy state and auth key and
 // produces returns tailscaled configuration and a hash of that configuration.
-func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) ([]byte, string, error) {
+func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret, proxyClass *tsapi.ProxyClass) ([]byte, string, error) {
 	conf := ipn.ConfigVAlpha{
-		Version:   "alpha0",
-		AcceptDNS: "false",
-		Locked:    "false",
-		Hostname:  &stsC.Hostname,
+		Version:      "alpha0",
+		AcceptDNS:    "false",
+		Locked:       "false",
+		Hostname:     &stsC.Hostname,
+		AcceptRoutes: opt.NewBool(false), // always set it explicitly
+	}
+	if proxyClass != nil && proxyClass.Spec.TailscaledConfig != nil {
+		conf.AcceptRoutes = opt.Bool(proxyClass.Spec.TailscaledConfig.AcceptRoutes)
 	}
 	if stsC.Connector != nil {
 		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)

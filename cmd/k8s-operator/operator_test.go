@@ -71,7 +71,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, opts))
@@ -213,7 +213,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		parentType:        "svc",
 		tailnetTargetFQDN: tailnetTargetFQDN,
 		hostname:          "default-test",
-		confFileHash:      "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:      "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -324,7 +324,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		parentType:      "svc",
 		tailnetTargetIP: tailnetTargetIP,
 		hostname:        "default-test",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -432,7 +432,7 @@ func TestAnnotations(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -541,7 +541,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -591,7 +591,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
 	// (although configfile hash will change in test env only because we lose auth key due to out test not syncing secret.StringData -> secret.Data)
-	o.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
+	o.confFileHash = "5c7ed263a3bde718d485eb836f307d76f8778bda1f0303b0ea554d69b5829d80"
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 	// ... but the service should have a LoadBalancer status.
@@ -675,7 +675,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -745,7 +745,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 	// configfile hash changes on a re-apply in this case in tests only as
 	// we lose the auth key due to the test apply not syncing
 	// secret.StringData -> Data.
-	o.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
+	o.confFileHash = "5c7ed263a3bde718d485eb836f307d76f8778bda1f0303b0ea554d69b5829d80"
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 
@@ -821,7 +821,7 @@ func TestCustomHostname(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "reindeer-flotilla",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "42376226c7d76ed6d6318315dc6c402f7d993bc0b01a5b0e6c8a833106b7509e",
+		confFileHash:    "37426401f55a3e9e48d7e076a2d859386df39138858f8e2e34280555759fb4d8",
 	}
 
 	expectEqual(t, fc, expectedSecret(t, o))
@@ -937,7 +937,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 		hostname:          "tailscale-critical",
 		priorityClassName: "custom-priority-class-name",
 		clusterTargetIP:   "10.20.30.40",
-		confFileHash:      "13cdef0d5f6f0f2406af028710ea1e0f99f65aba4021e4e70ac75a73cf141fd1",
+		confFileHash:      "3bf08bbd3c5ef664ce6c25f1ff6d307c411db4c8c5e05ba2aeefb81d7c9de79d",
 	}
 
 	expectEqual(t, fc, expectedSTS(t, fc, o))
@@ -1000,7 +1000,7 @@ func TestProxyClassForService(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 	expectEqual(t, fc, expectedSecret(t, opts))
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
@@ -1030,7 +1030,7 @@ func TestProxyClassForService(t *testing.T) {
 	// configfile hash changes on a second apply in test env only because we
 	// lose auth key due to out test not syncing secret.StringData ->
 	// secret.Data
-	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
+	opts.confFileHash = "5c7ed263a3bde718d485eb836f307d76f8778bda1f0303b0ea554d69b5829d80"
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -1094,7 +1094,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 }
@@ -1148,7 +1148,79 @@ func TestProxyFirewallMode(t *testing.T) {
 		hostname:        "default-test",
 		firewallMode:    "nftables",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
+	}
+	expectEqual(t, fc, expectedSTS(t, fc, o))
+
+}
+func TestAcceptRoutes(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "accept-routes"},
+		Spec:       tsapi.ProxyClassSpec{TailscaledConfig: &tsapi.TailscaledConfig{AcceptRoutes: "true"}}}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc).
+		WithStatusSubresource(pc).
+		Build()
+	mustUpdateStatus(t, fc, "", "accept-routes", func(pc *tsapi.ProxyClass) {
+		pc.Status = tsapi.ProxyClassStatus{
+			Conditions: []tsapi.ConnectorCondition{{
+				Status:             metav1.ConditionTrue,
+				Type:               tsapi.ProxyClassready,
+				ObservedGeneration: pc.Generation,
+			}}}
+	})
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Labels: map[string]string{
+				LabelProxyClass: "accept-routes",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	o := configOpts{
+		stsName:         shortName,
+		secretName:      fullName,
+		namespace:       "default",
+		parentType:      "svc",
+		hostname:        "default-test",
+		clusterTargetIP: "10.20.30.40",
+		proxyClass:      "accept-routes",
+		acceptRoutes:    true,
+		confFileHash:    "5ec91709575f0f51af26f0ab6f86c7ebb3d6007ec59186c72da67a292d11f268",
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o))
 

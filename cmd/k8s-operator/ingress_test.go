@@ -93,7 +93,7 @@ func TestTailscaleIngress(t *testing.T) {
 		namespace:    "default",
 		parentType:   "ingress",
 		hostname:     "default-test",
-		confFileHash: "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash: "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -128,7 +128,7 @@ func TestTailscaleIngress(t *testing.T) {
 	opts.shouldEnableForwardingClusterTrafficViaIngress = true
 	// configfile hash changed at this point in test env only because we
 	// lost auth key due to how changes are applied in test client.
-	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
+	opts.confFileHash = "5c7ed263a3bde718d485eb836f307d76f8778bda1f0303b0ea554d69b5829d80"
 	expectReconciled(t, ingR, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts))
 
@@ -228,7 +228,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		namespace:    "default",
 		parentType:   "ingress",
 		hostname:     "default-test",
-		confFileHash: "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		confFileHash: "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -263,7 +263,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	opts.proxyClass = pc.Name
 	// configfile hash changed at this point in test env only because we
 	// lost auth key due to how changes are applied in test client.
-	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
+	opts.confFileHash = "5c7ed263a3bde718d485eb836f307d76f8778bda1f0303b0ea554d69b5829d80"
 	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
 
 	// 4. tailscale.com/proxy-class label is removed from the Ingress, the

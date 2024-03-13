@@ -335,7 +335,14 @@ ConnectorCondition contains condition information for a Connector.
         <td>
           Proxy's StatefulSet spec.<br/>
         </td>
-        <td>true</td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#proxyclassspectailscaledconfig">tailscaledConfig</a></b></td>
+        <td>object</td>
+        <td>
+          Configuration for tailscaled running in the proxy.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -360,7 +367,7 @@ Proxy's StatefulSet spec.
         <td><b>annotations</b></td>
         <td>map[string]string</td>
         <td>
-          Annotations that will be added to the StatefulSet created for the proxy. Any Annotations specified here will be merged with the default annotations applied to the StatefulSet by the Tailscale Kubernetes operator as well as any other annotations that might have been applied by other actors. Annotations must be valid Kubernetes annotations. https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set<br/>
+          Annotations that will be added to the StatefulSet created for the proxy. Any annotations specified here will be merged with the default annotations applied to the StatefulSet by the Tailscale Kubernetes operator as well as any other annotations that might have been applied by other actors. Annotations must be valid Kubernetes annotations. https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -1545,6 +1552,35 @@ The pod this Toleration is attached to tolerates any taint that matches the trip
         <td>string</td>
         <td>
           Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty, otherwise just a regular string.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProxyClass.spec.tailscaledConfig
+<sup><sup>[↩ Parent](#proxyclassspec)</sup></sup>
+
+
+
+Configuration for tailscaled running in the proxy.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>acceptRoutes</b></td>
+        <td>string</td>
+        <td>
+          AcceptRoutes can be set to "true" to configure the proxy to accept routes advertized by by other nodes on your tailnet, such as subnet routers and app connectors. This is equivalent of running 'tailscale up --accept-routes'. https://tailscale.com/kb/1072/client-preferences#use-tailscale-subnets The value of this field must be a string ("true" or "false"), defaults to "false".<br/>
+          <br/>
+            <i>Validations</i>:<li>type(self) == string && (self=='true' || self=='false'): acceptRoutes must be set to a string value. Accepted values are 'true' and 'false'</li>
         </td>
         <td>false</td>
       </tr></tbody>

@@ -36,9 +36,27 @@ type ProxyClassList struct {
 }
 
 type ProxyClassSpec struct {
+	// Configuration for tailscaled running in the proxy.
+	// +optional
+	TailscaledConfig *TailscaledConfig `json:"tailscaledConfig,omitempty"`
 	// Proxy's StatefulSet spec.
-	StatefulSet *StatefulSet `json:"statefulSet"`
+	// +optional
+	StatefulSet *StatefulSet `json:"statefulSet,omitempty"`
 }
+
+type TailscaledConfig struct {
+	// AcceptRoutes can be set to "true" to configure the proxy to accept
+	// routes advertised by other nodes on your tailnet, such as subnet
+	// routers and app connectors.
+	// This is equivalent of running 'tailscale up --accept-routes'.
+	// https://tailscale.com/kb/1072/client-preferences#use-tailscale-subnets
+	// The value of this field must be a string ("true" or "false"),
+	// defaults to "false".
+	AcceptRoutes Bool `json:"acceptRoutes,omitempty"`
+}
+
+// +kubebuilder:validation:XValidation:rule="type(self) == string && (self=='true' || self=='false')",message="acceptRoutes must be set to a string value. Accepted values are 'true' and 'false'"
+type Bool string
 
 type StatefulSet struct {
 	// Labels that will be added to the StatefulSet created for the proxy.
@@ -51,7 +69,7 @@ type StatefulSet struct {
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 	// Annotations that will be added to the StatefulSet created for the proxy.
-	// Any Annotations specified here will be merged with the default annotations
+	// Any annotations specified here will be merged with the default annotations
 	// applied to the StatefulSet by the Tailscale Kubernetes operator as
 	// well as any other annotations that might have been applied by other
 	// actors.
