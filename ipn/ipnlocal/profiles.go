@@ -49,6 +49,25 @@ func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
 	return ipn.WriteState(pm.store, id, val)
 }
 
+func (pm *profileManager) WriteStateForCurrentProfile(id ipn.StateKey, val []byte) error {
+	var currentProfileKey ipn.StateKey
+	// TODO(fran) maybe we should error if the current profile is nil?
+	if pm.currentProfile != nil {
+		currentProfileKey = pm.currentProfile.Key
+	}
+	return ipn.WriteState(pm.store, currentProfileKey+"||"+id, val)
+}
+
+func (pm *profileManager) ReadStateForCurrentProfile(id ipn.StateKey) ([]byte, error) {
+	var currentProfileKey ipn.StateKey
+	// TODO(fran) maybe we should error if the current profile is nil?
+	if pm.currentProfile != nil {
+		currentProfileKey = pm.currentProfile.Key
+	}
+	fmt.Println(currentProfileKey)
+	return pm.store.ReadState(currentProfileKey + "||" + id)
+}
+
 // CurrentUserID returns the current user ID. It is only non-empty on
 // Windows where we have a multi-user system.
 func (pm *profileManager) CurrentUserID() ipn.WindowsUserID {

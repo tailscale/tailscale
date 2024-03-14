@@ -576,3 +576,75 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), uid)
 	}
 }
+
+func TestFran(t *testing.T) {
+	store := new(mem.Store)
+
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = pm.WriteStateForCurrentProfile("x", []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, err := pm.ReadStateForCurrentProfile("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := string(bs)
+	fmt.Println(s)
+	if s != "hello" {
+		t.Fatal("oh")
+	}
+
+	var id int
+	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
+		id++
+		t.Helper()
+		pm.NewProfile()
+		p := pm.CurrentPrefs().AsStruct()
+		p.Persist = &persist.Persist{
+			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
+			PrivateNodeKey: key.NewNode(),
+			UserProfile: tailcfg.UserProfile{
+				ID:        tailcfg.UserID(id),
+				LoginName: loginName,
+			},
+		}
+		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+			t.Fatal(err)
+		}
+		return p.View()
+	}
+
+	pm.SetCurrentUserID("user1")
+	newProfile(t, "user1")
+
+	err = pm.WriteStateForCurrentProfile("x", []byte("hello user1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, err = pm.ReadStateForCurrentProfile("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = string(bs)
+	fmt.Println(s)
+	if s != "hello user1" {
+		t.Fatal("oh")
+	}
+
+	pm.SetCurrentUserID("")
+	bs, err = pm.ReadStateForCurrentProfile("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = string(bs)
+	fmt.Println(s)
+	if s != "hello" {
+		t.Fatal("oh")
+	}
+}
