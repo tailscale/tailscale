@@ -14,7 +14,7 @@ import (
 )
 
 func TestGetRouteTable(t *testing.T) {
-	routes, err := Get(1000)
+	routes, err := Get(512000) // arbitrarily large
 	if err != nil {
 		t.Fatal(err)
 	}
