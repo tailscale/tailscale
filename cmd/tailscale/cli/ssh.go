@@ -48,8 +48,8 @@ The 'tailscale ssh' wrapper adds a few things:
 }
 
 func runSSH(ctx context.Context, args []string) error {
-	if runtime.GOOS == "darwin" && version.IsSandboxedMacOS() && !envknob.UseWIPCode() {
-		return errors.New("The 'tailscale ssh' subcommand is not available on sandboxed macOS builds.\nUse the regular 'ssh' client instead.")
+	if runtime.GOOS == "darwin" && version.IsMacAppStore() && !envknob.UseWIPCode() {
+		return errors.New("The 'tailscale ssh' subcommand is not available on macOS builds distributed through the App Store or TestFlight.\nInstall the Standalone variant of Tailscale (download it from https://pkgs.tailscale.com), or use the regular 'ssh' client instead.")
 	}
 	if len(args) == 0 {
 		return errors.New("usage: ssh [user@]<host>")

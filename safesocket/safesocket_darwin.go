@@ -74,7 +74,7 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 
 	if dir := os.Getenv("TS_MACOS_CLI_SHARED_DIR"); dir != "" {
 		// First see if we're running as the non-AppStore "macsys" variant.
-		if version.IsMacSysExt() {
+		if version.IsMacSys() {
 			if port, token, err := localTCPPortAndTokenMacsys(); err == nil {
 				return port, token, nil
 			}
