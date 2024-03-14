@@ -2219,6 +2219,9 @@ const (
 	// NodeAttrSuggestExitNode is applied to each exit node which the control plane has determined
 	// is a recommended exit node.
 	NodeAttrSuggestExitNode NodeCapability = "suggest-exit-node"
+
+	// NodeAttrDisableWebClient disables using the web client.
+	NodeAttrDisableWebClient NodeCapability = "disable-web-client"
 )
 
 // SetDNSRequest is a request to add a DNS record.
