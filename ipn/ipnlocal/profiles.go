@@ -36,6 +36,8 @@ type profileManager struct {
 	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile // always non-nil
 	currentProfile *ipn.LoginProfile                   // always non-nil
 	prefs          ipn.PrefsView                       // always Valid.
+
+	currentRoutes *ipn.RouteInfo
 }
 
 func (pm *profileManager) dlogf(format string, args ...any) {
@@ -49,16 +51,35 @@ func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
 	return ipn.WriteState(pm.store, id, val)
 }
 
-func (pm *profileManager) WriteStateForCurrentProfile(id ipn.StateKey, val []byte) error {
+func (pm *profileManager) WriteRoutesForCurrentProfile() error {
+	routeInfoInBytes, err := json.Marshal(*pm.currentRoutes)
+	if err != nil {
+		return err
+	}
+
+	return pm.writeStateForCurrentProfile("_routes", routeInfoInBytes)
+}
+
+func (pm *profileManager) ReadRoutesForCurrentProfile() error {
+	routeInfoInBytes, err := pm.readStateForCurrentProfile("_routes")
+	if err != nil {
+		return err
+	}
+
+	return json.Unmarshal(routeInfoInBytes, pm.currentRoutes)
+}
+
+func (pm *profileManager) writeStateForCurrentProfile(id ipn.StateKey, val []byte) error {
 	var currentProfileKey ipn.StateKey
 	// TODO(fran) maybe we should error if the current profile is nil?
 	if pm.currentProfile != nil {
 		currentProfileKey = pm.currentProfile.Key
 	}
+
 	return ipn.WriteState(pm.store, currentProfileKey+"||"+id, val)
 }
 
-func (pm *profileManager) ReadStateForCurrentProfile(id ipn.StateKey) ([]byte, error) {
+func (pm *profileManager) readStateForCurrentProfile(id ipn.StateKey) ([]byte, error) {
 	var currentProfileKey ipn.StateKey
 	// TODO(fran) maybe we should error if the current profile is nil?
 	if pm.currentProfile != nil {

@@ -5,9 +5,11 @@ package ipnlocal
 
 import (
 	"fmt"
+	"net/netip"
 	"os/user"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -585,11 +587,11 @@ func TestFran(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = pm.WriteStateForCurrentProfile("x", []byte("hello"))
+	err = pm.writeStateForCurrentProfile("x", []byte("hello"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bs, err := pm.ReadStateForCurrentProfile("x")
+	bs, err := pm.readStateForCurrentProfile("x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,11 +625,11 @@ func TestFran(t *testing.T) {
 	pm.SetCurrentUserID("user1")
 	newProfile(t, "user1")
 
-	err = pm.WriteStateForCurrentProfile("x", []byte("hello user1"))
+	err = pm.writeStateForCurrentProfile("x", []byte("hello user1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bs, err = pm.ReadStateForCurrentProfile("x")
+	bs, err = pm.readStateForCurrentProfile("x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +640,7 @@ func TestFran(t *testing.T) {
 	}
 
 	pm.SetCurrentUserID("")
-	bs, err = pm.ReadStateForCurrentProfile("x")
+	bs, err = pm.readStateForCurrentProfile("x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,5 +648,71 @@ func TestFran(t *testing.T) {
 	fmt.Println(s)
 	if s != "hello" {
 		t.Fatal("oh")
+	}
+}
+
+func TestKevin(t *testing.T) {
+	store := new(mem.Store)
+
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var id int
+	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
+		id++
+		t.Helper()
+		pm.NewProfile()
+		p := pm.CurrentPrefs().AsStruct()
+		p.Persist = &persist.Persist{
+			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
+			PrivateNodeKey: key.NewNode(),
+			UserProfile: tailcfg.UserProfile{
+				ID:        tailcfg.UserID(id),
+				LoginName: loginName,
+			},
+		}
+		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+			t.Fatal(err)
+		}
+		return p.View()
+	}
+
+	pm.SetCurrentUserID("user1")
+	newProfile(t, "user1")
+
+	Prefix_1 := netip.MustParsePrefix("1.2.3.0/24")
+	Prefix_2 := netip.MustParsePrefix("2.3.4.5/32")
+	Prefix_3 := netip.MustParsePrefix("192.16.0.0/16")
+
+	fakeRouteInfo1 := ipn.RouteInfo{
+		Local: []netip.Prefix{Prefix_2},
+		Corp:  []netip.Prefix{Prefix_1},
+		Discovered: map[string]ipn.DatedRoute{
+			"Home.dom": {Route: Prefix_3, LastSeen: time.Now()},
+		},
+	}
+
+	fakeRouteInfo2 := ipn.RouteInfo{
+		Local: []netip.Prefix{Prefix_1},
+		Corp:  []netip.Prefix{Prefix_3},
+		Discovered: map[string]ipn.DatedRoute{
+			"Home.dom": {Route: Prefix_2, LastSeen: time.Now()},
+		},
+	}
+
+	pm.currentRoutes = &fakeRouteInfo1
+	if err := pm.WriteRoutesForCurrentProfile(); err != nil {
+		t.Fatal(err)
+	}
+
+	pm.currentRoutes = &fakeRouteInfo2
+	if err := pm.ReadRoutesForCurrentProfile(); err != nil {
+		t.Fatal(err)
+	}
+
+	if pm.currentRoutes.Corp[0] != Prefix_1 {
+		t.Fatal("That's not right")
 	}
 }

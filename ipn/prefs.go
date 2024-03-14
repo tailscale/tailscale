@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn/ipnstate"
@@ -951,4 +952,15 @@ type LoginProfile struct {
 	// ControlURL is the URL of the control server that this profile is logged
 	// into.
 	ControlURL string
+}
+
+type RouteInfo struct {
+	Local      []netip.Prefix
+	Corp       []netip.Prefix
+	Discovered map[string]DatedRoute
+}
+
+type DatedRoute struct {
+	Route    netip.Prefix
+	LastSeen time.Time
 }
