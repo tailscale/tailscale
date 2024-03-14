@@ -2503,11 +2503,21 @@ func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
 	if err != nil {
 		return false
 	}
+	serverURL := b.Prefs().ControlURLOrDefault()
+	if ipn.IsLoginServerSynonym(serverURL) {
+		// When connected to the official Tailscale control plane, only allow
+		// URLs from tailscale.com or its subdomains.
+		if h := u.Hostname(); h != "tailscale.com" && !strings.HasSuffix(u.Hostname(), ".tailscale.com") {
+			return false
+		}
+		// When using a different ControlURL, we cannot be sure what legitimate
+		// PopBrowserURLs they will send. Allow any domain there to avoid
+		// breaking existing user setups.
+	}
 	switch u.Scheme {
 	case "https":
 		return true
 	case "http":
-		serverURL := b.Prefs().ControlURLOrDefault()
 		// If the control server is using plain HTTP (likely a dev server),
 		// then permit http://.
 		return strings.HasPrefix(serverURL, "http://")
