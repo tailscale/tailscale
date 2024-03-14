@@ -119,7 +119,7 @@ func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
 
 	var clusters []any
 	if cm, ok := cfg["clusters"]; ok {
-		clusters = cm.([]any)
+		clusters, _ = cm.([]any)
 	}
 	cfg["clusters"] = appendOrSetNamed(clusters, fqdn, map[string]any{
 		"name": fqdn,
@@ -130,7 +130,7 @@ func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
 
 	var users []any
 	if um, ok := cfg["users"]; ok {
-		users = um.([]any)
+		users, _ = um.([]any)
 	}
 	cfg["users"] = appendOrSetNamed(users, "tailscale-auth", map[string]any{
 		// We just need one of these, and can reuse it for all clusters.
@@ -144,7 +144,7 @@ func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
 
 	var contexts []any
 	if cm, ok := cfg["contexts"]; ok {
-		contexts = cm.([]any)
+		contexts, _ = cm.([]any)
 	}
 	cfg["contexts"] = appendOrSetNamed(contexts, fqdn, map[string]any{
 		"name": fqdn,
