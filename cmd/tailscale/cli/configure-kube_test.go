@@ -53,6 +53,31 @@ users:
     token: unused`,
 		},
 		{
+			name: "all configs, clusters, users have been deleted",
+			in: `apiVersion: v1
+clusters: null
+contexts: null
+kind: Config
+current-context: some-non-existent-cluster
+users: null`,
+			want: `apiVersion: v1
+clusters:
+- cluster:
+    server: https://foo.tail-scale.ts.net
+  name: foo.tail-scale.ts.net
+contexts:
+- context:
+    cluster: foo.tail-scale.ts.net
+    user: tailscale-auth
+  name: foo.tail-scale.ts.net
+current-context: foo.tail-scale.ts.net
+kind: Config
+users:
+- name: tailscale-auth
+  user:
+    token: unused`,
+		},
+		{
 			name: "already-configured",
 			in: `apiVersion: v1
 clusters:
