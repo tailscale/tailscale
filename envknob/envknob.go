@@ -492,7 +492,11 @@ func ApplyDiskConfig() (err error) {
 	defer func() {
 		if err != nil {
 			// Stash away our return error for the healthcheck package to use.
-			applyDiskConfigErr = fmt.Errorf("error parsing %s: %w", f.Name(), err)
+			if f != nil {
+				applyDiskConfigErr = fmt.Errorf("error parsing %s: %w", f.Name(), err)
+			} else {
+				applyDiskConfigErr = fmt.Errorf("error applying disk config: %w", err)
+			}
 		}
 	}()
 
