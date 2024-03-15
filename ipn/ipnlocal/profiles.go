@@ -47,6 +47,15 @@ func (pm *profileManager) dlogf(format string, args ...any) {
 	pm.logf(format, args...)
 }
 
+func (pm *profileManager) CurrentRoutes() *ipn.RouteInfo {
+	return pm.currentRoutes
+}
+
+func (pm *profileManager) SetCurrentRoutes(in *ipn.RouteInfo) error {
+	pm.currentRoutes = in
+	return pm.WriteRoutesForCurrentProfile()
+}
+
 func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
 	return ipn.WriteState(pm.store, id, val)
 }

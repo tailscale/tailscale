@@ -3223,6 +3223,13 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
+	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
+	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
+	routeInfo := b.pm.CurrentRoutes()
+	routeInfo.Local = newp.AdvertiseRoutes
+	b.pm.SetCurrentRoutes(routeInfo)
+	//newp.AdvertiseRoutes = b.pm.CurrentRoutes.AsArray() (sort of thing)
+
 	// setExitNodeID returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
