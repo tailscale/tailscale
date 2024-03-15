@@ -707,12 +707,36 @@ func TestKevin(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	assertIsUser1Routes := func() {
+		if pm.currentRoutes.Corp[0] != Prefix_1 {
+			t.Fatal("That's not right")
+		}
+		if pm.currentRoutes.Discovered["Home.dom"].Route != Prefix_3 {
+			t.Fatal("That's not right: discovered")
+		}
+	}
+	assertIsUser2Routes := func() {
+		if pm.currentRoutes.Corp[0] != Prefix_3 {
+			t.Fatal("That's not right")
+		}
+		if pm.currentRoutes.Discovered["Home.dom"].Route != Prefix_2 {
+			t.Fatal("That's not right: discovered")
+		}
+	}
+	assertIsUser1Routes()
+
+	pm.SetCurrentUserID("user2")
+	newProfile(t, "user2")
 	pm.currentRoutes = &fakeRouteInfo2
-	if err := pm.ReadRoutesForCurrentProfile(); err != nil {
+	if err := pm.WriteRoutesForCurrentProfile(); err != nil {
 		t.Fatal(err)
 	}
+	assertIsUser2Routes()
 
-	if pm.currentRoutes.Corp[0] != Prefix_1 {
-		t.Fatal("That's not right")
-	}
+	pm.SetCurrentUserID("user1")
+	// should have read out the other route info
+	assertIsUser1Routes()
+
+	pm.SetCurrentUserID("user2")
+	assertIsUser2Routes()
 }

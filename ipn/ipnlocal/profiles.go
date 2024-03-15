@@ -61,8 +61,12 @@ func (pm *profileManager) WriteRoutesForCurrentProfile() error {
 }
 
 func (pm *profileManager) ReadRoutesForCurrentProfile() error {
+	// TODO(fran) key should be a const somewhere
 	routeInfoInBytes, err := pm.readStateForCurrentProfile("_routes")
-	if err != nil {
+	if err == ipn.ErrStateNotExist || len(routeInfoInBytes) == 0 {
+		pm.currentRoutes = &ipn.RouteInfo{}
+		return nil
+	} else if err != nil {
 		return err
 	}
 
@@ -141,6 +145,10 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	}
 	pm.currentProfile = prof
 	pm.prefs = prefs
+
+	if err := pm.ReadRoutesForCurrentProfile(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -376,6 +384,9 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 	}
 	pm.prefs = prefs
 	pm.currentProfile = kp
+	if err := pm.ReadRoutesForCurrentProfile(); err != nil {
+		return err
+	}
 	return pm.setAsUserSelectedProfileLocked()
 }
 
@@ -586,6 +597,9 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 			return nil, err
 		}
 		if err := pm.setPrefsLocked(prefs); err != nil {
+			return nil, err
+		}
+		if err := pm.ReadRoutesForCurrentProfile(); err != nil {
 			return nil, err
 		}
 		// Most platform behavior is controlled by the goos parameter, however
