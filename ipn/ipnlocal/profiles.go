@@ -601,6 +601,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 		} else {
 			pm.currentUserID = pm.currentProfile.LocalUserID
 		}
+		//Kevin TODO: we need to also load routing settings here.
 		prefs, err := pm.loadSavedPrefs(stateKey)
 		if err != nil {
 			return nil, err

@@ -355,6 +355,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			return nil, err
 		}
 	}
+	// Kevin comment: no need to do this since tailscaled startup will not affect routes.
 
 	envknob.LogCurrent(logf)
 	if dialer == nil {
