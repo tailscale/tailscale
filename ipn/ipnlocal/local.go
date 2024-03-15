@@ -3137,6 +3137,18 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 	return nil
 }
 
+func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
+	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
+	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
+	routeInfo := b.pm.CurrentRoutes()
+	if mp.AdvertiseRoutesSet {
+		routeInfo.Local = mp.AdvertiseRoutes
+		b.pm.SetCurrentRoutes(routeInfo)
+		//newp.AdvertiseRoutes = b.pm.CurrentRoutes.AsArray() (sort of thing)
+	}
+	return b.EditPrefs(mp)
+}
+
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	b.mu.Lock()
 	if mp.EggSet {
@@ -3224,12 +3236,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
-	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
-	routeInfo := b.pm.CurrentRoutes()
-	routeInfo.Local = newp.AdvertiseRoutes
-	b.pm.SetCurrentRoutes(routeInfo)
-	//newp.AdvertiseRoutes = b.pm.CurrentRoutes.AsArray() (sort of thing)
 
 	// setExitNodeID returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
