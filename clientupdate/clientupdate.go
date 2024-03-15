@@ -836,7 +836,7 @@ func (up *Updater) switchOutputToFile() (io.Closer, error) {
 func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
-		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
+		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/norestart", "/qn")
 		cmd.Dir = filepath.Dir(msi)
 		cmd.Stdout = up.Stdout
 		cmd.Stderr = up.Stderr
