@@ -11,6 +11,7 @@ package appc
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -34,6 +36,10 @@ type RouteAdvertiser interface {
 
 	// UnadvertiseRoute removes any matching route advertisements.
 	UnadvertiseRoute(...netip.Prefix) error
+
+	ReadRouteInfoFromStore() *ipn.RouteInfo
+
+	UpdateRoutesInfoToStore(*ipn.RouteInfo) error
 }
 
 // AppConnector is an implementation of an AppConnector that performs
@@ -298,13 +304,29 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		// advertise each address we have learned for the routed domain, that
 		// was not already known.
 		var toAdvertise []netip.Prefix
+		// Kevin comment: Will this update be too frequent?
+		var toUpdateDate []netip.Prefix
 		for _, addr := range addrs {
 			if !e.isAddrKnownLocked(domain, addr) {
 				toAdvertise = append(toAdvertise, netip.PrefixFrom(addr, addr.BitLen()))
+			} else {
+				toUpdateDate = append(toUpdateDate, netip.PrefixFrom(addr, addr.BitLen()))
 			}
 		}
 
 		e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
+		// update the pm.currentroutes, then advertise those routes.
+		// we might also able to do this in local backend's advertiseRoute method, doing the update one domain by one domain.
+		// currentRouteInfo := nil
+		routesToUpdate := append(toAdvertise, toUpdateDate...)
+		routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
+		if routeInfo.Discovered == nil {
+			routeInfo.Discovered = make(map[string]ipn.DatedRoute)
+		}
+		routeInfo.UpdateRoutesInDiscoveredForDomain(domain, routesToUpdate)
+
+		e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
+		fmt.Println("Appc DNS lookup", routeInfo)
 		e.scheduleAdvertisement(domain, toAdvertise...)
 	}
 }

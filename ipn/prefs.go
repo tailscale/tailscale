@@ -960,7 +960,27 @@ type RouteInfo struct {
 	Discovered map[string]DatedRoute
 }
 
-type DatedRoute struct {
-	Route    netip.Prefix
-	LastSeen time.Time
+func (r RouteInfo) UpdateRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
+	newDatedRoutes := make(DatedRoute)
+	_, hasKey := r.Discovered[domain]
+	if !hasKey {
+		r.Discovered[domain] = addAddrsToDatedRoute(newDatedRoutes, addrs)
+		return
+	}
+
+	// kevin comment: we won't see any existing routes here because know addrs are filtered.
+	currentRoutes := r.Discovered[domain]
+	r.Discovered[domain] = addAddrsToDatedRoute(currentRoutes, addrs)
+	return
+}
+
+type DatedRoute = map[netip.Prefix]time.Time
+
+func addAddrsToDatedRoute(curDatedRoutes DatedRoute, addrs []netip.Prefix) DatedRoute {
+	time := time.Now()
+	ret := curDatedRoutes
+	for _, addr := range addrs {
+		ret[addr] = time
+	}
+	return ret
 }

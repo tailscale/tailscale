@@ -3181,6 +3181,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	// in setPrefsLocksOnEntry instead.
 
 	// This should return the public prefs, not the private ones.
+	fmt.Println("Editpref in local", b.pm.CurrentRoutes())
 	return stripKeysFromPrefs(newPrefs), nil
 }
 
@@ -6000,6 +6001,16 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
+}
+
+func (b *LocalBackend) ReadRouteInfoFromStore() *ipn.RouteInfo {
+	b.pm.ReadRoutesForCurrentProfile()
+	return b.pm.CurrentRoutes()
+}
+
+func (b *LocalBackend) UpdateRoutesInfoToStore(newRouteInfo *ipn.RouteInfo) error {
+	b.pm.SetCurrentRoutes(newRouteInfo)
+	return nil
 }
 
 // seamlessRenewalEnabled reports whether seamless key renewals are enabled

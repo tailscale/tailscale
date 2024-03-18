@@ -74,12 +74,17 @@ func (pm *profileManager) ReadRoutesForCurrentProfile() error {
 	routeInfoInBytes, err := pm.readStateForCurrentProfile("_routes")
 	if err == ipn.ErrStateNotExist || len(routeInfoInBytes) == 0 {
 		pm.currentRoutes = &ipn.RouteInfo{}
+		pm.WriteRoutesForCurrentProfile()
 		return nil
 	} else if err != nil {
 		return err
 	}
-
-	return json.Unmarshal(routeInfoInBytes, pm.currentRoutes)
+	storedRoutes := &ipn.RouteInfo{}
+	if err := json.Unmarshal(routeInfoInBytes, storedRoutes); err != nil {
+		return err
+	}
+	pm.currentRoutes = storedRoutes
+	return nil
 }
 
 func (pm *profileManager) writeStateForCurrentProfile(id ipn.StateKey, val []byte) error {
@@ -580,7 +585,6 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 	if err != nil {
 		return nil, err
 	}
-
 	pm := &profileManager{
 		store:         store,
 		knownProfiles: knownProfiles,
@@ -601,7 +605,6 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 		} else {
 			pm.currentUserID = pm.currentProfile.LocalUserID
 		}
-		//Kevin TODO: we need to also load routing settings here.
 		prefs, err := pm.loadSavedPrefs(stateKey)
 		if err != nil {
 			return nil, err
