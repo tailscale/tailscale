@@ -118,7 +118,8 @@ type Prefs struct {
 	// policies as configured by the Tailnet's admin(s).
 	RunSSH bool
 
-	// RunWebClient bool is whether this node should run a web client,
+	// RunWebClient bool is whether this node should expose
+	// its web client over Tailscale at port 5252,
 	// permitting access to peers according to the
 	// policies as configured by the Tailnet's admin(s).
 	RunWebClient bool

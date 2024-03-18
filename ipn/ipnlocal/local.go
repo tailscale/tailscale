@@ -176,10 +176,15 @@ type LocalBackend struct {
 	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
 	em                    *expiryManager   // non-nil
 	sshAtomicBool         atomic.Bool
-	webClientAtomicBool   atomic.Bool
-	shutdownCalled        bool // if Shutdown has been called
-	debugSink             *capture.Sink
-	sockstatLogger        *sockstatlog.Logger
+	// webClientAtomicBool controls whether the web client is running. This should
+	// be true unless the disable-web-client node attribute has been set.
+	webClientAtomicBool atomic.Bool
+	// exposeRemoteWebClientAtomicBool controls whether the web client is exposed over
+	// Tailscale on port 5252.
+	exposeRemoteWebClientAtomicBool atomic.Bool
+	shutdownCalled                  bool // if Shutdown has been called
+	debugSink                       *capture.Sink
+	sockstatLogger                  *sockstatlog.Logger
 
 	// getTCPHandlerForFunnelFlow returns a handler for an incoming TCP flow for
 	// the provided srcAddr and dstPort if one exists.
@@ -1160,7 +1165,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
 		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLock)
-		b.setWebClientAtomicBoolLocked(st.NetMap, prefs.View())
+		b.setWebClientAtomicBoolLocked(st.NetMap)
 
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
 		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
@@ -2719,11 +2724,12 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 	b.shouldInterceptTCPPortAtomic.Store(f)
 }
 
-// setAtomicValuesFromPrefsLocked populates sshAtomicBool, containsViaIPFuncAtomic
-// and shouldInterceptTCPPortAtomic from the prefs p, which may be !Valid().
+// setAtomicValuesFromPrefsLocked populates sshAtomicBool, containsViaIPFuncAtomic,
+// shouldInterceptTCPPortAtomic, and exposeRemoteWebClientAtomicBool from the prefs p,
+// which may be !Valid().
 func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
-	b.setWebClientAtomicBoolLocked(b.netMap, p)
+	b.setExposeRemoteWebClientAtomicBoolLocked(p)
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
@@ -3356,6 +3362,8 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	if hittingServiceIP {
 		switch dst.Port() {
 		case 80:
+			// TODO(mpminardi): do we want to show an error message if the web client
+			// has been disabled instead of the more "basic" web UI?
 			if b.ShouldRunWebClient() {
 				return b.handleWebClientConn, opts
 			}
@@ -3380,7 +3388,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 		return b.handleSSHConn, opts
 	}
 	// TODO(will,sonia): allow customizing web client port ?
-	if dst.Port() == webClientPort && b.ShouldRunWebClient() {
+	if dst.Port() == webClientPort && b.ShouldExposeRemoteWebClient() {
 		return b.handleWebClientConn, opts
 	}
 	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
@@ -4508,17 +4516,37 @@ func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && en
 // call regardless of whether b.mu is held or not.
 func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
 
+// ShouldExposeRemoteWebClient reports whether the web client should
+// accept connections via [tailscale IP]:5252 in addition to the default
+// behaviour of accepting local connections over 100.100.100.100.
+//
+// This function checks both the web client user pref via
+// exposeRemoteWebClientAtomicBool and the disable-web-client node attr
+// via ShouldRunWebClient to determine whether the web client should be
+// exposed.
+func (b *LocalBackend) ShouldExposeRemoteWebClient() bool {
+	return b.ShouldRunWebClient() && b.exposeRemoteWebClientAtomicBool.Load()
+}
+
 // setWebClientAtomicBoolLocked sets webClientAtomicBool based on whether
-// the RunWebClient pref is set, and whether tailcfg.NodeAttrDisableWebClient
-// has been set in the netmap.NetworkMap.
+// tailcfg.NodeAttrDisableWebClient has been set in the netmap.NetworkMap.
 //
 // b.mu must be held.
-func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
-	shouldRun := prefs.Valid() && prefs.RunWebClient() && !hasCapability(nm, tailcfg.NodeAttrDisableWebClient)
+func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
+	shouldRun := !hasCapability(nm, tailcfg.NodeAttrDisableWebClient)
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
 		go b.webClientShutdown() // stop web client
 	}
+}
+
+// setExposeRemoteWebClientAtomicBoolLocked sets exposeRemoteWebClientAtomicBool
+// based on whether the RunWebClient pref is set.
+//
+// b.mu must be held.
+func (b *LocalBackend) setExposeRemoteWebClientAtomicBoolLocked(prefs ipn.PrefsView) {
+	shouldExpose := prefs.Valid() && prefs.RunWebClient()
+	b.exposeRemoteWebClientAtomicBool.Store(shouldExpose)
 }
 
 // ShouldHandleViaIP reports whether ip is an IPv6 address in the
@@ -4808,7 +4836,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
 	}
-	if b.ShouldRunWebClient() {
+	if b.ShouldExposeRemoteWebClient() {
 		handlePorts = append(handlePorts, webClientPort)
 
 		// don't listen on netmap addresses if we're in userspace mode
