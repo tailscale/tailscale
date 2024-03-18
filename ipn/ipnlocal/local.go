@@ -4508,8 +4508,13 @@ func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && en
 // call regardless of whether b.mu is held or not.
 func (b *LocalBackend) ShouldRunWebClient() bool { return b.webClientAtomicBool.Load() }
 
+// setWebClientAtomicBoolLocked sets webClientAtomicBool based on whether
+// the RunWebClient pref is set, and whether tailcfg.NodeAttrDisableWebClient
+// has been set in the netmap.NetworkMap.
+//
+// b.mu must be held.
 func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
-	shouldRun := prefs.Valid() && prefs.RunWebClient()
+	shouldRun := prefs.Valid() && prefs.RunWebClient() && !hasCapability(nm, tailcfg.NodeAttrDisableWebClient)
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
 		go b.webClientShutdown() // stop web client
