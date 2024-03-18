@@ -51,6 +51,7 @@ The Tailscale API does not currently support pagination. All results are returne
 **[Device](#device)**
 - Get a device: [`GET /api/v2/device/{deviceid}`](#get-device)
 - Delete a device: [`DELETE /api/v2/device/{deviceID}`](#delete-device)
+- Expire device key: [`POST /api/v2/device/{deviceID}/expire`](#expire-device-key)
 - **Routes**
   - Get device routes: [`GET /api/v2/device/{deviceID}/routes`](#get-device-routes)
   - Set device routes: [`POST /api/v2/device/{deviceID}/routes`](#set-device-routes)
@@ -410,6 +411,39 @@ If the device is not owned by your tailnet:
 HTTP/1.1 501 Not Implemented
 ...
 {"message":"cannot delete devices outside of your tailnet"}
+```
+
+<a href="expire-device-key"></a>
+
+## Expire a device's key
+
+```http
+POST /api/v2/device/{deviceID}/expire
+```
+
+Mark a device's node key as expired.
+This will require the device to re-authenticate in order to connect to the tailnet.
+The device must belong to the requesting user's tailnet.
+
+### Parameters
+
+#### `deviceid` (required in URL path)
+
+The ID of the device.
+
+### Request example
+
+```sh
+curl -X POST 'https://api.tailscale.com/api/v2/device/12345/expire' \
+  -u "tskey-api-xxxxx:"
+```
+
+### Response
+
+If successful, the response should be empty:
+
+```http
+HTTP/1.1 200 OK
 ```
 
 <a href="device-routes-get">
