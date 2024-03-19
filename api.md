@@ -87,7 +87,7 @@ The Tailscale API does not currently support pagination. All results are returne
     - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#get-dns-preferences)
     - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#set-dns-preferences)
   - **Search paths**
-    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#get-search-paths)
+    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths`](#get-search-paths)
     - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#set-search-paths)
 
 # Device
