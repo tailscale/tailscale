@@ -61,6 +61,8 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	}
 
 	switch targetOS {
+	case "android":
+		cgo = env.Get("CGO_ENABLED", "0") == "1"
 	case "linux":
 		// Getting Go to build a static binary with cgo enabled is a
 		// minor ordeal. The incantations you apparently need are
