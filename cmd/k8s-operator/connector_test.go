@@ -73,38 +73,34 @@ func TestConnector(t *testing.T) {
 		hostname:     "test-connector",
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
-		confFileHash: "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Add another route to be advertised.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
 		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"10.40.0.0/14", "10.44.0.0/20"}
 	})
 	opts.subnetRoutes = "10.40.0.0/14,10.44.0.0/20"
-	opts.confFileHash = "fb6c4daf67425f983985750cd8d6f2beae77e614fcb34176604571f5623d6862"
 	expectReconciled(t, cr, "", "test")
 
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Remove a route.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
 		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"10.44.0.0/20"}
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
-	opts.confFileHash = "bacba177bcfe3849065cf6fee53d658a9bb4144197ac5b861727d69ea99742bb"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Remove the subnet router.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
 		conn.Spec.SubnetRouter = nil
 	})
 	opts.subnetRoutes = ""
-	opts.confFileHash = "7c421a99128eb80e79a285a82702f19f8f720615542a15bd794858a6275d8079"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Re-add the subnet router.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
@@ -113,9 +109,8 @@ func TestConnector(t *testing.T) {
 		}
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
-	opts.confFileHash = "bacba177bcfe3849065cf6fee53d658a9bb4144197ac5b861727d69ea99742bb"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Delete the Connector.
 	if err = fc.Delete(context.Background(), cn); err != nil {
@@ -156,19 +151,17 @@ func TestConnector(t *testing.T) {
 		parentType:   "connector",
 		subnetRoutes: "10.40.0.0/14",
 		hostname:     "test-connector",
-		confFileHash: "57d922331890c9b1c8c6ae664394cb254334c551d9cd9db14537b5d9da9fb17e",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Add an exit node.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
 		conn.Spec.ExitNode = true
 	})
 	opts.isExitNode = true
-	opts.confFileHash = "1499b591fd97a50f0330db6ec09979792c49890cf31f5da5bb6a3f50dba1e77a"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Delete the Connector.
 	if err = fc.Delete(context.Background(), cn); err != nil {
@@ -243,10 +236,9 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		hostname:     "test-connector",
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
-		confFileHash: "9321660203effb80983eaecc7b5ac5a8c53934926f46e895b9fe295dcfc5a904",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts))
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// 2. Update Connector to specify a ProxyClass. ProxyClass is not yet
 	// ready, so its configuration is NOT applied to the Connector
@@ -255,7 +247,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		conn.Spec.ProxyClass = "custom-metadata"
 	})
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// 3. ProxyClass is set to Ready by proxy-class reconciler. Connector
 	// get reconciled and configuration from the ProxyClass is applied to
@@ -269,12 +261,8 @@ func TestConnectorWithProxyClass(t *testing.T) {
 			}}}
 	})
 	opts.proxyClass = pc.Name
-	// We lose the auth key on second reconcile, because in code it's set to
-	// StringData, but is actually read from Data. This works with a real
-	// API server, but not with our test setup here.
-	opts.confFileHash = "1499b591fd97a50f0330db6ec09979792c49890cf31f5da5bb6a3f50dba1e77a"
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// 4. Connector.spec.proxyClass field is unset, Connector gets
 	// reconciled and configuration from the ProxyClass is removed from the
@@ -284,5 +272,5 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	})
 	opts.proxyClass = ""
 	expectReconciled(t, cr, "", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 }

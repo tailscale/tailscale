@@ -650,10 +650,11 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 // produces returns tailscaled configuration and a hash of that configuration.
 func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) ([]byte, string, error) {
 	conf := ipn.ConfigVAlpha{
-		Version:   "alpha0",
-		AcceptDNS: "false",
-		Locked:    "false",
-		Hostname:  &stsC.Hostname,
+		Version:      "alpha0",
+		AcceptDNS:    "false",
+		AcceptRoutes: "false", // AcceptRoutes defaults to true
+		Locked:       "false",
+		Hostname:     &stsC.Hostname,
 	}
 	if stsC.Connector != nil {
 		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
