@@ -664,9 +664,22 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				pc().Cap = n.Cap
 			}
 		case "CapMap":
-			if n.CapMap != nil {
-				pc().CapMap = n.CapMap
+			if len(n.CapMap) != was.CapMap().Len() {
+				if n.CapMap == nil {
+					pc().CapMap = make(tailcfg.NodeCapMap)
+				} else {
+					pc().CapMap = n.CapMap
+				}
+				break
 			}
+			was.CapMap().Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
+				nv, ok := n.CapMap[k]
+				if !ok || !views.SliceEqual(v, views.SliceOf(nv)) {
+					pc().CapMap = n.CapMap
+					return false
+				}
+				return true
+			})
 		case "Tags":
 			if !views.SliceEqual(was.Tags(), views.SliceOf(n.Tags)) {
 				return nil, false
