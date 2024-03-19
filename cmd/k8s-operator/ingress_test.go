@@ -88,12 +88,11 @@ func TestTailscaleIngress(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
-		stsName:      shortName,
-		secretName:   fullName,
-		namespace:    "default",
-		parentType:   "ingress",
-		hostname:     "default-test",
-		confFileHash: "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		stsName:    shortName,
+		secretName: fullName,
+		namespace:  "default",
+		parentType: "ingress",
+		hostname:   "default-test",
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -101,9 +100,9 @@ func TestTailscaleIngress(t *testing.T) {
 	}
 	opts.serveConfig = serveConfig
 
-	expectEqual(t, fc, expectedSecret(t, opts))
-	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 
 	// 2. Ingress status gets updated with ingress proxy's MagicDNS name
 	// once that becomes available.
@@ -118,7 +117,7 @@ func TestTailscaleIngress(t *testing.T) {
 			{Hostname: "foo.tailnetxyz.ts.net", Ports: []networkingv1.IngressPortStatus{{Port: 443, Protocol: "TCP"}}},
 		},
 	}
-	expectEqual(t, fc, ing)
+	expectEqual(t, fc, ing, nil)
 
 	// 3. Resources get created for Ingress that should allow forwarding
 	// cluster traffic
@@ -126,11 +125,8 @@ func TestTailscaleIngress(t *testing.T) {
 		mak.Set(&ing.ObjectMeta.Annotations, AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy, "true")
 	})
 	opts.shouldEnableForwardingClusterTrafficViaIngress = true
-	// configfile hash changed at this point in test env only because we
-	// lost auth key due to how changes are applied in test client.
-	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
 	expectReconciled(t, ingR, "default", "test")
-	expectEqual(t, fc, expectedSTS(t, fc, opts))
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// 4. Resources get cleaned up when Ingress class is unset
 	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
@@ -223,12 +219,11 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	opts := configOpts{
-		stsName:      shortName,
-		secretName:   fullName,
-		namespace:    "default",
-		parentType:   "ingress",
-		hostname:     "default-test",
-		confFileHash: "6cceb342cd3e1c56cd1bd94c29df63df3653c35fe98a7e7afcdee0dcaa2ad549",
+		stsName:    shortName,
+		secretName: fullName,
+		namespace:  "default",
+		parentType: "ingress",
+		hostname:   "default-test",
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -236,9 +231,9 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	}
 	opts.serveConfig = serveConfig
 
-	expectEqual(t, fc, expectedSecret(t, opts))
-	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"))
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 
 	// 2. Ingress is updated to specify a ProxyClass, ProxyClass is not yet
 	// ready, so proxy resource configuration does not change.
@@ -246,7 +241,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		mak.Set(&ing.ObjectMeta.Labels, LabelProxyClass, "custom-metadata")
 	})
 	expectReconciled(t, ingR, "default", "test")
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 
 	// 3. ProxyClass is set to Ready by proxy-class reconciler. Ingress get
 	// reconciled and configuration from the ProxyClass is applied to the
@@ -261,10 +256,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = pc.Name
-	// configfile hash changed at this point in test env only because we
-	// lost auth key due to how changes are applied in test client.
-	opts.confFileHash = "fb9006e30ecda75e88c29dcd0ca2dd28a2ae964d001c66e1be3efe159cc3821d"
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 
 	// 4. tailscale.com/proxy-class label is removed from the Ingress, the
 	// Ingress gets reconciled and the custom ProxyClass configuration is
@@ -274,5 +266,5 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	})
 	expectReconciled(t, ingR, "default", "test")
 	opts.proxyClass = ""
-	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 }
