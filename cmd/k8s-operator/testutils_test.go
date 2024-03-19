@@ -97,7 +97,9 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		ReadOnly:  true,
 		MountPath: "/etc/tsconfig",
 	}}
-	annots["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
+	if opts.confFileHash != "" {
+		annots["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
+	}
 	if opts.firewallMode != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
@@ -269,7 +271,6 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 						"tailscale.com/parent-resource-type": opts.parentType,
 						"app":                                "1234-UID",
 					},
-					Annotations: map[string]string{"tailscale.com/operator-last-set-config-file-hash": opts.confFileHash},
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "proxies",
@@ -279,6 +280,10 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 				},
 			},
 		},
+	}
+	ss.Spec.Template.Annotations = map[string]string{}
+	if opts.confFileHash != "" {
+		ss.Spec.Template.Annotations["tailscale.com/operator-last-set-config-file-hash"] = opts.confFileHash
 	}
 	// If opts.proxyClass is set, retrieve the ProxyClass and apply
 	// configuration from that to the StatefulSet.
@@ -339,11 +344,12 @@ func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 		mak.Set(&s.StringData, "serve-config", string(serveConfigBs))
 	}
 	conf := &ipn.ConfigVAlpha{
-		Version:   "alpha0",
-		AcceptDNS: "false",
-		Hostname:  &opts.hostname,
-		Locked:    "false",
-		AuthKey:   ptr.To("secret-authkey"),
+		Version:      "alpha0",
+		AcceptDNS:    "false",
+		Hostname:     &opts.hostname,
+		Locked:       "false",
+		AuthKey:      ptr.To("secret-authkey"),
+		AcceptRoutes: "false",
 	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {
@@ -433,7 +439,13 @@ func mustUpdateStatus[T any, O ptrObject[T]](t *testing.T, client client.Client,
 	}
 }
 
-func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O) {
+// expectEqual accepts a Kubernetes object and a Kubernetes client. It tests
+// whether an object with equivalent contents can be retrieved by the passed
+// client. If you want to NOT test some object fields for equality, ensure that
+// they are not present in the passed object and use the modify func to remove
+// them from the cluster object. If no such modifications are needed, you can
+// pass nil in place of the modify function.
+func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, modify func(O)) {
 	t.Helper()
 	got := O(new(T))
 	if err := client.Get(context.Background(), types.NamespacedName{
@@ -447,6 +459,9 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	// so just remove it from both got and want.
 	got.SetResourceVersion("")
 	want.SetResourceVersion("")
+	if modify != nil {
+		modify(got)
+	}
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected object (-got +want):\n%s", diff)
 	}
@@ -542,4 +557,12 @@ func (c *fakeTSClient) Deleted() []string {
 	c.Lock()
 	defer c.Unlock()
 	return c.deleted
+}
+
+// removeHashAnnotation can be used to remove declarative tailscaled config hash
+// annotation from proxy StatefulSets to make the tests more maintainable (so
+// that we don't have to change the annotation in each test case after any
+// change to the configfile contents).
+func removeHashAnnotation(sts *appsv1.StatefulSet) {
+	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
 }
