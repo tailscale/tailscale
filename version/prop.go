@@ -71,7 +71,7 @@ func IsMacSysApp() bool {
 		}
 		// Check that this is the GUI binary, and it is not sandboxed. The GUI binary
 		// shipped in the App Store will always have the App Sandbox enabled.
-		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") && !IsMacAppSandboxEnabled()
+		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") && !IsMacAppStore()
 	})
 }
 
@@ -85,7 +85,8 @@ func IsMacSysExt() bool {
 		return false
 	}
 	return isMacSysExt.Get(func() bool {
-		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
+		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") ||
+			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macsys") {
 			return true
 		}
 		exe, err := os.Executable()
@@ -93,19 +94,6 @@ func IsMacSysExt() bool {
 			return false
 		}
 		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
-	})
-}
-
-var isMacAppSandboxEnabled lazy.SyncValue[bool]
-
-// IsMacAppSandboxEnabled reports whether this process is subject to the App Sandbox
-// on macOS.
-func IsMacAppSandboxEnabled() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	return isMacAppSandboxEnabled.Get(func() bool {
-		return os.Getenv("APP_SANDBOX_CONTAINER_ID") != ""
 	})
 }
 
@@ -121,19 +109,8 @@ func IsMacAppStore() bool {
 		// Both macsys and app store versions can run CLI executable with
 		// suffix /Contents/MacOS/Tailscale. Check $HOME to filter out running
 		// as macsys.
-		if !IsMacAppSandboxEnabled() {
-			// If no sandbox found, we're definitely not on an App Store release, as you cannot push
-			// anything to the App Store that has the App Sandbox disabled.
-			return false
-		}
-		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
-			return false
-		}
-		exe, err := os.Executable()
-		if err != nil {
-			return false
-		}
-		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
+		return strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macos/") ||
+			strings.Contains(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.macos")
 	})
 }
 
