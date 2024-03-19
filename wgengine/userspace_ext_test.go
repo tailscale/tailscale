@@ -9,6 +9,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tsd"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
@@ -17,7 +18,10 @@ import (
 
 func TestIsNetstack(t *testing.T) {
 	sys := new(tsd.System)
-	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
+	e, err := wgengine.NewUserspaceEngine(
+		tstest.WhileTestRunningLogger(t),
+		wgengine.Config{SetSubsystem: sys.Set},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
