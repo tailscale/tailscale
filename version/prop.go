@@ -71,7 +71,7 @@ func IsMacSysApp() bool {
 		}
 		// Check that this is the GUI binary, and it is not sandboxed. The GUI binary
 		// shipped in the App Store will always have the App Sandbox enabled.
-		return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") && !IsMacAppSandboxEnabled()
+		return !IsMacAppStore() && strings.HasSuffix(exe, "/Contents/MacOS/Tailscale")
 	})
 }
 
@@ -96,19 +96,6 @@ func IsMacSysExt() bool {
 	})
 }
 
-var isMacAppSandboxEnabled lazy.SyncValue[bool]
-
-// IsMacAppSandboxEnabled reports whether this process is subject to the App Sandbox
-// on macOS.
-func IsMacAppSandboxEnabled() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	return isMacAppSandboxEnabled.Get(func() bool {
-		return os.Getenv("APP_SANDBOX_CONTAINER_ID") != ""
-	})
-}
-
 var isMacAppStore lazy.SyncValue[bool]
 
 // IsMacAppStore whether this binary is from the App Store version of Tailscale
@@ -121,11 +108,6 @@ func IsMacAppStore() bool {
 		// Both macsys and app store versions can run CLI executable with
 		// suffix /Contents/MacOS/Tailscale. Check $HOME to filter out running
 		// as macsys.
-		if !IsMacAppSandboxEnabled() {
-			// If no sandbox found, we're definitely not on an App Store release, as you cannot push
-			// anything to the App Store that has the App Sandbox disabled.
-			return false
-		}
 		if strings.Contains(os.Getenv("HOME"), "/Containers/io.tailscale.ipn.macsys/") {
 			return false
 		}
