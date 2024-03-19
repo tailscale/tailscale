@@ -169,4 +169,15 @@ func TestMap(t *testing.T) {
 			t.Errorf("Len after Clear want=0 got=%d", m.Len())
 		}
 	})
+
+	t.Run("Swap", func(t *testing.T) {
+		var m Map[string, string]
+		m.Store("hello", "world")
+		if got, want := m.Swap("hello", "world2"), "world"; got != want {
+			t.Errorf("got old value %q, want %q", got, want)
+		}
+		if got := m.Swap("empty", "foo"); got != "" {
+			t.Errorf("got old value %q, want empty string", got)
+		}
+	})
 }

@@ -271,6 +271,17 @@ func (m *Map[K, V]) Clear() {
 	clear(m.m)
 }
 
+// Swap stores the value for the provided key, and returns the previous value
+// (if any). If there was no previous value set, a zero value will be returned.
+func (m *Map[K, V]) Swap(key K, value V) (oldValue V) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	oldValue = m.m[key]
+	mak.Set(&m.m, key, value)
+	return oldValue
+}
+
 // WaitGroup is identical to [sync.WaitGroup],
 // but provides a Go method to start a goroutine.
 type WaitGroup struct{ sync.WaitGroup }
