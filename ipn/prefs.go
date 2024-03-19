@@ -962,8 +962,8 @@ type RouteInfo struct {
 
 func (r RouteInfo) UpdateRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
 	newDatedRoutes := make(DatedRoute)
-	_, hasKey := r.Discovered[domain]
-	if !hasKey {
+	val, hasKey := r.Discovered[domain]
+	if !hasKey || val == nil {
 		r.Discovered[domain] = addAddrsToDatedRoute(newDatedRoutes, addrs)
 		return
 	}

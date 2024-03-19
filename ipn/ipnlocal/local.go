@@ -3562,6 +3562,8 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
 	domains = slices.Compact(domains)
 	routes = slices.Compact(routes)
+	fmt.Println("Connector Kevin: ", domains)
+	fmt.Println("Connector Kevin: ", routes)
 	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
 }
 

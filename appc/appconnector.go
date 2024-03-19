@@ -111,6 +111,10 @@ func (e *AppConnector) updateDomains(domains []string) {
 	defer e.mu.Unlock()
 
 	var oldDomains map[string][]netip.Addr
+	var oldDiscovered map[string]ipn.DatedRoute
+	routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
+
+	oldDiscovered, routeInfo.Discovered = routeInfo.Discovered, make(map[string]ipn.DatedRoute, len(domains))
 	oldDomains, e.domains = e.domains, make(map[string][]netip.Addr, len(domains))
 	e.wildcards = e.wildcards[:0]
 	for _, d := range domains {
@@ -123,7 +127,9 @@ func (e *AppConnector) updateDomains(domains []string) {
 			continue
 		}
 		e.domains[d] = oldDomains[d]
+		routeInfo.Discovered[d] = oldDiscovered[d]
 		delete(oldDomains, d)
+		delete(oldDiscovered, d)
 	}
 
 	// Ensure that still-live wildcards addresses are preserved as well.
@@ -135,6 +141,17 @@ func (e *AppConnector) updateDomains(domains []string) {
 			}
 		}
 	}
+
+	for d, dr := range oldDiscovered {
+		for _, wc := range e.wildcards {
+			if dnsname.HasSuffix(d, wc) {
+				routeInfo.Discovered[d] = dr
+				break
+			}
+		}
+	}
+
+	e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
 }
 
