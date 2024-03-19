@@ -974,13 +974,31 @@ func (r RouteInfo) UpdateRoutesInDiscoveredForDomain(domain string, addrs []neti
 	return
 }
 
+func (r RouteInfo) CorpAndDiscoveredAsSlice() []netip.Prefix {
+	dr := r.Corp
+	for _, routes := range r.Discovered {
+		for k := range routes {
+			dr = append(dr, k)
+		}
+	}
+	return dr
+}
+
 type DatedRoute = map[netip.Prefix]time.Time
 
-func addAddrsToDatedRoute(curDatedRoutes DatedRoute, addrs []netip.Prefix) DatedRoute {
+func addAddrsToDatedRoute(curDatedRoute DatedRoute, addrs []netip.Prefix) DatedRoute {
 	time := time.Now()
-	ret := curDatedRoutes
+	ret := curDatedRoute
 	for _, addr := range addrs {
 		ret[addr] = time
 	}
 	return ret
 }
+
+// func datedRouteToSlice(curDatedRoute DatedRoute) []netip.Prefix {
+// 	r := make([]netip.Prefix, 0, len(curDatedRoute))
+// 	for k := range curDatedRoute {
+// 		r = append(r, k)
+// 	}
+// 	return r
+// }

@@ -3141,10 +3141,12 @@ func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, er
 	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
 	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
 	routeInfo := b.pm.CurrentRoutes()
+	curRoutes := routeInfo.CorpAndDiscoveredAsSlice()
 	if mp.AdvertiseRoutesSet {
 		routeInfo.Local = mp.AdvertiseRoutes
 		b.pm.SetCurrentRoutes(routeInfo)
-		//newp.AdvertiseRoutes = b.pm.CurrentRoutes.AsArray() (sort of thing)
+		curRoutes := append(curRoutes, mp.AdvertiseRoutes...)
+		mp.AdvertiseRoutes = curRoutes
 	}
 	return b.EditPrefs(mp)
 }
