@@ -319,6 +319,9 @@ type LocalBackend struct {
 	// lastNotifiedTailFSShares keeps track of the last set of shares that we
 	// notified about.
 	lastNotifiedTailFSShares atomic.Pointer[views.SliceView[*tailfs.Share, tailfs.ShareView]]
+
+	// outgoingFiles keeps track of Taildrop outgoing files
+	outgoingFiles map[string]*ipn.OutgoingFile
 }
 
 type updateStatus struct {
