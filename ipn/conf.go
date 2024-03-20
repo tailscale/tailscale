@@ -23,8 +23,8 @@ type ConfigVAlpha struct {
 	OperatorUser *string `json:",omitempty"` // local user name who is allowed to operate tailscaled without being root or using sudo
 	Hostname     *string `json:",omitempty"`
 
-	AcceptDNS    opt.Bool `json:"acceptDNS,omitempty"` // --accept-dns
-	AcceptRoutes opt.Bool `json:"acceptRoutes,omitempty"`
+	AcceptDNS    opt.Bool `json:"acceptDNS,omitempty"`    // --accept-dns
+	AcceptRoutes opt.Bool `json:"acceptRoutes,omitempty"` // --accept-routes defaults to true
 
 	ExitNode                   *string  `json:"exitNode,omitempty"` // IP, StableID, or MagicDNS base name
 	AllowLANWhileUsingExitNode opt.Bool `json:"allowLANWhileUsingExitNode,omitempty"`

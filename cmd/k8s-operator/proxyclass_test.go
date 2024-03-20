@@ -69,7 +69,7 @@ func TestProxyClass(t *testing.T) {
 		LastTransitionTime: &metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
 
-	expectEqual(t, fc, pc)
+	expectEqual(t, fc, pc, nil)
 
 	// 2. An invalid ProxyClass resource gets its status updated to Invalid.
 	pc.Spec.StatefulSet.Labels["foo"] = "?!someVal"
@@ -79,5 +79,5 @@ func TestProxyClass(t *testing.T) {
 	expectReconciled(t, pcr, "", "test")
 	msg := `ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: "?!someVal": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
-	expectEqual(t, fc, pc)
+	expectEqual(t, fc, pc, nil)
 }
