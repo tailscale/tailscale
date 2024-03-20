@@ -641,6 +641,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if err != nil {
 		return regen, opt.URL, nil, err
 	}
+	addLBHeader(req, request.OldNodeKey)
+	addLBHeader(req, request.NodeKey)
+
 	res, err := httpc.Do(req)
 	if err != nil {
 		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
@@ -884,10 +887,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		vlogf = c.logf
 	}
 
+	nodeKey := persist.PublicNodeKey()
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentCapabilityVersion,
 		KeepAlive:     true,
-		NodeKey:       persist.PublicNodeKey(),
+		NodeKey:       nodeKey,
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     eps,
 		EndpointTypes: epTypes,
@@ -946,6 +950,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	if err != nil {
 		return err
 	}
+	addLBHeader(req, nodeKey)
 
 	res, err := httpc.Do(req)
 	if err != nil {
@@ -1537,7 +1542,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	if err != nil {
 		return err
 	}
-	res, err := nc.post(ctx, "/machine/set-dns", &newReq)
+	res, err := nc.post(ctx, "/machine/set-dns", newReq.NodeKey, &newReq)
 	if err != nil {
 		return err
 	}
@@ -1714,8 +1719,10 @@ func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
 		// Don't report errors to control if the server doesn't support noise.
 		return
 	}
+	nodeKey := c.GetPersist().PublicNodeKey()
 	req := &tailcfg.HealthChangeRequest{
-		Subsys: string(sys),
+		Subsys:  string(sys),
+		NodeKey: nodeKey,
 	}
 	if sysErr != nil {
 		req.Error = sysErr.Error()
@@ -1724,7 +1731,7 @@ func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
 	// Best effort, no logging:
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := np.post(ctx, "/machine/update-health", req)
+	res, err := np.post(ctx, "/machine/update-health", nodeKey, req)
 	if err != nil {
 		return
 	}
@@ -1766,6 +1773,12 @@ func decodeWrappedAuthkey(key string, logf logger.Logf) (authKey string, isWrapp
 	priv = ed25519.PrivateKey(rawPriv)
 
 	return authKey, true, sig, priv
+}
+
+func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
+	if !nodeKey.IsZero() {
+		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
+	}
 }
 
 var (

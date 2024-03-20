@@ -2263,6 +2263,10 @@ type SetDNSResponse struct{}
 type HealthChangeRequest struct {
 	Subsys string // a health.Subsystem value in string form
 	Error  string // or empty if cleared
+
+	// NodeKey is the client's current node key.
+	// In clients <= 1.62.0 it was always the zero value.
+	NodeKey key.NodePublic
 }
 
 // SSHPolicy is the policy for how to handle incoming SSH connections
@@ -2680,3 +2684,21 @@ type EarlyNoise struct {
 	// the client to prove possession of a wireguard private key.
 	NodeKeyChallenge key.ChallengePublic `json:"nodeKeyChallenge"`
 }
+
+// LBHeader is the HTTP request header used to provide a load balancer or
+// internal reverse proxy with information about the request body without the
+// reverse proxy needing to read the body to parse it out. Think of it akin to
+// an HTTP Host header or SNI. The value may be absent (notably for old clients)
+// but if present, it should match the request. A non-empty value that doesn't
+// match the request body's.
+//
+// The possible values depend on the request path, but for /machine (Noise)
+// requests, they'll usually be a node public key (in key.NodePublic.String
+// format), matching the Request JSON body's NodeKey.
+//
+// Note that this is not a security or authentication header; it's strictly
+// denormalized redundant data as an optimization.
+//
+// For some request types, the header may have multiple values. (e.g. OldNodeKey
+// vs NodeKey)
+const LBHeader = "Ts-Lb"
