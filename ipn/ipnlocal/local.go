@@ -5988,6 +5988,7 @@ func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bo
 // UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
 // a route advertisement if one is present in the existing routes.
 func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
+	fmt.Println("We are unadvertising routes: ", toRemove)
 	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	finalRoutes := currentRoutes[:0]
 
@@ -5997,7 +5998,7 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		}
 		finalRoutes = append(finalRoutes, ipp)
 	}
-
+	fmt.Println("We are advertising these routes in unadvertising routes: ", finalRoutes)
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: finalRoutes,

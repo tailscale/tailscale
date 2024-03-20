@@ -11,7 +11,6 @@ package appc
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -168,12 +167,26 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 		return
 	}
 
+	routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
+	oldCorp := routeInfo.Corp
+	var toRemove []netip.Prefix
+	for _, ipp := range oldCorp {
+		if slices.Contains(routes, ipp) {
+			continue
+		}
+		toRemove = append(toRemove, ipp)
+	}
+	if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+		e.logf("failed to unadvertise old routes: %v: %v", routes, err)
+	}
+	routeInfo.Corp = routes
+
 	if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
 		e.logf("failed to advertise routes: %v: %v", routes, err)
 		return
 	}
 
-	var toRemove []netip.Prefix
+	toRemove = toRemove[:0]
 
 nextRoute:
 	for _, r := range routes {
@@ -193,6 +206,7 @@ nextRoute:
 	}
 
 	e.controlRoutes = routes
+	e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
 }
 
 // Domains returns the currently configured domain list.
@@ -343,7 +357,6 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		routeInfo.UpdateRoutesInDiscoveredForDomain(domain, routesToUpdate)
 
 		e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
-		fmt.Println("Appc DNS lookup", routeInfo)
 		e.scheduleAdvertisement(domain, toAdvertise...)
 	}
 }
