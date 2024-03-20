@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"reflect"
 	"slices"
@@ -668,14 +669,14 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				if n.CapMap == nil {
 					pc().CapMap = make(tailcfg.NodeCapMap)
 				} else {
-					pc().CapMap = n.CapMap
+					pc().CapMap = maps.Clone(n.CapMap)
 				}
 				break
 			}
 			was.CapMap().Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
 				nv, ok := n.CapMap[k]
 				if !ok || !views.SliceEqual(v, views.SliceOf(nv)) {
-					pc().CapMap = n.CapMap
+					pc().CapMap = maps.Clone(n.CapMap)
 					return false
 				}
 				return true
