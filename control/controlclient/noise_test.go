@@ -128,7 +128,7 @@ func (tt noiseClientTest) run(t *testing.T) {
 	checkRes(t, res)
 
 	// And try using the high-level nc.post API as well.
-	res, err = nc.post(context.Background(), "/", nil)
+	res, err = nc.post(context.Background(), "/", key.NodePublic{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
