@@ -274,6 +274,10 @@ func (b *LocalBackend) tailFSSetSharesLocked(shares []*tailfs.Share) error {
 // tailFSNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
 // about the latest list of shares.
 func (b *LocalBackend) tailFSNotifyShares(shares views.SliceView[*tailfs.Share, tailfs.ShareView]) {
+	// Ensures shares is not nil to distinguish "no shares" from "not notifying shares"
+	if shares.IsNil() {
+		shares = views.SliceOfViews(make([]*tailfs.Share, 0))
+	}
 	b.send(ipn.Notify{TailFSShares: shares})
 }
 
@@ -289,10 +293,6 @@ func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
 	lastNotified := b.lastNotifiedTailFSShares.Load()
 	if lastNotified == nil || !tailFSShareViewsEqual(lastNotified, shares) {
 		// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
-		if shares.IsNil() {
-			// set to a non-nil value to indicate we have 0 shares
-			shares = views.SliceOfViews(make([]*tailfs.Share, 0))
-		}
 		go b.tailFSNotifyShares(shares)
 	}
 }
