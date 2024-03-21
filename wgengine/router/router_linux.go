@@ -56,6 +56,7 @@ type linuxRouter struct {
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool // whether kernel was built with IP_MULTIPLE_TABLES
+	v6Available     bool // whether the kernel supports IPv6
 	fwmaskWorks     bool // whether we can use 'ip rule...fwmark <mark>/<mask>'
 
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
@@ -141,6 +142,8 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		r.ipPolicyPrefBase = 1300
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
 	}
+
+	r.v6Available = linuxfw.CheckIPv6(r.logf) == nil
 
 	r.fixupWSLMTU()
 
@@ -416,7 +419,7 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 	case "udp4":
 		magicsockPort = &r.magicsockPortV4
 	case "udp6":
-		if !r.nfr.HasIPV6() {
+		if !r.getV6Available() {
 			return nil
 		}
 		magicsockPort = &r.magicsockPortV6
@@ -523,7 +526,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
-			if r.magicsockPortV6 != 0 && r.nfr.HasIPV6() {
+			if r.magicsockPortV6 != 0 && r.getV6Available() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
@@ -563,7 +566,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
-			if r.magicsockPortV6 != 0 && r.nfr.HasIPV6() {
+			if r.magicsockPortV6 != 0 && r.getV6Available() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
@@ -602,6 +605,9 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 }
 
 func (r *linuxRouter) getV6Available() bool {
+	if r.netfilterMode == netfilterOff {
+		return r.v6Available
+	}
 	return r.nfr.HasIPV6()
 }
 

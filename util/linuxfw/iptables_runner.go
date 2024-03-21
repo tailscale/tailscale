@@ -59,7 +59,7 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 	}
 
 	supportsV6, supportsV6NAT := false, false
-	v6err := checkIPv6(logf)
+	v6err := CheckIPv6(logf)
 	ip6terr := checkIP6TablesExists()
 	var ipt6 *iptables.IPTables
 	switch {
