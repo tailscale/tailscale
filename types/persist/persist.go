@@ -51,9 +51,30 @@ func (p *Persist) PublicNodeKey() key.NodePublic {
 	return p.PrivateNodeKey.Public()
 }
 
+// PublicNodeKeyOK returns the public key for the node key.
+//
+// Unlike PublicNodeKey, it returns ok=false if there is no node private key
+// instead of panicking.
+func (p *Persist) PublicNodeKeyOK() (pub key.NodePublic, ok bool) {
+	if p.PrivateNodeKey.IsZero() {
+		return
+	}
+	return p.PrivateNodeKey.Public(), true
+}
+
 // PublicNodeKey returns the public key for the node key.
+//
+// It panics if there is no node private key. See PublicNodeKeyOK.
 func (p PersistView) PublicNodeKey() key.NodePublic {
 	return p.ж.PublicNodeKey()
+}
+
+// PublicNodeKeyOK returns the public key for the node key.
+//
+// Unlike PublicNodeKey, it returns ok=false if there is no node private key
+// instead of panicking.
+func (p PersistView) PublicNodeKeyOK() (_ key.NodePublic, ok bool) {
+	return p.ж.PublicNodeKeyOK()
 }
 
 func (p PersistView) Equals(p2 PersistView) bool {

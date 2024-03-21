@@ -1709,7 +1709,10 @@ func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
 		// Don't report errors to control if the server doesn't support noise.
 		return
 	}
-	nodeKey := c.GetPersist().PublicNodeKey()
+	nodeKey, ok := c.GetPersist().PublicNodeKeyOK()
+	if !ok {
+		return
+	}
 	req := &tailcfg.HealthChangeRequest{
 		Subsys:  string(sys),
 		NodeKey: nodeKey,
