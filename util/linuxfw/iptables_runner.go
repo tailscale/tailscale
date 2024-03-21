@@ -36,8 +36,10 @@ type iptablesRunner struct {
 	ipt4 iptablesInterface
 	ipt6 iptablesInterface
 
-	v6Available    bool
-	v6NATAvailable bool
+	v6Available bool // whether system supports IPv6
+
+	v6IPTablesAvailable bool // whether system supports ip6tables
+	v6NATAvailable      bool // whether system supports ip6tables NAT
 }
 
 func checkIP6TablesExists() error {
@@ -58,7 +60,7 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		return nil, err
 	}
 
-	supportsV6, supportsV6NAT := false, false
+	supportsV6, supportsIPTablesv6, supportsV6NAT := false, false, false
 	v6err := checkIPv6(logf)
 	ip6terr := checkIP6TablesExists()
 	var ipt6 *iptables.IPTables
@@ -69,17 +71,18 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		logf("disabling tunneled IPv6 due to missing ip6tables: %v", ip6terr)
 	default:
 		supportsV6 = true
+		supportsIPTablesv6 = true
 		ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
 		if err != nil {
 			return nil, err
 		}
-		supportsV6 = checkSupportsV6Filter(ipt6, logf)
-		if supportsV6 {
+		supportsIPTablesv6 = checkSupportsV6Filter(ipt6, logf)
+		if supportsIPTablesv6 {
 			supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
 		}
 		logf("v6filter = %v, v6nat = %v", supportsV6, supportsV6NAT)
 	}
-	return &iptablesRunner{ipt4, ipt6, supportsV6, supportsV6NAT}, nil
+	return &iptablesRunner{ipt4, ipt6, supportsV6, supportsIPTablesv6, supportsV6NAT}, nil
 }
 
 // checkSupportsV6Filter returns whether the system has a "filter" table in the
@@ -142,6 +145,11 @@ func (i *iptablesRunner) HasIPV6() bool {
 	return i.v6Available
 }
 
+// HasIPV6 reports true if the system supports IPv6.
+func (i *iptablesRunner) HasIPV6Tables() bool {
+	return i.v6IPTablesAvailable
+}
+
 // HasIPV6NAT reports true if the system supports IPv6 NAT.
 func (i *iptablesRunner) HasIPV6NAT() bool {
 	return i.v6NATAvailable
@@ -189,7 +197,7 @@ func (i *iptablesRunner) DelLoopbackRule(addr netip.Addr) error {
 
 // getTables gets the available iptablesInterface in iptables runner.
 func (i *iptablesRunner) getTables() []iptablesInterface {
-	if i.HasIPV6() {
+	if i.HasIPV6Tables() {
 		return []iptablesInterface{i.ipt4, i.ipt6}
 	}
 	return []iptablesInterface{i.ipt4}
@@ -286,7 +294,7 @@ func (i *iptablesRunner) AddBase(tunname string) error {
 	if err := i.addBase4(tunname); err != nil {
 		return err
 	}
-	if i.HasIPV6() {
+	if i.HasIPV6Tables() {
 		if err := i.addBase6(tunname); err != nil {
 			return err
 		}
