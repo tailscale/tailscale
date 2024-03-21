@@ -1202,9 +1202,7 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	} else {
 		st = h.b.StatusWithoutPeers()
 	}
-	e := json.NewEncoder(w)
-	e.SetIndent("", "\t")
-	e.Encode(st)
+	json.NewEncoder(w).Encode(st)
 }
 
 func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.Request) {
