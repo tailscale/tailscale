@@ -3615,7 +3615,9 @@ func (b *LocalBackend) authReconfig() {
 	}
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
+	runtime.GC()
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
+	runtime.GC()
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {
