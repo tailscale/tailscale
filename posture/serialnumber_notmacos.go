@@ -3,7 +3,7 @@
 
 // Build on Windows, Linux and *BSD
 
-//go:build windows || (linux && !android) || freebsd || openbsd || dragonfly || netbsd
+//go:build (windows || (linux && !android) || freebsd || openbsd || dragonfly || netbsd) && !darwin
 
 package posture
 
