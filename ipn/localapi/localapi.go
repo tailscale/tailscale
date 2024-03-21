@@ -1289,14 +1289,16 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	buf := bytes.NewBuffer(nil)
 	ctx := r.Context()
 	h.b.WatchNotifications(ctx, mask, f.Flush, func(roNotify *ipn.Notify) (keepGoing bool) {
-		js, err := json.Marshal(roNotify)
+		buf.Reset()
+		err := json.NewEncoder(buf).Encode(roNotify)
 		if err != nil {
 			h.logf("json.Marshal: %v", err)
 			return false
 		}
-		if _, err := fmt.Fprintf(w, "%s\n", js); err != nil {
+		if _, err := w.Write(buf.Bytes()); err != nil {
 			return false
 		}
 		f.Flush()
