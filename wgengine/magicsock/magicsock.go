@@ -1815,9 +1815,11 @@ func debugRingBufferSize(numPeers int) int {
 	}
 	var maxRingBufferSize int
 	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
-		maxRingBufferSize = 1 * 1024 * 1024
+		maxRingBufferSize = 1 << 20
+		// But as of 2024-03-20, we now just disable the ring buffer entirely
+		// on mobile as it hadn't proven useful enough to justify even 1 MB.
 	} else {
-		maxRingBufferSize = 4 * 1024 * 1024
+		maxRingBufferSize = 4 << 20
 	}
 	if v := debugRingBufferMaxSizeBytes(); v > 0 {
 		maxRingBufferSize = v
@@ -1984,7 +1986,6 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 		ep = &endpoint{
 			c:                 c,
-			debugUpdates:      ringbuffer.New[EndpointChange](entriesPerBuffer),
 			nodeID:            n.ID(),
 			publicKey:         n.Key(),
 			publicKeyHex:      n.Key().UntypedHexString(),
@@ -1992,6 +1993,14 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			endpointState:     map[netip.AddrPort]*endpointState{},
 			heartbeatDisabled: flags.heartbeatDisabled,
 			isWireguardOnly:   n.IsWireGuardOnly(),
+		}
+		switch runtime.GOOS {
+		case "ios", "android":
+			// Omit, to save memory. Prior to 2024-03-20 we used to limit it to
+			// ~1MB on mobile but we never used the data so the memory was just
+			// wasted.
+		default:
+			ep.debugUpdates = ringbuffer.New[EndpointChange](entriesPerBuffer)
 		}
 		if n.Addresses().Len() > 0 {
 			ep.nodeAddr = n.Addresses().At(0).Addr()
