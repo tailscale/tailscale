@@ -185,6 +185,7 @@ type Logger struct {
 	netMonitor     *netmon.Monitor
 	buffer         Buffer
 	drainWake      chan struct{}        // signal to speed up drain
+	drainBuf       bytes.Buffer         // owned by drainPending for reuse
 	flushDelayFn   func() time.Duration // negative or zero return value to upload aggressively, or >0 to batch at this delay
 	flushPending   atomic.Bool
 	sentinel       chan int32
@@ -302,10 +303,10 @@ func (l *Logger) drainBlock() (shuttingDown bool) {
 }
 
 // drainPending drains and encodes a batch of logs from the buffer for upload.
-// It uses scratch as its initial buffer.
 // If no logs are available, drainPending blocks until logs are available.
-func (l *Logger) drainPending(scratch []byte) (res []byte) {
-	buf := bytes.NewBuffer(scratch[:0])
+func (l *Logger) drainPending() (res []byte) {
+	buf := &l.drainBuf
+	buf.Reset()
 	buf.WriteByte('[')
 	entries := 0
 
@@ -321,6 +322,14 @@ func (l *Logger) drainPending(scratch []byte) (res []byte) {
 		} else if b == nil {
 			if entries > 0 {
 				break
+			}
+
+			// We're about to block. If we're holding on to too much memory
+			// in our buffer from a previous large write, let it go.
+			if buf.Available() > 4<<10 {
+				cur := buf.Bytes()
+				l.drainBuf = bytes.Buffer{}
+				buf.Write(cur)
 			}
 
 			batchDone = l.drainBlock()
@@ -365,9 +374,8 @@ func (l *Logger) drainPending(scratch []byte) (res []byte) {
 func (l *Logger) uploading(ctx context.Context) {
 	defer close(l.shutdownDone)
 
-	scratch := make([]byte, 4096) // reusable buffer to write into
 	for {
-		body := l.drainPending(scratch)
+		body := l.drainPending()
 		origlen := -1 // sentinel value: uncompressed
 		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
 		if (l.compressLogs || l.zstdEncoder != nil) && len(body) > 256 {
