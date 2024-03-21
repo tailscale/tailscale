@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -86,6 +87,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
@@ -4751,7 +4753,102 @@ type tailFSTransport struct {
 	b *LocalBackend
 }
 
-func (t *tailFSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+// responseBodyWrapper wraps an io.ReadCloser and stores
+// the number of bytesRead.
+type responseBodyWrapper struct {
+	io.ReadCloser
+	bytesRx       int64
+	bytesTx       int64
+	log           logger.Logf
+	method        string
+	statusCode    int
+	contentType   string
+	fileExtension string
+	shareNodeKey  string
+	selfNodeKey   string
+	contentLength int64
+}
+
+// logAccess logs the tailfs: access: log line. If the logger is nil,
+// the log will not be written.
+func (rbw *responseBodyWrapper) logAccess(err string) {
+	if rbw.log == nil {
+		return
+	}
+
+	rbw.log("tailfs: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+}
+
+// Read implements the io.Reader interface.
+func (rbw *responseBodyWrapper) Read(b []byte) (int, error) {
+	n, err := rbw.ReadCloser.Read(b)
+	rbw.bytesRx += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		rbw.logAccess(err.Error())
+	}
+
+	return n, err
+}
+
+// Close implements the io.Close interface.
+func (rbw *responseBodyWrapper) Close() error {
+	err := rbw.ReadCloser.Close()
+	var errStr string
+	if err != nil {
+		errStr = err.Error()
+	}
+	rbw.logAccess(errStr)
+
+	return err
+}
+
+func (t *tailFSTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	bw := &requestBodyWrapper{}
+	if req.Body != nil {
+		bw.ReadCloser = req.Body
+		req.Body = bw
+	}
+
+	defer func() {
+		contentType := "unknown"
+		switch req.Method {
+		case httpm.PUT:
+			if ct := req.Header.Get("Content-Type"); ct != "" {
+				contentType = ct
+			}
+		case httpm.GET:
+			if ct := resp.Header.Get("Content-Type"); ct != "" {
+				contentType = ct
+			}
+		default:
+			return
+		}
+
+		t.b.mu.Lock()
+		selfNodeKey := t.b.netMap.SelfNode.Key().ShortString()
+		t.b.mu.Unlock()
+		n, _, ok := t.b.WhoIs(netip.MustParseAddrPort(req.URL.Host))
+		shareNodeKey := "unknown"
+		if ok {
+			shareNodeKey = string(n.Key().ShortString())
+		}
+
+		rbw := responseBodyWrapper{
+			log:           t.b.logf,
+			method:        req.Method,
+			bytesTx:       int64(bw.bytesRead),
+			selfNodeKey:   selfNodeKey,
+			shareNodeKey:  shareNodeKey,
+			contentType:   contentType,
+			contentLength: resp.ContentLength,
+			fileExtension: parseTailFSFileExtensionForLog(req.URL.Path),
+			statusCode:    resp.StatusCode,
+			ReadCloser:    resp.Body,
+		}
+
+		resp.Body = &rbw
+	}()
+
 	// dialTimeout is fairly aggressive to avoid hangs on contacting offline or
 	// unreachable hosts.
 	dialTimeout := 1 * time.Second // TODO(oxtoacart): tune this
@@ -4764,6 +4861,32 @@ func (t *tailFSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return dialContext(ctxWithTimeout, network, addr)
 	}
 	return tr.RoundTrip(req)
+}
+
+// roundTraffic rounds bytes. This is used to preserve user privacy within logs.
+func roundTraffic(bytes int64) float64 {
+	var x float64
+	switch {
+	case bytes <= 5:
+		return float64(bytes)
+	case bytes < 1000:
+		x = 10
+	case bytes < 10_000:
+		x = 100
+	case bytes < 100_000:
+		x = 1000
+	case bytes < 1_000_000:
+		x = 10_000
+	case bytes < 10_000_000:
+		x = 100_000
+	case bytes < 100_000_000:
+		x = 1_000_000
+	case bytes < 1_000_000_000:
+		x = 10_000_000
+	default:
+		x = 100_000_000
+	}
+	return math.Round(float64(bytes)/x) * x
 }
 
 // setDebugLogsByCapabilityLocked sets debug logging based on the self node's
