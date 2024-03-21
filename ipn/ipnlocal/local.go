@@ -355,7 +355,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			return nil, err
 		}
 	}
-	// Kevin comment: no need to do this since tailscaled startup will not affect routes.
 
 	envknob.LogCurrent(logf)
 	if dialer == nil {
@@ -3142,6 +3141,7 @@ func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, er
 	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
 	routeInfo := b.pm.CurrentRoutes()
 	curRoutes := routeInfo.CorpAndDiscoveredAsSlice()
+	// fmt.Println("Kevin cur route: ", curRoutes)
 	if mp.AdvertiseRoutesSet {
 		routeInfo.Local = mp.AdvertiseRoutes
 		b.pm.SetCurrentRoutes(routeInfo)
@@ -3183,7 +3183,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	// in setPrefsLocksOnEntry instead.
 
 	// This should return the public prefs, not the private ones.
-	fmt.Println("Editpref in local", b.pm.CurrentRoutes())
+	// fmt.Println("Editpref in local", b.pm.CurrentRoutes()) //Kevin debug
 	return stripKeysFromPrefs(newPrefs), nil
 }
 
@@ -3562,8 +3562,6 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
 	domains = slices.Compact(domains)
 	routes = slices.Compact(routes)
-	fmt.Println("Connector Kevin: ", domains)
-	fmt.Println("Connector Kevin: ", routes)
 	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
 }
 
@@ -5988,7 +5986,7 @@ func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bo
 // UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
 // a route advertisement if one is present in the existing routes.
 func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
-	fmt.Println("We are unadvertising routes: ", toRemove)
+	// fmt.Println("We are unadvertising routes: ", toRemove) //Kevin debug
 	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	finalRoutes := currentRoutes[:0]
 
@@ -5998,7 +5996,7 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		}
 		finalRoutes = append(finalRoutes, ipp)
 	}
-	fmt.Println("We are advertising these routes in unadvertising routes: ", finalRoutes)
+	// fmt.Println("We are advertising these routes in unadvertising routes: ", finalRoutes) // Kevin debug
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: finalRoutes,
@@ -6009,7 +6007,9 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 }
 
 func (b *LocalBackend) ReadRouteInfoFromStore() *ipn.RouteInfo {
-	b.pm.ReadRoutesForCurrentProfile()
+	if b.pm.CurrentRoutes() == nil {
+		b.pm.ReadRoutesForCurrentProfile()
+	}
 	return b.pm.CurrentRoutes()
 }
 

@@ -65,7 +65,6 @@ func (pm *profileManager) WriteRoutesForCurrentProfile() error {
 	if err != nil {
 		return err
 	}
-
 	return pm.writeStateForCurrentProfile("_routes", routeInfoInBytes)
 }
 
