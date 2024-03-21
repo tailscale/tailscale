@@ -42,7 +42,6 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
-	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -57,6 +56,7 @@ import (
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/systemd"
+	"tailscale.com/util/zstdframe"
 )
 
 // Direct is the client that connects to a tailcontrol server for a node.
@@ -178,11 +178,6 @@ type ControlDialPlanner interface {
 type Pinger interface {
 	// Ping is a request to do a ping with the peer handling the given IP.
 	Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error)
-}
-
-type Decompressor interface {
-	DecodeAll(input, dst []byte) ([]byte, error)
-	Close()
 }
 
 // NetmapUpdater is the interface needed by the controlclient to enact change in
@@ -1208,12 +1203,7 @@ func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
 	} else {
 		decrypted = msg
 	}
-	decoder, err := smallzstd.NewDecoder(nil)
-	if err != nil {
-		return err
-	}
-	defer decoder.Close()
-	b, err := decoder.DecodeAll(decrypted, nil)
+	b, err := zstdframe.AppendDecode(nil, decrypted)
 	if err != nil {
 		return err
 	}

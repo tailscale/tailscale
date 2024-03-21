@@ -46,7 +46,6 @@ import (
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/smallzstd"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -651,17 +650,11 @@ func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 	}
 	closePool.add(s.logbuffer)
 	c := logtail.Config{
-		Collection: lpc.Collection,
-		PrivateID:  lpc.PrivateID,
-		Stderr:     io.Discard, // log everything to Buffer
-		Buffer:     s.logbuffer,
-		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
-		},
+		Collection:   lpc.Collection,
+		PrivateID:    lpc.PrivateID,
+		Stderr:       io.Discard, // log everything to Buffer
+		Buffer:       s.logbuffer,
+		CompressLogs: true,
 		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
 		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
