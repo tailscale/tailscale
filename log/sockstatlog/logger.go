@@ -22,7 +22,6 @@ import (
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
-	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/mak"
@@ -117,17 +116,11 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *ne
 		tr:    logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, logf),
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
-		BaseURL:    logpolicy.LogURL(),
-		PrivateID:  SockstatLogID(logID),
-		Collection: "sockstats.log.tailscale.io",
-		Buffer:     filch,
-		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
-		},
+		BaseURL:      logpolicy.LogURL(),
+		PrivateID:    SockstatLogID(logID),
+		Collection:   "sockstats.log.tailscale.io",
+		Buffer:       filch,
+		CompressLogs: true,
 		FlushDelayFn: func() time.Duration {
 			// set flush delay to 100 years so it never flushes automatically
 			return 100 * 365 * 24 * time.Hour

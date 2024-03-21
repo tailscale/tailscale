@@ -27,17 +27,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/stun/stuntest"
-	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/zstdframe"
 	"tailscale.com/version"
 )
 
@@ -302,20 +301,19 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("bad log ID: %q: %v", r.URL.Path, err)
 	}
 
-	var body io.Reader = r.Body
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("http.Request.Body.Read: %v", err)
+		return
+	}
 	if r.Header.Get("Content-Encoding") == "zstd" {
-		var err error
-		var dec *zstd.Decoder
-		dec, err = smallzstd.NewDecoder(body)
+		bodyBytes, err = zstdframe.AppendDecode(nil, bodyBytes)
 		if err != nil {
-			log.Printf("bad caught zstd: %v", err)
+			log.Printf("zstdframe.AppendDecode: %v", err)
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		defer dec.Close()
-		body = dec
 	}
-	bodyBytes, _ := io.ReadAll(body)
 
 	type Entry struct {
 		Logtail struct {

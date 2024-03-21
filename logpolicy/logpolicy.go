@@ -42,7 +42,6 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
-	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
@@ -551,17 +550,11 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 	}
 
 	conf := logtail.Config{
-		Collection: newc.Collection,
-		PrivateID:  newc.PrivateID,
-		Stderr:     logWriter{console},
-		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
-		},
-		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, netMon, logf)},
+		Collection:   newc.Collection,
+		PrivateID:    newc.PrivateID,
+		Stderr:       logWriter{console},
+		CompressLogs: true,
+		HTTPC:        &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, netMon, logf)},
 	}
 	if collection == logtail.CollectionNode {
 		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta

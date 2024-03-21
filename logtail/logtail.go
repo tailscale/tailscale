@@ -31,6 +31,7 @@ import (
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/set"
+	"tailscale.com/util/zstdframe"
 )
 
 // DefaultHost is the default host name to upload logs to when
@@ -62,7 +63,10 @@ type Config struct {
 	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
 	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
-	NewZstdEncoder func() Encoder  // if set, used to compress logs for transmission
+	CompressLogs   bool            // whether to compress the log uploads
+
+	// Deprecated: Use CompressUploads instead.
+	NewZstdEncoder func() Encoder // if set, used to compress logs for transmission
 
 	// MetricsDelta, if non-nil, is a func that returns an encoding
 	// delta in clientmetrics to upload alongside existing logs.
@@ -156,6 +160,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		shutdownDone:  make(chan struct{}),
 	}
 	l.SetSockstatsLabel(sockstats.LabelLogtailLogger)
+	l.compressLogs = cfg.CompressLogs
 	if cfg.NewZstdEncoder != nil {
 		l.zstdEncoder = cfg.NewZstdEncoder()
 	}
@@ -184,6 +189,7 @@ type Logger struct {
 	flushPending   atomic.Bool
 	sentinel       chan int32
 	clock          tstime.Clock
+	compressLogs   bool
 	zstdEncoder    Encoder
 	uploadCancel   func()
 	explainedRaw   bool
@@ -364,8 +370,18 @@ func (l *Logger) uploading(ctx context.Context) {
 		body := l.drainPending(scratch)
 		origlen := -1 // sentinel value: uncompressed
 		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
-		if l.zstdEncoder != nil && len(body) > 256 {
-			zbody := l.zstdEncoder.EncodeAll(body, nil)
+		if (l.compressLogs || l.zstdEncoder != nil) && len(body) > 256 {
+			var zbody []byte
+			switch {
+			case l.zstdEncoder != nil:
+				zbody = l.zstdEncoder.EncodeAll(body, nil)
+			case l.lowMem:
+				zbody = zstdframe.AppendEncode(nil, body,
+					zstdframe.FastestCompression, zstdframe.LowMemory(true))
+			default:
+				zbody = zstdframe.AppendEncode(nil, body)
+			}
+
 			// Only send it compressed if the bandwidth savings are sufficient.
 			// Just the extra headers associated with enabling compression
 			// are 50 bytes by themselves.

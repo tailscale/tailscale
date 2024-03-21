@@ -24,11 +24,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -37,6 +35,7 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
+	"tailscale.com/util/zstdframe"
 )
 
 const msgLimit = 1 << 20 // encrypted message length limit
@@ -1047,16 +1046,6 @@ func (s *Server) decode(mkey key.MachinePublic, msg []byte, v any) error {
 	return json.Unmarshal(decrypted, v)
 }
 
-var zstdEncoderPool = &sync.Pool{
-	New: func() any {
-		encoder, err := smallzstd.NewEncoder(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
-		if err != nil {
-			panic(err)
-		}
-		return encoder
-	},
-}
-
 func (s *Server) encode(mkey key.MachinePublic, compress bool, v any) (b []byte, err error) {
 	var isBytes bool
 	if b, isBytes = v.([]byte); !isBytes {
@@ -1066,10 +1055,7 @@ func (s *Server) encode(mkey key.MachinePublic, compress bool, v any) (b []byte,
 		}
 	}
 	if compress {
-		encoder := zstdEncoderPool.Get().(*zstd.Encoder)
-		b = encoder.EncodeAll(b, nil)
-		encoder.Close()
-		zstdEncoderPool.Put(encoder)
+		b = zstdframe.AppendEncode(nil, b, zstdframe.FastestCompression)
 	}
 	return s.privateKey().SealTo(mkey, b), nil
 }
