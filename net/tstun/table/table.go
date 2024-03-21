@@ -8,7 +8,7 @@ package table
 import (
 	"net/netip"
 
-	"tailscale.com/tempfork/device"
+	"github.com/gaissmai/bart"
 	"tailscale.com/types/key"
 	"tailscale.com/util/mak"
 )
@@ -18,51 +18,36 @@ import (
 type RoutingTableBuilder struct {
 	// peers is a map from node public key to the peer that owns that key.
 	// It is only used to handle insertions and deletions.
-	peers map[key.NodePublic]*device.Peer
+	peers map[key.NodePublic][]netip.Prefix
 
-	// prefixTrie is a trie of prefixes which facilitates looking up the
-	// peer that owns a given IP address.
-	prefixTrie *device.AllowedIPs
-}
-
-// Remove removes the given peer from the routing table.
-func (t *RoutingTableBuilder) Remove(peer key.NodePublic) {
-	p, ok := t.peers[peer]
-	if !ok {
-		return
-	}
-	t.prefixTrie.RemoveByPeer(p)
-	delete(t.peers, peer)
+	// table is a routing table that supports longest prefix matches on IP
+	// ip addresses. This facilitates looking up the peer that owns a given IP
+	// address.
+	table bart.Table[key.NodePublic]
 }
 
 // InsertOrReplace inserts the given peer and prefixes into the routing table.
 func (t *RoutingTableBuilder) InsertOrReplace(peer key.NodePublic, pfxs ...netip.Prefix) {
-	p, ok := t.peers[peer]
-	if !ok {
-		p = device.NewPeer(peer)
-		mak.Set(&t.peers, peer, p)
-	} else {
-		t.prefixTrie.RemoveByPeer(p)
+	oldPfxs, found := t.peers[peer]
+	if found {
+		for _, pfx := range oldPfxs {
+			t.table.Delete(pfx)
+		}
 	}
 	if len(pfxs) == 0 {
 		return
 	}
-	if t.prefixTrie == nil {
-		t.prefixTrie = new(device.AllowedIPs)
-	}
+	mak.Set(&t.peers, peer, pfxs)
 	for _, pfx := range pfxs {
-		t.prefixTrie.Insert(pfx, p)
+		t.table.Insert(pfx, peer)
 	}
 }
 
 // Build returns a RoutingTable that can be used to look up peers.
 // Build resets the RoutingTableBuilder to its zero value.
 func (t *RoutingTableBuilder) Build() *RoutingTable {
-	pt := t.prefixTrie
-	t.prefixTrie = nil
-	t.peers = nil
 	return &RoutingTable{
-		prefixTrie: pt,
+		table: &t.table,
 	}
 }
 
@@ -73,7 +58,7 @@ func (t *RoutingTableBuilder) Build() *RoutingTable {
 //
 // It is safe for concurrent use.
 type RoutingTable struct {
-	prefixTrie *device.AllowedIPs
+	table *bart.Table[key.NodePublic]
 }
 
 // Lookup returns the peer that would be used to route the given IP address.
@@ -82,9 +67,9 @@ func (t *RoutingTable) Lookup(ip netip.Addr) (_ key.NodePublic, ok bool) {
 	if t == nil {
 		return key.NodePublic{}, false
 	}
-	p := t.prefixTrie.Lookup(ip.AsSlice())
-	if p == nil {
+	_, k, found := t.table.Lookup(ip)
+	if !found {
 		return key.NodePublic{}, false
 	}
-	return p.Key(), true
+	return k, true
 }
