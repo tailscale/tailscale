@@ -11,6 +11,8 @@ import (
 	"maps"
 	"net"
 	"reflect"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -186,6 +188,12 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	// We have to rebuild the whole netmap (lots of garbage & work downstream of
 	// our UpdateFullNetmap call). This is the part we tried to avoid but
 	// some field mutations (especially rare ones) aren't yet handled.
+
+	if runtime.GOOS == "ios" {
+		// Memory is tight on iOS. Free what we can while we
+		// can before this potential burst of in-use memory.
+		debug.FreeOSMemory()
+	}
 
 	nm := ms.netmap()
 	ms.lastNetmapSummary = nm.VeryConcise()
