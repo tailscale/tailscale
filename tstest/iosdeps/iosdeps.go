@@ -48,7 +48,6 @@ import (
 	_ "tailscale.com/net/tsdial"
 	_ "tailscale.com/net/tstun"
 	_ "tailscale.com/paths"
-	_ "tailscale.com/tempfork/pprof"
 	_ "tailscale.com/types/empty"
 	_ "tailscale.com/types/logger"
 	_ "tailscale.com/util/clientmetric"
