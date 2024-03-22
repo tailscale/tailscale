@@ -198,6 +198,8 @@ type Conn struct {
 	mu     sync.Mutex
 	muCond *sync.Cond
 
+	onlyTCP443 atomic.Bool
+
 	closed  bool        // Close was called
 	closing atomic.Bool // Close is in progress (or done)
 
@@ -444,7 +446,10 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, nil, opts.ControlKnobs, c.onPortMapChanged)
+	portMapOpts := &portmapper.DebugKnobs{
+		DisableAll: func() bool { return c.onlyTCP443.Load() },
+	}
+	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
 	if opts.NetMon != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	}
@@ -1067,6 +1072,9 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 // sendUDP sends UDP packet b to addr.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) {
+	if c.onlyTCP443.Load() {
+		return false, nil
+	}
 	switch {
 	case addr.Addr().Is4():
 		_, err = c.pconn4.WriteToUDPAddrPort(b, addr)

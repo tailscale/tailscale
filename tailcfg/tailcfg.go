@@ -2133,6 +2133,13 @@ const (
 	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
 	CapabilityFunnelPorts NodeCapability = "https://tailscale.com/cap/funnel-ports"
 
+	// NodeAttrOnlyTCP443 specifies that the client should not attempt to generate
+	// any outbound traffic that isn't TCP on port 443 (HTTPS). This is used for
+	// clients in restricted environments where only HTTPS traffic is allowed
+	// other types of traffic trips outbound firewall alarms. This thus implies
+	// all traffic is over DERP.
+	NodeAttrOnlyTCP443 NodeCapability = "only-tcp-443"
+
 	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
 	NodeAttrFunnel NodeCapability = "funnel"
 	// NodeAttrSSHAggregator grants the ability for a node to collect SSH sessions.

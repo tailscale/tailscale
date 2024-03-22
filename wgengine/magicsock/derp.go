@@ -729,6 +729,13 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	return n, ep
 }
 
+// SetOnlyTCP443 set whether the magicsock connection is restricted
+// to only using TCP port 443 outbound. If true, no UDP is allowed,
+// no STUN checks are performend, etc.
+func (c *Conn) SetOnlyTCP443(v bool) {
+	c.onlyTCP443.Store(v)
+}
+
 // SetDERPMap controls which (if any) DERP servers are used.
 // A nil value means to disable DERP; it's disabled by default.
 func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {

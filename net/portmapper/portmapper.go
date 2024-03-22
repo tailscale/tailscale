@@ -49,6 +49,17 @@ type DebugKnobs struct {
 	DisableUPnP bool
 	DisablePMP  bool
 	DisablePCP  bool
+
+	// DisableAll, if non-nil, is a func that reports whether all port
+	// mapping attempts should be disabled.
+	DisableAll func() bool
+}
+
+func (k *DebugKnobs) disableAll() bool {
+	if k.DisableAll != nil {
+		return k.DisableAll()
+	}
+	return false
 }
 
 // References:
@@ -403,6 +414,7 @@ var (
 	ErrNoPortMappingServices = errors.New("no port mapping services were found")
 	ErrGatewayRange          = errors.New("skipping portmap; gateway range likely lacks support")
 	ErrGatewayIPv6           = errors.New("skipping portmap; no IPv6 support for portmapping")
+	ErrPortMappingDisabled   = errors.New("port mapping is disabled")
 )
 
 // GetCachedMappingOrStartCreatingOne quickly returns with our current cached portmapping, if any.
@@ -464,6 +476,9 @@ var wildcardIP = netip.MustParseAddr("0.0.0.0")
 // If no mapping is available, the error will be of type
 // NoMappingError; see IsNoMappingError.
 func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPort, err error) {
+	if c.debug.disableAll() {
+		return netip.AddrPort{}, NoMappingError{ErrPortMappingDisabled}
+	}
 	if c.debug.DisableUPnP && c.debug.DisablePCP && c.debug.DisablePMP {
 		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
@@ -777,6 +792,9 @@ type ProbeResult struct {
 // the returned result might be server from the Client's cache, without
 // sending any network traffic.
 func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
+	if c.debug.disableAll() {
+		return res, ErrPortMappingDisabled
+	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
 		return res, ErrGatewayRange
