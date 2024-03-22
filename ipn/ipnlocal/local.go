@@ -1164,7 +1164,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
-		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLock)
+		b.capTailnetLock = st.NetMap.HasCap(tailcfg.CapabilityTailnetLock)
 		b.setWebClientAtomicBoolLocked(st.NetMap)
 
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
@@ -1201,7 +1201,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 
 	if st.NetMap != nil {
-		if envknob.NoLogsNoSupport() && hasCapability(st.NetMap, tailcfg.CapabilityDataPlaneAuditLogs) {
+		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
 			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
 			health.SetLocalLogConfigHealth(errors.New(msg))
 			// Connecting to this tailnet without logging is forbidden; boot us outta here.
@@ -3068,7 +3068,7 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 		return nil
 	}
 	if b.netMap != nil {
-		if !hasCapability(b.netMap, tailcfg.CapabilitySSH) {
+		if !b.netMap.HasCap(tailcfg.CapabilitySSH) {
 			if b.isDefaultServerLocked() {
 				return errors.New("Unable to enable local Tailscale SSH server; not enabled on Tailnet. See https://tailscale.com/s/ssh")
 			}
@@ -3093,9 +3093,8 @@ func (b *LocalBackend) sshOnButUnusableHealthCheckMessageLocked() (healthMessage
 		return ""
 	}
 	isDefault := b.isDefaultServerLocked()
-	isAdmin := hasCapability(nm, tailcfg.CapabilityAdmin)
 
-	if !isAdmin {
+	if !nm.HasCap(tailcfg.CapabilityAdmin) {
 		return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Ask your admin to update your tailnet's ACLs to allow access."
 	}
 	if !isDefault {
@@ -3565,7 +3564,7 @@ func (b *LocalBackend) authReconfig() {
 	prefs := b.pm.CurrentPrefs()
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
-	disableSubnetsIfPAC := hasCapability(nm, tailcfg.NodeAttrDisableSubnetsIfPAC)
+	disableSubnetsIfPAC := nm.HasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
@@ -4533,7 +4532,7 @@ func (b *LocalBackend) ShouldExposeRemoteWebClient() bool {
 //
 // b.mu must be held.
 func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
-	shouldRun := !hasCapability(nm, tailcfg.NodeAttrDisableWebClient)
+	shouldRun := !nm.HasCap(tailcfg.NodeAttrDisableWebClient)
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
 		go b.webClientShutdown() // stop web client
@@ -4630,13 +4629,6 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	cc.SetNetInfo(ni)
 }
 
-func hasCapability(nm *netmap.NetworkMap, cap tailcfg.NodeCapability) bool {
-	if nm != nil {
-		return nm.SelfNode.HasCap(cap)
-	}
-	return false
-}
-
 // setNetMapLocked updates the LocalBackend state to reflect the newly
 // received nm. If nm is nil, it resets all configuration as though
 // Tailscale is turned off.
@@ -4665,15 +4657,15 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 
 	// Determine if file sharing is enabled
-	fs := hasCapability(nm, tailcfg.CapabilityFileSharing)
+	fs := nm.HasCap(tailcfg.CapabilityFileSharing)
 	if fs != b.capFileSharing {
 		osshare.SetFileSharingEnabled(fs, b.logf)
 	}
 	b.capFileSharing = fs
 
-	if hasCapability(nm, tailcfg.NodeAttrLinuxMustUseIPTables) {
+	if nm.HasCap(tailcfg.NodeAttrLinuxMustUseIPTables) {
 		b.capForcedNetfilter = "iptables"
-	} else if hasCapability(nm, tailcfg.NodeAttrLinuxMustUseNfTables) {
+	} else if nm.HasCap(tailcfg.NodeAttrLinuxMustUseNfTables) {
 		b.capForcedNetfilter = "nftables"
 	} else {
 		b.capForcedNetfilter = "" // empty string means client can auto-detect
@@ -4685,8 +4677,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.setDebugLogsByCapabilityLocked(nm)
 
 	// See the netns package for documentation on what this capability does.
-	netns.SetBindToInterfaceByRoute(hasCapability(nm, tailcfg.CapabilityBindToInterfaceByRoute))
-	netns.SetDisableBindConnToInterface(hasCapability(nm, tailcfg.CapabilityDebugDisableBindConnToInterface))
+	netns.SetBindToInterfaceByRoute(nm.HasCap(tailcfg.CapabilityBindToInterfaceByRoute))
+	netns.SetDisableBindConnToInterface(nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterface))
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if nm == nil {
@@ -4777,7 +4769,7 @@ func (t *tailFSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
 	// These are sufficiently cheap (atomic bools) that we don't need to
 	// store state and compare.
-	if hasCapability(nm, tailcfg.CapabilityDebugTSDNSResolution) {
+	if nm.HasCap(tailcfg.CapabilityDebugTSDNSResolution) {
 		dnscache.SetDebugLoggingEnabled(true)
 	} else {
 		dnscache.SetDebugLoggingEnabled(false)
