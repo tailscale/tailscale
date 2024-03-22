@@ -962,8 +962,9 @@ type RouteInfo struct {
 
 func (r RouteInfo) UpdateRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
 	dr, hasKey := r.Discovered[domain]
+	fmt.Println("FRAN URIDFD", hasKey, dr, dr.Routes)
 	if !hasKey || dr == nil || dr.Routes == nil {
-		newDatedRoutes := &DatedRoute{make(map[netip.Prefix]time.Time), time.Now()}
+		newDatedRoutes := &DatedRoute{make(map[netip.Prefix]time.Time), time.Now().Truncate(1 * time.Hour)}
 		newDatedRoutes.addAddrsToDatedRoute(addrs)
 		r.Discovered[domain] = newDatedRoutes
 		return
@@ -991,6 +992,7 @@ func (r RouteInfo) OutDatedRoutesInDiscoveredForDomain(domain string) []netip.Pr
 		}
 	}
 	r.Discovered[domain] = dr
+	dr.LastCleanUp = time.Now().Truncate(1 * time.Hour)
 	return outdate
 }
 
@@ -1016,7 +1018,7 @@ func (d *DatedRoute) String() string {
 }
 
 func (d *DatedRoute) addAddrsToDatedRoute(addrs []netip.Prefix) {
-	time := time.Now()
+	time := time.Now().Truncate(1 * time.Hour)
 	for _, addr := range addrs {
 		d.Routes[addr] = time
 	}
