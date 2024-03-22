@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -74,6 +75,7 @@ type mapSession struct {
 	// Fields storing state over the course of multiple MapResponses.
 	lastPrintMap           time.Time
 	lastNode               tailcfg.NodeView
+	lastCapSet             set.Set[tailcfg.NodeCapability]
 	peers                  map[tailcfg.NodeID]*tailcfg.NodeView // pointer to view (oddly). same pointers as sortedPeers.
 	sortedPeers            []*tailcfg.NodeView                  // same pointers as peers, but sorted by Node.ID
 	lastDNSConfig          *tailcfg.DNSConfig
@@ -239,6 +241,15 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 
 	if resp.Node != nil {
 		ms.lastNode = resp.Node.View()
+
+		capSet := set.Set[tailcfg.NodeCapability]{}
+		for _, c := range resp.Node.Capabilities {
+			capSet.Add(c)
+		}
+		for c := range resp.Node.CapMap {
+			capSet.Add(c)
+		}
+		ms.lastCapSet = capSet
 	}
 
 	for _, up := range resp.UserProfiles {
@@ -803,6 +814,7 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		nm.SelfNode = node
 		nm.Expiry = node.KeyExpiry()
 		nm.Name = node.Name()
+		nm.AllCaps = ms.lastCapSet
 	}
 
 	ms.addUserProfile(nm, nm.User())
