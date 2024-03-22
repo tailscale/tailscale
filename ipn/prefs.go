@@ -960,11 +960,10 @@ type RouteInfo struct {
 	Discovered map[string]*DatedRoute
 }
 
-func (r RouteInfo) UpdateRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
+func (r RouteInfo) AddRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
 	dr, hasKey := r.Discovered[domain]
-	fmt.Println("FRAN URIDFD", hasKey, dr, dr.Routes)
 	if !hasKey || dr == nil || dr.Routes == nil {
-		newDatedRoutes := &DatedRoute{make(map[netip.Prefix]time.Time), time.Now().Truncate(1 * time.Hour)}
+		newDatedRoutes := &DatedRoute{make(map[netip.Prefix]time.Time), time.Now()}
 		newDatedRoutes.addAddrsToDatedRoute(addrs)
 		r.Discovered[domain] = newDatedRoutes
 		return
@@ -977,11 +976,19 @@ func (r RouteInfo) UpdateRoutesInDiscoveredForDomain(domain string, addrs []neti
 	return
 }
 
+func (r RouteInfo) UpdateDatesForRoutesInDiscovered(toUpdate map[string][]netip.Prefix) {
+	for domain, addrs := range toUpdate {
+		for _, addr := range addrs {
+			r.Discovered[domain].Routes[addr] = time.Now()
+		}
+	}
+}
+
 func (r RouteInfo) OutDatedRoutesInDiscoveredForDomain(domain string) []netip.Prefix {
 	dr, hasKey := r.Discovered[domain]
 	var outdate []netip.Prefix
 	now := time.Now()
-	if !hasKey || dr == nil || dr.Routes == nil || now.Sub(dr.LastCleanUp) < 360 {
+	if !hasKey || dr == nil || dr.Routes == nil || now.Sub(dr.LastCleanUp) < 360*time.Hour {
 		return nil
 	}
 	for addr, date := range dr.Routes {
@@ -992,7 +999,7 @@ func (r RouteInfo) OutDatedRoutesInDiscoveredForDomain(domain string) []netip.Pr
 		}
 	}
 	r.Discovered[domain] = dr
-	dr.LastCleanUp = time.Now().Truncate(1 * time.Hour)
+	dr.LastCleanUp = time.Now()
 	return outdate
 }
 
@@ -1018,7 +1025,7 @@ func (d *DatedRoute) String() string {
 }
 
 func (d *DatedRoute) addAddrsToDatedRoute(addrs []netip.Prefix) {
-	time := time.Now().Truncate(1 * time.Hour)
+	time := time.Now()
 	for _, addr := range addrs {
 		d.Routes[addr] = time
 	}

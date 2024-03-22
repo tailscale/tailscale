@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
@@ -69,6 +70,9 @@ type AppConnector struct {
 
 	// queue provides ordering for update operations
 	queue execqueue.ExecQueue
+
+	discoveredToUpdateDate map[string][]netip.Prefix
+	discoveredLastUpdate   time.Time
 }
 
 // NewAppConnector creates a new AppConnector.
@@ -335,12 +339,17 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		// advertise each address we have learned for the routed domain, that
 		// was not already known.
 		var toAdvertise []netip.Prefix
-		var toUpdateDate []netip.Prefix
+		// var toUpdateDate []netip.Prefix
 		for _, addr := range addrs {
 			if !e.isAddrKnownLocked(domain, addr) {
 				toAdvertise = append(toAdvertise, netip.PrefixFrom(addr, addr.BitLen()))
 			} else {
-				toUpdateDate = append(toUpdateDate, netip.PrefixFrom(addr, addr.BitLen()))
+				if e.discoveredToUpdateDate == nil {
+					e.discoveredToUpdateDate = make(map[string][]netip.Prefix)
+				}
+				e.discoveredToUpdateDate[domain] = append(e.discoveredToUpdateDate[domain], netip.PrefixFrom(addr, addr.BitLen()))
+				slices.SortFunc(e.discoveredToUpdateDate[domain], func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
+				slices.Compact(e.discoveredToUpdateDate[domain])
 			}
 		}
 
@@ -348,15 +357,34 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		// update the pm.currentroutes, then advertise those routes.
 		// we might also able to do this in local backend's advertiseRoute method, doing the update one domain by one domain.
 		// currentRouteInfo := nil
-		routesToUpdate := append(toAdvertise, toUpdateDate...)
+
+		updateStore := false
 		routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
-		if routeInfo.Discovered == nil {
-			routeInfo.Discovered = make(map[string]*ipn.DatedRoute)
+		if len(toAdvertise) != 0 {
+			routeInfo.AddRoutesInDiscoveredForDomain(domain, toAdvertise)
+			updateStore = true
 		}
-		routeInfo.UpdateRoutesInDiscoveredForDomain(domain, routesToUpdate)
+		now := time.Now()
+		if len(e.discoveredToUpdateDate) > 0 && now.Sub(e.discoveredLastUpdate) > 5*time.Minute {
+			// fmt.Println("We did a date update to the existing routes") // Kevin debug
+			// fmt.Println("The time now is: ", now, " The last update was; ", e.discoveredLastUpdate) // Kevin debug
+			routeInfo.UpdateDatesForRoutesInDiscovered(e.discoveredToUpdateDate)
+			e.discoveredToUpdateDate = make(map[string][]netip.Prefix)
+			e.discoveredLastUpdate = now
+			updateStore = true
+		}
+		// fmt.Println("The time I updated the date was: ", now) // Kevin debug
+		// fmt.Println("Next time we update the date will be: ", now.Add(1*time.Minute)) // Kevin debug
+		// fmt.Println("The last update was; ", e.discoveredLastUpdate)// Kevin debug
+		// fmt.Println("discoveredToUpdate: ", e.discoveredToUpdateDate)// Kevin debug
 		outDated := routeInfo.OutDatedRoutesInDiscoveredForDomain(domain)
-		e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
-		// fmt.Println("Route infos after dns update: ", e.routeAdvertiser.ReadRouteInfoFromStore())
+		if len(outDated) != 0 {
+			updateStore = true
+		}
+		if updateStore {
+			e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
+		}
+		// fmt.Println("Route infos after dns update: ", e.routeAdvertiser.ReadRouteInfoFromStore()) // Kevin debug
 		e.scheduleAdvertisement(domain, toAdvertise...)
 		e.scheduleUndvertisement(domain, outDated...)
 	}

@@ -53,7 +53,10 @@ func (pm *profileManager) CurrentRoutes() *ipn.RouteInfo {
 
 func (pm *profileManager) SetCurrentRoutes(in *ipn.RouteInfo) error {
 	pm.currentRoutes = in
-	return pm.WriteRoutesForCurrentProfile()
+	if err := pm.WriteRoutesForCurrentProfile(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
