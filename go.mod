@@ -28,6 +28,7 @@ require (
 	github.com/evanw/esbuild v0.19.11
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.5.0
+	github.com/gaissmai/bart v0.4.0
 	github.com/go-json-experiment/json v0.0.0-20231102232822-2e55bd4e08b0
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
@@ -115,6 +116,7 @@ require (
 
 require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
+	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.4 // indirect
 	github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14 // indirect
 	github.com/dave/brenda v1.1.0 // indirect
