@@ -129,7 +129,8 @@ type CapabilityVersion int
 //   - 86: 2024-01-23: Client understands NodeAttrProbeUDPLifetime
 //   - 87: 2024-02-11: UserProfile.Groups removed (added in 66)
 //   - 88: 2024-03-05: Client understands NodeAttrSuggestExitNode
-const CurrentCapabilityVersion CapabilityVersion = 88
+//   - 89: 2024-03-23: Client no longer respects deleted PeerChange.Capabilities (use CapMap)
+const CurrentCapabilityVersion CapabilityVersion = 89
 
 type StableID string
 
@@ -325,7 +326,7 @@ type Node struct {
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
 	//
-	// Deprecated: use CapMap instead.
+	// Deprecated: use CapMap instead. See https://github.com/tailscale/tailscale/issues/11508
 	Capabilities []NodeCapability `json:",omitempty"`
 
 	// CapMap is a map of capabilities to their optional argument/data values.
@@ -415,7 +416,7 @@ func (v NodeView) HasCap(cap NodeCapability) bool {
 // HasCap reports whether the node has the given capability.
 // It is safe to call on a nil Node.
 func (v *Node) HasCap(cap NodeCapability) bool {
-	return v != nil && (v.CapMap.Contains(cap) || slices.Contains(v.Capabilities, cap))
+	return v != nil && v.CapMap.Contains(cap)
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -2660,11 +2661,6 @@ type PeerChange struct {
 
 	// KeyExpiry, if non-nil, changes the NodeID's key expiry.
 	KeyExpiry *time.Time `json:",omitempty"`
-
-	// Capabilities, if non-nil, means that the NodeID's capabilities changed.
-	// It's a pointer to a slice for "omitempty", to allow differentiating
-	// a change to empty from no change.
-	Capabilities *[]NodeCapability `json:",omitempty"`
 }
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means to

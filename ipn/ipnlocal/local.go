@@ -823,15 +823,16 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			ss.UserID = b.netMap.User()
 			if sn := b.netMap.SelfNode; sn.Valid() {
 				peerStatusFromNode(ss, sn)
-				if c := sn.Capabilities(); c.Len() > 0 {
-					ss.Capabilities = c.AsSlice()
-				}
 				if cm := sn.CapMap(); cm.Len() > 0 {
+					ss.Capabilities = make([]tailcfg.NodeCapability, 1, cm.Len()+1)
+					ss.Capabilities[0] = "HTTPS://TAILSCALE.COM/s/DEPRECATED-NODE-CAPS#see-https://github.com/tailscale/tailscale/issues/11508"
 					ss.CapMap = make(tailcfg.NodeCapMap, sn.CapMap().Len())
 					cm.Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
 						ss.CapMap[k] = v.AsSlice()
+						ss.Capabilities = append(ss.Capabilities, k)
 						return true
 					})
+					slices.Sort(ss.Capabilities[1:])
 				}
 			}
 			for _, addr := range tailscaleIPs {

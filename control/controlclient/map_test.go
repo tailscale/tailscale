@@ -331,23 +331,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			}),
 			wantStats: updateStats{changed: 1},
 		},
-		{
-			name: "change_capabilities",
-			prev: peers(n(1, "foo")),
-			mapRes: &tailcfg.MapResponse{
-				PeersChangedPatch: []*tailcfg.PeerChange{{
-					NodeID:       1,
-					Capabilities: ptr.To([]tailcfg.NodeCapability{"foo"}),
-				}},
-			},
-			want: peers(&tailcfg.Node{
-				ID:           1,
-				Name:         "foo",
-				Capabilities: []tailcfg.NodeCapability{"foo"},
-			}),
-			wantStats: updateStats{changed: 1},
-		}}
-
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.curTime.IsZero() {
@@ -782,18 +766,6 @@ func TestPeerChangeDiff(t *testing.T) {
 			a:    &tailcfg.Node{ID: 1, LastSeen: ptr.To(time.Unix(1, 0))},
 			b:    &tailcfg.Node{ID: 1, LastSeen: ptr.To(time.Unix(2, 0))},
 			want: &tailcfg.PeerChange{NodeID: 1, LastSeen: ptr.To(time.Unix(2, 0))},
-		},
-		{
-			name: "patch-capabilities-to-nonempty",
-			a:    &tailcfg.Node{ID: 1, Capabilities: []tailcfg.NodeCapability{"foo"}},
-			b:    &tailcfg.Node{ID: 1, Capabilities: []tailcfg.NodeCapability{"bar"}},
-			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]tailcfg.NodeCapability{"bar"})},
-		},
-		{
-			name: "patch-capabilities-to-empty",
-			a:    &tailcfg.Node{ID: 1, Capabilities: []tailcfg.NodeCapability{"foo"}},
-			b:    &tailcfg.Node{ID: 1},
-			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]tailcfg.NodeCapability(nil))},
 		},
 		{
 			name: "patch-online-to-true",

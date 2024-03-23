@@ -266,6 +266,10 @@ type PeerStatus struct {
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
 	//    "funnel"
+	//
+	// Deprecated: use CapMap instead. See https://github.com/tailscale/tailscale/issues/11508
+	// Every value is Capabilities is also a key in CapMap, even if it
+	// has no values in that map.
 	Capabilities []tailcfg.NodeCapability `json:",omitempty"`
 
 	// CapMap is a map of capabilities to their values.
@@ -306,7 +310,7 @@ type PeerStatus struct {
 
 // HasCap reports whether ps has the given capability.
 func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
-	return ps.CapMap.Contains(cap) || slices.Contains(ps.Capabilities, cap)
+	return ps.CapMap.Contains(cap)
 }
 
 // IsTagged reports whether ps is tagged.
