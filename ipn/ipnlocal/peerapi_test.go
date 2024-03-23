@@ -522,7 +522,7 @@ func TestHandlePeerAPI(t *testing.T) {
 				},
 			}
 			if tt.debugCap {
-				selfNode.Capabilities = append(selfNode.Capabilities, tailcfg.CapabilityDebug)
+				selfNode.CapMap = tailcfg.NodeCapMap{tailcfg.CapabilityDebug: nil}
 			}
 			var e peerAPITestEnv
 			lb := &LocalBackend{

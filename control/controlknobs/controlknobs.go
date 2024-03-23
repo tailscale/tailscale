@@ -6,7 +6,6 @@
 package controlknobs
 
 import (
-	"slices"
 	"sync/atomic"
 
 	"tailscale.com/syncs"
@@ -77,14 +76,11 @@ type Knobs struct {
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
 // node attributes (Node.Capabilities).
-func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability, capMap tailcfg.NodeCapMap) {
+func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	if k == nil {
 		return
 	}
-	has := func(attr tailcfg.NodeCapability) bool {
-		_, ok := capMap[attr]
-		return ok || slices.Contains(selfNodeAttrs, attr)
-	}
+	has := capMap.Contains
 	var (
 		keepFullWG                    = has(tailcfg.NodeAttrDebugDisableWGTrim)
 		disableDRPO                   = has(tailcfg.NodeAttrDebugDisableDRPO)

@@ -445,7 +445,7 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 		break
 	}
 	if portsStr == "" {
-		for _, attr := range node.Capabilities {
+		for attr := range node.CapMap {
 			attr := string(attr)
 			if !strings.HasPrefix(attr, string(tailcfg.CapabilityFunnelPorts)) {
 				continue

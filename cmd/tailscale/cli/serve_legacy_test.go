@@ -21,6 +21,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 )
 
@@ -807,9 +808,11 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 			lc.setQueryFeatureResponse(tt.queryFeatureResponse)
 
 			if tt.caps != nil {
-				oldCaps := fakeStatus.Self.Capabilities
-				defer func() { fakeStatus.Self.Capabilities = oldCaps }() // reset after test
-				fakeStatus.Self.Capabilities = tt.caps
+				cm := make(tailcfg.NodeCapMap)
+				for _, c := range tt.caps {
+					cm[c] = nil
+				}
+				tstest.Replace(t, &fakeStatus.Self.CapMap, cm)
 			}
 
 			defer func() {
@@ -853,8 +856,11 @@ type fakeLocalServeClient struct {
 var fakeStatus = &ipnstate.Status{
 	BackendState: ipn.Running.String(),
 	Self: &ipnstate.PeerStatus{
-		DNSName:      "foo.test.ts.net",
-		Capabilities: []tailcfg.NodeCapability{tailcfg.NodeAttrFunnel, tailcfg.CapabilityFunnelPorts + "?ports=443,8443"},
+		DNSName: "foo.test.ts.net",
+		CapMap: tailcfg.NodeCapMap{
+			tailcfg.NodeAttrFunnel:                            nil,
+			tailcfg.CapabilityFunnelPorts + "?ports=443,8443": nil,
+		},
 	},
 }
 
