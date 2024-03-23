@@ -44,6 +44,24 @@ func TestVarzHandler(t *testing.T) {
 			"# TYPE foo_bar counter\nfoo_bar 0\n",
 		},
 		{
+			"slash_in_metric_name",
+			"counter_foo/bar",
+			new(expvar.Int),
+			"# TYPE foo_bar counter\nfoo_bar 0\n",
+		},
+		{
+			"metric_name_start_digit",
+			"0abc",
+			new(expvar.Int),
+			"# TYPE _0abc counter\n_0abc 0\n",
+		},
+		{
+			"metric_name_have_bogus_bytes",
+			"abc\x10defügh",
+			new(expvar.Int),
+			"# TYPE abcdefgh counter\nabcdefgh 0\n",
+		},
+		{
 			"int_with_type_counter",
 			"counter_foo",
 			new(expvar.Int),
