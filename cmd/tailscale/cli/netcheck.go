@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
@@ -145,6 +147,13 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	printf("\t* PortMapping: %v\n", portMapping(report))
 	if report.CaptivePortal != "" {
 		printf("\t* CaptivePortal: %v\n", report.CaptivePortal)
+	}
+
+	if runtime.GOOS == "linux" {
+		mode := dns.GetGlobalDnsMode()
+		if mode != "" {
+			printf("\t* Current DNS Mode: %v\n", mode)
+		}
 	}
 
 	// When DERP latency checking failed,
