@@ -34,11 +34,24 @@ declare global {
       statusText: string
       text: () => Promise<string>
     }>
+    tcp(config: {
+      hostname: string
+      port: number
+      readCallback: (data: Uint8Array) => void,
+      connectTimeoutSeconds?: number
+      writeBufferSizeInBytes?: number
+      readBufferSizeInBytes?: number
+    }): Promise<IPNTCPSession>;
   }
 
   interface IPNSSHSession {
     resize(rows: number, cols: number): boolean
     close(): boolean
+  }
+
+  interface IPNTCPSession {
+    close(): Promise<void>
+    write(buffer: Uint8Array): Promise<number>
   }
 
   interface IPNStateStorage {
@@ -51,6 +64,7 @@ declare global {
     authKey?: string
     controlURL?: string
     hostname?: string
+    routeAll?: boolean
   }
 
   type IPNCallbacks = {
