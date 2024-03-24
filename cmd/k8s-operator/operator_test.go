@@ -20,7 +20,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
 
@@ -1351,4 +1353,82 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	if len(gotReqs) > 0 {
 		t.Errorf("unexpected reconcile request for a Service that does not belong to any Ingress: %#+v\n", gotReqs)
 	}
+}
+
+func Test_clusterDomainFromResolverConf(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		conf      *resolvconffile.Config
+		namespace string
+		want      string
+	}{
+		{
+			name: "success- custom domain",
+			conf: &resolvconffile.Config{
+				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
+			},
+			namespace: "foo",
+			want:      "department.org.io",
+		},
+		{
+			name: "success- default domain",
+			conf: &resolvconffile.Config{
+				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.cluster.local."), toFQDN(t, "svc.cluster.local."), toFQDN(t, "cluster.local.")},
+			},
+			namespace: "foo",
+			want:      "cluster.local",
+		},
+		{
+			name: "only two search domains found",
+			conf: &resolvconffile.Config{
+				SearchDomains: []dnsname.FQDN{toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
+			},
+			namespace: "foo",
+			want:      "cluster.local",
+		},
+		{
+			name: "first search domain does not match the expected structure",
+			conf: &resolvconffile.Config{
+				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.bar.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
+			},
+			namespace: "foo",
+			want:      "cluster.local",
+		},
+		{
+			name: "second search domain does not match the expected structure",
+			conf: &resolvconffile.Config{
+				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "foo.department.org.io"), toFQDN(t, "some.other.fqdn")},
+			},
+			namespace: "foo",
+			want:      "cluster.local",
+		},
+		{
+			name: "third search domain does not match the expected structure",
+			conf: &resolvconffile.Config{
+				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
+			},
+			namespace: "foo",
+			want:      "cluster.local",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clusterDomainFromResolverConf(tt.conf, tt.namespace, zl.Sugar()); got != tt.want {
+				t.Errorf("clusterDomainFromResolverConf() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func toFQDN(t *testing.T, s string) dnsname.FQDN {
+	t.Helper()
+	fqdn, err := dnsname.ToFQDN(s)
+	if err != nil {
+		t.Fatalf("error coverting %q to dnsname.FQDN: %v", s, err)
+	}
+	return fqdn
 }
