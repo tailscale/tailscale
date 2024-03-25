@@ -133,6 +133,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 			writePromExpVar(w, name+"_", kv)
 		})
 		return
+	case PrometheusWriter:
+		v.WritePrometheus(w, name)
+		return
 	case PrometheusMetricsReflectRooter:
 		root := v.PrometheusMetricsReflectRoot()
 		rv := reflect.ValueOf(root)
@@ -231,6 +234,14 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 			})
 		}
 	}
+}
+
+// PrometheusWriter is the interface implemented by metrics that can write
+// themselves into Prometheus exposition format.
+//
+// As of 2024-03-25, this is only *metrics.MultiLabelMap.
+type PrometheusWriter interface {
+	WritePrometheus(w io.Writer, name string)
 }
 
 var sortedKVsPool = &sync.Pool{New: func() any { return new(sortedKVs) }}
