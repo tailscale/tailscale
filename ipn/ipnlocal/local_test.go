@@ -736,6 +736,58 @@ func TestStatusWithoutPeers(t *testing.T) {
 	}
 }
 
+func TestStatusPeerCapabilities(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	var cc *mockControl
+	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+		cc = newClient(t, opts)
+
+		t.Logf("ccGen: new mockControl.")
+		cc.called("New")
+		return cc, nil
+	})
+	b.Start(ipn.Options{})
+	b.Login(nil)
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			Addresses:         ipps("100.101.101.101"),
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:              1,
+				StableID:        "foo",
+				IsWireGuardOnly: true,
+				Hostinfo:        (&tailcfg.Hostinfo{}).View(),
+				Capabilities:    []tailcfg.NodeCapability{tailcfg.CapabilitySSH},
+				CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+					tailcfg.CapabilitySSH: nil,
+				}),
+			}).View(),
+			(&tailcfg.Node{
+				ID:           2,
+				StableID:     "bar",
+				Hostinfo:     (&tailcfg.Hostinfo{}).View(),
+				Capabilities: []tailcfg.NodeCapability{tailcfg.CapabilitySSH},
+				CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+					tailcfg.CapabilitySSH: nil,
+				}),
+			}).View(),
+		},
+	})
+	got := b.Status()
+
+	for _, peer := range got.Peer {
+		if peer.Capabilities == nil {
+			t.Errorf("expected populated Capabilities")
+		}
+		if peer.CapMap == nil {
+			t.Errorf("expected populated CapMap")
+		}
+	}
+}
+
 // legacyBackend was the interface between Tailscale frontends
 // (e.g. cmd/tailscale, iOS/MacOS/Windows GUIs) and the tailscale
 // backend (e.g. cmd/tailscaled) running on the same machine.
