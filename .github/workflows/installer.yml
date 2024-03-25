@@ -1,16 +1,19 @@
 name: test installer.sh
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "main"
     paths:
       - scripts/installer.sh
+      - .github/workflows/installer.yml
   pull_request:
     branches:
       - "*"
     paths:
       - scripts/installer.sh
+      - .github/workflows/installer.yml
 
 jobs:
   test:
