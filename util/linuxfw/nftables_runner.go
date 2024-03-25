@@ -546,7 +546,7 @@ func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 	}
 	nft4 := &nftable{Proto: nftables.TableFamilyIPv4}
 
-	v6err := checkIPv6(logf)
+	v6err := CheckIPv6(logf)
 	if v6err != nil {
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
