@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -27,6 +28,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailfs"
@@ -2503,6 +2505,505 @@ func TestValidPopBrowserURL(t *testing.T) {
 			got := b.validPopBrowserURL(tt.popBrowserURL)
 			if got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSuggestExitNode(t *testing.T) {
+	tests := []struct {
+		name         string
+		lastReport   netcheck.Report
+		netMap       netmap.NetworkMap
+		wantID       tailcfg.StableNodeID
+		wantName     string
+		wantLocation tailcfg.Location
+		wantError    error
+	}{
+		{
+			name: "2 exit nodes in same region",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10 * time.Millisecond,
+					2: 20 * time.Millisecond,
+					3: 30 * time.Millisecond,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						Name:     "2",
+						StableID: "2",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						Name:     "3",
+						StableID: "3",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+				},
+			},
+			wantName: "2",
+			wantID:   tailcfg.StableNodeID("2"),
+		},
+		{
+			name: "2 derp based exit nodes, different regions, no latency measurements",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						Name:     "2",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						Name:     "3",
+						DERP:     "127.3.3.40:2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+				},
+			},
+			wantName: "2",
+			wantID:   tailcfg.StableNodeID("2"),
+		},
+		{
+			name: "mullvad nodes, no derp based exit nodes",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {
+							Latitude:  40.73061,
+							Longitude: -73.935242,
+						},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						Name: "Dallas",
+						Hostinfo: (&tailcfg.Hostinfo{
+							Location: &tailcfg.Location{
+								Latitude:  32.89748,
+								Longitude: -97.040443,
+							},
+						}).View(),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						Name: "SanJose",
+						Hostinfo: (&tailcfg.Hostinfo{
+							Location: &tailcfg.Location{
+								Latitude:  37.3382082,
+								Longitude: -121.8863286,
+							},
+						}).View(),
+					}).View(),
+				},
+			},
+			wantID: tailcfg.StableNodeID("2"),
+			wantLocation: tailcfg.Location{
+				Latitude:  32.89748,
+				Longitude: -97.040443,
+			},
+			wantName: "Dallas",
+		},
+		{
+			name: "mullvad nodes, no preferred derp region exit nodes",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {
+							Latitude:  40.73061,
+							Longitude: -73.935242,
+						},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						Name: "Dallas",
+						Hostinfo: (&tailcfg.Hostinfo{
+							Location: &tailcfg.Location{
+								Latitude:  32.89748,
+								Longitude: -97.040443,
+							},
+						}).View(),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						Name: "SanJose",
+						Hostinfo: (&tailcfg.Hostinfo{
+							Location: &tailcfg.Location{
+								Latitude:  37.3382082,
+								Longitude: -121.8863286,
+							},
+						}).View(),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						Name:     "3",
+						DERP:     "127.3.3.40:2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+					}).View(),
+				},
+			},
+			wantID:   tailcfg.StableNodeID("3"),
+			wantName: "3",
+		},
+		{
+			name: "no mullvad nodes; no derp nodes",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+			},
+			wantError: errNoExitNodes,
+		},
+		{
+			name: "no preferred derp region",
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+			},
+			wantError: errUnableToPick,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotID, gotName, gotLocation, err := suggestExitNode(&tt.lastReport, &tt.netMap)
+			if gotName != tt.wantName || gotID != tt.wantID || err != tt.wantError || gotLocation != tt.wantLocation {
+				t.Errorf("got name %v id %v location %v error %v want name %v id %v location %v error %v", gotName, gotID, gotLocation, err, tt.wantName, tt.wantID, tt.wantLocation, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestSuggestExitNodeSortRegions(t *testing.T) {
+	tests := []struct {
+		name       string
+		regions    []int
+		lastReport netcheck.Report
+		wantValue  []int
+	}{
+		{
+			name:    "list of regions and netcheck report has latency values",
+			regions: []int{1, 3, 5},
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 3,
+					3: 2,
+					5: 1,
+				},
+			},
+			wantValue: []int{5, 3, 1},
+		},
+		{
+			name:    "empty list of regions",
+			regions: []int{},
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{},
+			},
+			wantValue: []int{},
+		},
+		{
+			name:    "list of regions and netcheck report doesn't have all regions' values",
+			regions: []int{1, 3, 5},
+			lastReport: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					3: 1,
+					5: 0,
+				},
+			},
+			wantValue: []int{3, 1, 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sortRegions(tt.regions, &tt.lastReport)
+			if !reflect.DeepEqual(got, tt.wantValue) {
+				t.Errorf("got value %v want %v", got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestSuggestExitNodePickWeighted(t *testing.T) {
+	tests := []struct {
+		name       string
+		candidates []tailcfg.NodeView
+		wantValue  tailcfg.NodeView
+		wantValid  bool
+	}{
+		{
+			name: ">1 candidates",
+			candidates: []tailcfg.NodeView{
+				(&tailcfg.Node{
+					ID:       2,
+					StableID: "2",
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+					},
+					Hostinfo: (&tailcfg.Hostinfo{
+						Location: &tailcfg.Location{
+							Priority: 20,
+						},
+					}).View(),
+				}).View(),
+				(&tailcfg.Node{
+					ID:       3,
+					StableID: "3",
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+					},
+					Hostinfo: (&tailcfg.Hostinfo{
+						Location: &tailcfg.Location{
+							Priority: 10,
+						},
+					}).View(),
+				}).View(),
+			},
+			wantValue: (&tailcfg.Node{
+				ID:       2,
+				StableID: "2",
+				AllowedIPs: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+				},
+				Hostinfo: (&tailcfg.Hostinfo{
+					Location: &tailcfg.Location{
+						Priority: 20,
+					},
+				}).View(),
+			}).View(),
+			wantValid: true,
+		},
+		{
+			name:       "<1 candidates",
+			candidates: []tailcfg.NodeView{},
+			wantValid:  false,
+		},
+		{
+			name: "1 candidate",
+			candidates: []tailcfg.NodeView{
+				(&tailcfg.Node{
+					ID:       2,
+					StableID: "2",
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+					},
+					Hostinfo: (&tailcfg.Hostinfo{
+						Location: &tailcfg.Location{
+							Priority: 20,
+						},
+					}).View(),
+				}).View(),
+			},
+			wantValue: (&tailcfg.Node{
+				ID:       2,
+				StableID: "2",
+				AllowedIPs: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+				},
+				Hostinfo: (&tailcfg.Hostinfo{
+					Location: &tailcfg.Location{
+						Priority: 20,
+					},
+				}).View(),
+			}).View(),
+			wantValid: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pickWeighted(tt.candidates)
+			if !reflect.DeepEqual(got, tt.wantValue) {
+				t.Errorf("got value %v want %v", got, tt.wantValue)
+				if tt.wantValid != got.Valid() {
+					t.Errorf("got invalid candidate expected valid")
+				}
+				if tt.wantValid {
+					if !reflect.DeepEqual(got, tt.wantValue) {
+						t.Errorf("got value %v want %v", got, tt.wantValue)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSuggestExitNodeLongLatDistance(t *testing.T) {
+	tests := []struct {
+		name           string
+		firstDistance  []float64
+		secondDistance []float64
+		distanceValue  float64
+	}{
+		{
+			name:           "zero values",
+			firstDistance:  []float64{0, 0},
+			secondDistance: []float64{0, 0},
+			distanceValue:  0,
+		},
+		{
+			name:           "valid values",
+			firstDistance:  []float64{40.7128, -73.935242},
+			secondDistance: []float64{37.7749, -122.4194},
+			distanceValue:  4132000,
+		},
+		{
+			name:           "valid values, locations in north and south of equator",
+			firstDistance:  []float64{40.7128, -73.935242},
+			secondDistance: []float64{-33.867778, 151.2093},
+			distanceValue:  15994658,
+		},
+	}
+	// Check if the absolute value of the difference between the calculated distance value
+	// and the hardcoded distance value is greater than 100km.
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := longLatDistance(tt.firstDistance, tt.secondDistance)
+			if math.Abs(got-tt.distanceValue) > 100000 {
+				t.Errorf("got value %v distance value %v absolute value difference %v", got, tt.distanceValue, math.Abs(got-tt.distanceValue))
 			}
 		})
 	}

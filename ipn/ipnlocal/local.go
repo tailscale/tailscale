@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -57,6 +58,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -6059,4 +6061,156 @@ func mayDeref[T any](p *T) (v T) {
 		return v
 	}
 	return *p
+}
+
+var errNoExitNodes = errors.New("no exit nodes available")
+var errUnableToPick = errors.New("unable to pick candidate")
+
+// SuggestExitNode returns a tailcfg.StableNodeID of a suggested exit node given the local backend's netmap and last report.
+// Non-mullvad nodes are prioritized before suggesting Mullvad nodes.
+// We look at non-mullvad nodes region latency values, and if there are none then we choose the geographic closest Mullvad node to the self node's preferred DERP region.
+func (b *LocalBackend) SuggestExitNode() (tailcfg.StableNodeID, string, tailcfg.Location, error) {
+	b.mu.Lock()
+	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
+	netMap := b.netMap
+	b.mu.Unlock()
+	return suggestExitNode(lastReport, netMap)
+}
+
+func suggestExitNode(lastReport *netcheck.Report, netMap *netmap.NetworkMap) (tailcfg.StableNodeID, string, tailcfg.Location, error) {
+	var preferredExitNodeID tailcfg.StableNodeID
+	var preferredExitNodeName string
+	var preferredExitNodeLocation tailcfg.Location
+	if lastReport.PreferredDERP == 0 {
+		return preferredExitNodeID, "", tailcfg.Location{}, errUnableToPick
+	}
+	var candidates []tailcfg.NodeView
+	peers := netMap.Peers
+	for _, peer := range peers {
+		if online := peer.Online(); online != nil && !*online {
+			continue
+		}
+		if tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
+			candidates = append(candidates, peer)
+		}
+	}
+	if len(candidates) == 1 {
+		if candidates[0].Valid() {
+			hi := candidates[0].Hostinfo()
+			if hi.Valid() && hi.Location().View().Valid() {
+				preferredExitNodeLocation = *hi.Location()
+			}
+			return candidates[0].StableID(), candidates[0].Name(), preferredExitNodeLocation, nil
+		} else {
+			return preferredExitNodeID, "", tailcfg.Location{}, errUnableToPick
+		}
+	}
+	if len(candidates) == 0 {
+		return preferredExitNodeID, "", tailcfg.Location{}, errNoExitNodes
+	}
+
+	candidateLatencyMap := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
+	candidateDistanceMap := make(map[float64][]tailcfg.NodeView, len(candidates))
+	preferredDerp := netMap.DERPMap.Regions[lastReport.PreferredDERP]
+	sortedRegions := make([]int, 0, len(netMap.DERPMap.Regions))
+	distances := make([]float64, 0, len(candidates))
+	if preferredDerp == nil {
+		return preferredExitNodeID, "", tailcfg.Location{}, errUnableToPick
+	}
+	derpHomeCoordinates := []float64{preferredDerp.Latitude, preferredDerp.Longitude}
+	for _, candidate := range candidates {
+		if candidate.Valid() {
+			if candidate.DERP() != "" {
+				ipp, err := netip.ParseAddrPort(candidate.DERP())
+				if err != nil {
+					continue
+				}
+				if ipp.Addr() == tailcfg.DerpMagicIPAddr {
+					regionID := int(ipp.Port())
+					if !slices.Contains(sortedRegions, regionID) {
+						sortedRegions = append(sortedRegions, regionID)
+					}
+					candidateLatencyMap[regionID] = append(candidateLatencyMap[regionID], candidate)
+				}
+			} else {
+				if candidate.Hostinfo().Location().View().Valid() {
+					candidateCoordinates := []float64{candidate.Hostinfo().Location().Latitude, candidate.Hostinfo().Location().Longitude}
+					distance := longLatDistance(derpHomeCoordinates, candidateCoordinates)
+					candidateDistanceMap[distance] = append(candidateDistanceMap[distance], candidate)
+					distances = append(distances, distance)
+				}
+			}
+		}
+	}
+	sortedRegions = sortRegions(sortedRegions, lastReport)
+	if len(sortedRegions) > 0 && candidateLatencyMap[sortedRegions[0]] != nil && candidateLatencyMap[sortedRegions[0]][0].Valid() {
+		preferredExitNodeID = candidateLatencyMap[sortedRegions[0]][0].StableID()
+		preferredExitNodeName = candidateLatencyMap[sortedRegions[0]][0].Name()
+		hi := candidateLatencyMap[sortedRegions[0]][0].Hostinfo()
+		if hi.Valid() && hi.Location().View().Valid() {
+			preferredExitNodeLocation = *hi.Location()
+		}
+	} else {
+		slices.Sort(distances)
+		if len(distances) > 0 {
+			if len(candidateDistanceMap[distances[0]]) == 1 && candidateDistanceMap[distances[0]][0].Valid() {
+				preferredExitNodeID = candidateDistanceMap[distances[0]][0].StableID()
+				preferredExitNodeName = candidateDistanceMap[distances[0]][0].Name()
+				preferredExitNodeLocation = *candidateDistanceMap[distances[0]][0].Hostinfo().Location()
+			} else {
+				chosen := pickWeighted(candidateDistanceMap[distances[0]])
+				if chosen.Valid() {
+					preferredExitNodeID = chosen.StableID()
+					preferredExitNodeName = chosen.Name()
+					preferredExitNodeLocation = *chosen.Hostinfo().Location()
+				}
+			}
+		}
+	}
+	if preferredExitNodeID.IsZero() {
+		return preferredExitNodeID, "", preferredExitNodeLocation, errNoExitNodes
+	}
+	return preferredExitNodeID, preferredExitNodeName, preferredExitNodeLocation, nil
+}
+
+func pickWeighted(candidates []tailcfg.NodeView) tailcfg.NodeView {
+	maxWeight := 0
+	var chosenCandidate tailcfg.NodeView
+	for _, candidate := range candidates {
+		if candidate.Hostinfo().Location().View().Valid() && candidate.Hostinfo().Location().Priority > maxWeight {
+			maxWeight = candidate.Hostinfo().Location().Priority
+			chosenCandidate = candidate
+		}
+	}
+	return chosenCandidate
+}
+
+// sortRegions returns a list of sorted regions by ascending latency given a list of region IDs and a netcheck report.
+func sortRegions(regions []int, lastReport *netcheck.Report) []int {
+	sort.Slice(regions, func(i, j int) bool {
+		iLatency, ok := lastReport.RegionLatency[regions[i]]
+		if !ok || iLatency == 0 {
+			iLatency = math.MaxInt
+		}
+		jLatency, ok := lastReport.RegionLatency[regions[j]]
+		if !ok || jLatency == 0 {
+			jLatency = math.MaxInt
+		}
+		return iLatency < jLatency
+	})
+	return regions
+}
+
+// longLatDistance returns an estimated distance given two lists of float64 values that represent geographic coordinates.
+// The first index is latitude and the second index is longitude.
+// Value is returned in meters. We tolerate up to 100km difference in accuracy.
+func longLatDistance(firstDistance []float64, secondDistance []float64) float64 {
+	diffLat := (firstDistance[0] - secondDistance[0]) * math.Pi / 180
+	diffLong := (firstDistance[1] - secondDistance[1]) * math.Pi / 180
+	latRadians1 := firstDistance[0] * math.Pi / 180
+	latRadians2 := secondDistance[0] * math.Pi / 180
+	a := math.Pow(math.Sin(diffLat/2), 2) + math.Cos(latRadians1)*math.Cos(latRadians2)*math.Pow(math.Sin(diffLong/2), 2)
+	earthRadius := float64(6371000) // earth radius is 6371000 meters
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return earthRadius * c
 }

@@ -1505,3 +1505,16 @@ func (w *IPNBusWatcher) Next() (ipn.Notify, error) {
 	}
 	return n, nil
 }
+
+// SuggestExitNode returns the tailcfg.StableNodeID of a suggested exit node to connect to.
+func (lc *LocalClient) SuggestExitNode(ctx context.Context) (tailcfg.StableNodeID, string, tailcfg.Location, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-exit-node", 200, nil)
+	if err != nil {
+		return "", "", tailcfg.Location{}, fmt.Errorf("error %w: %s", err, body)
+	}
+	res, err := decodeJSON[apitype.ExitNodeSuggestionResponse](body)
+	if err != nil {
+		return "", "", tailcfg.Location{}, err
+	}
+	return res.SuggestedExitNodeID, res.SuggestedExitNodeName, res.SuggestedExitNodeLocation, nil
+}
