@@ -25,6 +25,11 @@ func TestVarzHandler(t *testing.T) {
 	half := new(expvar.Float)
 	half.Set(0.5)
 
+	type L2 struct {
+		Foo string `prom:"foo"`
+		Bar string `prom:"bar"`
+	}
+
 	tests := []struct {
 		name string
 		k    string // key name
@@ -192,6 +197,18 @@ func TestVarzHandler(t *testing.T) {
 				return m
 			})(),
 			"foo{label=\"a\"} 1\n",
+		},
+		{
+			"metrics_multilabel_map",
+			"foo",
+			(func() *metrics.MultiLabelMap[L2] {
+				m := new(metrics.MultiLabelMap[L2])
+				m.Add(L2{"a", "b"}, 1)
+				m.Add(L2{"c", "d"}, 2)
+				return m
+			})(),
+			"foo{foo=\"a\",bar=\"b\"} 1\n" +
+				"foo{foo=\"c\",bar=\"d\"} 2\n",
 		},
 		{
 			"expvar_label_map",
