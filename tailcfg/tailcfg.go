@@ -2230,6 +2230,9 @@ const (
 
 	// NodeAttrDisableWebClient disables using the web client.
 	NodeAttrDisableWebClient NodeCapability = "disable-web-client"
+
+	// NodeAttrNewtorkFLowLogging enables logging destination addresses for exit nodes.
+	NodeAttrNetworkFlowLoggingDst NodeCapability = "network-flow-logging-dst"
 )
 
 // SetDNSRequest is a request to add a DNS record.
