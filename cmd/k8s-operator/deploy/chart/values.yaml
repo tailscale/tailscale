@@ -12,7 +12,7 @@ oauth: {}
 # of chart installation. We do not use Helm's CRD installation mechanism as that
 # does not allow for upgrading CRDs.
 # https://helm.sh/docs/chart_best_practices/custom_resource_definitions/
-installCRDs: "true"
+installCRDs: true
 
 operatorConfig:
   # ACL tag that operator will be tagged with. Operator must be made owner of
