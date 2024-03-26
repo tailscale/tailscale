@@ -320,7 +320,7 @@ type LocalBackend struct {
 	// notified about.
 	lastNotifiedTailFSShares atomic.Pointer[views.SliceView[*tailfs.Share, tailfs.ShareView]]
 
-	// outgoingFiles keeps track of Taildrop outgoing files
+	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 }
 
