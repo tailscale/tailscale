@@ -18,6 +18,7 @@ import (
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/appc/routeinfo"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -34,6 +35,10 @@ type RouteAdvertiser interface {
 
 	// UnadvertiseRoute removes any matching route advertisements.
 	UnadvertiseRoute(...netip.Prefix) error
+
+	// Store/ReadRouteInfo persists and retreives RouteInfo to stable storage
+	StoreRouteInfo(*routeinfo.RouteInfo) error
+	ReadRouteInfo() (*routeinfo.RouteInfo, error)
 }
 
 // AppConnector is an implementation of an AppConnector that performs

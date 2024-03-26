@@ -6,6 +6,8 @@ package appctest
 import (
 	"net/netip"
 	"slices"
+
+	"tailscale.com/appc/routeinfo"
 )
 
 // RouteCollector is a test helper that collects the list of routes advertised
@@ -30,6 +32,14 @@ func (rc *RouteCollector) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		}
 	}
 	return nil
+}
+
+func (rc *RouteCollector) StoreRouteInfo(ri *routeinfo.RouteInfo) error {
+	return nil
+}
+
+func (rc *RouteCollector) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
+	return nil, nil
 }
 
 // RemovedRoutes returns the list of routes that were removed.
