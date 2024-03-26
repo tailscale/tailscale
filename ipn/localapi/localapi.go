@@ -1535,11 +1535,10 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 // directly, as the Windows GUI always runs in tun mode anyway.
 //
 // In addition to single file PUTs, this endpoint accepts multipart file
-// POSTS encoded as multipart/form-data. Each part must include a
-// "Content-Length" in the MIME header indicating the size of the file.
-// The first part should be an application/json file that contains a JSON map
-// of filename -> length, which we can use for tracking progress even before
-// reading the file parts.
+// POSTS encoded as multipart/form-data.The first part should be an
+// application/json file that contains a manifest consisting of a JSON array of
+// OutgoingFiles which wecan use for tracking progress even before reading the
+// file parts.
 //
 // URL format:
 //
@@ -1599,9 +1598,9 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Report progress on outgoing files every 5 seconds
-	outgoingFiles := make(map[string]ipn.OutgoingFile)
-	t := time.NewTicker(5 * time.Second)
+	// Periodically report progress of outgoing files.
+	outgoingFiles := make(map[string]*ipn.OutgoingFile)
+	t := time.NewTicker(1 * time.Second)
 	progressUpdates := make(chan ipn.OutgoingFile)
 	defer close(progressUpdates)
 
@@ -1614,7 +1613,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return
 				}
-				outgoingFiles[u.ID] = u
+				outgoingFiles[u.ID] = &u
 			case <-t.C:
 				h.b.UpdateOutgoingFiles(outgoingFiles)
 			}
@@ -1672,21 +1671,15 @@ func (h *Handler) multiFilePost(progressUpdates chan (ipn.OutgoingFile), w http.
 				return
 			}
 
-			var manifest map[string]int64
+			var manifest []ipn.OutgoingFile
 			err := json.NewDecoder(part).Decode(&manifest)
 			if err != nil {
 				http.Error(ww, fmt.Sprintf("invalid manifest: %s", err), http.StatusBadRequest)
 				return
 			}
 
-			for filename, size := range manifest {
-				file := ipn.OutgoingFile{
-					ID:           uuid.Must(uuid.NewRandom()).String(),
-					Name:         filename,
-					PeerID:       peerID,
-					DeclaredSize: size,
-				}
-				outgoingFilesByName[filename] = file
+			for _, file := range manifest {
+				outgoingFilesByName[file.Name] = file
 				progressUpdates <- file
 			}
 

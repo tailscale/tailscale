@@ -4,20 +4,21 @@
 package ipnlocal
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
 	"tailscale.com/ipn"
 )
 
-func (b *LocalBackend) UpdateOutgoingFiles(updates map[string]ipn.OutgoingFile) {
+// UpdateOutgoingFiles updates b.outgoingFiles to reflect the given updates and
+// sends an ipn.Notify with the full list of outgoingFiles.
+func (b *LocalBackend) UpdateOutgoingFiles(updates map[string]*ipn.OutgoingFile) {
 	b.mu.Lock()
 	if b.outgoingFiles == nil {
 		b.outgoingFiles = make(map[string]*ipn.OutgoingFile, len(updates))
 	}
-	for id, file := range updates {
-		b.outgoingFiles[id] = &file
-	}
+	maps.Copy(b.outgoingFiles, updates)
 	outgoingFiles := make([]*ipn.OutgoingFile, 0, len(b.outgoingFiles))
 	for _, file := range b.outgoingFiles {
 		outgoingFiles = append(outgoingFiles, file)

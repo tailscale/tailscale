@@ -202,8 +202,8 @@ type PartialFile struct {
 
 // OutgoingFile represents an in-progress outgoing file transfer.
 type OutgoingFile struct {
-	ID           string               `json:"-"` // unique identifier for this transfer (a type 4 UUID)
-	PeerID       tailcfg.StableNodeID // identifier for the peer to which this is being transferred
+	ID           string               `json:",omitempty"` // unique identifier for this transfer (a type 4 UUID)
+	PeerID       tailcfg.StableNodeID `json:",omitempty"` // identifier for the peer to which this is being transferred
 	Name         string               `json:",omitempty"` // e.g. "foo.jpg"
 	Started      time.Time            // time transfer started
 	DeclaredSize int64                // or -1 if unknown
