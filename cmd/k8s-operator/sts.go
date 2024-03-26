@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
@@ -352,17 +353,34 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	}
 
 	if orig != nil {
-		logger.Debugf("patching existing state Secret with values %s", secret.Data[tailscaledConfigKey])
+		logger.Debugf("patching the existing proxy Secret with tailscaled config %s", sanitizeConfigBytes(secret.Data[tailscaledConfigKey]))
 		if err := a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
 			return "", "", err
 		}
 	} else {
-		logger.Debugf("creating new state Secret with authkey %s", secret.Data[tailscaledConfigKey])
+		logger.Debugf("creating a new Secret for the proxy with tailscaled config %s", sanitizeConfigBytes([]byte(secret.StringData[tailscaledConfigKey])))
 		if err := a.Create(ctx, secret); err != nil {
 			return "", "", err
 		}
 	}
 	return secret.Name, hash, nil
+}
+
+// sanitizeConfigBytes returns ipn.ConfigVAlpha in string form with redacted
+// auth key.
+func sanitizeConfigBytes(bs []byte) string {
+	c := &ipn.ConfigVAlpha{}
+	if err := json.Unmarshal(bs, c); err != nil {
+		return "invalid config"
+	}
+	if c.AuthKey != nil {
+		c.AuthKey = ptr.To("**redacted**")
+	}
+	sanitizedBytes, err := json.Marshal(c)
+	if err != nil {
+		return "invalid config"
+	}
+	return string(sanitizedBytes)
 }
 
 // DeviceInfo returns the device ID and hostname for the Tailscale device
