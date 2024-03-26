@@ -20,7 +20,7 @@ import (
 var updateCmd = &ffcli.Command{
 	Name:       "update",
 	ShortUsage: "update",
-	ShortHelp:  "[BETA] Update Tailscale to the latest/different version",
+	ShortHelp:  "Update Tailscale to the latest/different version",
 	Exec:       runUpdate,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("update")
