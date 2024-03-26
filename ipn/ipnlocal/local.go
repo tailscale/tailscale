@@ -4776,7 +4776,11 @@ func (rbw *responseBodyWrapper) logAccess(err string) {
 		return
 	}
 
-	rbw.log("tailfs: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+	// Some operating systems create and copy lots of 0 length hidden files for
+	// tracking various states. Omit these to keep logs from being too verbose.
+	if rbw.contentLength > 0 {
+		rbw.log("tailfs: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+	}
 }
 
 // Read implements the io.Reader interface.
@@ -4846,7 +4850,12 @@ func (t *tailFSTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 			ReadCloser:    resp.Body,
 		}
 
-		resp.Body = &rbw
+		if resp.StatusCode >= 400 {
+			// in case of error response, just log immediately
+			rbw.logAccess("")
+		} else {
+			resp.Body = &rbw
+		}
 	}()
 
 	// dialTimeout is fairly aggressive to avoid hangs on contacting offline or
