@@ -2507,3 +2507,29 @@ func TestValidPopBrowserURL(t *testing.T) {
 		})
 	}
 }
+
+func TestRoundTraffic(t *testing.T) {
+	tests := []struct {
+		name  string
+		bytes int64
+		want  float64
+	}{
+		{name: "under 5 bytes", bytes: 4, want: 4},
+		{name: "under 1000 bytes", bytes: 987, want: 990},
+		{name: "under 10_000 bytes", bytes: 8875, want: 8900},
+		{name: "under 100_000 bytes", bytes: 77777, want: 78000},
+		{name: "under 1_000_000 bytes", bytes: 666523, want: 670000},
+		{name: "under 10_000_000 bytes", bytes: 22556677, want: 23000000},
+		{name: "under 1_000_000_000 bytes", bytes: 1234234234, want: 1200000000},
+		{name: "under 1_000_000_000 bytes", bytes: 123423423499, want: 123400000000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if result := roundTraffic(tt.bytes); result != tt.want {
+				t.Errorf("unexpected rounding got %v want %v", result, tt.want)
+			}
+		})
+
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -42,6 +43,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
+	"tailscale.com/util/httpm"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -1104,8 +1106,44 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 	return nil
 }
 
+// httpResponseWrapper wraps an http.ResponseWrite and
+// stores the status code and content length.
+type httpResponseWrapper struct {
+	http.ResponseWriter
+	statusCode    int
+	contentLength int64
+}
+
+// WriteHeader implements the WriteHeader interface.
+func (hrw *httpResponseWrapper) WriteHeader(status int) {
+	hrw.statusCode = status
+	hrw.ResponseWriter.WriteHeader(status)
+}
+
+// Write implements the Write interface.
+func (hrw *httpResponseWrapper) Write(b []byte) (int, error) {
+	n, err := hrw.ResponseWriter.Write(b)
+	hrw.contentLength += int64(n)
+	return n, err
+}
+
+// requestBodyWrapper wraps an io.ReadCloser and stores
+// the number of bytesRead.
+type requestBodyWrapper struct {
+	io.ReadCloser
+	bytesRead int64
+}
+
+// Read implements the io.Reader interface.
+func (rbw *requestBodyWrapper) Read(b []byte) (int, error) {
+	n, err := rbw.ReadCloser.Read(b)
+	rbw.bytesRead += int64(n)
+	return n, err
+}
+
 func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Request) {
 	if !h.ps.b.TailFSSharingEnabled() {
+		h.logf("tailfs: not enabled")
 		http.Error(w, "tailfs not enabled", http.StatusNotFound)
 		return
 	}
@@ -1113,6 +1151,7 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 	capsMap := h.peerCaps()
 	tailfsCaps, ok := capsMap[tailcfg.PeerCapabilityTailFS]
 	if !ok {
+		h.logf("tailfs: not permitted")
 		http.Error(w, "tailfs not permitted", http.StatusForbidden)
 		return
 	}
@@ -1124,17 +1163,63 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 
 	p, err := tailfs.ParsePermissions(rawPerms)
 	if err != nil {
+		h.logf("tailfs: error parsing permissions: %w", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	fs, ok := h.ps.b.sys.TailFSForRemote.GetOK()
 	if !ok {
-		http.Error(w, "tailfs not enabled", http.StatusNotFound)
+		h.logf("tailfs: not supported on platform")
+		http.Error(w, "tailfs not supported on platform", http.StatusNotFound)
 		return
 	}
+	wr := &httpResponseWrapper{
+		ResponseWriter: w,
+	}
+	bw := &requestBodyWrapper{
+		ReadCloser: r.Body,
+	}
+	r.Body = bw
+
+	if r.Method == httpm.PUT || r.Method == httpm.GET {
+		defer func() {
+			switch wr.statusCode {
+			case 304:
+				// 304s are particularly chatty so skip logging.
+			default:
+				contentType := "unknown"
+				if ct := wr.Header().Get("Content-Type"); ct != "" {
+					contentType = ct
+				}
+
+				h.logf("tailfs: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseTailFSFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
+			}
+		}()
+	}
+
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailFSPrefix)
-	fs.ServeHTTPWithPerms(p, w, r)
+	fs.ServeHTTPWithPerms(p, wr, r)
+}
+
+// parseTailFSFileExtensionForLog parses the file extension, if available.
+// If a file extension is not present or parsable, the file extension is
+// set to "unknown". If the file extension contains a double quote, it is
+// replaced with "removed".
+// All whitespace is removed from a parsed file extension.
+// File extensions including the leading ., e.g. ".gif".
+func parseTailFSFileExtensionForLog(path string) string {
+	fileExt := "unknown"
+	if fe := filepath.Ext(path); fe != "" {
+		if strings.Contains(fe, "\"") {
+			// Do not log include file extensions with quotes within them.
+			return "removed"
+		}
+		// Remove white space from user defined inputs.
+		fileExt = strings.ReplaceAll(fe, " ", "")
+	}
+
+	return fileExt
 }
 
 // newFakePeerAPIListener creates a new net.Listener that acts like
