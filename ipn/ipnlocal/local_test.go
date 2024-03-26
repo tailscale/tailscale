@@ -23,6 +23,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
+	"tailscale.com/appc/routeinfo"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
@@ -2633,4 +2634,50 @@ func (b *LocalBackend) SetPrefsForTest(newp *ipn.Prefs) {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	b.setPrefsLockedOnEntry(newp, unlock)
+}
+func TestReadWriteRouteInfo(t *testing.T) {
+	// test can read what's written
+	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
+	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
+	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
+	now := time.Now()
+	discovered := make(map[string]*routeinfo.DatedRoutes)
+	routes := make(map[netip.Prefix]time.Time)
+	routes[prefix3] = now
+	discovered["example.com"] = &routeinfo.DatedRoutes{
+		LastCleanup: now,
+		Routes:      routes,
+	}
+	b := newTestBackend(t)
+	ri := routeinfo.RouteInfo{
+		Local:      []netip.Prefix{prefix1},
+		Control:    []netip.Prefix{prefix2},
+		Discovered: discovered,
+	}
+	if err := b.StoreRouteInfo(&ri); err != nil {
+		t.Fatal(err)
+	}
+	readRi, err := b.ReadRouteInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readRi.Local) != 1 || len(readRi.Control) != 1 || len(readRi.Discovered) != 1 {
+		t.Fatal("read Ri expected to be same shape as ri")
+	}
+	if readRi.Local[0] != ri.Local[0] {
+		t.Fatalf("wanted %v, got %v", ri.Local[0], readRi.Local[0])
+	}
+	if readRi.Control[0] != ri.Control[0] {
+		t.Fatalf("wanted %v, got %v", ri.Control[0], readRi.Control[0])
+	}
+	dr := readRi.Discovered["example.com"]
+	if dr.LastCleanup.Compare(now) != 0 {
+		t.Fatalf("wanted %v, got %v", now, dr.LastCleanup)
+	}
+	if len(dr.Routes) != 1 {
+		t.Fatalf("read Ri expected to be same shape as ri")
+	}
+	if dr.Routes[prefix3].Compare(routes[prefix3]) != 0 {
+		t.Fatalf("wanted %v, got %v", routes[prefix3], dr.Routes[prefix3])
+	}
 }

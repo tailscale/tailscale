@@ -35,6 +35,7 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"tailscale.com/appc"
+	"tailscale.com/appc/routeinfo"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
@@ -6248,6 +6249,49 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
+}
+
+// namespace a key with the profile manager's current profile key, if any
+func namespaceKeyForCurrentProfile(pm *profileManager, key ipn.StateKey) ipn.StateKey {
+	return pm.CurrentProfile().Key + "||" + key
+}
+
+const routeInfoStateStoreKey ipn.StateKey = "_routeInfo"
+
+// StoreRouteInfo implements the appc.RouteAdvertiser interface. It stores
+// RouteInfo to StateStore per profile.
+func (b *LocalBackend) StoreRouteInfo(ri *routeinfo.RouteInfo) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.pm.CurrentProfile().ID == "" {
+		return nil
+	}
+	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
+	bs, err := json.Marshal(ri)
+	if err != nil {
+		return err
+	}
+	return b.pm.WriteState(key, bs)
+}
+
+// ReadRouteInfo implements the appc.RouteAdvertiser interface. It reads
+// RouteInfo from StateStore per profile.
+func (b *LocalBackend) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.pm.CurrentProfile().ID == "" {
+		return &routeinfo.RouteInfo{}, nil
+	}
+	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
+	bs, err := b.pm.Store().ReadState(key)
+	if err != nil {
+		return nil, err
+	}
+	ri := &routeinfo.RouteInfo{}
+	if err := json.Unmarshal(bs, ri); err != nil {
+		return nil, err
+	}
+	return ri, nil
 }
 
 // seamlessRenewalEnabled reports whether seamless key renewals are enabled
