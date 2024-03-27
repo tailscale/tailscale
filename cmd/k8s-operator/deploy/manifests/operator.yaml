@@ -161,6 +161,103 @@ kind: CustomResourceDefinition
 metadata:
     annotations:
         controller-gen.kubebuilder.io/version: v0.13.0
+    name: dnsconfigs.tailscale.com
+spec:
+    group: tailscale.com
+    names:
+        kind: DNSConfig
+        listKind: DNSConfigList
+        plural: dnsconfigs
+        shortNames:
+            - dc
+        singular: dnsconfig
+    scope: Cluster
+    versions:
+        - additionalPrinterColumns:
+            - description: Service IP address of the nameserver
+              jsonPath: .status.nameserverStatus.ip
+              name: NameserverIP
+              type: string
+          name: v1alpha1
+          schema:
+            openAPIV3Schema:
+                properties:
+                    apiVersion:
+                        description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+                        type: string
+                    kind:
+                        description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+                        type: string
+                    metadata:
+                        type: object
+                    spec:
+                        properties:
+                            nameserver:
+                                properties:
+                                    image:
+                                        properties:
+                                            repo:
+                                                type: string
+                                            tag:
+                                                type: string
+                                        type: object
+                                type: object
+                        required:
+                            - nameserver
+                        type: object
+                    status:
+                        properties:
+                            conditions:
+                                items:
+                                    description: ConnectorCondition contains condition information for a Connector.
+                                    properties:
+                                        lastTransitionTime:
+                                            description: LastTransitionTime is the timestamp corresponding to the last status change of this condition.
+                                            format: date-time
+                                            type: string
+                                        message:
+                                            description: Message is a human readable description of the details of the last transition, complementing reason.
+                                            type: string
+                                        observedGeneration:
+                                            description: If set, this represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.condition[x].observedGeneration is 9, the condition is out of date with respect to the current state of the Connector.
+                                            format: int64
+                                            type: integer
+                                        reason:
+                                            description: Reason is a brief machine readable explanation for the condition's last transition.
+                                            type: string
+                                        status:
+                                            description: Status of the condition, one of ('True', 'False', 'Unknown').
+                                            type: string
+                                        type:
+                                            description: Type of the condition, known values are (`SubnetRouterReady`).
+                                            type: string
+                                    required:
+                                        - status
+                                        - type
+                                    type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                    - type
+                                x-kubernetes-list-type: map
+                            nameserverStatus:
+                                properties:
+                                    ip:
+                                        type: string
+                                type: object
+                        type: object
+                required:
+                    - spec
+                type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    annotations:
+        controller-gen.kubebuilder.io/version: v0.13.0
     name: proxyclasses.tailscale.com
 spec:
     group: tailscale.com
@@ -691,6 +788,16 @@ rules:
         - list
         - watch
         - update
+    - apiGroups:
+        - tailscale.com
+      resources:
+        - dnsconfigs
+        - dnsconfigs/status
+      verbs:
+        - get
+        - list
+        - watch
+        - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -715,12 +822,15 @@ rules:
         - ""
       resources:
         - secrets
+        - serviceaccounts
+        - configmaps
       verbs:
         - '*'
     - apiGroups:
         - apps
       resources:
         - statefulsets
+        - deployments
       verbs:
         - '*'
 ---

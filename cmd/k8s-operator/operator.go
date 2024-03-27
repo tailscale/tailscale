@@ -223,8 +223,11 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		// resources that we GET via the controller manager's client.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}:      nsFilter,
-				&appsv1.StatefulSet{}: nsFilter,
+				&corev1.Secret{}:         nsFilter,
+				&corev1.ServiceAccount{}: nsFilter,
+				&corev1.ConfigMap{}:      nsFilter,
+				&appsv1.StatefulSet{}:    nsFilter,
+				&appsv1.Deployment{}:     nsFilter,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -308,7 +311,28 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			clock:    tstime.DefaultClock{},
 		})
 	if err != nil {
-		startlog.Fatal("could not create connector reconciler: %v", err)
+		startlog.Fatalf("could not create connector reconciler: %v", err)
+	}
+	// TODO (irbekrm): switch to metadata-only watches for resources whose
+	// spec we don't need to inspect to reduce memory consumption
+	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
+	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.DNSConfig{}).
+		Watches(&appsv1.Deployment{}, nameserverFilter).
+		Watches(&corev1.ConfigMap{}, nameserverFilter).
+		Watches(&corev1.Service{}, nameserverFilter).
+		Watches(&corev1.ServiceAccount{}, nameserverFilter).
+		Complete(&NameserverReconciler{
+			recorder:    eventRecorder,
+			tsNamespace: tsNamespace,
+
+			Client: mgr.GetClient(),
+			logger: zlog.Named("nameserver-reconciler"),
+			clock:  tstime.DefaultClock{},
+		})
+	if err != nil {
+		startlog.Fatalf("could not create nameserver reconciler: %v", err)
 	}
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyClass{}).
