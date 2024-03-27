@@ -84,9 +84,11 @@ export type Feature =
   | "advertise-routes"
   | "use-exit-node"
   | "ssh"
+  | "serve"
+  | "funnel"
   | "auto-update"
 
-export const featureDescription = (f: Feature) => {
+export const featureLongName = (f: Feature) => {
   switch (f) {
     case "advertise-exit-node":
       return "Advertising as an exit node"
@@ -96,6 +98,10 @@ export const featureDescription = (f: Feature) => {
       return "Using an exit node"
     case "ssh":
       return "Running a Tailscale SSH server"
+    case "serve":
+      return "Sharing local content"
+    case "funnel":
+      return "Sharing local content over the internet"
     case "auto-update":
       return "Auto updating client versions"
     default:
@@ -111,3 +117,31 @@ export type VersionInfo = {
   RunningLatest: boolean
   LatestVersion?: string
 }
+
+export type ServeData = {
+  target: Target
+  destination: Destination
+  shareType: ShareType
+  isForeground?: boolean // only populated for "GET"
+  isEdit?: boolean // only populated for "PATCH"
+}
+
+export type Target = {
+  type: TargetType
+  value: string
+}
+
+export type Destination = {
+  protocol: DestinationProtocol
+  port: DestinationPort
+  path: string
+}
+
+export type TargetType = "plainText" | "localHttpPort"
+export type DestinationProtocol =
+  | "https"
+  | "http"
+  | "tcp"
+  | "tls-terminated-tcp"
+export type DestinationPort = 443 | 8443 | 10000
+export type ShareType = "serve" | "funnel"

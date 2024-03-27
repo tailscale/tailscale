@@ -8,11 +8,12 @@ import DeviceDetailsView from "src/components/views/device-details-view"
 import DisconnectedView from "src/components/views/disconnected-view"
 import HomeView from "src/components/views/home-view"
 import LoginView from "src/components/views/login-view"
+import ServeView from "src/components/views/serve-view"
 import SSHView from "src/components/views/ssh-view"
 import SubnetRouterView from "src/components/views/subnet-router-view"
 import { UpdatingView } from "src/components/views/updating-view"
 import useAuth, { AuthResponse, canEdit } from "src/hooks/auth"
-import { Feature, NodeData, featureDescription } from "src/types"
+import { Feature, NodeData, featureLongName } from "src/types"
 import Card from "src/ui/card"
 import EmptyState from "src/ui/empty-state"
 import LoadingDots from "src/ui/loading-dots"
@@ -70,7 +71,9 @@ function WebClient({
           <FeatureRoute path="/ssh" feature="ssh" node={node}>
             <SSHView readonly={!canEdit("ssh", auth)} node={node} />
           </FeatureRoute>
-          {/* <Route path="/serve">Share local content</Route> */}
+          <FeatureRoute path="/serve" feature="serve" node={node}>
+            <ServeView node={node} auth={auth} />
+          </FeatureRoute>
           <FeatureRoute path="/update" feature="auto-update" node={node}>
             <UpdatingView
               versionInfo={node.ClientVersion}
@@ -113,7 +116,7 @@ function FeatureRoute({
       {!node.Features[feature] ? (
         <Card className="mt-8">
           <EmptyState
-            description={`${featureDescription(
+            description={`${featureLongName(
               feature
             )} not available on this device.`}
           />

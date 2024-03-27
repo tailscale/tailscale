@@ -12,12 +12,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -397,7 +400,7 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 			// All requests must be made over tailscale.
 			http.Error(w, "must access over tailscale", http.StatusUnauthorized)
 			return false
-		case r.URL.Path == "/api/data" && r.Method == httpm.GET:
+		case (r.URL.Path == "/api/data" || r.URL.Path == "/api/serve/items") && r.Method == httpm.GET: // TODO: maybe allow all GET?
 			// Readonly endpoint allowed without valid browser session.
 			return true
 		case r.URL.Path == "/api/device-details-click" && r.Method == httpm.POST:
@@ -431,11 +434,15 @@ func (s *Server) authorizeRequest(w http.ResponseWriter, r *http.Request) (ok bo
 // serveLoginAPI serves requests for the web login client.
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
 // which protects the handler using gorilla csrf.
+// Endpoints here should be readonly endpoints, as users are only able
+// to obtain an edit session on the management client (handled by serveAPI).
 func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	switch {
 	case r.URL.Path == "/api/data" && r.Method == httpm.GET:
 		s.serveGetNodeData(w, r)
+	case r.URL.Path == "/api/serve/items" && r.Method == httpm.GET:
+		s.serveGetServeItems(w, r)
 	case r.URL.Path == "/api/up" && r.Method == httpm.POST:
 		s.serveTailscaleUp(w, r)
 	case r.URL.Path == "/api/device-details-click" && r.Method == httpm.POST:
@@ -617,6 +624,29 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/local/v0/upload-client-metrics" && r.Method == httpm.POST:
 		newHandler[noBodyData](s, w, r, alwaysAllowed).
 			handle(s.proxyRequestToLocalAPI)
+		return
+	case path == "/serve/items":
+		peerAllowed := func(data serveItem, peer peerCapabilities) bool {
+			if data.ShareType == "serve" && !peer.canEdit(capFeatureServe) {
+				return false
+			} else if data.ShareType == "funnel" && !peer.canEdit(capFeatureFunnel) {
+				return false
+			}
+			return true
+		}
+		switch r.Method {
+		case httpm.GET:
+			newHandler[noBodyData](s, w, r, alwaysAllowed).
+				handle(s.serveGetServeItems)
+		case httpm.PATCH:
+			newHandler[serveItem](s, w, r, peerAllowed).
+				handleJSON(s.servePatchServeItem)
+		case httpm.DELETE:
+			newHandler[serveItem](s, w, r, peerAllowed).
+				handleJSON(s.serveDeleteServeItem)
+		default:
+			http.Error(w, "invalid endpoint", http.StatusNotFound)
+		}
 		return
 	}
 	http.Error(w, "invalid endpoint", http.StatusNotFound)
@@ -880,7 +910,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		URLPrefix:        strings.TrimSuffix(s.pathPrefix, "/"),
 		ControlAdminURL:  prefs.AdminPageURL(),
 		LicensesURL:      licenses.LicensesURL(),
-		Features:         availableFeatures(),
+		Features:         availableFeatures(st.Self),
 
 		ACLAllowsAnyIncomingTraffic: s.aclsAllowAccess(filterRules),
 	}
@@ -958,13 +988,15 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, *data)
 }
 
-func availableFeatures() map[string]bool {
+func availableFeatures(self *ipnstate.PeerStatus) map[string]bool {
 	env := hostinfo.GetEnvType()
 	features := map[string]bool{
 		"advertise-exit-node": true, // available on all platforms
 		"advertise-routes":    true, // available on all platforms
 		"use-exit-node":       canUseExitNode(env) == nil,
 		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
+		"serve":               ipn.NodeCanServe(self) == nil, // TODO: anything else to check for this (and line below)?
+		"funnel":              ipn.NodeCanFunnel(self) == nil,
 		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
 	}
 	if env == hostinfo.HomeAssistantAddOn {
@@ -1106,6 +1138,285 @@ func (s *Server) servePostRoutes(ctx context.Context, data postRoutesRequest) er
 	}
 	_, err = s.lc.EditPrefs(ctx, p)
 	return err
+}
+
+type serveItem struct {
+	Target      serveTarget      `json:"target"`
+	Destination serveDestination `json:"destination"`
+	ShareType   string           `json:"shareType"` // "serve" or "funnel"
+
+	IsForeground bool `json:"isForeground,omitempty"` // only populated by "GET", empty for "PATCH"/"DELETE"
+	IsEdit       bool `json:"isEdit,omitempty"`       // only populated by "PATCH", true when editing an existing item, false when adding a new one
+}
+
+type serveTarget struct {
+	Type  string `json:"type"`  // "plainText" or "localHttpPort"
+	Value string `json:"value"` // Any text if type is "plainText"; port number if type is "localHttpPort"
+}
+
+type serveDestination struct {
+	Protocol string `json:"protocol"` // "https", "http", "tcp", or "tls-terminated-tcp"
+	Port     uint16 `json:"port"`     // 443 or 8443 or 10000
+	Path     string `json:"path"`     // e.g. /images/dogs; only for "https" or "http"
+}
+
+func (s *Server) serveGetServeItems(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.lc.GetServeConfig(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	st, err := s.lc.StatusWithoutPeers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var serveItems []*serveItem
+	if sc == nil {
+		writeJSON(w, serveItems)
+		return
+	}
+
+	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+
+	shareType := func(sc *ipn.ServeConfig, hp ipn.HostPort) string {
+		if sc.AllowFunnel[hp] {
+			return "funnel"
+		}
+		return "serve"
+	}
+
+	addWebItem := func(sc *ipn.ServeConfig, hp ipn.HostPort, mount string, h *ipn.HTTPHandler, isForeground bool) {
+		port, err := hp.Port()
+		if err != nil {
+			return
+		}
+		var target serveTarget
+		if h.Text != "" {
+			target = serveTarget{
+				Type:  "plainText",
+				Value: h.Text,
+			}
+		} else {
+			target = serveTarget{
+				Type:  "localHttpPort",
+				Value: h.Proxy,
+			}
+		}
+		protocol := "https"
+		if sc.IsServingHTTP(port) {
+			protocol = "http"
+		}
+		serveItems = append(serveItems, &serveItem{
+			Target: target,
+			Destination: serveDestination{
+				Path:     mount,
+				Protocol: protocol,
+				Port:     port,
+			},
+			ShareType:    shareType(sc, hp),
+			IsForeground: isForeground,
+		})
+	}
+
+	addTCPItem := func(sc *ipn.ServeConfig, port uint16, h *ipn.TCPPortHandler, isForeground bool) {
+		if h.TCPForward == "" {
+			return // skip, this is a web item
+		}
+		hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(port))))
+		protocol := "tcp"
+		if h.TerminateTLS != "" {
+			protocol = "tls-terminated-tcp"
+		}
+		serveItems = append(serveItems, &serveItem{
+			Target: serveTarget{
+				Type:  "localHttpPort",
+				Value: fmt.Sprint(port),
+			},
+			Destination: serveDestination{
+				Protocol: protocol,
+				Port:     port,
+			},
+			ShareType:    shareType(sc, hp),
+			IsForeground: isForeground,
+		})
+	}
+
+	for port, h := range sc.TCP {
+		addTCPItem(sc, port, h, false)
+	}
+	for hp, config := range sc.Web {
+		for mount, h := range config.Handlers {
+			addWebItem(sc, hp, mount, h, false)
+		}
+	}
+	// Also add foreground items.
+	for _, sc := range sc.Foreground {
+		for port, h := range sc.TCP {
+			addTCPItem(sc, port, h, true)
+		}
+		for hp, config := range sc.Web {
+			for mount, h := range config.Handlers {
+				addWebItem(sc, hp, mount, h, true)
+			}
+		}
+	}
+
+	// Sort by ":port/path", with foreground always pushed to end.
+	slices.SortFunc(serveItems, func(a *serveItem, b *serveItem) int {
+		if a.IsForeground && !b.IsForeground {
+			return 1
+		} else if b.IsForeground && !a.IsForeground {
+			return -1
+		}
+		aKey := fmt.Sprintf("%d%s", a.Destination.Port, a.Destination.Path)
+		bKey := fmt.Sprintf("%d%s", b.Destination.Port, b.Destination.Path)
+		return strings.Compare(aKey, bKey)
+	})
+	writeJSON(w, serveItems)
+}
+
+func (s *Server) servePatchServeItem(ctx context.Context, data serveItem) error {
+	st, err := s.lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	sc, err := s.lc.GetServeConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
+
+	// First, validate the requested update.
+	if data.ShareType == "funnel" {
+		if err := ipn.CheckFunnelAccess(data.Destination.Port, st.Self); err != nil {
+			return err
+		}
+	}
+	if sc, foreground := sc.FindConfig(data.Destination.Port); sc != nil && foreground {
+		return errors.New("port already in use by foreground process") // never allowed to edit a foreground config
+	} else if sc != nil && !data.IsEdit {
+		return errors.New("port already in use")
+	} else if sc == nil && data.IsEdit {
+		return errors.New("no current configuration at port")
+	}
+
+	// Next, make the update.
+	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+	switch data.Destination.Protocol {
+	case "https", "http":
+		h := new(ipn.HTTPHandler)
+		switch data.Target.Type {
+		case "plainText":
+			h.Text = data.Target.Value
+		case "localHttpPort":
+			t, err := ipn.ExpandProxyTargetValue(data.Target.Value, []string{"http", "https", "https+insecure"}, "http")
+			if err != nil {
+				return err
+			}
+			h.Proxy = t
+		default:
+			return errors.New("unknown target type")
+		}
+		// Clean the mount path.
+		p := data.Destination.Path
+		if p == "" {
+			p = "/"
+		} else if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		c := path.Clean(p)
+		if p != c && p != c+"/" {
+			return fmt.Errorf("invalid mount point %q", p)
+		}
+		sc.SetWebHandler(h, dnsName, data.Destination.Port, p, data.Destination.Protocol == "https")
+	case "tcp", "tls-terminated-tcp":
+		t, err := ipn.ExpandProxyTargetValue(data.Target.Value, []string{"tcp"}, "tcp")
+		if err != nil {
+			return err
+		}
+		tUrl, err := url.Parse(t)
+		if err != nil {
+			return err
+		}
+		if data.IsEdit {
+			// Remove old web config at port if existant.
+			hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(data.Destination.Port))))
+			delete(sc.Web, hp)
+		}
+		sc.SetTCPForwarding(data.Destination.Port, tUrl.Host, data.Destination.Protocol == "tls-terminated-tcp", dnsName)
+	default:
+		return errors.New("unsupported protocol type")
+	}
+
+	sc.SetFunnel(dnsName, data.Destination.Port, data.ShareType == "funnel")
+	if err := s.lc.SetServeConfig(ctx, sc); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) serveDeleteServeItem(ctx context.Context, data serveItem) error {
+	sc, err := s.lc.GetServeConfig(ctx)
+	if err != nil {
+		return err
+	}
+	st, err := s.lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	if sc, foreground := sc.FindConfig(data.Destination.Port); sc == nil {
+		return errors.New("port not being served")
+	} else if foreground {
+		return errors.New("cannot delete a foreground port")
+	}
+
+	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(data.Destination.Port))))
+	if data.Destination.Path == "" {
+		data.Destination.Path = "/"
+	}
+
+	deleteWeb := func() {
+		delete(sc.Web[hp].Handlers, data.Destination.Path)
+		if len(sc.Web[hp].Handlers) == 0 { // no more handlers left
+			delete(sc.Web, hp)
+			delete(sc.AllowFunnel, hp)
+			delete(sc.TCP, data.Destination.Port)
+		}
+	}
+	deleteTCP := func() {
+		delete(sc.TCP, data.Destination.Port)
+		delete(sc.AllowFunnel, hp)
+	}
+
+	switch data.Destination.Protocol {
+	case "http":
+		if !sc.IsServingHTTP(data.Destination.Port) {
+			return errors.New("not serving http on given port")
+		}
+		deleteWeb()
+	case "https":
+		if !sc.IsServingHTTPS(data.Destination.Port) {
+			return errors.New("not serving https on given port")
+		}
+		deleteWeb()
+	case "tcp", "tls-terminated-tcp":
+		if !sc.IsTCPForwardingOnPort(data.Destination.Port) {
+			return errors.New("not serving tcp on given port")
+		}
+		deleteTCP()
+	default:
+		return errors.New("unsupported protocol")
+	}
+
+	if err := s.lc.SetServeConfig(ctx, sc); err != nil {
+		return err
+	}
+	return nil
 }
 
 // tailscaleUp starts the daemon with the provided options.
