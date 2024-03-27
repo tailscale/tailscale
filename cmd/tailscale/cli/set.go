@@ -38,24 +38,25 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 }
 
 type setArgsT struct {
-	acceptRoutes           bool
-	acceptDNS              bool
-	exitNodeIP             string
-	exitNodeAllowLANAccess bool
-	shieldsUp              bool
-	runSSH                 bool
-	runWebClient           bool
-	hostname               string
-	advertiseRoutes        string
-	advertiseDefaultRoute  bool
-	advertiseConnector     bool
-	opUser                 string
-	acceptedRisks          string
-	profileName            string
-	forceDaemon            bool
-	updateCheck            bool
-	updateApply            bool
-	postureChecking        bool
+	acceptRoutes            bool
+	acceptDNS               bool
+	exitNodeIP              string
+	exitNodeAllowLANAccess  bool
+	exitDestinationFlowLogs bool
+	shieldsUp               bool
+	runSSH                  bool
+	runWebClient            bool
+	hostname                string
+	advertiseRoutes         string
+	advertiseDefaultRoute   bool
+	advertiseConnector      bool
+	opUser                  string
+	acceptedRisks           string
+	profileName             string
+	forceDaemon             bool
+	updateCheck             bool
+	updateApply             bool
+	postureChecking         bool
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -66,6 +67,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", false, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
+	setf.BoolVar(&setArgs.exitDestinationFlowLogs, "exit-destination-flow-logs", false, "Enable exit node destination in network flow logs")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -106,16 +108,17 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 
 	maskedPrefs := &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
-			ProfileName:            setArgs.profileName,
-			RouteAll:               setArgs.acceptRoutes,
-			CorpDNS:                setArgs.acceptDNS,
-			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
-			ShieldsUp:              setArgs.shieldsUp,
-			RunSSH:                 setArgs.runSSH,
-			RunWebClient:           setArgs.runWebClient,
-			Hostname:               setArgs.hostname,
-			OperatorUser:           setArgs.opUser,
-			ForceDaemon:            setArgs.forceDaemon,
+			ProfileName:             setArgs.profileName,
+			RouteAll:                setArgs.acceptRoutes,
+			CorpDNS:                 setArgs.acceptDNS,
+			ExitNodeAllowLANAccess:  setArgs.exitNodeAllowLANAccess,
+			ExitDestinationFlowLogs: setArgs.exitDestinationFlowLogs,
+			ShieldsUp:               setArgs.shieldsUp,
+			RunSSH:                  setArgs.runSSH,
+			RunWebClient:            setArgs.runWebClient,
+			Hostname:                setArgs.hostname,
+			OperatorUser:            setArgs.opUser,
+			ForceDaemon:             setArgs.forceDaemon,
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
 				Apply: opt.NewBool(setArgs.updateApply),

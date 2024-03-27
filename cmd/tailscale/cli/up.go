@@ -723,6 +723,7 @@ func init() {
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
+	addPrefFlagMapping("exit-destination-flow-logs", "ExitDestinationFlowLogs")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -951,6 +952,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(exitNodeIPStr())
 		case "exit-node-allow-lan-access":
 			set(prefs.ExitNodeAllowLANAccess)
+		case "exit-destination-flow-logs":
+			set(prefs.ExitDestinationFlowLogs)
 		case "advertise-tags":
 			set(strings.Join(prefs.AdvertiseTags, ","))
 		case "hostname":

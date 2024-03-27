@@ -109,6 +109,9 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	// ExitDestinationFlowLogs indicates whether exit node destination is recorded in network flow logs.
+	ExitDestinationFlowLogs bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
@@ -274,33 +277,34 @@ type AppConnectorPrefs struct {
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet             bool                `json:",omitempty"`
-	RouteAllSet               bool                `json:",omitempty"`
-	AllowSingleHostsSet       bool                `json:",omitempty"`
-	ExitNodeIDSet             bool                `json:",omitempty"`
-	ExitNodeIPSet             bool                `json:",omitempty"`
-	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
-	CorpDNSSet                bool                `json:",omitempty"`
-	RunSSHSet                 bool                `json:",omitempty"`
-	RunWebClientSet           bool                `json:",omitempty"`
-	WantRunningSet            bool                `json:",omitempty"`
-	LoggedOutSet              bool                `json:",omitempty"`
-	ShieldsUpSet              bool                `json:",omitempty"`
-	AdvertiseTagsSet          bool                `json:",omitempty"`
-	HostnameSet               bool                `json:",omitempty"`
-	NotepadURLsSet            bool                `json:",omitempty"`
-	ForceDaemonSet            bool                `json:",omitempty"`
-	EggSet                    bool                `json:",omitempty"`
-	AdvertiseRoutesSet        bool                `json:",omitempty"`
-	NoSNATSet                 bool                `json:",omitempty"`
-	NetfilterModeSet          bool                `json:",omitempty"`
-	OperatorUserSet           bool                `json:",omitempty"`
-	ProfileNameSet            bool                `json:",omitempty"`
-	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
-	AppConnectorSet           bool                `json:",omitempty"`
-	PostureCheckingSet        bool                `json:",omitempty"`
-	NetfilterKindSet          bool                `json:",omitempty"`
-	DriveSharesSet            bool                `json:",omitempty"`
+	ControlURLSet              bool                `json:",omitempty"`
+	RouteAllSet                bool                `json:",omitempty"`
+	AllowSingleHostsSet        bool                `json:",omitempty"`
+	ExitDestinationFlowLogsSet bool                `json:",omitempty"`
+	ExitNodeIDSet              bool                `json:",omitempty"`
+	ExitNodeIPSet              bool                `json:",omitempty"`
+	ExitNodeAllowLANAccessSet  bool                `json:",omitempty"`
+	CorpDNSSet                 bool                `json:",omitempty"`
+	RunSSHSet                  bool                `json:",omitempty"`
+	RunWebClientSet            bool                `json:",omitempty"`
+	WantRunningSet             bool                `json:",omitempty"`
+	LoggedOutSet               bool                `json:",omitempty"`
+	ShieldsUpSet               bool                `json:",omitempty"`
+	AdvertiseTagsSet           bool                `json:",omitempty"`
+	HostnameSet                bool                `json:",omitempty"`
+	NotepadURLsSet             bool                `json:",omitempty"`
+	ForceDaemonSet             bool                `json:",omitempty"`
+	EggSet                     bool                `json:",omitempty"`
+	AdvertiseRoutesSet         bool                `json:",omitempty"`
+	NoSNATSet                  bool                `json:",omitempty"`
+	NetfilterModeSet           bool                `json:",omitempty"`
+	OperatorUserSet            bool                `json:",omitempty"`
+	ProfileNameSet             bool                `json:",omitempty"`
+	AutoUpdateSet              AutoUpdatePrefsMask `json:",omitempty"`
+	AppConnectorSet            bool                `json:",omitempty"`
+	PostureCheckingSet         bool                `json:",omitempty"`
+	NetfilterKindSet           bool                `json:",omitempty"`
+	DriveSharesSet             bool                `json:",omitempty"`
 }
 
 type AutoUpdatePrefsMask struct {
@@ -475,6 +479,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
+	if p.ExitDestinationFlowLogs {
+		sb.WriteString("exitdestinationflowlogs=true ")
+	}
 	if p.ExitNodeIP.IsValid() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
 	} else if !p.ExitNodeID.IsZero() {
@@ -545,6 +552,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
+		p.ExitDestinationFlowLogs == p2.ExitDestinationFlowLogs &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.RunWebClient == p2.RunWebClient &&

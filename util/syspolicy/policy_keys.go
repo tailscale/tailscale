@@ -67,7 +67,7 @@ const (
 	// The default is 0 unless otherwise stated.
 	LogSCMInteractions      Key = "LogSCMInteractions"
 	FlushDNSOnSessionUnlock Key = "FlushDNSOnSessionUnlock"
-
+	ExitDestinationFlowLogs Key = "ExitDestinationFlowLogs"
 	// PostureChecking indicates if posture checking is enabled and the client shall gather
 	// posture data.
 	// Key is a string value that specifies an option: "always", "never", "user-decides".

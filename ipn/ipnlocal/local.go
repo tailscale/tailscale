@@ -1150,6 +1150,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if setExitNodeID(prefs, st.NetMap) {
 		prefsChanged = true
 	}
+	if setExitDstFlowLogs(prefs) {
+		prefsChanged = true
+	}
 	if applySysPolicy(prefs) {
 		prefsChanged = true
 	}
@@ -1332,6 +1335,15 @@ func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
 		}
 	}
 
+	return anyChange
+}
+
+func setExitDstFlowLogs(prefs *ipn.Prefs) (anyChange bool) {
+	fmt.Printf("set exit dst flow pref")
+	if enable, err := syspolicy.GetBoolean(syspolicy.ExitDestinationFlowLogs, prefs.ExitDestinationFlowLogs); err == nil && prefs.ExitDestinationFlowLogs != enable {
+		prefs.ExitDestinationFlowLogs = enable
+		anyChange = true
+	}
 	return anyChange
 }
 
@@ -3247,6 +3259,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
+	setExitDstFlowLogs(newp)
 	// applySysPolicy does likewise so we can also ignore its return value.
 	applySysPolicy(newp)
 	// We do this to avoid holding the lock while doing everything else.
@@ -3627,6 +3640,8 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("wgcfg: %v", err)
 		return
 	}
+
+	cfg.NetworkLogging.ExitDestinationFlowLogs = prefs.ExitDestinationFlowLogs()
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
