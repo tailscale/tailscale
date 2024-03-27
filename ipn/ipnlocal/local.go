@@ -1142,6 +1142,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if setExitNodeID(prefs, st.NetMap) {
 		prefsChanged = true
 	}
+	if setExitNodeDstLogging(prefs) {
+		prefsChanged = true
+	}
 	if applySysPolicy(prefs) {
 		prefsChanged = true
 	}
@@ -1324,6 +1327,14 @@ func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
 		}
 	}
 
+	return anyChange
+}
+
+func setExitNodeDstLogging(prefs *ipn.Prefs) (anyChange bool) {
+	if enable, err := syspolicy.GetBoolean(syspolicy.ExitDestinationFlowLogs, prefs.ExitDestinationFlowLog); err == nil && prefs.ExitDestinationFlowLog != enable {
+		prefs.ExitDestinationFlowLog = enable
+		anyChange = true
+	}
 	return anyChange
 }
 
@@ -3239,6 +3250,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
+	setExitNodeDstLogging(newp)
 	// applySysPolicy does likewise so we can also ignore its return value.
 	applySysPolicy(newp)
 	// We do this to avoid holding the lock while doing everything else.

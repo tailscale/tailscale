@@ -109,6 +109,8 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	ExitDestinationFlowLog bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
