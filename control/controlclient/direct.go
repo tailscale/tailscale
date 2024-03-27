@@ -941,6 +941,30 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		url = strings.Replace(url, "http:", "https:", 1)
 	}
 
+	// Create a watchdog timer that breaks the connection if we don't receive a
+	// MapResponse from the network at least once every two minutes. The
+	// watchdog timer is stopped every time we receive a MapResponse (so it
+	// doesn't run when we're processing a MapResponse message, including any
+	// long-running requested operations like Debug.Sleep) and is reset whenever
+	// we go back to blocking on network reads.
+	// The watchdog timer also covers the initial request (effectively the
+	// pre-body and initial-body read timeouts) as we do not have any other
+	// keep-alive mechanism for the initial request.
+	watchdogTimer, watchdogTimedOut := c.clock.NewTimer(watchdogTimeout)
+	defer watchdogTimer.Stop()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			vlogf("netmap: ending timeout goroutine")
+			return
+		case <-watchdogTimedOut:
+			c.logf("map response long-poll timed out!")
+			cancel()
+			return
+		}
+	}()
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
 	if err != nil {
 		return err
@@ -962,6 +986,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	defer res.Body.Close()
 
 	health.NoteMapRequestHeard(request)
+	watchdogTimer.Reset(watchdogTimeout)
 
 	if nu == nil {
 		io.Copy(io.Discard, res.Body)
@@ -992,27 +1017,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 		c.expiry = nm.Expiry
 	}
-
-	// Create a watchdog timer that breaks the connection if we don't receive a
-	// MapResponse from the network at least once every two minutes. The
-	// watchdog timer is stopped every time we receive a MapResponse (so it
-	// doesn't run when we're processing a MapResponse message, including any
-	// long-running requested operations like Debug.Sleep) and is reset whenever
-	// we go back to blocking on network reads.
-	watchdogTimer, watchdogTimedOut := c.clock.NewTimer(watchdogTimeout)
-	defer watchdogTimer.Stop()
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			vlogf("netmap: ending timeout goroutine")
-			return
-		case <-watchdogTimedOut:
-			c.logf("map response long-poll timed out!")
-			cancel()
-			return
-		}
-	}()
 
 	// gotNonKeepAliveMessage is whether we've yet received a MapResponse message without
 	// KeepAlive set.
