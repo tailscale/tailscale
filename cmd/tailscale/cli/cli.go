@@ -14,13 +14,13 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
 	"tailscale.com/paths"
 	"tailscale.com/version/distro"
@@ -132,6 +132,9 @@ change in the future.
 			exitNodeCmd,
 			updateCmd,
 			whoisCmd,
+			shareCmd,
+			debugCmd,
+			configureHostCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
@@ -144,12 +147,6 @@ change in the future.
 	}
 
 	// Don't advertise these commands, but they're still explicitly available.
-	switch {
-	case slices.Contains(args, "debug"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
-	case slices.Contains(args, "share"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, shareCmd)
-	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
@@ -160,6 +157,7 @@ change in the future.
 		}
 	}
 
+	ffcomplete.Inject(rootCmd, usageFunc)
 	if err := rootCmd.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -228,7 +226,11 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 		fmt.Fprintf(&b, "SUBCOMMANDS\n")
 		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
 		for _, subcommand := range c.Subcommands {
-			fmt.Fprintf(tw, "  %s\t%s\n", subcommand.Name, subcommand.ShortHelp)
+			shortHelp, hidden := strings.CutPrefix(subcommand.ShortHelp, "HIDDEN: ")
+			if hidden {
+				continue
+			}
+			fmt.Fprintf(tw, "  %s\t%s\n", subcommand.Name, shortHelp)
 		}
 		tw.Flush()
 		fmt.Fprintf(&b, "\n")

@@ -45,9 +45,10 @@ import (
 )
 
 var debugCmd = &ffcli.Command{
-	Name:     "debug",
-	Exec:     runDebug,
-	LongHelp: `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
+	Name:      "debug",
+	Exec:      runDebug,
+	ShortHelp: "HIDDEN: debug commands",
+	LongHelp:  `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("debug")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")

@@ -22,7 +22,7 @@ const (
 
 var shareCmd = &ffcli.Command{
 	Name:      "share",
-	ShortHelp: "Share a directory with your tailnet",
+	ShortHelp: "HIDDEN: Share a directory with your tailnet",
 	ShortUsage: strings.Join([]string{
 		shareSetUsage,
 		shareRemoveUsage,

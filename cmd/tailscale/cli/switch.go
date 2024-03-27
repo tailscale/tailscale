@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/ipn"
 )
 
@@ -37,6 +38,34 @@ can use the Tailnet or the account names to switch as well.
 
 This command is currently in alpha and may change in the future.`
 	},
+}
+
+func init() {
+	ffcomplete.Args(switchCmd, func(s []string) (words []string, dir ffcomplete.ShellCompDirective, err error) {
+		_, all, err := localClient.ProfileStatus(context.Background())
+		if err != nil {
+			return nil, 0, err
+		}
+
+		seen := make(map[string]bool, 3*len(all))
+		wordfns := []func(prof ipn.LoginProfile) string{
+			func(prof ipn.LoginProfile) string { return string(prof.ID) },
+			func(prof ipn.LoginProfile) string { return prof.NetworkProfile.DomainName },
+			func(prof ipn.LoginProfile) string { return prof.Name },
+		}
+
+		for _, wordfn := range wordfns {
+			for _, prof := range all {
+				word := wordfn(prof)
+				if seen[word] {
+					continue
+				}
+				seen[word] = true
+				words = append(words, fmt.Sprintf("%s\tid: %s, tailnet: %s, account: %s", word, prof.ID, prof.NetworkProfile.DomainName, prof.Name))
+			}
+		}
+		return words, ffcomplete.ShellCompDirectiveNoFileComp, nil
+	})
 }
 
 var switchArgs struct {

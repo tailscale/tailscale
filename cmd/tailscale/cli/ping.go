@@ -17,6 +17,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
@@ -57,6 +58,24 @@ relay node.
 		fs.IntVar(&pingArgs.size, "size", 0, "size of the ping message (disco pings only). 0 for minimum size.")
 		return fs
 	})(),
+}
+
+func init() {
+	ffcomplete.Args(pingCmd, func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
+		if len(args) > 1 {
+			return nil, ffcomplete.ShellCompDirectiveNoFileComp, nil
+		}
+
+		st, err := localClient.Status(context.Background())
+		if err != nil {
+			return nil, 0, err
+		}
+		nodes := make([]string, 0, len(st.Peer))
+		for _, node := range st.Peer {
+			nodes = append(nodes, strings.TrimSuffix(node.DNSName, "."))
+		}
+		return nodes, ffcomplete.ShellCompDirectiveNoFileComp, nil
+	})
 }
 
 var pingArgs struct {
