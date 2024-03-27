@@ -497,9 +497,9 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 		}
 		h.Text = text
 	case filepath.IsAbs(target):
-		if version.IsSandboxedMacOS() {
-			// don't allow path serving for now on macOS (2022-11-15)
-			return errors.New("path serving is not supported if sandboxed on macOS")
+		if version.IsMacAppStore() || version.IsMacSys() {
+			// The Tailscale network extension cannot serve arbitrary paths on macOS due to sandbox restrictions (2024-03-26)
+			return errors.New("Path serving is not supported on macOS due to sandbox restrictions. To use Tailscale Serve on macOS, switch to the open-source tailscaled distribution. See https://tailscale.com/kb/1065/macos-variants for more information.")
 		}
 
 		target = filepath.Clean(target)
