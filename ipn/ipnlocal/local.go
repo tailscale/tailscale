@@ -3620,6 +3620,8 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
+	cfg.NetworkLogging.EnableExitNodeDstLog = // prefs here 
+
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 
