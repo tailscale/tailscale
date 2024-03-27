@@ -35,8 +35,12 @@ type ForEachAddrOpts struct {
 // every time a new IP is discovered. The Probes returned will be closed if an
 // IP address is no longer in the DNS record for the given hostname. This can
 // be used to healthcheck every IP address that a hostname resolves to.
-func ForEachAddr(host string, makeProbes func(netip.Addr) []*Probe, opts ForEachAddrOpts) ProbeFunc {
-	return makeForEachAddr(host, makeProbes, opts).run
+func ForEachAddr(host string, makeProbes func(netip.Addr) []*Probe, opts ForEachAddrOpts) ProbeClass {
+	feap := makeForEachAddr(host, makeProbes, opts)
+	return ProbeClass{
+		Probe: feap.run,
+		Class: "dns_each_addr",
+	}
 }
 
 func makeForEachAddr(host string, makeProbes func(netip.Addr) []*Probe, opts ForEachAddrOpts) *forEachAddrProbe {
