@@ -267,6 +267,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 			logger:                zlog.Named("service-reconciler"),
 			isDefaultLoadBalancer: isDefaultLoadBalancer,
 			recorder:              eventRecorder,
+			tsNamespace:           tsNamespace,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create service reconciler: %v", err)
