@@ -9,6 +9,7 @@ package logpolicy
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -443,22 +444,47 @@ func tryFixLogStateLocation(dir, cmdname string, logf logger.Logf) {
 	}
 }
 
-// New returns a new log policy (a logger and its instance ID) for a given
-// collection name.
-//
-// The netMon parameter is optional; if non-nil it's used to do faster
-// interface lookups.
-//
-// The logf parameter is optional; if non-nil, information logs (e.g. when
-// migrating state) are sent to that logger, and global changes to the log
-// package are avoided. If nil, logs will be printed using log.Printf.
+// Deprecated: Use [Options.New] instead.
 func New(collection string, netMon *netmon.Monitor, logf logger.Logf) *Policy {
-	return NewWithConfigPath(collection, "", "", netMon, logf)
+	return Options{Collection: collection, NetMon: netMon, Logf: logf}.New()
 }
 
-// NewWithConfigPath is identical to New, but uses the specified directory and
-// command name. If either is empty, it derives them automatically.
+// Deprecated: Use [Options.New] instead.
 func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, logf logger.Logf) *Policy {
+	return Options{Collection: collection, Dir: dir, CmdName: cmdName, NetMon: netMon, Logf: logf}.New()
+}
+
+// Options is used to construct a [Policy].
+type Options struct {
+	// Collection is a required collection to upload logs under.
+	// Collection is a namespace for the type logs.
+	// For example, logs for a node use "tailnode.log.tailscale.io".
+	Collection string
+
+	// Dir is an optional directory to store the log configuration.
+	// If empty, [LogsDir] is used.
+	Dir string
+
+	// CmdName is an optional name of the current binary.
+	// If empty, [version.CmdName] is used.
+	CmdName string
+
+	// NetMon is an optional parameter for monitoring.
+	// If non-nil, it's used to do faster interface lookups.
+	NetMon *netmon.Monitor
+
+	// Logf is an optional logger to use.
+	// If nil, [log.Printf] will be used instead.
+	Logf logger.Logf
+
+	// HTTPC is an optional client to use upload logs.
+	// If nil, [TransportOptions.New] is used to construct a new client
+	// with that particular transport sending logs to the default logs server.
+	HTTPC *http.Client
+}
+
+// New returns a new log policy (a logger and its instance ID).
+func (opts Options) New() *Policy {
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -481,13 +507,16 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		earlyErrBuf.WriteByte('\n')
 	}
 
+	dir := opts.Dir
 	if dir == "" {
 		dir = LogsDir(earlyLogf)
 	}
+	cmdName := opts.CmdName
 	if cmdName == "" {
 		cmdName = version.CmdName()
 	}
 
+	logf := opts.Logf
 	useStdLogger := logf == nil
 	if useStdLogger {
 		logf = log.Printf
@@ -541,9 +570,9 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 	if err != nil {
 		earlyLogf("logpolicy.ConfigFromFile %v: %v", cfgPath, err)
 	}
-	if err := newc.Validate(collection); err != nil {
+	if err := newc.Validate(opts.Collection); err != nil {
 		earlyLogf("logpolicy.Config.Validate for %v: %v", cfgPath, err)
-		newc = NewConfig(collection)
+		newc = NewConfig(opts.Collection)
 		if err := newc.Save(cfgPath); err != nil {
 			earlyLogf("logpolicy.Config.Save for %v: %v", cfgPath, err)
 		}
@@ -554,9 +583,8 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		PrivateID:    newc.PrivateID,
 		Stderr:       logWriter{console},
 		CompressLogs: true,
-		HTTPC:        &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, netMon, logf)},
 	}
-	if collection == logtail.CollectionNode {
+	if opts.Collection == logtail.CollectionNode {
 		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
 		conf.IncludeProcID = true
 		conf.IncludeProcSequence = true
@@ -565,11 +593,13 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 	if envknob.NoLogsNoSupport() || testenv.InTest() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
-	} else if val := getLogTarget(); val != "" {
+	} else if val := getLogTarget(); val != "" && opts.HTTPC == nil {
 		logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		conf.BaseURL = val
 		u, _ := url.Parse(val)
-		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, logf)}
+		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, opts.NetMon, logf)}
+	} else if opts.HTTPC == nil {
+		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, opts.NetMon, logf)}
 	}
 
 	filchOptions := filch.Options{
@@ -734,19 +764,40 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 	return c, err
 }
 
-// NewLogtailTransport returns an HTTP Transport particularly suited to uploading
-// logs to the given host name. See DialContext for details on how it works.
-//
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-//
-// The logf parameter is optional; if non-nil, logs are printed using the
-// provided function; if nil, log.Printf will be used instead.
+// Deprecated: Use [TransportOptions.New] instead.
 func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) http.RoundTripper {
+	return TransportOptions{Host: host, NetMon: netMon, Logf: logf}.New()
+}
+
+// TransportOptions is used to construct an [http.RoundTripper].
+type TransportOptions struct {
+	// Host is the optional hostname of the logs server.
+	// If empty, then [logtail.DefaultHost] is used.
+	Host string
+
+	// NetMon is an optional parameter for monitoring.
+	// If non-nil, it's used to do faster interface lookups.
+	NetMon *netmon.Monitor
+
+	// Logf is an optional logger to use.
+	// If nil, [log.Printf] will be used instead.
+	Logf logger.Logf
+
+	// TLSClientConfig is an optional TLS configuration to use.
+	TLSClientConfig *tls.Config
+}
+
+// New returns an HTTP Transport particularly suited to uploading
+// logs to the given host name. See [DialContext] for details on how it works.
+func (opts TransportOptions) New() http.RoundTripper {
 	if testenv.InTest() {
 		return noopPretendSuccessTransport{}
 	}
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if opts.TLSClientConfig != nil {
+		tr.TLSClientConfig = opts.TLSClientConfig
+	}
 
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
 	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
@@ -757,10 +808,11 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) 
 	tr.DisableCompression = true
 
 	// Log whenever we dial:
+	logf := opts.Logf
 	if logf == nil {
 		logf = log.Printf
 	}
-	tr.DialContext = MakeDialFunc(netMon, logf)
+	tr.DialContext = MakeDialFunc(opts.NetMon, logf)
 
 	// We're uploading logs ideally infrequently, with specific timing that will
 	// change over time. Try to keep the connection open, to avoid repeatedly
@@ -782,6 +834,7 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) 
 		tr.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}
 	}
 
+	host := cmp.Or(opts.Host, logtail.DefaultHost)
 	tr.TLSClientConfig = tlsdial.Config(host, tr.TLSClientConfig)
 
 	return tr
