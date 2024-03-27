@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"maps"
 	"math/rand"
 	"sync"
 	"time"
@@ -19,10 +20,33 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// ProbeFunc is a function that probes something and reports whether
-// the probe succeeded. The provided context's deadline must be obeyed
-// for correct probe scheduling.
-type ProbeFunc func(context.Context) error
+// ProbeClass defines a probe of a specific type: a probing function that will
+// be regularly ran, and metric labels that will be added automatically to all
+// probes using this class.
+type ProbeClass struct {
+	// Probe is a function that probes something and reports whether the Probe
+	// succeeded. The provided context's deadline must be obeyed for correct
+	// Probe scheduling.
+	Probe func(context.Context) error
+
+	// Class defines a user-facing name of the probe class that will be used
+	// in the `class` metric label.
+	Class string
+
+	// Labels defines a set of metric labels that will be added to all metrics
+	// exposed by this probe class.
+	Labels Labels
+
+	// Metrics allows a probe class to export custom Metrics. Can be nil.
+	Metrics func(prometheus.Labels) []prometheus.Metric
+}
+
+// FuncProbe wraps a simple probe function in a ProbeClass.
+func FuncProbe(fn func(context.Context) error) ProbeClass {
+	return ProbeClass{
+		Probe: fn,
+	}
+}
 
 // a Prober manages a set of probes and keeps track of their results.
 type Prober struct {
@@ -61,17 +85,23 @@ func newForTest(now func() time.Time, newTicker func(time.Duration) ticker) *Pro
 	return p
 }
 
-// Run executes fun every interval, and exports probe results under probeName.
+// Run executes probe class function every interval, and exports probe results under probeName.
 //
 // Registering a probe under an already-registered name panics.
-func (p *Prober) Run(name string, interval time.Duration, labels map[string]string, fun ProbeFunc) *Probe {
+func (p *Prober) Run(name string, interval time.Duration, labels Labels, pc ProbeClass) *Probe {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, ok := p.probes[name]; ok {
 		panic(fmt.Sprintf("probe named %q already registered", name))
 	}
 
-	l := prometheus.Labels{"name": name}
+	l := prometheus.Labels{
+		"name":  name,
+		"class": pc.Class,
+	}
+	for k, v := range pc.Labels {
+		l[k] = v
+	}
 	for k, v := range labels {
 		l[k] = v
 	}
@@ -84,10 +114,11 @@ func (p *Prober) Run(name string, interval time.Duration, labels map[string]stri
 		stopped: make(chan struct{}),
 
 		name:         name,
-		doProbe:      fun,
+		probeClass:   pc,
 		interval:     interval,
 		initialDelay: initialDelay(name, interval),
 		metrics:      prometheus.NewRegistry(),
+		metricLabels: l,
 		mInterval:    prometheus.NewDesc("interval_secs", "Probe interval in seconds", nil, l),
 		mStartTime:   prometheus.NewDesc("start_secs", "Latest probe start time (seconds since epoch)", nil, l),
 		mEndTime:     prometheus.NewDesc("end_secs", "Latest probe end time (seconds since epoch)", nil, l),
@@ -177,7 +208,7 @@ type Probe struct {
 	stopped chan struct{}      // closed when shutdown is complete
 
 	name         string
-	doProbe      ProbeFunc
+	probeClass   ProbeClass
 	interval     time.Duration
 	initialDelay time.Duration
 	tick         ticker
@@ -185,14 +216,15 @@ type Probe struct {
 	// metrics is a Prometheus metrics registry for metrics exported by this probe.
 	// Using a separate registry allows cleanly removing metrics exported by this
 	// probe when it gets unregistered.
-	metrics    *prometheus.Registry
-	mInterval  *prometheus.Desc
-	mStartTime *prometheus.Desc
-	mEndTime   *prometheus.Desc
-	mLatency   *prometheus.Desc
-	mResult    *prometheus.Desc
-	mAttempts  *prometheus.CounterVec
-	mSeconds   *prometheus.CounterVec
+	metrics      *prometheus.Registry
+	metricLabels prometheus.Labels
+	mInterval    *prometheus.Desc
+	mStartTime   *prometheus.Desc
+	mEndTime     *prometheus.Desc
+	mLatency     *prometheus.Desc
+	mResult      *prometheus.Desc
+	mAttempts    *prometheus.CounterVec
+	mSeconds     *prometheus.CounterVec
 
 	mu        sync.Mutex
 	start     time.Time     // last time doProbe started
@@ -268,7 +300,7 @@ func (p *Probe) run() {
 	ctx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
 
-	err := p.doProbe(ctx)
+	err := p.probeClass.Probe(ctx)
 	p.recordEnd(start, err)
 	if err != nil {
 		log.Printf("probe %s: %v", p.name, err)
@@ -349,6 +381,11 @@ func (p *Probe) Describe(ch chan<- *prometheus.Desc) {
 	ch <- p.mLatency
 	p.mAttempts.Describe(ch)
 	p.mSeconds.Describe(ch)
+	if p.probeClass.Metrics != nil {
+		for _, m := range p.probeClass.Metrics(p.metricLabels) {
+			ch <- m.Desc()
+		}
+	}
 }
 
 // Collect implements prometheus.Collector.
@@ -373,6 +410,11 @@ func (p *Probe) Collect(ch chan<- prometheus.Metric) {
 	}
 	p.mAttempts.Collect(ch)
 	p.mSeconds.Collect(ch)
+	if p.probeClass.Metrics != nil {
+		for _, m := range p.probeClass.Metrics(p.metricLabels) {
+			ch <- m
+		}
+	}
 }
 
 // ticker wraps a time.Ticker in a way that can be faked for tests.
@@ -400,4 +442,13 @@ func initialDelay(seed string, interval time.Duration) time.Duration {
 	fmt.Fprint(h, seed)
 	r := rand.New(rand.NewSource(int64(h.Sum64()))).Float64()
 	return time.Duration(float64(interval) * r)
+}
+
+// Labels is a set of metric labels used by a prober.
+type Labels map[string]string
+
+func (l Labels) With(k, v string) Labels {
+	new := maps.Clone(l)
+	new[k] = v
+	return new
 }

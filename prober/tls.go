@@ -27,22 +27,28 @@ const expiresSoon = 7 * 24 * time.Hour // 7 days from now
 // The ProbeFunc connects to a hostPort (host:port string), does a TLS
 // handshake, verifies that the hostname matches the presented certificate,
 // checks certificate validity time and OCSP revocation status.
-func TLS(hostPort string) ProbeFunc {
-	return func(ctx context.Context) error {
-		certDomain, _, err := net.SplitHostPort(hostPort)
-		if err != nil {
-			return err
-		}
-		return probeTLS(ctx, certDomain, hostPort)
+func TLS(hostPort string) ProbeClass {
+	return ProbeClass{
+		Probe: func(ctx context.Context) error {
+			certDomain, _, err := net.SplitHostPort(hostPort)
+			if err != nil {
+				return err
+			}
+			return probeTLS(ctx, certDomain, hostPort)
+		},
+		Class: "tls",
 	}
 }
 
 // TLSWithIP is like TLS, but dials the provided dialAddr instead
 // of using DNS resolution. The certDomain is the expected name in
 // the cert (and the SNI name to send).
-func TLSWithIP(certDomain string, dialAddr netip.AddrPort) ProbeFunc {
-	return func(ctx context.Context) error {
-		return probeTLS(ctx, certDomain, dialAddr.String())
+func TLSWithIP(certDomain string, dialAddr netip.AddrPort) ProbeClass {
+	return ProbeClass{
+		Probe: func(ctx context.Context) error {
+			return probeTLS(ctx, certDomain, dialAddr.String())
+		},
+		Class: "tls",
 	}
 }
 

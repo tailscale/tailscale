@@ -57,9 +57,9 @@ func TestForEachAddr(t *testing.T) {
 		registered = append(registered, addr)
 
 		// Return a probe that does nothing; we don't care about what this does.
-		probe := p.Run(fmt.Sprintf("website/%s", addr), probeInterval, nil, func(_ context.Context) error {
+		probe := p.Run(fmt.Sprintf("website/%s", addr), probeInterval, nil, FuncProbe(func(_ context.Context) error {
 			return nil
-		})
+		}))
 		return []*Probe{probe}
 	}
 

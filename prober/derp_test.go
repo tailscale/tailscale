@@ -60,16 +60,16 @@ func TestDerpProber(t *testing.T) {
 		p:            p,
 		derpMapURL:   srv.URL,
 		tlsInterval:  time.Second,
-		tlsProbeFn:   func(_ string) ProbeFunc { return func(context.Context) error { return nil } },
+		tlsProbeFn:   func(_ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
 		udpInterval:  time.Second,
-		udpProbeFn:   func(_ string, _ int) ProbeFunc { return func(context.Context) error { return nil } },
+		udpProbeFn:   func(_ string, _ int) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
 		meshInterval: time.Second,
-		meshProbeFn:  func(_, _ string) ProbeFunc { return func(context.Context) error { return nil } },
+		meshProbeFn:  func(_, _ string) ProbeClass { return FuncProbe(func(context.Context) error { return nil }) },
 		nodes:        make(map[string]*tailcfg.DERPNode),
 		probes:       make(map[string]*Probe),
 	}
-	if err := dp.ProbeMap(context.Background()); err != nil {
-		t.Errorf("unexpected ProbeMap() error: %s", err)
+	if err := dp.probeMapFn(context.Background()); err != nil {
+		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
 	if len(dp.nodes) != 2 || dp.nodes["n1"] == nil || dp.nodes["n2"] == nil {
 		t.Errorf("unexpected nodes: %+v", dp.nodes)
@@ -89,8 +89,8 @@ func TestDerpProber(t *testing.T) {
 		IPv4:     "1.1.1.1",
 		IPv6:     "::1",
 	})
-	if err := dp.ProbeMap(context.Background()); err != nil {
-		t.Errorf("unexpected ProbeMap() error: %s", err)
+	if err := dp.probeMapFn(context.Background()); err != nil {
+		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
 	if len(dp.nodes) != 3 {
 		t.Errorf("unexpected nodes: %+v", dp.nodes)
@@ -102,8 +102,8 @@ func TestDerpProber(t *testing.T) {
 
 	// Remove 2 nodes and check that probes have been destroyed.
 	dm.Regions[0].Nodes = dm.Regions[0].Nodes[:1]
-	if err := dp.ProbeMap(context.Background()); err != nil {
-		t.Errorf("unexpected ProbeMap() error: %s", err)
+	if err := dp.probeMapFn(context.Background()); err != nil {
+		t.Errorf("unexpected probeMapFn() error: %s", err)
 	}
 	if len(dp.nodes) != 1 {
 		t.Errorf("unexpected nodes: %+v", dp.nodes)

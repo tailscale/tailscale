@@ -51,10 +51,10 @@ func TestProberTiming(t *testing.T) {
 		}
 	}
 
-	p.Run("test-probe", probeInterval, nil, func(context.Context) error {
+	p.Run("test-probe", probeInterval, nil, FuncProbe(func(context.Context) error {
 		invoked <- struct{}{}
 		return nil
-	})
+	}))
 
 	waitActiveProbes(t, p, clk, 1)
 
@@ -93,10 +93,10 @@ func TestProberTimingSpread(t *testing.T) {
 		}
 	}
 
-	probe := p.Run("test-spread-probe", probeInterval, nil, func(context.Context) error {
+	probe := p.Run("test-spread-probe", probeInterval, nil, FuncProbe(func(context.Context) error {
 		invoked <- struct{}{}
 		return nil
-	})
+	}))
 
 	waitActiveProbes(t, p, clk, 1)
 
@@ -156,12 +156,12 @@ func TestProberRun(t *testing.T) {
 	var probes []*Probe
 
 	for i := 0; i < startingProbes; i++ {
-		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, func(context.Context) error {
+		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, FuncProbe(func(context.Context) error {
 			mu.Lock()
 			defer mu.Unlock()
 			cnt++
 			return nil
-		}))
+		})))
 	}
 
 	checkCnt := func(want int) {
@@ -207,13 +207,13 @@ func TestPrometheus(t *testing.T) {
 	p := newForTest(clk.Now, clk.NewTicker).WithMetricNamespace("probe")
 
 	var succeed atomic.Bool
-	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
+	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, FuncProbe(func(context.Context) error {
 		clk.Advance(aFewMillis)
 		if succeed.Load() {
 			return nil
 		}
 		return errors.New("failing, as instructed by test")
-	})
+	}))
 
 	waitActiveProbes(t, p, clk, 1)
 
@@ -221,16 +221,16 @@ func TestPrometheus(t *testing.T) {
 		want := fmt.Sprintf(`
 # HELP probe_interval_secs Probe interval in seconds
 # TYPE probe_interval_secs gauge
-probe_interval_secs{label="value",name="testprobe"} %f
+probe_interval_secs{class="",label="value",name="testprobe"} %f
 # HELP probe_start_secs Latest probe start time (seconds since epoch)
 # TYPE probe_start_secs gauge
-probe_start_secs{label="value",name="testprobe"} %d
+probe_start_secs{class="",label="value",name="testprobe"} %d
 # HELP probe_end_secs Latest probe end time (seconds since epoch)
 # TYPE probe_end_secs gauge
-probe_end_secs{label="value",name="testprobe"} %d
+probe_end_secs{class="",label="value",name="testprobe"} %d
 # HELP probe_result Latest probe result (1 = success, 0 = failure)
 # TYPE probe_result gauge
-probe_result{label="value",name="testprobe"} 0
+probe_result{class="",label="value",name="testprobe"} 0
 `, probeInterval.Seconds(), epoch.Unix(), epoch.Add(aFewMillis).Unix())
 		return testutil.GatherAndCompare(p.metrics, strings.NewReader(want),
 			"probe_interval_secs", "probe_start_secs", "probe_end_secs", "probe_result")
@@ -248,19 +248,19 @@ probe_result{label="value",name="testprobe"} 0
 		want := fmt.Sprintf(`
 # HELP probe_interval_secs Probe interval in seconds
 # TYPE probe_interval_secs gauge
-probe_interval_secs{label="value",name="testprobe"} %f
+probe_interval_secs{class="",label="value",name="testprobe"} %f
 # HELP probe_start_secs Latest probe start time (seconds since epoch)
 # TYPE probe_start_secs gauge
-probe_start_secs{label="value",name="testprobe"} %d
+probe_start_secs{class="",label="value",name="testprobe"} %d
 # HELP probe_end_secs Latest probe end time (seconds since epoch)
 # TYPE probe_end_secs gauge
-probe_end_secs{label="value",name="testprobe"} %d
+probe_end_secs{class="",label="value",name="testprobe"} %d
 # HELP probe_latency_millis Latest probe latency (ms)
 # TYPE probe_latency_millis gauge
-probe_latency_millis{label="value",name="testprobe"} %d
+probe_latency_millis{class="",label="value",name="testprobe"} %d
 # HELP probe_result Latest probe result (1 = success, 0 = failure)
 # TYPE probe_result gauge
-probe_result{label="value",name="testprobe"} 1
+probe_result{class="",label="value",name="testprobe"} 1
 `, probeInterval.Seconds(), start.Unix(), end.Unix(), aFewMillis.Milliseconds())
 		return testutil.GatherAndCompare(p.metrics, strings.NewReader(want),
 			"probe_interval_secs", "probe_start_secs", "probe_end_secs", "probe_latency_millis", "probe_result")
@@ -274,14 +274,14 @@ func TestOnceMode(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
 
-	p.Run("probe1", probeInterval, nil, func(context.Context) error { return nil })
-	p.Run("probe2", probeInterval, nil, func(context.Context) error { return fmt.Errorf("error2") })
-	p.Run("probe3", probeInterval, nil, func(context.Context) error {
-		p.Run("probe4", probeInterval, nil, func(context.Context) error {
+	p.Run("probe1", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	p.Run("probe2", probeInterval, nil, FuncProbe(func(context.Context) error { return fmt.Errorf("error2") }))
+	p.Run("probe3", probeInterval, nil, FuncProbe(func(context.Context) error {
+		p.Run("probe4", probeInterval, nil, FuncProbe(func(context.Context) error {
 			return fmt.Errorf("error4")
-		})
+		}))
 		return nil
-	})
+	}))
 
 	p.Wait()
 	wantCount := 4

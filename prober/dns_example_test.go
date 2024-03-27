@@ -89,11 +89,13 @@ func ExampleForEachAddr() {
 	<-sigCh
 }
 
-func probeLogWrapper(logf logger.Logf, pf prober.ProbeFunc) prober.ProbeFunc {
-	return func(ctx context.Context) error {
-		logf("starting probe")
-		err := pf(ctx)
-		logf("probe finished with %v", err)
-		return err
+func probeLogWrapper(logf logger.Logf, pc prober.ProbeClass) prober.ProbeClass {
+	return prober.ProbeClass{
+		Probe: func(ctx context.Context) error {
+			logf("starting probe")
+			err := pc.Probe(ctx)
+			logf("probe finished with %v", err)
+			return err
+		},
 	}
 }

@@ -10,9 +10,9 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"errors"
+	"expvar"
 	"fmt"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/stun"
@@ -42,11 +43,14 @@ type derpProber struct {
 	bwInterval  time.Duration
 	bwProbeSize int64
 
-	// Probe functions that can be overridden for testing.
-	tlsProbeFn  func(string) ProbeFunc
-	udpProbeFn  func(string, int) ProbeFunc
-	meshProbeFn func(string, string) ProbeFunc
-	bwProbeFn   func(string, string, int64) ProbeFunc
+	// Probe class for fetching & updating the DERP map.
+	ProbeMap ProbeClass
+
+	// Probe classes for probing individual derpers.
+	tlsProbeFn  func(string) ProbeClass
+	udpProbeFn  func(string, int) ProbeClass
+	meshProbeFn func(string, string) ProbeClass
+	bwProbeFn   func(string, string, int64) ProbeClass
 
 	sync.Mutex
 	lastDERPMap   *tailcfg.DERPMap
@@ -100,6 +104,10 @@ func DERP(p *Prober, derpMapURL string, opts ...DERPOpt) (*derpProber, error) {
 		nodes:      make(map[string]*tailcfg.DERPNode),
 		probes:     make(map[string]*Probe),
 	}
+	d.ProbeMap = ProbeClass{
+		Probe: d.probeMapFn,
+		Class: "derp_map",
+	}
 	for _, o := range opts {
 		o(d)
 	}
@@ -109,10 +117,10 @@ func DERP(p *Prober, derpMapURL string, opts ...DERPOpt) (*derpProber, error) {
 	return d, nil
 }
 
-// ProbeMap fetches the DERPMap and creates/destroys probes for each
+// probeMapFn fetches the DERPMap and creates/destroys probes for each
 // DERP server as necessary. It should get regularly executed as a
 // probe function itself.
-func (d *derpProber) ProbeMap(ctx context.Context) error {
+func (d *derpProber) probeMapFn(ctx context.Context) error {
 	if err := d.updateMap(ctx); err != nil {
 		return err
 	}
@@ -123,7 +131,7 @@ func (d *derpProber) ProbeMap(ctx context.Context) error {
 
 	for _, region := range d.lastDERPMap.Regions {
 		for _, server := range region.Nodes {
-			labels := map[string]string{
+			labels := Labels{
 				"region":    region.RegionCode,
 				"region_id": strconv.Itoa(region.RegionID),
 				"hostname":  server.HostName,
@@ -169,18 +177,11 @@ func (d *derpProber) ProbeMap(ctx context.Context) error {
 				}
 
 				if d.bwInterval > 0 && d.bwProbeSize > 0 {
-					bwLabels := maps.Clone(labels)
-					bwLabels["probe_size_bytes"] = fmt.Sprintf("%d", d.bwProbeSize)
-					if server.Name == to.Name {
-						bwLabels["derp_path"] = "single"
-					} else {
-						bwLabels["derp_path"] = "mesh"
-					}
 					n := fmt.Sprintf("derp/%s/%s/%s/bw", region.RegionCode, server.Name, to.Name)
 					wantProbes[n] = true
 					if d.probes[n] == nil {
 						log.Printf("adding DERP bandwidth probe for %s->%s (%s) %v bytes every %v", server.Name, to.Name, region.RegionName, d.bwProbeSize, d.bwInterval)
-						d.probes[n] = d.p.Run(n, d.bwInterval, bwLabels, d.bwProbeFn(server.Name, to.Name, d.bwProbeSize))
+						d.probes[n] = d.p.Run(n, d.bwInterval, labels, d.bwProbeFn(server.Name, to.Name, d.bwProbeSize))
 					}
 				}
 			}
@@ -198,32 +199,55 @@ func (d *derpProber) ProbeMap(ctx context.Context) error {
 	return nil
 }
 
-// probeMesh returs a probe func that sends a test packet through a pair of DERP
+// probeMesh returs a probe class that sends a test packet through a pair of DERP
 // servers (or just one server, if 'from' and 'to' are the same). 'from' and 'to'
 // are expected to be names (DERPNode.Name) of two DERP servers in the same region.
-func (d *derpProber) probeMesh(from, to string) ProbeFunc {
-	return func(ctx context.Context) error {
-		fromN, toN, err := d.getNodePair(from, to)
-		if err != nil {
-			return err
-		}
+func (d *derpProber) probeMesh(from, to string) ProbeClass {
+	derpPath := "mesh"
+	if from == to {
+		derpPath = "single"
+	}
+	return ProbeClass{
+		Probe: func(ctx context.Context) error {
+			fromN, toN, err := d.getNodePair(from, to)
+			if err != nil {
+				return err
+			}
 
-		dm := d.lastDERPMap
-		return derpProbeNodePair(ctx, dm, fromN, toN)
+			dm := d.lastDERPMap
+			return derpProbeNodePair(ctx, dm, fromN, toN)
+		},
+		Class:  "derp_mesh",
+		Labels: Labels{"derp_path": derpPath},
 	}
 }
 
-// probeBandwidth returs a probe func that sends a payload of a given size
+// probeBandwidth returs a probe class that sends a payload of a given size
 // through a pair of DERP servers (or just one server, if 'from' and 'to' are
 // the same). 'from' and 'to' are expected to be names (DERPNode.Name) of two
 // DERP servers in the same region.
-func (d *derpProber) probeBandwidth(from, to string, size int64) ProbeFunc {
-	return func(ctx context.Context) error {
-		fromN, toN, err := d.getNodePair(from, to)
-		if err != nil {
-			return err
-		}
-		return derpProbeBandwidth(ctx, d.lastDERPMap, fromN, toN, size)
+func (d *derpProber) probeBandwidth(from, to string, size int64) ProbeClass {
+	derpPath := "mesh"
+	if from == to {
+		derpPath = "single"
+	}
+	var transferTime expvar.Float
+	return ProbeClass{
+		Probe: func(ctx context.Context) error {
+			fromN, toN, err := d.getNodePair(from, to)
+			if err != nil {
+				return err
+			}
+			return derpProbeBandwidth(ctx, d.lastDERPMap, fromN, toN, size, &transferTime)
+		},
+		Class:  "derp_bw",
+		Labels: Labels{"derp_path": derpPath},
+		Metrics: func(l prometheus.Labels) []prometheus.Metric {
+			return []prometheus.Metric{
+				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_bw_probe_size_bytes", "Payload size of the bandwidth prober", nil, l), prometheus.GaugeValue, float64(size)),
+				prometheus.MustNewConstMetric(prometheus.NewDesc("derp_bw_transfer_time_seconds_total", "Time it took to transfer data", nil, l), prometheus.CounterValue, transferTime.Value()),
+			}
+		},
 	}
 }
 
@@ -289,9 +313,12 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 	return nil
 }
 
-func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeFunc {
-	return func(ctx context.Context) error {
-		return derpProbeUDP(ctx, ipaddr, port)
+func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeClass {
+	return ProbeClass{
+		Probe: func(ctx context.Context) error {
+			return derpProbeUDP(ctx, ipaddr, port)
+		},
+		Class: "derp_udp",
 	}
 }
 
@@ -347,7 +374,7 @@ func derpProbeUDP(ctx context.Context, ipStr string, port int) error {
 
 // derpProbeBandwidth sends a payload of a given size between two local
 // DERP clients connected to two DERP servers.
-func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode, size int64) (err error) {
+func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.DERPNode, size int64, transferTime *expvar.Float) (err error) {
 	// This probe uses clients with isProber=false to avoid spamming the derper logs with every packet
 	// sent by the bandwidth probe.
 	fromc, err := newConn(ctx, dm, from, false)
@@ -367,6 +394,9 @@ func derpProbeBandwidth(ctx context.Context, dm *tailcfg.DERPMap, from, to *tail
 	if from.Name != to.Name {
 		time.Sleep(100 * time.Millisecond) // pretty arbitrary
 	}
+
+	start := time.Now()
+	defer func() { transferTime.Add(time.Since(start).Seconds()) }()
 
 	if err := runDerpProbeNodePair(ctx, from, to, fromc, toc, size); err != nil {
 		// Record pubkeys on failed probes to aid investigation.
