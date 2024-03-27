@@ -93,6 +93,12 @@ func (m *Manager) Set(cfg Config) error {
 	if err := m.resolver.SetConfig(rcfg); err != nil {
 		return err
 	}
+
+	if err != nil {
+		m.logf("err: %s", err)
+		return err
+	}
+
 	if err := m.os.SetDNS(ocfg); err != nil {
 		health.SetDNSOSHealth(err)
 		return err
@@ -249,7 +255,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// builds.
 		} else {
 			health.SetDNSOSHealth(err)
-			return resolver.Config{}, OSConfig{}, err
+			return rcfg, OSConfig{}, err
 		}
 	}
 
