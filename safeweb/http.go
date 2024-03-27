@@ -199,8 +199,8 @@ func NewServer(config Config) (*Server, error) {
 
 // RedirectHTTP returns a handler that redirects all incoming HTTP requests to
 // the provided fully qualified domain name (FQDN).
-func (s *Server) RedirectHTTP(fqdn string) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (s *Server) RedirectHTTP(fqdn string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		new := url.URL{
 			Scheme:   "https",
 			Host:     fqdn,
@@ -209,7 +209,7 @@ func (s *Server) RedirectHTTP(fqdn string) func(w http.ResponseWriter, r *http.R
 		}
 
 		http.Redirect(w, r, new.String(), http.StatusMovedPermanently)
-	}
+	})
 }
 
 // Serve starts the server and listens on the provided listener. It will block
