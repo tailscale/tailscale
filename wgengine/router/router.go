@@ -80,8 +80,13 @@ type Config struct {
 	// callback. If zero, the MTU is unchanged.
 	NewMTU int
 
+	// SubnetRoutes is the list of subnets that this node is
+	// advertising to other Tailscale nodes.
+	// As of 2023-10-11, this field is only used for network
+	// flow logging and is otherwise ignored.
+	SubnetRoutes []netip.Prefix
+
 	// Linux-only things below, ignored on other platforms.
-	SubnetRoutes     []netip.Prefix         // subnets being advertised to other Tailscale nodes
 	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
 	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules
 	NetfilterKind    string                 // what kind of netfilter to use (nftables, iptables)
