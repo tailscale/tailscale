@@ -3148,6 +3148,21 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 	return nil
 }
 
+func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
+	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
+	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
+	routeInfo := b.pm.CurrentRoutes()
+	curRoutes := routeInfo.CorpAndDiscoveredAsSlice()
+	// fmt.Println("Kevin cur route: ", curRoutes)
+	if mp.AdvertiseRoutesSet {
+		routeInfo.Local = mp.AdvertiseRoutes
+		b.pm.SetCurrentRoutes(routeInfo)
+		curRoutes := append(curRoutes, mp.AdvertiseRoutes...)
+		mp.AdvertiseRoutes = curRoutes
+	}
+	return b.EditPrefs(mp)
+}
+
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	b.mu.Lock()
 	if mp.EggSet {
@@ -3180,6 +3195,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	// in setPrefsLocksOnEntry instead.
 
 	// This should return the public prefs, not the private ones.
+	// fmt.Println("Editpref in local", b.pm.CurrentRoutes()) //Kevin debug
 	return stripKeysFromPrefs(newPrefs), nil
 }
 
@@ -3235,6 +3251,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
+
 	// setExitNodeID returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
@@ -6131,6 +6148,7 @@ func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bo
 // UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
 // a route advertisement if one is present in the existing routes.
 func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
+	// fmt.Println("We are unadvertising routes: ", toRemove) //Kevin debug
 	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
 	finalRoutes := currentRoutes[:0]
 
@@ -6140,7 +6158,7 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		}
 		finalRoutes = append(finalRoutes, ipp)
 	}
-
+	// fmt.Println("We are advertising these routes in unadvertising routes: ", finalRoutes) // Kevin debug
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: finalRoutes,
@@ -6148,6 +6166,18 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
+}
+
+func (b *LocalBackend) ReadRouteInfoFromStore() *ipn.RouteInfo {
+	if b.pm.CurrentRoutes() == nil {
+		b.pm.ReadRoutesForCurrentProfile()
+	}
+	return b.pm.CurrentRoutes()
+}
+
+func (b *LocalBackend) UpdateRoutesInfoToStore(newRouteInfo *ipn.RouteInfo) error {
+	b.pm.SetCurrentRoutes(newRouteInfo)
+	return nil
 }
 
 // seamlessRenewalEnabled reports whether seamless key renewals are enabled

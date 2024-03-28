@@ -15,9 +15,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -34,6 +36,10 @@ type RouteAdvertiser interface {
 
 	// UnadvertiseRoute removes any matching route advertisements.
 	UnadvertiseRoute(...netip.Prefix) error
+
+	ReadRouteInfoFromStore() *ipn.RouteInfo
+
+	UpdateRoutesInfoToStore(*ipn.RouteInfo) error
 }
 
 // AppConnector is an implementation of an AppConnector that performs
@@ -64,6 +70,9 @@ type AppConnector struct {
 
 	// queue provides ordering for update operations
 	queue execqueue.ExecQueue
+
+	discoveredToUpdateDate map[string][]netip.Prefix
+	discoveredLastUpdate   time.Time
 }
 
 // NewAppConnector creates a new AppConnector.
@@ -105,6 +114,10 @@ func (e *AppConnector) updateDomains(domains []string) {
 	defer e.mu.Unlock()
 
 	var oldDomains map[string][]netip.Addr
+	var oldDiscovered map[string]*ipn.DatedRoute
+	routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
+
+	oldDiscovered, routeInfo.Discovered = routeInfo.Discovered, make(map[string]*ipn.DatedRoute, len(domains))
 	oldDomains, e.domains = e.domains, make(map[string][]netip.Addr, len(domains))
 	e.wildcards = e.wildcards[:0]
 	for _, d := range domains {
@@ -117,7 +130,9 @@ func (e *AppConnector) updateDomains(domains []string) {
 			continue
 		}
 		e.domains[d] = oldDomains[d]
+		routeInfo.Discovered[d] = oldDiscovered[d]
 		delete(oldDomains, d)
+		delete(oldDiscovered, d)
 	}
 
 	// Ensure that still-live wildcards addresses are preserved as well.
@@ -129,6 +144,17 @@ func (e *AppConnector) updateDomains(domains []string) {
 			}
 		}
 	}
+
+	for d, dr := range oldDiscovered {
+		for _, wc := range e.wildcards {
+			if dnsname.HasSuffix(d, wc) {
+				routeInfo.Discovered[d] = dr
+				break
+			}
+		}
+	}
+
+	e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
 }
 
@@ -145,12 +171,26 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 		return
 	}
 
+	routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
+	oldCorp := routeInfo.Corp
+	var toRemove []netip.Prefix
+	for _, ipp := range oldCorp {
+		if slices.Contains(routes, ipp) {
+			continue
+		}
+		toRemove = append(toRemove, ipp)
+	}
+	if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+		e.logf("failed to unadvertise old routes: %v: %v", routes, err)
+	}
+	routeInfo.Corp = routes
+
 	if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
 		e.logf("failed to advertise routes: %v: %v", routes, err)
 		return
 	}
 
-	var toRemove []netip.Prefix
+	toRemove = toRemove[:0]
 
 nextRoute:
 	for _, r := range routes {
@@ -170,6 +210,7 @@ nextRoute:
 	}
 
 	e.controlRoutes = routes
+	e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
 }
 
 // Domains returns the currently configured domain list.
@@ -298,14 +339,54 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		// advertise each address we have learned for the routed domain, that
 		// was not already known.
 		var toAdvertise []netip.Prefix
+		// var toUpdateDate []netip.Prefix
 		for _, addr := range addrs {
 			if !e.isAddrKnownLocked(domain, addr) {
 				toAdvertise = append(toAdvertise, netip.PrefixFrom(addr, addr.BitLen()))
+			} else {
+				if e.discoveredToUpdateDate == nil {
+					e.discoveredToUpdateDate = make(map[string][]netip.Prefix)
+				}
+				e.discoveredToUpdateDate[domain] = append(e.discoveredToUpdateDate[domain], netip.PrefixFrom(addr, addr.BitLen()))
+				slices.SortFunc(e.discoveredToUpdateDate[domain], func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
+				slices.Compact(e.discoveredToUpdateDate[domain])
 			}
 		}
 
 		e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
+		// update the pm.currentroutes, then advertise those routes.
+		// we might also able to do this in local backend's advertiseRoute method, doing the update one domain by one domain.
+		// currentRouteInfo := nil
+
+		updateStore := false
+		routeInfo := e.routeAdvertiser.ReadRouteInfoFromStore()
+		if len(toAdvertise) != 0 {
+			routeInfo.AddRoutesInDiscoveredForDomain(domain, toAdvertise)
+			updateStore = true
+		}
+		now := time.Now()
+		if len(e.discoveredToUpdateDate) > 0 && now.Sub(e.discoveredLastUpdate) > 5*time.Minute {
+			// fmt.Println("We did a date update to the existing routes") // Kevin debug
+			// fmt.Println("The time now is: ", now, " The last update was; ", e.discoveredLastUpdate) // Kevin debug
+			routeInfo.UpdateDatesForRoutesInDiscovered(e.discoveredToUpdateDate)
+			e.discoveredToUpdateDate = make(map[string][]netip.Prefix)
+			e.discoveredLastUpdate = now
+			updateStore = true
+		}
+		// fmt.Println("The time I updated the date was: ", now) // Kevin debug
+		// fmt.Println("Next time we update the date will be: ", now.Add(1*time.Minute)) // Kevin debug
+		// fmt.Println("The last update was; ", e.discoveredLastUpdate)// Kevin debug
+		// fmt.Println("discoveredToUpdate: ", e.discoveredToUpdateDate)// Kevin debug
+		outDated := routeInfo.OutDatedRoutesInDiscoveredForDomain(domain)
+		if len(outDated) != 0 {
+			updateStore = true
+		}
+		if updateStore {
+			e.routeAdvertiser.UpdateRoutesInfoToStore(routeInfo)
+		}
+		// fmt.Println("Route infos after dns update: ", e.routeAdvertiser.ReadRouteInfoFromStore()) // Kevin debug
 		e.scheduleAdvertisement(domain, toAdvertise...)
+		e.scheduleUndvertisement(domain, outDated...)
 	}
 }
 
@@ -383,6 +464,27 @@ func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Pref
 	})
 }
 
+func (e *AppConnector) scheduleUndvertisement(domain string, routes ...netip.Prefix) {
+	e.queue.Add(func() {
+		if err := e.routeAdvertiser.UnadvertiseRoute(routes...); err != nil {
+			e.logf("failed to unadvertise routes for %s: %v: %v", domain, routes, err)
+			return
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		for _, route := range routes {
+			if !route.IsSingleIP() {
+				continue
+			}
+			addr := route.Addr()
+
+			e.deleteDomainAddrLocked(domain, addr)
+			e.logf("[v2] unadvertised route for %v: %v", domain, addr)
+		}
+	})
+}
+
 // hasDomainAddrLocked returns true if the address has been observed in a
 // resolution of domain.
 func (e *AppConnector) hasDomainAddrLocked(domain string, addr netip.Addr) bool {
@@ -394,6 +496,15 @@ func (e *AppConnector) hasDomainAddrLocked(domain string, addr netip.Addr) bool 
 // domain and ensures the list remains sorted. Does not attempt to deduplicate.
 func (e *AppConnector) addDomainAddrLocked(domain string, addr netip.Addr) {
 	e.domains[domain] = append(e.domains[domain], addr)
+	slices.SortFunc(e.domains[domain], compareAddr)
+}
+
+func (e *AppConnector) deleteDomainAddrLocked(domain string, addr netip.Addr) {
+	ind, ok := slices.BinarySearchFunc(e.domains[domain], addr, compareAddr)
+	if !ok {
+		return
+	}
+	e.domains[domain] = slices.Delete(e.domains[domain], ind, ind+1)
 	slices.SortFunc(e.domains[domain], compareAddr)
 }
 

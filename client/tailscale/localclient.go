@@ -727,6 +727,7 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	if err != nil {
 		return nil, err
 	}
+	// fmt.Println(decodeJSON[*ipn.Prefs](body)) // Kevin debug
 	return decodeJSON[*ipn.Prefs](body)
 }
 

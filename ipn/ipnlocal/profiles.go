@@ -36,6 +36,8 @@ type profileManager struct {
 	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile // always non-nil
 	currentProfile *ipn.LoginProfile                   // always non-nil
 	prefs          ipn.PrefsView                       // always Valid.
+
+	currentRoutes *ipn.RouteInfo
 }
 
 func (pm *profileManager) dlogf(format string, args ...any) {
@@ -45,8 +47,66 @@ func (pm *profileManager) dlogf(format string, args ...any) {
 	pm.logf(format, args...)
 }
 
+func (pm *profileManager) CurrentRoutes() *ipn.RouteInfo {
+	return pm.currentRoutes
+}
+
+func (pm *profileManager) SetCurrentRoutes(in *ipn.RouteInfo) error {
+	pm.currentRoutes = in
+	if err := pm.WriteRoutesForCurrentProfile(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
 	return ipn.WriteState(pm.store, id, val)
+}
+
+func (pm *profileManager) WriteRoutesForCurrentProfile() error {
+	routeInfoInBytes, err := json.Marshal(*pm.currentRoutes)
+	if err != nil {
+		return err
+	}
+	return pm.writeStateForCurrentProfile("_routes", routeInfoInBytes)
+}
+
+func (pm *profileManager) ReadRoutesForCurrentProfile() error {
+	// TODO(fran) key should be a const somewhere
+	routeInfoInBytes, err := pm.readStateForCurrentProfile("_routes")
+	if err == ipn.ErrStateNotExist || len(routeInfoInBytes) == 0 {
+		pm.currentRoutes = &ipn.RouteInfo{}
+		pm.WriteRoutesForCurrentProfile()
+		return nil
+	} else if err != nil {
+		return err
+	}
+	storedRoutes := &ipn.RouteInfo{}
+	if err := json.Unmarshal(routeInfoInBytes, storedRoutes); err != nil {
+		return err
+	}
+	pm.currentRoutes = storedRoutes
+	return nil
+}
+
+func (pm *profileManager) writeStateForCurrentProfile(id ipn.StateKey, val []byte) error {
+	var currentProfileKey ipn.StateKey
+	// TODO(fran) maybe we should error if the current profile is nil?
+	if pm.currentProfile != nil {
+		currentProfileKey = pm.currentProfile.Key
+	}
+
+	return ipn.WriteState(pm.store, currentProfileKey+"||"+id, val)
+}
+
+func (pm *profileManager) readStateForCurrentProfile(id ipn.StateKey) ([]byte, error) {
+	var currentProfileKey ipn.StateKey
+	// TODO(fran) maybe we should error if the current profile is nil?
+	if pm.currentProfile != nil {
+		currentProfileKey = pm.currentProfile.Key
+	}
+	fmt.Println(currentProfileKey)
+	return pm.store.ReadState(currentProfileKey + "||" + id)
 }
 
 // CurrentUserID returns the current user ID. It is only non-empty on
@@ -101,6 +161,10 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	}
 	pm.currentProfile = prof
 	pm.prefs = prefs
+
+	if err := pm.ReadRoutesForCurrentProfile(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -336,6 +400,9 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 	}
 	pm.prefs = prefs
 	pm.currentProfile = kp
+	if err := pm.ReadRoutesForCurrentProfile(); err != nil {
+		return err
+	}
 	return pm.setAsUserSelectedProfileLocked()
 }
 
@@ -520,7 +587,6 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 	if err != nil {
 		return nil, err
 	}
-
 	pm := &profileManager{
 		store:         store,
 		knownProfiles: knownProfiles,
@@ -546,6 +612,9 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 			return nil, err
 		}
 		if err := pm.setPrefsLocked(prefs); err != nil {
+			return nil, err
+		}
+		if err := pm.ReadRoutesForCurrentProfile(); err != nil {
 			return nil, err
 		}
 		// Most platform behavior is controlled by the goos parameter, however

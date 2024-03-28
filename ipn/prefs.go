@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn/ipnstate"
@@ -952,4 +953,81 @@ type LoginProfile struct {
 	// ControlURL is the URL of the control server that this profile is logged
 	// into.
 	ControlURL string
+}
+
+type RouteInfo struct {
+	Local      []netip.Prefix
+	Corp       []netip.Prefix
+	Discovered map[string]*DatedRoute
+}
+
+func (r RouteInfo) AddRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
+	dr, hasKey := r.Discovered[domain]
+	if !hasKey || dr == nil || dr.Routes == nil {
+		newDatedRoutes := &DatedRoute{make(map[netip.Prefix]time.Time), time.Now()}
+		newDatedRoutes.addAddrsToDatedRoute(addrs)
+		r.Discovered[domain] = newDatedRoutes
+		return
+	}
+
+	// kevin comment: we won't see any existing routes here because know addrs are filtered.
+	currentRoutes := r.Discovered[domain]
+	currentRoutes.addAddrsToDatedRoute(addrs)
+	r.Discovered[domain] = currentRoutes
+	return
+}
+
+func (r RouteInfo) UpdateDatesForRoutesInDiscovered(toUpdate map[string][]netip.Prefix) {
+	for domain, addrs := range toUpdate {
+		for _, addr := range addrs {
+			r.Discovered[domain].Routes[addr] = time.Now()
+		}
+	}
+}
+
+func (r RouteInfo) OutDatedRoutesInDiscoveredForDomain(domain string) []netip.Prefix {
+	dr, hasKey := r.Discovered[domain]
+	var outdate []netip.Prefix
+	now := time.Now()
+	if !hasKey || dr == nil || dr.Routes == nil || now.Sub(dr.LastCleanUp) < 360*time.Hour {
+		return nil
+	}
+	for addr, date := range dr.Routes {
+		if now.Sub(date).Hours() >= 360 {
+			// 15 days old when last seen
+			outdate = append(outdate, addr)
+			delete(dr.Routes, addr)
+		}
+	}
+	r.Discovered[domain] = dr
+	dr.LastCleanUp = time.Now()
+	return outdate
+}
+
+func (r RouteInfo) CorpAndDiscoveredAsSlice() []netip.Prefix {
+	ret := r.Corp
+	for _, dr := range r.Discovered {
+		if dr != nil && dr.Routes != nil {
+			for k := range dr.Routes {
+				ret = append(ret, k)
+			}
+		}
+	}
+	return ret
+}
+
+type DatedRoute struct {
+	Routes      map[netip.Prefix]time.Time
+	LastCleanUp time.Time
+}
+
+func (d *DatedRoute) String() string {
+	return fmt.Sprintf("routes: %s, lastCleanUp: %v", d.Routes, d.LastCleanUp)
+}
+
+func (d *DatedRoute) addAddrsToDatedRoute(addrs []netip.Prefix) {
+	time := time.Now()
+	for _, addr := range addrs {
+		d.Routes[addr] = time
+	}
 }
