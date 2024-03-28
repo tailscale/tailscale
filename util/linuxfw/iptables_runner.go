@@ -36,8 +36,9 @@ type iptablesRunner struct {
 	ipt4 iptablesInterface
 	ipt6 iptablesInterface
 
-	v6Available    bool
-	v6NATAvailable bool
+	v6Available       bool
+	v6NATAvailable    bool
+	v6FilterAvailable bool
 }
 
 func checkIP6TablesExists() error {
@@ -58,7 +59,7 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		return nil, err
 	}
 
-	supportsV6, supportsV6NAT := false, false
+	supportsV6, supportsV6NAT, supportsV6Filter := false, false, false
 	v6err := CheckIPv6(logf)
 	ip6terr := checkIP6TablesExists()
 	var ipt6 *iptables.IPTables
@@ -73,20 +74,23 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		if err != nil {
 			return nil, err
 		}
-		supportsV6 = checkSupportsV6Filter(ipt6, logf)
-		if supportsV6 {
-			supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
-		}
-		logf("v6filter = %v, v6nat = %v", supportsV6, supportsV6NAT)
+		supportsV6Filter = checkSupportsV6Filter(ipt6, logf)
+		supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
+		logf("v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
 	}
-	return &iptablesRunner{ipt4, ipt6, supportsV6, supportsV6NAT}, nil
+	return &iptablesRunner{
+		ipt4:              ipt4,
+		ipt6:              ipt6,
+		v6Available:       supportsV6,
+		v6NATAvailable:    supportsV6NAT,
+		v6FilterAvailable: supportsV6Filter}, nil
 }
 
 // checkSupportsV6Filter returns whether the system has a "filter" table in the
 // IPv6 tables. Some container environments such as GitHub codespaces have
 // limited local IPv6 support, and containers containing ip6tables, but do not
 // have kernel support for IPv6 filtering.
-// We will not enable IPv6 in these instances.
+// We will not set ip6tables rules in these instances.
 func checkSupportsV6Filter(ipt *iptables.IPTables, logf logger.Logf) bool {
 	if ipt == nil {
 		return false
@@ -95,7 +99,7 @@ func checkSupportsV6Filter(ipt *iptables.IPTables, logf logger.Logf) bool {
 	if filterListErr == nil {
 		return true
 	}
-	logf("ipv6 unavailable due to missing filter table: %s", filterListErr)
+	logf("ip6tables filtering is not supported on this host: %v", filterListErr)
 	return false
 }
 
@@ -140,6 +144,11 @@ func checkSupportsV6NAT(ipt *iptables.IPTables, logf logger.Logf) bool {
 // HasIPV6 reports true if the system supports IPv6.
 func (i *iptablesRunner) HasIPV6() bool {
 	return i.v6Available
+}
+
+// HasIPV6Filter reports true if the system supports ip6tables filter table.
+func (i *iptablesRunner) HasIPV6Filter() bool {
+	return i.v6FilterAvailable
 }
 
 // HasIPV6NAT reports true if the system supports IPv6 NAT.
@@ -189,7 +198,7 @@ func (i *iptablesRunner) DelLoopbackRule(addr netip.Addr) error {
 
 // getTables gets the available iptablesInterface in iptables runner.
 func (i *iptablesRunner) getTables() []iptablesInterface {
-	if i.HasIPV6() {
+	if i.HasIPV6Filter() {
 		return []iptablesInterface{i.ipt4, i.ipt6}
 	}
 	return []iptablesInterface{i.ipt4}
@@ -286,7 +295,7 @@ func (i *iptablesRunner) AddBase(tunname string) error {
 	if err := i.addBase4(tunname); err != nil {
 		return err
 	}
-	if i.HasIPV6() {
+	if i.HasIPV6Filter() {
 		if err := i.addBase6(tunname); err != nil {
 			return err
 		}
