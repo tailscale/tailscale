@@ -178,8 +178,8 @@ func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start
 		case srcWithinSubnet || dstWithinSubnet:
 			m.SubnetTraffic = append(m.SubnetTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 		default:
-			const anonymize = false
-			if anonymize {
+			const anonymize = true
+			if anonymize && !enableExitDstFlowLogs {
 				// Only preserve the address if it is a Tailscale IP address.
 				srcOrig, dstOrig := conn.Src, conn.Dst
 				conn = netlogtype.Connection{} // scrub everything by default
