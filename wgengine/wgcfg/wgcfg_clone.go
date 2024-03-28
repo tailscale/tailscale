@@ -77,3 +77,30 @@ var _PeerCloneNeedsRegeneration = Peer(struct {
 	PersistentKeepalive uint16
 	WGEndpoint          key.NodePublic
 }{})
+
+// Clone duplicates src into dst and reports whether it succeeded.
+// To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
+// where T is one of Config,Peer.
+func Clone(dst, src any) bool {
+	switch src := src.(type) {
+	case *Config:
+		switch dst := dst.(type) {
+		case *Config:
+			*dst = *src.Clone()
+			return true
+		case **Config:
+			*dst = src.Clone()
+			return true
+		}
+	case *Peer:
+		switch dst := dst.(type) {
+		case *Peer:
+			*dst = *src.Clone()
+			return true
+		case **Peer:
+			*dst = src.Clone()
+			return true
+		}
+	}
+	return false
+}

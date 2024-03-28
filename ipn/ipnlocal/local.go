@@ -1331,6 +1331,7 @@ func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
 }
 
 func setExitDstFlowLogs(prefs *ipn.Prefs) (anyChange bool) {
+	fmt.Printf("set exit dst flow pref")
 	if enable, err := syspolicy.GetBoolean(syspolicy.ExitDestinationFlowLogs, prefs.ExitDestinationFlowLogs); err == nil && prefs.ExitDestinationFlowLogs != enable {
 		prefs.ExitDestinationFlowLogs = enable
 		anyChange = true

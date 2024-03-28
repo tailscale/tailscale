@@ -92,7 +92,7 @@ var testClient *http.Client
 // The IP protocol and source port are always zero.
 // The sock is used to populated the PhysicalTraffic field in Message.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor) error {
+func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor, enableExitDstFlowLogs bool) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 	if nl.logger != nil {
@@ -130,7 +130,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 		addrs := nl.addrs
 		prefixes := nl.prefixes
 		nl.mu.Unlock()
-		recordStatistics(nl.logger, nodeID, start, end, virtual, physical, addrs, prefixes)
+		recordStatistics(nl.logger, nodeID, start, end, virtual, physical, addrs, prefixes, enableExitDstFlowLogs)
 	})
 
 	// Register the connection tracker into the TUN device.
@@ -150,7 +150,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 	return nil
 }
 
-func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start, end time.Time, connstats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool) {
+func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start, end time.Time, connstats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool, enableExitDstFlowLogs bool) {
 	m := netlogtype.Message{NodeID: nodeID, Start: start.UTC(), End: end.UTC()}
 
 	classifyAddr := func(a netip.Addr) (isTailscale, withinRoute bool) {
@@ -178,7 +178,7 @@ func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start
 		case srcWithinSubnet || dstWithinSubnet:
 			m.SubnetTraffic = append(m.SubnetTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 		default:
-			const anonymize = true
+			const anonymize = false
 			if anonymize {
 				// Only preserve the address if it is a Tailscale IP address.
 				srcOrig, dstOrig := conn.Src, conn.Dst

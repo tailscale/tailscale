@@ -16,7 +16,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Config,Peer
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=Config,Peer
 
 // View returns a readonly view of Config.
 func (p *Config) View() ConfigView {
