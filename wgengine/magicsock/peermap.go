@@ -60,10 +60,11 @@ func (m *peerMap) nodeCount() int {
 	return len(m.byNodeKey)
 }
 
-// anyEndpointForDiscoKey reports whether there exists any
-// peers in the netmap with dk as their DiscoKey.
-func (m *peerMap) anyEndpointForDiscoKey(dk key.DiscoPublic) bool {
-	return len(m.nodesOfDisco[dk]) > 0
+// knownPeerDiscoKey reports whether there exists any peer with the disco key
+// dk.
+func (m *peerMap) knownPeerDiscoKey(dk key.DiscoPublic) bool {
+	_, ok := m.nodesOfDisco[dk]
+	return ok
 }
 
 // endpointForNodeKey returns the endpoint for nk, or nil if
