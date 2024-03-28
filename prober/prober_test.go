@@ -51,10 +51,10 @@ func TestProberTiming(t *testing.T) {
 		}
 	}
 
-	p.Run("test-probe", probeInterval, nil, func(context.Context) error {
+	p.Run("test-probe", probeInterval, nil, FuncProbe(func(context.Context) error {
 		invoked <- struct{}{}
 		return nil
-	})
+	}))
 
 	waitActiveProbes(t, p, clk, 1)
 
@@ -93,10 +93,10 @@ func TestProberTimingSpread(t *testing.T) {
 		}
 	}
 
-	probe := p.Run("test-spread-probe", probeInterval, nil, func(context.Context) error {
+	probe := p.Run("test-spread-probe", probeInterval, nil, FuncProbe(func(context.Context) error {
 		invoked <- struct{}{}
 		return nil
-	})
+	}))
 
 	waitActiveProbes(t, p, clk, 1)
 
@@ -156,12 +156,12 @@ func TestProberRun(t *testing.T) {
 	var probes []*Probe
 
 	for i := 0; i < startingProbes; i++ {
-		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, func(context.Context) error {
+		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, FuncProbe(func(context.Context) error {
 			mu.Lock()
 			defer mu.Unlock()
 			cnt++
 			return nil
-		}))
+		})))
 	}
 
 	checkCnt := func(want int) {
@@ -207,13 +207,13 @@ func TestPrometheus(t *testing.T) {
 	p := newForTest(clk.Now, clk.NewTicker).WithMetricNamespace("probe")
 
 	var succeed atomic.Bool
-	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
+	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, FuncProbe(func(context.Context) error {
 		clk.Advance(aFewMillis)
 		if succeed.Load() {
 			return nil
 		}
 		return errors.New("failing, as instructed by test")
-	})
+	}))
 
 	waitActiveProbes(t, p, clk, 1)
 
@@ -274,14 +274,14 @@ func TestOnceMode(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
 
-	p.Run("probe1", probeInterval, nil, func(context.Context) error { return nil })
-	p.Run("probe2", probeInterval, nil, func(context.Context) error { return fmt.Errorf("error2") })
-	p.Run("probe3", probeInterval, nil, func(context.Context) error {
-		p.Run("probe4", probeInterval, nil, func(context.Context) error {
+	p.Run("probe1", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+	p.Run("probe2", probeInterval, nil, FuncProbe(func(context.Context) error { return fmt.Errorf("error2") }))
+	p.Run("probe3", probeInterval, nil, FuncProbe(func(context.Context) error {
+		p.Run("probe4", probeInterval, nil, FuncProbe(func(context.Context) error {
 			return fmt.Errorf("error4")
-		})
+		}))
 		return nil
-	})
+	}))
 
 	p.Wait()
 	wantCount := 4
