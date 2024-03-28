@@ -6,6 +6,8 @@ package safeweb
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/csrf"
@@ -360,6 +362,32 @@ func TestRefererPolicy(t *testing.T) {
 
 			if (resp.Header.Get("Referer-Policy") == "") == tt.wantRefererPolicy {
 				t.Fatalf("referer policy want: %v; got: %v", tt.wantRefererPolicy, resp.Header.Get("Referer-Policy"))
+			}
+		})
+	}
+}
+
+func TestCSPAllowInlineStyles(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(strconv.FormatBool(allow), func(t *testing.T) {
+			h := &http.ServeMux{}
+			h.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("ok"))
+			}))
+			s, err := NewServer(Config{BrowserMux: h, CSPAllowInlineStyles: allow})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest("GET", "/", nil)
+			w := httptest.NewRecorder()
+			s.h.Handler.ServeHTTP(w, req)
+			resp := w.Result()
+
+			csp := resp.Header.Get("Content-Security-Policy")
+			allowsStyles := strings.Contains(csp, "style-src 'self' 'unsafe-inline'")
+			if allowsStyles != allow {
+				t.Fatalf("CSP inline styles want: %v; got: %v", allow, allowsStyles)
 			}
 		})
 	}

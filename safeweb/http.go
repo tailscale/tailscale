@@ -26,6 +26,10 @@
 //   - X-Content-Type-Options header on responses set to "nosniff" to prevent MIME type sniffing attacks.
 //   - Referer-Policy header set to "same-origin" to prevent leaking referrer information to third parties.
 //
+// By default the Content-Security-Policy header will disallow inline styles.
+// This can be overridden by setting the CSPAllowInlineStyles field to true in
+// the safeweb.Config struct.
+//
 // # API routes
 //
 // safeweb inspects the Content-Type header of incoming requests to the API mux
@@ -118,6 +122,11 @@ type Config struct {
 	// If this is not provided, the Server will generate a random CSRF secret on
 	// startup.
 	CSRFSecret []byte
+
+	// CSPAllowInlineStyles specifies whether to include `style-src:
+	// unsafe-inline` in the Content-Security-Policy header to permit the use of
+	// inline CSS.
+	CSPAllowInlineStyles bool
 }
 
 func (c *Config) setDefaults() error {
@@ -144,6 +153,15 @@ func (c Config) newHandler() http.Handler {
 	// as otherwise the browser will reject the cookie
 	csrfProtect := csrf.Protect(c.CSRFSecret, csrf.Secure(c.SecureContext))
 
+	var csp string
+	if c.CSPAllowInlineStyles {
+		csp = defaultCSP + `; style-src 'self' 'unsafe-inline'`
+	} else {
+		// if no style-src is provided the browser will fallback to the
+		// default-src directive which disallows inline styles.
+		csp = defaultCSP
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, p := c.BrowserMux.Handler(r); p == "" {
 			// disallow x-www-form-urlencoded requests to the API
@@ -161,8 +179,7 @@ func (c Config) newHandler() http.Handler {
 			return
 		}
 
-		// TODO(@patrickod) consider templating additions to the CSP header.
-		w.Header().Set("Content-Security-Policy", defaultCSP)
+		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referer-Policy", "same-origin")
 		csrfProtect(c.BrowserMux).ServeHTTP(w, r)
