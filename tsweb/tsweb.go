@@ -311,10 +311,20 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var bucket string
+	bumpStartIfNeeded := func() {}
 	if bs := h.opts.BucketedStats; bs != nil {
 		bucket = bs.bucketForRequest(r)
 		if bs.Started != nil {
-			bs.Started.Add(bucket, 1)
+			switch v := bs.Started.Map.Get(bucket).(type) {
+			case *expvar.Int:
+				// If we've already seen this bucket for, count it immediately.
+				v.Add(1)
+			case nil:
+				// Otherwise, for newly seen paths, only count retroactively
+				// (so started-finished doesn't go negative) so we don't fill
+				// this LabelMap up with internet scanning spam.
+				bumpStartIfNeeded = func() { bs.Started.Add(bucket, 1) }
+			}
 		}
 	}
 
@@ -401,7 +411,15 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if bs := h.opts.BucketedStats; bs != nil && bs.Finished != nil {
-		bs.Finished.Add(bucket, 1)
+		// Only increment metrics for buckets that result in good HTTP statuses.
+		// Otherwise they get full of internet scanning noise. Only filtering 404
+		// gets most of the way there but there are also plenty of URLs that are
+		// almost right but result in 400s too. Seem easier to just only ignore
+		// all 4xx and 5xx.
+		if msg.Code < 400 {
+			bumpStartIfNeeded()
+			bs.Finished.Add(bucket, 1)
+		}
 	}
 
 	if !h.opts.QuietLoggingIfSuccessful || (msg.Code != http.StatusOK && msg.Code != http.StatusNotModified) {
