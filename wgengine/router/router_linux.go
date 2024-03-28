@@ -419,7 +419,7 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 	case "udp4":
 		magicsockPort = &r.magicsockPortV4
 	case "udp6":
-		if !r.getV6Available() {
+		if !r.nfr.HasIPV6() {
 			return nil
 		}
 		magicsockPort = &r.magicsockPortV6
