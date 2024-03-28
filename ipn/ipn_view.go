@@ -70,6 +70,7 @@ func (v PrefsView) AllowSingleHosts() bool             { return v.ж.AllowSingle
 func (v PrefsView) ExitNodeID() tailcfg.StableNodeID   { return v.ж.ExitNodeID }
 func (v PrefsView) ExitNodeIP() netip.Addr             { return v.ж.ExitNodeIP }
 func (v PrefsView) ExitNodeAllowLANAccess() bool       { return v.ж.ExitNodeAllowLANAccess }
+func (v PrefsView) ExitDestinationFlowLogs() bool      { return v.ж.ExitDestinationFlowLogs }
 func (v PrefsView) CorpDNS() bool                      { return v.ж.CorpDNS }
 func (v PrefsView) RunSSH() bool                       { return v.ж.RunSSH }
 func (v PrefsView) RunWebClient() bool                 { return v.ж.RunWebClient }
@@ -99,34 +100,35 @@ func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
-	ControlURL             string
-	RouteAll               bool
-	AllowSingleHosts       bool
-	ExitNodeID             tailcfg.StableNodeID
-	ExitNodeIP             netip.Addr
-	ExitNodeAllowLANAccess bool
-	CorpDNS                bool
-	RunSSH                 bool
-	RunWebClient           bool
-	WantRunning            bool
-	LoggedOut              bool
-	ShieldsUp              bool
-	AdvertiseTags          []string
-	Hostname               string
-	NotepadURLs            bool
-	ForceDaemon            bool
-	Egg                    bool
-	AdvertiseRoutes        []netip.Prefix
-	NoSNAT                 bool
-	NetfilterMode          preftype.NetfilterMode
-	OperatorUser           string
-	ProfileName            string
-	AutoUpdate             AutoUpdatePrefs
-	AppConnector           AppConnectorPrefs
-	PostureChecking        bool
-	NetfilterKind          string
-	TailFSShares           []*tailfs.Share
-	Persist                *persist.Persist
+	ControlURL              string
+	RouteAll                bool
+	AllowSingleHosts        bool
+	ExitNodeID              tailcfg.StableNodeID
+	ExitNodeIP              netip.Addr
+	ExitNodeAllowLANAccess  bool
+	ExitDestinationFlowLogs bool
+	CorpDNS                 bool
+	RunSSH                  bool
+	RunWebClient            bool
+	WantRunning             bool
+	LoggedOut               bool
+	ShieldsUp               bool
+	AdvertiseTags           []string
+	Hostname                string
+	NotepadURLs             bool
+	ForceDaemon             bool
+	Egg                     bool
+	AdvertiseRoutes         []netip.Prefix
+	NoSNAT                  bool
+	NetfilterMode           preftype.NetfilterMode
+	OperatorUser            string
+	ProfileName             string
+	AutoUpdate              AutoUpdatePrefs
+	AppConnector            AppConnectorPrefs
+	PostureChecking         bool
+	NetfilterKind           string
+	TailFSShares            []*tailfs.Share
+	Persist                 *persist.Persist
 }{})
 
 // View returns a readonly view of ServeConfig.

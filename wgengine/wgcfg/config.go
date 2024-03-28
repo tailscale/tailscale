@@ -28,9 +28,9 @@ type Config struct {
 	// NetworkLogging enables network logging.
 	// It is disabled if either ID is the zero value.
 	NetworkLogging struct {
-		NodeID               logid.PrivateID
-		DomainID             logid.PrivateID
-		EnableExitNodeDstLog bool
+		NodeID                  logid.PrivateID
+		DomainID                logid.PrivateID
+		ExitDestinationFlowLogs bool
 	}
 }
 

@@ -37,34 +37,35 @@ func (src *Prefs) Clone() *Prefs {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsCloneNeedsRegeneration = Prefs(struct {
-	ControlURL             string
-	RouteAll               bool
-	AllowSingleHosts       bool
-	ExitNodeID             tailcfg.StableNodeID
-	ExitNodeIP             netip.Addr
-	ExitNodeAllowLANAccess bool
-	CorpDNS                bool
-	RunSSH                 bool
-	RunWebClient           bool
-	WantRunning            bool
-	LoggedOut              bool
-	ShieldsUp              bool
-	AdvertiseTags          []string
-	Hostname               string
-	NotepadURLs            bool
-	ForceDaemon            bool
-	Egg                    bool
-	AdvertiseRoutes        []netip.Prefix
-	NoSNAT                 bool
-	NetfilterMode          preftype.NetfilterMode
-	OperatorUser           string
-	ProfileName            string
-	AutoUpdate             AutoUpdatePrefs
-	AppConnector           AppConnectorPrefs
-	PostureChecking        bool
-	NetfilterKind          string
-	TailFSShares           []*tailfs.Share
-	Persist                *persist.Persist
+	ControlURL              string
+	RouteAll                bool
+	AllowSingleHosts        bool
+	ExitNodeID              tailcfg.StableNodeID
+	ExitNodeIP              netip.Addr
+	ExitNodeAllowLANAccess  bool
+	ExitDestinationFlowLogs bool
+	CorpDNS                 bool
+	RunSSH                  bool
+	RunWebClient            bool
+	WantRunning             bool
+	LoggedOut               bool
+	ShieldsUp               bool
+	AdvertiseTags           []string
+	Hostname                string
+	NotepadURLs             bool
+	ForceDaemon             bool
+	Egg                     bool
+	AdvertiseRoutes         []netip.Prefix
+	NoSNAT                  bool
+	NetfilterMode           preftype.NetfilterMode
+	OperatorUser            string
+	ProfileName             string
+	AutoUpdate              AutoUpdatePrefs
+	AppConnector            AppConnectorPrefs
+	PostureChecking         bool
+	NetfilterKind           string
+	TailFSShares            []*tailfs.Share
+	Persist                 *persist.Persist
 }{})
 
 // Clone makes a deep copy of ServeConfig.
