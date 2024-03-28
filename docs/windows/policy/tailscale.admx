@@ -42,6 +42,10 @@
                   displayName="$(string.SINCE_V1_58)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_62"
+                  displayName="$(string.SINCE_V1_62)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -251,6 +255,27 @@
       <disabledValue>
         <string>hide</string>
       </disabledValue>
+    </policy>
+    <policy name="ManagedByOrganizationName" class="Machine" displayName="$(string.ManagedByOrganizationName)" explainText="$(string.ManagedByOrganizationName_Help)" presentation="$(presentation.ManagedByOrganizationName)" key="Software\Policies\Tailscale">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_62" />
+      <elements>
+        <text id="ManagedByOrganizationNamePrompt" valueName="ManagedByOrganizationName" required="true" />
+      </elements>
+    </policy>
+    <policy name="ManagedByCaption" class="Machine" displayName="$(string.ManagedByCaption)" explainText="$(string.ManagedByCaption_Help)" presentation="$(presentation.ManagedByCaption)" key="Software\Policies\Tailscale">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_62" />
+      <elements>
+        <text id="ManagedByCaptionPrompt" valueName="ManagedByCaption" required="true" />
+      </elements>
+    </policy>
+    <policy name="ManagedByURL" class="Machine" displayName="$(string.ManagedByURL)" explainText="$(string.ManagedByURL_Help)" presentation="$(presentation.ManagedByURL)" key="Software\Policies\Tailscale">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_62" />
+      <elements>
+        <text id="ManagedByURLPrompt" valueName="ManagedByURL" required="true" />
+      </elements>
     </policy>
   </policies>
 </policyDefinitions>

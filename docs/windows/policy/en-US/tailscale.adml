@@ -13,6 +13,7 @@
             <string id="SINCE_V1_56">Tailscale version 1.56.0 and later</string>
             <string id="PARTIAL_FULL_SINCE_V1_56">Tailscale version 1.56.0 and later (full support), some earlier versions (partial support)</string>
             <string id="SINCE_V1_58">Tailscale version 1.58.0 and later</string>
+            <string id="SINCE_V1_62">Tailscale version 1.62.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -195,6 +196,31 @@ If you enable this policy, then data collection is always enabled.
 If you disable this policy, then data collection is always disabled.
 
 If you do not configure this policy, then data collection depends on if it has been enabled from the CLI (as of Tailscale 1.56), it may be present in the GUI in later versions.]]></string>
+            <string id="ManagedByOrganizationName">Show organization name in menu</string>
+            <string id="ManagedByOrganizationName_Help"><![CDATA[Use this policy to specify the name of the organization managing Tailscale, for instance “XYZ Corp, Inc.”. The value will be displayed in the Tailscale client, so that users can easily reach your internal support resources.
+See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more details.
+
+If you enable this policy, set it to the name of your organization.
+
+If you disable this policy or do not configure it, then no value will be displayed.]]></string>
+            <string id="ManagedByCaption">Show a custom info message for your organization</string>
+            <string id="ManagedByCaption_Help"><![CDATA[Use this policy to specify a caption to be displayed in the Managed By view in the Tailscale client. Use this string value to provide your users with information on how to reach support resources for Tailscale in your organization. 
+See https://tailscale.com/kb/1315/mdm-keys#set-an-info-message for more details.
+
+This policy requires a value to be specified for the ManagedByOrganizationName policy (Show organization name in menu).
+
+If you enable this policy, set it to a message to be displayed in the Tailscale client.
+
+If you disable this policy or do not configure it, then no value will be displayed.]]></string>
+            <string id="ManagedByURL">Show custom support URL</string>
+            <string id="ManagedByURL_Help"><![CDATA[Use this policy to specify a URL pointing to a help desk webpage, or other helpful resources for users in the organization. Clicking the Support button in the Tailscale UI will open this webpage. 
+See https://tailscale.com/kb/1315/mdm-keys#set-a-support-url for more details.
+
+This policy requires a value to be specified for the ManagedByOrganizationName policy (Show organization name in menu).
+
+If you enable this policy, set it to a valid URL that can be opened in the default browser by the Tailscale client.
+
+If you disable this policy or do not configure it, then no value will be displayed.]]></string>
         </stringTable>
         <presentationTable>
             <presentation id="LoginURL">
@@ -215,6 +241,21 @@ If you do not configure this policy, then data collection depends on if it has b
             <presentation id="ExitNodeID">
                 <textBox refId="ExitNodeIDPrompt">
                     <label>Exit Node</label>
+                </textBox>
+            </presentation>
+            <presentation id="ManagedByOrganizationName">
+                <textBox refId="ManagedByOrganizationNamePrompt">
+                    <label>Organization Name</label>
+                </textBox>
+            </presentation>
+            <presentation id="ManagedByCaption">
+                <textBox refId="ManagedByCaptionPrompt">
+                    <label>Organization Caption</label>
+                </textBox>
+            </presentation>
+            <presentation id="ManagedByURL">
+                <textBox refId="ManagedByURLPrompt">
+                    <label>Organization Support URL</label>
                 </textBox>
             </presentation>
         </presentationTable>
