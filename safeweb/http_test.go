@@ -4,6 +4,7 @@
 package safeweb
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -388,6 +389,101 @@ func TestCSPAllowInlineStyles(t *testing.T) {
 			allowsStyles := strings.Contains(csp, "style-src 'self' 'unsafe-inline'")
 			if allowsStyles != allow {
 				t.Fatalf("CSP inline styles want: %v; got: %v", allow, allowsStyles)
+			}
+		})
+	}
+}
+
+func TestRouting(t *testing.T) {
+	for _, tt := range []struct {
+		desc            string
+		browserPatterns []string
+		apiPatterns     []string
+		requestPath     string
+		want            string
+	}{
+		{
+			desc:            "only browser mux",
+			browserPatterns: []string{"/"},
+			requestPath:     "/index.html",
+			want:            "browser",
+		},
+		{
+			desc:        "only API mux",
+			apiPatterns: []string{"/api/"},
+			requestPath: "/api/foo",
+			want:        "api",
+		},
+		{
+			desc:            "browser mux match",
+			browserPatterns: []string{"/content/"},
+			apiPatterns:     []string{"/api/"},
+			requestPath:     "/content/index.html",
+			want:            "browser",
+		},
+		{
+			desc:            "API mux match",
+			browserPatterns: []string{"/content/"},
+			apiPatterns:     []string{"/api/"},
+			requestPath:     "/api/foo",
+			want:            "api",
+		},
+		{
+			desc:            "browser wildcard match",
+			browserPatterns: []string{"/"},
+			apiPatterns:     []string{"/api/"},
+			requestPath:     "/index.html",
+			want:            "browser",
+		},
+		{
+			desc:            "API wildcard match",
+			browserPatterns: []string{"/content/"},
+			apiPatterns:     []string{"/"},
+			requestPath:     "/api/foo",
+			want:            "api",
+		},
+		{
+			desc:            "path conflict",
+			browserPatterns: []string{"/foo/"},
+			apiPatterns:     []string{"/foo/bar/"},
+			requestPath:     "/foo/bar/baz",
+			want:            "multiple handlers match this request",
+		},
+		{
+			desc:            "no match",
+			browserPatterns: []string{"/foo/"},
+			apiPatterns:     []string{"/bar/"},
+			requestPath:     "/baz",
+			want:            "404 page not found",
+		},
+	} {
+		t.Run(tt.desc, func(t *testing.T) {
+			bm := &http.ServeMux{}
+			for _, p := range tt.browserPatterns {
+				bm.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
+					w.Write([]byte("browser"))
+				})
+			}
+			am := &http.ServeMux{}
+			for _, p := range tt.apiPatterns {
+				am.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
+					w.Write([]byte("api"))
+				})
+			}
+			s, err := NewServer(Config{BrowserMux: bm, APIMux: am})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest("GET", tt.requestPath, nil)
+			w := httptest.NewRecorder()
+			s.h.Handler.ServeHTTP(w, req)
+			resp, err := io.ReadAll(w.Result().Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(resp)); got != tt.want {
+				t.Errorf("got response %q, want %q", got, tt.want)
 			}
 		})
 	}
