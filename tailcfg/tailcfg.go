@@ -2232,8 +2232,13 @@ const (
 	// NodeAttrDisableWebClient disables using the web client.
 	NodeAttrDisableWebClient NodeCapability = "disable-web-client"
 
+<<<<<<< HEAD
 	// NodeAttrExitDstNetworkFlowLog enables exit node destinations in network flow logs.
 	NodeAttrExitDstNetworkFlowLog NodeCapability = "exit-dst-network-flow-log"
+=======
+	// NodeAttrStoreAppCRoutes enables storing app connector routes persistently.
+	NodeAttrStoreAppCRoutes NodeCapability = "store-appc-routes"
+>>>>>>> 61f7b83bd (Add a control knob to toggle writing RouteInfo to StateStore)
 )
 
 // SetDNSRequest is a request to add a DNS record.

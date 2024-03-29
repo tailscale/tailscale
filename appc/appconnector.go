@@ -69,13 +69,21 @@ type AppConnector struct {
 
 	// queue provides ordering for update operations
 	queue execqueue.ExecQueue
+
+	// whether this tailscaled should persist routes. Storing RouteInfo enables the app connector
+	// to forget routes when appropriate and should make routes smaller. While we are verifying that
+	// writing the RouteInfo to StateStore is a good solution (and doesn't for example cause writes
+	// that are too frequent or too large) use a controlknob to manage this flag.
+	ShouldStoreRoutes bool
 }
 
 // NewAppConnector creates a new AppConnector.
-func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser) *AppConnector {
+func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, shouldStoreRoutes bool) *AppConnector {
+	// TODO(fran) if !shouldStoreRoutes we probably want to try and clean up any stored routes
 	return &AppConnector{
-		logf:            logger.WithPrefix(logf, "appc: "),
-		routeAdvertiser: routeAdvertiser,
+		logf:              logger.WithPrefix(logf, "appc: "),
+		routeAdvertiser:   routeAdvertiser,
+		ShouldStoreRoutes: shouldStoreRoutes,
 	}
 }
 

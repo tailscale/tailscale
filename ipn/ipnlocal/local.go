@@ -3561,8 +3561,14 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		return
 	}
 
-	if b.appConnector == nil {
-		b.appConnector = appc.NewAppConnector(b.logf, b)
+	shouldAppCStoreRoutesHasChanged := false
+	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+	if b.appConnector != nil {
+		shouldAppCStoreRoutesHasChanged = b.appConnector.ShouldStoreRoutes != shouldAppCStoreRoutes
+	}
+
+	if b.appConnector == nil || shouldAppCStoreRoutesHasChanged {
+		b.appConnector = appc.NewAppConnector(b.logf, b, shouldAppCStoreRoutes)
 	}
 	if nm == nil {
 		return
