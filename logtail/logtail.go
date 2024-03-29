@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -490,6 +491,19 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAft
 	if origlen != -1 {
 		req.Header.Add("Content-Encoding", "zstd")
 		req.Header.Add("Orig-Content-Length", strconv.Itoa(origlen))
+	}
+	if runtime.GOOS == "js" {
+		// We once advertised we'd accept optional client certs (for internal use)
+		// on log.tailscale.io but then Tailscale SSH js/wasm clients prompted
+		// users (on some browsers?) to pick a client cert. We'll fix the server's
+		// TLS ServerHello, but we can also fix it client side for good measure.
+		//
+		// Corp details: https://github.com/tailscale/corp/issues/18177#issuecomment-2026598715
+		// and https://github.com/tailscale/corp/pull/18775#issuecomment-2027505036
+		//
+		// See https://github.com/golang/go/wiki/WebAssembly#configuring-fetch-options-while-using-nethttp
+		// and https://developer.mozilla.org/en-US/docs/Web/API/fetch#credentials
+		req.Header.Set("js.fetch:credentials", "omit")
 	}
 	req.Header["User-Agent"] = nil // not worth writing one; save some bytes
 
