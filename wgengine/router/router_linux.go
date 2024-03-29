@@ -419,7 +419,12 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 	case "udp4":
 		magicsockPort = &r.magicsockPortV4
 	case "udp6":
-		if !r.getV6Available() {
+		// Skip setting up MagicSock port if the host does not support
+		// IPv6. MagicSock IPv6 port needs a filter rule to function. In
+		// some cases (hosts with partial iptables support) filter
+		// tables are not supported, so skip setting up the port for
+		// those hosts too.
+		if !r.getV6FilteringAvailable() {
 			return nil
 		}
 		magicsockPort = &r.magicsockPortV6
@@ -526,7 +531,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
-			if r.magicsockPortV6 != 0 && r.getV6Available() {
+			if r.magicsockPortV6 != 0 && r.getV6FilteringAvailable() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
@@ -566,7 +571,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 					return fmt.Errorf("could not add magicsock port rule v4: %w", err)
 				}
 			}
-			if r.magicsockPortV6 != 0 && r.getV6Available() {
+			if r.magicsockPortV6 != 0 && r.getV6FilteringAvailable() {
 				if err := r.nfr.AddMagicsockPortRule(r.magicsockPortV6, "udp6"); err != nil {
 					return fmt.Errorf("could not add magicsock port rule v6: %w", err)
 				}
@@ -597,17 +602,21 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 
 	for cidr := range r.addrs {
 		if err := r.addLoopbackRule(cidr.Addr()); err != nil {
-			return err
+			return fmt.Errorf("error adding loopback rule: %w", err)
 		}
 	}
 
 	return nil
 }
 
+// getV6FilteringAvailable returns true if the router is able to setup the
+// required tailscale filter rules for IPv6.
+func (r *linuxRouter) getV6FilteringAvailable() bool {
+	return r.nfr.HasIPV6() && r.nfr.HasIPV6Filter()
+}
+
+// getV6Available returns true if the host supports IPv6.
 func (r *linuxRouter) getV6Available() bool {
-	if r.netfilterMode == netfilterOff {
-		return r.v6Available
-	}
 	return r.nfr.HasIPV6()
 }
 
@@ -669,6 +678,9 @@ func (r *linuxRouter) addLoopbackRule(addr netip.Addr) error {
 	if r.netfilterMode == netfilterOff {
 		return nil
 	}
+	if addr.Is6() && !r.nfr.HasIPV6Filter() {
+		return nil
+	}
 
 	if err := r.nfr.AddLoopbackRule(addr); err != nil {
 		return err
@@ -680,6 +692,9 @@ func (r *linuxRouter) addLoopbackRule(addr netip.Addr) error {
 // traffic to a Tailscale IP.
 func (r *linuxRouter) delLoopbackRule(addr netip.Addr) error {
 	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+	if addr.Is6() && !r.nfr.HasIPV6Filter() {
 		return nil
 	}
 

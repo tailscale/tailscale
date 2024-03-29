@@ -121,6 +121,6 @@ func NewFakeIPTablesRunner() *iptablesRunner {
 	ipt4 := newFakeIPTables()
 	ipt6 := newFakeIPTables()
 
-	iptr := &iptablesRunner{ipt4, ipt6, true, true}
+	iptr := &iptablesRunner{ipt4, ipt6, true, true, true}
 	return iptr
 }

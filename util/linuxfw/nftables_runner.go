@@ -488,6 +488,12 @@ type NetfilterRunner interface {
 	// HasIPV6NAT reports true if the system supports IPv6 NAT.
 	HasIPV6NAT() bool
 
+	// HasIPV6Filter reports true if the system supports IPv6 filter tables
+	// This is only meaningful for iptables implementation, where hosts have
+	// partial ipables support (i.e missing filter table). For nftables
+	// implementation, this will default to the value of HasIPv6().
+	HasIPV6Filter() bool
+
 	// AddDNATRule adds a rule to the nat/PREROUTING chain to DNAT traffic
 	// destined for the given original destination to the given new destination.
 	// This is used to forward all traffic destined for the Tailscale interface
@@ -555,21 +561,16 @@ func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 
 	if supportsV6 {
 		nft6 = &nftable{Proto: nftables.TableFamilyIPv6}
-		// Kernel support for nftables was added after support for IPv6
-		// NAT, so no need for a separate IPv6 NAT support check.
-		// https://tldp.org/HOWTO/Linux+IPv6-HOWTO/ch18s04.html
-		// https://wiki.nftables.org/wiki-nftables/index.php/Building_and_installing_nftables_from_sources
 		logf("v6nat availability: true")
 	}
 
 	// TODO(KevinLiang10): convert iptables rule to nftable rules if they exist in the iptables
 
 	return &nftablesRunner{
-		conn:           conn,
-		nft4:           nft4,
-		nft6:           nft6,
-		v6Available:    supportsV6,
-		v6NATAvailable: supportsV6, // if nftables are supported, IPv6 NAT is supported
+		conn:        conn,
+		nft4:        nft4,
+		nft6:        nft6,
+		v6Available: supportsV6,
 	}, nil
 }
 
@@ -612,9 +613,20 @@ func (n *nftablesRunner) HasIPV6() bool {
 	return n.v6Available
 }
 
-// HasIPV6NAT returns true if the system supports IPv6 NAT.
+// HasIPV6NAT returns true if the system supports IPv6.
+// Kernel support for nftables was added after support for IPv6
+// NAT, so no need for a separate IPv6 NAT support check like we do for iptables.
+// https://tldp.org/HOWTO/Linux+IPv6-HOWTO/ch18s04.html
+// https://wiki.nftables.org/wiki-nftables/index.php/Building_and_installing_nftables_from_sources
 func (n *nftablesRunner) HasIPV6NAT() bool {
-	return n.v6NATAvailable
+	return n.v6Available
+}
+
+// HasIPV6Filter returns true if system supports IPv6. There are no known edge
+// cases where nftables running on a host that supports IPv6 would not support
+// filter table.
+func (n *nftablesRunner) HasIPV6Filter() bool {
+	return n.v6Available
 }
 
 // findRule iterates through the rules to find the rule with matching expressions.
