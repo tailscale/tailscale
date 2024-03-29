@@ -403,6 +403,8 @@ func (m *directManager) GetBaseConfig() (OSConfig, error) {
 }
 
 func (m *directManager) Close() error {
+	m.ctxClose()
+
 	// We used to keep a file for the tailscale config and symlinked
 	// to it, but then we stopped because /etc/resolv.conf being a
 	// symlink to surprising places breaks snaps and other sandboxing
