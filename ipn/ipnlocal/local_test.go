@@ -1153,13 +1153,15 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 }
 
 func TestOfferingAppConnector(t *testing.T) {
-	b := newTestBackend(t)
-	if b.OfferingAppConnector() {
-		t.Fatal("unexpected offering app connector")
-	}
-	b.appConnector = appc.NewAppConnector(t.Logf, nil)
-	if !b.OfferingAppConnector() {
-		t.Fatal("unexpected not offering app connector")
+	for _, shouldStore := range []bool{true, false} {
+		b := newTestBackend(t)
+		if b.OfferingAppConnector() {
+			t.Fatal("unexpected offering app connector")
+		}
+		b.appConnector = appc.NewAppConnector(t.Logf, nil, shouldStore)
+		if !b.OfferingAppConnector() {
+			t.Fatal("unexpected not offering app connector")
+		}
 	}
 }
 
@@ -1204,21 +1206,23 @@ func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
 }
 
 func TestObserveDNSResponse(t *testing.T) {
-	b := newTestBackend(t)
+	for _, shouldStore := range []bool{true, false} {
+		b := newTestBackend(t)
 
-	// ensure no error when no app connector is configured
-	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		// ensure no error when no app connector is configured
+		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 
-	rc := &appctest.RouteCollector{}
-	b.appConnector = appc.NewAppConnector(t.Logf, rc)
-	b.appConnector.UpdateDomains([]string{"example.com"})
-	b.appConnector.Wait(context.Background())
+		rc := &appctest.RouteCollector{}
+		b.appConnector = appc.NewAppConnector(t.Logf, rc, shouldStore)
+		b.appConnector.UpdateDomains([]string{"example.com"})
+		b.appConnector.Wait(context.Background())
 
-	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
-	b.appConnector.Wait(context.Background())
-	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
-	if !slices.Equal(rc.Routes(), wantRoutes) {
-		t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		b.appConnector.Wait(context.Background())
+		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
+		if !slices.Equal(rc.Routes(), wantRoutes) {
+			t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+		}
 	}
 }
 

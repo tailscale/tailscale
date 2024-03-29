@@ -2230,6 +2230,9 @@ const (
 
 	// NodeAttrDisableWebClient disables using the web client.
 	NodeAttrDisableWebClient NodeCapability = "disable-web-client"
+
+	// NodeAttrStoreAppCRoutes enables storing app connector routes persistently.
+	NodeAttrStoreAppCRoutes NodeCapability = "store-appc-routes"
 )
 
 // SetDNSRequest is a request to add a DNS record.
