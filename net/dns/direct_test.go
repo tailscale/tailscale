@@ -4,6 +4,7 @@
 package dns
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -78,7 +79,10 @@ func testDirect(t *testing.T, fs wholeFileFS) {
 		}
 	}
 
-	m := directManager{logf: t.Logf, fs: fs}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := directManager{logf: t.Logf, fs: fs, ctx: ctx, ctxClose: cancel}
 	if err := m.SetDNS(OSConfig{
 		Nameservers:   []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("8.8.4.4")},
 		SearchDomains: []dnsname.FQDN{"ts.net.", "ts-dns.test."},
