@@ -405,8 +405,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if err != nil {
 		log.Printf("error setting up sockstat logger: %v", err)
 	}
-	// Enable sockstats logs only on unstable builds
-	if version.IsUnstableBuild() && b.sockstatLogger != nil {
+	// Enable sockstats logs only on non-mobile unstable builds
+	if version.IsUnstableBuild() && !version.IsMobile() && b.sockstatLogger != nil {
 		b.sockstatLogger.SetLoggingEnabled(true)
 	}
 
