@@ -3144,6 +3144,21 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 	return nil
 }
 
+func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
+	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
+	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
+	routeInfo := b.appConnector.RouteInfo()
+	curRoutes := routeInfo.Routes(false, true, true)
+
+	if mp.AdvertiseRoutesSet && b.appConnector.ShouldStoreRoutes {
+		routeInfo.Local = mp.AdvertiseRoutes
+		b.StoreRouteInfo(routeInfo)
+		curRoutes := append(curRoutes, mp.AdvertiseRoutes...)
+		mp.AdvertiseRoutes = curRoutes
+	}
+	return b.EditPrefs(mp)
+}
+
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	b.mu.Lock()
 	if mp.EggSet {
@@ -6055,10 +6070,12 @@ func (b *LocalBackend) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
 	}
 	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
 	bs, err := b.pm.Store().ReadState(key)
-	if err != nil {
-		return nil, err
-	}
 	ri := &routeinfo.RouteInfo{}
+	if err != nil && err != ipn.ErrStateNotExist {
+		return nil, err
+	} else if err == ipn.ErrStateNotExist {
+		return ri, nil
+	}
 	if err := json.Unmarshal(bs, ri); err != nil {
 		return nil, err
 	}
