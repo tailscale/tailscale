@@ -14,6 +14,7 @@ import (
 type RouteCollector struct {
 	routes        []netip.Prefix
 	removedRoutes []netip.Prefix
+	routeInfo     *routeinfo.RouteInfo
 }
 
 func (rc *RouteCollector) AdvertiseRoute(pfx ...netip.Prefix) error {
@@ -35,11 +36,15 @@ func (rc *RouteCollector) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 }
 
 func (rc *RouteCollector) StoreRouteInfo(ri *routeinfo.RouteInfo) error {
+	rc.routeInfo = ri
 	return nil
 }
 
 func (rc *RouteCollector) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
-	return nil, nil
+	if rc.routeInfo == nil {
+		return routeinfo.NewRouteInfo(), nil
+	}
+	return rc.routeInfo, nil
 }
 
 // RemovedRoutes returns the list of routes that were removed.
