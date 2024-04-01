@@ -2685,3 +2685,54 @@ func TestReadWriteRouteInfo(t *testing.T) {
 		t.Fatalf("wanted %v, got %v", routes[prefix3], dr.Routes[prefix3])
 	}
 }
+
+func TestPatchPrefsHandler(t *testing.T) {
+	// test can read what's written
+	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
+	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
+	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
+	rc := &appctest.RouteCollector{}
+	testAppConnector := appc.NewAppConnector(t.Logf, rc, true)
+	mp := new(ipn.MaskedPrefs)
+	mp.AdvertiseRoutesSet = true
+	mp.AdvertiseRoutes = []netip.Prefix{prefix1}
+	now := time.Now()
+	ri := routeinfo.NewRouteInfo()
+	ri.Control = []netip.Prefix{prefix2}
+	discovered := make(map[string]*routeinfo.DatedRoutes)
+	routes := make(map[netip.Prefix]time.Time)
+	routes[prefix3] = now
+	discovered["example.com"] = &routeinfo.DatedRoutes{
+		LastCleanup: now,
+		Routes:      routes,
+	}
+	ri.Discovered = discovered
+	b := newTestBackend(t)
+	b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+	if b.appConnector != nil {
+		t.Fatal("unexpected app connector")
+	}
+	b.appConnector = testAppConnector
+
+	prefView, err := b.PatchPrefsHandler(mp)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if prefView.AdvertiseRoutes().Len() != 3 {
+		t.Fatalf("wanted %d, got %d", 3, prefView.AdvertiseRoutes().Len())
+	}
+
+	if !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix1) {
+		t.Fatalf("New prefix was not advertised")
+	}
+
+	if !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix2) || !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix3) {
+		t.Fatalf("Old prefixes are no longer advertised.")
+	}
+
+	//TODO: test if route if stored in Appc/Appc.routeAdvertiser
+
+	//TODO: patch again with no route, see if prefix1 is removed/ prefix2, prefix3 presists.
+
+}

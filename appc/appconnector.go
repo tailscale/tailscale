@@ -101,6 +101,18 @@ func (e *AppConnector) UpdateDomainsAndRoutes(domains []string, routes []netip.P
 	})
 }
 
+func (e *AppConnector) RouteInfo() *routeinfo.RouteInfo {
+	if e.routeInfo == nil {
+		ret, err := e.routeAdvertiser.ReadRouteInfo()
+		if err != nil {
+			e.logf("Unsuccessful Read RouteInfo: ", err)
+			return routeinfo.NewRouteInfo()
+		}
+		return ret
+	}
+	return e.routeInfo
+}
+
 // UpdateDomains asynchronously replaces the current set of configured domains
 // with the supplied set of domains. Domains must not contain a trailing dot,
 // and should be lower case. If the domain contains a leading '*' label it
