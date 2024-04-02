@@ -82,9 +82,9 @@ type Direct struct {
 
 	dialPlan ControlDialPlanner // can be nil
 
-	mu             sync.Mutex        // mutex guards the following fields
-	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
-	serverNoiseKey key.MachinePublic
+	mu              sync.Mutex        // mutex guards the following fields
+	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
+	serverNoiseKey  key.MachinePublic
 
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
@@ -436,12 +436,6 @@ type loginOpt struct {
 	OldNodeKeySignature tkatype.MarshaledSignature
 }
 
-// httpClient provides a common interface for the noiseClient and
-// the NaCl box http.Client.
-type httpClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
-
 // hostInfoLocked returns a Clone of c.hostinfo and c.netinfo.
 // It must only be called with c.mu held.
 func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
@@ -454,7 +448,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.mu.Lock()
 	persist := c.persist.AsStruct()
 	tryingNewKey := c.tryingNewKey
-	serverKey := c.serverKey
+	serverKey := c.serverLegacyKey
 	serverNoiseKey := c.serverNoiseKey
 	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
@@ -494,20 +488,22 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
 
 		c.mu.Lock()
-		c.serverKey = keys.LegacyPublicKey
+		c.serverLegacyKey = keys.LegacyPublicKey
 		c.serverNoiseKey = keys.PublicKey
 		c.mu.Unlock()
 		serverKey = keys.LegacyPublicKey
 		serverNoiseKey = keys.PublicKey
 
-		// For servers supporting the Noise transport,
-		// proactively shut down our TLS TCP connection.
+		// Proactively shut down our TLS TCP connection.
 		// We're not going to need it and it's nicer to the
 		// server.
-		if !serverNoiseKey.IsZero() {
-			c.httpc.CloseIdleConnections()
-		}
+		c.httpc.CloseIdleConnections()
 	}
+
+	if serverNoiseKey.IsZero() {
+		return false, "", nil, errors.New("control server is too old; no noise key")
+	}
+
 	var oldNodeKey key.NodePublic
 	switch {
 	case opt.Logout:
@@ -594,7 +590,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.UserProfile.LoginName
 	request.Auth.AuthKey = authKey
-	err = signRegisterRequest(&request, c.serverURL, c.serverKey, machinePrivKey.Public())
+	err = signRegisterRequest(&request, c.serverURL, c.serverLegacyKey, machinePrivKey.Public())
 	if err != nil {
 		// If signing failed, clear all related fields
 		request.SignatureType = tailcfg.SignatureNone
@@ -614,21 +610,16 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 
 	// URL and httpc are protocol specific.
-	var url string
-	var httpc httpClient
-	if serverNoiseKey.IsZero() {
-		httpc = c.httpc
-		url = fmt.Sprintf("%s/machine/%s", c.serverURL, machinePrivKey.Public().UntypedHexString())
-	} else {
-		request.Version = tailcfg.CurrentCapabilityVersion
-		httpc, err = c.getNoiseClient()
-		if err != nil {
-			return regen, opt.URL, nil, fmt.Errorf("getNoiseClient: %w", err)
-		}
-		url = fmt.Sprintf("%s/machine/register", c.serverURL)
-		url = strings.Replace(url, "http:", "https:", 1)
+
+	request.Version = tailcfg.CurrentCapabilityVersion
+	httpc, err := c.getNoiseClient()
+	if err != nil {
+		return regen, opt.URL, nil, fmt.Errorf("getNoiseClient: %w", err)
 	}
-	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
+	url := fmt.Sprintf("%s/machine/register", c.serverURL)
+	url = strings.Replace(url, "http:", "https:", 1)
+
+	bodyData, err := encode(request)
 	if err != nil {
 		return regen, opt.URL, nil, err
 	}
@@ -650,7 +641,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	resp := tailcfg.RegisterResponse{}
-	if err := decode(res, &resp, serverKey, serverNoiseKey, machinePrivKey); err != nil {
+	if err := decode(res, &resp); err != nil {
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
 	}
@@ -844,7 +835,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	c.mu.Lock()
 	persist := c.persist
 	serverURL := c.serverURL
-	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
@@ -857,6 +847,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		epTypes = append(epTypes, ep.Type)
 	}
 	c.mu.Unlock()
+
+	if serverNoiseKey.IsZero() {
+		return errors.New("control server is too old; no noise key")
+	}
 
 	machinePrivKey, err := c.getMachinePrivKey()
 	if err != nil {
@@ -914,7 +908,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 	request.Compress = "zstd"
 
-	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
+	bodyData, err := encode(request)
 	if err != nil {
 		vlogf("netmap: encode: %v", err)
 		return err
@@ -926,20 +920,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	machinePubKey := machinePrivKey.Public()
 	t0 := c.clock.Now()
 
-	// Url and httpc are protocol specific.
-	var url string
-	var httpc httpClient
-	if serverNoiseKey.IsZero() {
-		httpc = c.httpc
-		url = fmt.Sprintf("%s/machine/%s/map", serverURL, machinePubKey.UntypedHexString())
-	} else {
-		httpc, err = c.getNoiseClient()
-		if err != nil {
-			return fmt.Errorf("getNoiseClient: %w", err)
-		}
-		url = fmt.Sprintf("%s/machine/map", serverURL)
-		url = strings.Replace(url, "http:", "https:", 1)
+	httpc, err := c.getNoiseClient()
+	if err != nil {
+		return fmt.Errorf("getNoiseClient: %w", err)
 	}
+	url := fmt.Sprintf("%s/machine/map", serverURL)
+	url = strings.Replace(url, "http:", "https:", 1)
 
 	// Create a watchdog timer that breaks the connection if we don't receive a
 	// MapResponse from the network at least once every two minutes. The
@@ -1047,7 +1033,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		vlogf("netmap: read body after %v", time.Since(t0).Round(time.Millisecond))
 
 		var resp tailcfg.MapResponse
-		if err := c.decodeMsg(msg, &resp, machinePrivKey); err != nil {
+		if err := c.decodeMsg(msg, &resp); err != nil {
 			vlogf("netmap: decode error: %v", err)
 			return err
 		}
@@ -1164,9 +1150,8 @@ func initDisplayNames(selfNode tailcfg.NodeView, resp *tailcfg.MapResponse) {
 	}
 }
 
-// decode JSON decodes the res.Body into v. If serverNoiseKey is not specified,
-// it uses the serverKey and mkey to decode the message from the NaCl-crypto-box.
-func decode(res *http.Response, v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) error {
+// decode JSON decodes the res.Body into v.
+func decode(res *http.Response, v any) error {
 	defer res.Body.Close()
 	msg, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
@@ -1175,10 +1160,7 @@ func decode(res *http.Response, v any, serverKey, serverNoiseKey key.MachinePubl
 	if res.StatusCode != 200 {
 		return fmt.Errorf("%d: %v", res.StatusCode, string(msg))
 	}
-	if !serverNoiseKey.IsZero() {
-		return json.Unmarshal(msg, v)
-	}
-	return decodeMsg(msg, v, serverKey, mkey)
+	return json.Unmarshal(msg, v)
 }
 
 var (
@@ -1189,25 +1171,8 @@ var (
 var jsonEscapedZero = []byte(`\u0000`)
 
 // decodeMsg is responsible for uncompressing msg and unmarshaling into v.
-// If c.serverNoiseKey is not specified, it uses the c.serverKey and mkey
-// to first the decrypt msg from the NaCl-crypto-box.
-func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
-	c.mu.Lock()
-	serverKey := c.serverKey
-	serverNoiseKey := c.serverNoiseKey
-	c.mu.Unlock()
-
-	var decrypted []byte
-	if serverNoiseKey.IsZero() {
-		var ok bool
-		decrypted, ok = mkey.OpenFrom(serverKey, msg)
-		if !ok {
-			return errors.New("cannot decrypt response")
-		}
-	} else {
-		decrypted = msg
-	}
-	b, err := zstdframe.AppendDecode(nil, decrypted)
+func (c *Direct) decodeMsg(compressedMsg []byte, v any) error {
+	b, err := zstdframe.AppendDecode(nil, compressedMsg)
 	if err != nil {
 		return err
 	}
@@ -1224,26 +1189,11 @@ func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
 		return fmt.Errorf("response: %v", err)
 	}
 	return nil
-
 }
 
-func decodeMsg(msg []byte, v any, serverKey key.MachinePublic, machinePrivKey key.MachinePrivate) error {
-	decrypted, ok := machinePrivKey.OpenFrom(serverKey, msg)
-	if !ok {
-		return errors.New("cannot decrypt response")
-	}
-	if bytes.Contains(decrypted, jsonEscapedZero) {
-		log.Printf("[unexpected] zero byte in controlclient decodeMsg into %T: %q", v, decrypted)
-	}
-	if err := json.Unmarshal(decrypted, v); err != nil {
-		return fmt.Errorf("response: %v", err)
-	}
-	return nil
-}
-
-// encode JSON encodes v. If serverNoiseKey is not specified, it uses the serverKey and mkey to
-// seal the message into a NaCl-crypto-box.
-func encode(v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) ([]byte, error) {
+// encode JSON encodes v as JSON, logging tailcfg.MapRequest values if
+// debugMap is set.
+func encode(v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -1253,10 +1203,7 @@ func encode(v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.Machine
 			log.Printf("MapRequest: %s", b)
 		}
 	}
-	if !serverNoiseKey.IsZero() {
-		return b, nil
-	}
-	return mkey.SealTo(serverKey, b), nil
+	return b, nil
 }
 
 func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string) (*tailcfg.OverTLSPublicKeyResponse, error) {
@@ -1353,7 +1300,7 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 
 func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 	httpc := c.httpc
-	useNoise := pr.URLIsNoise || pr.Types == "c2n" && c.noiseConfigured()
+	useNoise := pr.URLIsNoise || pr.Types == "c2n"
 	if useNoise {
 		nc, err := c.getNoiseClient()
 		if err != nil {
@@ -1554,14 +1501,6 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	return nil
 }
 
-// noiseConfigured reports whether the client can communicate with Control
-// over Noise.
-func (c *Direct) noiseConfigured() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return !c.serverNoiseKey.IsZero()
-}
-
 // SetDNS sends the SetDNSRequest request to the control plane server,
 // requesting a DNS record be created or updated.
 func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err error) {
@@ -1571,53 +1510,7 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 			metricSetDNSError.Add(1)
 		}
 	}()
-	if c.noiseConfigured() {
-		return c.setDNSNoise(ctx, req)
-	}
-	c.mu.Lock()
-	serverKey := c.serverKey
-	c.mu.Unlock()
-
-	if serverKey.IsZero() {
-		return errors.New("zero serverKey")
-	}
-	machinePrivKey, err := c.getMachinePrivKey()
-	if err != nil {
-		return fmt.Errorf("getMachinePrivKey: %w", err)
-	}
-	if machinePrivKey.IsZero() {
-		return errors.New("getMachinePrivKey returned zero key")
-	}
-
-	// TODO(maisem): dedupe this codepath from SetDNSNoise.
-	var serverNoiseKey key.MachinePublic
-	bodyData, err := encode(req, serverKey, serverNoiseKey, machinePrivKey)
-	if err != nil {
-		return err
-	}
-	body := bytes.NewReader(bodyData)
-
-	u := fmt.Sprintf("%s/machine/%s/set-dns", c.serverURL, machinePrivKey.Public().UntypedHexString())
-	hreq, err := http.NewRequestWithContext(ctx, "POST", u, body)
-	if err != nil {
-		return err
-	}
-	res, err := c.httpc.Do(hreq)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		msg, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
-	}
-	var setDNSRes tailcfg.SetDNSResponse
-	if err := decode(res, &setDNSRes, serverKey, serverNoiseKey, machinePrivKey); err != nil {
-		c.logf("error decoding SetDNSResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
-		return fmt.Errorf("set-dns-response: %w", err)
-	}
-
-	return nil
+	return c.setDNSNoise(ctx, req)
 }
 
 func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {

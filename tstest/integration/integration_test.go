@@ -562,16 +562,11 @@ func TestAddPingRequest(t *testing.T) {
 func TestC2NPingRequest(t *testing.T) {
 	tstest.Shard(t)
 	tstest.Parallel(t)
-	env := newTestEnv(t)
-	n1 := newTestNode(t, env)
-	n1.StartDaemon()
 
-	n1.AwaitListening()
-	n1.MustUp()
-	n1.AwaitRunning()
+	env := newTestEnv(t)
 
 	gotPing := make(chan bool, 1)
-	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	env.Control.HandleC2N = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			t.Errorf("unexpected ping method %q", r.Method)
 		}
@@ -584,8 +579,14 @@ func TestC2NPingRequest(t *testing.T) {
 			t.Errorf("body error\n got: %q\nwant: %q", got, want)
 		}
 		gotPing <- true
-	}))
-	defer waitPing.Close()
+	})
+
+	n1 := newTestNode(t, env)
+	n1.StartDaemon()
+
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
 
 	nodes := env.Control.AllNodes()
 	if len(nodes) != 1 {
@@ -604,7 +605,7 @@ func TestC2NPingRequest(t *testing.T) {
 		cancel()
 
 		pr := &tailcfg.PingRequest{
-			URL:     fmt.Sprintf("%s/ping-%d", waitPing.URL, try),
+			URL:     fmt.Sprintf("https://unused/some-c2n-path/ping-%d", try),
 			Log:     true,
 			Types:   "c2n",
 			Payload: []byte("POST /echo HTTP/1.0\r\nContent-Length: 3\r\n\r\nabc"),
