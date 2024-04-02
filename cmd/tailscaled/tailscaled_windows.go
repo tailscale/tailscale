@@ -48,7 +48,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tstun"
-	"tailscale.com/tailfs/tailfsimpl"
+	"tailscale.com/taildrive/taildriveimpl"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -316,7 +316,7 @@ func beWindowsSubprocess() bool {
 	}
 	sys.Set(netMon)
 
-	sys.Set(tailfsimpl.NewFileSystemForRemote(log.Printf))
+	sys.Set(taildriveimpl.NewFileSystemForRemote(log.Printf))
 
 	publicLogID, _ := logid.ParsePublicID(logID)
 	err = startIPNServer(ctx, log.Printf, publicLogID, sys)

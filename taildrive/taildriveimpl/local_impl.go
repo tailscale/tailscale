@@ -1,8 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tailfsimpl provides an implementation of package tailfs.
-package tailfsimpl
+// Package taildriveimpl provides an implementation of package taildrive.
+package taildriveimpl
 
 import (
 	"log"
@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"time"
 
-	"tailscale.com/tailfs"
-	"tailscale.com/tailfs/tailfsimpl/compositedav"
-	"tailscale.com/tailfs/tailfsimpl/dirfs"
+	"tailscale.com/taildrive"
+	"tailscale.com/taildrive/taildriveimpl/compositedav"
+	"tailscale.com/taildrive/taildriveimpl/dirfs"
 	"tailscale.com/types/logger"
 )
 
@@ -69,7 +69,7 @@ func (s *FileSystemForLocal) HandleConn(conn net.Conn, remoteAddr net.Addr) erro
 // SetRemotes sets the complete set of remotes on the given tailnet domain
 // using a map of name -> url. If transport is specified, that transport
 // will be used to connect to these remotes.
-func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*tailfs.Remote, transport http.RoundTripper) {
+func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*taildrive.Remote, transport http.RoundTripper) {
 	children := make([]*compositedav.Child, 0, len(remotes))
 	for _, remote := range remotes {
 		children = append(children, &compositedav.Child{

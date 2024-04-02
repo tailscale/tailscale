@@ -11,7 +11,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
+	"tailscale.com/taildrive"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
@@ -92,8 +92,8 @@ func (v PrefsView) AutoUpdate() AutoUpdatePrefs           { return v.ж.AutoUpda
 func (v PrefsView) AppConnector() AppConnectorPrefs       { return v.ж.AppConnector }
 func (v PrefsView) PostureChecking() bool                 { return v.ж.PostureChecking }
 func (v PrefsView) NetfilterKind() string                 { return v.ж.NetfilterKind }
-func (v PrefsView) TailFSShares() views.SliceView[*tailfs.Share, tailfs.ShareView] {
-	return views.SliceOfViews[*tailfs.Share, tailfs.ShareView](v.ж.TailFSShares)
+func (v PrefsView) TailFSShares() views.SliceView[*taildrive.Share, taildrive.ShareView] {
+	return views.SliceOfViews[*taildrive.Share, taildrive.ShareView](v.ж.TailFSShares)
 }
 func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
@@ -125,7 +125,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
-	TailFSShares           []*tailfs.Share
+	TailFSShares           []*taildrive.Share
 	Persist                *persist.Persist
 }{})
 

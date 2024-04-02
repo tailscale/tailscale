@@ -1,13 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tailfs provides a filesystem that allows sharing folders between
-// Tailscale nodes using WebDAV. The actual implementation of the core TailFS
-// functionality lives in package tailfsimpl. These packages are separated to
-// allow users of tailfs to refer to the interfaces without having a hard
-// dependency on tailfs, so that programs which don't actually use tailfs can
+// Package taildrive provides a filesystem that allows sharing folders between
+// Tailscale nodes using WebDAV. The actual implementation of the core taildrive
+// functionality lives in package taildriveimpl. These packages are separated to
+// allow users of taildrive to refer to the interfaces without having a hard
+// dependency on taildrive, so that programs which don't actually use taildrive can
 // avoid its transitive dependencies.
-package tailfs
+package taildrive
 
 import (
 	"net"

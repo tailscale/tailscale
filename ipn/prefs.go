@@ -22,7 +22,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
+	"tailscale.com/taildrive"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -227,7 +227,7 @@ type Prefs struct {
 
 	// TailFSShares are the configured TailFSShares, stored in increasing order
 	// by name.
-	TailFSShares []*tailfs.Share
+	TailFSShares []*taildrive.Share
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -564,7 +564,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
-		slices.EqualFunc(p.TailFSShares, p2.TailFSShares, tailfs.SharesEqual) &&
+		slices.EqualFunc(p.TailFSShares, p2.TailFSShares, taildrive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind
 }
 

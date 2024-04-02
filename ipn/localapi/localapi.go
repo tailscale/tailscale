@@ -46,8 +46,8 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrive"
 	"tailscale.com/taildrop"
-	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -2765,7 +2765,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "PUT":
-		var share tailfs.Share
+		var share taildrive.Share
 		err := json.NewDecoder(r.Body).Decode(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2781,7 +2781,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not a directory", http.StatusBadRequest)
 			return
 		}
-		if tailfs.AllowShareAs() {
+		if taildrive.AllowShareAs() {
 			// share as the connected user
 			username, err := h.getUsername()
 			if err != nil {

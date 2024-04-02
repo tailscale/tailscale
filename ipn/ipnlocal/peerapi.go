@@ -38,8 +38,8 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrive"
 	"tailscale.com/taildrop"
-	"tailscale.com/tailfs"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
@@ -1161,7 +1161,7 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 		rawPerms = append(rawPerms, []byte(cap))
 	}
 
-	p, err := tailfs.ParsePermissions(rawPerms)
+	p, err := taildrive.ParsePermissions(rawPerms)
 	if err != nil {
 		h.logf("tailfs: error parsing permissions: %w", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)

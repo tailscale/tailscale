@@ -3,7 +3,7 @@
 
 //go:build !unix
 
-package tailfs
+package taildrive
 
 func doAllowShareAs() bool {
 	// On non-UNIX platforms, we use the GUI application (e.g. Windows taskbar

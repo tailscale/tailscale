@@ -3,7 +3,7 @@
 
 //go:build unix
 
-package tailfs
+package taildrive
 
 import "tailscale.com/version"
 

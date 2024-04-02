@@ -10,7 +10,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
+	"tailscale.com/taildrive"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 )
@@ -26,7 +26,7 @@ func (src *Prefs) Clone() *Prefs {
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
 	if src.TailFSShares != nil {
-		dst.TailFSShares = make([]*tailfs.Share, len(src.TailFSShares))
+		dst.TailFSShares = make([]*taildrive.Share, len(src.TailFSShares))
 		for i := range dst.TailFSShares {
 			dst.TailFSShares[i] = src.TailFSShares[i].Clone()
 		}
@@ -63,7 +63,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
-	TailFSShares           []*tailfs.Share
+	TailFSShares           []*taildrive.Share
 	Persist                *persist.Persist
 }{})
 

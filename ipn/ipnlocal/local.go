@@ -68,8 +68,8 @@ import (
 	"tailscale.com/portlist"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/taildrive"
 	"tailscale.com/taildrop"
-	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -318,7 +318,7 @@ type LocalBackend struct {
 
 	// lastNotifiedTailFSShares keeps track of the last set of shares that we
 	// notified about.
-	lastNotifiedTailFSShares atomic.Pointer[views.SliceView[*tailfs.Share, tailfs.ShareView]]
+	lastNotifiedTailFSShares atomic.Pointer[views.SliceView[*taildrive.Share, taildrive.ShareView]]
 
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
@@ -447,7 +447,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if ok {
 		currentShares := b.pm.prefs.TailFSShares()
 		if currentShares.Len() > 0 {
-			var shares []*tailfs.Share
+			var shares []*taildrive.Share
 			for i := 0; i < currentShares.Len(); i++ {
 				shares = append(shares, currentShares.At(i).AsStruct())
 			}

@@ -35,7 +35,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
+	"tailscale.com/taildrive"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -206,7 +206,7 @@ type Config struct {
 
 	// TailFSForLocal, if populated, will cause the engine to expose a TailFS
 	// listener at 100.100.100.100:8080.
-	TailFSForLocal tailfs.FileSystemForLocal
+	TailFSForLocal taildrive.FileSystemForLocal
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
