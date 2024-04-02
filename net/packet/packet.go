@@ -416,13 +416,13 @@ func (q *Parsed) IsError() bool {
 			return false
 		}
 		t := ICMP4Type(q.b[q.subofs])
-		return t == ICMP4Unreachable || t == ICMP4TimeExceeded
+		return t == ICMP4Unreachable || t == ICMP4TimeExceeded || t == ICMP4ParamProblem
 	case ipproto.ICMPv6:
 		if len(q.b) < q.subofs+8 {
 			return false
 		}
 		t := ICMP6Type(q.b[q.subofs])
-		return t == ICMP6Unreachable || t == ICMP6TimeExceeded
+		return t == ICMP6Unreachable || t == ICMP6PacketTooBig || t == ICMP6TimeExceeded || t == ICMP6ParamProblem
 	default:
 		return false
 	}
