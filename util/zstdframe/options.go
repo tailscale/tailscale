@@ -5,6 +5,7 @@ package zstdframe
 
 import (
 	"math/bits"
+	"strconv"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
@@ -52,12 +53,46 @@ type maxDecodedSize uint64
 
 func (maxDecodedSize) isOption() {}
 
+type maxDecodedSizeLog2 uint8 // uint8 avoids allocation when storing into interface
+
+func (maxDecodedSizeLog2) isOption() {}
+
 // MaxDecodedSize specifies the maximum decoded size and
 // is used to protect against hostile content.
 // By default, there is no limit.
 // This option is ignored when encoding.
 func MaxDecodedSize(maxSize uint64) Option {
+	if bits.OnesCount64(maxSize) == 1 {
+		return maxDecodedSizeLog2(log2(maxSize))
+	}
 	return maxDecodedSize(maxSize)
+}
+
+type maxWindowSizeLog2 uint8 // uint8 avoids allocation when storing into interface
+
+func (maxWindowSizeLog2) isOption() {}
+
+// MaxWindowSize specifies the maximum window size, which must be a power-of-two
+// and be in the range of [[zstd.MinWindowSize], [zstd.MaxWindowSize]].
+//
+// The compression or decompression algorithm will use a LZ77 rolling window
+// no larger than the specified size. The compression ratio will be
+// adversely affected, but memory requirements will be lower.
+// When decompressing, an error is reported if a LZ77 back reference exceeds
+// the specified maximum window size.
+//
+// For decompression, [MaxDecodedSize] is generally more useful.
+func MaxWindowSize(maxSize uint64) Option {
+	switch {
+	case maxSize < zstd.MinWindowSize:
+		panic("maximum window size cannot be less than " + strconv.FormatUint(zstd.MinWindowSize, 10))
+	case bits.OnesCount64(maxSize) != 1:
+		panic("maximum window size must be a power-of-two")
+	case maxSize > zstd.MaxWindowSize:
+		panic("maximum window size cannot be greater than " + strconv.FormatUint(zstd.MaxWindowSize, 10))
+	default:
+		return maxWindowSizeLog2(log2(maxSize))
+	}
 }
 
 type lowMemory bool
@@ -72,9 +107,10 @@ func LowMemory(low bool) Option { return lowMemory(low) }
 var encoderPools sync.Map // map[encoderOptions]*sync.Pool -> *zstd.Encoder
 
 type encoderOptions struct {
-	level     zstd.EncoderLevel
-	checksum  bool
-	lowMemory bool
+	level         zstd.EncoderLevel
+	maxWindowLog2 uint8
+	checksum      bool
+	lowMemory     bool
 }
 
 type encoder struct {
@@ -88,6 +124,8 @@ func getEncoder(opts ...Option) encoder {
 		switch opt := opt.(type) {
 		case encoderLevel:
 			eopts.level = zstd.EncoderLevel(opt)
+		case maxWindowSizeLog2:
+			eopts.maxWindowLog2 = uint8(opt)
 		case withChecksum:
 			eopts.checksum = bool(opt)
 		case lowMemory:
@@ -102,7 +140,8 @@ func getEncoder(opts ...Option) encoder {
 	pool := vpool.(*sync.Pool)
 	enc, _ := pool.Get().(*zstd.Encoder)
 	if enc == nil {
-		enc = must.Get(zstd.NewWriter(nil,
+		var noopts int
+		zopts := [...]zstd.EOption{
 			// Set concurrency=1 to ensure synchronous operation.
 			zstd.WithEncoderConcurrency(1),
 			// In stateless compression, the data is already in a single buffer,
@@ -115,7 +154,15 @@ func getEncoder(opts ...Option) encoder {
 			zstd.WithZeroFrames(true),
 			zstd.WithEncoderLevel(eopts.level),
 			zstd.WithEncoderCRC(eopts.checksum),
-			zstd.WithLowerEncoderMem(eopts.lowMemory)))
+			zstd.WithLowerEncoderMem(eopts.lowMemory),
+			nil, // reserved for zstd.WithWindowSize
+		}
+		if eopts.maxWindowLog2 > 0 {
+			zopts[len(zopts)-noopts-1] = zstd.WithWindowSize(1 << eopts.maxWindowLog2)
+		} else {
+			noopts++
+		}
+		enc = must.Get(zstd.NewWriter(nil, zopts[:len(zopts)-noopts]...))
 	}
 	return encoder{pool, enc}
 }
@@ -125,9 +172,10 @@ func putEncoder(e encoder) { e.pool.Put(e.Encoder) }
 var decoderPools sync.Map // map[decoderOptions]*sync.Pool -> *zstd.Decoder
 
 type decoderOptions struct {
-	maxSizeLog2 int
-	checksum    bool
-	lowMemory   bool
+	maxSizeLog2   uint8
+	maxWindowLog2 uint8
+	checksum      bool
+	lowMemory     bool
 }
 
 type decoder struct {
@@ -142,10 +190,14 @@ func getDecoder(opts ...Option) decoder {
 	dopts := decoderOptions{maxSizeLog2: 63, checksum: true}
 	for _, opt := range opts {
 		switch opt := opt.(type) {
+		case maxDecodedSizeLog2:
+			maxSize = 1 << uint8(opt)
+			dopts.maxSizeLog2 = uint8(opt)
 		case maxDecodedSize:
 			maxSize = uint64(opt)
-			dopts.maxSizeLog2 = 64 - bits.LeadingZeros64(maxSize-1)
-			dopts.maxSizeLog2 = min(max(10, dopts.maxSizeLog2), 63)
+			dopts.maxSizeLog2 = uint8(log2(maxSize))
+		case maxWindowSizeLog2:
+			dopts.maxWindowLog2 = uint8(opt)
 		case withChecksum:
 			dopts.checksum = bool(opt)
 		case lowMemory:
@@ -160,12 +212,21 @@ func getDecoder(opts ...Option) decoder {
 	pool := vpool.(*sync.Pool)
 	dec, _ := pool.Get().(*zstd.Decoder)
 	if dec == nil {
-		dec = must.Get(zstd.NewReader(nil,
+		var noopts int
+		zopts := [...]zstd.DOption{
 			// Set concurrency=1 to ensure synchronous operation.
 			zstd.WithDecoderConcurrency(1),
-			zstd.WithDecoderMaxMemory(1<<dopts.maxSizeLog2),
+			zstd.WithDecoderMaxMemory(1 << min(max(10, dopts.maxSizeLog2), 63)),
 			zstd.IgnoreChecksum(!dopts.checksum),
-			zstd.WithDecoderLowmem(dopts.lowMemory)))
+			zstd.WithDecoderLowmem(dopts.lowMemory),
+			nil, // reserved for zstd.WithDecoderMaxWindow
+		}
+		if dopts.maxWindowLog2 > 0 {
+			zopts[len(zopts)-noopts-1] = zstd.WithDecoderMaxWindow(1 << dopts.maxWindowLog2)
+		} else {
+			noopts++
+		}
+		dec = must.Get(zstd.NewReader(nil, zopts[:len(zopts)-noopts]...))
 	}
 	return decoder{pool, dec, maxSize}
 }
@@ -181,3 +242,6 @@ func (d decoder) DecodeAll(src, dst []byte) ([]byte, error) {
 	}
 	return dst2, err
 }
+
+// log2 computes log2 of x rounded up to the nearest integer.
+func log2(x uint64) int { return 64 - bits.LeadingZeros64(x-1) }

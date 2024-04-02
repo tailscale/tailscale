@@ -121,6 +121,7 @@ func BenchmarkEncode(b *testing.B) {
 		{name: "Default", opts: []Option{DefaultCompression}},
 		{name: "Fastest", opts: []Option{FastestCompression}},
 		{name: "FastestLowMemory", opts: []Option{FastestCompression, LowMemory(true)}},
+		{name: "FastestWindowSize", opts: []Option{FastestCompression, MaxWindowSize(1 << 10)}},
 		{name: "FastestNoChecksum", opts: []Option{FastestCompression, WithChecksum(false)}},
 	}
 	for _, bb := range options {
@@ -206,4 +207,32 @@ func BenchmarkDecodeParallel(b *testing.B) {
 			}
 		})
 	}
+}
+
+var opt Option
+
+func TestOptionAllocs(t *testing.T) {
+	t.Run("EncoderLevel", func(t *testing.T) {
+		t.Log(testing.AllocsPerRun(1e3, func() { opt = EncoderLevel(zstd.SpeedFastest) }))
+	})
+	t.Run("MaxDecodedSize/PowerOfTwo", func(t *testing.T) {
+		t.Log(testing.AllocsPerRun(1e3, func() { opt = MaxDecodedSize(1024) }))
+	})
+	t.Run("MaxDecodedSize/Prime", func(t *testing.T) {
+		t.Log(testing.AllocsPerRun(1e3, func() { opt = MaxDecodedSize(1021) }))
+	})
+	t.Run("MaxWindowSize", func(t *testing.T) {
+		t.Log(testing.AllocsPerRun(1e3, func() { opt = MaxWindowSize(1024) }))
+	})
+	t.Run("LowMemory", func(t *testing.T) {
+		t.Log(testing.AllocsPerRun(1e3, func() { opt = LowMemory(true) }))
+	})
+}
+
+func TestGetDecoderAllocs(t *testing.T) {
+	t.Log(testing.AllocsPerRun(1e3, func() { getDecoder() }))
+}
+
+func TestGetEncoderAllocs(t *testing.T) {
+	t.Log(testing.AllocsPerRun(1e3, func() { getEncoder() }))
 }
