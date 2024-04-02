@@ -87,7 +87,7 @@ func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, shouldSt
 		logf:              logger.WithPrefix(logf, "appc: "),
 		routeAdvertiser:   routeAdvertiser,
 		ShouldStoreRoutes: shouldStoreRoutes,
-		routeInfo:         routeinfo.NewRouteInfo(),
+		routeInfo:         nil,
 	}
 }
 
