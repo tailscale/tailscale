@@ -272,6 +272,7 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		proxyImage:             image,
 		proxyPriorityClassName: priorityClassName,
 		tsFirewallMode:         tsFirewallMode,
+		controlURL:             s.ControlURL,
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
