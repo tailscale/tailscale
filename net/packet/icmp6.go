@@ -20,7 +20,9 @@ type ICMP6Type uint8
 
 const (
 	ICMP6Unreachable  ICMP6Type = 1
+	ICMP6PacketTooBig ICMP6Type = 2
 	ICMP6TimeExceeded ICMP6Type = 3
+	ICMP6ParamProblem ICMP6Type = 4
 	ICMP6EchoRequest  ICMP6Type = 128
 	ICMP6EchoReply    ICMP6Type = 129
 )
@@ -29,8 +31,12 @@ func (t ICMP6Type) String() string {
 	switch t {
 	case ICMP6Unreachable:
 		return "Unreachable"
+	case ICMP6PacketTooBig:
+		return "PacketTooBig"
 	case ICMP6TimeExceeded:
 		return "TimeExceeded"
+	case ICMP6ParamProblem:
+		return "ParamProblem"
 	case ICMP6EchoRequest:
 		return "EchoRequest"
 	case ICMP6EchoReply:

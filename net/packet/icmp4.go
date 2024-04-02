@@ -23,6 +23,7 @@ const (
 	ICMP4EchoRequest  ICMP4Type = 0x08
 	ICMP4Unreachable  ICMP4Type = 0x03
 	ICMP4TimeExceeded ICMP4Type = 0x0b
+	ICMP4ParamProblem ICMP4Type = 0x12
 )
 
 func (t ICMP4Type) String() string {
@@ -35,6 +36,8 @@ func (t ICMP4Type) String() string {
 		return "Unreachable"
 	case ICMP4TimeExceeded:
 		return "TimeExceeded"
+	case ICMP4ParamProblem:
+		return "ParamProblem"
 	default:
 		return "Unknown"
 	}
