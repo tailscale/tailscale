@@ -16,10 +16,12 @@ import (
 
 	"tailscale.com/prober"
 	"tailscale.com/tsweb"
+	"tailscale.com/version"
 )
 
 var (
 	derpMapURL   = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://)")
+	versionFlag  = flag.Bool("version", false, "print version and exit")
 	listen       = flag.String("listen", ":8030", "HTTP listen address")
 	probeOnce    = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
 	spread       = flag.Bool("spread", true, "whether to spread probing over time")
@@ -33,6 +35,10 @@ var (
 
 func main() {
 	flag.Parse()
+	if *versionFlag {
+		fmt.Println(version.Long())
+		return
+	}
 
 	p := prober.New().WithSpread(*spread).WithOnce(*probeOnce).WithMetricNamespace("derpprobe")
 	opts := []prober.DERPOpt{
