@@ -242,10 +242,12 @@ func (s *Server) serveBrowser(w http.ResponseWriter, r *http.Request) {
 	s.csrfProtect(s.BrowserMux).ServeHTTP(w, r)
 }
 
-// RedirectHTTP returns a handler that redirects all incoming HTTP requests to
-// the provided fully qualified domain name (FQDN).
-func (s *Server) RedirectHTTP(fqdn string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// ServeRedirectHTTP serves a single HTTP handler on the provided listener that
+// redirects all incoming HTTP requests to the HTTPS address of the provided
+// fully qualified domain name (FQDN). Callers are responsible for closing the
+// listener.
+func (s *Server) ServeRedirectHTTP(ln net.Listener, fqdn string) error {
+	return http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		new := url.URL{
 			Scheme:   "https",
 			Host:     fqdn,
@@ -254,7 +256,7 @@ func (s *Server) RedirectHTTP(fqdn string) http.Handler {
 		}
 
 		http.Redirect(w, r, new.String(), http.StatusMovedPermanently)
-	})
+	}))
 }
 
 // Serve starts the server and listens on the provided listener. It will block
