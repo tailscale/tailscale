@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/tailfs"
+	"tailscale.com/drive"
 )
 
 const (
@@ -69,7 +69,7 @@ func runShareSet(ctx context.Context, args []string) error {
 
 	name, path := args[0], args[1]
 
-	err := localClient.TailFSShareSet(ctx, &tailfs.Share{
+	err := localClient.TailFSShareSet(ctx, &drive.Share{
 		Name: name,
 		Path: path,
 	})
@@ -145,7 +145,7 @@ func runShareList(ctx context.Context, args []string) error {
 
 func buildShareLongHelp() string {
 	longHelpAs := ""
-	if tailfs.AllowShareAs() {
+	if drive.AllowShareAs() {
 		longHelpAs = shareLongHelpAs
 	}
 	return fmt.Sprintf(shareLongHelpBase, longHelpAs)

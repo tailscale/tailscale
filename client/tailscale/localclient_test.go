@@ -34,9 +34,9 @@ func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		BadDeps: map[string]string{
 			// Make sure we don't again accidentally bring in a dependency on
-			// TailFS or its transitive dependencies
-			"tailscale.com/tailfs/tailfsimpl": "https://github.com/tailscale/tailscale/pull/10631",
-			"github.com/studio-b12/gowebdav":  "https://github.com/tailscale/tailscale/pull/10631",
+			// drive or its transitive dependencies
+			"tailscale.com/drive/driveimpl":  "https://github.com/tailscale/tailscale/pull/10631",
+			"github.com/studio-b12/gowebdav": "https://github.com/tailscale/tailscale/pull/10631",
 		},
 	}.Check(t)
 }

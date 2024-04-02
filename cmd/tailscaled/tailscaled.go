@@ -33,6 +33,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
@@ -52,7 +53,6 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
-	"tailscale.com/tailfs/tailfsimpl"
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
@@ -407,7 +407,7 @@ func run() (err error) {
 		debugMux = newDebugMux()
 	}
 
-	sys.Set(tailfsimpl.NewFileSystemForRemote(logf))
+	sys.Set(driveimpl.NewFileSystemForRemote(logf))
 
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
@@ -650,7 +650,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		Dialer:         sys.Dialer.Get(),
 		SetSubsystem:   sys.Set,
 		ControlKnobs:   sys.ControlKnobs(),
-		TailFSForLocal: tailfsimpl.NewFileSystemForLocal(logf),
+		TailFSForLocal: driveimpl.NewFileSystemForLocal(logf),
 	}
 
 	onlyNetstack = name == "userspace-networking"
@@ -847,7 +847,7 @@ func serveTailFS(args []string) error {
 	if len(args)%2 != 0 {
 		return errors.New("need <sharename> <path> pairs")
 	}
-	s, err := tailfsimpl.NewFileServer()
+	s, err := driveimpl.NewFileServer()
 	if err != nil {
 		return fmt.Errorf("unable to start tailfs FileServer: %v", err)
 	}

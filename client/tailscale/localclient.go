@@ -28,6 +28,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -35,7 +36,6 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
@@ -1429,7 +1429,7 @@ func (lc *LocalClient) TailFSSetFileServerAddr(ctx context.Context, addr string)
 // TailFSShareSet adds or updates the given share in the list of shares that
 // TailFS will serve to remote nodes. If a share with the same name already
 // exists, the existing share is replaced/updated.
-func (lc *LocalClient) TailFSShareSet(ctx context.Context, share *tailfs.Share) error {
+func (lc *LocalClient) TailFSShareSet(ctx context.Context, share *drive.Share) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/shares", http.StatusCreated, jsonBody(share))
 	return err
 }
@@ -1459,12 +1459,12 @@ func (lc *LocalClient) TailFSShareRename(ctx context.Context, oldName, newName s
 
 // TailFSShareList returns the list of shares that TailFS is currently serving
 // to remote nodes.
-func (lc *LocalClient) TailFSShareList(ctx context.Context) ([]*tailfs.Share, error) {
+func (lc *LocalClient) TailFSShareList(ctx context.Context) ([]*drive.Share, error) {
 	result, err := lc.get200(ctx, "/localapi/v0/tailfs/shares")
 	if err != nil {
 		return nil, err
 	}
-	var shares []*tailfs.Share
+	var shares []*drive.Share
 	err = json.Unmarshal(result, &shares)
 	return shares, err
 }
