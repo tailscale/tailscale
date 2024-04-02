@@ -384,11 +384,9 @@ func (l *Logger) uploading(ctx context.Context) {
 			switch {
 			case l.zstdEncoder != nil:
 				zbody = l.zstdEncoder.EncodeAll(body, nil)
-			case l.lowMem:
+			default:
 				zbody = zstdframe.AppendEncode(nil, body,
 					zstdframe.FastestCompression, zstdframe.LowMemory(true))
-			default:
-				zbody = zstdframe.AppendEncode(nil, body)
 			}
 
 			// Only send it compressed if the bandwidth savings are sufficient.
