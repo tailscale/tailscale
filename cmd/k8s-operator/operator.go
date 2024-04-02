@@ -98,38 +98,54 @@ func main() {
 	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
 }
 
+func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
+	startlog := zlog.Named("startup")
+
+	switch backend := defaultEnv("OPERATOR_BACKEND", "tailscale"); backend {
+	case "tailscale":
+		var (
+			clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
+			clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
+		)
+		if clientIDPath == "" || clientSecretPath == "" {
+			startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
+		}
+		clientID, err := os.ReadFile(clientIDPath)
+		if err != nil {
+			startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+		}
+		clientSecret, err := os.ReadFile(clientSecretPath)
+		if err != nil {
+			startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
+		}
+		credentials := clientcredentials.Config{
+			ClientID:     string(clientID),
+			ClientSecret: string(clientSecret),
+			TokenURL:     tsBaseURL + "/api/v2/oauth/token",
+		}
+		tsClient := tailscale.NewClient("-", nil)
+		tsClient.BaseURL = tsBaseURL
+		tsClient.HTTPClient = credentials.Client(context.Background())
+
+		client = tsClient
+	default:
+		startlog.Fatalf("unsupported backend: %s", backend)
+	}
+	return client
+}
+
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
+func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	var (
-		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
-		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
-		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
-		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
-		tsBaseURL        = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
+		hostname     = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
+		kubeSecret   = defaultEnv("OPERATOR_SECRET", "")
+		operatorTags = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		tsBaseURL    = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
+		tsClient     = getTSClient(zlog, tsBaseURL)
 	)
 	startlog := zlog.Named("startup")
-	if clientIDPath == "" || clientSecretPath == "" {
-		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
-	}
-	clientID, err := os.ReadFile(clientIDPath)
-	if err != nil {
-		startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
-	}
-	clientSecret, err := os.ReadFile(clientSecretPath)
-	if err != nil {
-		startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
-	}
-	credentials := clientcredentials.Config{
-		ClientID:     string(clientID),
-		ClientSecret: string(clientSecret),
-		TokenURL:     tsBaseURL + "/api/v2/oauth/token",
-	}
-	tsClient := tailscale.NewClient("-", nil)
-	tsClient.BaseURL = tsBaseURL
-	tsClient.HTTPClient = credentials.Client(context.Background())
 
 	s := &tsnet.Server{
 		Hostname:   hostname,
@@ -206,7 +222,7 @@ waitOnline:
 
 // runReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler. It blocks forever.
-func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags, tsFirewallMode string) {
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient tsClient, image, priorityClassName, tags, tsFirewallMode string) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
