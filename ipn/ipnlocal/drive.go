@@ -11,9 +11,9 @@ import (
 	"slices"
 	"strings"
 
+	"tailscale.com/drive"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 )
@@ -73,7 +73,7 @@ func (b *LocalBackend) TailFSSetFileServerAddr(addr string) error {
 // replaces the existing share if one with the same name already exists. To
 // avoid potential incompatibilities across file systems, share names are
 // limited to alphanumeric characters and the underscore _.
-func (b *LocalBackend) TailFSSetShare(share *tailfs.Share) error {
+func (b *LocalBackend) TailFSSetShare(share *drive.Share) error {
 	var err error
 	share.Name, err = normalizeShareName(share.Name)
 	if err != nil {
@@ -108,7 +108,7 @@ func normalizeShareName(name string) (string, error) {
 	return name, nil
 }
 
-func (b *LocalBackend) tailFSSetShareLocked(share *tailfs.Share) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+func (b *LocalBackend) tailFSSetShareLocked(share *drive.Share) (views.SliceView[*drive.Share, drive.ShareView], error) {
 	existingShares := b.pm.prefs.TailFSShares()
 
 	fs, ok := b.sys.TailFSForRemote.GetOK()
@@ -117,7 +117,7 @@ func (b *LocalBackend) tailFSSetShareLocked(share *tailfs.Share) (views.SliceVie
 	}
 
 	addedShare := false
-	var shares []*tailfs.Share
+	var shares []*drive.Share
 	for i := 0; i < existingShares.Len(); i++ {
 		existing := existingShares.At(i)
 		if existing.Name() != share.Name {
@@ -167,7 +167,7 @@ func (b *LocalBackend) TailFSRenameShare(oldName, newName string) error {
 	return nil
 }
 
-func (b *LocalBackend) tailFSRenameShareLocked(oldName, newName string) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+func (b *LocalBackend) tailFSRenameShareLocked(oldName, newName string) (views.SliceView[*drive.Share, drive.ShareView], error) {
 	existingShares := b.pm.prefs.TailFSShares()
 
 	fs, ok := b.sys.TailFSForRemote.GetOK()
@@ -176,7 +176,7 @@ func (b *LocalBackend) tailFSRenameShareLocked(oldName, newName string) (views.S
 	}
 
 	found := false
-	var shares []*tailfs.Share
+	var shares []*drive.Share
 	for i := 0; i < existingShares.Len(); i++ {
 		existing := existingShares.At(i)
 		if existing.Name() == newName {
@@ -196,7 +196,7 @@ func (b *LocalBackend) tailFSRenameShareLocked(oldName, newName string) (views.S
 		return existingShares, os.ErrNotExist
 	}
 
-	slices.SortFunc(shares, tailfs.CompareShares)
+	slices.SortFunc(shares, drive.CompareShares)
 	err := b.tailFSSetSharesLocked(shares)
 	if err != nil {
 		return existingShares, err
@@ -228,7 +228,7 @@ func (b *LocalBackend) TailFSRemoveShare(name string) error {
 	return nil
 }
 
-func (b *LocalBackend) tailFSRemoveShareLocked(name string) (views.SliceView[*tailfs.Share, tailfs.ShareView], error) {
+func (b *LocalBackend) tailFSRemoveShareLocked(name string) (views.SliceView[*drive.Share, drive.ShareView], error) {
 	existingShares := b.pm.prefs.TailFSShares()
 
 	fs, ok := b.sys.TailFSForRemote.GetOK()
@@ -237,7 +237,7 @@ func (b *LocalBackend) tailFSRemoveShareLocked(name string) (views.SliceView[*ta
 	}
 
 	found := false
-	var shares []*tailfs.Share
+	var shares []*drive.Share
 	for i := 0; i < existingShares.Len(); i++ {
 		existing := existingShares.At(i)
 		if existing.Name() != name {
@@ -260,7 +260,7 @@ func (b *LocalBackend) tailFSRemoveShareLocked(name string) (views.SliceView[*ta
 	return b.pm.prefs.TailFSShares(), nil
 }
 
-func (b *LocalBackend) tailFSSetSharesLocked(shares []*tailfs.Share) error {
+func (b *LocalBackend) tailFSSetSharesLocked(shares []*drive.Share) error {
 	prefs := b.pm.prefs.AsStruct()
 	prefs.ApplyEdits(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
@@ -273,10 +273,10 @@ func (b *LocalBackend) tailFSSetSharesLocked(shares []*tailfs.Share) error {
 
 // tailFSNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
 // about the latest list of shares.
-func (b *LocalBackend) tailFSNotifyShares(shares views.SliceView[*tailfs.Share, tailfs.ShareView]) {
+func (b *LocalBackend) tailFSNotifyShares(shares views.SliceView[*drive.Share, drive.ShareView]) {
 	// Ensures shares is not nil to distinguish "no shares" from "not notifying shares"
 	if shares.IsNil() {
-		shares = views.SliceOfViews(make([]*tailfs.Share, 0))
+		shares = views.SliceOfViews(make([]*drive.Share, 0))
 	}
 	b.send(ipn.Notify{TailFSShares: shares})
 }
@@ -284,7 +284,7 @@ func (b *LocalBackend) tailFSNotifyShares(shares views.SliceView[*tailfs.Share, 
 // tailFSNotifyCurrentSharesLocked sends an ipn.Notify if the current set of
 // shares has changed since the last notification.
 func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
-	var shares views.SliceView[*tailfs.Share, tailfs.ShareView]
+	var shares views.SliceView[*drive.Share, drive.ShareView]
 	if b.tailFSSharingEnabledLocked() {
 		// Only populate shares if sharing is enabled.
 		shares = b.pm.prefs.TailFSShares()
@@ -297,7 +297,7 @@ func (b *LocalBackend) tailFSNotifyCurrentSharesLocked() {
 	}
 }
 
-func tailFSShareViewsEqual(a *views.SliceView[*tailfs.Share, tailfs.ShareView], b views.SliceView[*tailfs.Share, tailfs.ShareView]) bool {
+func tailFSShareViewsEqual(a *views.SliceView[*drive.Share, drive.ShareView], b views.SliceView[*drive.Share, drive.ShareView]) bool {
 	if a == nil {
 		return false
 	}
@@ -307,7 +307,7 @@ func tailFSShareViewsEqual(a *views.SliceView[*tailfs.Share, tailfs.ShareView], 
 	}
 
 	for i := 0; i < a.Len(); i++ {
-		if !tailfs.ShareViewsEqual(a.At(i), b.At(i)) {
+		if !drive.ShareViewsEqual(a.At(i), b.At(i)) {
 			return false
 		}
 	}
@@ -316,7 +316,7 @@ func tailFSShareViewsEqual(a *views.SliceView[*tailfs.Share, tailfs.ShareView], 
 }
 
 // TailFSGetShares() gets the current list of TailFS shares, sorted by name.
-func (b *LocalBackend) TailFSGetShares() views.SliceView[*tailfs.Share, tailfs.ShareView] {
+func (b *LocalBackend) TailFSGetShares() views.SliceView[*drive.Share, drive.ShareView] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -331,7 +331,7 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 		return
 	}
 
-	var tailFSRemotes []*tailfs.Remote
+	var tailFSRemotes []*drive.Remote
 	if b.tailFSAccessEnabledLocked() {
 		// Only populate peers if access is enabled, otherwise leave blank.
 		tailFSRemotes = b.tailFSRemotesFromPeers(nm)
@@ -340,8 +340,8 @@ func (b *LocalBackend) updateTailFSPeersLocked(nm *netmap.NetworkMap) {
 	fs.SetRemotes(b.netMap.Domain, tailFSRemotes, &tailFSTransport{b: b})
 }
 
-func (b *LocalBackend) tailFSRemotesFromPeers(nm *netmap.NetworkMap) []*tailfs.Remote {
-	tailFSRemotes := make([]*tailfs.Remote, 0, len(nm.Peers))
+func (b *LocalBackend) tailFSRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Remote {
+	tailFSRemotes := make([]*drive.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
 		// Exclude mullvad exit nodes from list of TailFS peers
 		// TODO(oxtoacart) - once we have a better mechanism for finding only accessible sharers
@@ -352,7 +352,7 @@ func (b *LocalBackend) tailFSRemotesFromPeers(nm *netmap.NetworkMap) []*tailfs.R
 
 		peerID := p.ID()
 		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailFSPrefix[1:])
-		tailFSRemotes = append(tailFSRemotes, &tailfs.Remote{
+		tailFSRemotes = append(tailFSRemotes, &drive.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,
 			Available: func() bool {

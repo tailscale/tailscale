@@ -5,7 +5,7 @@
 
 //go:build windows || darwin
 
-package tailfsimpl
+package driveimpl
 
 import (
 	"context"

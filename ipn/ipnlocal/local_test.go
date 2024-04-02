@@ -24,13 +24,13 @@ import (
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/drive"
+	"tailscale.com/drive/driveimpl"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
-	"tailscale.com/tailfs/tailfsimpl"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
@@ -2250,20 +2250,20 @@ func TestTailFSManageShares(t *testing.T) {
 	tests := []struct {
 		name     string
 		disabled bool
-		existing []*tailfs.Share
-		add      *tailfs.Share
+		existing []*drive.Share
+		add      *drive.Share
 		remove   string
 		rename   [2]string
 		expect   any
 	}{
 		{
 			name: "append",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "b"},
 				{Name: "d"},
 			},
-			add: &tailfs.Share{Name: "  E  "},
-			expect: []*tailfs.Share{
+			add: &drive.Share{Name: "  E  "},
+			expect: []*drive.Share{
 				{Name: "b"},
 				{Name: "d"},
 				{Name: "e"},
@@ -2271,12 +2271,12 @@ func TestTailFSManageShares(t *testing.T) {
 		},
 		{
 			name: "prepend",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "b"},
 				{Name: "d"},
 			},
-			add: &tailfs.Share{Name: "  A  "},
-			expect: []*tailfs.Share{
+			add: &drive.Share{Name: "  A  "},
+			expect: []*drive.Share{
 				{Name: "a"},
 				{Name: "b"},
 				{Name: "d"},
@@ -2284,12 +2284,12 @@ func TestTailFSManageShares(t *testing.T) {
 		},
 		{
 			name: "insert",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "b"},
 				{Name: "d"},
 			},
-			add: &tailfs.Share{Name: "  C  "},
-			expect: []*tailfs.Share{
+			add: &drive.Share{Name: "  C  "},
+			expect: []*drive.Share{
 				{Name: "b"},
 				{Name: "c"},
 				{Name: "d"},
@@ -2297,43 +2297,43 @@ func TestTailFSManageShares(t *testing.T) {
 		},
 		{
 			name: "replace",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "b", Path: "i"},
 				{Name: "d"},
 			},
-			add: &tailfs.Share{Name: "  B  ", Path: "ii"},
-			expect: []*tailfs.Share{
+			add: &drive.Share{Name: "  B  ", Path: "ii"},
+			expect: []*drive.Share{
 				{Name: "b", Path: "ii"},
 				{Name: "d"},
 			},
 		},
 		{
 			name:   "add_bad_name",
-			add:    &tailfs.Share{Name: "$"},
+			add:    &drive.Share{Name: "$"},
 			expect: ErrInvalidShareName,
 		},
 		{
 			name:     "add_disabled",
 			disabled: true,
-			add:      &tailfs.Share{Name: "a"},
+			add:      &drive.Share{Name: "a"},
 			expect:   ErrTailFSNotEnabled,
 		},
 		{
 			name: "remove",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "a"},
 				{Name: "b"},
 				{Name: "c"},
 			},
 			remove: "b",
-			expect: []*tailfs.Share{
+			expect: []*drive.Share{
 				{Name: "a"},
 				{Name: "c"},
 			},
 		},
 		{
 			name: "remove_non_existing",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "a"},
 				{Name: "b"},
 				{Name: "c"},
@@ -2349,19 +2349,19 @@ func TestTailFSManageShares(t *testing.T) {
 		},
 		{
 			name: "rename",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "a"},
 				{Name: "b"},
 			},
 			rename: [2]string{"a", "  C  "},
-			expect: []*tailfs.Share{
+			expect: []*drive.Share{
 				{Name: "b"},
 				{Name: "c"},
 			},
 		},
 		{
 			name: "rename_not_exist",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "a"},
 				{Name: "b"},
 			},
@@ -2370,7 +2370,7 @@ func TestTailFSManageShares(t *testing.T) {
 		},
 		{
 			name: "rename_exists",
-			existing: []*tailfs.Share{
+			existing: []*drive.Share{
 				{Name: "a"},
 				{Name: "b"},
 			},
@@ -2390,9 +2390,9 @@ func TestTailFSManageShares(t *testing.T) {
 		},
 	}
 
-	tailfs.DisallowShareAs = true
+	drive.DisallowShareAs = true
 	t.Cleanup(func() {
-		tailfs.DisallowShareAs = false
+		drive.DisallowShareAs = false
 	})
 
 	for _, tt := range tests {
@@ -2406,14 +2406,14 @@ func TestTailFSManageShares(t *testing.T) {
 				self := b.netMap.SelfNode.AsStruct()
 				self.CapMap = tailcfg.NodeCapMap{tailcfg.NodeAttrsTailFSShare: nil}
 				b.netMap.SelfNode = self.View()
-				b.sys.Set(tailfsimpl.NewFileSystemForRemote(b.logf))
+				b.sys.Set(driveimpl.NewFileSystemForRemote(b.logf))
 			}
 			b.mu.Unlock()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			t.Cleanup(cancel)
 
-			result := make(chan views.SliceView[*tailfs.Share, tailfs.ShareView], 1)
+			result := make(chan views.SliceView[*drive.Share, drive.ShareView], 1)
 
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -2447,7 +2447,7 @@ func TestTailFSManageShares(t *testing.T) {
 				if !errors.Is(err, e) {
 					t.Errorf("expected error, want: %v got: %v", e, err)
 				}
-			case []*tailfs.Share:
+			case []*drive.Share:
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
 				} else {

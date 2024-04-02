@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"os"
 
-	"tailscale.com/tailfs/tailfsimpl/shared"
+	"tailscale.com/drive/driveimpl/shared"
 )
 
 // Stat implements webdav.FileSystem.

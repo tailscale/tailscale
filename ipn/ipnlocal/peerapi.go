@@ -29,6 +29,7 @@ import (
 	"github.com/kortschak/wol"
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/http/httpguts"
+	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -39,7 +40,6 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
-	"tailscale.com/tailfs"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
@@ -1161,7 +1161,7 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 		rawPerms = append(rawPerms, []byte(cap))
 	}
 
-	p, err := tailfs.ParsePermissions(rawPerms)
+	p, err := drive.ParsePermissions(rawPerms)
 	if err != nil {
 		h.logf("tailfs: error parsing permissions: %w", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)

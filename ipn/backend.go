@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/drive"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailfs"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -136,7 +136,7 @@ type Notify struct {
 	// the identity of the unprivileged user that is running the application. A
 	// nil value here means that we're not broadcasting shares information, an
 	// empty value means that there are no shares.
-	TailFSShares views.SliceView[*tailfs.Share, tailfs.ShareView]
+	TailFSShares views.SliceView[*drive.Share, drive.ShareView]
 
 	// type is mirrored in xcode/Shared/IPN.swift
 }

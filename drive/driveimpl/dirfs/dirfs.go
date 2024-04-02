@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/tailfs/tailfsimpl/shared"
+	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/tstime"
 )
 

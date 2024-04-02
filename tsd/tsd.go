@@ -22,6 +22,7 @@ import (
 	"reflect"
 
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/drive"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/net/dns"
@@ -29,7 +30,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
-	"tailscale.com/tailfs"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -48,8 +48,8 @@ type System struct {
 	Tun             SubSystem[*tstun.Wrapper]
 	StateStore      SubSystem[ipn.StateStore]
 	Netstack        SubSystem[NetstackImpl] // actually a *netstack.Impl
-	TailFSForLocal  SubSystem[tailfs.FileSystemForLocal]
-	TailFSForRemote SubSystem[tailfs.FileSystemForRemote]
+	TailFSForLocal  SubSystem[drive.FileSystemForLocal]
+	TailFSForRemote SubSystem[drive.FileSystemForRemote]
 
 	// InitialConfig is initial server config, if any.
 	// It is nil if the node is not in declarative mode.
@@ -101,9 +101,9 @@ func (s *System) Set(v any) {
 		s.StateStore.Set(v)
 	case NetstackImpl:
 		s.Netstack.Set(v)
-	case tailfs.FileSystemForLocal:
+	case drive.FileSystemForLocal:
 		s.TailFSForLocal.Set(v)
-	case tailfs.FileSystemForRemote:
+	case drive.FileSystemForRemote:
 		s.TailFSForRemote.Set(v)
 	default:
 		panic(fmt.Sprintf("unknown type %T", v))

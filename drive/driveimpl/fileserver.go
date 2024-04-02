@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tailfsimpl
+package driveimpl
 
 import (
 	"net"
@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/tailfs/tailfsimpl/shared"
+	"tailscale.com/drive/driveimpl/shared"
 )
 
 // FileServer is a standalone WebDAV server that dynamically serves up shares.

@@ -17,8 +17,8 @@ import (
 	"sync"
 
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/tailfs/tailfsimpl/dirfs"
-	"tailscale.com/tailfs/tailfsimpl/shared"
+	"tailscale.com/drive/driveimpl/dirfs"
+	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )

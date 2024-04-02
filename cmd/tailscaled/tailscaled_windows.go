@@ -42,13 +42,13 @@ import (
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tstun"
-	"tailscale.com/tailfs/tailfsimpl"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -316,7 +316,7 @@ func beWindowsSubprocess() bool {
 	}
 	sys.Set(netMon)
 
-	sys.Set(tailfsimpl.NewFileSystemForRemote(log.Printf))
+	sys.Set(driveimpl.NewFileSystemForRemote(log.Printf))
 
 	publicLogID, _ := logid.ParsePublicID(logID)
 	err = startIPNServer(ctx, log.Printf, publicLogID, sys)

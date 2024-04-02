@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tailfsimpl
+package driveimpl
 
 import (
 	"bufio"
@@ -23,11 +23,11 @@ import (
 	"time"
 
 	"github.com/tailscale/xnet/webdav"
+	"tailscale.com/drive"
+	"tailscale.com/drive/driveimpl/compositedav"
+	"tailscale.com/drive/driveimpl/dirfs"
+	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/safesocket"
-	"tailscale.com/tailfs"
-	"tailscale.com/tailfs/tailfsimpl/compositedav"
-	"tailscale.com/tailfs/tailfsimpl/dirfs"
-	"tailscale.com/tailfs/tailfsimpl/shared"
 	"tailscale.com/types/logger"
 )
 
@@ -53,7 +53,7 @@ type FileSystemForRemote struct {
 	// them, acquire a read lock before reading any of them.
 	mu             sync.RWMutex
 	fileServerAddr string
-	shares         []*tailfs.Share
+	shares         []*drive.Share
 	children       map[string]*compositedav.Child
 	userServers    map[string]*userServer
 }
@@ -67,9 +67,9 @@ func (s *FileSystemForRemote) SetFileServerAddr(addr string) {
 
 // SetShares implements tailfs.FileSystemForRemote. Shares must be sorted
 // according to tailfs.CompareShares.
-func (s *FileSystemForRemote) SetShares(shares []*tailfs.Share) {
+func (s *FileSystemForRemote) SetShares(shares []*drive.Share) {
 	userServers := make(map[string]*userServer)
-	if tailfs.AllowShareAs() {
+	if drive.AllowShareAs() {
 		// Set up per-user server by running the current executable as an
 		// unprivileged user in order to avoid privilege escalation.
 		executable, err := os.Executable()
@@ -112,7 +112,7 @@ func (s *FileSystemForRemote) SetShares(shares []*tailfs.Share) {
 	s.closeChildren(oldChildren)
 }
 
-func (s *FileSystemForRemote) buildChild(share *tailfs.Share) *compositedav.Child {
+func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child {
 	return &compositedav.Child{
 		Child: &dirfs.Child{
 			Name: share.Name,
@@ -133,8 +133,8 @@ func (s *FileSystemForRemote) buildChild(share *tailfs.Share) *compositedav.Chil
 				shareName := string(shareNameBytes)
 
 				s.mu.RLock()
-				var share *tailfs.Share
-				i, shareFound := slices.BinarySearchFunc(s.shares, shareName, func(s *tailfs.Share, name string) int {
+				var share *drive.Share
+				i, shareFound := slices.BinarySearchFunc(s.shares, shareName, func(s *drive.Share, name string) int {
 					return strings.Compare(s.Name, name)
 				})
 				if shareFound {
@@ -149,7 +149,7 @@ func (s *FileSystemForRemote) buildChild(share *tailfs.Share) *compositedav.Chil
 				}
 
 				var addr string
-				if !tailfs.AllowShareAs() {
+				if !drive.AllowShareAs() {
 					addr = fileServerAddr
 				} else {
 					userServer, found := userServers[share.As]
@@ -177,17 +177,17 @@ func (s *FileSystemForRemote) buildChild(share *tailfs.Share) *compositedav.Chil
 }
 
 // ServeHTTPWithPerms implements tailfs.FileSystemForRemote.
-func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions tailfs.Permissions, w http.ResponseWriter, r *http.Request) {
+func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions drive.Permissions, w http.ResponseWriter, r *http.Request) {
 	isWrite := writeMethods[r.Method]
 	if isWrite {
 		share := shared.CleanAndSplit(r.URL.Path)[0]
 		switch permissions.For(share) {
-		case tailfs.PermissionNone:
+		case drive.PermissionNone:
 			// If we have no permissions to this share, treat it as not found
 			// to avoid leaking any information about the share's existence.
 			http.Error(w, "not found", http.StatusNotFound)
 			return
-		case tailfs.PermissionReadOnly:
+		case drive.PermissionReadOnly:
 			http.Error(w, "permission denied", http.StatusForbidden)
 			return
 		}
@@ -200,7 +200,7 @@ func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions tailfs.Permissions,
 	children := make([]*compositedav.Child, 0, len(childrenMap))
 	// filter out shares to which the connecting principal has no access
 	for name, child := range childrenMap {
-		if permissions.For(name) == tailfs.PermissionNone {
+		if permissions.For(name) == drive.PermissionNone {
 			continue
 		}
 
@@ -247,7 +247,7 @@ func (s *FileSystemForRemote) Close() error {
 // content is served as that Share.As user.
 type userServer struct {
 	logf       logger.Logf
-	shares     []*tailfs.Share
+	shares     []*drive.Share
 	username   string
 	executable string
 

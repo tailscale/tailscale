@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tailfsimpl
+package driveimpl
 
 import (
 	"fmt"
@@ -20,8 +20,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/studio-b12/gowebdav"
-	"tailscale.com/tailfs"
-	"tailscale.com/tailfs/tailfsimpl/shared"
+	"tailscale.com/drive"
+	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/tstest"
 )
 
@@ -38,7 +38,7 @@ const (
 func init() {
 	// set AllowShareAs() to false so that we don't try to use sub-processes
 	// for access files on disk.
-	tailfs.DisallowShareAs = true
+	drive.DisallowShareAs = true
 }
 
 // The tests in this file simulate real-life TailFS scenarios, but without
@@ -51,9 +51,9 @@ func TestDirectoryListing(t *testing.T) {
 	s.checkDirList("domain should contain its only remote", shared.Join(domain), remote1)
 	s.checkDirList("remote with no shares should be empty", shared.Join(domain, remote1))
 
-	s.addShare(remote1, share11, tailfs.PermissionReadWrite)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
 	s.checkDirList("remote with one share should contain that share", shared.Join(domain, remote1), share11)
-	s.addShare(remote1, share12, tailfs.PermissionReadOnly)
+	s.addShare(remote1, share12, drive.PermissionReadOnly)
 	s.checkDirList("remote with two shares should contain both in lexicographical order", shared.Join(domain, remote1), share12, share11)
 	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
 	s.checkDirList("remote share should contain file", shared.Join(domain, remote1, share11), file111)
@@ -76,12 +76,12 @@ func TestFileManipulation(t *testing.T) {
 	s := newSystem(t)
 
 	s.addRemote(remote1)
-	s.addShare(remote1, share11, tailfs.PermissionReadWrite)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
 	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
 	s.checkFileStatus(remote1, share11, file111)
 	s.checkFileContents(remote1, share11, file111)
 
-	s.addShare(remote1, share12, tailfs.PermissionReadOnly)
+	s.addShare(remote1, share12, drive.PermissionReadOnly)
 	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, "hello world", false)
 
 	s.writeFile("writing file to non-existent remote should fail", "non-existent", share11, file111, "hello world", false)
@@ -98,7 +98,7 @@ type remote struct {
 	fs          *FileSystemForRemote
 	fileServer  *FileServer
 	shares      map[string]string
-	permissions map[string]tailfs.Permission
+	permissions map[string]drive.Permission
 	mu          sync.RWMutex
 }
 
@@ -175,15 +175,15 @@ func (s *system) addRemote(name string) {
 		fileServer:  fileServer,
 		fs:          NewFileSystemForRemote(log.Printf),
 		shares:      make(map[string]string),
-		permissions: make(map[string]tailfs.Permission),
+		permissions: make(map[string]drive.Permission),
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
 	go http.Serve(l, r)
 	s.remotes[name] = r
 
-	remotes := make([]*tailfs.Remote, 0, len(s.remotes))
+	remotes := make([]*drive.Remote, 0, len(s.remotes))
 	for name, r := range s.remotes {
-		remotes = append(remotes, &tailfs.Remote{
+		remotes = append(remotes, &drive.Remote{
 			Name: name,
 			URL:  fmt.Sprintf("http://%s", r.l.Addr()),
 		})
@@ -197,7 +197,7 @@ func (s *system) addRemote(name string) {
 		})
 }
 
-func (s *system) addShare(remoteName, shareName string, permission tailfs.Permission) {
+func (s *system) addShare(remoteName, shareName string, permission drive.Permission) {
 	r, ok := s.remotes[remoteName]
 	if !ok {
 		s.t.Fatalf("unknown remote %q", remoteName)
@@ -207,14 +207,14 @@ func (s *system) addShare(remoteName, shareName string, permission tailfs.Permis
 	r.shares[shareName] = f
 	r.permissions[shareName] = permission
 
-	shares := make([]*tailfs.Share, 0, len(r.shares))
+	shares := make([]*drive.Share, 0, len(r.shares))
 	for shareName, folder := range r.shares {
-		shares = append(shares, &tailfs.Share{
+		shares = append(shares, &drive.Share{
 			Name: shareName,
 			Path: folder,
 		})
 	}
-	slices.SortFunc(shares, tailfs.CompareShares)
+	slices.SortFunc(shares, drive.CompareShares)
 	r.fs.SetShares(shares)
 	r.fileServer.SetShares(r.shares)
 }
