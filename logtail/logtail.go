@@ -47,11 +47,6 @@ const (
 	CollectionNode = "tailnode.log.tailscale.io"
 )
 
-type Encoder interface {
-	EncodeAll(src, dst []byte) []byte
-	Close() error
-}
-
 type Config struct {
 	Collection     string          // collection name, a domain name
 	PrivateID      logid.PrivateID // private ID for the primary log stream
@@ -65,9 +60,6 @@ type Config struct {
 	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
 	CompressLogs   bool            // whether to compress the log uploads
-
-	// Deprecated: Use CompressUploads instead.
-	NewZstdEncoder func() Encoder // if set, used to compress logs for transmission
 
 	// MetricsDelta, if non-nil, is a func that returns an encoding
 	// delta in clientmetrics to upload alongside existing logs.
@@ -162,9 +154,6 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	}
 	l.SetSockstatsLabel(sockstats.LabelLogtailLogger)
 	l.compressLogs = cfg.CompressLogs
-	if cfg.NewZstdEncoder != nil {
-		l.zstdEncoder = cfg.NewZstdEncoder()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	l.uploadCancel = cancel
@@ -192,7 +181,6 @@ type Logger struct {
 	sentinel       chan int32
 	clock          tstime.Clock
 	compressLogs   bool
-	zstdEncoder    Encoder
 	uploadCancel   func()
 	explainedRaw   bool
 	metricsDelta   func() string // or nil
@@ -273,9 +261,6 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 	io.WriteString(l, "logger closing down\n")
 	<-done
 
-	if l.zstdEncoder != nil {
-		return l.zstdEncoder.Close()
-	}
 	return nil
 }
 
@@ -379,15 +364,9 @@ func (l *Logger) uploading(ctx context.Context) {
 		body := l.drainPending()
 		origlen := -1 // sentinel value: uncompressed
 		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
-		if (l.compressLogs || l.zstdEncoder != nil) && len(body) > 256 {
-			var zbody []byte
-			switch {
-			case l.zstdEncoder != nil:
-				zbody = l.zstdEncoder.EncodeAll(body, nil)
-			default:
-				zbody = zstdframe.AppendEncode(nil, body,
-					zstdframe.FastestCompression, zstdframe.LowMemory(true))
-			}
+		if l.compressLogs && len(body) > 256 {
+			zbody := zstdframe.AppendEncode(nil, body,
+				zstdframe.FastestCompression, zstdframe.LowMemory(true))
 
 			// Only send it compressed if the bandwidth savings are sufficient.
 			// Just the extra headers associated with enabling compression
