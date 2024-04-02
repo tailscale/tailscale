@@ -41,7 +41,7 @@ func init() {
 	drive.DisallowShareAs = true
 }
 
-// The tests in this file simulate real-life TailFS scenarios, but without
+// The tests in this file simulate real-life Taildrive scenarios, but without
 // going over the Tailscale network stack.
 func TestDirectoryListing(t *testing.T) {
 	s := newSystem(t)

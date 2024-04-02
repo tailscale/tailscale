@@ -204,9 +204,9 @@ type Config struct {
 	// SetSubsystem, if non-nil, is called for each new subsystem created, just before a successful return.
 	SetSubsystem func(any)
 
-	// TailFSForLocal, if populated, will cause the engine to expose a TailFS
+	// DriveForLocal, if populated, will cause the engine to expose a Taildrive
 	// listener at 100.100.100.100:8080.
-	TailFSForLocal drive.FileSystemForLocal
+	DriveForLocal drive.FileSystemForLocal
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -468,8 +468,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.SetSubsystem(conf.Router)
 		conf.SetSubsystem(conf.Dialer)
 		conf.SetSubsystem(e.netMon)
-		if conf.TailFSForLocal != nil {
-			conf.SetSubsystem(conf.TailFSForLocal)
+		if conf.DriveForLocal != nil {
+			conf.SetSubsystem(conf.DriveForLocal)
 		}
 	}
 

@@ -145,7 +145,7 @@ var subCommands = map[string]*func([]string) error{
 	"uninstall-system-daemon": &uninstallSystemDaemon,
 	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
-	"serve-tailfs":            &serveTailFSFunc,
+	"serve-tailfs":            &serveDriveFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -645,12 +645,12 @@ var tstunNew = tstun.New
 
 func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack bool, err error) {
 	conf := wgengine.Config{
-		ListenPort:     args.port,
-		NetMon:         sys.NetMon.Get(),
-		Dialer:         sys.Dialer.Get(),
-		SetSubsystem:   sys.Set,
-		ControlKnobs:   sys.ControlKnobs(),
-		TailFSForLocal: driveimpl.NewFileSystemForLocal(logf),
+		ListenPort:    args.port,
+		NetMon:        sys.NetMon.Get(),
+		Dialer:        sys.Dialer.Get(),
+		SetSubsystem:  sys.Set,
+		ControlKnobs:  sys.ControlKnobs(),
+		DriveForLocal: driveimpl.NewFileSystemForLocal(logf),
 	}
 
 	onlyNetstack = name == "userspace-networking"
@@ -753,7 +753,7 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	tfs, _ := sys.TailFSForLocal.GetOK()
+	tfs, _ := sys.DriveForLocal.GetOK()
 	ret, err := netstack.Create(logf,
 		sys.Tun.Get(),
 		sys.Engine.Get(),
@@ -831,16 +831,16 @@ func beChild(args []string) error {
 	return f(args[1:])
 }
 
-var serveTailFSFunc = serveTailFS
+var serveDriveFunc = serveDrive
 
-// serveTailFS serves one or more tailfs on localhost using the WebDAV
+// serveDrive serves one or more tailfs on localhost using the WebDAV
 // protocol. On UNIX and MacOS tailscaled environment, tailfs spawns child
 // tailscaled processes in serve-tailfs mode in order to access the fliesystem
 // as specific (usually unprivileged) users.
 //
-// serveTailFS prints the address on which it's listening to stdout so that the
+// serveDrive prints the address on which it's listening to stdout so that the
 // parent process knows where to connect to.
-func serveTailFS(args []string) error {
+func serveDrive(args []string) error {
 	if len(args) == 0 {
 		return errors.New("missing shares")
 	}

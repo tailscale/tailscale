@@ -69,7 +69,7 @@ func runShareSet(ctx context.Context, args []string) error {
 
 	name, path := args[0], args[1]
 
-	err := localClient.TailFSShareSet(ctx, &drive.Share{
+	err := localClient.DriveShareSet(ctx, &drive.Share{
 		Name: name,
 		Path: path,
 	})
@@ -86,7 +86,7 @@ func runShareRemove(ctx context.Context, args []string) error {
 	}
 	name := args[0]
 
-	err := localClient.TailFSShareRemove(ctx, name)
+	err := localClient.DriveShareRemove(ctx, name)
 	if err == nil {
 		fmt.Printf("Removed share %q\n", name)
 	}
@@ -101,7 +101,7 @@ func runShareRename(ctx context.Context, args []string) error {
 	oldName := args[0]
 	newName := args[1]
 
-	err := localClient.TailFSShareRename(ctx, oldName, newName)
+	err := localClient.DriveShareRename(ctx, oldName, newName)
 	if err == nil {
 		fmt.Printf("Renamed share %q to %q\n", oldName, newName)
 	}
@@ -114,7 +114,7 @@ func runShareList(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: tailscale %v", shareListUsage)
 	}
 
-	shares, err := localClient.TailFSShareList(ctx)
+	shares, err := localClient.DriveShareList(ctx)
 	if err != nil {
 		return err
 	}

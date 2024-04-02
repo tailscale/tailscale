@@ -829,7 +829,7 @@ func TestPrefFlagMapping(t *testing.T) {
 			// Handled by TS_DEBUG_FIREWALL_MODE env var, we don't want to have
 			// a CLI flag for this. The Pref is used by c2n.
 			continue
-		case "TailFSShares":
+		case "DriveShares":
 			// Handled by the tailscale share subcommand, we don't want a CLI
 			// flag for this.
 			continue

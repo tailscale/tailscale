@@ -1345,7 +1345,7 @@ const (
 	// PeerCapabilityWebUI grants the ability for a peer to edit features from the
 	// device Web UI.
 	PeerCapabilityWebUI PeerCapability = "tailscale.com/cap/webui"
-	// PeerCapabilityTailFS grants the ability for a peer to access tailfs shares.
+	// PeerCapabilityTailFS grants the ability for a peer to access Taildrive shares.
 	PeerCapabilityTailFS PeerCapability = "tailscale.com/cap/tailfs"
 )
 

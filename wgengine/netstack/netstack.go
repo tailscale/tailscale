@@ -177,19 +177,19 @@ type Impl struct {
 	// It can only be set before calling Start.
 	ProcessSubnets bool
 
-	ipstack        *stack.Stack
-	linkEP         *channel.Endpoint
-	tundev         *tstun.Wrapper
-	e              wgengine.Engine
-	pm             *proxymap.Mapper
-	mc             *magicsock.Conn
-	logf           logger.Logf
-	dialer         *tsdial.Dialer
-	ctx            context.Context        // alive until Close
-	ctxCancel      context.CancelFunc     // called on Close
-	lb             *ipnlocal.LocalBackend // or nil
-	dns            *dns.Manager
-	tailFSForLocal drive.FileSystemForLocal // or nil
+	ipstack       *stack.Stack
+	linkEP        *channel.Endpoint
+	tundev        *tstun.Wrapper
+	e             wgengine.Engine
+	pm            *proxymap.Mapper
+	mc            *magicsock.Conn
+	logf          logger.Logf
+	dialer        *tsdial.Dialer
+	ctx           context.Context        // alive until Close
+	ctxCancel     context.CancelFunc     // called on Close
+	lb            *ipnlocal.LocalBackend // or nil
+	dns           *dns.Manager
+	driveForLocal drive.FileSystemForLocal // or nil
 
 	peerapiPort4Atomic atomic.Uint32 // uint16 port number for IPv4 peerapi
 	peerapiPort6Atomic atomic.Uint32 // uint16 port number for IPv6 peerapi
@@ -248,7 +248,7 @@ const nicID = 1
 const maxUDPPacketSize = tstun.MaxPacketSize
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, tailFSForLocal drive.FileSystemForLocal) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, driveForLocal drive.FileSystemForLocal) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -330,7 +330,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		connsInFlightByClient: make(map[netip.Addr]int),
 		packetsInFlight:       make(map[stack.TransportEndpointID]struct{}),
 		dns:                   dns,
-		tailFSForLocal:        tailFSForLocal,
+		driveForLocal:         driveForLocal,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
@@ -670,7 +670,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		return filter.DropSilently
 	}
 
-	// If it's not traffic to the service IP (e.g. magicDNS or TailFS) we don't
+	// If it's not traffic to the service IP (e.g. magicDNS or Taildrive) we don't
 	// care; resume processing.
 	if dst := p.Dst.Addr(); dst != serviceIP && dst != serviceIPv6 {
 		return filter.Accept

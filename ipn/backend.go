@@ -68,7 +68,7 @@ const (
 	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
 
 	NotifyNoPrivateKeys        // if set, private keys that would normally be sent in updates are zeroed out
-	NotifyInitialTailFSShares  // if set, the first Notify message (sent immediately) will contain the current TailFS Shares
+	NotifyInitialDriveShares   // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
 	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
 )
 
@@ -130,13 +130,13 @@ type Notify struct {
 	// is available.
 	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
 
-	// TailFSShares tracks the full set of current TailFSShares that we're
+	// DriveShares tracks the full set of current DriveShares that we're
 	// publishing. Some client applications, like the MacOS and Windows clients,
 	// will listen for updates to this and handle serving these shares under
 	// the identity of the unprivileged user that is running the application. A
 	// nil value here means that we're not broadcasting shares information, an
 	// empty value means that there are no shares.
-	TailFSShares views.SliceView[*drive.Share, drive.ShareView]
+	DriveShares views.SliceView[*drive.Share, drive.ShareView]
 
 	// type is mirrored in xcode/Shared/IPN.swift
 }

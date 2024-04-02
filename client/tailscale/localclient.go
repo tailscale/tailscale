@@ -1418,25 +1418,25 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
-// TailFSSetFileServerAddr instructs TailFS to use the server at addr to access
+// DriveSetServerAddr instructs Taildrive to use the server at addr to access
 // the filesystem. This is used on platforms like Windows and MacOS to let
-// TailFS know to use the file server running in the GUI app.
-func (lc *LocalClient) TailFSSetFileServerAddr(ctx context.Context, addr string) error {
+// Taildrive know to use the file server running in the GUI app.
+func (lc *LocalClient) DriveSetServerAddr(ctx context.Context, addr string) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/fileserver-address", http.StatusCreated, strings.NewReader(addr))
 	return err
 }
 
-// TailFSShareSet adds or updates the given share in the list of shares that
-// TailFS will serve to remote nodes. If a share with the same name already
+// DriveShareSet adds or updates the given share in the list of shares that
+// Taildrive will serve to remote nodes. If a share with the same name already
 // exists, the existing share is replaced/updated.
-func (lc *LocalClient) TailFSShareSet(ctx context.Context, share *drive.Share) error {
+func (lc *LocalClient) DriveShareSet(ctx context.Context, share *drive.Share) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/shares", http.StatusCreated, jsonBody(share))
 	return err
 }
 
-// TailFSShareRemove removes the share with the given name from the list of
-// shares that TailFS will serve to remote nodes.
-func (lc *LocalClient) TailFSShareRemove(ctx context.Context, name string) error {
+// DriveShareRemove removes the share with the given name from the list of
+// shares that Taildrive will serve to remote nodes.
+func (lc *LocalClient) DriveShareRemove(ctx context.Context, name string) error {
 	_, err := lc.send(
 		ctx,
 		"DELETE",
@@ -1446,8 +1446,8 @@ func (lc *LocalClient) TailFSShareRemove(ctx context.Context, name string) error
 	return err
 }
 
-// TailFSShareRename renames the share from old to new name.
-func (lc *LocalClient) TailFSShareRename(ctx context.Context, oldName, newName string) error {
+// DriveShareRename renames the share from old to new name.
+func (lc *LocalClient) DriveShareRename(ctx context.Context, oldName, newName string) error {
 	_, err := lc.send(
 		ctx,
 		"POST",
@@ -1457,9 +1457,9 @@ func (lc *LocalClient) TailFSShareRename(ctx context.Context, oldName, newName s
 	return err
 }
 
-// TailFSShareList returns the list of shares that TailFS is currently serving
+// DriveShareList returns the list of shares that drive is currently serving
 // to remote nodes.
-func (lc *LocalClient) TailFSShareList(ctx context.Context) ([]*drive.Share, error) {
+func (lc *LocalClient) DriveShareList(ctx context.Context) ([]*drive.Share, error) {
 	result, err := lc.get200(ctx, "/localapi/v0/tailfs/shares")
 	if err != nil {
 		return nil, err

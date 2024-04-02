@@ -44,7 +44,7 @@ func NewFileSystemForRemote(logf logger.Logf) *FileSystemForRemote {
 	return fs
 }
 
-// FileSystemForRemote implements tailfs.FileSystemForRemote.
+// FileSystemForRemote implements drive.FileSystemForRemote.
 type FileSystemForRemote struct {
 	logf       logger.Logf
 	lockSystem webdav.LockSystem
@@ -58,15 +58,15 @@ type FileSystemForRemote struct {
 	userServers    map[string]*userServer
 }
 
-// SetFileServerAddr implements tailfs.FileSystemForRemote.
+// SetFileServerAddr implements drive.FileSystemForRemote.
 func (s *FileSystemForRemote) SetFileServerAddr(addr string) {
 	s.mu.Lock()
 	s.fileServerAddr = addr
 	s.mu.Unlock()
 }
 
-// SetShares implements tailfs.FileSystemForRemote. Shares must be sorted
-// according to tailfs.CompareShares.
+// SetShares implements drive.FileSystemForRemote. Shares must be sorted
+// according to drive.CompareShares.
 func (s *FileSystemForRemote) SetShares(shares []*drive.Share) {
 	userServers := make(map[string]*userServer)
 	if drive.AllowShareAs() {
@@ -176,7 +176,7 @@ func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child
 	}
 }
 
-// ServeHTTPWithPerms implements tailfs.FileSystemForRemote.
+// ServeHTTPWithPerms implements drive.FileSystemForRemote.
 func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions drive.Permissions, w http.ResponseWriter, r *http.Request) {
 	isWrite := writeMethods[r.Method]
 	if isWrite {
@@ -228,7 +228,7 @@ func (s *FileSystemForRemote) closeChildren(children map[string]*compositedav.Ch
 	}
 }
 
-// Close() implements tailfs.FileSystemForRemote.
+// Close() implements drive.FileSystemForRemote.
 func (s *FileSystemForRemote) Close() error {
 	s.mu.Lock()
 	userServers := s.userServers
