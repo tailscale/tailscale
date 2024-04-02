@@ -69,12 +69,15 @@ func TestUpdateRoutes(t *testing.T) {
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.0.0.1/32")}
 		a.updateRoutes(routes)
 
-		wantRouteInfoControlRoutes := []netip.Prefix{}
 		if shouldStore {
-			wantRouteInfoControlRoutes = routes
-		}
-		if !slices.Equal(a.routeInfo.Control, wantRouteInfoControlRoutes) {
-			t.Fatalf("got %v, want %v (shouldStore=%t)", a.routeInfo.Control, wantRouteInfoControlRoutes, shouldStore)
+			wantRouteInfoControlRoutes := routes
+			if !slices.Equal(a.routeInfo.Control, wantRouteInfoControlRoutes) {
+				t.Fatalf("got %v, want %v (shouldStore=%t)", a.routeInfo.Control, wantRouteInfoControlRoutes, shouldStore)
+			}
+		} else {
+			if a.routeInfo != nil {
+				t.Fatalf("got %v, want %v (shouldStore=%t)", a.routeInfo.Control, nil, shouldStore)
+			}
 		}
 
 		slices.SortFunc(rc.Routes(), prefixCompare)
