@@ -189,7 +189,8 @@ type BucketedStatsOptions struct {
 	Started *metrics.LabelMap
 
 	// If non-nil, Finished maintains a counter of all requests which
-	// have finished processing (that is, the HTTP handler has returned).
+	// have finished processing with success (that is, the HTTP handler has
+	// returned).
 	Finished *metrics.LabelMap
 }
 
