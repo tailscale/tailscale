@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package drive
+package tailfs
 
 //go:generate go run tailscale.com/cmd/viewer --type=Share --clonefunc
 

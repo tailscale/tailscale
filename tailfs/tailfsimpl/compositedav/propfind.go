@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"tailscale.com/drive/driveimpl/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 var (

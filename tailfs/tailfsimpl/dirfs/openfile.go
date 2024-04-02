@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/drive/driveimpl/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 )
 
 // OpenFile implements interface webdav.Filesystem.

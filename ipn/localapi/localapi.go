@@ -34,7 +34,6 @@ import (
 	"github.com/google/uuid"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
-	"tailscale.com/drive"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -48,6 +47,7 @@ import (
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/taildrop"
+	"tailscale.com/tailfs"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -2765,7 +2765,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "PUT":
-		var share drive.Share
+		var share tailfs.Share
 		err := json.NewDecoder(r.Body).Decode(&share)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2781,7 +2781,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not a directory", http.StatusBadRequest)
 			return
 		}
-		if drive.AllowShareAs() {
+		if tailfs.AllowShareAs() {
 			// share as the connected user
 			username, err := h.getUsername()
 			if err != nil {

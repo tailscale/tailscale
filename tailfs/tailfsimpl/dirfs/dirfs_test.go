@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/xnet/webdav"
-	"tailscale.com/drive/driveimpl/shared"
+	"tailscale.com/tailfs/tailfsimpl/shared"
 	"tailscale.com/tstest"
 )
 

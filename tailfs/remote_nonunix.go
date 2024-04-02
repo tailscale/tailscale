@@ -3,7 +3,7 @@
 
 //go:build !unix
 
-package drive
+package tailfs
 
 func doAllowShareAs() bool {
 	// On non-UNIX platforms, we use the GUI application (e.g. Windows taskbar
