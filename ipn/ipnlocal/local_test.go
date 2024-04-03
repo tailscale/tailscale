@@ -455,6 +455,61 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 }
 
+func TestSetUseExitNodeEnabled(t *testing.T) {
+	lb := newTestLocalBackend(t)
+
+	// Can't turn it on if it never had an old value.
+	if _, err := lb.SetUseExitNodeEnabled(true); err == nil {
+		t.Fatal("expected success")
+	}
+
+	// But we can turn it off when it's already off.
+	if _, err := lb.SetUseExitNodeEnabled(false); err != nil {
+		t.Fatal("expected failure")
+	}
+
+	// Give it an initial exit node in use.
+	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		ExitNodeIDSet: true,
+		Prefs: ipn.Prefs{
+			ExitNodeID: "foo",
+		},
+	}); err != nil {
+		t.Fatalf("enabling first exit node: %v", err)
+	}
+
+	// Now turn off that exit node.
+	if prefs, err := lb.SetUseExitNodeEnabled(false); err != nil {
+		t.Fatal("expected failure")
+	} else {
+		if g, w := prefs.ExitNodeID(), tailcfg.StableNodeID(""); g != w {
+			t.Fatalf("unexpected exit node ID %q; want %q", g, w)
+		}
+		if g, w := prefs.InternalExitNodePrior(), "foo"; g != w {
+			t.Fatalf("unexpected exit node prior %q; want %q", g, w)
+		}
+	}
+
+	// And turn it back on.
+	if prefs, err := lb.SetUseExitNodeEnabled(true); err != nil {
+		t.Fatal("expected failure")
+	} else {
+		if g, w := prefs.ExitNodeID(), tailcfg.StableNodeID("foo"); g != w {
+			t.Fatalf("unexpected exit node ID %q; want %q", g, w)
+		}
+		if g, w := prefs.InternalExitNodePrior(), "foo"; g != w {
+			t.Fatalf("unexpected exit node prior %q; want %q", g, w)
+		}
+	}
+
+	// Verify we block setting an Internal field.
+	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		InternalExitNodePriorSet: true,
+	}); err == nil {
+		t.Fatalf("unexpected success; want an error trying to set an internal field")
+	}
+}
+
 func TestFileTargets(t *testing.T) {
 	b := new(LocalBackend)
 	_, err := b.FileTargets()

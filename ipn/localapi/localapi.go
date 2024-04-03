@@ -119,6 +119,7 @@ var handler = map[string]localAPIHandler{
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"set-gui-visible":             (*Handler).serveSetGUIVisible,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
+	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
 	"tka/affected-sigs":           (*Handler).serveTKAAffectedSigs,
@@ -2106,6 +2107,32 @@ func (h *Handler) serveSetGUIVisible(w http.ResponseWriter, r *http.Request) {
 	// TODO(bradfitz): use `req.IsVisible == true` to flush netmap
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) serveSetUseExitNodeEnabled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+
+	v, err := strconv.ParseBool(r.URL.Query().Get("enabled"))
+	if err != nil {
+		http.Error(w, "invalid 'enabled' parameter", http.StatusBadRequest)
+		return
+	}
+	prefs, err := h.b.SetUseExitNodeEnabled(v)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(prefs)
 }
 
 func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
@@ -25,7 +26,10 @@ var exitNodeCmd = &ffcli.Command{
 	ShortUsage: "exit-node [flags]",
 	ShortHelp:  "Show machines on your tailnet configured as exit nodes",
 	LongHelp:   "Show machines on your tailnet configured as exit nodes",
-	Subcommands: []*ffcli.Command{
+	Exec: func(context.Context, []string) error {
+		return errors.New("exit-node subcommand required; run 'tailscale exit-node -h' for details")
+	},
+	Subcommands: append([]*ffcli.Command{
 		{
 			Name:       "list",
 			ShortUsage: "exit-node list [flags]",
@@ -36,15 +40,49 @@ var exitNodeCmd = &ffcli.Command{
 				fs.StringVar(&exitNodeArgs.filter, "filter", "", "filter exit nodes by country")
 				return fs
 			})(),
-		},
-	},
-	Exec: func(context.Context, []string) error {
-		return errors.New("exit-node subcommand required; run 'tailscale exit-node -h' for details")
-	},
+		}},
+		(func() []*ffcli.Command {
+			if !envknob.UseWIPCode() {
+				return nil
+			}
+			return []*ffcli.Command{
+				{
+					Name:       "connect",
+					ShortUsage: "exit-node connect",
+					ShortHelp:  "connect to most recently used exit node",
+					Exec:       exitNodeSetUse(true),
+				},
+				{
+					Name:       "disconnect",
+					ShortUsage: "exit-node disconnect",
+					ShortHelp:  "disconnect from current exit node, if any",
+					Exec:       exitNodeSetUse(false),
+				},
+			}
+		})()...),
 }
 
 var exitNodeArgs struct {
 	filter string
+}
+
+func exitNodeSetUse(wantOn bool) func(ctx context.Context, args []string) error {
+	return func(ctx context.Context, args []string) error {
+		if len(args) > 0 {
+			return errors.New("unexpected non-flag arguments")
+		}
+		err := localClient.SetUseExitNode(ctx, wantOn)
+		if err != nil {
+			if !wantOn {
+				pref, err := localClient.GetPrefs(ctx)
+				if err == nil && pref.ExitNodeID == "" {
+					// Two processes concurrently turned it off.
+					return nil
+				}
+			}
+		}
+		return err
+	}
 }
 
 // runExitNodeList returns a formatted list of exit nodes for a tailnet.

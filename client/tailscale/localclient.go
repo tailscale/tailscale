@@ -1418,6 +1418,15 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 	return &cv, nil
 }
 
+// SetUseExitNode toggles the use of an exit node on or off.
+// To turn it on, there must have been a previously used exit node.
+// The most previously used one is reused.
+// This is a convenience method for GUIs. To select an actual one, update the prefs.
+func (lc *LocalClient) SetUseExitNode(ctx context.Context, on bool) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/set-use-exit-node-enabled?enabled="+strconv.FormatBool(on), http.StatusOK, nil)
+	return err
+}
+
 // DriveSetServerAddr instructs Taildrive to use the server at addr to access
 // the filesystem. This is used on platforms like Windows and MacOS to let
 // Taildrive know to use the file server running in the GUI app.

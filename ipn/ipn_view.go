@@ -69,6 +69,7 @@ func (v PrefsView) RouteAll() bool                     { return v.ж.RouteAll }
 func (v PrefsView) AllowSingleHosts() bool             { return v.ж.AllowSingleHosts }
 func (v PrefsView) ExitNodeID() tailcfg.StableNodeID   { return v.ж.ExitNodeID }
 func (v PrefsView) ExitNodeIP() netip.Addr             { return v.ж.ExitNodeIP }
+func (v PrefsView) InternalExitNodePrior() string      { return v.ж.InternalExitNodePrior }
 func (v PrefsView) ExitNodeAllowLANAccess() bool       { return v.ж.ExitNodeAllowLANAccess }
 func (v PrefsView) CorpDNS() bool                      { return v.ж.CorpDNS }
 func (v PrefsView) RunSSH() bool                       { return v.ж.RunSSH }
@@ -104,6 +105,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
+	InternalExitNodePrior  string
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	RunSSH                 bool
