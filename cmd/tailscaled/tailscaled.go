@@ -116,7 +116,7 @@ var args struct {
 	// or comma-separated list thereof.
 	tunname string
 
-	cleanup        bool
+	cleanUp        bool
 	confFile       string
 	debug          string
 	port           uint16
@@ -156,7 +156,7 @@ func main() {
 
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
-	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
+	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
 	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
@@ -207,7 +207,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if runtime.GOOS == "darwin" && os.Getuid() != 0 && !strings.Contains(args.tunname, "userspace-networking") && !args.cleanup {
+	if runtime.GOOS == "darwin" && os.Getuid() != 0 && !strings.Contains(args.tunname, "userspace-networking") && !args.cleanUp {
 		log.SetFlags(0)
 		log.Fatalf("tailscaled requires root; use sudo tailscaled (or use --tun=userspace-networking)")
 	}
@@ -387,12 +387,16 @@ func run() (err error) {
 	}
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
-	if args.cleanup {
-		if envknob.Bool("TS_PLEASE_PANIC") {
-			panic("TS_PLEASE_PANIC asked us to panic")
-		}
-		dns.Cleanup(logf, args.tunname)
-		router.Cleanup(logf, args.tunname)
+	if envknob.Bool("TS_PLEASE_PANIC") {
+		panic("TS_PLEASE_PANIC asked us to panic")
+	}
+	// Always clean up, even if we're going to run the server. This covers cases
+	// such as when a system was rebooted without shutting down, or tailscaled
+	// crashed, and would for example restore system DNS configuration.
+	dns.CleanUp(logf, args.tunname)
+	router.CleanUp(logf, args.tunname)
+	// If the cleanUp flag was passed, then exit.
+	if args.cleanUp {
 		return nil
 	}
 

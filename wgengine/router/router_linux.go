@@ -1396,12 +1396,12 @@ func normalizeCIDR(cidr netip.Prefix) string {
 	return cidr.Masked().String()
 }
 
-// cleanup removes all the rules and routes that were added by the linux router.
-// The function calls cleanup for both iptables and nftables since which ever
-// netfilter runner is used, the cleanup function for the other one doesn't do anything.
-func cleanup(logf logger.Logf, interfaceName string) {
+// cleanUp removes all the rules and routes that were added by the linux router.
+// The function calls cleanUp for both iptables and nftables since which ever
+// netfilter runner is used, the cleanUp function for the other one doesn't do anything.
+func cleanUp(logf logger.Logf, interfaceName string) {
 	if interfaceName != "userspace-networking" {
-		linuxfw.IPTablesCleanup(logf)
+		linuxfw.IPTablesCleanUp(logf)
 		linuxfw.NfTablesCleanUp(logf)
 	}
 }

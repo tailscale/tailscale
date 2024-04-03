@@ -561,9 +561,9 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 	return nil
 }
 
-// IPTablesCleanup removes all Tailscale added iptables rules.
+// IPTablesCleanUp removes all Tailscale added iptables rules.
 // Any errors that occur are logged to the provided logf.
-func IPTablesCleanup(logf logger.Logf) {
+func IPTablesCleanUp(logf logger.Logf) {
 	err := clearRules(iptables.ProtocolIPv4, logf)
 	if err != nil {
 		logf("linuxfw: clear iptables: %v", err)

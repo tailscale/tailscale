@@ -18,6 +18,6 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 	return nil, fmt.Errorf("unsupported OS %q", runtime.GOOS)
 }
 
-func cleanup(logf logger.Logf, interfaceName string) {
+func cleanUp(logf logger.Logf, interfaceName string) {
 	// Nothing to do here.
 }

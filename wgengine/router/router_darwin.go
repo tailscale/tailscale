@@ -13,6 +13,6 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Moni
 	return newUserspaceBSDRouter(logf, tundev, netMon)
 }
 
-func cleanup(logger.Logf, string) {
+func cleanUp(logger.Logf, string) {
 	// Nothing to do.
 }

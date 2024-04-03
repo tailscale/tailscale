@@ -120,7 +120,7 @@ func (r *winRouter) Close() error {
 	return nil
 }
 
-func cleanup(logf logger.Logf, interfaceName string) {
+func cleanUp(logf logger.Logf, interfaceName string) {
 	// Nothing to do here.
 }
 

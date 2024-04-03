@@ -236,11 +236,11 @@ func (r *openbsdRouter) UpdateMagicsockPort(_ uint16, _ string) error {
 }
 
 func (r *openbsdRouter) Close() error {
-	cleanup(r.logf, r.tunname)
+	cleanUp(r.logf, r.tunname)
 	return nil
 }
 
-func cleanup(logf logger.Logf, interfaceName string) {
+func cleanUp(logf logger.Logf, interfaceName string) {
 	out, err := cmd("ifconfig", interfaceName, "down").CombinedOutput()
 	if err != nil {
 		logf("ifconfig down: %v\n%s", err, out)
