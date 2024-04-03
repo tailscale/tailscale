@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/cmd/k8s-operator/headscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
@@ -128,6 +129,8 @@ func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 		tsClient.HTTPClient = credentials.Client(context.Background())
 
 		client = tsClient
+	case "headscale":
+		client = headscale.NewHeadscaleClientWrapper(context.Background(), zlog)
 	default:
 		startlog.Fatalf("unsupported backend: %s", backend)
 	}
@@ -145,6 +148,8 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 		tsBaseURL    = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
 		tsClient     = getTSClient(zlog, tsBaseURL)
 	)
+	// TODO: should this be passed to other functions,
+	// or should they call zlog.Named themselves?
 	startlog := zlog.Named("startup")
 
 	s := &tsnet.Server{
@@ -167,6 +172,7 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 		startlog.Fatalf("getting local client: %v", err)
 	}
 
+	// TODO: create this earlier and pass to previous functions?
 	ctx := context.Background()
 	loginDone := false
 	machineAuthShown := false
