@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -85,7 +86,11 @@ func TestTLSConnection(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 
-	err = probeTLS(context.Background(), "fail.example.com", srv.Listener.Addr().String())
+	err = probeTLS(context.Background(), TLSOpts{
+		CertDomain: "fail.example.com",
+		DialAddr:   netip.MustParseAddrPort(srv.Listener.Addr().String()),
+		Network:    "tcp",
+	})
 	// The specific error message here is platform-specific ("certificate is not trusted"
 	// on macOS and "certificate signed by unknown authority" on Linux), so only check
 	// that it contains the word 'certificate'.
@@ -126,7 +131,7 @@ func TestCertExpiration(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{tt.cert()}}
-			err := validateConnState(context.Background(), cs)
+			err := validateConnState(context.Background(), cs, &TLSOpts{})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("unexpected error %q; want %q", err, tt.wantErr)
 			}
@@ -221,7 +226,7 @@ func TestOCSP(t *testing.T) {
 				handler.template.SerialNumber = big.NewInt(1337)
 			}
 			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{parsed, issuerCert}}
-			err := validateConnState(context.Background(), cs)
+			err := validateConnState(context.Background(), cs, &TLSOpts{})
 
 			if err == nil && tt.wantErr == "" {
 				return

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/pkg/errors"
@@ -29,11 +30,31 @@ const expiresSoon = 7 * 24 * time.Hour // 7 days from now
 // checks certificate validity time and OCSP revocation status.
 func TLS(hostPort string) ProbeFunc {
 	return func(ctx context.Context) error {
-		certDomain, _, err := net.SplitHostPort(hostPort)
+		host, portStr, err := net.SplitHostPort(hostPort)
 		if err != nil {
 			return err
 		}
-		return probeTLS(ctx, certDomain, hostPort)
+		port, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil {
+			return fmt.Errorf("parsing port %q: %w", portStr, err)
+		}
+
+		var resolver net.Resolver
+		addrs, err := resolver.LookupNetIP(ctx, "ip", host)
+		if err != nil {
+			return fmt.Errorf("resolving IP for %q: %w", host, err)
+		}
+		if len(addrs) == 0 {
+			return fmt.Errorf("no addrs for %q", host)
+		}
+
+		return probeTLS(ctx, TLSOpts{
+			CertDomain: host,
+
+			// TODO(andrew-d): do something smarter than always
+			// checking the first IP.
+			DialAddr: netip.AddrPortFrom(addrs[0], uint16(port)),
+		})
 	}
 }
 
@@ -42,31 +63,72 @@ func TLS(hostPort string) ProbeFunc {
 // the cert (and the SNI name to send).
 func TLSWithIP(certDomain string, dialAddr netip.AddrPort) ProbeFunc {
 	return func(ctx context.Context) error {
-		return probeTLS(ctx, certDomain, dialAddr.String())
+		return probeTLS(ctx, TLSOpts{
+			CertDomain: certDomain,
+			DialAddr:   dialAddr,
+		})
 	}
 }
 
-func probeTLS(ctx context.Context, certDomain string, dialHostPort string) error {
-	dialer := &tls.Dialer{Config: &tls.Config{ServerName: certDomain}}
-	conn, err := dialer.DialContext(ctx, "tcp", dialHostPort)
+// TLSOpts is the set of options for TLSWithOpts.
+type TLSOpts struct {
+	// CertDomain is the expected name in the cert (and the SNI name to
+	// send) when connecting to the server.
+	CertDomain string
+
+	// DialAddr is the IP address to dial. It must be provided.
+	DialAddr netip.AddrPort
+
+	// Network is the network to use when dialing. It must be one of "tcp",
+	// "tcp4", or "tcp6". If not provided, "tcp" is used.
+	Network string
+
+	// MinExpiry is the minimum time before a certificate expires that is
+	// considered healthy. If not provided, a default value will be used.
+	MinExpiry time.Duration
+}
+
+// TLSWithOpts returns a Probe that healthchecks a TLS endpoint.
+//
+// This is the fully-customizable version of TLS; the TLS and TLSWithIP
+// functions wrap this.
+func TLSWithOpts(opts TLSOpts) ProbeFunc {
+	if opts.Network == "" {
+		opts.Network = "tcp"
+	}
+
+	return func(ctx context.Context) error {
+		return probeTLS(ctx, opts)
+	}
+}
+
+func probeTLS(ctx context.Context, opts TLSOpts) error {
+	dialer := &tls.Dialer{Config: &tls.Config{ServerName: opts.CertDomain}}
+	conn, err := dialer.DialContext(ctx, opts.Network, opts.DialAddr.String())
 	if err != nil {
-		return fmt.Errorf("connecting to %q: %w", dialHostPort, err)
+		return fmt.Errorf("connecting to %q: %w", opts.DialAddr.String(), err)
 	}
 	defer conn.Close()
 
 	tlsConnState := conn.(*tls.Conn).ConnectionState()
-	return validateConnState(ctx, &tlsConnState)
+	return validateConnState(ctx, &tlsConnState, &opts)
 }
 
 // validateConnState verifies certificate validity time in all certificates
 // returned by the TLS server and checks OCSP revocation status for the
 // leaf cert.
-func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr error) {
+func validateConnState(ctx context.Context, cs *tls.ConnectionState, opts *TLSOpts) (returnerr error) {
 	var errs []error
 	defer func() {
 		returnerr = multierr.New(errs...)
 	}()
-	latestAllowedExpiration := time.Now().Add(expiresSoon)
+
+	var latestAllowedExpiration time.Time
+	if opts.MinExpiry > 0 {
+		latestAllowedExpiration = time.Now().Add(opts.MinExpiry)
+	} else {
+		latestAllowedExpiration = time.Now().Add(expiresSoon)
+	}
 
 	var leafCert *x509.Certificate
 	var issuerCert *x509.Certificate
