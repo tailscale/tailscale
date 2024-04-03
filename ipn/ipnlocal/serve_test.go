@@ -823,3 +823,21 @@ func Test_isGRPCContentType(t *testing.T) {
 		}
 	}
 }
+
+func TestEncTailscaleHeaderValue(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"Alice Smith", "Alice Smith"},
+		{"Bad\xffUTF-8", ""},
+		{"Krūmiņa", "=?utf-8?q?Kr=C5=ABmi=C5=86a?="},
+	}
+	for _, tt := range tests {
+		got := encTailscaleHeaderValue(tt.in)
+		if got != tt.want {
+			t.Errorf("encTailscaleHeaderValue(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
