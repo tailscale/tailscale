@@ -44,6 +44,10 @@ See: https://tailscale.com/s/k8s-auth-proxy
 
 // kubeconfigPath returns the path to the kubeconfig file for the current user.
 func kubeconfigPath() string {
+	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
+		return filepath.SplitList(kubeconfig)[0]
+	}
+
 	var dir string
 	if version.IsSandboxedMacOS() {
 		// The HOME environment variable in macOS sandboxed apps is set to
