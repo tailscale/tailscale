@@ -3192,11 +3192,11 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
 	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
-	if b.appConnector.ShouldStoreRoutes {
+	if b.appConnector != nil && b.appConnector.ShouldStoreRoutes {
 		routeInfo := b.appConnector.RouteInfo()
 		curRoutes := routeInfo.Routes(false, true, true)
 
-		if mp.AdvertiseRoutesSet && b.appConnector.ShouldStoreRoutes {
+		if mp.AdvertiseRoutesSet {
 			routeInfo.Local = mp.AdvertiseRoutes
 			b.StoreRouteInfo(routeInfo)
 			curRoutes := append(curRoutes, mp.AdvertiseRoutes...)

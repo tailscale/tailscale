@@ -2686,18 +2686,30 @@ func TestReadWriteRouteInfo(t *testing.T) {
 	}
 }
 
-func TestPatchPrefsHandler(t *testing.T) {
+func TestPatchPrefsHandlerWithPresistStore(t *testing.T) {
 	// test can read what's written
 	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
 	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
 	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
-	rc := &appctest.RouteCollector{}
-	testAppConnector := appc.NewAppConnector(t.Logf, rc, true)
+	// rc := &appctest.RouteCollector{}
 	mp := new(ipn.MaskedPrefs)
 	mp.AdvertiseRoutesSet = true
 	mp.AdvertiseRoutes = []netip.Prefix{prefix1}
-	mp.AppConnectorSet = true
-	mp.AppConnector.Advertise = true
+
+	b := newTestBackend(t)
+	testAppConnector := appc.NewAppConnector(t.Logf, b, true)
+	b.appConnector = testAppConnector
+	b.ControlKnobs().AppCStoreRoutes.Store(true)
+
+	b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{
+				Advertise: true,
+			},
+		},
+		AppConnectorSet: true,
+	})
+
 	now := time.Now()
 	ri := routeinfo.NewRouteInfo()
 	ri.Control = []netip.Prefix{prefix2}
@@ -2709,13 +2721,12 @@ func TestPatchPrefsHandler(t *testing.T) {
 		Routes:      routes,
 	}
 	ri.Discovered = discovered
-	rc.StoreRouteInfo(ri)
 
-	testAppConnector.ShouldStoreRoutes = true
+	b.StoreRouteInfo(ri)
+	b.AdvertiseRoute([]netip.Prefix{prefix2, prefix3}...)
+
 	testAppConnector.RouteInfo()
-	b := newTestBackend(t)
-	b.appConnector = testAppConnector
-	b.ControlKnobs().AppCStoreRoutes.Store(true)
+
 	prefView, err := b.PatchPrefsHandler(mp)
 	if err != nil {
 		t.Fatalf(err.Error())
@@ -2734,7 +2745,7 @@ func TestPatchPrefsHandler(t *testing.T) {
 	}
 
 	//Check if route is stored in Appc/Appc.routeAdvertiser
-	storedRouteInfo, _ := rc.ReadRouteInfo()
+	storedRouteInfo, _ := b.ReadRouteInfo()
 	if len(storedRouteInfo.Local) != 1 {
 		t.Fatalf("wanted %d, got %d", 1, len(storedRouteInfo.Local))
 	}
@@ -2769,4 +2780,80 @@ func TestPatchPrefsHandler(t *testing.T) {
 	if !slices.Contains(prefView2.AdvertiseRoutes().AsSlice(), prefix2) || !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix3) {
 		t.Fatalf("Old prefixes are no longer advertised.")
 	}
+
+}
+
+func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
+	// test can read what's written
+	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
+	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
+	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
+	// rc := &appctest.RouteCollector{}
+	mp := new(ipn.MaskedPrefs)
+	mp.AdvertiseRoutesSet = true
+	mp.AdvertiseRoutes = []netip.Prefix{prefix1}
+
+	b := newTestBackend(t)
+	testAppConnector := appc.NewAppConnector(t.Logf, b, false)
+	b.appConnector = testAppConnector
+	b.ControlKnobs().AppCStoreRoutes.Store(false)
+
+	b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{
+				Advertise: true,
+			},
+		},
+		AppConnectorSet: true,
+	})
+
+	b.AdvertiseRoute([]netip.Prefix{prefix2, prefix3}...)
+
+	testAppConnector.RouteInfo()
+
+	prefView, err := b.PatchPrefsHandler(mp)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if prefView.AdvertiseRoutes().Len() != 1 {
+		t.Fatalf("wanted %d, got %d", 1, prefView.AdvertiseRoutes().Len())
+	}
+
+	if !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix1) {
+		t.Fatalf("New prefix was not advertised")
+	}
+
+	if slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix2) || slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix3) {
+		t.Fatalf("Old prefixes are still advertised.")
+	}
+
+	//Check if route is stored in Appc/Appc.routeAdvertiser
+	storedRouteInfo, _ := b.ReadRouteInfo()
+	if len(storedRouteInfo.Local) != 0 {
+		t.Fatalf("wanted %d, got %d", 0, len(storedRouteInfo.Local))
+	}
+	if slices.Contains(storedRouteInfo.Local, prefix1) {
+		t.Fatalf("New local route not stored.")
+	}
+
+	//Patch again with no route, see if prefix1 is removed/ prefix2, prefix3 presists.
+	mp.AdvertiseRoutes = []netip.Prefix{}
+	prefView2, err := b.PatchPrefsHandler(mp)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if prefView2.AdvertiseRoutes().Len() != 0 {
+		t.Fatalf("wanted %d, got %d", 0, prefView.AdvertiseRoutes().Len())
+	}
+
+	if slices.Contains(prefView2.AdvertiseRoutes().AsSlice(), prefix1) {
+		t.Fatalf("Local route was not removed")
+	}
+
+	if slices.Contains(prefView2.AdvertiseRoutes().AsSlice(), prefix2) || slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix3) {
+		t.Fatalf("Old prefixes are still advertised.")
+	}
+
 }
