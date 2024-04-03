@@ -338,7 +338,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			return "", "", err
 		}
 	}
-	confFileBytes, h, err := tailscaledConfig(stsC, authKey, orig)
+	confFileBytes, h, err := a.tailscaledConfig(stsC, authKey, orig)
 	if err != nil {
 		return "", "", fmt.Errorf("error creating tailscaled config: %w", err)
 	}
@@ -494,10 +494,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		corev1.EnvVar{
 			Name:  "EXPERIMENTAL_TS_CONFIGFILE_PATH",
 			Value: "/etc/tsconfig/tailscaled",
-		},
-		corev1.EnvVar{
-			Name:  "TS_EXTRA_ARGS",
-			Value: "--login-server=" + a.controlURL,
 		},
 	)
 	if sts.ForwardClusterTrafficViaL7IngressProxy {
@@ -671,13 +667,14 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 // tailscaledConfig takes a proxy config, a newly generated auth key if
 // generated and a Secret with the previous proxy state and auth key and
 // produces returns tailscaled configuration and a hash of that configuration.
-func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) ([]byte, string, error) {
+func (a *tailscaleSTSReconciler) tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *corev1.Secret) ([]byte, string, error) {
 	conf := ipn.ConfigVAlpha{
 		Version:      "alpha0",
 		AcceptDNS:    "false",
 		AcceptRoutes: "false", // AcceptRoutes defaults to true
 		Locked:       "false",
 		Hostname:     &stsC.Hostname,
+		ServerURL:    &a.controlURL,
 	}
 	if stsC.Connector != nil {
 		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
