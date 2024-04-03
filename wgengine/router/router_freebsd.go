@@ -18,7 +18,7 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Moni
 	return newUserspaceBSDRouter(logf, tundev, netMon)
 }
 
-func cleanup(logf logger.Logf, interfaceName string) {
+func cleanUp(logf logger.Logf, interfaceName string) {
 	// If the interface was left behind, ifconfig down will not remove it.
 	// In fact, this will leave a system in a tainted state where starting tailscaled
 	// will result in "interface tailscale0 already exists"
