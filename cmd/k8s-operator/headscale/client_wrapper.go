@@ -3,11 +3,13 @@ package headscale
 import (
 	"context"
 	"os"
+	"time"
 
 	headscale "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"tailscale.com/client/tailscale"
 )
 
@@ -73,12 +75,13 @@ func NewHeadscaleClientWrapper(ctx context.Context, zlog *zap.SugaredLogger) *He
 }
 
 func (c *HeadscaleClientWrapper) CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (keySecret string, keyMeta *tailscale.Key, _ error) {
-	// TODO: expiration 0?
 	resp, err := c.client.CreatePreAuthKey(ctx, &headscale.CreatePreAuthKeyRequest{
 		User:      c.user,
 		Reusable:  caps.Devices.Create.Reusable,
 		Ephemeral: caps.Devices.Create.Ephemeral,
 		AclTags:   caps.Devices.Create.Tags,
+		// FIXME: PreAuthKey renewal
+		Expiration: timestamppb.New(time.Now().Add(time.Hour * 24)),
 	})
 	if err != nil {
 		return "", nil, err
