@@ -34,7 +34,12 @@ operatorConfig:
   nodeSelector:
     kubernetes.io/os: linux
   tailscaleBaseURL: "https://login.tailscale.com"
-
+  backend: "tailscale" # tailscale, headscale
+  headscale:
+    grpc_address: headscale.net:50443
+    # Secret with apikey=<apikey>
+    apikey_secret: headscale-apikey
+    user: test
   resources: {}
 
   podAnnotations: {}

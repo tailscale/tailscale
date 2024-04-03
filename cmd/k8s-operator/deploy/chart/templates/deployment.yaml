@@ -76,6 +76,19 @@ spec:
               value: {{ .Values.proxyConfig.firewallMode }}
             - name: TAILSCALE_BASE_URL
               value: {{ .Values.operatorConfig.tailscaleBaseURL }}
+            - name: OPERATOR_BACKEND
+              value: {{ .Values.operatorConfig.backend }}
+            {{- if eq .Values.operatorConfig.backend "headscale" }}
+            - name: HEADSCALE_ADDRESS
+              value: {{ .Values.operatorConfig.headscale.grpc_address }}
+            - name: HEADSCALE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.operatorConfig.headscale.apikey_secret }}
+                  key: apikey
+            - name: HEADSCALE_USER
+              value: {{ .Values.operatorConfig.headscale.user }}
+            {{- end }}
           volumeMounts:
           - name: oauth
             mountPath: /oauth
