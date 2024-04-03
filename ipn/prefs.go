@@ -225,9 +225,9 @@ type Prefs struct {
 	// Linux-only.
 	NetfilterKind string
 
-	// TailFSShares are the configured TailFSShares, stored in increasing order
+	// DriveShares are the configured DriveShares, stored in increasing order
 	// by name.
-	TailFSShares []*drive.Share
+	DriveShares []*drive.Share
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -300,7 +300,7 @@ type MaskedPrefs struct {
 	AppConnectorSet           bool                `json:",omitempty"`
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
-	TailFSSharesSet           bool                `json:",omitempty"`
+	DriveSharesSet            bool                `json:",omitempty"`
 }
 
 type AutoUpdatePrefsMask struct {
@@ -564,7 +564,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
 		p.PostureChecking == p2.PostureChecking &&
-		slices.EqualFunc(p.TailFSShares, p2.TailFSShares, drive.SharesEqual) &&
+		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind
 }
 

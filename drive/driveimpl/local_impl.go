@@ -42,8 +42,8 @@ func NewFileSystemForLocal(logf logger.Logf) *FileSystemForLocal {
 	return fs
 }
 
-// FileSystemForLocal is the TailFS filesystem exposed to local clients. It
-// provides a unified WebDAV interface to remote TailFS shares on other nodes.
+// FileSystemForLocal is the Taildrive filesystem exposed to local clients. It
+// provides a unified WebDAV interface to remote Taildrive shares on other nodes.
 type FileSystemForLocal struct {
 	logf     logger.Logf
 	h        *compositedav.Handler

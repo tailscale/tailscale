@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package shared contains types and functions shared by different tailfs
+// Package shared contains types and functions shared by different drive
 // packages.
 package shared
 

@@ -92,8 +92,8 @@ func (v PrefsView) AutoUpdate() AutoUpdatePrefs           { return v.ж.AutoUpda
 func (v PrefsView) AppConnector() AppConnectorPrefs       { return v.ж.AppConnector }
 func (v PrefsView) PostureChecking() bool                 { return v.ж.PostureChecking }
 func (v PrefsView) NetfilterKind() string                 { return v.ж.NetfilterKind }
-func (v PrefsView) TailFSShares() views.SliceView[*drive.Share, drive.ShareView] {
-	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.TailFSShares)
+func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
+	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
 }
 func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
@@ -125,7 +125,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AppConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
-	TailFSShares           []*drive.Share
+	DriveShares            []*drive.Share
 	Persist                *persist.Persist
 }{})
 

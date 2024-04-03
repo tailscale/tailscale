@@ -316,9 +316,9 @@ type LocalBackend struct {
 	// Last ClientVersion received in MapResponse, guarded by mu.
 	lastClientVersion *tailcfg.ClientVersion
 
-	// lastNotifiedTailFSShares keeps track of the last set of shares that we
+	// lastNotifiedDriveShares keeps track of the last set of shares that we
 	// notified about.
-	lastNotifiedTailFSShares atomic.Pointer[views.SliceView[*drive.Share, drive.ShareView]]
+	lastNotifiedDriveShares atomic.Pointer[views.SliceView[*drive.Share, drive.ShareView]]
 
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
@@ -442,10 +442,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 
-	// initialize TailFS shares from saved state
-	fs, ok := b.sys.TailFSForRemote.GetOK()
+	// initialize Taildrive shares from saved state
+	fs, ok := b.sys.DriveForRemote.GetOK()
 	if ok {
-		currentShares := b.pm.prefs.TailFSShares()
+		currentShares := b.pm.prefs.DriveShares()
 		if currentShares.Len() > 0 {
 			var shares []*drive.Share
 			for i := 0; i < currentShares.Len(); i++ {
@@ -2292,7 +2292,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialTailFSShares
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialDriveShares
 	if mask&initialBits != 0 {
 		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
@@ -2308,8 +2308,8 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		if mask&ipn.NotifyInitialNetMap != 0 {
 			ini.NetMap = b.netMap
 		}
-		if mask&ipn.NotifyInitialTailFSShares != 0 && b.tailFSSharingEnabledLocked() {
-			ini.TailFSShares = b.pm.prefs.TailFSShares()
+		if mask&ipn.NotifyInitialDriveShares != 0 && b.driveSharingEnabledLocked() {
+			ini.DriveShares = b.pm.prefs.DriveShares()
 		}
 	}
 
@@ -3382,8 +3382,8 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 				return b.handleWebClientConn, opts
 			}
 			return b.HandleQuad100Port80Conn, opts
-		case TailFSLocalPort:
-			return b.handleTailFSConn, opts
+		case DriveLocalPort:
+			return b.handleDriveConn, opts
 		}
 	}
 
@@ -3417,9 +3417,9 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 	return nil, nil
 }
 
-func (b *LocalBackend) handleTailFSConn(conn net.Conn) error {
-	fs, ok := b.sys.TailFSForLocal.GetOK()
-	if !ok || !b.TailFSAccessEnabled() {
+func (b *LocalBackend) handleDriveConn(conn net.Conn) error {
+	fs, ok := b.sys.DriveForLocal.GetOK()
+	if !ok || !b.DriveAccessEnabled() {
 		conn.Close()
 		return nil
 	}
@@ -4729,8 +4729,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}
 	}
 
-	b.updateTailFSPeersLocked(nm)
-	b.tailFSNotifyCurrentSharesLocked()
+	b.updateDrivePeersLocked(nm)
+	b.driveNotifyCurrentSharesLocked()
 }
 
 func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
@@ -4757,10 +4757,10 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 	}
 }
 
-// tailFSTransport is an http.RoundTripper that uses the latest value of
+// driveTransport is an http.RoundTripper that uses the latest value of
 // b.Dialer().PeerAPITransport() for each round trip and imposes a short
 // dial timeout to avoid hanging on connecting to offline/unreachable hosts.
-type tailFSTransport struct {
+type driveTransport struct {
 	b *LocalBackend
 }
 
@@ -4817,7 +4817,7 @@ func (rbw *responseBodyWrapper) Close() error {
 	return err
 }
 
-func (t *tailFSTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	bw := &requestBodyWrapper{}
 	if req.Body != nil {
 		bw.ReadCloser = req.Body
@@ -4839,24 +4839,24 @@ func (t *tailFSTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 			return
 		}
 
-		t.b.mu.Lock()
-		selfNodeKey := t.b.netMap.SelfNode.Key().ShortString()
-		t.b.mu.Unlock()
-		n, _, ok := t.b.WhoIs(netip.MustParseAddrPort(req.URL.Host))
+		dt.b.mu.Lock()
+		selfNodeKey := dt.b.netMap.SelfNode.Key().ShortString()
+		dt.b.mu.Unlock()
+		n, _, ok := dt.b.WhoIs(netip.MustParseAddrPort(req.URL.Host))
 		shareNodeKey := "unknown"
 		if ok {
 			shareNodeKey = string(n.Key().ShortString())
 		}
 
 		rbw := responseBodyWrapper{
-			log:           t.b.logf,
+			log:           dt.b.logf,
 			method:        req.Method,
 			bytesTx:       int64(bw.bytesRead),
 			selfNodeKey:   selfNodeKey,
 			shareNodeKey:  shareNodeKey,
 			contentType:   contentType,
 			contentLength: resp.ContentLength,
-			fileExtension: parseTailFSFileExtensionForLog(req.URL.Path),
+			fileExtension: parseDriveFileExtensionForLog(req.URL.Path),
 			statusCode:    resp.StatusCode,
 			ReadCloser:    resp.Body,
 		}
@@ -4873,7 +4873,7 @@ func (t *tailFSTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 	// unreachable hosts.
 	dialTimeout := 1 * time.Second // TODO(oxtoacart): tune this
 
-	tr := t.b.Dialer().PeerAPITransport().Clone()
+	tr := dt.b.Dialer().PeerAPITransport().Clone()
 	dialContext := tr.DialContext
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, dialTimeout)

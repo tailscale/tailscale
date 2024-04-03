@@ -2295,12 +2295,12 @@ func TestTCPHandlerForDst(t *testing.T) {
 			intercept: false,
 		},
 		{
-			desc:      "intercept port 8080 (TailFS) on quad100 IPv4",
+			desc:      "intercept port 8080 (Taildrive) on quad100 IPv4",
 			dst:       "100.100.100.100:8080",
 			intercept: true,
 		},
 		{
-			desc:      "intercept port 8080 (TailFS) on quad100 IPv6",
+			desc:      "intercept port 8080 (Taildrive) on quad100 IPv6",
 			dst:       "[fd7a:115c:a1e0::53]:8080",
 			intercept: true,
 		},
@@ -2340,7 +2340,7 @@ func TestTCPHandlerForDst(t *testing.T) {
 	}
 }
 
-func TestTailFSManageShares(t *testing.T) {
+func TestDriveManageShares(t *testing.T) {
 	tests := []struct {
 		name     string
 		disabled bool
@@ -2410,7 +2410,7 @@ func TestTailFSManageShares(t *testing.T) {
 			name:     "add_disabled",
 			disabled: true,
 			add:      &drive.Share{Name: "a"},
-			expect:   ErrTailFSNotEnabled,
+			expect:   ErrDriveNotEnabled,
 		},
 		{
 			name: "remove",
@@ -2439,7 +2439,7 @@ func TestTailFSManageShares(t *testing.T) {
 			name:     "remove_disabled",
 			disabled: true,
 			remove:   "b",
-			expect:   ErrTailFSNotEnabled,
+			expect:   ErrDriveNotEnabled,
 		},
 		{
 			name: "rename",
@@ -2480,7 +2480,7 @@ func TestTailFSManageShares(t *testing.T) {
 			name:     "rename_disabled",
 			disabled: true,
 			rename:   [2]string{"a", "c"},
-			expect:   ErrTailFSNotEnabled,
+			expect:   ErrDriveNotEnabled,
 		},
 	}
 
@@ -2494,7 +2494,7 @@ func TestTailFSManageShares(t *testing.T) {
 			b := newTestBackend(t)
 			b.mu.Lock()
 			if tt.existing != nil {
-				b.tailFSSetSharesLocked(tt.existing)
+				b.driveSetSharesLocked(tt.existing)
 			}
 			if !tt.disabled {
 				self := b.netMap.SelfNode.AsStruct()
@@ -2517,7 +2517,7 @@ func TestTailFSManageShares(t *testing.T) {
 				func() { wg.Done() },
 				func(n *ipn.Notify) bool {
 					select {
-					case result <- n.TailFSShares:
+					case result <- n.DriveShares:
 					default:
 						//
 					}
@@ -2529,11 +2529,11 @@ func TestTailFSManageShares(t *testing.T) {
 			var err error
 			switch {
 			case tt.add != nil:
-				err = b.TailFSSetShare(tt.add)
+				err = b.DriveSetShare(tt.add)
 			case tt.remove != "":
-				err = b.TailFSRemoveShare(tt.remove)
+				err = b.DriveRemoveShare(tt.remove)
 			default:
-				err = b.TailFSRenameShare(tt.rename[0], tt.rename[1])
+				err = b.DriveRenameShare(tt.rename[0], tt.rename[1])
 			}
 
 			switch e := tt.expect.(type) {

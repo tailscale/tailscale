@@ -22,7 +22,7 @@ func AllowShareAs() bool {
 	return !DisallowShareAs && doAllowShareAs()
 }
 
-// Share configures a folder to be shared through TailFS.
+// Share configures a folder to be shared through drive.
 type Share struct {
 	// Name is how this share appears on remote nodes.
 	Name string `json:"name,omitempty"`
@@ -78,7 +78,7 @@ func CompareShares(a, b *Share) int {
 	return strings.Compare(a.Name, b.Name)
 }
 
-// FileSystemForRemote is the TailFS filesystem exposed to remote nodes. It
+// FileSystemForRemote is the drive filesystem exposed to remote nodes. It
 // provides a unified WebDAV interface to local directories that have been
 // shared.
 type FileSystemForRemote interface {

@@ -325,7 +325,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, tailFSPrefix) {
-		h.handleServeTailFS(w, r)
+		h.handleServeDrive(w, r)
 		return
 	}
 	switch r.URL.Path {
@@ -1141,23 +1141,23 @@ func (rbw *requestBodyWrapper) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Request) {
-	if !h.ps.b.TailFSSharingEnabled() {
+func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request) {
+	if !h.ps.b.DriveSharingEnabled() {
 		h.logf("tailfs: not enabled")
 		http.Error(w, "tailfs not enabled", http.StatusNotFound)
 		return
 	}
 
 	capsMap := h.peerCaps()
-	tailfsCaps, ok := capsMap[tailcfg.PeerCapabilityTailFS]
+	driveCaps, ok := capsMap[tailcfg.PeerCapabilityTailFS]
 	if !ok {
 		h.logf("tailfs: not permitted")
 		http.Error(w, "tailfs not permitted", http.StatusForbidden)
 		return
 	}
 
-	rawPerms := make([][]byte, 0, len(tailfsCaps))
-	for _, cap := range tailfsCaps {
+	rawPerms := make([][]byte, 0, len(driveCaps))
+	for _, cap := range driveCaps {
 		rawPerms = append(rawPerms, []byte(cap))
 	}
 
@@ -1168,7 +1168,7 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	fs, ok := h.ps.b.sys.TailFSForRemote.GetOK()
+	fs, ok := h.ps.b.sys.DriveForRemote.GetOK()
 	if !ok {
 		h.logf("tailfs: not supported on platform")
 		http.Error(w, "tailfs not supported on platform", http.StatusNotFound)
@@ -1193,7 +1193,7 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 					contentType = ct
 				}
 
-				h.logf("tailfs: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseTailFSFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
+				h.logf("tailfs: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseDriveFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
 			}
 		}()
 	}
@@ -1202,13 +1202,13 @@ func (h *peerAPIHandler) handleServeTailFS(w http.ResponseWriter, r *http.Reques
 	fs.ServeHTTPWithPerms(p, wr, r)
 }
 
-// parseTailFSFileExtensionForLog parses the file extension, if available.
+// parseDriveFileExtensionForLog parses the file extension, if available.
 // If a file extension is not present or parsable, the file extension is
 // set to "unknown". If the file extension contains a double quote, it is
 // replaced with "removed".
 // All whitespace is removed from a parsed file extension.
 // File extensions including the leading ., e.g. ".gif".
-func parseTailFSFileExtensionForLog(path string) string {
+func parseDriveFileExtensionForLog(path string) string {
 	fileExt := "unknown"
 	if fe := filepath.Ext(path); fe != "" {
 		if strings.Contains(fe, "\"") {

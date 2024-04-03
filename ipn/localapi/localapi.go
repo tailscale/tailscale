@@ -116,7 +116,7 @@ var handler = map[string]localAPIHandler{
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"set-gui-visible":             (*Handler).serveSetGUIVisible,
-	"tailfs/fileserver-address":   (*Handler).serveTailFSFileServerAddr,
+	"tailfs/fileserver-address":   (*Handler).serveDriveServerAddr,
 	"tailfs/shares":               (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
@@ -2735,8 +2735,8 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ups)
 }
 
-// serveTailFSFileServerAddr handles updates of the tailfs file server address.
-func (h *Handler) serveTailFSFileServerAddr(w http.ResponseWriter, r *http.Request) {
+// serveDriveServerAddr handles updates of the Taildrive file server address.
+func (h *Handler) serveDriveServerAddr(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "PUT" {
 		http.Error(w, "only PUT allowed", http.StatusMethodNotAllowed)
 		return
@@ -2748,18 +2748,18 @@ func (h *Handler) serveTailFSFileServerAddr(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.b.TailFSSetFileServerAddr(string(b))
+	h.b.DriveSetServerAddr(string(b))
 	w.WriteHeader(http.StatusCreated)
 }
 
-// serveShares handles the management of tailfs shares.
+// serveShares handles the management of Taildrive shares.
 //
 // PUT - adds or updates an existing share
 // DELETE - removes a share
 // GET - gets a list of all shares, sorted by name
 // POST - renames an existing share
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
-	if !h.b.TailFSSharingEnabled() {
+	if !h.b.DriveSharingEnabled() {
 		http.Error(w, `tailfs sharing not enabled, please add the attribute "tailfs:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusForbidden)
 		return
 	}
@@ -2790,7 +2790,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			}
 			share.As = username
 		}
-		err = h.b.TailFSSetShare(&share)
+		err = h.b.DriveSetShare(&share)
 		if err != nil {
 			if errors.Is(err, ipnlocal.ErrInvalidShareName) {
 				http.Error(w, "invalid share name", http.StatusBadRequest)
@@ -2806,7 +2806,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		err = h.b.TailFSRemoveShare(string(b))
+		err = h.b.DriveRemoveShare(string(b))
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "share not found", http.StatusNotFound)
@@ -2823,7 +2823,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		err = h.b.TailFSRenameShare(names[0], names[1])
+		err = h.b.DriveRenameShare(names[0], names[1])
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "share not found", http.StatusNotFound)
@@ -2842,7 +2842,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "GET":
-		shares := h.b.TailFSGetShares()
+		shares := h.b.DriveGetShares()
 		err := json.NewEncoder(w).Encode(shares)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -13,7 +13,7 @@ import (
 )
 
 // FileServer is a standalone WebDAV server that dynamically serves up shares.
-// It's typically used in a separate process from the actual TailFS server to
+// It's typically used in a separate process from the actual Taildrive server to
 // serve up files as an unprivileged user.
 type FileServer struct {
 	l             net.Listener
