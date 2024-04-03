@@ -326,9 +326,6 @@ type Node struct {
 	//    "https://tailscale.com/cap/file-sharing"
 	//
 	// Deprecated: use CapMap instead.
-	// CapMap and Capabilities are both ways for control to send metadata about a peer node.
-	// By accessing a self node's peers - a self node can check the peer's capabilities.
-	// Capabilities can be used to label information about a peer.
 	Capabilities []NodeCapability `json:",omitempty"`
 
 	// CapMap is a map of capabilities to their optional argument/data values.
@@ -341,6 +338,16 @@ type Node struct {
 	// CapMap with an empty value.
 	//
 	// See NodeCapability for more information on keys.
+	//
+	// Metadata about nodes can be transmitted in 3 ways:
+	// 1. MapResponse.Node.CapMap describes attributes that affect behavior for
+	//    this node, such as which features have been enabled through the admin
+	//    panel and any associated configuration details.
+	// 2. MapResponse.PacketFilter(s) describes access (both IP and application
+	//    based) that should be granted to peers.
+	// 3. MapResponse.Peers[].CapMap describes attributes regarding a peer node,
+	//    such as which features the peer supports or if that peer is preferred
+	//    for a particular task vs other peers that could also be chosen.
 	CapMap NodeCapMap `json:",omitempty"`
 
 	// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
