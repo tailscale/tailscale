@@ -105,6 +105,14 @@ type Prefs struct {
 	ExitNodeID tailcfg.StableNodeID
 	ExitNodeIP netip.Addr
 
+	// InternalExitNodePrior is the most recently used ExitNodeID in string form. It is set by
+	// the backend on transition from exit node on to off and used by the
+	// backend. It's not of type tailcfg.StableNodeID because in the future we plan
+	// to overload this field to mean things like "Anything in country $FOO" too.
+	//
+	// As an Internal field, it can't be set by LocalAPI clients.
+	InternalExitNodePrior string
+
 	// ExitNodeAllowLANAccess indicates whether locally accessible subnets should be
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
@@ -279,6 +287,7 @@ type MaskedPrefs struct {
 	AllowSingleHostsSet       bool                `json:",omitempty"`
 	ExitNodeIDSet             bool                `json:",omitempty"`
 	ExitNodeIPSet             bool                `json:",omitempty"`
+	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
 	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
 	CorpDNSSet                bool                `json:",omitempty"`
 	RunSSHSet                 bool                `json:",omitempty"`
@@ -301,6 +310,12 @@ type MaskedPrefs struct {
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
+}
+
+// SetsInternal reports whether mp has any of the Internal*Set field bools set
+// to true.
+func (mp *MaskedPrefs) SetsInternal() bool {
+	return mp.InternalExitNodePriorSet
 }
 
 type AutoUpdatePrefsMask struct {
@@ -544,6 +559,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
+		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&

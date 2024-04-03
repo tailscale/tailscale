@@ -41,6 +41,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AllowSingleHosts",
 		"ExitNodeID",
 		"ExitNodeIP",
+		"InternalExitNodePrior",
 		"ExitNodeAllowLANAccess",
 		"CorpDNS",
 		"RunSSH",
@@ -612,6 +613,19 @@ func TestLoadPrefsFileWithZeroInIt(t *testing.T) {
 		return
 	}
 	t.Fatalf("unexpected prefs=%#v, err=%v", p, err)
+}
+
+func TestMaskedPrefsSetsInternal(t *testing.T) {
+	for _, f := range fieldsOf(reflect.TypeFor[MaskedPrefs]()) {
+		if !strings.HasSuffix(f, "Set") || !strings.HasPrefix(f, "Internal") {
+			continue
+		}
+		mp := new(MaskedPrefs)
+		reflect.ValueOf(mp).Elem().FieldByName(f).SetBool(true)
+		if !mp.SetsInternal() {
+			t.Errorf("MaskedPrefs.%sSet=true but SetsInternal=false", f)
+		}
+	}
 }
 
 func TestMaskedPrefsFields(t *testing.T) {

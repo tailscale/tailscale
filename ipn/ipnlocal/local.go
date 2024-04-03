@@ -3158,9 +3158,59 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 	return nil
 }
 
-func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
+// SetUseExitNodeEnabled turns on or off the most recently selected exit node.
+//
+// On success, it returns the resulting prefs (or current prefs, in the case of no change).
+// Setting the value to false when use of an exit node is already false is not an error,
+// nor is true when the exit node is already in use.
+func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
+
+	p0 := b.pm.CurrentPrefs()
+	if v && p0.ExitNodeID() != "" {
+		// Already on.
+		return p0, nil
+	}
+	if !v && p0.ExitNodeID() == "" {
+		// Already off.
+		return p0, nil
+	}
+
+	var zero ipn.PrefsView
+	if v && p0.InternalExitNodePrior() == "" {
+		if !p0.ExitNodeIP().IsValid() {
+			return zero, errors.New("no exit node IP to enable & prior exit node IP was never resolved an a node")
+		}
+		return zero, errors.New("no prior exit node to enable")
+	}
+
+	mp := &ipn.MaskedPrefs{}
+	if v {
+		mp.ExitNodeIDSet = true
+		mp.ExitNodeID = tailcfg.StableNodeID(p0.InternalExitNodePrior())
+	} else {
+		mp.ExitNodeIDSet = true
+		mp.ExitNodeID = ""
+		mp.InternalExitNodePriorSet = true
+		mp.InternalExitNodePrior = string(p0.ExitNodeID())
+	}
+	return b.editPrefsLockedOnEntry(mp, unlock)
+}
+
+func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
+	if mp.SetsInternal() {
+		return ipn.PrefsView{}, errors.New("can't set Internal fields")
+	}
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+	return b.editPrefsLockedOnEntry(mp, unlock)
+}
+
+// Warning: b.mu must be held on entry, but it unlocks it on the way out.
+// TODO(bradfitz): redo the locking on all these weird methods like this.
+func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlockOnce) (ipn.PrefsView, error) {
+	defer unlock() // for error paths
 
 	if mp.EggSet {
 		mp.EggSet = false
@@ -4651,18 +4701,16 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	// Grab the current profile before we unlock the mutex, so that we can
 	// delete it later.
 	profile := b.pm.CurrentProfile()
-	unlock.UnlockEarly()
 
-	// TODO(bradfitz): call/make editPrefsLocked here and stay locked until
-	// before the cc.Logout.
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+	_, err := b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
 		WantRunningSet: true,
 		LoggedOutSet:   true,
 		Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
-	})
+	}, unlock)
 	if err != nil {
 		return err
 	}
+	// b.mu is now unlocked, after editPrefsLockedOnEntry.
 
 	// Clear any previous dial plan(s), if set.
 	b.dialPlan.Store(nil)
