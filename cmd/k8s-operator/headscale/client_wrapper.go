@@ -7,6 +7,7 @@ import (
 	headscale "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"tailscale.com/client/tailscale"
 )
 
@@ -56,6 +57,7 @@ func NewHeadscaleClientWrapper(ctx context.Context, zlog *zap.SugaredLogger) *He
 	grpcOptions := []grpc.DialOption{
 		grpc.WithBlock(),
 		grpc.WithPerRPCCredentials(tokenAuth{token: apiKey}),
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
 	}
 
 	// TODO: is the context correct here?
