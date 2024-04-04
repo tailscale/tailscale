@@ -125,7 +125,8 @@ type userspaceEngine struct {
 	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netip.Addr]*mono.Time // value is accessed atomically
 	destIPActivityFuncs map[netip.Addr]func()
-	lastStatusPollTime  mono.Time // last time we polled the engine status
+	lastStatusPollTime  mono.Time    // last time we polled the engine status
+	reconfigureVPN      func() error // or nil
 
 	mu             sync.Mutex         // guards following; see lock order comment below
 	netMap         *netmap.NetworkMap // or nil
@@ -174,6 +175,13 @@ type Config struct {
 	// DNS interfaces the Engine to the OS DNS resolver configuration.
 	// If nil, a fake OSConfigurator that does nothing is used.
 	DNS dns.OSConfigurator
+
+	// ReconfigureVPN provides an optional hook for platforms like Android to
+	// know when it's time to reconfigure their VPN implementation. Such
+	// platforms can only set their entire VPN configuration (routes, DNS, etc)
+	// at all once and can't make piecemeal incremental changes, so this
+	// provides a hook to "flush" a batch of Router and/or DNS changes.
+	ReconfigureVPN func() error
 
 	// NetMon optionally provides an existing network monitor to re-use.
 	// If nil, a new network monitor is created.
@@ -283,6 +291,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		confListenPort: conf.ListenPort,
 		birdClient:     conf.BIRDClient,
 		controlKnobs:   conf.ControlKnobs,
+		reconfigureVPN: conf.ReconfigureVPN,
 	}
 
 	if e.birdClient != nil {
@@ -956,6 +965,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		if err != nil {
 			return err
 		}
+		if err := e.reconfigureVPNIfNecessary(); err != nil {
+			return err
+		}
 	}
 
 	// Shutdown the network logger.
@@ -1161,10 +1173,12 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 		}
 	}
 
-	// Hacky workaround for Linux DNS issue 2458: on
+	// Hacky workaround for Unix DNS issue 2458: on
 	// suspend/resume or whenever NetworkManager is started, it
 	// nukes all systemd-resolved configs. So reapply our DNS
 	// config on major link change.
+	// TODO: explain why this is ncessary not just on Linux but also android
+	// and Apple platforms.
 	if changed {
 		switch runtime.GOOS {
 		case "linux", "android", "ios", "darwin":
@@ -1174,6 +1188,8 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 			if dnsCfg != nil {
 				if err := e.dns.Set(*dnsCfg); err != nil {
 					e.logf("wgengine: error setting DNS config after major link change: %v", err)
+				} else if err := e.reconfigureVPNIfNecessary(); err != nil {
+					e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)
 				} else {
 					e.logf("wgengine: set DNS config again after major link change")
 				}
@@ -1527,4 +1543,11 @@ var (
 func (e *userspaceEngine) InstallCaptureHook(cb capture.Callback) {
 	e.tundev.InstallCaptureHook(cb)
 	e.magicConn.InstallCaptureHook(cb)
+}
+
+func (e *userspaceEngine) reconfigureVPNIfNecessary() error {
+	if e.reconfigureVPN == nil {
+		return nil
+	}
+	return e.reconfigureVPN()
 }
