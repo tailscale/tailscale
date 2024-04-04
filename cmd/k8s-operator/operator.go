@@ -99,34 +99,43 @@ func main() {
 	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
 }
 
+// getTailscaleClient initializes the Tailscale API client. It uses the
+// CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
+// with Tailscale
+func getTailscaleClient(ctx context.Context, zlog *zap.SugaredLogger, tsBaseURL string) tsClient {
+	var (
+		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
+		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
+	)
+	if clientIDPath == "" || clientSecretPath == "" {
+		zlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
+	}
+	clientID, err := os.ReadFile(clientIDPath)
+	if err != nil {
+		zlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+	}
+	clientSecret, err := os.ReadFile(clientSecretPath)
+	if err != nil {
+		zlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
+	}
+	credentials := clientcredentials.Config{
+		ClientID:     string(clientID),
+		ClientSecret: string(clientSecret),
+		TokenURL:     tsBaseURL + "/api/v2/oauth/token",
+	}
+	tailscaleClient := tailscale.NewClient("-", nil)
+	tailscaleClient.BaseURL = tsBaseURL
+	tailscaleClient.HTTPClient = credentials.Client(ctx)
+
+	return tailscaleClient
+}
+
+// getTSClient initializes either a Tailscale or a Headscale API client,
+// depending on the OPERATOR_BACKEND environment variable.
 func getTSClient(ctx context.Context, zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 	switch backend := defaultEnv("OPERATOR_BACKEND", "tailscale"); backend {
 	case "tailscale":
-		var (
-			clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
-			clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
-		)
-		if clientIDPath == "" || clientSecretPath == "" {
-			zlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
-		}
-		clientID, err := os.ReadFile(clientIDPath)
-		if err != nil {
-			zlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
-		}
-		clientSecret, err := os.ReadFile(clientSecretPath)
-		if err != nil {
-			zlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
-		}
-		credentials := clientcredentials.Config{
-			ClientID:     string(clientID),
-			ClientSecret: string(clientSecret),
-			TokenURL:     tsBaseURL + "/api/v2/oauth/token",
-		}
-		tsClient := tailscale.NewClient("-", nil)
-		tsClient.BaseURL = tsBaseURL
-		tsClient.HTTPClient = credentials.Client(ctx)
-
-		client = tsClient
+		client = getTailscaleClient(ctx, zlog, tsBaseURL)
 	case "headscale":
 		client = headscale.NewHeadscaleClientWrapper(ctx, zlog)
 	default:
@@ -135,9 +144,8 @@ func getTSClient(ctx context.Context, zlog *zap.SugaredLogger, tsBaseURL string)
 	return client
 }
 
-// initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
-// CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
-// with Tailscale.
+// initTSNet initializes the tsnet.Server and logs in to Tailscale or
+// Headscale, depending on the OPERATOR_BACKEND environment variable.
 func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	var (
 		ctx          = context.Background()

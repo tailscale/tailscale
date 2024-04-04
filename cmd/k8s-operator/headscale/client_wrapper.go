@@ -14,6 +14,7 @@ import (
 	"tailscale.com/client/tailscale"
 )
 
+// HeadscaleClientWrapper implements the tsClient interface for Headscale.
 type HeadscaleClientWrapper struct {
 	client headscale.HeadscaleServiceClient
 	// NOTE: in headscale, user and network
@@ -21,26 +22,7 @@ type HeadscaleClientWrapper struct {
 	user string
 }
 
-// type and methods copied from:
-// https://github.com/juanfont/headscale/blob/main/cmd/headscale/cli/utils.go
-type tokenAuth struct {
-	token string
-}
-
-// Return value is mapped to request headers.
-func (t tokenAuth) GetRequestMetadata(
-	ctx context.Context,
-	in ...string,
-) (map[string]string, error) {
-	return map[string]string{
-		"authorization": "Bearer " + t.token,
-	}, nil
-}
-
-func (tokenAuth) RequireTransportSecurity() bool {
-	return true
-}
-
+// NewHeadscaleClientWrapper instantiates a new HeadscaleClientWrapper.
 func NewHeadscaleClientWrapper(ctx context.Context, zlog *zap.SugaredLogger) *HeadscaleClientWrapper {
 	apiAddress, set := os.LookupEnv("HEADSCALE_ADDRESS")
 	if !set {
@@ -118,4 +100,25 @@ func (c *HeadscaleClientWrapper) DeleteDevice(ctx context.Context, nodeStableID 
 	}
 
 	return nil
+}
+
+// tokenAuth is a helper type that implements the PerRPCCredentials interface.
+// source:
+// https://github.com/juanfont/headscale/blob/main/cmd/headscale/cli/utils.go
+type tokenAuth struct {
+	token string
+}
+
+// Return value is mapped to request headers.
+func (t tokenAuth) GetRequestMetadata(
+	ctx context.Context,
+	in ...string,
+) (map[string]string, error) {
+	return map[string]string{
+		"authorization": "Bearer " + t.token,
+	}, nil
+}
+
+func (tokenAuth) RequireTransportSecurity() bool {
+	return true
 }
