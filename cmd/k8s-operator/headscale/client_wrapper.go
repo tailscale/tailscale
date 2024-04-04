@@ -42,19 +42,17 @@ func (tokenAuth) RequireTransportSecurity() bool {
 }
 
 func NewHeadscaleClientWrapper(ctx context.Context, zlog *zap.SugaredLogger) *HeadscaleClientWrapper {
-	startlog := zlog.Named("startup")
-
 	apiAddress, set := os.LookupEnv("HEADSCALE_ADDRESS")
 	if !set {
-		startlog.Fatalf("HEADSCALE_ADDRESS must be set")
+		zlog.Fatalf("HEADSCALE_ADDRESS must be set")
 	}
 	user, set := os.LookupEnv("HEADSCALE_USER")
 	if !set {
-		startlog.Fatalf("HEADSCALE_USER must be set")
+		zlog.Fatalf("HEADSCALE_USER must be set")
 	}
 	apiKey, set := os.LookupEnv("HEADSCALE_API_KEY")
 	if !set {
-		startlog.Fatalf("HEADSCALE_API_KEY must be set")
+		zlog.Fatalf("HEADSCALE_API_KEY must be set")
 	}
 
 	grpcOptions := []grpc.DialOption{
@@ -63,10 +61,9 @@ func NewHeadscaleClientWrapper(ctx context.Context, zlog *zap.SugaredLogger) *He
 		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
 	}
 
-	// TODO: is the context correct here?
 	conn, err := grpc.DialContext(ctx, apiAddress, grpcOptions...)
 	if err != nil {
-		startlog.Fatalf("Error creating Headscale API client: %v", err)
+		zlog.Fatalf("Error creating Headscale API client: %v", err)
 	}
 
 	return &HeadscaleClientWrapper{

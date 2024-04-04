@@ -100,8 +100,6 @@ func main() {
 }
 
 func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
-	startlog := zlog.Named("startup")
-
 	switch backend := defaultEnv("OPERATOR_BACKEND", "tailscale"); backend {
 	case "tailscale":
 		var (
@@ -109,15 +107,15 @@ func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 			clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
 		)
 		if clientIDPath == "" || clientSecretPath == "" {
-			startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
+			zlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
 		}
 		clientID, err := os.ReadFile(clientIDPath)
 		if err != nil {
-			startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+			zlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
 		}
 		clientSecret, err := os.ReadFile(clientSecretPath)
 		if err != nil {
-			startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
+			zlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
 		}
 		credentials := clientcredentials.Config{
 			ClientID:     string(clientID),
@@ -132,7 +130,7 @@ func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 	case "headscale":
 		client = headscale.NewHeadscaleClientWrapper(context.Background(), zlog)
 	default:
-		startlog.Fatalf("unsupported backend: %s", backend)
+		zlog.Fatalf("unsupported backend: %s", backend)
 	}
 	return client
 }
@@ -142,15 +140,13 @@ func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 // with Tailscale.
 func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	var (
+		startlog     = zlog.Named("startup")
 		hostname     = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret   = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
 		tsBaseURL    = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
-		tsClient     = getTSClient(zlog, tsBaseURL)
+		tsClient     = getTSClient(startlog, tsBaseURL)
 	)
-	// TODO: should this be passed to other functions,
-	// or should they call zlog.Named themselves?
-	startlog := zlog.Named("startup")
 
 	s := &tsnet.Server{
 		Hostname:   hostname,
