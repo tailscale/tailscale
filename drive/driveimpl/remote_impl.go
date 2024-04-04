@@ -217,7 +217,7 @@ func (s *FileSystemForRemote) ServeHTTPWithPerms(permissions drive.Permissions, 
 func (s *FileSystemForRemote) stopUserServers(userServers map[string]*userServer) {
 	for _, server := range userServers {
 		if err := server.Close(); err != nil {
-			s.logf("error closing tailfs user server: %v", err)
+			s.logf("error closing taildrive user server: %v", err)
 		}
 	}
 }
@@ -242,7 +242,7 @@ func (s *FileSystemForRemote) Close() error {
 	return nil
 }
 
-// userServer runs tailscaled serve-tailfs to serve webdav content for the
+// userServer runs tailscaled serve-taildrive to serve webdav content for the
 // given Shares. All Shares are assumed to have the same Share.As, and the
 // content is served as that Share.As user.
 type userServer struct {
@@ -306,13 +306,13 @@ func (s *userServer) runLoop() {
 // userServers anyway.
 func (s *userServer) run() error {
 	// set up the command
-	args := []string{"serve-tailfs"}
+	args := []string{"serve-taildrive"}
 	for _, s := range s.shares {
 		args = append(args, s.Name, s.Path)
 	}
 	var cmd *exec.Cmd
 	if s.canSudo() {
-		s.logf("starting TailFS file server as user %q", s.username)
+		s.logf("starting taildrive file server as user %q", s.username)
 		allArgs := []string{"-n", "-u", s.username, s.executable}
 		allArgs = append(allArgs, args...)
 		cmd = exec.Command("sudo", allArgs...)
@@ -324,7 +324,7 @@ func (s *userServer) run() error {
 		if err != nil {
 			return err
 		}
-		s.logf("starting TailFS file server as ourselves")
+		s.logf("starting taildrive file server as ourselves")
 		cmd = exec.Command(s.executable, args...)
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -356,13 +356,13 @@ func (s *userServer) run() error {
 	// send the rest of stdout and stderr to logger to avoid blocking
 	go func() {
 		for stdoutScanner.Scan() {
-			s.logf("tailscaled serve-tailfs stdout: %v", stdoutScanner.Text())
+			s.logf("tailscaled serve-taildrive stdout: %v", stdoutScanner.Text())
 		}
 	}()
 	stderrScanner := bufio.NewScanner(stderr)
 	go func() {
 		for stderrScanner.Scan() {
-			s.logf("tailscaled serve-tailfs stderr: %v", stderrScanner.Text())
+			s.logf("tailscaled serve-taildrive stderr: %v", stderrScanner.Text())
 		}
 	}()
 	s.mu.Lock()

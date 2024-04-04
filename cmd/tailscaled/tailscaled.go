@@ -145,7 +145,7 @@ var subCommands = map[string]*func([]string) error{
 	"uninstall-system-daemon": &uninstallSystemDaemon,
 	"debug":                   &debugModeFunc,
 	"be-child":                &beChildFunc,
-	"serve-tailfs":            &serveDriveFunc,
+	"serve-taildrive":         &serveDriveFunc,
 }
 
 var beCLI func() // non-nil if CLI is linked in
@@ -833,9 +833,9 @@ func beChild(args []string) error {
 
 var serveDriveFunc = serveDrive
 
-// serveDrive serves one or more tailfs on localhost using the WebDAV
-// protocol. On UNIX and MacOS tailscaled environment, tailfs spawns child
-// tailscaled processes in serve-tailfs mode in order to access the fliesystem
+// serveDrive serves one or more Taildrives on localhost using the WebDAV
+// protocol. On UNIX and MacOS tailscaled environment, Taildrive spawns child
+// tailscaled processes in serve-taildrive mode in order to access the fliesystem
 // as specific (usually unprivileged) users.
 //
 // serveDrive prints the address on which it's listening to stdout so that the
@@ -849,7 +849,7 @@ func serveDrive(args []string) error {
 	}
 	s, err := driveimpl.NewFileServer()
 	if err != nil {
-		return fmt.Errorf("unable to start tailfs FileServer: %v", err)
+		return fmt.Errorf("unable to start Taildrive file server: %v", err)
 	}
 	shares := make(map[string]string)
 	for i := 0; i < len(args); i += 2 {

@@ -116,8 +116,8 @@ var handler = map[string]localAPIHandler{
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"set-gui-visible":             (*Handler).serveSetGUIVisible,
-	"tailfs/fileserver-address":   (*Handler).serveDriveServerAddr,
-	"tailfs/shares":               (*Handler).serveShares,
+	"drive/fileserver-address":    (*Handler).serveDriveServerAddr,
+	"drive/shares":                (*Handler).serveShares,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
 	"tka/init":                    (*Handler).serveTKAInit,
@@ -2760,7 +2760,7 @@ func (h *Handler) serveDriveServerAddr(w http.ResponseWriter, r *http.Request) {
 // POST - renames an existing share
 func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 	if !h.b.DriveSharingEnabled() {
-		http.Error(w, `tailfs sharing not enabled, please add the attribute "tailfs:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusForbidden)
+		http.Error(w, `taildrive sharing not enabled, please add the attribute "drive:share" to this node in your ACLs' "nodeAttrs" section`, http.StatusForbidden)
 		return
 	}
 	switch r.Method {

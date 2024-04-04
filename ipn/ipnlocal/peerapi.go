@@ -48,7 +48,7 @@ import (
 )
 
 const (
-	tailFSPrefix = "/v0/tailfs"
+	taildrivePrefix = "/v0/drive"
 )
 
 var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
@@ -324,7 +324,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDNSQuery(w, r)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, tailFSPrefix) {
+	if strings.HasPrefix(r.URL.Path, taildrivePrefix) {
 		h.handleServeDrive(w, r)
 		return
 	}
@@ -1143,16 +1143,16 @@ func (rbw *requestBodyWrapper) Read(b []byte) (int, error) {
 
 func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request) {
 	if !h.ps.b.DriveSharingEnabled() {
-		h.logf("tailfs: not enabled")
-		http.Error(w, "tailfs not enabled", http.StatusNotFound)
+		h.logf("taildrive: not enabled")
+		http.Error(w, "taildrive not enabled", http.StatusNotFound)
 		return
 	}
 
 	capsMap := h.peerCaps()
-	driveCaps, ok := capsMap[tailcfg.PeerCapabilityTailFS]
+	driveCaps, ok := capsMap[tailcfg.PeerCapabilityTaildrive]
 	if !ok {
-		h.logf("tailfs: not permitted")
-		http.Error(w, "tailfs not permitted", http.StatusForbidden)
+		h.logf("taildrive: not permitted")
+		http.Error(w, "taildrive not permitted", http.StatusForbidden)
 		return
 	}
 
@@ -1163,15 +1163,15 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 
 	p, err := drive.ParsePermissions(rawPerms)
 	if err != nil {
-		h.logf("tailfs: error parsing permissions: %w", err.Error())
+		h.logf("taildrive: error parsing permissions: %w", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	fs, ok := h.ps.b.sys.DriveForRemote.GetOK()
 	if !ok {
-		h.logf("tailfs: not supported on platform")
-		http.Error(w, "tailfs not supported on platform", http.StatusNotFound)
+		h.logf("taildrive: not supported on platform")
+		http.Error(w, "taildrive not supported on platform", http.StatusNotFound)
 		return
 	}
 	wr := &httpResponseWrapper{
@@ -1193,12 +1193,12 @@ func (h *peerAPIHandler) handleServeDrive(w http.ResponseWriter, r *http.Request
 					contentType = ct
 				}
 
-				h.logf("tailfs: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseDriveFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
+				h.logf("taildrive: share: %s from %s to %s: status-code=%d ext=%q content-type=%q tx=%.f rx=%.f", r.Method, h.peerNode.Key().ShortString(), h.selfNode.Key().ShortString(), wr.statusCode, parseDriveFileExtensionForLog(r.URL.Path), contentType, roundTraffic(wr.contentLength), roundTraffic(bw.bytesRead))
 			}
 		}()
 	}
 
-	r.URL.Path = strings.TrimPrefix(r.URL.Path, tailFSPrefix)
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, taildrivePrefix)
 	fs.ServeHTTPWithPerms(p, wr, r)
 }
 

@@ -2498,7 +2498,7 @@ func TestDriveManageShares(t *testing.T) {
 			}
 			if !tt.disabled {
 				self := b.netMap.SelfNode.AsStruct()
-				self.CapMap = tailcfg.NodeCapMap{tailcfg.NodeAttrsTailFSShare: nil}
+				self.CapMap = tailcfg.NodeCapMap{tailcfg.NodeAttrsTaildriveShare: nil}
 				b.netMap.SelfNode = self.View()
 				b.sys.Set(driveimpl.NewFileSystemForRemote(b.logf))
 			}
