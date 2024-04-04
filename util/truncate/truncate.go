@@ -9,7 +9,7 @@ package truncate
 // bytes. If s exceeds this length, it is truncated at a point ≤ n so that the
 // result does not end in a partial UTF-8 encoding.  If s is less than or equal
 // to this length, it is returned unmodified.
-func String(s string, n int) string {
+func String[String ~string | ~[]byte](s String, n int) String {
 	if n >= len(s) {
 		return s
 	}
