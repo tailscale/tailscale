@@ -110,10 +110,10 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Name:      info.Name,
 		ShortHelp: info.ShortHelp,
 		ShortUsage: strings.Join([]string{
-			fmt.Sprintf("%s <target>", info.Name),
-			fmt.Sprintf("%s status [--json]", info.Name),
-			fmt.Sprintf("%s reset", info.Name),
-		}, "\n  "),
+			fmt.Sprintf("tailscale %s <target>", info.Name),
+			fmt.Sprintf("tailscale %s status [--json]", info.Name),
+			fmt.Sprintf("tailscale %s reset", info.Name),
+		}, "\n"),
 		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name),
 		Exec:     e.runServeCombined(subcmd),
 
@@ -131,20 +131,20 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
 			{
-				Name:      "status",
-				Exec:      e.runServeStatus,
-				ShortHelp: "view current proxy configuration",
+				Name:       "status",
+				ShortUsage: "tailscale " + info.Name + " status [--json]",
+				Exec:       e.runServeStatus,
+				ShortHelp:  "View current " + info.Name + " configuration",
 				FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")
 				}),
-				UsageFunc: usageFunc,
 			},
 			{
-				Name:      "reset",
-				ShortHelp: "reset current serve/funnel config",
-				Exec:      e.runServeReset,
-				FlagSet:   e.newFlags("serve-reset", nil),
-				UsageFunc: usageFunc,
+				Name:       "reset",
+				ShortUsage: "tailscale " + info.Name + " reset",
+				ShortHelp:  "Reset current " + info.Name + " config",
+				Exec:       e.runServeReset,
+				FlagSet:    e.newFlags("serve-reset", nil),
 			},
 		},
 	}

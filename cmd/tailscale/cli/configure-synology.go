@@ -22,10 +22,11 @@ import (
 // used to configure Synology devices, but is now a compatibility alias to
 // "tailscale configure synology".
 var configureHostCmd = &ffcli.Command{
-	Name:      "configure-host",
-	Exec:      runConfigureSynology,
-	ShortHelp: synologyConfigureCmd.ShortHelp,
-	LongHelp:  synologyConfigureCmd.LongHelp,
+	Name:       "configure-host",
+	Exec:       runConfigureSynology,
+	ShortUsage: "tailscale configure-host",
+	ShortHelp:  synologyConfigureCmd.ShortHelp,
+	LongHelp:   synologyConfigureCmd.LongHelp,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("configure-host")
 		return fs
@@ -33,9 +34,10 @@ var configureHostCmd = &ffcli.Command{
 }
 
 var synologyConfigureCmd = &ffcli.Command{
-	Name:      "synology",
-	Exec:      runConfigureSynology,
-	ShortHelp: "Configure Synology to enable outbound connections",
+	Name:       "synology",
+	Exec:       runConfigureSynology,
+	ShortUsage: "tailscale configure synology",
+	ShortHelp:  "Configure Synology to enable outbound connections",
 	LongHelp: strings.TrimSpace(`
 This command is intended to run at boot as root on a Synology device to
 create the /dev/net/tun device and give the tailscaled binary permission

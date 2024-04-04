@@ -44,7 +44,7 @@ import (
 
 var upCmd = &ffcli.Command{
 	Name:       "up",
-	ShortUsage: "up [flags]",
+	ShortUsage: "tailscale up [flags]",
 	ShortHelp:  "Connect to Tailscale, logging in if needed",
 
 	LongHelp: strings.TrimSpace(`

@@ -23,7 +23,7 @@ import (
 func exitNodeCmd() *ffcli.Command {
 	return &ffcli.Command{
 		Name:       "exit-node",
-		ShortUsage: "exit-node [flags]",
+		ShortUsage: "tailscale exit-node [flags]",
 		ShortHelp:  "Show machines on your tailnet configured as exit nodes",
 		LongHelp:   "Show machines on your tailnet configured as exit nodes",
 		Exec: func(context.Context, []string) error {
@@ -32,7 +32,7 @@ func exitNodeCmd() *ffcli.Command {
 		Subcommands: append([]*ffcli.Command{
 			{
 				Name:       "list",
-				ShortUsage: "exit-node list [flags]",
+				ShortUsage: "tailscale exit-node list [flags]",
 				ShortHelp:  "Show exit nodes",
 				Exec:       runExitNodeList,
 				FlagSet: (func() *flag.FlagSet {
@@ -48,13 +48,13 @@ func exitNodeCmd() *ffcli.Command {
 				return []*ffcli.Command{
 					{
 						Name:       "connect",
-						ShortUsage: "exit-node connect",
+						ShortUsage: "tailscale exit-node connect",
 						ShortHelp:  "connect to most recently used exit node",
 						Exec:       exitNodeSetUse(true),
 					},
 					{
 						Name:       "disconnect",
-						ShortUsage: "exit-node disconnect",
+						ShortUsage: "tailscale exit-node disconnect",
 						ShortHelp:  "disconnect from current exit node, if any",
 						Exec:       exitNodeSetUse(false),
 					},

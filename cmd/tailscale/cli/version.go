@@ -17,7 +17,7 @@ import (
 
 var versionCmd = &ffcli.Command{
 	Name:       "version",
-	ShortUsage: "version [flags]",
+	ShortUsage: "tailscale version [flags]",
 	ShortHelp:  "Print Tailscale version",
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("version")

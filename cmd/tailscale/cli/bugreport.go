@@ -17,7 +17,7 @@ var bugReportCmd = &ffcli.Command{
 	Name:       "bugreport",
 	Exec:       runBugReport,
 	ShortHelp:  "Print a shareable identifier to help diagnose issues",
-	ShortUsage: "bugreport [note]",
+	ShortUsage: "tailscale bugreport [note]",
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("bugreport")
 		fs.BoolVar(&bugReportArgs.diagnose, "diagnose", false, "run additional in-depth checks")

@@ -28,7 +28,7 @@ var certCmd = &ffcli.Command{
 	Name:       "cert",
 	Exec:       runCert,
 	ShortHelp:  "Get TLS certs",
-	ShortUsage: "cert [flags] <domain>",
+	ShortUsage: "tailscale cert [flags] <domain>",
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("cert")
 		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")

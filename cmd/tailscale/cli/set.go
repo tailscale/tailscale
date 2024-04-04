@@ -25,7 +25,7 @@ import (
 
 var setCmd = &ffcli.Command{
 	Name:       "set",
-	ShortUsage: "set [flags]",
+	ShortUsage: "tailscale set [flags]",
 	ShortHelp:  "Change specified preferences",
 	LongHelp: `"tailscale set" allows changing specific preferences.
 

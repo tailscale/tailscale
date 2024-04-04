@@ -23,7 +23,7 @@ import (
 
 var pingCmd = &ffcli.Command{
 	Name:       "ping",
-	ShortUsage: "ping <hostname-or-IP>",
+	ShortUsage: "tailscale ping <hostname-or-IP>",
 	ShortHelp:  "Ping a host at the Tailscale layer, see how it routed",
 	LongHelp: strings.TrimSpace(`
 

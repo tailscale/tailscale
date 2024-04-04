@@ -14,7 +14,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -95,6 +94,49 @@ func Run(args []string) (err error) {
 		})
 	})
 
+	rootCmd := newRootCmd()
+	if err := rootCmd.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	if envknob.Bool("TS_DUMP_HELP") {
+		walkCommands(rootCmd, func(c *ffcli.Command) {
+			fmt.Println("===")
+			// UsageFuncs are typically called during Command.Run which ensures
+			// FlagSet is not nil.
+			if c.FlagSet == nil {
+				c.FlagSet = flag.NewFlagSet(c.Name, flag.ContinueOnError)
+			}
+			if c.UsageFunc != nil {
+				fmt.Println(c.UsageFunc(c))
+			} else {
+				fmt.Println(ffcli.DefaultUsageFunc(c))
+			}
+		})
+		return
+	}
+
+	localClient.Socket = rootArgs.socket
+	rootCmd.FlagSet.Visit(func(f *flag.Flag) {
+		if f.Name == "socket" {
+			localClient.UseSocketOnly = true
+		}
+	})
+
+	err = rootCmd.Run(context.Background())
+	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
+		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
+	}
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	return err
+}
+
+func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled socket")
 
@@ -134,10 +176,11 @@ change in the future.
 			exitNodeCmd(),
 			updateCmd,
 			whoisCmd,
+			debugCmd,
+			driveCmd,
 		},
-		FlagSet:   rootfs,
-		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
-		UsageFunc: usageFunc,
+		FlagSet: rootfs,
+		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
 	}
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands,
@@ -145,45 +188,16 @@ change in the future.
 		)
 	}
 
-	// Don't advertise these commands, but they're still explicitly available.
-	switch {
-	case slices.Contains(args, "debug"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
-	case slices.Contains(args, "drive"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, driveCmd)
-	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
 
-	for _, c := range rootCmd.Subcommands {
+	walkCommands(rootCmd, func(c *ffcli.Command) {
 		if c.UsageFunc == nil {
 			c.UsageFunc = usageFunc
 		}
-	}
-
-	if err := rootCmd.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-
-	localClient.Socket = rootArgs.socket
-	rootfs.Visit(func(f *flag.Flag) {
-		if f.Name == "socket" {
-			localClient.UseSocketOnly = true
-		}
 	})
-
-	err = rootCmd.Run(context.Background())
-	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
-		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
-	}
-	if errors.Is(err, flag.ErrHelp) {
-		return nil
-	}
-	return err
+	return rootCmd
 }
 
 func fatalf(format string, a ...any) {
@@ -202,6 +216,13 @@ var rootArgs struct {
 	socket string
 }
 
+func walkCommands(cmd *ffcli.Command, f func(*ffcli.Command)) {
+	f(cmd)
+	for _, sub := range cmd.Subcommands {
+		walkCommands(sub, f)
+	}
+}
+
 // usageFuncNoDefaultValues is like usageFunc but doesn't print default values.
 func usageFuncNoDefaultValues(c *ffcli.Command) string {
 	return usageFuncOpt(c, false)
@@ -213,23 +234,32 @@ func usageFunc(c *ffcli.Command) string {
 
 func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 	var b strings.Builder
+	const hiddenPrefix = "HIDDEN: "
+
+	if c.ShortHelp != "" {
+		fmt.Fprintf(&b, "%s\n\n", c.ShortHelp)
+	}
 
 	fmt.Fprintf(&b, "USAGE\n")
 	if c.ShortUsage != "" {
-		fmt.Fprintf(&b, "  %s\n", c.ShortUsage)
+		fmt.Fprintf(&b, "  %s\n", strings.ReplaceAll(c.ShortUsage, "\n", "\n  "))
 	} else {
 		fmt.Fprintf(&b, "  %s\n", c.Name)
 	}
 	fmt.Fprintf(&b, "\n")
 
 	if c.LongHelp != "" {
-		fmt.Fprintf(&b, "%s\n\n", c.LongHelp)
+		help, _ := strings.CutPrefix(c.LongHelp, hiddenPrefix)
+		fmt.Fprintf(&b, "%s\n\n", help)
 	}
 
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintf(&b, "SUBCOMMANDS\n")
 		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
 		for _, subcommand := range c.Subcommands {
+			if strings.HasPrefix(subcommand.LongHelp, hiddenPrefix) {
+				continue
+			}
 			fmt.Fprintf(tw, "  %s\t%s\n", subcommand.Name, subcommand.ShortHelp)
 		}
 		tw.Flush()
@@ -242,7 +272,7 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 		c.FlagSet.VisitAll(func(f *flag.Flag) {
 			var s string
 			name, usage := flag.UnquoteUsage(f)
-			if strings.HasPrefix(usage, "HIDDEN: ") {
+			if strings.HasPrefix(usage, hiddenPrefix) {
 				return
 			}
 			if isBoolFlag(f) {
