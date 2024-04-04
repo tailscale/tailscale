@@ -48,7 +48,7 @@ func TestForEachAddr(t *testing.T) {
 		mu         sync.Mutex // protects following
 		registered []netip.Addr
 	)
-	newProbe := func(addr netip.Addr) *Probe {
+	newProbe := func(addr netip.Addr) []*Probe {
 		// Called to register a new prober
 		t.Logf("called to register new probe for %v", addr)
 
@@ -57,9 +57,10 @@ func TestForEachAddr(t *testing.T) {
 		registered = append(registered, addr)
 
 		// Return a probe that does nothing; we don't care about what this does.
-		return p.Run(fmt.Sprintf("website/%s", addr), probeInterval, nil, func(_ context.Context) error {
+		probe := p.Run(fmt.Sprintf("website/%s", addr), probeInterval, nil, func(_ context.Context) error {
 			return nil
 		})
+		return []*Probe{probe}
 	}
 
 	fep := makeForEachAddr("tailscale.com", newProbe, opts)
