@@ -14,7 +14,11 @@ import (
 // Mainly used as a shim for OSes that want to set both network and
 // DNS configuration simultaneously (Mac, iOS, Android).
 type CallbackRouter struct {
-	SetBoth  func(rcfg *Config, dcfg *dns.OSConfig) error
+	// SetBoth provides a hook for letting clients know that routes and/or DNS
+	// configuration have changed. It always includes the most up-to-date
+	// version of each. readyToEstablishVPN signals that this is the last
+	// update and the client can go ahead and establish its VPN.
+	SetBoth  func(rcfg *Config, dcfg *dns.OSConfig, readyToEstablishVPN bool) error
 	SplitDNS bool
 
 	// GetBaseConfigFunc optionally specifies a function to return the current DNS
@@ -53,7 +57,7 @@ func (r *CallbackRouter) Set(rcfg *Config) error {
 		rcfg.NewMTU = int(r.InitialMTU)
 	}
 	r.rcfg = rcfg
-	return r.SetBoth(r.rcfg, r.dcfg)
+	return r.SetBoth(r.rcfg, r.dcfg, false)
 }
 
 // UpdateMagicsockPort implements the Router interface. This implementation
@@ -71,7 +75,7 @@ func (r *CallbackRouter) SetDNS(dcfg dns.OSConfig) error {
 		return nil
 	}
 	r.dcfg = &dcfg
-	return r.SetBoth(r.rcfg, r.dcfg)
+	return r.SetBoth(r.rcfg, r.dcfg, true)
 }
 
 // SupportsSplitDNS implements dns.OSConfigurator.
@@ -87,5 +91,5 @@ func (r *CallbackRouter) GetBaseConfig() (dns.OSConfig, error) {
 }
 
 func (r *CallbackRouter) Close() error {
-	return r.SetBoth(nil, nil) // TODO: check if makes sense
+	return r.SetBoth(nil, nil, false) // TODO: check if makes sense
 }
