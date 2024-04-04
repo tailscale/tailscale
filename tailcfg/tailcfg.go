@@ -130,7 +130,8 @@ type CapabilityVersion int
 //   - 87: 2024-02-11: UserProfile.Groups removed (added in 66)
 //   - 88: 2024-03-05: Client understands NodeAttrSuggestExitNode
 //   - 89: 2024-03-23: Client no longer respects deleted PeerChange.Capabilities (use CapMap)
-const CurrentCapabilityVersion CapabilityVersion = 89
+//   - 90: 2024-04-03: Client understands PeerCapabilityTaildrive.
+const CurrentCapabilityVersion CapabilityVersion = 90
 
 type StableID string
 
@@ -1345,8 +1346,8 @@ const (
 	// PeerCapabilityWebUI grants the ability for a peer to edit features from the
 	// device Web UI.
 	PeerCapabilityWebUI PeerCapability = "tailscale.com/cap/webui"
-	// PeerCapabilityTailFS grants the ability for a peer to access Taildrive shares.
-	PeerCapabilityTailFS PeerCapability = "tailscale.com/cap/tailfs"
+	// PeerCapabilityTaildrive grants the ability for a peer to access Taildrive shares.
+	PeerCapabilityTaildrive PeerCapability = "tailscale.com/cap/drive"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
@@ -2218,11 +2219,11 @@ const (
 	// tail end of an active direct connection in magicsock.
 	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
 
-	// NodeAttrsTailFSShare enables sharing via TailFS.
-	NodeAttrsTailFSShare NodeCapability = "tailfs:share"
+	// NodeAttrsTaildriveShare enables sharing via Taildrive.
+	NodeAttrsTaildriveShare NodeCapability = "drive:share"
 
-	// NodeAttrsTailFSAccess enables accessing shares via TailFS.
-	NodeAttrsTailFSAccess NodeCapability = "tailfs:access"
+	// NodeAttrsTaildriveAccess enables accessing shares via Taildrive.
+	NodeAttrsTaildriveAccess NodeCapability = "drive:access"
 
 	// NodeAttrSuggestExitNode is applied to each exit node which the control plane has determined
 	// is a recommended exit node.

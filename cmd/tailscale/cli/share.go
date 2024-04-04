@@ -153,9 +153,9 @@ func buildShareLongHelp() string {
 
 var shareLongHelpBase = `Tailscale share allows you to share directories with other machines on your tailnet.
 
-In order to share folders, your node needs to have the node attribute "tailfs:share".
+In order to share folders, your node needs to have the node attribute "drive:share".
 
-In order to access shares, your node needs to have the node attribute "tailfs:access".
+In order to access shares, your node needs to have the node attribute "drive:access".
 
 For example, to enable sharing and accessing shares for all member nodes:
 
@@ -163,8 +163,8 @@ For example, to enable sharing and accessing shares for all member nodes:
     {
       "target": ["autogroup:member"],
       "attr": [
-        "tailfs:share",
-        "tailfs:access",
+        "drive:share",
+        "drive:access",
       ],
     }]
 
@@ -191,7 +191,7 @@ Permissions to access shares are controlled via ACLs. For example, to give yours
       "src": ["mylogin@domain.com"],
       "dst": ["mylaptop's ip address"],
       "app": {
-        "tailscale.com/cap/tailfs": [{
+        "tailscale.com/cap/drive": [{
           "shares": ["docs"],
           "access": "rw"
         }]
@@ -201,7 +201,7 @@ Permissions to access shares are controlled via ACLs. For example, to give yours
       "src": ["group:home"],
       "dst": ["mylaptop"],
       "app": {
-        "tailscale.com/cap/tailfs": [{
+        "tailscale.com/cap/drive": [{
           "shares": ["docs"],
           "access": "ro"
         }]
@@ -215,7 +215,7 @@ To categorically give yourself access to all your shares, you can use the below 
       "src": ["autogroup:member"],
       "dst": ["autogroup:self"],
       "app": {
-        "tailscale.com/cap/tailfs": [{
+        "tailscale.com/cap/drive": [{
           "shares": ["*"],
           "access": "rw"
         }]

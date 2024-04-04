@@ -4780,7 +4780,7 @@ type responseBodyWrapper struct {
 	contentLength int64
 }
 
-// logAccess logs the tailfs: access: log line. If the logger is nil,
+// logAccess logs the taildrive: access: log line. If the logger is nil,
 // the log will not be written.
 func (rbw *responseBodyWrapper) logAccess(err string) {
 	if rbw.log == nil {
@@ -4790,7 +4790,7 @@ func (rbw *responseBodyWrapper) logAccess(err string) {
 	// Some operating systems create and copy lots of 0 length hidden files for
 	// tracking various states. Omit these to keep logs from being too verbose.
 	if rbw.contentLength > 0 {
-		rbw.log("tailfs: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
+		rbw.log("taildrive: access: %s from %s to %s: status-code=%d ext=%q content-type=%q content-length=%.f tx=%.f rx=%.f err=%q", rbw.method, rbw.selfNodeKey, rbw.shareNodeKey, rbw.statusCode, rbw.fileExtension, rbw.contentType, roundTraffic(rbw.contentLength), roundTraffic(rbw.bytesTx), roundTraffic(rbw.bytesRx), err)
 	}
 }
 

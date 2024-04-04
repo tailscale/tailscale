@@ -1422,7 +1422,7 @@ func (lc *LocalClient) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion,
 // the filesystem. This is used on platforms like Windows and MacOS to let
 // Taildrive know to use the file server running in the GUI app.
 func (lc *LocalClient) DriveSetServerAddr(ctx context.Context, addr string) error {
-	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/fileserver-address", http.StatusCreated, strings.NewReader(addr))
+	_, err := lc.send(ctx, "PUT", "/localapi/v0/drive/fileserver-address", http.StatusCreated, strings.NewReader(addr))
 	return err
 }
 
@@ -1430,7 +1430,7 @@ func (lc *LocalClient) DriveSetServerAddr(ctx context.Context, addr string) erro
 // Taildrive will serve to remote nodes. If a share with the same name already
 // exists, the existing share is replaced/updated.
 func (lc *LocalClient) DriveShareSet(ctx context.Context, share *drive.Share) error {
-	_, err := lc.send(ctx, "PUT", "/localapi/v0/tailfs/shares", http.StatusCreated, jsonBody(share))
+	_, err := lc.send(ctx, "PUT", "/localapi/v0/drive/shares", http.StatusCreated, jsonBody(share))
 	return err
 }
 
@@ -1440,7 +1440,7 @@ func (lc *LocalClient) DriveShareRemove(ctx context.Context, name string) error 
 	_, err := lc.send(
 		ctx,
 		"DELETE",
-		"/localapi/v0/tailfs/shares",
+		"/localapi/v0/drive/shares",
 		http.StatusNoContent,
 		strings.NewReader(name))
 	return err
@@ -1451,7 +1451,7 @@ func (lc *LocalClient) DriveShareRename(ctx context.Context, oldName, newName st
 	_, err := lc.send(
 		ctx,
 		"POST",
-		"/localapi/v0/tailfs/shares",
+		"/localapi/v0/drive/shares",
 		http.StatusNoContent,
 		jsonBody([2]string{oldName, newName}))
 	return err
@@ -1460,7 +1460,7 @@ func (lc *LocalClient) DriveShareRename(ctx context.Context, oldName, newName st
 // DriveShareList returns the list of shares that drive is currently serving
 // to remote nodes.
 func (lc *LocalClient) DriveShareList(ctx context.Context) ([]*drive.Share, error) {
-	result, err := lc.get200(ctx, "/localapi/v0/tailfs/shares")
+	result, err := lc.get200(ctx, "/localapi/v0/drive/shares")
 	if err != nil {
 		return nil, err
 	}

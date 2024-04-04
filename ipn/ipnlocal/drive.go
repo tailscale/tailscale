@@ -26,12 +26,12 @@ const (
 
 var (
 	shareNameRegex      = regexp.MustCompile(`^[a-z0-9_\(\) ]+$`)
-	ErrDriveNotEnabled  = errors.New("TailFS not enabled")
+	ErrDriveNotEnabled  = errors.New("Taildrive not enabled")
 	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
 )
 
 // DriveSharingEnabled reports whether sharing to remote nodes via Taildrive is
-// enabled. This is currently based on checking for the tailfs:share node
+// enabled. This is currently based on checking for the drive:share node
 // attribute.
 func (b *LocalBackend) DriveSharingEnabled() bool {
 	b.mu.Lock()
@@ -40,11 +40,11 @@ func (b *LocalBackend) DriveSharingEnabled() bool {
 }
 
 func (b *LocalBackend) driveSharingEnabledLocked() bool {
-	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailFSShare)
+	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTaildriveShare)
 }
 
 // DriveAccessEnabled reports whether accessing Taildrive shares on remote nodes
-// is enabled. This is currently based on checking for the tailfs:access node
+// is enabled. This is currently based on checking for the drive:access node
 // attribute.
 func (b *LocalBackend) DriveAccessEnabled() bool {
 	b.mu.Lock()
@@ -53,7 +53,7 @@ func (b *LocalBackend) DriveAccessEnabled() bool {
 }
 
 func (b *LocalBackend) driveAccessEnabledLocked() bool {
-	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTailFSAccess)
+	return b.netMap != nil && b.netMap.SelfNode.HasCap(tailcfg.NodeAttrsTaildriveAccess)
 }
 
 // DriveSetServerAddr tells Taildrive to use the given address for connecting
@@ -351,7 +351,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 		}
 
 		peerID := p.ID()
-		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), tailFSPrefix[1:])
+		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), taildrivePrefix[1:])
 		driveRemotes = append(driveRemotes, &drive.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,
@@ -359,7 +359,7 @@ func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Rem
 				// TODO(oxtoacart): need to figure out a performant and reliable way to only
 				// show the peers that have shares to which we have access
 				// This will require work on the control server to transmit the inverse
-				// of the "tailscale.com/cap/tailfs" capability.
+				// of the "tailscale.com/cap/drive" capability.
 				// For now, at least limit it only to nodes that are online.
 				// Note, we have to iterate the latest netmap because the peer we got from the first iteration may not be it
 				b.mu.Lock()
