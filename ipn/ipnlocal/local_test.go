@@ -2731,3 +2731,76 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 	}
 
 }
+
+func TestFran(t *testing.T) {
+	for _, shouldStore := range []bool{true, false} {
+		b := newTestBackend(t)
+		b.ControlKnobs().AppCStoreRoutes.Store(shouldStore)
+		// make b an app connector
+		b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs: ipn.Prefs{
+				AppConnector: ipn.AppConnectorPrefs{
+					Advertise: true,
+				},
+			},
+			AppConnectorSet: true,
+		})
+		b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+
+		appCfgTmpl := `{
+		"name": "example",
+		"domains": [%s],
+		"connectors": ["tag:example"]
+	}`
+		appCfg1Domain := fmt.Sprintf(appCfgTmpl, `"one.com"`)
+		appCfg2Domains := fmt.Sprintf(appCfgTmpl, `"one.com", "two.com"`)
+
+		reconfigWithAppCfg := func(appCfg string) {
+			b.netMap.SelfNode = (&tailcfg.Node{
+				Name: "example.ts.net",
+				Tags: []string{"tag:example"},
+				CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+					"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
+				}),
+			}).View()
+
+			b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+			b.appConnector.Wait(context.Background())
+		}
+
+		// set the app connector to watch 2 domains
+		reconfigWithAppCfg(appCfg2Domains)
+
+		//want := []string{"one.com", "two.com"}
+		// TODO how do we check this?, it seems to be unordered
+		//if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {
+		//t.Fatalf("got domains %v, want %v", b.appConnector.Domains(), want)
+		//}
+
+		// when the app connector observes dns for the domains it adds routes
+		for _, tst := range []struct {
+			domain    string
+			route     string
+			wantAfter []netip.Prefix
+		}{
+			// learns the route for one.com
+			{domain: "one.com", route: "192.0.0.8", wantAfter: []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}},
+			// doesn't care about example.com, so still just the route for one.com
+			{domain: "example.com", route: "192.0.0.9", wantAfter: []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}},
+			// learns the route for two.com as well
+			{domain: "two.com", route: "192.0.0.10", wantAfter: []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32"), netip.MustParsePrefix("192.0.0.10/32")}},
+		} {
+			b.ObserveDNSResponse(dnsResponse(tst.domain+".", tst.route))
+			b.appConnector.Wait(context.Background())
+			routesNow := b.pm.prefs.AdvertiseRoutes().AsSlice()
+			if !slices.Equal(routesNow, tst.wantAfter) {
+				t.Fatalf("after dns response for %s got routes %v, want %v", tst.domain, routesNow, tst.wantAfter)
+			}
+		}
+
+		// when the app connector is reconfigured to observe fewer domains it advertises fewer routes
+		reconfigWithAppCfg(appCfg1Domain)
+		routesNow := b.pm.prefs.AdvertiseRoutes().AsSlice()
+		fmt.Println("shouldStore", shouldStore, "routesNow", routesNow)
+	}
+}
