@@ -81,8 +81,9 @@ func (c *HeadscaleClientWrapper) CreateKey(ctx context.Context, caps tailscale.K
 		Reusable:  caps.Devices.Create.Reusable,
 		Ephemeral: caps.Devices.Create.Ephemeral,
 		AclTags:   caps.Devices.Create.Tags,
-		// FIXME: PreAuthKey renewal
-		Expiration: timestamppb.New(time.Now().Add(time.Hour * 24)),
+		// According to the Tailscale API docs,
+		// 90 days is the default.
+		Expiration: timestamppb.New(time.Now().UTC().Add(time.Hour * 24 * 90)),
 	})
 	if err != nil {
 		return "", nil, err
