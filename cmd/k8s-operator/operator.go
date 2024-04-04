@@ -99,7 +99,7 @@ func main() {
 	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, tsFirewallMode)
 }
 
-func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
+func getTSClient(ctx context.Context, zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 	switch backend := defaultEnv("OPERATOR_BACKEND", "tailscale"); backend {
 	case "tailscale":
 		var (
@@ -124,11 +124,11 @@ func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 		}
 		tsClient := tailscale.NewClient("-", nil)
 		tsClient.BaseURL = tsBaseURL
-		tsClient.HTTPClient = credentials.Client(context.Background())
+		tsClient.HTTPClient = credentials.Client(ctx)
 
 		client = tsClient
 	case "headscale":
-		client = headscale.NewHeadscaleClientWrapper(context.Background(), zlog)
+		client = headscale.NewHeadscaleClientWrapper(ctx, zlog)
 	default:
 		zlog.Fatalf("unsupported backend: %s", backend)
 	}
@@ -140,12 +140,13 @@ func getTSClient(zlog *zap.SugaredLogger, tsBaseURL string) (client tsClient) {
 // with Tailscale.
 func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 	var (
+		ctx          = context.Background()
 		startlog     = zlog.Named("startup")
 		hostname     = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret   = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
 		tsBaseURL    = defaultEnv("TAILSCALE_BASE_URL", "https://login.tailscale.com")
-		tsClient     = getTSClient(startlog, tsBaseURL)
+		tsClient     = getTSClient(ctx, startlog, tsBaseURL)
 	)
 
 	s := &tsnet.Server{
@@ -168,8 +169,6 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, tsClient) {
 		startlog.Fatalf("getting local client: %v", err)
 	}
 
-	// TODO: create this earlier and pass to previous functions?
-	ctx := context.Background()
 	loginDone := false
 	machineAuthShown := false
 waitOnline:
