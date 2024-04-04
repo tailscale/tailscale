@@ -44,17 +44,17 @@ func TestParse(t *testing.T) {
 		{in: `# nameserver 192.168.0.100`, want: &Config{}},
 		{in: `nameserver192.168.0.100`, wantErr: true},
 
-		{in: `search tailsacle.com`,
+		{in: `search tailscale.com`,
 			want: &Config{
-				SearchDomains: []dnsname.FQDN{"tailsacle.com."},
+				SearchDomains: []dnsname.FQDN{"tailscale.com."},
 			},
 		},
-		{in: `search tailsacle.com # typo`,
+		{in: `search tailscale.com # comment`,
 			want: &Config{
-				SearchDomains: []dnsname.FQDN{"tailsacle.com."},
+				SearchDomains: []dnsname.FQDN{"tailscale.com."},
 			},
 		},
-		{in: `searchtailsacle.com`, wantErr: true},
+		{in: `searchtailscale.com`, wantErr: true},
 		{in: `search`, wantErr: true},
 
 		// Issue 6875: there can be multiple search domains, and even if they're

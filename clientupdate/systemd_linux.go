@@ -19,11 +19,11 @@ func restartSystemdUnit(ctx context.Context) error {
 	}
 	defer c.Close()
 	if err := c.ReloadContext(ctx); err != nil {
-		return fmt.Errorf("failed to reload tailsacled.service: %w", err)
+		return fmt.Errorf("failed to reload tailscaled.service: %w", err)
 	}
 	ch := make(chan string, 1)
 	if _, err := c.RestartUnitContext(ctx, "tailscaled.service", "replace", ch); err != nil {
-		return fmt.Errorf("failed to restart tailsacled.service: %w", err)
+		return fmt.Errorf("failed to restart tailscaled.service: %w", err)
 	}
 	select {
 	case res := <-ch:
