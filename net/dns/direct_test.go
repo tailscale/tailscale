@@ -177,17 +177,17 @@ func TestReadResolve(t *testing.T) {
 		{in: `# nameserver 192.168.0.100`, want: OSConfig{}},
 		{in: `nameserver192.168.0.100`, wantErr: true},
 
-		{in: `search tailsacle.com`,
+		{in: `search tailscale.com`,
 			want: OSConfig{
-				SearchDomains: []dnsname.FQDN{"tailsacle.com."},
+				SearchDomains: []dnsname.FQDN{"tailscale.com."},
 			},
 		},
-		{in: `search tailsacle.com # typo`,
+		{in: `search tailscale.com # comment`,
 			want: OSConfig{
-				SearchDomains: []dnsname.FQDN{"tailsacle.com."},
+				SearchDomains: []dnsname.FQDN{"tailscale.com."},
 			},
 		},
-		{in: `searchtailsacle.com`, wantErr: true},
+		{in: `searchtailscale.com`, wantErr: true},
 		{in: `search`, wantErr: true},
 	}
 
