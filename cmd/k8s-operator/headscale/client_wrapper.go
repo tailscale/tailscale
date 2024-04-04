@@ -24,9 +24,9 @@ type HeadscaleClientWrapper struct {
 
 // NewHeadscaleClientWrapper instantiates a new HeadscaleClientWrapper.
 func NewHeadscaleClientWrapper(ctx context.Context, zlog *zap.SugaredLogger) *HeadscaleClientWrapper {
-	apiAddress, set := os.LookupEnv("HEADSCALE_ADDRESS")
+	apiAddress, set := os.LookupEnv("HEADSCALE_GRPC_ADDRESS")
 	if !set {
-		zlog.Fatalf("HEADSCALE_ADDRESS must be set")
+		zlog.Fatalf("HEADSCALE_GRPC_ADDRESS must be set")
 	}
 	user, set := os.LookupEnv("HEADSCALE_USER")
 	if !set {

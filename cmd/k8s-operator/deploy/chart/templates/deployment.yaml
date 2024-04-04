@@ -79,7 +79,7 @@ spec:
             - name: OPERATOR_BACKEND
               value: {{ .Values.operatorConfig.backend }}
             {{- if eq .Values.operatorConfig.backend "headscale" }}
-            - name: HEADSCALE_ADDRESS
+            - name: HEADSCALE_GRPC_ADDRESS
               value: {{ .Values.operatorConfig.headscale.grpc_address }}
             - name: HEADSCALE_API_KEY
               valueFrom:
