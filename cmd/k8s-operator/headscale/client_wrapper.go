@@ -2,6 +2,7 @@ package headscale
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -106,7 +107,11 @@ func (c *HeadscaleClientWrapper) DeleteDevice(ctx context.Context, nodeStableID 
 	}
 
 	for _, node := range resp.Nodes {
-		if node.Name == nodeStableID {
+		// TODO: Headscale uses simple numeric node IDs
+		// which can be reused after deletion.
+		// To avoid accidentally deleting the wrong node,
+		// we should also check the node name.
+		if fmt.Sprint(node.Id) == nodeStableID {
 			_, err := c.client.DeleteNode(ctx, &headscale.DeleteNodeRequest{
 				NodeId: node.Id,
 			})
