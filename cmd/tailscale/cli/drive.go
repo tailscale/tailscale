@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	driveShareUsage   = "drive share <name> <path>"
-	driveRenameUsage  = "drive rename <oldname> <newname>"
-	driveUnshareUsage = "drive unshare <name>"
-	driveListUsage    = "drive list"
+	driveShareUsage   = "tailscale drive share <name> <path>"
+	driveRenameUsage  = "tailscale drive rename <oldname> <newname>"
+	driveUnshareUsage = "tailscale drive unshare <name>"
+	driveListUsage    = "tailscale drive list"
 )
 
 var driveCmd = &ffcli.Command{
@@ -33,28 +33,32 @@ var driveCmd = &ffcli.Command{
 	UsageFunc: usageFuncNoDefaultValues,
 	Subcommands: []*ffcli.Command{
 		{
-			Name:      "share",
-			Exec:      runDriveShare,
-			ShortHelp: "[ALPHA] create or modify a share",
-			UsageFunc: usageFunc,
+			Name:       "share",
+			ShortUsage: driveShareUsage,
+			Exec:       runDriveShare,
+			ShortHelp:  "[ALPHA] create or modify a share",
+			UsageFunc:  usageFunc,
 		},
 		{
-			Name:      "rename",
-			ShortHelp: "[ALPHA] rename a share",
-			Exec:      runDriveRename,
-			UsageFunc: usageFunc,
+			Name:       "rename",
+			ShortUsage: driveRenameUsage,
+			ShortHelp:  "[ALPHA] rename a share",
+			Exec:       runDriveRename,
+			UsageFunc:  usageFunc,
 		},
 		{
-			Name:      "unshare",
-			ShortHelp: "[ALPHA] remove a share",
-			Exec:      runDriveUnshare,
-			UsageFunc: usageFunc,
+			Name:       "unshare",
+			ShortUsage: driveUnshareUsage,
+			ShortHelp:  "[ALPHA] remove a share",
+			Exec:       runDriveUnshare,
+			UsageFunc:  usageFunc,
 		},
 		{
-			Name:      "list",
-			ShortHelp: "[ALPHA] list current shares",
-			Exec:      runDriveList,
-			UsageFunc: usageFunc,
+			Name:       "list",
+			ShortUsage: driveListUsage,
+			ShortHelp:  "[ALPHA] list current shares",
+			Exec:       runDriveList,
+			UsageFunc:  usageFunc,
 		},
 	},
 	Exec: func(context.Context, []string) error {
@@ -237,8 +241,8 @@ You can get a list of currently published shares by running:
 
   $ tailscale drive list`
 
-var shareLongHelpAs = `
+const shareLongHelpAs = `
 
 If you want a share to be accessed as a different user, you can use sudo to accomplish this. For example, to create the aforementioned share as "theuser", you could run:
 
-	$ sudo -u theuser tailscale drive share docs /Users/theuser/Documents`
+  $ sudo -u theuser tailscale drive share docs /Users/theuser/Documents`

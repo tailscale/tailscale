@@ -12,7 +12,7 @@ import (
 
 var licensesCmd = &ffcli.Command{
 	Name:       "licenses",
-	ShortUsage: "licenses",
+	ShortUsage: "tailscale licenses",
 	ShortHelp:  "Get open source license information",
 	LongHelp:   "Get open source license information",
 	Exec:       runLicenses,

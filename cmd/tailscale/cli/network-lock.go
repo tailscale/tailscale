@@ -26,7 +26,7 @@ import (
 
 var netlockCmd = &ffcli.Command{
 	Name:       "lock",
-	ShortUsage: "lock <sub-command> <arguments>",
+	ShortUsage: "tailscale lock <sub-command> <arguments>",
 	ShortHelp:  "Manage tailnet lock",
 	LongHelp:   "Manage tailnet lock",
 	Subcommands: []*ffcli.Command{
@@ -61,7 +61,7 @@ var nlInitArgs struct {
 
 var nlInitCmd = &ffcli.Command{
 	Name:       "init",
-	ShortUsage: "init [--gen-disablement-for-support] --gen-disablements N <trusted-key>...",
+	ShortUsage: "tailscale lock init [--gen-disablement-for-support] --gen-disablements N <trusted-key>...",
 	ShortHelp:  "Initialize tailnet lock",
 	LongHelp: strings.TrimSpace(`
 
@@ -183,7 +183,7 @@ var nlStatusArgs struct {
 
 var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "status",
+	ShortUsage: "tailscale lock status",
 	ShortHelp:  "Outputs the state of tailnet lock",
 	LongHelp:   "Outputs the state of tailnet lock",
 	Exec:       runNetworkLockStatus,
@@ -280,7 +280,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 
 var nlAddCmd = &ffcli.Command{
 	Name:       "add",
-	ShortUsage: "add <public-key>...",
+	ShortUsage: "tailscale lock add <public-key>...",
 	ShortHelp:  "Adds one or more trusted signing keys to tailnet lock",
 	LongHelp:   "Adds one or more trusted signing keys to tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
@@ -294,7 +294,7 @@ var nlRemoveArgs struct {
 
 var nlRemoveCmd = &ffcli.Command{
 	Name:       "remove",
-	ShortUsage: "remove [--re-sign=false] <public-key>...",
+	ShortUsage: "tailscale lock remove [--re-sign=false] <public-key>...",
 	ShortHelp:  "Removes one or more trusted signing keys from tailnet lock",
 	LongHelp:   "Removes one or more trusted signing keys from tailnet lock",
 	Exec:       runNetworkLockRemove,
@@ -435,7 +435,7 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
-	ShortUsage: "sign <node-key> [<rotation-key>] or sign <auth-key>",
+	ShortUsage: "tailscale lock sign <node-key> [<rotation-key>] or sign <auth-key>",
 	ShortHelp:  "Signs a node or pre-approved auth key",
 	LongHelp: `Either:
   - signs a node key and transmits the signature to the coordination server, or
@@ -479,7 +479,7 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 
 var nlDisableCmd = &ffcli.Command{
 	Name:       "disable",
-	ShortUsage: "disable <disablement-secret>",
+	ShortUsage: "tailscale lock disable <disablement-secret>",
 	ShortHelp:  "Consumes a disablement secret to shut down tailnet lock for the tailnet",
 	LongHelp: strings.TrimSpace(`
 
@@ -508,7 +508,7 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 
 var nlLocalDisableCmd = &ffcli.Command{
 	Name:       "local-disable",
-	ShortUsage: "local-disable",
+	ShortUsage: "tailscale lock local-disable",
 	ShortHelp:  "Disables tailnet lock for this node only",
 	LongHelp: strings.TrimSpace(`
 
@@ -530,7 +530,7 @@ func runNetworkLockLocalDisable(ctx context.Context, args []string) error {
 
 var nlDisablementKDFCmd = &ffcli.Command{
 	Name:       "disablement-kdf",
-	ShortUsage: "disablement-kdf <hex-encoded-disablement-secret>",
+	ShortUsage: "tailscale lock disablement-kdf <hex-encoded-disablement-secret>",
 	ShortHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
 	LongHelp:   "Computes a disablement value from a disablement secret (advanced users only)",
 	Exec:       runNetworkLockDisablementKDF,
@@ -555,7 +555,7 @@ var nlLogArgs struct {
 
 var nlLogCmd = &ffcli.Command{
 	Name:       "log",
-	ShortUsage: "log [--limit N]",
+	ShortUsage: "tailscale lock log [--limit N]",
 	ShortHelp:  "List changes applied to tailnet lock",
 	LongHelp:   "List changes applied to tailnet lock",
 	Exec:       runNetworkLockLog,
@@ -719,7 +719,7 @@ var nlRevokeKeysArgs struct {
 
 var nlRevokeKeysCmd = &ffcli.Command{
 	Name:       "revoke-keys",
-	ShortUsage: "revoke-keys <tailnet-lock-key>...\n  revoke-keys [--cosign] [--finish] <recovery-blob>",
+	ShortUsage: "tailscale lock revoke-keys <tailnet-lock-key>...\n  revoke-keys [--cosign] [--finish] <recovery-blob>",
 	ShortHelp:  "Revoke compromised tailnet-lock keys",
 	LongHelp: `Retroactively revoke the specified tailnet lock keys (tlpub:abc).
 

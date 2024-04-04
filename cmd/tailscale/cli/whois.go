@@ -17,13 +17,12 @@ import (
 
 var whoisCmd = &ffcli.Command{
 	Name:       "whois",
-	ShortUsage: "whois [--json] ip[:port]",
+	ShortUsage: "tailscale whois [--json] ip[:port]",
 	ShortHelp:  "Show the machine and user associated with a Tailscale IP (v4 or v6)",
 	LongHelp: strings.TrimSpace(`
 	'tailscale whois' shows the machine and user associated with a Tailscale IP (v4 or v6).
 	`),
-	UsageFunc: usageFunc,
-	Exec:      runWhoIs,
+	Exec: runWhoIs,
 	FlagSet: func() *flag.FlagSet {
 		fs := newFlagSet("whois")
 		fs.BoolVar(&whoIsArgs.json, "json", false, "output in JSON format")

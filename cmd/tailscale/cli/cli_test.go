@@ -16,6 +16,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
@@ -29,14 +30,36 @@ import (
 	"tailscale.com/version/distro"
 )
 
+func TestPanicIfAnyEnvCheckedInInit(t *testing.T) {
+	envknob.PanicIfAnyEnvCheckedInInit()
+}
+
+func TestShortUsage_FullCmd(t *testing.T) {
+	t.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	if !envknob.UseWIPCode() {
+		t.Fatal("expected envknob.UseWIPCode() to be true")
+	}
+
+	// Some commands have more than one path from the root, so investigate all
+	// paths before we report errors.
+	ok := make(map[*ffcli.Command]bool)
+	root := newRootCmd()
+	walkCommands(root, func(c *ffcli.Command) {
+		if !ok[c] {
+			ok[c] = strings.HasPrefix(c.ShortUsage, "tailscale ") && (c.Name == "tailscale" || strings.Contains(c.ShortUsage, " "+c.Name+" ") || strings.HasSuffix(c.ShortUsage, " "+c.Name))
+		}
+	})
+	walkCommands(root, func(c *ffcli.Command) {
+		if !ok[c] {
+			t.Errorf("subcommand %s should show full usage ('tailscale ... %s ...') in ShortUsage (%q)", c.Name, c.Name, c.ShortUsage)
+		}
+	})
+}
+
 // geese is a collection of gooses. It need not be complete.
 // But it should include anything handled specially (e.g. linux, windows)
 // and at least one thing that's not (darwin, freebsd).
 var geese = []string{"linux", "darwin", "windows", "freebsd"}
-
-func TestPanicIfAnyEnvCheckedInInit(t *testing.T) {
-	envknob.PanicIfAnyEnvCheckedInInit()
-}
 
 // Test that checkForAccidentalSettingReverts's updateMaskedPrefsFromUpFlag can handle
 // all flags. This will panic if a new flag creeps in that's unhandled.

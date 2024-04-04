@@ -16,7 +16,7 @@ import (
 
 var ncCmd = &ffcli.Command{
 	Name:       "nc",
-	ShortUsage: "nc <hostname-or-IP> <port>",
+	ShortUsage: "tailscale nc <hostname-or-IP> <port>",
 	ShortHelp:  "Connect to a port on a host, connected to stdin/stdout",
 	Exec:       runNC,
 }

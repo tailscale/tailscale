@@ -44,13 +44,13 @@ func newServeLegacyCommand(e *serveEnv) *ffcli.Command {
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers",
 		ShortUsage: strings.Join([]string{
-			"serve http:<port> <mount-point> <source> [off]",
-			"serve https:<port> <mount-point> <source> [off]",
-			"serve tcp:<port> tcp://localhost:<local-port> [off]",
-			"serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]",
-			"serve status [--json]",
-			"serve reset",
-		}, "\n  "),
+			"tailscale serve http:<port> <mount-point> <source> [off]",
+			"tailscale serve https:<port> <mount-point> <source> [off]",
+			"tailscale serve tcp:<port> tcp://localhost:<local-port> [off]",
+			"tailscale serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]",
+			"tailscale serve status [--json]",
+			"tailscale serve reset",
+		}, "\n"),
 		LongHelp: strings.TrimSpace(`
 *** BETA; all of this is subject to change ***
 
@@ -91,24 +91,21 @@ EXAMPLES
     local plaintext server on port 80:
     $ tailscale serve tls-terminated-tcp:443 tcp://localhost:80
 `),
-		Exec:      e.runServe,
-		UsageFunc: usageFunc,
+		Exec: e.runServe,
 		Subcommands: []*ffcli.Command{
 			{
 				Name:      "status",
 				Exec:      e.runServeStatus,
-				ShortHelp: "show current serve/funnel status",
+				ShortHelp: "Show current serve/funnel status",
 				FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")
 				}),
-				UsageFunc: usageFunc,
 			},
 			{
 				Name:      "reset",
 				Exec:      e.runServeReset,
-				ShortHelp: "reset current serve/funnel config",
+				ShortHelp: "Reset current serve/funnel config",
 				FlagSet:   e.newFlags("serve-reset", nil),
-				UsageFunc: usageFunc,
 			},
 		},
 	}
