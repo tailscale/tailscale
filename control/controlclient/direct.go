@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -81,6 +82,11 @@ type Direct struct {
 	onTailnetDefaultAutoUpdate func(bool)                   // or nil
 
 	dialPlan ControlDialPlanner // can be nil
+
+	// lastServerAddr is set to the most recent address that we
+	// successfully connected to. It is used to prioritize this address
+	// when reconnecting (e.g. when a control server restart happens).
+	lastServerAddr syncs.AtomicValue[netip.Addr]
 
 	mu              sync.Mutex        // mutex guards the following fields
 	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
@@ -1428,6 +1434,8 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, d time.Duration, cl
 	}
 }
 
+var useLastAddr = envknob.RegisterBool("TS_CONTROLCLIENT_USE_LAST_ADDR")
+
 // getNoiseClient returns the noise client, creating one if one doesn't exist.
 func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 	c.mu.Lock()
@@ -1444,6 +1452,12 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 	if c.dialPlan != nil {
 		dp = c.dialPlan.Load
 	}
+
+	var lastAddr *syncs.AtomicValue[netip.Addr]
+	if useLastAddr() {
+		lastAddr = &c.lastServerAddr
+	}
+
 	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*NoiseClient, error) {
 		k, err := c.getMachinePrivKey()
 		if err != nil {
@@ -1451,18 +1465,20 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 		}
 		c.logf("[v1] creating new noise client")
 		nc, err := NewNoiseClient(NoiseOpts{
-			PrivKey:      k,
-			ServerPubKey: serverNoiseKey,
-			ServerURL:    c.serverURL,
-			Dialer:       c.dialer,
-			DNSCache:     c.dnsCache,
-			Logf:         c.logf,
-			NetMon:       c.netMon,
-			DialPlan:     dp,
+			PrivKey:        k,
+			ServerPubKey:   serverNoiseKey,
+			ServerURL:      c.serverURL,
+			Dialer:         c.dialer,
+			DNSCache:       c.dnsCache,
+			Logf:           c.logf,
+			NetMon:         c.netMon,
+			DialPlan:       dp,
+			LastServerAddr: lastAddr,
 		})
 		if err != nil {
 			return nil, err
 		}
+
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		c.noiseClient = nc

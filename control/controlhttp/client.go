@@ -95,6 +95,17 @@ func (a *Dialer) httpsFallbackDelay() time.Duration {
 var _ = envknob.RegisterBool("TS_USE_CONTROL_DIAL_PLAN") // to record at init time whether it's in use
 
 func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
+	// If we have a last used address, try that first, but time out fairly
+	// aggressively in case it's actually down.
+	if a.LastServerAddr.IsValid() {
+		lastDialCtx, lastDialCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer lastDialCancel()
+		conn, err := a.dialHost(lastDialCtx, a.LastServerAddr)
+		if err == nil {
+			return conn, nil
+		}
+	}
+
 	// If we don't have a dial plan, just fall back to dialing the single
 	// host we know about.
 	useDialPlan := envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")

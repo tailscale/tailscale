@@ -5,6 +5,7 @@ package controlhttp
 
 import (
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 
@@ -83,6 +84,11 @@ type Dialer struct {
 	// how to connect to it. If present, we will try the methods in this
 	// plan before falling back to DNS.
 	DialPlan *tailcfg.ControlDialPlan
+
+	// LastServerAddr, if valid, is the address that was last used to
+	// (successfully) connect to the control server. It will be prioritized
+	// when making a connection to the server.
+	LastServerAddr netip.Addr
 
 	proxyFunc func(*http.Request) (*url.URL, error) // or nil
 
