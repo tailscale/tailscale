@@ -31,15 +31,15 @@ type ForEachAddrOpts struct {
 }
 
 // ForEachAddr returns a Probe that resolves a given hostname into all
-// available IP addresses, and then calls a function to create a new Probe
-// every time a new IP is discovered. The Probe returned will be closed if an
+// available IP addresses, and then calls a function to create new Probes
+// every time a new IP is discovered. The Probes returned will be closed if an
 // IP address is no longer in the DNS record for the given hostname. This can
 // be used to healthcheck every IP address that a hostname resolves to.
-func ForEachAddr(host string, newProbe func(netip.Addr) *Probe, opts ForEachAddrOpts) ProbeFunc {
-	return makeForEachAddr(host, newProbe, opts).run
+func ForEachAddr(host string, makeProbes func(netip.Addr) []*Probe, opts ForEachAddrOpts) ProbeFunc {
+	return makeForEachAddr(host, makeProbes, opts).run
 }
 
-func makeForEachAddr(host string, newProbe func(netip.Addr) *Probe, opts ForEachAddrOpts) *forEachAddrProbe {
+func makeForEachAddr(host string, makeProbes func(netip.Addr) []*Probe, opts ForEachAddrOpts) *forEachAddrProbe {
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard
 	}
@@ -54,9 +54,9 @@ func makeForEachAddr(host string, newProbe func(netip.Addr) *Probe, opts ForEach
 		logf:        opts.Logf,
 		host:        host,
 		networks:    opts.Networks,
-		newProbe:    newProbe,
+		makeProbes:  makeProbes,
 		lookupNetIP: opts.LookupNetIP,
-		probes:      make(map[netip.Addr]*Probe),
+		probes:      make(map[netip.Addr][]*Probe),
 	}
 }
 
@@ -65,12 +65,12 @@ type forEachAddrProbe struct {
 	logf        logger.Logf
 	host        string
 	networks    []string
-	newProbe    func(netip.Addr) *Probe
+	makeProbes  func(netip.Addr) []*Probe
 	lookupNetIP func(context.Context, string, string) ([]netip.Addr, error)
 
 	// state
 	mu     sync.Mutex // protects following
-	probes map[netip.Addr]*Probe
+	probes map[netip.Addr][]*Probe
 }
 
 // run matches the ProbeFunc signature
@@ -102,23 +102,25 @@ func (f *forEachAddrProbe) run(ctx context.Context) error {
 		}
 
 		// Make a new probe, and add it to 'probes'; if the
-		// function returns nil, we skip it.
-		probe := f.newProbe(addr)
-		if probe == nil {
+		// function returns an empty list, we skip it.
+		probes := f.makeProbes(addr)
+		if len(probes) == 0 {
 			continue
 		}
 
-		f.logf("adding new probe for %v", addr)
-		f.probes[addr] = probe
+		f.logf("adding %d new probes for %v", len(probes), addr)
+		f.probes[addr] = probes
 	}
 
 	// Remove probes that we didn't see during this address resolution.
-	for addr, probe := range f.probes {
+	for addr, probes := range f.probes {
 		if !sawIPs[addr] {
-			f.logf("removing probe for %v", addr)
+			f.logf("removing %d probes for %v", len(probes), addr)
 
-			// This IP is no longer in the DNS record. Close and remove the probe.
-			probe.Close()
+			// This IP is no longer in the DNS record. Close and remove all probes
+			for _, probe := range probes {
+				probe.Close()
+			}
 			delete(f.probes, addr)
 		}
 	}

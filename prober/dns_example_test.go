@@ -39,14 +39,15 @@ func ExampleForEachAddr() {
 	}
 
 	// This function is called every time we discover a new IP address to check.
-	makeTLSProbe := func(addr netip.Addr) *prober.Probe {
+	makeTLSProbe := func(addr netip.Addr) []*prober.Probe {
 		pf := prober.TLSWithIP(*hostname, netip.AddrPortFrom(addr, 443))
 		if *verbose {
 			logger := logger.WithPrefix(log.Printf, fmt.Sprintf("[tls %s]: ", addr))
 			pf = probeLogWrapper(logger, pf)
 		}
 
-		return p.Run(fmt.Sprintf("website/%s/tls", addr), every30s, nil, pf)
+		probe := p.Run(fmt.Sprintf("website/%s/tls", addr), every30s, nil, pf)
+		return []*prober.Probe{probe}
 	}
 
 	// Determine whether to use IPv4 or IPv6 based on whether we can create
