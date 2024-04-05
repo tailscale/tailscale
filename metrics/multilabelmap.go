@@ -17,7 +17,7 @@ import (
 // [expvar.Var] interface but also allows for multiple Prometheus labels to be
 // associated with each value.
 //
-// T must be a struct type with only string fields. The struct field names
+// T must be a struct type with scalar fields. The struct field names
 // (lowercased) are used as the labels, unless a "prom" struct tag is present.
 // The struct fields must all be strings, and the string values must be valid
 // Prometheus label values without requiring quoting.
@@ -38,6 +38,8 @@ func NewMultiLabelMap[T comparable](name string, promType, helpText string) *Mul
 		Type: promType,
 		Help: helpText,
 	}
+	var zero T
+	_ = labelString(zero) // panic early if T is invalid
 	expvar.Publish(name, m)
 	return m
 }
