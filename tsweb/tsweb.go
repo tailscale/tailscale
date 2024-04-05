@@ -330,7 +330,32 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
-	err := h.rh.ServeHTTPReturn(lw, r)
+
+	// In case the handler panics, we want to recover and continue logging the
+	// error before raising the panic again for the server to handle.
+	var (
+		didPanic bool
+		panicRes any
+	)
+	defer func() {
+		if didPanic {
+			panic(panicRes)
+		}
+	}()
+	runWithPanicProtection := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				didPanic = true
+				panicRes = r
+				// Even if r is an error, do not wrap it as an error here as
+				// that would allow things like panic(vizerror.New("foo")) which
+				// is really hard to define the behavior of.
+				err = fmt.Errorf("panic: %v", r)
+			}
+		}()
+		return h.rh.ServeHTTPReturn(lw, r)
+	}
+	err := runWithPanicProtection()
 
 	var hErr HTTPError
 	var hErrOK bool
