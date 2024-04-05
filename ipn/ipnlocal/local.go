@@ -3531,6 +3531,9 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	}()
 
 	if !prefs.AppConnector().Advertise {
+		if b.appConnector != nil {
+			b.appConnector.UpdateDomainsAndRoutes([]string{}, []netip.Prefix{})
+		}
 		b.appConnector = nil
 		return
 	}
