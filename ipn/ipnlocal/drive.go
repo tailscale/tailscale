@@ -4,10 +4,8 @@
 package ipnlocal
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -22,12 +20,6 @@ const (
 	// DriveLocalPort is the port on which the Taildrive listens for location
 	// connections on quad 100.
 	DriveLocalPort = 8080
-)
-
-var (
-	shareNameRegex      = regexp.MustCompile(`^[a-z0-9_\(\) ]+$`)
-	ErrDriveNotEnabled  = errors.New("Taildrive not enabled")
-	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
 )
 
 // DriveSharingEnabled reports whether sharing to remote nodes via Taildrive is
@@ -62,7 +54,7 @@ func (b *LocalBackend) driveAccessEnabledLocked() bool {
 func (b *LocalBackend) DriveSetServerAddr(addr string) error {
 	fs, ok := b.sys.DriveForRemote.GetOK()
 	if !ok {
-		return ErrDriveNotEnabled
+		return drive.ErrDriveNotEnabled
 	}
 
 	fs.SetFileServerAddr(addr)
@@ -75,7 +67,7 @@ func (b *LocalBackend) DriveSetServerAddr(addr string) error {
 // limited to alphanumeric characters and the underscore _.
 func (b *LocalBackend) DriveSetShare(share *drive.Share) error {
 	var err error
-	share.Name, err = normalizeShareName(share.Name)
+	share.Name, err = drive.NormalizeShareName(share.Name)
 	if err != nil {
 		return err
 	}
@@ -91,29 +83,12 @@ func (b *LocalBackend) DriveSetShare(share *drive.Share) error {
 	return nil
 }
 
-// normalizeShareName normalizes the given share name and returns an error if
-// it contains any disallowed characters.
-func normalizeShareName(name string) (string, error) {
-	// Force all share names to lowercase to avoid potential incompatibilities
-	// with clients that don't support case-sensitive filenames.
-	name = strings.ToLower(name)
-
-	// Trim whitespace
-	name = strings.TrimSpace(name)
-
-	if !shareNameRegex.MatchString(name) {
-		return "", ErrInvalidShareName
-	}
-
-	return name, nil
-}
-
 func (b *LocalBackend) driveSetShareLocked(share *drive.Share) (views.SliceView[*drive.Share, drive.ShareView], error) {
 	existingShares := b.pm.prefs.DriveShares()
 
 	fs, ok := b.sys.DriveForRemote.GetOK()
 	if !ok {
-		return existingShares, ErrDriveNotEnabled
+		return existingShares, drive.ErrDriveNotEnabled
 	}
 
 	addedShare := false
@@ -151,7 +126,7 @@ func (b *LocalBackend) driveSetShareLocked(share *drive.Share) (views.SliceView[
 // - share already exists under new name
 func (b *LocalBackend) DriveRenameShare(oldName, newName string) error {
 	var err error
-	newName, err = normalizeShareName(newName)
+	newName, err = drive.NormalizeShareName(newName)
 	if err != nil {
 		return err
 	}
@@ -172,7 +147,7 @@ func (b *LocalBackend) driveRenameShareLocked(oldName, newName string) (views.Sl
 
 	fs, ok := b.sys.DriveForRemote.GetOK()
 	if !ok {
-		return existingShares, ErrDriveNotEnabled
+		return existingShares, drive.ErrDriveNotEnabled
 	}
 
 	found := false
@@ -212,7 +187,7 @@ func (b *LocalBackend) DriveRemoveShare(name string) error {
 	// Force all share names to lowercase to avoid potential incompatibilities
 	// with clients that don't support case-sensitive filenames.
 	var err error
-	name, err = normalizeShareName(name)
+	name, err = drive.NormalizeShareName(name)
 	if err != nil {
 		return err
 	}
@@ -233,7 +208,7 @@ func (b *LocalBackend) driveRemoveShareLocked(name string) (views.SliceView[*dri
 
 	fs, ok := b.sys.DriveForRemote.GetOK()
 	if !ok {
-		return existingShares, ErrDriveNotEnabled
+		return existingShares, drive.ErrDriveNotEnabled
 	}
 
 	found := false

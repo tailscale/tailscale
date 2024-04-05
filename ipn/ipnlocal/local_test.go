@@ -2404,13 +2404,13 @@ func TestDriveManageShares(t *testing.T) {
 		{
 			name:   "add_bad_name",
 			add:    &drive.Share{Name: "$"},
-			expect: ErrInvalidShareName,
+			expect: drive.ErrInvalidShareName,
 		},
 		{
 			name:     "add_disabled",
 			disabled: true,
 			add:      &drive.Share{Name: "a"},
-			expect:   ErrDriveNotEnabled,
+			expect:   drive.ErrDriveNotEnabled,
 		},
 		{
 			name: "remove",
@@ -2439,7 +2439,7 @@ func TestDriveManageShares(t *testing.T) {
 			name:     "remove_disabled",
 			disabled: true,
 			remove:   "b",
-			expect:   ErrDriveNotEnabled,
+			expect:   drive.ErrDriveNotEnabled,
 		},
 		{
 			name: "rename",
@@ -2474,13 +2474,13 @@ func TestDriveManageShares(t *testing.T) {
 		{
 			name:   "rename_bad_name",
 			rename: [2]string{"a", "$"},
-			expect: ErrInvalidShareName,
+			expect: drive.ErrInvalidShareName,
 		},
 		{
 			name:     "rename_disabled",
 			disabled: true,
 			rename:   [2]string{"a", "c"},
-			expect:   ErrDriveNotEnabled,
+			expect:   drive.ErrDriveNotEnabled,
 		},
 	}
 

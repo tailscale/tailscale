@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package ipnlocal
+package drive
 
 import (
 	"fmt"
@@ -29,7 +29,7 @@ func TestNormalizeShareName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("name %q", tt.name), func(t *testing.T) {
-			got, err := normalizeShareName(tt.name)
+			got, err := NormalizeShareName(tt.name)
 			if tt.err != nil && err != tt.err {
 				t.Errorf("wanted error %v, got %v", tt.err, err)
 			} else if got != tt.want {
