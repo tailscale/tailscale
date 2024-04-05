@@ -70,7 +70,6 @@ func runExitNodeList(ctx context.Context, args []string) error {
 			// We only show exit nodes under the exit-node subcommand.
 			continue
 		}
-
 		peers = append(peers, ps)
 	}
 
@@ -90,7 +89,6 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	for _, country := range filteredPeers.Countries {
 		for _, city := range country.Cities {
 			for _, peer := range city.Peers {
-
 				fmt.Fprintf(w, "\n %s\t%s\t%s\t%s\t%s\t", peer.TailscaleIPs[0], strings.Trim(peer.DNSName, "."), country.Name, city.Name, peerStatus(peer))
 			}
 		}
@@ -137,46 +135,51 @@ type filteredCity struct {
 
 const noLocationData = "-"
 
+var noLocation = &tailcfg.Location{
+	Country:     noLocationData,
+	CountryCode: noLocationData,
+	City:        noLocationData,
+	CityCode:    noLocationData,
+}
+
 // filterFormatAndSortExitNodes filters and sorts exit nodes into
 // alphabetical order, by country, city and then by priority if
 // present.
 // If an exit node has location data, and the country has more than
-// once city, an `Any` city is added to the country that contains the
+// one city, an `Any` city is added to the country that contains the
 // highest priority exit node within that country.
 // For exit nodes without location data, their country fields are
 // defined as '-' to indicate that the data is not available.
 func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string) filteredExitNodes {
+	// first get peers into some fixed order, as code below doesn't break ties
+	// and our input comes from a random range-over-map.
+	slices.SortFunc(peers, func(a, b *ipnstate.PeerStatus) int {
+		return strings.Compare(a.DNSName, b.DNSName)
+	})
+
 	countries := make(map[string]*filteredCountry)
 	cities := make(map[string]*filteredCity)
 	for _, ps := range peers {
-		if ps.Location == nil {
-			ps.Location = &tailcfg.Location{
-				Country:     noLocationData,
-				CountryCode: noLocationData,
-				City:        noLocationData,
-				CityCode:    noLocationData,
-			}
-		}
+		loc := cmp.Or(ps.Location, noLocation)
 
-		if filterBy != "" && ps.Location.Country != filterBy {
+		if filterBy != "" && loc.Country != filterBy {
 			continue
 		}
 
-		co, coOK := countries[ps.Location.CountryCode]
-		if !coOK {
+		co, ok := countries[loc.CountryCode]
+		if !ok {
 			co = &filteredCountry{
-				Name: ps.Location.Country,
+				Name: loc.Country,
 			}
-			countries[ps.Location.CountryCode] = co
-
+			countries[loc.CountryCode] = co
 		}
 
-		ci, ciOK := cities[ps.Location.CityCode]
-		if !ciOK {
+		ci, ok := cities[loc.CityCode]
+		if !ok {
 			ci = &filteredCity{
-				Name: ps.Location.City,
+				Name: loc.City,
 			}
-			cities[ps.Location.CityCode] = ci
+			cities[loc.CityCode] = ci
 			co.Cities = append(co.Cities, ci)
 		}
 		ci.Peers = append(ci.Peers, ps)
@@ -193,10 +196,10 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 			continue
 		}
 
-		var countryANYPeer []*ipnstate.PeerStatus
+		var countryAnyPeer []*ipnstate.PeerStatus
 		for _, city := range country.Cities {
 			sortPeersByPriority(city.Peers)
-			countryANYPeer = append(countryANYPeer, city.Peers...)
+			countryAnyPeer = append(countryAnyPeer, city.Peers...)
 			var reducedCityPeers []*ipnstate.PeerStatus
 			for i, peer := range city.Peers {
 				if i == 0 || peer.ExitNode {
@@ -208,7 +211,7 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 			city.Peers = reducedCityPeers
 		}
 		sortByCityName(country.Cities)
-		sortPeersByPriority(countryANYPeer)
+		sortPeersByPriority(countryAnyPeer)
 
 		if len(country.Cities) > 1 {
 			// For countries with more than one city, we want to return the
@@ -216,7 +219,7 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 			country.Cities = append([]*filteredCity{
 				{
 					Name:  "Any",
-					Peers: []*ipnstate.PeerStatus{countryANYPeer[0]},
+					Peers: []*ipnstate.PeerStatus{countryAnyPeer[0]},
 				},
 			}, country.Cities...)
 		}
