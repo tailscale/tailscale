@@ -1388,10 +1388,11 @@ const (
 	// node is near region 1 @ 4ms and region 2 @ 5ms, region 1 getting
 	// 5ms slower would cause a flap).
 	preferredDERPAbsoluteDiff = 10 * time.Millisecond
-	// preferredDERPFrameTime is the time which, if a DERP frame has been
+	// PreferredDERPFrameTime is the time which, if a DERP frame has been
 	// received within that period, we treat that region as being present
 	// even without receiving a STUN response.
-	preferredDERPFrameTime = 2 * time.Second
+	// Note: must remain higher than the derp package frameReceiveRecordRate
+	PreferredDERPFrameTime = 8 * time.Second
 )
 
 // addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
@@ -1480,7 +1481,7 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 			now := c.timeNow()
 
 			heardFromOldRegionRecently = lastHeard.After(rs.start)
-			heardFromOldRegionRecently = heardFromOldRegionRecently || lastHeard.After(now.Add(-preferredDERPFrameTime))
+			heardFromOldRegionRecently = heardFromOldRegionRecently || lastHeard.After(now.Add(-PreferredDERPFrameTime))
 		}
 	}
 
