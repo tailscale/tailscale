@@ -1210,14 +1210,14 @@ func TestObserveDNSResponse(t *testing.T) {
 		b := newTestBackend(t)
 
 		// ensure no error when no app connector is configured
-		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		b.ObserveDNSResponse(dnsResponse("example.com.", []string{"192.0.0.8"}))
 
 		rc := &appctest.RouteCollector{}
 		b.appConnector = appc.NewAppConnector(t.Logf, rc, shouldStore)
 		b.appConnector.UpdateDomains([]string{"example.com"})
 		b.appConnector.Wait(context.Background())
 
-		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		b.ObserveDNSResponse(dnsResponse("example.com.", []string{"192.0.0.8"}))
 		b.appConnector.Wait(context.Background())
 		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
 		if !slices.Equal(rc.Routes(), wantRoutes) {
@@ -1371,38 +1371,41 @@ func routesEqual(t *testing.T, a, b map[dnsname.FQDN][]*dnstype.Resolver) bool {
 }
 
 // dnsResponse is a test helper that creates a DNS response buffer for the given domain and address
-func dnsResponse(domain, address string) []byte {
-	addr := netip.MustParseAddr(address)
+// func dnsResponse(domain, address string) []byte {
+func dnsResponse(domain string, addresses []string) []byte {
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
 	b.EnableCompression()
 	b.StartAnswers()
-	switch addr.BitLen() {
-	case 32:
-		b.AResource(
-			dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(domain),
-				Type:  dnsmessage.TypeA,
-				Class: dnsmessage.ClassINET,
-				TTL:   0,
-			},
-			dnsmessage.AResource{
-				A: addr.As4(),
-			},
-		)
-	case 128:
-		b.AAAAResource(
-			dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(domain),
-				Type:  dnsmessage.TypeAAAA,
-				Class: dnsmessage.ClassINET,
-				TTL:   0,
-			},
-			dnsmessage.AAAAResource{
-				AAAA: addr.As16(),
-			},
-		)
-	default:
-		panic("invalid address length")
+	for _, address := range addresses {
+		addr := netip.MustParseAddr(address)
+		switch addr.BitLen() {
+		case 32:
+			b.AResource(
+				dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName(domain),
+					Type:  dnsmessage.TypeA,
+					Class: dnsmessage.ClassINET,
+					TTL:   0,
+				},
+				dnsmessage.AResource{
+					A: addr.As4(),
+				},
+			)
+		case 128:
+			b.AAAAResource(
+				dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName(domain),
+					Type:  dnsmessage.TypeAAAA,
+					Class: dnsmessage.ClassINET,
+					TTL:   0,
+				},
+				dnsmessage.AAAAResource{
+					AAAA: addr.As16(),
+				},
+			)
+		default:
+			panic("invalid address length")
+		}
 	}
 	return must.Get(b.Finish())
 }
@@ -2733,7 +2736,12 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 }
 
 func TestFran(t *testing.T) {
+	explicitlyAdvertisedRoutes := []netip.Prefix{netip.MustParsePrefix("192.1.0.8/32"), netip.MustParsePrefix("192.1.0.9/32")}
+	oneRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32"), netip.MustParsePrefix("192.0.0.16/32")}
+	twoRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.10/32"), netip.MustParsePrefix("192.0.0.18/32")}
+
 	for _, shouldStore := range []bool{true, false} {
+		//for _, shouldStore := range []bool{false} {
 		b := newTestBackend(t)
 		b.ControlKnobs().AppCStoreRoutes.Store(shouldStore)
 		// make b an app connector
@@ -2742,8 +2750,10 @@ func TestFran(t *testing.T) {
 				AppConnector: ipn.AppConnectorPrefs{
 					Advertise: true,
 				},
+				AdvertiseRoutes: explicitlyAdvertisedRoutes,
 			},
-			AppConnectorSet: true,
+			AppConnectorSet:    true,
+			AdvertiseRoutesSet: true,
 		})
 		b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
 
@@ -2771,24 +2781,25 @@ func TestFran(t *testing.T) {
 		// set the app connector to watch 2 domains
 		reconfigWithAppCfg(appCfg2Domains)
 
-		//want := []string{"one.com", "two.com"}
-		// TODO how do we check this?, it seems to be unordered
-		//if !slices.Equal(b.appConnector.Domains().AsSlice(), want) {
-		//t.Fatalf("got domains %v, want %v", b.appConnector.Domains(), want)
-		//}
-
 		// when the app connector observes dns for the domains it adds routes
+		afterTwoRoutes := append([]netip.Prefix{}, explicitlyAdvertisedRoutes...)
+		afterTwoRoutes = append(afterTwoRoutes, oneRoutes...)
+		afterTwoRoutes = append(afterTwoRoutes, twoRoutes...)
+
+		afterOneRoutes := append([]netip.Prefix{}, explicitlyAdvertisedRoutes...)
+		afterOneRoutes = append(afterOneRoutes, oneRoutes...)
+
 		for _, tst := range []struct {
 			domain    string
-			route     string
+			route     []string
 			wantAfter []netip.Prefix
 		}{
 			// learns the route for one.com
-			{domain: "one.com", route: "192.0.0.8", wantAfter: []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}},
+			{domain: "one.com", route: []string{"192.0.0.8", "192.0.0.16"}, wantAfter: afterOneRoutes},
 			// doesn't care about example.com, so still just the route for one.com
-			{domain: "example.com", route: "192.0.0.9", wantAfter: []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}},
+			{domain: "example.com", route: []string{"192.0.0.9", "192.0.0.17"}, wantAfter: afterOneRoutes},
 			// learns the route for two.com as well
-			{domain: "two.com", route: "192.0.0.10", wantAfter: []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32"), netip.MustParsePrefix("192.0.0.10/32")}},
+			{domain: "two.com", route: []string{"192.0.0.10", "192.0.0.18"}, wantAfter: afterTwoRoutes},
 		} {
 			b.ObserveDNSResponse(dnsResponse(tst.domain+".", tst.route))
 			b.appConnector.Wait(context.Background())
@@ -2798,9 +2809,37 @@ func TestFran(t *testing.T) {
 			}
 		}
 
-		// when the app connector is reconfigured to observe fewer domains it advertises fewer routes
+		// reconfigure the app connector to observe fewer domains
 		reconfigWithAppCfg(appCfg1Domain)
 		routesNow := b.pm.prefs.AdvertiseRoutes().AsSlice()
-		fmt.Println("shouldStore", shouldStore, "routesNow", routesNow)
+		wantRoutes := afterOneRoutes
+		if !shouldStore {
+			wantRoutes = afterTwoRoutes
+		}
+		if !slices.Equal(routesNow, wantRoutes) {
+			t.Fatalf("after removing two.com (shouldStore=%t), got %v, want %v", shouldStore, routesNow, wantRoutes)
+		}
+
+		ac := b.appConnector
+		// heck forget about being an app connector
+		b.EditPrefs(&ipn.MaskedPrefs{
+			Prefs: ipn.Prefs{
+				AppConnector: ipn.AppConnectorPrefs{
+					Advertise: false,
+				},
+			},
+			AppConnectorSet: true,
+		})
+		b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+		ac.Wait(context.Background())
+
+		routesNow = b.pm.prefs.AdvertiseRoutes().AsSlice()
+		wantRoutes = explicitlyAdvertisedRoutes
+		if !shouldStore {
+			wantRoutes = afterTwoRoutes
+		}
+		if !slices.Equal(routesNow, wantRoutes) {
+			t.Fatalf("after becoming not an app connector got routes %v, want %v", routesNow, wantRoutes)
+		}
 	}
 }
