@@ -447,7 +447,7 @@ func getOrCreateChain(c *nftables.Conn, cinfo chainInfo) (*nftables.Chain, error
 		// type/hook/priority, but for "conventional chains" assume they're what
 		// we expect (in case iptables-nft/ufw make minor behavior changes in
 		// the future).
-		if isTSChain(chain.Name) && (chain.Type != cinfo.chainType || chain.Hooknum != cinfo.chainHook || chain.Priority != cinfo.chainPriority) {
+		if isTSChain(chain.Name) && (chain.Type != cinfo.chainType || *chain.Hooknum != *cinfo.chainHook || *chain.Priority != *cinfo.chainPriority) {
 			return nil, fmt.Errorf("chain %s already exists with different type/hook/priority", cinfo.name)
 		}
 		return chain, nil
