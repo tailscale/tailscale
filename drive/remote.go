@@ -7,14 +7,22 @@ package drive
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
 var (
 	// DisallowShareAs forcibly disables sharing as a specific user, only used
 	// for testing.
-	DisallowShareAs = false
+	DisallowShareAs     = false
+	ErrDriveNotEnabled  = errors.New("Taildrive not enabled")
+	ErrInvalidShareName = errors.New("Share names may only contain the letters a-z, underscore _, parentheses (), or spaces")
+)
+
+var (
+	shareNameRegex = regexp.MustCompile(`^[a-z0-9_\(\) ]+$`)
 )
 
 // AllowShareAs reports whether sharing files as a specific user is allowed.
@@ -102,4 +110,21 @@ type FileSystemForRemote interface {
 
 	// Close() stops serving the WebDAV content
 	Close() error
+}
+
+// NormalizeShareName normalizes the given share name and returns an error if
+// it contains any disallowed characters.
+func NormalizeShareName(name string) (string, error) {
+	// Force all share names to lowercase to avoid potential incompatibilities
+	// with clients that don't support case-sensitive filenames.
+	name = strings.ToLower(name)
+
+	// Trim whitespace
+	name = strings.TrimSpace(name)
+
+	if !shareNameRegex.MatchString(name) {
+		return "", ErrInvalidShareName
+	}
+
+	return name, nil
 }

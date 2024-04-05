@@ -2792,7 +2792,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 		}
 		err = h.b.DriveSetShare(&share)
 		if err != nil {
-			if errors.Is(err, ipnlocal.ErrInvalidShareName) {
+			if errors.Is(err, drive.ErrInvalidShareName) {
 				http.Error(w, "invalid share name", http.StatusBadRequest)
 				return
 			}
@@ -2833,7 +2833,7 @@ func (h *Handler) serveShares(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "share name already used", http.StatusBadRequest)
 				return
 			}
-			if errors.Is(err, ipnlocal.ErrInvalidShareName) {
+			if errors.Is(err, drive.ErrInvalidShareName) {
 				http.Error(w, "invalid share name", http.StatusBadRequest)
 				return
 			}
