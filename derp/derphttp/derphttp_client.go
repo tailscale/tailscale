@@ -86,7 +86,8 @@ type Client struct {
 	addrFamSelAtomic syncs.AtomicValue[AddressFamilySelector]
 
 	mu           sync.Mutex
-	started      bool // true upon first connect, never transitions to false
+	atomicState  syncs.AtomicValue[ConnectedState] // hold mu to write
+	started      bool                              // true upon first connect, never transitions to false
 	preferred    bool
 	canAckPings  bool
 	closed       bool
@@ -97,6 +98,14 @@ type Client struct {
 	tlsState     *tls.ConnectionState
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
 	clock        tstime.Clock
+}
+
+// ConnectedState describes the state of a derphttp Client.
+type ConnectedState struct {
+	Connected  bool
+	Connecting bool
+	Closed     bool
+	LocalAddr  netip.AddrPort // if Connected
 }
 
 func (c *Client) String() string {
@@ -307,6 +316,12 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	if c.client != nil {
 		return c.client, c.connGen, nil
 	}
+	c.atomicState.Store(ConnectedState{Connecting: true})
+	defer func() {
+		if err != nil {
+			c.atomicState.Store(ConnectedState{Connecting: false})
+		}
+	}()
 
 	// timeout is the fallback maximum time (if ctx doesn't limit
 	// it further) to do all of: DNS + TCP + TLS + HTTP Upgrade +
@@ -524,6 +539,12 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	c.netConn = tcpConn
 	c.tlsState = tlsState
 	c.connGen++
+
+	localAddr, _ := c.client.LocalAddr()
+	c.atomicState.Store(ConnectedState{
+		Connected: true,
+		LocalAddr: localAddr,
+	})
 	return c.client, c.connGen, nil
 }
 
@@ -906,16 +927,15 @@ func (c *Client) SendPing(data [8]byte) error {
 // LocalAddr reports c's local TCP address, without any implicit
 // connect or reconnect.
 func (c *Client) LocalAddr() (netip.AddrPort, error) {
-	c.mu.Lock()
-	closed, client := c.closed, c.client
-	c.mu.Unlock()
-	if closed {
+	st := c.atomicState.Load()
+	if st.Closed {
 		return netip.AddrPort{}, ErrClientClosed
 	}
-	if client == nil {
+	la := st.LocalAddr
+	if !st.Connected && !la.IsValid() {
 		return netip.AddrPort{}, errors.New("client not connected")
 	}
-	return client.LocalAddr()
+	return la, nil
 }
 
 func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
@@ -1049,6 +1069,7 @@ func (c *Client) Close() error {
 	if c.netConn != nil {
 		c.netConn.Close()
 	}
+	c.atomicState.Store(ConnectedState{Closed: true})
 	return nil
 }
 
