@@ -3013,20 +3013,20 @@ func (b *LocalBackend) SetCurrentUser(token ipnauth.WindowsToken) (ipn.WindowsUs
 		}
 	}
 
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	if b.pm.CurrentUserID() == uid {
-		b.mu.Unlock()
 		return uid, nil
 	}
 	if err := b.pm.SetCurrentUserID(uid); err != nil {
-		b.mu.Unlock()
 		return uid, nil
 	}
 	if b.currentUser != nil {
 		b.currentUser.Close()
 	}
 	b.currentUser = token
-	b.resetForProfileChangeLockedOnEntry()
+	b.resetForProfileChangeLockedOnEntry(unlock)
 	return uid, nil
 }
 
@@ -4258,13 +4258,13 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 // really this is more "one of several places in which random things
 // happen".
 func (b *LocalBackend) enterState(newState ipn.State) {
-	b.mu.Lock()
-	b.enterStateLockedOnEntry(newState)
+	unlock := b.lockAndGetUnlock()
+	b.enterStateLockedOnEntry(newState, unlock)
 }
 
 // enterStateLockedOnEntry is like enterState but requires b.mu be held to call
-// it, but it unlocks b.mu when done.
-func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
+// it, but it unlocks b.mu when done (via unlock, a once func).
+func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock func()) {
 	oldState := b.state
 	b.state = newState
 	prefs := b.pm.CurrentPrefs()
@@ -4280,7 +4280,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 		b.closePeerAPIListenersLocked()
 	}
 	b.pauseOrResumeControlClientLocked()
-	b.mu.Unlock()
+	unlock()
 
 	// prefs may change irrespective of state; WantRunning should be explicitly
 	// set before potential early return even if the state is unchanged.
@@ -4436,8 +4436,24 @@ func (b *LocalBackend) RequestEngineStatus() {
 // TODO(apenwarr): use a channel or something to prevent reentrancy?
 // Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
+	unlock := b.lockAndGetUnlock()
+	b.enterStateLockedOnEntry(b.nextStateLocked(), unlock)
+}
+
+// lockAndGetUnlock locks b.mu and returns a sync.OnceFunc function that will
+// unlock it at most once.
+//
+// This is all very unfortunate but exists as a guardrail against the
+// unfortunate "lockedOnEntry" methods in this package (primarily
+// enterStateLockedOnEntry) that require b.mu held to be locked on entry to the
+// function but unlock the mutex on their way out. As a stepping stone to
+// cleaning things up (as of 2024-04-06), we at least pass the unlock func
+// around now and defer unlock in the caller to avoid missing unlocks and double
+// unlocks. TODO(bradfitz,maisem): make the locking in this package more
+// traditional (simple). See https://github.com/tailscale/tailscale/issues/11649
+func (b *LocalBackend) lockAndGetUnlock() (unlock func()) {
 	b.mu.Lock()
-	b.enterStateLockedOnEntry(b.nextStateLocked())
+	return sync.OnceFunc(b.mu.Unlock)
 }
 
 // stopEngineAndWait deconfigures the local network data plane, and
@@ -4501,7 +4517,9 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 func (b *LocalBackend) ResetForClientDisconnect() {
 	b.logf("LocalBackend.ResetForClientDisconnect")
 
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	prevCC := b.resetControlClientLocked()
 	if prevCC != nil {
 		// Needs to happen without b.mu held.
@@ -4520,7 +4538,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.authURLTime = time.Time{}
 	b.activeLogin = ""
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
-	b.enterStateLockedOnEntry(ipn.Stopped)
+	b.enterStateLockedOnEntry(ipn.Stopped, unlock)
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
@@ -4615,13 +4633,15 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	if err := cc.Logout(ctx); err != nil {
 		return err
 	}
-	b.mu.Lock()
+
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	if err := b.pm.DeleteProfile(profile.ID); err != nil {
-		b.mu.Unlock()
 		b.logf("error deleting profile: %v", err)
 		return err
 	}
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
 // assertClientLocked crashes if there is no controlclient in this backend.
@@ -5800,12 +5820,13 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 	if b.CurrentProfile().ID == profile {
 		return nil
 	}
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	if err := b.pm.SwitchProfile(profile); err != nil {
-		b.mu.Unlock()
 		return err
 	}
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
 func (b *LocalBackend) initTKALocked() error {
@@ -5858,24 +5879,24 @@ func (b *LocalBackend) initTKALocked() error {
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
 //
 // b.mu must held on entry. It is released on exit.
-func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
+func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock func()) error {
+	defer unlock()
+
 	if b.shutdownCalled {
 		// Prevent a call back to Start during Shutdown, which calls Logout for
 		// ephemeral nodes, which can then call back here. But we're shutting
 		// down, so no need to do any work.
-		b.mu.Unlock()
 		return nil
 	}
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
 	if err := b.initTKALocked(); err != nil {
-		b.mu.Unlock()
 		return err
 	}
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
-	b.enterStateLockedOnEntry(ipn.NoState) // Reset state; releases b.mu
+	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
@@ -5883,8 +5904,9 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 // DeleteProfile deletes a profile with the given ID.
 // If the profile is not known, it is a no-op.
 func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	needToRestart := b.pm.CurrentProfile().ID == p
 	if err := b.pm.DeleteProfile(p); err != nil {
 		if err == errProfileNotFound {
@@ -5895,7 +5917,7 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 	if !needToRestart {
 		return nil
 	}
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
 // CurrentProfile returns the current LoginProfile.
@@ -5908,9 +5930,11 @@ func (b *LocalBackend) CurrentProfile() ipn.LoginProfile {
 
 // NewProfile creates and switches to the new profile.
 func (b *LocalBackend) NewProfile() error {
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	b.pm.NewProfile()
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
 // ListProfiles returns a list of all LoginProfiles.
@@ -5925,20 +5949,20 @@ func (b *LocalBackend) ListProfiles() []ipn.LoginProfile {
 // backend is left with a new profile, ready for StartLoginInterative to be
 // called to register it as new node.
 func (b *LocalBackend) ResetAuth() error {
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	prevCC := b.resetControlClientLocked()
 	if prevCC != nil {
 		defer prevCC.Shutdown() // call must happen after release b.mu
 	}
 	if err := b.clearMachineKeyLocked(); err != nil {
-		b.mu.Unlock()
 		return err
 	}
 	if err := b.pm.DeleteAllProfiles(); err != nil {
-		b.mu.Unlock()
 		return err
 	}
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
 // StreamDebugCapture writes a pcap stream of packets traversing
