@@ -9,11 +9,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,6 +33,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine"
 )
 
@@ -317,4 +325,68 @@ func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
 	return lb
+}
+
+func TestKeepItSorted(t *testing.T) {
+	// Parse the localapi.go file into an AST.
+	fset := token.NewFileSet() // positions are relative to fset
+	src, err := os.ReadFile("localapi.go")
+	if err != nil {
+		log.Fatal(err)
+	}
+	f, err := parser.ParseFile(fset, "localapi.go", src, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	getHandler := func() *ast.ValueSpec {
+		for _, d := range f.Decls {
+			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.VAR {
+				for _, s := range g.Specs {
+					if vs, ok := s.(*ast.ValueSpec); ok {
+						if len(vs.Names) == 1 && vs.Names[0].Name == "handler" {
+							return vs
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+	keys := func() (ret []string) {
+		h := getHandler()
+		if h == nil {
+			t.Fatal("no handler var found")
+		}
+		cl, ok := h.Values[0].(*ast.CompositeLit)
+		if !ok {
+			t.Fatalf("handler[0] is %T, want *ast.CompositeLit", h.Values[0])
+		}
+		for _, e := range cl.Elts {
+			kv := e.(*ast.KeyValueExpr)
+			strLt := kv.Key.(*ast.BasicLit)
+			if strLt.Kind != token.STRING {
+				t.Fatalf("got: %T, %q", kv.Key, kv.Key)
+			}
+			k, err := strconv.Unquote(strLt.Value)
+			if err != nil {
+				t.Fatalf("unquote: %v", err)
+			}
+			ret = append(ret, k)
+		}
+		return
+	}
+	gotKeys := keys()
+	endSlash, noSlash := slicesx.Partition(keys(), func(s string) bool { return strings.HasSuffix(s, "/") })
+	if !slices.IsSorted(endSlash) {
+		t.Errorf("the items ending in a slash aren't sorted")
+	}
+	if !slices.IsSorted(noSlash) {
+		t.Errorf("the items ending in a slash aren't sorted")
+	}
+	if !t.Failed() {
+		want := append(endSlash, noSlash...)
+		if !slices.Equal(gotKeys, want) {
+			t.Errorf("items with trailing slashes should precede those without")
+		}
+	}
 }
