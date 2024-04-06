@@ -325,6 +325,13 @@ func (c *Conn) dlogf(format string, a ...any) {
 	}
 }
 
+// debugDisco reports whether we should log verbose things about disco packets.
+// It returns true if either the disco-specific environment variable or the
+// component debug logging is enabled.
+func (c *Conn) debugDisco() bool {
+	return debugDiscoEnv() || c.debugLogging.Load()
+}
+
 // Options contains options for Listen.
 type Options struct {
 	// Logf optionally provides a log function to use.
@@ -1308,7 +1315,7 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	pkt = append(pkt, box...)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
 	if sent {
-		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
+		if logLevel == discoLog || (logLevel == discoVerboseLog && c.debugDisco()) {
 			node := "?"
 			if !dstKey.IsZero() {
 				node = dstKey.ShortString()
@@ -1380,7 +1387,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	if c.closed {
 		return
 	}
-	if debugDisco() {
+	if c.debugDisco() {
 		c.logf("magicsock: disco: got disco-looking frame from %v via %s len %v", sender.ShortString(), via, len(msg))
 	}
 	if c.privateKey.IsZero() {
@@ -1391,7 +1398,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 
 	if !c.peerMap.anyEndpointForDiscoKey(sender) {
 		metricRecvDiscoBadPeer.Add(1)
-		if debugDisco() {
+		if c.debugDisco() {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know endpoint for %v", sender.ShortString())
 		}
 		return
@@ -1426,7 +1433,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		// group of messages. Don't log in normal case.
 		// Callers may choose to pass on to wireguard, in case
 		// it's actually a wireguard packet (super unlikely, but).
-		if debugDisco() {
+		if c.debugDisco() {
 			c.logf("magicsock: disco: failed to open naclbox from %v (wrong rcpt?) via %s", sender, via)
 		}
 		metricRecvDiscoBadKey.Add(1)
@@ -1440,7 +1447,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	}
 
 	dm, err := disco.Parse(payload)
-	if debugDisco() {
+	if c.debugDisco() {
 		c.logf("magicsock: disco: disco.Parse = %T, %v", dm, err)
 	}
 	if err != nil {
@@ -1609,7 +1616,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 		return
 	}
 
-	if !likelyHeartBeat || debugDisco() {
+	if !likelyHeartBeat || c.debugDisco() {
 		pingNodeSrcStr := dstKey.ShortString()
 		if numNodes > 1 {
 			pingNodeSrcStr = "[one-of-multi]"
