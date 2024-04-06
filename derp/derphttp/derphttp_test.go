@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -446,4 +447,17 @@ func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 		return false
 	}
 	watcher.RunWatchConnectionLoop(ctx, key.NodePublic{}, t.Logf, noopAdd, noopRemove)
+}
+
+// verify that the LocalAddr method doesn't acquire the mutex.
+// See https://github.com/tailscale/tailscale/issues/11519
+func TestLocalAddrNoMutex(t *testing.T) {
+	var c Client
+	c.mu.Lock()
+	defer c.mu.Unlock() // not needed in test but for symmetry
+
+	_, err := c.LocalAddr()
+	if got, want := fmt.Sprint(err), "client not connected"; got != want {
+		t.Errorf("got error %q; want %q", got, want)
+	}
 }
