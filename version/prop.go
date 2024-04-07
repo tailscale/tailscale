@@ -40,6 +40,15 @@ func OS() string {
 	return runtime.GOOS
 }
 
+// IsMacGUIVariant reports whether runtime.GOOS=="darwin" and this one of the
+// two GUI variants (that is, not tailscaled-on-macOS).
+// This predicate should not be used to determine sandboxing properties. It's
+// meant for callers to determine whether the NetworkExtension-like auto-netns
+// is in effect.
+func IsMacGUIVariant() bool {
+	return IsMacAppStore() || IsMacSysExt()
+}
+
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
 // process (either the app or the extension). It is true for the Mac App Store
 // and macsys (System Extension) version on macOS, and false for

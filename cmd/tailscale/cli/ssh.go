@@ -106,10 +106,8 @@ func runSSH(ctx context.Context, args []string) error {
 		"-o", "CanonicalizeHostname no", // https://github.com/tailscale/tailscale/issues/10348
 	)
 
-	// TODO(bradfitz): nc is currently broken on macOS:
-	// https://github.com/tailscale/tailscale/issues/4529
-	// So don't use it for now. MagicDNS is usually working on macOS anyway
-	// and they're not in userspace mode, so 'nc' isn't very useful.
+	// MagicDNS is usually working on macOS anyway and they're not in userspace
+	// mode, so 'nc' isn't very useful.
 	if runtime.GOOS != "darwin" {
 		socketArg := ""
 		if rootArgs.socket != "" && rootArgs.socket != paths.DefaultTailscaledSocket() {
