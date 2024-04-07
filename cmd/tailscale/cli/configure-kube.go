@@ -43,9 +43,12 @@ See: https://tailscale.com/s/k8s-auth-proxy
 }
 
 // kubeconfigPath returns the path to the kubeconfig file for the current user.
-func kubeconfigPath() string {
+func kubeconfigPath() (string, error) {
 	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
-		return filepath.SplitList(kubeconfig)[0]
+		if version.IsSandboxedMacOS() {
+			return "", errors.New("$KUBECONFIG is incompatible with the App Store version")
+		}
+		return filepath.SplitList(kubeconfig)[0], nil
 	}
 
 	var dir string
@@ -59,7 +62,7 @@ func kubeconfigPath() string {
 	} else {
 		dir = homedir.HomeDir()
 	}
-	return filepath.Join(dir, ".kube", "config")
+	return filepath.Join(dir, ".kube", "config"), nil
 }
 
 func runConfigureKubeconfig(ctx context.Context, args []string) error {
@@ -80,7 +83,11 @@ func runConfigureKubeconfig(ctx context.Context, args []string) error {
 		return fmt.Errorf("no peer found with hostname %q", hostOrFQDN)
 	}
 	targetFQDN = strings.TrimSuffix(targetFQDN, ".")
-	if err := setKubeconfigForPeer(targetFQDN, kubeconfigPath()); err != nil {
+	var kubeconfig string
+	if kubeconfig, err = kubeconfigPath(); err != nil {
+		return err
+	}
+	if err = setKubeconfigForPeer(targetFQDN, kubeconfig); err != nil {
 		return err
 	}
 	printf("kubeconfig configured for %q\n", hostOrFQDN)
