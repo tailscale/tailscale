@@ -1018,15 +1018,16 @@ func (b *LocalBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st controlclient.Status) {
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	if b.cc != c {
 		b.logf("Ignoring SetControlClientStatus from old client")
-		b.mu.Unlock()
 		return
 	}
-	// The following do not depend on any data for which we need to lock b.
 	if st.Err != nil {
-		b.mu.Unlock()
+		// The following do not depend on any data for which we need b locked.
+		unlock.UnlockEarly()
 		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
 			return
@@ -1093,7 +1094,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		}
 		b.keyExpired = isExpired
 	}
-	b.mu.Unlock()
+
+	unlock.UnlockEarly()
 
 	if keyExpiryExtended && wasBlocked {
 		// Key extended, unblock the engine
@@ -1109,7 +1111,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
 
-	// Lock b once and do only the things that require locking.
+	// Lock b again and do only the things that require locking.
 	b.mu.Lock()
 
 	prefsChanged := false
@@ -3157,7 +3159,9 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	if mp.EggSet {
 		mp.EggSet = false
 		b.egg = true
@@ -3167,21 +3171,18 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	p1 := b.pm.CurrentPrefs().AsStruct()
 	p1.ApplyEdits(mp)
 	if err := b.checkPrefsLocked(p1); err != nil {
-		b.mu.Unlock()
 		b.logf("EditPrefs check error: %v", err)
 		return ipn.PrefsView{}, err
 	}
 	if p1.RunSSH && !envknob.CanSSHD() {
-		b.mu.Unlock()
 		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
 		return ipn.PrefsView{}, errors.New("Tailscale SSH server administratively disabled.")
 	}
 	if p1.View().Equals(p0) {
-		b.mu.Unlock()
 		return stripKeysFromPrefs(p0), nil
 	}
 	b.logf("EditPrefs: %v", mp.Pretty())
-	newPrefs := b.setPrefsLockedOnEntry("EditPrefs", p1) // does a b.mu.Unlock
+	newPrefs := b.setPrefsLockedOnEntry("EditPrefs", p1, unlock)
 
 	// Note: don't perform any actions for the new prefs here. Not
 	// every prefs change goes through EditPrefs. Put your actions
@@ -3214,8 +3215,9 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	if newp == nil {
 		panic("SetPrefs got nil prefs")
 	}
-	b.mu.Lock()
-	b.setPrefsLockedOnEntry("SetPrefs", newp)
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+	b.setPrefsLockedOnEntry("SetPrefs", newp, unlock)
 }
 
 // wantIngressLocked reports whether this node has ingress configured. This bool
@@ -3235,7 +3237,9 @@ func (b *LocalBackend) wantIngressLocked() bool {
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a readonly copy of the new prefs.
-func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn.PrefsView {
+func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs, unlock unlockOnce) ipn.PrefsView {
+	defer unlock()
+
 	netMap := b.netMap
 	b.setAtomicValuesFromPrefsLocked(newp.View())
 
@@ -3296,7 +3300,8 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.logf("failed to save new controlclient state: %v", err)
 	}
 	b.lastProfileID = b.pm.CurrentProfile().ID
-	b.mu.Unlock()
+
+	unlock.UnlockEarly()
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServices()
@@ -3455,15 +3460,15 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 // TODO(danderson): we shouldn't be mangling hostinfo here after
 // painstakingly constructing it in twelvety other places.
 func (b *LocalBackend) doSetHostinfoFilterServices() {
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	cc := b.cc
 	if cc == nil {
 		// Control client isn't up yet.
-		b.mu.Unlock()
 		return
 	}
 	if b.hostinfo == nil {
-		b.mu.Unlock()
 		b.logf("[unexpected] doSetHostinfoFilterServices with nil hostinfo")
 		return
 	}
@@ -3474,7 +3479,7 @@ func (b *LocalBackend) doSetHostinfoFilterServices() {
 
 	// TODO(maisem,bradfitz): store hostinfo as a view, not as a mutable struct.
 	hi := *b.hostinfo // shallow copy
-	b.mu.Unlock()
+	unlock.UnlockEarly()
 
 	// Make a shallow copy of hostinfo so we can mutate
 	// at the Service field.
@@ -4264,7 +4269,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 
 // enterStateLockedOnEntry is like enterState but requires b.mu be held to call
 // it, but it unlocks b.mu when done (via unlock, a once func).
-func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock func()) {
+func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlockOnce) {
 	oldState := b.state
 	b.state = newState
 	prefs := b.pm.CurrentPrefs()
@@ -4280,7 +4285,8 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock func()
 		b.closePeerAPIListenersLocked()
 	}
 	b.pauseOrResumeControlClientLocked()
-	unlock()
+
+	unlock.UnlockEarly()
 
 	// prefs may change irrespective of state; WantRunning should be explicitly
 	// set before potential early return even if the state is unchanged.
@@ -4451,9 +4457,48 @@ func (b *LocalBackend) stateMachine() {
 // around now and defer unlock in the caller to avoid missing unlocks and double
 // unlocks. TODO(bradfitz,maisem): make the locking in this package more
 // traditional (simple). See https://github.com/tailscale/tailscale/issues/11649
-func (b *LocalBackend) lockAndGetUnlock() (unlock func()) {
+func (b *LocalBackend) lockAndGetUnlock() (unlock unlockOnce) {
 	b.mu.Lock()
-	return sync.OnceFunc(b.mu.Unlock)
+	var unlocked atomic.Bool
+	return func() bool {
+		if unlocked.CompareAndSwap(false, true) {
+			b.mu.Unlock()
+			return true
+		}
+		return false
+	}
+}
+
+// unlockOnce is a func that unlocks only b.mu the first time it's called.
+// Therefore it can be safely deferred to catch error paths, without worrying
+// about double unlocks if a different point in the code later needs to explicitly
+// unlock it first as well. It reports whether it was unlocked.
+type unlockOnce func() bool
+
+// UnlockEarly unlocks the LocalBackend.mu. It panics if u returns false,
+// indicating that this unlocker was already used.
+//
+// We're using this method to help us document & find the places that have
+// atypical locking patterns. See
+// https://github.com/tailscale/tailscale/issues/11649 for background.
+//
+// A normal unlock is a deferred one or an explicit b.mu.Unlock a few lines
+// after the lock, without lots of control flow in-between. An "early" unlock is
+// one that happens in weird places, like in various "LockedOnEntry" methods in
+// this package that require the mutex to be locked on entry but unlock it
+// somewhere in the middle (maybe several calls away) and then sometimes proceed
+// to lock it again.
+//
+// The reason UnlockeEarly panics if already called is because these are the
+// points at which it's assumed that the mutex is already held and it now needs
+// to be released. If somebody already released it, that invariant was violated.
+// On the other hand, simply calling u only returns false instead of panicking
+// so you can defer it without care, confident you got all the error return
+// paths which were previously done by hand.
+func (u unlockOnce) UnlockEarly() {
+	if !u() {
+		panic("Unlock on already-called unlockOnce")
+	}
 }
 
 // stopEngineAndWait deconfigures the local network data plane, and
@@ -4594,10 +4639,11 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 // Logout logs out the current profile, if any, and waits for the logout to
 // complete.
 func (b *LocalBackend) Logout(ctx context.Context) error {
-	b.mu.Lock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	if !b.hasNodeKeyLocked() {
 		// Already logged out.
-		b.mu.Unlock()
 		return nil
 	}
 	cc := b.cc
@@ -4605,8 +4651,10 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	// Grab the current profile before we unlock the mutex, so that we can
 	// delete it later.
 	profile := b.pm.CurrentProfile()
-	b.mu.Unlock()
+	unlock.UnlockEarly()
 
+	// TODO(bradfitz): call/make editPrefsLocked here and stay locked until
+	// before the cc.Logout.
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
 		LoggedOutSet:   true,
@@ -4634,7 +4682,7 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 		return err
 	}
 
-	unlock := b.lockAndGetUnlock()
+	unlock = b.lockAndGetUnlock()
 	defer unlock()
 
 	if err := b.pm.DeleteProfile(profile.ID); err != nil {
@@ -5879,7 +5927,7 @@ func (b *LocalBackend) initTKALocked() error {
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
 //
 // b.mu must held on entry. It is released on exit.
-func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock func()) error {
+func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) error {
 	defer unlock()
 
 	if b.shutdownCalled {
