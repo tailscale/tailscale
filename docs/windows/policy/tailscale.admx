@@ -42,6 +42,10 @@
                   displayName="$(string.SINCE_V1_58)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_62"
+                  displayName="$(string.SINCE_V1_62)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -251,6 +255,15 @@
       <disabledValue>
         <string>hide</string>
       </disabledValue>
+    </policy>
+    <policy name="ManagedBy" class="Machine" displayName="$(string.ManagedBy)" explainText="$(string.ManagedBy_Help)" presentation="$(presentation.ManagedBy)" key="Software\Policies\Tailscale">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_62" />
+      <elements>
+        <text id="ManagedByOrganization" valueName="ManagedByOrganizationName" required="true" />
+        <text id="ManagedByCustomMessage" valueName="ManagedByCaption" />
+        <text id="ManagedBySupportURL" valueName="ManagedByURL" />
+      </elements>
     </policy>
   </policies>
 </policyDefinitions>

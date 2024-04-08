@@ -13,6 +13,7 @@
             <string id="SINCE_V1_56">Tailscale version 1.56.0 and later</string>
             <string id="PARTIAL_FULL_SINCE_V1_56">Tailscale version 1.56.0 and later (full support), some earlier versions (partial support)</string>
             <string id="SINCE_V1_58">Tailscale version 1.58.0 and later</string>
+            <string id="SINCE_V1_62">Tailscale version 1.62.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -195,6 +196,14 @@ If you enable this policy, then data collection is always enabled.
 If you disable this policy, then data collection is always disabled.
 
 If you do not configure this policy, then data collection depends on if it has been enabled from the CLI (as of Tailscale 1.56), it may be present in the GUI in later versions.]]></string>
+            <string id="ManagedBy">Show the "Managed By {Organization}" menu item</string>
+            <string id="ManagedBy_Help"><![CDATA[Use this policy to configure the “Managed By {Organization}” item in the Tailscale Menu.
+
+If you enable this policy, the menu item will be displayed indicating the organization name. For instance, “Managed By XYZ Corp, Inc.”. Optionally, you can provide a custom message to be displayed when a user clicks on the “Managed By” menu item, and a URL pointing to a help desk webpage or other helpful resources for users in the organization.
+
+If you disable this policy or do not configure it, the corresponding menu item will be hidden.
+
+See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more details.]]></string>
         </stringTable>
         <presentationTable>
             <presentation id="LoginURL">
@@ -215,6 +224,17 @@ If you do not configure this policy, then data collection depends on if it has b
             <presentation id="ExitNodeID">
                 <textBox refId="ExitNodeIDPrompt">
                     <label>Exit Node</label>
+                </textBox>
+            </presentation>
+            <presentation id="ManagedBy">
+                <textBox refId="ManagedByOrganization">
+                    <label>Organization Name:</label>
+                </textBox>
+                <textBox refId="ManagedByCustomMessage">
+                    <label>Custom Message:</label>
+                </textBox>
+                <textBox refId="ManagedBySupportURL">
+                    <label>Support URL:</label>
                 </textBox>
             </presentation>
         </presentationTable>
