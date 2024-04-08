@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -121,7 +120,7 @@ func runExitNodeList(ctx context.Context, args []string) error {
 		return fmt.Errorf("no exit nodes found for %q", exitNodeArgs.filter)
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 10, 5, 5, ' ', 0)
+	w := tabwriter.NewWriter(Stdout, 10, 5, 5, ' ', 0)
 	defer w.Flush()
 	fmt.Fprintf(w, "\n %s\t%s\t%s\t%s\t%s\t", "IP", "HOSTNAME", "COUNTRY", "CITY", "STATUS")
 	for _, country := range filteredPeers.Countries {

@@ -48,7 +48,7 @@ func listProfiles(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 2, 2, 2, ' ', 0)
+	tw := tabwriter.NewWriter(Stdout, 2, 2, 2, ' ', 0)
 	defer tw.Flush()
 	printRow := func(vals ...string) {
 		fmt.Fprintln(tw, strings.Join(vals, "\t"))

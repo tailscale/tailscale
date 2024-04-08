@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 
@@ -169,10 +168,10 @@ func printFunnelWarning(sc *ipn.ServeConfig) {
 		p, _ := strconv.ParseUint(portStr, 10, 16)
 		if _, ok := sc.TCP[uint16(p)]; !ok {
 			warn = true
-			fmt.Fprintf(os.Stderr, "\nWarning: funnel=on for %s, but no serve config\n", hp)
+			fmt.Fprintf(Stderr, "\nWarning: funnel=on for %s, but no serve config\n", hp)
 		}
 	}
 	if warn {
-		fmt.Fprintf(os.Stderr, "         run: `tailscale serve --help` to see how to configure handlers\n")
+		fmt.Fprintf(Stderr, "         run: `tailscale serve --help` to see how to configure handlers\n")
 	}
 }

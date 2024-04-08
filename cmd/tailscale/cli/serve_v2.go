@@ -823,12 +823,12 @@ func (e *serveEnv) stdout() io.Writer {
 	if e.testStdout != nil {
 		return e.testStdout
 	}
-	return os.Stdout
+	return Stdout
 }
 
 func (e *serveEnv) stderr() io.Writer {
 	if e.testStderr != nil {
 		return e.testStderr
 	}
-	return os.Stderr
+	return Stderr
 }

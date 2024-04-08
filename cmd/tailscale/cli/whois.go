@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -53,7 +52,7 @@ func runWhoIs(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 10, 5, 5, ' ', 0)
+	w := tabwriter.NewWriter(Stdout, 10, 5, 5, ' ', 0)
 	fmt.Fprintf(w, "Machine:\n")
 	fmt.Fprintf(w, "  Name:\t%s\n", strings.TrimSuffix(who.Node.Name, "."))
 	fmt.Fprintf(w, "  ID:\t%s\n", who.Node.StableID)
