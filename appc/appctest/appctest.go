@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"tailscale.com/appc/routeinfo"
+	"tailscale.com/ipn"
 )
 
 // RouteCollector is a test helper that collects the list of routes advertised
@@ -42,7 +43,7 @@ func (rc *RouteCollector) StoreRouteInfo(ri *routeinfo.RouteInfo) error {
 
 func (rc *RouteCollector) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
 	if rc.routeInfo == nil {
-		return routeinfo.NewRouteInfo(), nil
+		return nil, ipn.ErrStateNotExist
 	}
 	return rc.routeInfo, nil
 }

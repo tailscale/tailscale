@@ -3147,14 +3147,18 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
 	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
-	if b.appConnector != nil && b.appConnector.ShouldStoreRoutes {
+	if b.appConnector != nil && b.appConnector.ShouldStoreRoutes && mp.AdvertiseRoutesSet {
 		routeInfo := b.appConnector.RouteInfo()
 		curRoutes := routeInfo.Routes(false, true, true)
-
-		if mp.AdvertiseRoutesSet {
-			routeInfo.Local = mp.AdvertiseRoutes
-			b.StoreRouteInfo(routeInfo)
-			curRoutes := append(curRoutes, mp.AdvertiseRoutes...)
+		routeInfo.Local = mp.AdvertiseRoutes
+		b.appConnector.UpdateRouteInfo(routeInfo)
+		// When b.appConnector != nil, AppConnectorSet = true means
+		// The appConnector is turned off, in this case we should not
+		// append the remote routes to mp.AdvertiseRoutes. Appc will be
+		// set to nil first and unadvertise remote routes, but these remote routes
+		// will then be advertised again when the prefs are sent.
+		if !mp.AppConnectorSet {
+			curRoutes = append(curRoutes, mp.AdvertiseRoutes...)
 			mp.AdvertiseRoutes = curRoutes
 		}
 	}
@@ -3530,22 +3534,27 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		}
 	}()
 
-	if !prefs.AppConnector().Advertise {
-		if b.appConnector != nil {
-			b.appConnector.UpdateDomainsAndRoutes([]string{}, []netip.Prefix{})
-		}
-		b.appConnector = nil
-		return
-	}
-
 	shouldAppCStoreRoutesHasChanged := false
 	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
 	if b.appConnector != nil {
 		shouldAppCStoreRoutesHasChanged = b.appConnector.ShouldStoreRoutes != shouldAppCStoreRoutes
 	}
 
+	if !prefs.AppConnector().Advertise {
+		if b.appConnector != nil && shouldAppCStoreRoutes {
+			b.appConnector.UpdateDomainsAndRoutes([]string{}, []netip.Prefix{})
+		}
+		b.appConnector = nil
+		return
+	}
+
 	if b.appConnector == nil || shouldAppCStoreRoutesHasChanged {
 		b.appConnector = appc.NewAppConnector(b.logf, b, shouldAppCStoreRoutes)
+		if shouldAppCStoreRoutes {
+			b.appConnector.RecreateRouteInfoFromStore(prefs.AsStruct().AdvertiseRoutes)
+		} else if shouldAppCStoreRoutesHasChanged && !shouldAppCStoreRoutes {
+			b.appConnector.UpdateRouteInfo(nil)
+		}
 	}
 	if nm == nil {
 		return
@@ -6076,10 +6085,8 @@ func (b *LocalBackend) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
 	key := namespaceKeyForCurrentProfile(b.pm, routeInfoStateStoreKey)
 	bs, err := b.pm.Store().ReadState(key)
 	ri := &routeinfo.RouteInfo{}
-	if err != nil && err != ipn.ErrStateNotExist {
+	if err != nil {
 		return nil, err
-	} else if err == ipn.ErrStateNotExist {
-		return ri, nil
 	}
 	if err := json.Unmarshal(bs, ri); err != nil {
 		return nil, err

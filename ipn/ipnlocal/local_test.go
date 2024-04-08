@@ -2568,7 +2568,6 @@ func TestPatchPrefsHandlerWithPresistStore(t *testing.T) {
 	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
 	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
 	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
-	// rc := &appctest.RouteCollector{}
 	mp := new(ipn.MaskedPrefs)
 	mp.AdvertiseRoutesSet = true
 	mp.AdvertiseRoutes = []netip.Prefix{prefix1}
@@ -2665,7 +2664,7 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
 	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
 	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
-	// rc := &appctest.RouteCollector{}
+
 	mp := new(ipn.MaskedPrefs)
 	mp.AdvertiseRoutesSet = true
 	mp.AdvertiseRoutes = []netip.Prefix{prefix1}
@@ -2707,11 +2706,8 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 
 	//Check if route is stored in Appc/Appc.routeAdvertiser
 	storedRouteInfo, _ := b.ReadRouteInfo()
-	if len(storedRouteInfo.Local) != 0 {
-		t.Fatalf("wanted %d, got %d", 0, len(storedRouteInfo.Local))
-	}
-	if slices.Contains(storedRouteInfo.Local, prefix1) {
-		t.Fatalf("New local route not stored.")
+	if storedRouteInfo != nil {
+		t.Fatalf("wanted nil, got %v", storedRouteInfo)
 	}
 
 	//Patch again with no route, see if prefix1 is removed/ prefix2, prefix3 presists.
