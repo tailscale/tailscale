@@ -166,6 +166,13 @@ func (e *AppConnector) updateDomains(domains []string) {
 
 	var oldDomains map[string][]netip.Addr
 	oldDomains, e.domains = e.domains, make(map[string][]netip.Addr, len(domains))
+	var oldDiscovered map[string]*routeinfo.DatedRoutes
+	var routeInfo *routeinfo.RouteInfo
+	shouldStoreRoutes := e.ShouldStoreRoutes
+	if shouldStoreRoutes {
+		routeInfo = e.RouteInfo()
+		oldDiscovered, routeInfo.Discovered = routeInfo.Discovered, make(map[string]*routeinfo.DatedRoutes, len(domains))
+	}
 	e.wildcards = e.wildcards[:0]
 	for _, d := range domains {
 		d = strings.ToLower(d)
@@ -178,6 +185,10 @@ func (e *AppConnector) updateDomains(domains []string) {
 		}
 		e.domains[d] = oldDomains[d]
 		delete(oldDomains, d)
+		if shouldStoreRoutes {
+			routeInfo.Discovered[d] = oldDiscovered[d]
+			delete(oldDiscovered, d)
+		}
 	}
 
 	// Ensure that still-live wildcards addresses are preserved as well.
@@ -187,6 +198,27 @@ func (e *AppConnector) updateDomains(domains []string) {
 				e.domains[d] = addrs
 				break
 			}
+		}
+	}
+	if shouldStoreRoutes {
+		for d, dr := range oldDiscovered {
+			for _, wc := range e.wildcards {
+				if dnsname.HasSuffix(d, wc) {
+					routeInfo.Discovered[d] = dr
+					delete(oldDiscovered, d)
+					break
+				}
+			}
+		}
+	}
+
+	if shouldStoreRoutes {
+		e.UpdateRouteInfo(routeInfo)
+		// everything left in oldDiscovered a) won't be in e.domains and b) can be unadvertised if it's not in local or control
+		for domainName, domainsRoutes := range oldDiscovered {
+			toRemove := domainsRoutes.RoutesSlice()
+			e.logf("unadvertising %d routes for domain: %s", len(toRemove), domainName)
+			e.scheduleUnadvertisement(domainName, toRemove...)
 		}
 	}
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
@@ -394,6 +426,11 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		}
 
 		e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
+		if e.ShouldStoreRoutes && len(toAdvertise) != 0 {
+			routeInfo := e.RouteInfo()
+			routeInfo.AddRoutesInDiscoveredForDomain(domain, toAdvertise)
+			e.UpdateRouteInfo(routeInfo)
+		}
 		e.scheduleAdvertisement(domain, toAdvertise...)
 	}
 }
@@ -468,6 +505,27 @@ func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Pref
 				e.addDomainAddrLocked(domain, addr)
 				e.logf("[v2] advertised route for %v: %v", domain, addr)
 			}
+		}
+	})
+}
+
+func (e *AppConnector) scheduleUnadvertisement(domain string, routes ...netip.Prefix) {
+	e.queue.Add(func() {
+		if err := e.routeAdvertiser.UnadvertiseRoute(routes...); err != nil {
+			e.logf("failed to unadvertise routes for %s: %v: %v", domain, routes, err)
+			return
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		for _, route := range routes {
+			if !route.IsSingleIP() {
+				continue
+			}
+			addr := route.Addr()
+
+			//e.deleteDomainAddrLocked(domain, addr)
+			e.logf("[v2] unadvertised route for %v: %v", domain, addr)
 		}
 	})
 }
