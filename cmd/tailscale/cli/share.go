@@ -14,57 +14,58 @@ import (
 )
 
 const (
-	shareSetUsage    = "share set <name> <path>"
-	shareRenameUsage = "share rename <oldname> <newname>"
-	shareRemoveUsage = "share remove <name>"
-	shareListUsage   = "share list"
+	driveShareUsage   = "drive share <name> <path>"
+	driveRenameUsage  = "drive rename <oldname> <newname>"
+	driveUnshareUsage = "drive unshare <name>"
+	driveListUsage    = "drive list"
 )
 
-var shareCmd = &ffcli.Command{
-	Name:      "share",
+var driveCmd = &ffcli.Command{
+	Name:      "drive",
 	ShortHelp: "Share a directory with your tailnet",
 	ShortUsage: strings.Join([]string{
-		shareSetUsage,
-		shareRemoveUsage,
-		shareListUsage,
+		driveShareUsage,
+		driveRenameUsage,
+		driveUnshareUsage,
+		driveListUsage,
 	}, "\n  "),
 	LongHelp:  buildShareLongHelp(),
 	UsageFunc: usageFuncNoDefaultValues,
 	Subcommands: []*ffcli.Command{
 		{
-			Name:      "set",
-			Exec:      runShareSet,
-			ShortHelp: "[ALPHA] set a share",
+			Name:      "share",
+			Exec:      runDriveShare,
+			ShortHelp: "[ALPHA] create or modify a share",
 			UsageFunc: usageFunc,
 		},
 		{
 			Name:      "rename",
 			ShortHelp: "[ALPHA] rename a share",
-			Exec:      runShareRename,
+			Exec:      runDriveRename,
 			UsageFunc: usageFunc,
 		},
 		{
-			Name:      "remove",
+			Name:      "unshare",
 			ShortHelp: "[ALPHA] remove a share",
-			Exec:      runShareRemove,
+			Exec:      runDriveUnshare,
 			UsageFunc: usageFunc,
 		},
 		{
 			Name:      "list",
 			ShortHelp: "[ALPHA] list current shares",
-			Exec:      runShareList,
+			Exec:      runDriveList,
 			UsageFunc: usageFunc,
 		},
 	},
 	Exec: func(context.Context, []string) error {
-		return errors.New("share subcommand required; run 'tailscale share -h' for details")
+		return errors.New("drive subcommand required; run 'tailscale drive -h' for details")
 	},
 }
 
-// runShareSet is the entry point for the "tailscale share set" command.
-func runShareSet(ctx context.Context, args []string) error {
+// runDriveShare is the entry point for the "tailscale drive share" command.
+func runDriveShare(ctx context.Context, args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: tailscale %v", shareSetUsage)
+		return fmt.Errorf("usage: tailscale %v", driveShareUsage)
 	}
 
 	name, path := args[0], args[1]
@@ -74,29 +75,29 @@ func runShareSet(ctx context.Context, args []string) error {
 		Path: path,
 	})
 	if err == nil {
-		fmt.Printf("Set share %q at %q\n", name, path)
+		fmt.Printf("Sharing %q as %q\n", path, name)
 	}
 	return err
 }
 
-// runShareRemove is the entry point for the "tailscale share remove" command.
-func runShareRemove(ctx context.Context, args []string) error {
+// runDriveUnshare is the entry point for the "tailscale drive unshare" command.
+func runDriveUnshare(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: tailscale %v", shareRemoveUsage)
+		return fmt.Errorf("usage: tailscale %v", driveUnshareUsage)
 	}
 	name := args[0]
 
 	err := localClient.DriveShareRemove(ctx, name)
 	if err == nil {
-		fmt.Printf("Removed share %q\n", name)
+		fmt.Printf("No longer sharing %q\n", name)
 	}
 	return err
 }
 
-// runShareRename is the entry point for the "tailscale share rename" command.
-func runShareRename(ctx context.Context, args []string) error {
+// runDriveRename is the entry point for the "tailscale drive rename" command.
+func runDriveRename(ctx context.Context, args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: tailscale %v", shareRenameUsage)
+		return fmt.Errorf("usage: tailscale %v", driveRenameUsage)
 	}
 	oldName := args[0]
 	newName := args[1]
@@ -108,10 +109,10 @@ func runShareRename(ctx context.Context, args []string) error {
 	return err
 }
 
-// runShareList is the entry point for the "tailscale share list" command.
-func runShareList(ctx context.Context, args []string) error {
+// runDriveList is the entry point for the "tailscale drive list" command.
+func runDriveList(ctx context.Context, args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("usage: tailscale %v", shareListUsage)
+		return fmt.Errorf("usage: tailscale %v", driveListUsage)
 	}
 
 	shares, err := localClient.DriveShareList(ctx)
@@ -151,7 +152,7 @@ func buildShareLongHelp() string {
 	return fmt.Sprintf(shareLongHelpBase, longHelpAs)
 }
 
-var shareLongHelpBase = `Tailscale share allows you to share directories with other machines on your tailnet.
+var shareLongHelpBase = `Taildrive allows you to share directories with other machines on your tailnet.
 
 In order to share folders, your node needs to have the node attribute "drive:share".
 
@@ -170,7 +171,7 @@ For example, to enable sharing and accessing shares for all member nodes:
 
 Each share is identified by a name and points to a directory at a specific path. For example, to share the path /Users/me/Documents under the name "docs", you would run:
 
-  $ tailscale share set docs /Users/me/Documents
+  $ tailscale drive share docs /Users/me/Documents
 
 Note that the system forces share names to lowercase to avoid problems with clients that don't support case-sensitive filenames.
 
@@ -226,18 +227,18 @@ Whenever either you or anyone in the group "home" connects to the share, they co
 
 You can rename shares, for example you could rename the above share by running:
 
-  $ tailscale share rename docs newdocs
+  $ tailscale drive rename docs newdocs
 
 You can remove shares by name, for example you could remove the above share by running:
 
-  $ tailscale share remove newdocs
+  $ tailscale drive unshare newdocs
 
 You can get a list of currently published shares by running:
 
-  $ tailscale share list`
+  $ tailscale drive list`
 
 var shareLongHelpAs = `
 
 If you want a share to be accessed as a different user, you can use sudo to accomplish this. For example, to create the aforementioned share as "theuser", you could run:
 
-	$ sudo -u theuser tailscale share set docs /Users/theuser/Documents`
+	$ sudo -u theuser tailscale drive share docs /Users/theuser/Documents`
