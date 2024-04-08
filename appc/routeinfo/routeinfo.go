@@ -40,7 +40,7 @@ func (ri *RouteInfo) Routes(local, control, discovered bool) []netip.Prefix {
 
 	if discovered {
 		for _, dr := range ri.Discovered {
-			ret = append(ret, dr.routesSlice()...)
+			ret = append(ret, dr.RoutesSlice()...)
 		}
 	}
 	return ret
@@ -53,10 +53,33 @@ type DatedRoutes struct {
 	LastCleanup time.Time
 }
 
-func (dr *DatedRoutes) routesSlice() []netip.Prefix {
+func (dr *DatedRoutes) RoutesSlice() []netip.Prefix {
 	var routes []netip.Prefix
 	for k := range dr.Routes {
 		routes = append(routes, k)
 	}
 	return routes
+}
+
+func (r *RouteInfo) AddRoutesInDiscoveredForDomain(domain string, addrs []netip.Prefix) {
+	dr, hasKey := r.Discovered[domain]
+	if !hasKey || dr == nil || dr.Routes == nil {
+		newDatedRoutes := &DatedRoutes{make(map[netip.Prefix]time.Time), time.Now()}
+		newDatedRoutes.addAddrsToDatedRoute(addrs)
+		r.Discovered[domain] = newDatedRoutes
+		return
+	}
+
+	// kevin comment: we won't see any existing routes here because know addrs are filtered.
+	currentRoutes := r.Discovered[domain]
+	currentRoutes.addAddrsToDatedRoute(addrs)
+	r.Discovered[domain] = currentRoutes
+	return
+}
+
+func (d *DatedRoutes) addAddrsToDatedRoute(addrs []netip.Prefix) {
+	time := time.Now()
+	for _, addr := range addrs {
+		d.Routes[addr] = time
+	}
 }

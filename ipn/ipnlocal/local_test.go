@@ -2732,8 +2732,10 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 }
 
 func TestFran(t *testing.T) {
-	explicitlyAdvertisedRoutes := []netip.Prefix{netip.MustParsePrefix("192.1.0.8/32"), netip.MustParsePrefix("192.1.0.9/32")}
+	epIP2 := netip.MustParsePrefix("192.1.0.9/32")
+	explicitlyAdvertisedRoutes := []netip.Prefix{netip.MustParsePrefix("192.1.0.8/32"), epIP2}
 	oneRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32"), netip.MustParsePrefix("192.0.0.16/32")}
+	//twoRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.10/32"), netip.MustParsePrefix("192.0.0.18/32"), epIP2}
 	twoRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.10/32"), netip.MustParsePrefix("192.0.0.18/32")}
 
 	for _, shouldStore := range []bool{true, false} {
