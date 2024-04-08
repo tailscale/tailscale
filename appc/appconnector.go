@@ -19,6 +19,7 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/routeinfo"
+	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -105,12 +106,42 @@ func (e *AppConnector) RouteInfo() *routeinfo.RouteInfo {
 	if e.routeInfo == nil {
 		ret, err := e.routeAdvertiser.ReadRouteInfo()
 		if err != nil {
-			e.logf("Unsuccessful Read RouteInfo: ", err)
+			if err != ipn.ErrStateNotExist {
+				e.logf("Unsuccessful Read RouteInfo: ", err)
+			}
 			return routeinfo.NewRouteInfo()
 		}
 		return ret
 	}
 	return e.routeInfo
+}
+
+// RecreateRouteInfoFromStore searches from presist store for existing routeInfo for current profile,
+// then update local routes of routeInfo in store as the current advertised routes.
+func (e *AppConnector) RecreateRouteInfoFromStore(localRoutes []netip.Prefix) {
+	e.queue.Add(func() {
+		ri := e.RouteInfo()
+		ri.Local = localRoutes
+		err := e.routeAdvertiser.StoreRouteInfo(ri)
+		if err != nil {
+			e.logf("Appc recreate routeInfo: Error updating routeInfo in store: ", err)
+		}
+		err = e.routeAdvertiser.AdvertiseRoute(ri.Routes(false, true, true)...)
+		if err != nil {
+			e.logf("Appc recreate routeInfo: Error advertise routes: ", err)
+		}
+		e.routeInfo = ri
+	})
+}
+
+// UpdateRouteInfo updates routeInfo value of the AppConnector and
+// stores the routeInfo value to presist store.
+func (e *AppConnector) UpdateRouteInfo(ri *routeinfo.RouteInfo) {
+	err := e.routeAdvertiser.StoreRouteInfo(ri)
+	if err != nil {
+		e.logf("Appc: Failed to remove routeInfo from store: ", err)
+	}
+	e.routeInfo = ri
 }
 
 // UpdateDomains asynchronously replaces the current set of configured domains
@@ -180,9 +211,15 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 	if e.ShouldStoreRoutes {
 		routeInfo, err = e.routeAdvertiser.ReadRouteInfo()
 		if err != nil {
-			e.logf("failed to read routeInfo from store")
+			if err != ipn.ErrStateNotExist {
+				e.logf("Appc: Unsuccessful Read RouteInfo: ", err)
+			}
+			routeInfo = routeinfo.NewRouteInfo()
 		}
 		oldControl := routeInfo.Control
+		routeInfo.Control = routes
+		e.routeInfo = routeInfo
+		e.routeAdvertiser.StoreRouteInfo(e.routeInfo)
 		oldOtherRoutes := routeInfo.Routes(true, false, true)
 		for _, ipp := range oldControl {
 			if slices.Contains(routes, ipp) {
@@ -197,7 +234,6 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
 			e.logf("failed to unadvertise old routes: %v: %v", routes, err)
 		}
-		routeInfo.Control = routes
 	}
 	if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
 		e.logf("failed to advertise routes: %v: %v", routes, err)
@@ -223,10 +259,6 @@ nextRoute:
 		e.logf("failed to unadvertise routes: %v: %v", toRemove, err)
 	}
 	e.controlRoutes = routes
-	if e.ShouldStoreRoutes {
-		e.routeInfo = routeInfo
-		e.routeAdvertiser.StoreRouteInfo(e.routeInfo)
-	}
 }
 
 // Domains returns the currently configured domain list.

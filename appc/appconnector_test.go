@@ -102,8 +102,8 @@ func TestUpdateRoutesNotUnadvertiseRoutesFromOtherSources(t *testing.T) {
 		rc := &appctest.RouteCollector{}
 		a := NewAppConnector(t.Logf, rc, shouldStore)
 		testRi := routeinfo.NewRouteInfo()
-		a.routeInfo.Local = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
 		testRi.Local = append(testRi.Local, netip.MustParsePrefix("192.0.2.0/24"))
+		a.routeInfo = testRi
 		rc.StoreRouteInfo(testRi)
 
 		routes := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.0.0.1/32")}
