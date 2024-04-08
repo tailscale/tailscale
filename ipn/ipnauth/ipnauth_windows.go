@@ -14,7 +14,29 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/winutil"
+	"tailscale.com/util/winutil/winenv"
 )
+
+// GetConnIdentity extracts the identity information from the connection
+// based on the user who owns the other end of the connection.
+// If c is not backed by a named pipe, an error is returned.
+// TODO(nickkhyl): rename this to GetConnIdentity once we no longer need
+// the original GetConnIdentity.
+func GetIdentity(c net.Conn) (ci Identity, err error) {
+	wcc, ok := c.(*safesocket.WindowsClientConn)
+	if !ok {
+		return nil, fmt.Errorf("not a WindowsClientConn: %T", c)
+	}
+	tok, err := windowsClientToken(wcc)
+	if err != nil {
+		return nil, err
+	}
+	return newWindowsIdentity(tok, currentWindowsEnvironment()), nil
+}
+
+func currentWindowsEnvironment() WindowsEnvironment {
+	return WindowsEnvironment{IsManaged: winenv.IsManaged(), IsServer: winenv.IsWindowsServer()}
+}
 
 // GetConnIdentity extracts the identity information from the connection
 // based on the user who owns the other end of the connection.
@@ -168,7 +190,12 @@ func (ci *ConnIdentity) WindowsToken() (WindowsToken, error) {
 	if wcc, ok = ci.conn.(*safesocket.WindowsClientConn); !ok {
 		return nil, fmt.Errorf("not a WindowsClientConn: %T", ci.conn)
 	}
+	return windowsClientToken(wcc)
+}
 
+// windowsClientToken returns the WindowsToken representing the security context
+// of the connection's client.
+func windowsClientToken(wcc *safesocket.WindowsClientConn) (WindowsToken, error) {
 	// We duplicate the token's handle so that the WindowsToken we return may have
 	// a lifetime independent from the original connection.
 	var h windows.Handle
