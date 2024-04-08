@@ -48,7 +48,13 @@ func kubeconfigPath() (string, error) {
 		if version.IsSandboxedMacOS() {
 			return "", errors.New("$KUBECONFIG is incompatible with the App Store version")
 		}
-		return filepath.SplitList(kubeconfig)[0], nil
+		var out string
+		for _, out = range filepath.SplitList(kubeconfig) {
+			if info, err := os.Stat(out); !os.IsNotExist(err) && !info.IsDir() {
+				break
+			}
+		}
+		return out, nil
 	}
 
 	var dir string
