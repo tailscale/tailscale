@@ -131,7 +131,7 @@ change in the future.
 			certCmd,
 			netlockCmd,
 			licensesCmd,
-			exitNodeCmd,
+			exitNodeCmd(),
 			updateCmd,
 			whoisCmd,
 		},
