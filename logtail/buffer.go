@@ -4,6 +4,7 @@
 package logtail
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,8 +20,7 @@ type Buffer interface {
 	TryReadLine() ([]byte, error)
 
 	// Write writes a log line into the ring buffer.
-	//
-	// Write takes ownership of the provided slice.
+	// Implementations must not retain the provided buffer.
 	Write([]byte) (int, error)
 }
 
@@ -62,7 +62,7 @@ func (m *memBuffer) Write(b []byte) (int, error) {
 	defer m.dropMu.Unlock()
 
 	ent := qentry{
-		msg:       b,
+		msg:       bytes.Clone(b),
 		dropCount: m.dropCount,
 	}
 	select {
