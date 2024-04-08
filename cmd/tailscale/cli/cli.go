@@ -149,8 +149,8 @@ change in the future.
 	switch {
 	case slices.Contains(args, "debug"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
-	case slices.Contains(args, "share"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, shareCmd)
+	case slices.Contains(args, "drive"):
+		rootCmd.Subcommands = append(rootCmd.Subcommands, driveCmd)
 	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
