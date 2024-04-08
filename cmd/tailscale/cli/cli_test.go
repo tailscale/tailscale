@@ -16,6 +16,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -32,6 +33,10 @@ import (
 // But it should include anything handled specially (e.g. linux, windows)
 // and at least one thing that's not (darwin, freebsd).
 var geese = []string{"linux", "darwin", "windows", "freebsd"}
+
+func TestPanicIfAnyEnvCheckedInInit(t *testing.T) {
+	envknob.PanicIfAnyEnvCheckedInInit()
+}
 
 // Test that checkForAccidentalSettingReverts's updateMaskedPrefsFromUpFlag can handle
 // all flags. This will panic if a new flag creeps in that's unhandled.
