@@ -40,6 +40,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/proxymux"
@@ -577,6 +578,8 @@ func (s *Server) start() (reterr error) {
 	closePool.add(s.dialer)
 	sys.Set(eng)
 	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
+
+	s.dialer.UserDialCustomResolver = dns.Quad100Resolver(context.Background(), sys.DNSManager.Get())
 
 	// TODO(oxtoacart): do we need to support Taildrive on tsnet, and if so, how?
 	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())

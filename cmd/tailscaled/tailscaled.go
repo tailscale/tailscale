@@ -332,8 +332,10 @@ func ipnServerOpts() (o serverOptions) {
 	return o
 }
 
-var logPol *logpolicy.Policy
-var debugMux *http.ServeMux
+var (
+	logPol   *logpolicy.Policy
+	debugMux *http.ServeMux
+)
 
 func run() (err error) {
 	var logf logger.Logf = log.Printf
@@ -576,6 +578,8 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
+		dialer.UserDialCustomResolver = dns.Quad100Resolver(ctx, sys.DNSManager.Get())
+
 		var addrs []string
 		if httpProxyListener != nil {
 			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
