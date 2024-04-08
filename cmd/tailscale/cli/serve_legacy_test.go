@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -54,6 +55,9 @@ func TestCleanMountPoint(t *testing.T) {
 }
 
 func TestServeConfigMutations(t *testing.T) {
+	tstest.Replace(t, &Stderr, io.Discard)
+	tstest.Replace(t, &Stdout, io.Discard)
+
 	// Stateful mutations, starting from an empty config.
 	type step struct {
 		command []string                       // serve args; nil means no command to run (only reset)
@@ -706,6 +710,7 @@ func TestServeConfigMutations(t *testing.T) {
 			lc:          lc,
 			testFlagOut: &flagOut,
 			testStdout:  &stdout,
+			testStderr:  io.Discard,
 		}
 		lastCount := lc.setCount
 		var cmd *ffcli.Command
@@ -716,6 +721,10 @@ func TestServeConfigMutations(t *testing.T) {
 		} else {
 			cmd = newServeLegacyCommand(e)
 			args = st.command
+		}
+		if cmd.FlagSet == nil {
+			cmd.FlagSet = flag.NewFlagSet(cmd.Name, flag.ContinueOnError)
+			cmd.FlagSet.SetOutput(Stdout)
 		}
 		err := cmd.ParseAndRun(context.Background(), args)
 		if flagOut.Len() > 0 {
@@ -750,6 +759,9 @@ func TestServeConfigMutations(t *testing.T) {
 }
 
 func TestVerifyFunnelEnabled(t *testing.T) {
+	tstest.Replace(t, &Stderr, io.Discard)
+	tstest.Replace(t, &Stdout, io.Discard)
+
 	lc := &fakeLocalServeClient{}
 	var stdout bytes.Buffer
 	var flagOut bytes.Buffer
@@ -757,6 +769,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 		lc:          lc,
 		testFlagOut: &flagOut,
 		testStdout:  &stdout,
+		testStderr:  io.Discard,
 	}
 
 	tests := []struct {

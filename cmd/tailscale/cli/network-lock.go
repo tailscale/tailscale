@@ -17,8 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mattn/go-colorable"
-	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
@@ -471,10 +469,10 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 	// Provide a better help message for when someone clicks through the signing flow
 	// on the wrong device.
 	if err != nil && strings.Contains(err.Error(), "this node is not trusted by network lock") {
-		fmt.Fprintln(os.Stderr, "Error: Signing is not available on this device because it does not have a trusted tailnet lock key.")
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "Try again on a signing device instead. Tailnet admins can see signing devices on the admin panel.")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(Stderr, "Error: Signing is not available on this device because it does not have a trusted tailnet lock key.")
+		fmt.Fprintln(Stderr)
+		fmt.Fprintln(Stderr, "Try again on a signing device instead. Tailnet admins can see signing devices on the admin panel.")
+		fmt.Fprintln(Stderr)
 	}
 	return err
 }
@@ -643,20 +641,19 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 	if nlLogArgs.json {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(updates)
 	}
 
-	useColor := isatty.IsTerminal(os.Stdout.Fd())
+	out, useColor := colorableOutput()
 
-	stdOut := colorable.NewColorableStdout()
 	for _, update := range updates {
 		stanza, err := nlDescribeUpdate(update, useColor)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(stdOut, stanza)
+		fmt.Fprintln(out, stanza)
 	}
 	return nil
 }

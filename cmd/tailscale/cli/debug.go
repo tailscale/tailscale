@@ -453,7 +453,7 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		return err
 	}
 	defer watcher.Close()
-	fmt.Fprintf(os.Stderr, "Connected.\n")
+	fmt.Fprintf(Stderr, "Connected.\n")
 	for seen := 0; watchIPNArgs.count == 0 || seen < watchIPNArgs.count; seen++ {
 		n, err := watcher.Next()
 		if err != nil {
@@ -563,7 +563,7 @@ func runStat(ctx context.Context, args []string) error {
 func runHostinfo(ctx context.Context, args []string) error {
 	hi := hostinfo.New()
 	j, _ := json.MarshalIndent(hi, "", "  ")
-	os.Stdout.Write(j)
+	Stdout.Write(j)
 	return nil
 }
 
@@ -716,7 +716,7 @@ var ts2021Args struct {
 }
 
 func runTS2021(ctx context.Context, args []string) error {
-	log.SetOutput(os.Stdout)
+	log.SetOutput(Stdout)
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
 	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
@@ -885,7 +885,7 @@ func runCapture(ctx context.Context, args []string) error {
 
 	switch captureArgs.outFile {
 	case "-":
-		fmt.Fprintln(os.Stderr, "Press Ctrl-C to stop the capture.")
+		fmt.Fprintln(Stderr, "Press Ctrl-C to stop the capture.")
 		_, err = io.Copy(os.Stdout, stream)
 		return err
 	case "":
@@ -911,7 +911,7 @@ func runCapture(ctx context.Context, args []string) error {
 		return err
 	}
 	defer f.Close()
-	fmt.Fprintln(os.Stderr, "Press Ctrl-C to stop the capture.")
+	fmt.Fprintln(Stderr, "Press Ctrl-C to stop the capture.")
 	_, err = io.Copy(f, stream)
 	return err
 }

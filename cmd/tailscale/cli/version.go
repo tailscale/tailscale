@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"os"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/clientupdate"
@@ -70,7 +69,7 @@ func runVersion(ctx context.Context, args []string) error {
 			Meta:     m,
 			Upstream: upstreamVer,
 		}
-		e := json.NewEncoder(os.Stdout)
+		e := json.NewEncoder(Stdout)
 		e.SetIndent("", "\t")
 		return e.Encode(out)
 	}
