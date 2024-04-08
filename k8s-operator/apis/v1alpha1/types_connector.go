@@ -24,11 +24,19 @@ var ConnectorKind = "Connector"
 // +kubebuilder:printcolumn:name="IsExitNode",type="string",JSONPath=`.status.isExitNode`,description="Whether this Connector instance defines an exit node."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ConnectorReady")].reason`,description="Status of the deployed Connector resources."
 
+// Connector defines a Tailscale node that will be deployed in the cluster. The
+// node can be configured to act as a Tailscale subnet router and/or a Tailscale
+// exit node.
+// Connector is a cluster-scoped resource.
+// More info:
+// https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource
 type Connector struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// ConnectorSpec describes the desired Tailscale component.
+	// More info:
+	// https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 	Spec ConnectorSpec `json:"spec"`
 
 	// ConnectorStatus describes the status of the Connector. This is set
