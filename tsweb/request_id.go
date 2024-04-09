@@ -7,8 +7,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/google/uuid"
 	"tailscale.com/util/ctxkey"
+	"tailscale.com/util/fastuuid"
 )
 
 // RequestID is an opaque identifier for a HTTP request, used to correlate
@@ -44,7 +44,7 @@ func GenerateRequestID() RequestID {
 	// REQ-1 indicates the version of the RequestID pattern. It is
 	// currently arbitrary but allows for forward compatible
 	// transitions if needed.
-	return RequestID("REQ-1" + uuid.NewString())
+	return RequestID("REQ-1" + fastuuid.NewUUID().String())
 }
 
 // SetRequestID is an HTTP middleware that injects a RequestID in the
