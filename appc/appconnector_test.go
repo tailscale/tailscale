@@ -22,6 +22,8 @@ func TestUpdateDomains(t *testing.T) {
 	for _, shouldStore := range []bool{true, false} {
 		ctx := context.Background()
 		a := NewAppConnector(t.Logf, nil, shouldStore)
+		a.routeAdvertiser = &appctest.RouteCollector{}
+		a.UpdateRouteInfo(routeinfo.NewRouteInfo())
 		a.UpdateDomains([]string{"example.com"})
 
 		a.Wait(ctx)
