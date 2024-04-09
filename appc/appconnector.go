@@ -144,6 +144,15 @@ func (e *AppConnector) UpdateRouteInfo(ri *routeinfo.RouteInfo) {
 	e.routeInfo = ri
 }
 
+func (e *AppConnector) UnadvertiseRemoteRoutes() {
+	e.queue.Add(func() {
+		toRemove := e.RouteInfo().Routes(false, true, true)
+		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+			e.logf("failed to unadvertise routes %v: %v", toRemove, err)
+		}
+	})
+}
+
 // UpdateDomains asynchronously replaces the current set of configured domains
 // with the supplied set of domains. Domains must not contain a trailing dot,
 // and should be lower case. If the domain contains a leading '*' label it
@@ -216,9 +225,11 @@ func (e *AppConnector) updateDomains(domains []string) {
 		e.UpdateRouteInfo(routeInfo)
 		// everything left in oldDiscovered a) won't be in e.domains and b) can be unadvertised if it's not in local or control
 		for domainName, domainsRoutes := range oldDiscovered {
-			toRemove := domainsRoutes.RoutesSlice()
-			e.logf("unadvertising %d routes for domain: %s", len(toRemove), domainName)
-			e.scheduleUnadvertisement(domainName, toRemove...)
+			if domainsRoutes != nil {
+				toRemove := domainsRoutes.RoutesSlice()
+				e.logf("unadvertising %d routes for domain: %s", len(toRemove), domainName)
+				e.scheduleUnadvertisement(domainName, toRemove...)
+			}
 		}
 	}
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
