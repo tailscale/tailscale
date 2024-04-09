@@ -3159,6 +3159,8 @@ func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, er
 		// will then be advertised again when the prefs are sent.
 		if !mp.AppConnectorSet {
 			curRoutes = append(curRoutes, mp.AdvertiseRoutes...)
+			slices.SortFunc(curRoutes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
+			curRoutes = slices.Compact(curRoutes)
 			mp.AdvertiseRoutes = curRoutes
 		}
 	}

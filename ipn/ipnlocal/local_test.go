@@ -2586,6 +2586,29 @@ func TestPatchPrefsHandlerWithPresistStore(t *testing.T) {
 		AppConnectorSet: true,
 	})
 
+	appCfgTmpl := `{
+		"name": "example",
+		"domains": [%s],
+		"connectors": ["tag:example"],
+		"routes":[%s]
+	}`
+	appCfg := fmt.Sprintf(appCfgTmpl, `"example.com"`, `"1.2.3.5/32"`)
+
+	reconfigWithAppCfg := func(appCfg string) {
+		b.netMap.SelfNode = (&tailcfg.Node{
+			Name: "example.ts.net",
+			Tags: []string{"tag:example"},
+			CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+				"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
+			}),
+		}).View()
+
+		b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+		b.appConnector.Wait(context.Background())
+	}
+
+	reconfigWithAppCfg(appCfg)
+
 	now := time.Now()
 	ri := routeinfo.NewRouteInfo()
 	ri.Control = []netip.Prefix{prefix2}
@@ -2598,10 +2621,8 @@ func TestPatchPrefsHandlerWithPresistStore(t *testing.T) {
 	}
 	ri.Discovered = discovered
 
-	b.StoreRouteInfo(ri)
-	b.AdvertiseRoute([]netip.Prefix{prefix2, prefix3}...)
-
-	testAppConnector.RouteInfo()
+	b.appConnector.UpdateRouteInfo(ri)
+	b.AdvertiseRoute([]netip.Prefix{prefix3}...)
 
 	prefView, err := b.PatchPrefsHandler(mp)
 	if err != nil {
@@ -2632,7 +2653,7 @@ func TestPatchPrefsHandlerWithPresistStore(t *testing.T) {
 	//Check if the routes in control and discovered are presisted.
 	routesShouldPresist := storedRouteInfo.Routes(false, true, true)
 	if len(routesShouldPresist) != 2 {
-		t.Fatalf("wanted %d, got %d", 1, len(routesShouldPresist))
+		t.Fatalf("wanted %d, got %d", 2, len(routesShouldPresist))
 	}
 	if !slices.Contains(routesShouldPresist, prefix2) || !slices.Contains(routesShouldPresist, prefix3) {
 		t.Fatalf("Pre-existed routes not presisted.")
@@ -2683,7 +2704,29 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 		AppConnectorSet: true,
 	})
 
-	b.AdvertiseRoute([]netip.Prefix{prefix2, prefix3}...)
+	appCfgTmpl := `{
+		"name": "example",
+		"domains": [%s],
+		"connectors": ["tag:example"],
+		"routes":[%s]
+	}`
+	appCfg := fmt.Sprintf(appCfgTmpl, `"example.com"`, `"1.2.3.5/32"`)
+
+	reconfigWithAppCfg := func(appCfg string) {
+		b.netMap.SelfNode = (&tailcfg.Node{
+			Name: "example.ts.net",
+			Tags: []string{"tag:example"},
+			CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+				"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
+			}),
+		}).View()
+
+		b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+		b.appConnector.Wait(context.Background())
+	}
+	reconfigWithAppCfg(appCfg)
+
+	b.AdvertiseRoute([]netip.Prefix{prefix3}...)
 
 	testAppConnector.RouteInfo()
 
@@ -2840,4 +2883,103 @@ func TestFran(t *testing.T) {
 			t.Fatalf("after becoming not an app connector got routes %v, want %v", routesNow, wantRoutes)
 		}
 	}
+}
+
+func TestPatchPrefsHandlerNoDuplicateAdvertisement(t *testing.T) {
+	// test can read what's written
+	prefix1 := netip.MustParsePrefix("1.2.3.4/32")
+	prefix2 := netip.MustParsePrefix("1.2.3.5/32")
+	prefix3 := netip.MustParsePrefix("1.2.3.6/32")
+	mp := new(ipn.MaskedPrefs)
+	mp.AdvertiseRoutesSet = true
+	mp.AdvertiseRoutes = []netip.Prefix{prefix1}
+
+	b := newTestBackend(t)
+	testAppConnector := appc.NewAppConnector(t.Logf, b, true)
+	b.appConnector = testAppConnector
+	b.ControlKnobs().AppCStoreRoutes.Store(true)
+
+	b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AppConnector: ipn.AppConnectorPrefs{
+				Advertise: true,
+			},
+		},
+		AppConnectorSet: true,
+	})
+
+	appCfgTmpl := `{
+		"name": "example",
+		"domains": [%s],
+		"connectors": ["tag:example"],
+		"routes":[%s]
+	}`
+	appCfg := fmt.Sprintf(appCfgTmpl, `"example.com"`, `"1.2.3.4/32", "1.2.3.5/32"`)
+
+	reconfigWithAppCfg := func(appCfg string) {
+		b.netMap.SelfNode = (&tailcfg.Node{
+			Name: "example.ts.net",
+			Tags: []string{"tag:example"},
+			CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+				"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
+			}),
+		}).View()
+
+		b.reconfigAppConnectorLocked(b.netMap, b.pm.prefs)
+		b.appConnector.Wait(context.Background())
+	}
+
+	reconfigWithAppCfg(appCfg)
+
+	now := time.Now()
+	ri := routeinfo.NewRouteInfo()
+	ri.Control = []netip.Prefix{prefix1, prefix2}
+	discovered := make(map[string]*routeinfo.DatedRoutes)
+	routes := make(map[netip.Prefix]time.Time)
+	routes[prefix3] = now
+	discovered["example.com"] = &routeinfo.DatedRoutes{
+		LastCleanup: now,
+		Routes:      routes,
+	}
+	ri.Discovered = discovered
+
+	b.appConnector.UpdateRouteInfo(ri)
+	b.AdvertiseRoute([]netip.Prefix{prefix3}...)
+
+	prefView, err := b.PatchPrefsHandler(mp)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if prefView.AdvertiseRoutes().Len() != 3 {
+		t.Fatalf("wanted %d, got %d", 3, prefView.AdvertiseRoutes().Len())
+	}
+
+	if !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix1) {
+		t.Fatalf("New prefix was not advertised")
+	}
+
+	if !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix2) || !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix3) {
+		t.Fatalf("Old prefixes are no longer advertised.")
+	}
+
+	//Patch again with no route, see if prefix1 is removed/ prefix2, prefix3 presists.
+	mp.AdvertiseRoutes = []netip.Prefix{}
+	prefView2, err := b.PatchPrefsHandler(mp)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if prefView2.AdvertiseRoutes().Len() != 3 {
+		t.Fatalf("wanted %d, got %d", 3, prefView.AdvertiseRoutes().Len())
+	}
+
+	if !slices.Contains(prefView2.AdvertiseRoutes().AsSlice(), prefix1) {
+		t.Fatalf("Local route was not removed")
+	}
+
+	if !slices.Contains(prefView2.AdvertiseRoutes().AsSlice(), prefix2) || !slices.Contains(prefView.AdvertiseRoutes().AsSlice(), prefix3) {
+		t.Fatalf("Old prefixes are no longer advertised.")
+	}
+
 }
