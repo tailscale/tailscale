@@ -504,6 +504,7 @@ main() {
 		;;
 		zypper)
 			set -x
+			$SUDO rpm --import "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/repo.gpg"
 			$SUDO zypper --non-interactive ar -g -r "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO zypper --non-interactive --gpg-auto-import-keys refresh
 			$SUDO zypper --non-interactive install tailscale
