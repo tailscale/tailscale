@@ -223,15 +223,19 @@ func (e *AppConnector) updateDomains(domains []string) {
 
 	if shouldStoreRoutes {
 		e.UpdateRouteInfo(routeInfo)
-		// everything left in oldDiscovered a) won't be in e.domains and b) can be unadvertised if it's not in local or control
+		// every domain left in oldDiscovered won't be in e.domains
+		// routes can be unadvertised if it's not in local, control, or new discovered
+		currentRoutes := routeInfo.Routes(true, true, true)
+		slices.SortFunc(currentRoutes, comparePrefix)
+		currentRoutes = slices.Compact(currentRoutes)
 		for domainName, domainsRoutes := range oldDiscovered {
 			if domainsRoutes != nil {
 				toRemove := []netip.Prefix{}
 				for _, route := range domainsRoutes.RoutesSlice() {
-					if !slices.Contains(routeInfo.Local, route) {
+					_, ok := slices.BinarySearchFunc(currentRoutes, route, comparePrefix)
+					if !ok {
 						toRemove = append(toRemove, route)
 					}
-					// TODO check control also
 				}
 				e.logf("unadvertising %d routes for domain: %s", len(toRemove), domainName)
 				e.scheduleUnadvertisement(domainName, toRemove...)
@@ -563,4 +567,8 @@ func (e *AppConnector) addDomainAddrLocked(domain string, addr netip.Addr) {
 
 func compareAddr(l, r netip.Addr) int {
 	return l.Compare(r)
+}
+
+func comparePrefix(i, j netip.Prefix) int {
+	return i.Addr().Compare(j.Addr())
 }

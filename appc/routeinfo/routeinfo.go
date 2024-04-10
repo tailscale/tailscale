@@ -40,7 +40,9 @@ func (ri *RouteInfo) Routes(local, control, discovered bool) []netip.Prefix {
 
 	if discovered {
 		for _, dr := range ri.Discovered {
-			ret = append(ret, dr.RoutesSlice()...)
+			if dr != nil {
+				ret = append(ret, dr.RoutesSlice()...)
+			}
 		}
 	}
 	return ret
