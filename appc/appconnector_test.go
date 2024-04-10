@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
@@ -18,34 +19,99 @@ import (
 	"tailscale.com/util/must"
 )
 
-func TestUpdateDomains(t *testing.T) {
-	for _, shouldStore := range []bool{true, false} {
-		ctx := context.Background()
-		a := NewAppConnector(t.Logf, nil, shouldStore)
-		a.routeAdvertiser = &appctest.RouteCollector{}
-		a.UpdateRouteInfo(routeinfo.NewRouteInfo())
-		a.UpdateDomains([]string{"example.com"})
+func TestUpdateDomainsWithPresistStore(t *testing.T) {
 
-		a.Wait(ctx)
-		if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
-			t.Errorf("got %v; want %v", got, want)
-		}
+	ctx := context.Background()
+	a := NewAppConnector(t.Logf, nil, true)
+	TestRouteAdvertiser := &appctest.RouteCollector{}
+	a.routeAdvertiser = TestRouteAdvertiser
+	prefixControl := netip.MustParsePrefix("192.0.0.8/32")
+	prefixLocal := netip.MustParsePrefix("192.0.0.9/32")
+	prefixDiscovered := netip.MustParsePrefix("192.0.0.10/32")
+	prefixShouldUnadvertise := netip.MustParsePrefix("192.0.0.11/32")
+	ri := routeinfo.NewRouteInfo()
+	ri.Control = []netip.Prefix{prefixControl}
+	ri.Local = []netip.Prefix{prefixLocal}
+	a.UpdateRouteInfo(ri)
+	a.UpdateDomains([]string{"example.com", "test.com"})
 
-		addr := netip.MustParseAddr("192.0.0.8")
-		a.domains["example.com"] = append(a.domains["example.com"], addr)
-		a.UpdateDomains([]string{"example.com"})
-		a.Wait(ctx)
+	a.Wait(ctx)
+	if got, want := a.Domains().AsSlice(), []string{"example.com", "test.com"}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+	if _, hasKey := a.routeInfo.Discovered["example.com"]; !hasKey {
+		t.Errorf("Discovered did not record the test domain.")
+	}
 
-		if got, want := a.domains["example.com"], []netip.Addr{addr}; !slices.Equal(got, want) {
-			t.Errorf("got %v; want %v", got, want)
-		}
+	now := time.Now()
+	testRoutes := make(map[netip.Prefix]time.Time)
+	testRoutes[prefixDiscovered] = now
+	exampleRoutes := make(map[netip.Prefix]time.Time)
+	exampleRoutes[prefixShouldUnadvertise] = now
+	exampleRoutes[prefixControl] = now
+	exampleRoutes[prefixLocal] = now
+	exampleRoutes[prefixDiscovered] = now
+	ri.Discovered["test.com"] = &routeinfo.DatedRoutes{Routes: testRoutes, LastCleanup: now}
+	ri.Discovered["example.com"] = &routeinfo.DatedRoutes{Routes: exampleRoutes, LastCleanup: now}
+	a.UpdateRouteInfo(ri)
+	TestRouteAdvertiser.SetRoutes(ri.Discovered["example.com"].RoutesSlice())
 
-		// domains are explicitly downcased on set.
-		a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
-		a.Wait(ctx)
-		if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
-			t.Errorf("got %v; want %v", got, want)
-		}
+	addrControl := netip.MustParseAddr("192.0.0.8")
+	addrLocal := netip.MustParseAddr("192.0.0.9")
+	addrDiscovered := netip.MustParseAddr("192.0.0.10")
+	addrShouldUnadvertise := netip.MustParseAddr("192.0.0.11")
+	a.domains["example.com"] = append(a.domains["example.com"], []netip.Addr{addrControl, addrLocal, addrDiscovered, addrShouldUnadvertise}...)
+	a.domains["test.com"] = append(a.domains["test.com"], addrDiscovered)
+	a.UpdateDomains([]string{"example.com", "test.com"})
+	a.Wait(ctx)
+
+	if got, want := a.domains["example.com"], []netip.Addr{addrControl, addrLocal, addrDiscovered, addrShouldUnadvertise}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	// domains are explicitly downcased on set.
+	a.UpdateDomains([]string{"UP.EXAMPLE.COM", "test.com"})
+	a.Wait(ctx)
+	if got, want := xmaps.Keys(a.domains), []string{"up.example.com", "test.com"}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	if got, want := TestRouteAdvertiser.RemovedRoutes(), []netip.Prefix{prefixShouldUnadvertise}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	if got, want := TestRouteAdvertiser.Routes(), []netip.Prefix{prefixControl, prefixLocal, prefixDiscovered}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+}
+
+func TestUpdateDomainsWithoutPresistStore(t *testing.T) {
+	ctx := context.Background()
+	a := NewAppConnector(t.Logf, nil, false)
+	a.routeAdvertiser = &appctest.RouteCollector{}
+	a.UpdateRouteInfo(routeinfo.NewRouteInfo())
+	a.UpdateDomains([]string{"example.com"})
+
+	a.Wait(ctx)
+	if got, want := a.Domains().AsSlice(), []string{"example.com"}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	addr := netip.MustParseAddr("192.0.0.8")
+	a.domains["example.com"] = append(a.domains["example.com"], addr)
+	a.UpdateDomains([]string{"example.com"})
+	a.Wait(ctx)
+
+	if got, want := a.domains["example.com"], []netip.Addr{addr}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	// domains are explicitly downcased on set.
+	a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
+	a.Wait(ctx)
+	if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
+		t.Errorf("got %v; want %v", got, want)
 	}
 }
 
