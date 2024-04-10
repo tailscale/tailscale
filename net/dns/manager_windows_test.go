@@ -62,7 +62,7 @@ func TestManagerWindowsGP(t *testing.T) {
 	runTest(t, false)
 }
 
-func TestManagerWindowsGPMove(t *testing.T) {
+func TestManagerWindowsGPCopy(t *testing.T) {
 	if !isWindows10OrBetter() || !winutil.IsCurrentProcessElevated() {
 		t.Skipf("test requires running as elevated user on Windows 10+")
 	}
@@ -139,10 +139,10 @@ func TestManagerWindowsGPMove(t *testing.T) {
 		t.Fatalf("regWatcher.wait: %v\n", err)
 	}
 
-	// 3. Check that local NRPT is empty and GP is populated
+	// 3. Check that both local NRPT and GP NRPT are populated
 	t.Logf("Validating that group policy NRPT is populated...\n")
+	validateRegistry(t, nrptBaseLocal, domains)
 	validateRegistry(t, nrptBaseGP, domains)
-	ensureNoRulesInSubkey(t, nrptBaseLocal)
 
 	// 4. Delete fake GP key and refresh
 	t.Logf("Deleting fake group policy key and refreshing...\n")
@@ -578,25 +578,11 @@ func (trk *gpNotificationTracker) Close() error {
 }
 
 type regKeyWatcher struct {
-	keyLocal registry.Key
-	keyGP    registry.Key
-	evtLocal windows.Handle
-	evtGP    windows.Handle
+	keyGP registry.Key
+	evtGP windows.Handle
 }
 
-func newRegKeyWatcher() (*regKeyWatcher, error) {
-	var err error
-
-	keyLocal, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptBaseLocal, registry.READ)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			keyLocal.Close()
-		}
-	}()
-
+func newRegKeyWatcher() (result *regKeyWatcher, err error) {
 	// Monitor dnsBaseGP instead of nrptBaseGP, since the latter will be
 	// repeatedly created and destroyed throughout the course of the test.
 	keyGP, _, err := registry.CreateKey(registry.LOCAL_MACHINE, dnsBaseGP, registry.READ)
@@ -609,58 +595,31 @@ func newRegKeyWatcher() (*regKeyWatcher, error) {
 		}
 	}()
 
-	evtLocal, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			windows.CloseHandle(evtLocal)
-		}
-	}()
-
 	evtGP, err := windows.CreateEvent(nil, 0, 0, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	result := &regKeyWatcher{
-		keyLocal: keyLocal,
-		keyGP:    keyGP,
-		evtLocal: evtLocal,
-		evtGP:    evtGP,
-	}
-
-	return result, nil
+	return &regKeyWatcher{
+		keyGP: keyGP,
+		evtGP: evtGP,
+	}, nil
 }
 
 func (rw *regKeyWatcher) watch() error {
 	// We can make these waits thread-agnostic because the tests that use this code must already run on Windows 10+
-	err := windows.RegNotifyChangeKeyValue(windows.Handle(rw.keyLocal), true,
-		windows.REG_NOTIFY_CHANGE_NAME|windows.REG_NOTIFY_THREAD_AGNOSTIC, rw.evtLocal, true)
-	if err != nil {
-		return err
-	}
-
 	return windows.RegNotifyChangeKeyValue(windows.Handle(rw.keyGP), true,
 		windows.REG_NOTIFY_CHANGE_NAME|windows.REG_NOTIFY_THREAD_AGNOSTIC, rw.evtGP, true)
 }
 
 func (rw *regKeyWatcher) wait() error {
-	handles := []windows.Handle{
-		rw.evtLocal,
+	waitCode, err := windows.WaitForSingleObject(
 		rw.evtGP,
-	}
-
-	waitCode, err := windows.WaitForMultipleObjects(
-		handles,
-		true,  // Wait for both events to signal before resuming.
 		10000, // 10 seconds (as milliseconds)
 	)
 
-	const WAIT_TIMEOUT = 0x102
 	switch waitCode {
-	case WAIT_TIMEOUT:
+	case uint32(windows.WAIT_TIMEOUT):
 		return context.DeadlineExceeded
 	case windows.WAIT_FAILED:
 		return err
@@ -670,9 +629,7 @@ func (rw *regKeyWatcher) wait() error {
 }
 
 func (rw *regKeyWatcher) Close() error {
-	rw.keyLocal.Close()
 	rw.keyGP.Close()
-	windows.CloseHandle(rw.evtLocal)
 	windows.CloseHandle(rw.evtGP)
 	return nil
 }
