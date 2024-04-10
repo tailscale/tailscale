@@ -2901,14 +2901,15 @@ func TestPatchPrefsHandlerWithoutPresistStore(t *testing.T) {
 }
 
 func TestFran(t *testing.T) {
+	prefixSortFunc := func(i, j netip.Prefix) int {
+		return i.Addr().Compare(j.Addr())
+	}
 	epIP2 := netip.MustParsePrefix("192.1.0.9/32")
 	explicitlyAdvertisedRoutes := []netip.Prefix{netip.MustParsePrefix("192.1.0.8/32"), epIP2}
 	oneRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32"), netip.MustParsePrefix("192.0.0.16/32")}
-	//twoRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.10/32"), netip.MustParsePrefix("192.0.0.18/32"), epIP2}
-	twoRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.10/32"), netip.MustParsePrefix("192.0.0.18/32")}
+	twoRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.10/32"), netip.MustParsePrefix("192.0.0.18/32"), epIP2}
 
 	for _, shouldStore := range []bool{true, false} {
-		//for _, shouldStore := range []bool{false} {
 		b := newTestBackend(t)
 		b.ControlKnobs().AppCStoreRoutes.Store(shouldStore)
 		// make b an app connector
@@ -2952,9 +2953,13 @@ func TestFran(t *testing.T) {
 		afterTwoRoutes := append([]netip.Prefix{}, explicitlyAdvertisedRoutes...)
 		afterTwoRoutes = append(afterTwoRoutes, oneRoutes...)
 		afterTwoRoutes = append(afterTwoRoutes, twoRoutes...)
+		slices.SortFunc(afterTwoRoutes, prefixSortFunc)
+		afterTwoRoutes = slices.Compact(afterTwoRoutes)
 
 		afterOneRoutes := append([]netip.Prefix{}, explicitlyAdvertisedRoutes...)
 		afterOneRoutes = append(afterOneRoutes, oneRoutes...)
+		slices.SortFunc(afterOneRoutes, prefixSortFunc)
+		afterOneRoutes = slices.Compact(afterOneRoutes)
 
 		for _, tst := range []struct {
 			domain    string
@@ -2966,11 +2971,12 @@ func TestFran(t *testing.T) {
 			// doesn't care about example.com, so still just the route for one.com
 			{domain: "example.com", route: []string{"192.0.0.9", "192.0.0.17"}, wantAfter: afterOneRoutes},
 			// learns the route for two.com as well
-			{domain: "two.com", route: []string{"192.0.0.10", "192.0.0.18"}, wantAfter: afterTwoRoutes},
+			{domain: "two.com", route: []string{"192.0.0.10", "192.0.0.18", "192.1.0.9"}, wantAfter: afterTwoRoutes},
 		} {
 			b.ObserveDNSResponse(dnsResponse(tst.domain+".", tst.route))
 			b.appConnector.Wait(context.Background())
 			routesNow := b.pm.prefs.AdvertiseRoutes().AsSlice()
+			slices.SortFunc(routesNow, prefixSortFunc)
 			if !slices.Equal(routesNow, tst.wantAfter) {
 				t.Fatalf("after dns response for %s got routes %v, want %v", tst.domain, routesNow, tst.wantAfter)
 			}
@@ -2983,6 +2989,7 @@ func TestFran(t *testing.T) {
 		if !shouldStore {
 			wantRoutes = afterTwoRoutes
 		}
+		slices.SortFunc(routesNow, prefixSortFunc)
 		if !slices.Equal(routesNow, wantRoutes) {
 			t.Fatalf("after removing two.com (shouldStore=%t), got %v, want %v", shouldStore, routesNow, wantRoutes)
 		}
@@ -3005,6 +3012,7 @@ func TestFran(t *testing.T) {
 		if !shouldStore {
 			wantRoutes = afterTwoRoutes
 		}
+		slices.SortFunc(routesNow, prefixSortFunc)
 		if !slices.Equal(routesNow, wantRoutes) {
 			t.Fatalf("after becoming not an app connector got routes %v, want %v", routesNow, wantRoutes)
 		}

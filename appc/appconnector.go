@@ -226,7 +226,13 @@ func (e *AppConnector) updateDomains(domains []string) {
 		// everything left in oldDiscovered a) won't be in e.domains and b) can be unadvertised if it's not in local or control
 		for domainName, domainsRoutes := range oldDiscovered {
 			if domainsRoutes != nil {
-				toRemove := domainsRoutes.RoutesSlice()
+				toRemove := []netip.Prefix{}
+				for _, route := range domainsRoutes.RoutesSlice() {
+					if !slices.Contains(routeInfo.Local, route) {
+						toRemove = append(toRemove, route)
+					}
+					// TODO check control also
+				}
 				e.logf("unadvertising %d routes for domain: %s", len(toRemove), domainName)
 				e.scheduleUnadvertisement(domainName, toRemove...)
 			}
