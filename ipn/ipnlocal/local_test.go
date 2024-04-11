@@ -3454,3 +3454,66 @@ func TestEnableAutoUpdates(t *testing.T) {
 		t.Fatalf("disabling auto-updates: got error: %v", err)
 	}
 }
+
+func TestReadWriteRouteInfo(t *testing.T) {
+	// set up a backend with more than one profile
+	b := newTestBackend(t)
+	prof1 := ipn.LoginProfile{ID: "id1", Key: "key1"}
+	prof2 := ipn.LoginProfile{ID: "id2", Key: "key2"}
+	b.pm.knownProfiles["id1"] = &prof1
+	b.pm.knownProfiles["id2"] = &prof2
+	b.pm.currentProfile = &prof1
+
+	// set up routeInfo
+	ri1 := &appc.RouteInfo{}
+	ri1.Wildcards = []string{"1"}
+
+	ri2 := &appc.RouteInfo{}
+	ri2.Wildcards = []string{"2"}
+
+	// read before write
+	readRi, err := b.readRouteInfoLocked()
+	if readRi != nil {
+		t.Fatalf("read before writing: want nil, got %v", readRi)
+	}
+	if err != ipn.ErrStateNotExist {
+		t.Fatalf("read before writing: want %v, got %v", ipn.ErrStateNotExist, err)
+	}
+
+	// write the first routeInfo
+	if err := b.storeRouteInfo(ri1); err != nil {
+		t.Fatal(err)
+	}
+
+	// write the other routeInfo as the other profile
+	if err := b.pm.SwitchProfile("id2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.storeRouteInfo(ri2); err != nil {
+		t.Fatal(err)
+	}
+
+	// read the routeInfo of the first profile
+	if err := b.pm.SwitchProfile("id1"); err != nil {
+		t.Fatal(err)
+	}
+	readRi, err = b.readRouteInfoLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(readRi.Wildcards, ri1.Wildcards) {
+		t.Fatalf("read prof1 routeInfo wildcards:  want %v, got %v", ri1.Wildcards, readRi.Wildcards)
+	}
+
+	// read the routeInfo of the second profile
+	if err := b.pm.SwitchProfile("id2"); err != nil {
+		t.Fatal(err)
+	}
+	readRi, err = b.readRouteInfoLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(readRi.Wildcards, ri2.Wildcards) {
+		t.Fatalf("read prof2 routeInfo wildcards:  want %v, got %v", ri2.Wildcards, readRi.Wildcards)
+	}
+}

@@ -36,6 +36,19 @@ type RouteAdvertiser interface {
 	UnadvertiseRoute(...netip.Prefix) error
 }
 
+// RouteInfo is a data structure used to persist the in memory state of an AppConnector
+// so that we can know, even after a restart, which routes came from ACLs and which were
+// learned from domains.
+type RouteInfo struct {
+	// Control is the routes from the 'routes' section of an app connector acl.
+	Control []netip.Prefix `json:",omitempty"`
+	// Domains are the routes discovered by observing DNS lookups for configured domains.
+	Domains map[string][]netip.Addr `json:",omitempty"`
+	// Wildcards are the configured DNS lookup domains to observe. When a DNS query matches Wildcards,
+	// its result is added to Domains.
+	Wildcards []string `json:",omitempty"`
+}
+
 // AppConnector is an implementation of an AppConnector that performs
 // its function as a subsystem inside of a tailscale node. At the control plane
 // side App Connector routing is configured in terms of domains rather than IP
