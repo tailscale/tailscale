@@ -3516,8 +3516,22 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		return
 	}
 
-	if b.appConnector == nil {
-		b.appConnector = appc.NewAppConnector(b.logf, b)
+	shouldAppCStoreRoutes := b.ControlKnobs().AppCStoreRoutes.Load()
+	if b.appConnector == nil || b.appConnector.ShouldStoreRoutes() != shouldAppCStoreRoutes {
+		var ri *appc.RouteInfo
+		var storeFunc func(*appc.RouteInfo) error
+		if shouldAppCStoreRoutes {
+			var err error
+			ri, err = b.readRouteInfoLocked()
+			if err != nil {
+				ri = &appc.RouteInfo{}
+				if err != ipn.ErrStateNotExist {
+					b.logf("Unsuccessful Read RouteInfo: ", err)
+				}
+			}
+			storeFunc = b.storeRouteInfo
+		}
+		b.appConnector = appc.NewAppConnector(b.logf, b, ri, storeFunc)
 	}
 	if nm == nil {
 		return

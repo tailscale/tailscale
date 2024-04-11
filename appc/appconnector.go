@@ -62,6 +62,9 @@ type AppConnector struct {
 	logf            logger.Logf
 	routeAdvertiser RouteAdvertiser
 
+	// storeRoutesFunc will be called to persist routes if it is not nil.
+	storeRoutesFunc func(*RouteInfo) error
+
 	// mu guards the fields that follow
 	mu sync.Mutex
 
@@ -80,11 +83,24 @@ type AppConnector struct {
 }
 
 // NewAppConnector creates a new AppConnector.
-func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser) *AppConnector {
-	return &AppConnector{
+func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, routeInfo *RouteInfo, storeRoutesFunc func(*RouteInfo) error) *AppConnector {
+	ac := &AppConnector{
 		logf:            logger.WithPrefix(logf, "appc: "),
 		routeAdvertiser: routeAdvertiser,
+		storeRoutesFunc: storeRoutesFunc,
 	}
+	if routeInfo != nil {
+		ac.domains = routeInfo.Domains
+		ac.wildcards = routeInfo.Wildcards
+		ac.controlRoutes = routeInfo.Control
+	}
+	return ac
+}
+
+// ShouldStoreRoutes returns true if the appconnector was created with the controlknob on
+// and is storing its discovered routes persistently.
+func (e *AppConnector) ShouldStoreRoutes() bool {
+	return e.storeRoutesFunc != nil
 }
 
 // UpdateDomainsAndRoutes starts an asynchronous update of the configuration

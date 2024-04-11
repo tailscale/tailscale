@@ -2253,6 +2253,9 @@ const (
 
 	// NodeAttrAutoExitNode permits the automatic exit nodes feature.
 	NodeAttrAutoExitNode NodeCapability = "auto-exit-node"
+
+	// NodeAttrStoreAppCRoutes configures the node to store app connector routes persistently.
+	NodeAttrStoreAppCRoutes NodeCapability = "store-appc-routes"
 )
 
 // SetDNSRequest is a request to add a DNS record.

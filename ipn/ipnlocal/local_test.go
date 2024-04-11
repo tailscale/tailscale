@@ -55,6 +55,8 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
+func fakeStoreRoutes(*appc.RouteInfo) error { return nil }
+
 func inRemove(ip netip.Addr) bool {
 	for _, pfx := range removeFromDefaultRoute {
 		if pfx.Contains(ip) {
@@ -1291,13 +1293,19 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 }
 
 func TestOfferingAppConnector(t *testing.T) {
-	b := newTestBackend(t)
-	if b.OfferingAppConnector() {
-		t.Fatal("unexpected offering app connector")
-	}
-	b.appConnector = appc.NewAppConnector(t.Logf, nil)
-	if !b.OfferingAppConnector() {
-		t.Fatal("unexpected not offering app connector")
+	for _, shouldStore := range []bool{false, true} {
+		b := newTestBackend(t)
+		if b.OfferingAppConnector() {
+			t.Fatal("unexpected offering app connector")
+		}
+		if shouldStore {
+			b.appConnector = appc.NewAppConnector(t.Logf, nil, &appc.RouteInfo{}, fakeStoreRoutes)
+		} else {
+			b.appConnector = appc.NewAppConnector(t.Logf, nil, nil, nil)
+		}
+		if !b.OfferingAppConnector() {
+			t.Fatal("unexpected not offering app connector")
+		}
 	}
 }
 
@@ -1342,21 +1350,27 @@ func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
 }
 
 func TestObserveDNSResponse(t *testing.T) {
-	b := newTestBackend(t)
+	for _, shouldStore := range []bool{false, true} {
+		b := newTestBackend(t)
 
-	// ensure no error when no app connector is configured
-	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		// ensure no error when no app connector is configured
+		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
 
-	rc := &appctest.RouteCollector{}
-	b.appConnector = appc.NewAppConnector(t.Logf, rc)
-	b.appConnector.UpdateDomains([]string{"example.com"})
-	b.appConnector.Wait(context.Background())
+		rc := &appctest.RouteCollector{}
+		if shouldStore {
+			b.appConnector = appc.NewAppConnector(t.Logf, rc, &appc.RouteInfo{}, fakeStoreRoutes)
+		} else {
+			b.appConnector = appc.NewAppConnector(t.Logf, rc, nil, nil)
+		}
+		b.appConnector.UpdateDomains([]string{"example.com"})
+		b.appConnector.Wait(context.Background())
 
-	b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
-	b.appConnector.Wait(context.Background())
-	wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
-	if !slices.Equal(rc.Routes(), wantRoutes) {
-		t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+		b.ObserveDNSResponse(dnsResponse("example.com.", "192.0.0.8"))
+		b.appConnector.Wait(context.Background())
+		wantRoutes := []netip.Prefix{netip.MustParsePrefix("192.0.0.8/32")}
+		if !slices.Equal(rc.Routes(), wantRoutes) {
+			t.Fatalf("got routes %v, want %v", rc.Routes(), wantRoutes)
+		}
 	}
 }
 
