@@ -840,7 +840,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	domain, err := nameFromQuery(query.bs)
 	if err != nil {
 		metricDNSFwdErrorName.Add(1)
-		return err
+		return fmt.Errorf("getting name from DNS query: %w", err)
 	}
 
 	// Guarantee that the ctx we use below is done when this function returns.
@@ -888,7 +888,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("sending SERVFAIL due to no resolvers: %w", ctx.Err())
 			case responseChan <- res:
 				return nil
 			}
@@ -918,6 +918,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			resb, err := f.send(ctx, fq, *rr)
 			if err != nil {
+				err = fmt.Errorf("querying resolver %q: %w", rr.name.Addr, err)
 				select {
 				case errc <- err:
 				case <-ctx.Done():
@@ -939,7 +940,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			select {
 			case <-ctx.Done():
 				metricDNSFwdErrorContext.Add(1)
-				return ctx.Err()
+				return fmt.Errorf("sending response: %w", ctx.Err())
 			case responseChan <- packet{v, query.family, query.addr}:
 				metricDNSFwdSuccess.Add(1)
 				return nil
@@ -954,7 +955,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 					res, err := servfailResponse(query)
 					if err != nil {
 						f.logf("building servfail response: %v", err)
-						return firstErr
+						return fmt.Errorf("building SERVFAIL: %w", firstErr)
 					}
 
 					select {
@@ -970,9 +971,10 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			metricDNSFwdErrorContext.Add(1)
 			if firstErr != nil {
 				metricDNSFwdErrorContextGotError.Add(1)
-				return firstErr
+			} else {
+				firstErr = ctx.Err()
 			}
-			return ctx.Err()
+			return fmt.Errorf("waiting for response: %w", firstErr)
 		}
 	}
 }

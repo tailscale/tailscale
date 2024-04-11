@@ -288,9 +288,12 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 			// This is present in some errors paths, such as when all upstream
 			// DNS servers replied with an error.
 			case resp := <-responses:
+				if err != nil {
+					err = fmt.Errorf("forwarder response error: %w", err)
+				}
 				return resp.bs, err
 			default:
-				return nil, err
+				return nil, fmt.Errorf("forwarder error: %w", err)
 			}
 		}
 		return (<-responses).bs, nil
