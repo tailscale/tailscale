@@ -20,7 +20,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/coreos/go-systemd/activation"
+	"github.com/coreos/go-systemd/v22/activation"
 	"tailscale.com/client/tailscale"
 )
 
