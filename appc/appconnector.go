@@ -103,6 +103,18 @@ func (e *AppConnector) ShouldStoreRoutes() bool {
 	return e.storeRoutesFunc != nil
 }
 
+// storeRoutesLocked takes the current state of the AppConnector and persists it
+func (e *AppConnector) storeRoutesLocked() error {
+	if !e.ShouldStoreRoutes() {
+		return nil
+	}
+	return e.storeRoutesFunc(&RouteInfo{
+		Control:   e.controlRoutes,
+		Domains:   e.domains,
+		Wildcards: e.wildcards,
+	})
+}
+
 // UpdateDomainsAndRoutes starts an asynchronous update of the configuration
 // given the new domains and routes.
 func (e *AppConnector) UpdateDomainsAndRoutes(domains []string, routes []netip.Prefix) {
@@ -199,6 +211,9 @@ nextRoute:
 	}
 
 	e.controlRoutes = routes
+	if err := e.storeRoutesLocked(); err != nil {
+		e.logf("failed to store route info: %v", err)
+	}
 }
 
 // Domains returns the currently configured domain list.
@@ -408,6 +423,9 @@ func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Pref
 				e.addDomainAddrLocked(domain, addr)
 				e.logf("[v2] advertised route for %v: %v", domain, addr)
 			}
+		}
+		if err := e.storeRoutesLocked(); err != nil {
+			e.logf("failed to store route info: %v", err)
 		}
 	})
 }
