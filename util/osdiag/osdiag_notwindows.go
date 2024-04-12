@@ -5,7 +5,6 @@
 
 package osdiag
 
-import "tailscale.com/types/logger"
-
-func logSupportInfo(logger.Logf, LogSupportInfoReason) {
+func supportInfo(LogSupportInfoReason) map[string]any {
+	return nil
 }
