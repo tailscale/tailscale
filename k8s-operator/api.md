@@ -330,10 +330,44 @@ Specification of the desired state of the ProxyClass resource. https://git.k8s.i
         </tr>
     </thead>
     <tbody><tr>
+        <td><b><a href="#proxyclassspecmetrics">metrics</a></b></td>
+        <td>object</td>
+        <td>
+          Configuration for proxy metrics. Metrics are currently not supported for egress proxies and for Ingress proxies that have been configured with tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#proxyclassspecstatefulset">statefulSet</a></b></td>
         <td>object</td>
         <td>
           Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProxyClass.spec.metrics
+<sup><sup>[↩ Parent](#proxyclassspec)</sup></sup>
+
+
+
+Configuration for proxy metrics. Metrics are currently not supported for egress proxies and for Ingress proxies that have been configured with tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>enable</b></td>
+        <td>boolean</td>
+        <td>
+          Setting enable to true will make the proxy serve Tailscale metrics at <pod-ip>:9001/debug/metrics. Defaults to false.<br/>
         </td>
         <td>true</td>
       </tr></tbody>

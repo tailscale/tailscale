@@ -20,3 +20,7 @@ spec:
           env:
             - name: TS_USERSPACE
               value: "true"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
