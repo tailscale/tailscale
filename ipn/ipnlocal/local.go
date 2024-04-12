@@ -4235,7 +4235,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 			b.logf("failed to discover interface ips: %v", err)
 		}
 		switch runtime.GOOS {
-		case "linux", "windows", "darwin", "ios":
+		case "linux", "windows", "darwin", "ios", "android":
 			rs.LocalRoutes = internalIPs // unconditionally allow access to guest VM networks
 			if prefs.ExitNodeAllowLANAccess() {
 				rs.LocalRoutes = append(rs.LocalRoutes, externalIPs...)
