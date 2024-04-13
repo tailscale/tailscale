@@ -2833,17 +2833,6 @@ func (b *LocalBackend) tryLookupUserName(uid string) string {
 	return u.Username
 }
 
-// Login implements Backend.
-// As of 2022-11-15, this is only exists for Android.
-func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
-	b.mu.Lock()
-	b.assertClientLocked()
-	cc := b.cc
-	b.mu.Unlock()
-
-	cc.Login(token, b.loginFlags|controlclient.LoginInteractive)
-}
-
 // StartLoginInteractive implements Backend. It requests a new
 // interactive login from controlclient, unless such a flow is already
 // in progress, in which case StartLoginInteractive attempts to pick
