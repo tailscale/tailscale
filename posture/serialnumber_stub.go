@@ -8,7 +8,7 @@
 // solaris: currently unsupported by go-smbios:
 // https://github.com/digitalocean/go-smbios/pull/21
 
-//go:build ios || android || solaris || plan9 || js || wasm || (darwin && !cgo) || tamago
+//go:build ios || android || solaris || plan9 || js || wasm || (darwin && !cgo) || tamago || aix
 
 package posture
 

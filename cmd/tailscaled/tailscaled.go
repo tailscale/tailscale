@@ -79,7 +79,7 @@ func defaultTunName() string {
 		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
 		// as a magic value that uses/creates any free number.
 		return "utun"
-	case "plan9":
+	case "plan9", "aix":
 		return "userspace-networking"
 	case "linux":
 		switch distro.Get() {
