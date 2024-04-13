@@ -763,34 +763,6 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 	}
 }
 
-func TestStatusWithoutPeers(t *testing.T) {
-	b := newTestLocalBackend(t)
-
-	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
-		cc = newClient(t, opts)
-
-		t.Logf("ccGen: new mockControl.")
-		cc.called("New")
-		return cc, nil
-	})
-	b.Start(ipn.Options{})
-	b.StartLoginInteractive()
-	cc.send(nil, "", false, &netmap.NetworkMap{
-		SelfNode: (&tailcfg.Node{
-			MachineAuthorized: true,
-			Addresses:         ipps("100.101.101.101"),
-		}).View(),
-	})
-	got := b.StatusWithoutPeers()
-	if got.TailscaleIPs == nil {
-		t.Errorf("got nil, expected TailscaleIPs value to not be nil")
-	}
-	if !reflect.DeepEqual(got.TailscaleIPs, got.Self.TailscaleIPs) {
-		t.Errorf("got %v, expected %v", got.TailscaleIPs, got.Self.TailscaleIPs)
-	}
-}
-
 func TestStatusPeerCapabilities(t *testing.T) {
 	tests := []struct {
 		name                     string

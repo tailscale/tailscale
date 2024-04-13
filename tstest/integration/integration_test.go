@@ -382,6 +382,11 @@ func TestTwoNodes(t *testing.T) {
 		if peer.ID == st.Self.ID {
 			return errors.New("peer is self")
 		}
+
+		if len(st.TailscaleIPs) == 0 {
+			return errors.New("no Tailscale IPs")
+		}
+
 		return nil
 	}); err != nil {
 		t.Error(err)
