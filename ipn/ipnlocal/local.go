@@ -2839,7 +2839,9 @@ func (b *LocalBackend) tryLookupUserName(uid string) string {
 // up the in-progress flow where it left off.
 func (b *LocalBackend) StartLoginInteractive() {
 	b.mu.Lock()
-	b.assertClientLocked()
+	if b.cc == nil {
+		panic("LocalBackend.assertClient: b.cc == nil")
+	}
 	b.interact = true
 	url := b.authURL
 	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
@@ -4727,13 +4729,6 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 		return err
 	}
 	return b.resetForProfileChangeLockedOnEntry(unlock)
-}
-
-// assertClientLocked crashes if there is no controlclient in this backend.
-func (b *LocalBackend) assertClientLocked() {
-	if b.cc == nil {
-		panic("LocalBackend.assertClient: b.cc == nil")
-	}
 }
 
 // setNetInfo sets b.hostinfo.NetInfo to ni, and passes ni along to the
