@@ -825,16 +825,6 @@ func TestStatusPeerCapabilities(t *testing.T) {
 	}
 	b := newTestLocalBackend(t)
 
-	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
-		cc = newClient(t, opts)
-
-		t.Logf("ccGen: new mockControl.")
-		cc.called("New")
-		return cc, nil
-	})
-	b.Start(ipn.Options{})
-	b.StartLoginInteractive()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b.setNetMapLocked(&netmap.NetworkMap{
