@@ -775,7 +775,7 @@ func TestStatusWithoutPeers(t *testing.T) {
 		return cc, nil
 	})
 	b.Start(ipn.Options{})
-	b.Login(nil)
+	b.StartLoginInteractive()
 	cc.send(nil, "", false, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{
 			MachineAuthorized: true,
@@ -862,7 +862,7 @@ func TestStatusPeerCapabilities(t *testing.T) {
 		return cc, nil
 	})
 	b.Start(ipn.Options{})
-	b.Login(nil)
+	b.StartLoginInteractive()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b.setNetMapLocked(&netmap.NetworkMap{
@@ -901,8 +901,6 @@ type legacyBackend interface {
 	// flow. This should trigger a new BrowseToURL notification
 	// eventually.
 	StartLoginInteractive()
-	// Login logs in with an OAuth2 token.
-	Login(token *tailcfg.Oauth2Token)
 	// SetPrefs installs a new set of user preferences, including
 	// WantRunning. This may cause the wireguard engine to
 	// reconfigure or stop.
