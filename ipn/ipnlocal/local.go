@@ -1838,8 +1838,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if prevCC != nil {
 		defer prevCC.Shutdown() // must be called after b.mu is unlocked
 	}
-	b.cc = cc
-	b.ccAuto, _ = cc.(*controlclient.Auto)
+	b.setControlClientLocked(cc)
 	endpoints := b.endpoints
 
 	if err := b.initTKALocked(); err != nil {
@@ -4567,6 +4566,15 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Unlock()
 }
 
+// setControlClientLocked sets the control client to cc,
+// which may be nil.
+//
+// b.mu must be held.
+func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
+	b.cc = cc
+	b.ccAuto, _ = cc.(*controlclient.Auto)
+}
+
 // resetControlClientLocked sets b.cc to nil and returns the old value. If the
 // returned value is non-nil, the caller must call Shutdown on it after
 // releasing b.mu.
@@ -4589,8 +4597,7 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 		b.numClientStatusCalls.Add(1)
 	}
 	prev := b.cc
-	b.cc = nil
-	b.ccAuto = nil
+	b.setControlClientLocked(nil)
 	return prev
 }
 
