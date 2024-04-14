@@ -28,6 +28,8 @@ func statePath() string {
 		return "/var/db/tailscale/tailscaled.state"
 	case "darwin":
 		return "/Library/Tailscale/tailscaled.state"
+	case "aix":
+		return "/var/tailscale/tailscaled.state"
 	default:
 		return ""
 	}
