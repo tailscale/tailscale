@@ -16,15 +16,19 @@ var (
 
 // Handler reads system policies from OS-specific storage.
 type Handler interface {
-	// ReadString reads the policy settings value string given the key.
+	// ReadString reads the policy setting's string value for the given key.
+	// It should return ErrNoSuchKey if the key does not have a value set.
 	ReadString(key string) (string, error)
-	// ReadUInt64 reads the policy settings uint64 value given the key.
+	// ReadUInt64 reads the policy setting's uint64 value for the given key.
+	// It should return ErrNoSuchKey if the key does not have a value set.
 	ReadUInt64(key string) (uint64, error)
-	// ReadBool reads the policy setting's boolean value, given the key.
+	// ReadBool reads the policy setting's boolean value for the given key.
+	// It should return ErrNoSuchKey if the key does not have a value set.
 	ReadBoolean(key string) (bool, error)
 }
 
-// ErrNoSuchKey is returned when the specified key does not have a value set.
+// ErrNoSuchKey is returned by a Handler when the specified key does not have a
+// value set.
 var ErrNoSuchKey = errors.New("no such key")
 
 // defaultHandler is the catch all syspolicy type for anything that isn't windows or apple.
