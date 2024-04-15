@@ -40,6 +40,12 @@ func exitNodeCmd() *ffcli.Command {
 					fs.StringVar(&exitNodeArgs.filter, "filter", "", "filter exit nodes by country")
 					return fs
 				})(),
+			},
+			{
+				Name:       "suggest",
+				ShortUsage: "tailscale exit-node suggest",
+				ShortHelp:  "Suggests the best available exit node",
+				Exec:       runExitNodeSuggest,
 			}},
 			(func() []*ffcli.Command {
 				if !envknob.UseWIPCode() {
@@ -134,9 +140,35 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "# To use an exit node, use `tailscale set --exit-node=` followed by the hostname or IP")
-
+	fmt.Fprintln(w, "# To use an exit node, use `tailscale set --exit-node=` followed by the hostname or IP.")
+	if hasAnyExitNodeSuggestions(peers) {
+		fmt.Fprintln(w, "# To have Tailscale suggest an exit node, use `tailscale exit-node suggest`.")
+	}
 	return nil
+}
+
+// runExitNodeSuggest returns a suggested exit node ID to connect to and shows the chosen exit node tailcfg.StableNodeID.
+// If there are no derp based exit nodes to choose from or there is a failure in finding a suggestion, the command will return an error indicating so.
+func runExitNodeSuggest(ctx context.Context, args []string) error {
+	res, err := localClient.SuggestExitNode(ctx)
+	if err != nil {
+		return fmt.Errorf("suggest exit node: %w", err)
+	}
+	if res.ID == "" {
+		fmt.Println("No exit node suggestion is available.")
+		return nil
+	}
+	fmt.Printf("Suggested exit node: %v\nTo accept this suggestion, use `tailscale set --exit-node=%v`.\n", res.Name, res.ID)
+	return nil
+}
+
+func hasAnyExitNodeSuggestions(peers []*ipnstate.PeerStatus) bool {
+	for _, peer := range peers {
+		if peer.HasCap(tailcfg.NodeAttrSuggestExitNode) {
+			return true
+		}
+	}
+	return false
 }
 
 // peerStatus returns a string representing the current state of

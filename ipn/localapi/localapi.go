@@ -122,6 +122,7 @@ var handler = map[string]localAPIHandler{
 	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
+	"suggest-exit-node":           (*Handler).serveSuggestExitNode,
 	"tka/affected-sigs":           (*Handler).serveTKAAffectedSigs,
 	"tka/cosign-recovery-aum":     (*Handler).serveTKACosignRecoveryAUM,
 	"tka/disable":                 (*Handler).serveTKADisable,
@@ -2872,3 +2873,18 @@ var (
 	// User-visible LocalAPI endpoints.
 	metricFilePutCalls = clientmetric.NewCounter("localapi_file_put")
 )
+
+// serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
+func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := h.b.SuggestExitNode()
+	if err != nil {
+		writeErrorJSON(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}

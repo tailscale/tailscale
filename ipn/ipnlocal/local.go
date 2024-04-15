@@ -14,6 +14,7 @@ import (
 	"log"
 	"maps"
 	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -59,6 +60,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -6294,4 +6296,218 @@ func mayDeref[T any](p *T) (v T) {
 		return v
 	}
 	return *p
+}
+
+var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
+
+// SuggestExitNode computes a suggestion based on the current netmap and last netcheck report. If
+// there are multiple equally good options, one is selected at random, so the result is not stable. To be
+// eligible for consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
+//
+// Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
+// Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
+// without a DERP home, we look for geographic proximity to this device's DERP home.
+func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
+	b.mu.Lock()
+	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
+	netMap := b.netMap
+	b.mu.Unlock()
+	seed := time.Now().UnixNano()
+	r := rand.New(rand.NewSource(seed))
+	return suggestExitNode(lastReport, netMap, r)
+}
+
+func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand.Rand) (res apitype.ExitNodeSuggestionResponse, err error) {
+	if report.PreferredDERP == 0 {
+		return res, ErrNoPreferredDERP
+	}
+	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
+	for _, peer := range netMap.Peers {
+		if peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
+			candidates = append(candidates, peer)
+		}
+	}
+	if len(candidates) == 0 {
+		return res, nil
+	}
+	if len(candidates) == 1 {
+		peer := candidates[0]
+		if hi := peer.Hostinfo(); hi.Valid() {
+			if loc := hi.Location(); loc != nil {
+				res.Location = loc.View()
+			}
+		}
+		res.ID = peer.StableID()
+		res.Name = peer.Name()
+		return res, nil
+	}
+
+	candidatesByRegion := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
+	var preferredDERP *tailcfg.DERPRegion = netMap.DERPMap.Regions[report.PreferredDERP]
+	var minDistance float64 = math.MaxFloat64
+	type nodeDistance struct {
+		nv       tailcfg.NodeView
+		distance float64 // in meters, approximately
+	}
+	distances := make([]nodeDistance, 0, len(candidates))
+	for _, c := range candidates {
+		if !c.Valid() {
+			continue
+		}
+		if c.DERP() != "" {
+			ipp, err := netip.ParseAddrPort(c.DERP())
+			if err != nil {
+				continue
+			}
+			if ipp.Addr() != tailcfg.DerpMagicIPAddr {
+				continue
+			}
+			regionID := int(ipp.Port())
+			candidatesByRegion[regionID] = append(candidatesByRegion[regionID], c)
+			continue
+		}
+		if len(candidatesByRegion) > 0 {
+			// Since a candidate exists that does have a DERP home, skip this candidate. We never select
+			// a candidate without a DERP home if there is a candidate available with a DERP home.
+			continue
+		}
+		// This candidate does not have a DERP home.
+		// Use geographic distance from our DERP home to estimate how good this candidate is.
+		hi := c.Hostinfo()
+		if !hi.Valid() {
+			continue
+		}
+		loc := hi.Location()
+		if loc == nil {
+			continue
+		}
+		distance := longLatDistance(preferredDERP.Latitude, preferredDERP.Longitude, loc.Latitude, loc.Longitude)
+		if distance < minDistance {
+			minDistance = distance
+		}
+		distances = append(distances, nodeDistance{nv: c, distance: distance})
+	}
+	// First, try to select an exit node that has the closest DERP home, based on lastReport's DERP latency.
+	// If there are no latency values, it returns an arbitrary region
+	if len(candidatesByRegion) > 0 {
+		minRegion := minLatencyDERPRegion(xmaps.Keys(candidatesByRegion), report)
+		if minRegion == 0 {
+			minRegion = randomRegion(xmaps.Keys(candidatesByRegion), r)
+		}
+		regionCandidates, ok := candidatesByRegion[minRegion]
+		if !ok {
+			return res, errors.New("no candidates in expected region: this is a bug")
+		}
+		chosen := randomNode(regionCandidates, r)
+		res.ID = chosen.StableID()
+		res.Name = chosen.Name()
+		if hi := chosen.Hostinfo(); hi.Valid() {
+			if loc := hi.Location(); loc != nil {
+				res.Location = loc.View()
+			}
+		}
+		return res, nil
+	}
+	// None of the candidates have a DERP home, so proceed to select based on geographical distance from our preferred DERP region.
+
+	// allowanceMeters is the extra distance that will be permitted when considering peers. By this point, there
+	// are multiple approximations taking place (DERP location standing in for this device's location, the peer's
+	// location may only be city granularity, the distance algorithm assumes a spherical planet, etc.) so it is
+	// reasonable to consider peers that are similar distances. Those peers are good enough to be within
+	// measurement error. 100km corresponds to approximately 1ms of additional round trip light
+	// propagation delay in a fiber optic cable and seems like a reasonable heuristic. It may be adjusted in
+	// future.
+	const allowanceMeters = 100000
+	pickFrom := make([]tailcfg.NodeView, 0, len(distances))
+	for _, candidate := range distances {
+		if candidate.nv.Valid() && candidate.distance <= minDistance+allowanceMeters {
+			pickFrom = append(pickFrom, candidate.nv)
+		}
+	}
+	chosen := pickWeighted(pickFrom)
+	if !chosen.Valid() {
+		return res, errors.New("chosen candidate invalid: this is a bug")
+	}
+	res.ID = chosen.StableID()
+	res.Name = chosen.Name()
+	if hi := chosen.Hostinfo(); hi.Valid() {
+		if loc := hi.Location(); loc != nil {
+			res.Location = loc.View()
+		}
+	}
+	return res, nil
+}
+
+// pickWeighted chooses the node with highest priority given a list of mullvad nodes.
+func pickWeighted(candidates []tailcfg.NodeView) tailcfg.NodeView {
+	maxWeight := 0
+	var best tailcfg.NodeView
+	for _, c := range candidates {
+		hi := c.Hostinfo()
+		if !hi.Valid() {
+			continue
+		}
+		loc := hi.Location()
+		if loc == nil || loc.Priority <= maxWeight {
+			continue
+		}
+		maxWeight = loc.Priority
+		best = c
+	}
+	return best
+}
+
+// randomNode chooses a node randomly given a list of nodes and a *rand.Rand.
+func randomNode(nodes []tailcfg.NodeView, r *rand.Rand) tailcfg.NodeView {
+	return nodes[r.Intn(len(nodes))]
+}
+
+// randomRegion chooses a region randomly given a list of ints and a *rand.Rand
+func randomRegion(regions []int, r *rand.Rand) int {
+	if testenv.InTest() {
+		regions = slices.Clone(regions)
+		slices.Sort(regions)
+	}
+	return regions[r.Intn(len(regions))]
+}
+
+// minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
+// If there are no latency values, it returns 0.
+func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
+	min := slices.MinFunc(regions, func(i, j int) int {
+		const largeDuration time.Duration = math.MaxInt64
+		iLatency, ok := report.RegionLatency[i]
+		if !ok {
+			iLatency = largeDuration
+		}
+		jLatency, ok := report.RegionLatency[j]
+		if !ok {
+			jLatency = largeDuration
+		}
+		if c := cmp.Compare(iLatency, jLatency); c != 0 {
+			return c
+		}
+		return cmp.Compare(i, j)
+	})
+	latency, ok := report.RegionLatency[min]
+	if !ok || latency == 0 {
+		return 0
+	} else {
+		return min
+	}
+}
+
+// longLatDistance returns an estimated distance given the geographic coordinates of two locations, in degrees.
+// The coordinates are separated into four separate float64 values.
+// Value is returned in meters.
+func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
+	const toRadians = math.Pi / 180
+	diffLat := (fromLat - toLat) * toRadians
+	diffLong := (fromLong - toLong) * toRadians
+	lat1 := fromLat * toRadians
+	lat2 := toLat * toRadians
+	a := math.Pow(math.Sin(diffLat/2), 2) + math.Cos(lat1)*math.Cos(lat2)*math.Pow(math.Sin(diffLong/2), 2)
+	const earthRadiusMeters = 6371000
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return earthRadiusMeters * c
 }
