@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -30,7 +31,9 @@ import (
 const (
 	reasonProxyClassInvalid  = "ProxyClassInvalid"
 	reasonProxyClassValid    = "ProxyClassValid"
+	reasonCustomTSEnvVar     = "CustomTSEnvVar"
 	messageProxyClassInvalid = "ProxyClass is not valid: %v"
+	messageCustomTSEnvVar    = "ProxyClass overrides the default value for %s env var for %s container. Running with custom values for Tailscale env vars is not recommended and might break in the future."
 )
 
 type ProxyClassReconciler struct {
@@ -96,6 +99,19 @@ func (a *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.
 			if len(pod.Annotations) > 0 {
 				if errs := apivalidation.ValidateAnnotations(pod.Annotations, field.NewPath(".spec.statefulSet.pod.annotations")); errs != nil {
 					violations = append(violations, errs...)
+				}
+			}
+			if tc := pod.TailscaleContainer; tc != nil {
+				for _, e := range tc.Env {
+					if strings.HasPrefix(string(e.Name), "TS_") {
+						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+					}
+					if strings.EqualFold(string(e.Name), "EXPERIMENTAL_TS_CONFIGFILE_PATH") {
+						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+					}
+					if strings.EqualFold(string(e.Name), "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS") {
+						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+					}
 				}
 			}
 		}

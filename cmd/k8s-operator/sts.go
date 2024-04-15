@@ -644,6 +644,15 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 			base.SecurityContext = overlay.SecurityContext
 		}
 		base.Resources = overlay.Resources
+		for _, e := range overlay.Env {
+			// Env vars configured via ProxyClass might override env
+			// vars that have been specified by the operator, i.e
+			// TS_USERSPACE. The intended behaviour is to allow this
+			// and in practice it works without explicitly removing
+			// the operator configured value here as a later value
+			// in the env var list overrides an earlier one.
+			base.Env = append(base.Env, corev1.EnvVar{Name: string(e.Name), Value: e.Value})
+		}
 		return base
 	}
 	for i, c := range ss.Spec.Template.Spec.Containers {

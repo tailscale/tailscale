@@ -771,6 +771,13 @@ Configuration for the proxy container running tailscale.
         </tr>
     </thead>
     <tbody><tr>
+        <td><b><a href="#proxyclassspecstatefulsetpodtailscalecontainerenvindex">env</a></b></td>
+        <td>[]object</td>
+        <td>
+          List of environment variables to set in the container. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables Note that environment variables provided here will take precedence over Tailscale-specific environment variables set by the operator, however running proxies with custom values for Tailscale environment variables (i.e TS_USERSPACE) is not recommended and might break in the future.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#proxyclassspecstatefulsetpodtailscalecontainerresources">resources</a></b></td>
         <td>object</td>
         <td>
@@ -782,6 +789,40 @@ Configuration for the proxy container running tailscale.
         <td>object</td>
         <td>
           Container security context. Security context specified here will override the security context by the operator. By default the operator: - sets 'privileged: true' for the init container - set NET_ADMIN capability for tailscale container for proxies that are created for Services or Connector. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProxyClass.spec.statefulSet.pod.tailscaleContainer.env[index]
+<sup><sup>[↩ Parent](#proxyclassspecstatefulsetpodtailscalecontainer)</sup></sup>
+
+
+
+
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>value</b></td>
+        <td>string</td>
+        <td>
+          Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to "".<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1141,6 +1182,13 @@ Configuration for the proxy init container that enables forwarding.
         </tr>
     </thead>
     <tbody><tr>
+        <td><b><a href="#proxyclassspecstatefulsetpodtailscaleinitcontainerenvindex">env</a></b></td>
+        <td>[]object</td>
+        <td>
+          List of environment variables to set in the container. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables Note that environment variables provided here will take precedence over Tailscale-specific environment variables set by the operator, however running proxies with custom values for Tailscale environment variables (i.e TS_USERSPACE) is not recommended and might break in the future.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#proxyclassspecstatefulsetpodtailscaleinitcontainerresources">resources</a></b></td>
         <td>object</td>
         <td>
@@ -1152,6 +1200,40 @@ Configuration for the proxy init container that enables forwarding.
         <td>object</td>
         <td>
           Container security context. Security context specified here will override the security context by the operator. By default the operator: - sets 'privileged: true' for the init container - set NET_ADMIN capability for tailscale container for proxies that are created for Services or Connector. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProxyClass.spec.statefulSet.pod.tailscaleInitContainer.env[index]
+<sup><sup>[↩ Parent](#proxyclassspecstatefulsetpodtailscaleinitcontainer)</sup></sup>
+
+
+
+
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>name</b></td>
+        <td>string</td>
+        <td>
+          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>value</b></td>
+        <td>string</td>
+        <td>
+          Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to "".<br/>
         </td>
         <td>false</td>
       </tr></tbody>

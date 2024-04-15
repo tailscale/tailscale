@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale"
@@ -512,6 +513,34 @@ func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	}
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected timed requeue, got success")
+	}
+}
+
+// expectEvents accepts a test recorder and a list of events, tests that expected
+// events are sent down the recorder's channel. Waits for 5s for each event.
+func expectEvents(t *testing.T, rec *record.FakeRecorder, wantsEvents []string) {
+	t.Helper()
+	// Events are not expected to arrive in order.
+	seenEvents := make([]string, 0)
+	for i := 0; i < len(wantsEvents); i++ {
+		timer := time.NewTimer(time.Second * 5)
+		defer timer.Stop()
+		select {
+		case gotEvent := <-rec.Events:
+			found := false
+			for _, wantEvent := range wantsEvents {
+				if wantEvent == gotEvent {
+					found = true
+					seenEvents = append(seenEvents, gotEvent)
+					break
+				}
+			}
+			if !found {
+				t.Errorf("got unexpected event %q, expected events: %+#v", gotEvent, wantsEvents)
+			}
+		case <-timer.C:
+			t.Errorf("timeout waiting for an event, wants events %#+v, got events %+#v", wantsEvents, seenEvents)
+		}
 	}
 }
 

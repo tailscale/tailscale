@@ -36,8 +36,9 @@ func TestProxyClass(t *testing.T) {
 				Labels:      map[string]string{"foo": "bar", "xyz1234": "abc567"},
 				Annotations: map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
 				Pod: &tsapi.Pod{
-					Labels:      map[string]string{"foo": "bar", "xyz1234": "abc567"},
-					Annotations: map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
+					Labels:             map[string]string{"foo": "bar", "xyz1234": "abc567"},
+					Annotations:        map[string]string{"foo.io/bar": "{'key': 'val1232'}"},
+					TailscaleContainer: &tsapi.Container{Env: []tsapi.Env{{Name: "FOO", Value: "BAR"}}},
 				},
 			},
 		},
@@ -51,16 +52,17 @@ func TestProxyClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fr := record.NewFakeRecorder(3) // bump this if you expect a test case to throw more events
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	pcr := &ProxyClassReconciler{
 		Client:   fc,
 		logger:   zl.Sugar(),
 		clock:    cl,
-		recorder: record.NewFakeRecorder(1),
+		recorder: fr,
 	}
-	expectReconciled(t, pcr, "", "test")
 
 	// 1. A valid ProxyClass resource gets its status updated to Ready.
+	expectReconciled(t, pcr, "", "test")
 	pc.Status.Conditions = append(pc.Status.Conditions, tsapi.ConnectorCondition{
 		Type:               tsapi.ProxyClassready,
 		Status:             metav1.ConditionTrue,
@@ -80,4 +82,17 @@ func TestProxyClass(t *testing.T) {
 	msg := `ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: "?!someVal": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
 	expectEqual(t, fc, pc, nil)
+	expectedEvent := "Warning ProxyClassInvalid ProxyClass is not valid: .spec.statefulSet.labels: Invalid value: \"?!someVal\": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')"
+	expectEvents(t, fr, []string{expectedEvent})
+
+	// 2. An valid ProxyClass but with a Tailscale env vars set results in warning events.
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec.StatefulSet.Labels = nil // unset invalid labels from the previous test
+		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Env = []tsapi.Env{{Name: "TS_USERSPACE", Value: "true"}, {Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH"}, {Name: "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS"}}
+	})
+	expectedEvents := []string{"Warning CustomTSEnvVar ProxyClass overrides the default value for TS_USERSPACE env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
+		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_TS_CONFIGFILE_PATH env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
+		"Warning CustomTSEnvVar ProxyClass overrides the default value for EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future."}
+	expectReconciled(t, pcr, "", "test")
+	expectEvents(t, fr, expectedEvents)
 }
