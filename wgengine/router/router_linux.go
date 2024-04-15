@@ -469,7 +469,7 @@ func (r *linuxRouter) UpdateMagicsockPort(port uint16, network string) error {
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
 func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
-	if distro.Get() == distro.Synology {
+	if !platformCanNetfilter() {
 		mode = netfilterOff
 	}
 
@@ -1396,11 +1396,26 @@ func normalizeCIDR(cidr netip.Prefix) string {
 	return cidr.Masked().String()
 }
 
+// platformCanNetfilter reports whether the current distro/environment supports
+// running iptables/nftables commands.
+func platformCanNetfilter() bool {
+	switch distro.Get() {
+	case distro.Synology:
+		// Synology doesn't support iptables or nftables. Attempting to run it
+		// just blocks for a long time while it logs about failures.
+		//
+		// See https://github.com/tailscale/tailscale/issues/11737 for one such
+		// prior regression where we tried to run iptables on Synology.
+		return false
+	}
+	return true
+}
+
 // cleanUp removes all the rules and routes that were added by the linux router.
 // The function calls cleanUp for both iptables and nftables since which ever
 // netfilter runner is used, the cleanUp function for the other one doesn't do anything.
 func cleanUp(logf logger.Logf, interfaceName string) {
-	if interfaceName != "userspace-networking" {
+	if interfaceName != "userspace-networking" && platformCanNetfilter() {
 		linuxfw.IPTablesCleanUp(logf)
 		linuxfw.NfTablesCleanUp(logf)
 	}
