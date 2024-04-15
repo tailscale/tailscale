@@ -58,7 +58,7 @@ type Prefs struct {
 	// is used. It's set non-empty once the daemon has been started
 	// for the first time.
 	//
-	// TODO(apenwarr): Make it safe to update this with SetPrefs().
+	// TODO(apenwarr): Make it safe to update this with EditPrefs().
 	// Right now, you have to pass it in the initial prefs in Start(),
 	// which is the only code that actually uses the ControlURL value.
 	// It would be more consistent to restart controlclient

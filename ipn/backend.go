@@ -60,7 +60,7 @@ type NotifyWatchOpt uint64
 const (
 	// NotifyWatchEngineUpdates, if set, causes Engine updates to be sent to the
 	// client either regularly or when they change, without having to ask for
-	// each one via RequestEngineStatus.
+	// each one via Engine.RequestStatus.
 	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << iota
 
 	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
