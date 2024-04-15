@@ -2834,11 +2834,11 @@ func (b *LocalBackend) tryLookupUserName(uid string) string {
 	return u.Username
 }
 
-// StartLoginInteractive implements Backend. It requests a new
-// interactive login from controlclient, unless such a flow is already
-// in progress, in which case StartLoginInteractive attempts to pick
-// up the in-progress flow where it left off.
-func (b *LocalBackend) StartLoginInteractive() {
+// StartLoginInteractive requests a new interactive login from controlclient,
+// unless such a flow is already in progress, in which case
+// StartLoginInteractive attempts to pick up the in-progress flow where it left
+// off.
+func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
 	b.mu.Lock()
 	if b.cc == nil {
 		panic("LocalBackend.assertClient: b.cc == nil")
@@ -2858,6 +2858,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	} else {
 		cc.Login(nil, b.loginFlags|controlclient.LoginInteractive)
 	}
+	return nil
 }
 
 func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error) {

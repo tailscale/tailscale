@@ -322,7 +322,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 }
 
 func (i *jsIPN) login() {
-	go i.lb.StartLoginInteractive()
+	go i.lb.StartLoginInteractive(context.Background())
 }
 
 func (i *jsIPN) logout() {

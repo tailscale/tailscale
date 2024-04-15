@@ -862,10 +862,6 @@ type legacyBackend interface {
 	// Start starts or restarts the backend, typically when a
 	// frontend client connects.
 	Start(ipn.Options) error
-	// StartLoginInteractive requests to start a new interactive login
-	// flow. This should trigger a new BrowseToURL notification
-	// eventually.
-	StartLoginInteractive()
 }
 
 // Verify that LocalBackend still implements the legacyBackend interface

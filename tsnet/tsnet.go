@@ -597,7 +597,9 @@ func (s *Server) start() (reterr error) {
 	st := lb.State()
 	if st == ipn.NeedsLogin || envknob.Bool("TSNET_FORCE_LOGIN") {
 		logf("LocalBackend state is %v; running StartLoginInteractive...", st)
-		s.lb.StartLoginInteractive()
+		if err := s.lb.StartLoginInteractive(s.shutdownCtx); err != nil {
+			return fmt.Errorf("StartLoginInteractive: %w", err)
+		}
 	} else if authKey != "" {
 		logf("Authkey is set; but state is %v. Ignoring authkey. Re-run with TSNET_FORCE_LOGIN=1 to force use of authkey.", st)
 	}

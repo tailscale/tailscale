@@ -1306,7 +1306,7 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "want POST", http.StatusBadRequest)
 		return
 	}
-	h.b.StartLoginInteractive()
+	h.b.StartLoginInteractive(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 	return
 }
