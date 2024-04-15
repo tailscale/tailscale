@@ -1514,3 +1514,12 @@ func (w *IPNBusWatcher) Next() (ipn.Notify, error) {
 	}
 	return n, nil
 }
+
+// SuggestExitNode requests an exit node suggestion and returns the exit node's details.
+func (lc *LocalClient) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggestionResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/suggest-exit-node")
+	if err != nil {
+		return apitype.ExitNodeSuggestionResponse{}, err
+	}
+	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
+}

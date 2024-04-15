@@ -49,3 +49,11 @@ type ReloadConfigResponse struct {
 	Reloaded bool   // whether the config was reloaded
 	Err      string // any error message
 }
+
+// ExitNodeSuggestionResponse is the response to a LocalAPI suggest-exit-node GET request.
+// It returns the StableNodeID, name, and location of a suggested exit node for the client making the request.
+type ExitNodeSuggestionResponse struct {
+	ID       tailcfg.StableNodeID
+	Name     string
+	Location tailcfg.LocationView `json:",omitempty"`
+}
