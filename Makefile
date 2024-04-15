@@ -1,5 +1,5 @@
 IMAGE_REPO ?= tailscale/tailscale
-SYNO_ARCH ?= "amd64"
+SYNO_ARCH ?= "x86_64"
 SYNO_DSM ?= "7"
 TAGS ?= "latest"
 
