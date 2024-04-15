@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -3133,4 +3134,58 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMaybeRebindOnError(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	t.Run("darwin should rebind", func(t *testing.T) {
+		conn, err := NewConn(Options{
+			EndpointsFunc: func(eps []tailcfg.Endpoint) {},
+			Logf:          t.Logf,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		rebound := conn.maybeRebindOnError("darwin", syscall.EPERM)
+		if !rebound {
+			t.Errorf("darwin should rebind on syscall.EPERM")
+		}
+	})
+
+	t.Run("linux should not rebind", func(t *testing.T) {
+		conn, err := NewConn(Options{
+			EndpointsFunc: func(eps []tailcfg.Endpoint) {},
+			Logf:          t.Logf,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		rebound := conn.maybeRebindOnError("linux", syscall.EPERM)
+		if rebound {
+			t.Errorf("linux should not rebind on syscall.EPERM")
+		}
+	})
+
+	t.Run("should not rebind if recently rebind recently performed", func(t *testing.T) {
+		conn, err := NewConn(Options{
+			EndpointsFunc: func(eps []tailcfg.Endpoint) {},
+			Logf:          t.Logf,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		conn.lastEPERMRebind.Store(time.Now().Add(-1 * time.Second))
+		rebound := conn.maybeRebindOnError("darwin", syscall.EPERM)
+		if rebound {
+			t.Errorf("darwin should not rebind on syscall.EPERM within 5 seconds of last")
+		}
+	})
 }
