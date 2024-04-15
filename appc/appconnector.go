@@ -116,6 +116,16 @@ func (e *AppConnector) storeRoutesLocked() error {
 	})
 }
 
+// ClearRoutes removes all route state from the AppConnector.
+func (e *AppConnector) ClearRoutes() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.controlRoutes = nil
+	e.domains = nil
+	e.wildcards = nil
+	return e.storeRoutesLocked()
+}
+
 // UpdateDomainsAndRoutes starts an asynchronous update of the configuration
 // given the new domains and routes.
 func (e *AppConnector) UpdateDomainsAndRoutes(domains []string, routes []netip.Prefix) {

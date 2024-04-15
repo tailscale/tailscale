@@ -1366,6 +1366,12 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := h.b.MaybeClearAppConnector(mp); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
+			return
+		}
 		var err error
 		prefs, err = h.b.EditPrefs(mp)
 		if err != nil {
