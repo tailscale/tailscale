@@ -326,6 +326,21 @@ spec:
                                             tailscaleContainer:
                                                 description: Configuration for the proxy container running tailscale.
                                                 properties:
+                                                    env:
+                                                        description: List of environment variables to set in the container. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables Note that environment variables provided here will take precedence over Tailscale-specific environment variables set by the operator, however running proxies with custom values for Tailscale environment variables (i.e TS_USERSPACE) is not recommended and might break in the future.
+                                                        items:
+                                                            properties:
+                                                                name:
+                                                                    description: Name of the environment variable. Must be a C_IDENTIFIER.
+                                                                    pattern: ^[-._a-zA-Z][-._a-zA-Z0-9]*$
+                                                                    type: string
+                                                                value:
+                                                                    description: 'Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to "".'
+                                                                    type: string
+                                                            required:
+                                                                - name
+                                                            type: object
+                                                        type: array
                                                     resources:
                                                         description: Container resource requirements. By default Tailscale Kubernetes operator does not apply any resource requirements. The amount of resources required wil depend on the amount of resources the operator needs to parse, usage patterns and cluster size. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
                                                         properties:
@@ -454,6 +469,21 @@ spec:
                                             tailscaleInitContainer:
                                                 description: Configuration for the proxy init container that enables forwarding.
                                                 properties:
+                                                    env:
+                                                        description: List of environment variables to set in the container. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables Note that environment variables provided here will take precedence over Tailscale-specific environment variables set by the operator, however running proxies with custom values for Tailscale environment variables (i.e TS_USERSPACE) is not recommended and might break in the future.
+                                                        items:
+                                                            properties:
+                                                                name:
+                                                                    description: Name of the environment variable. Must be a C_IDENTIFIER.
+                                                                    pattern: ^[-._a-zA-Z][-._a-zA-Z0-9]*$
+                                                                    type: string
+                                                                value:
+                                                                    description: 'Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to "".'
+                                                                    type: string
+                                                            required:
+                                                                - name
+                                                            type: object
+                                                        type: array
                                                     resources:
                                                         description: Container resource requirements. By default Tailscale Kubernetes operator does not apply any resource requirements. The amount of resources required wil depend on the amount of resources the operator needs to parse, usage patterns and cluster size. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
                                                         properties:

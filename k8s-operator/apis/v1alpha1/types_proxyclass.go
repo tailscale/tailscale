@@ -131,7 +131,35 @@ type Container struct {
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// List of environment variables to set in the container.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables
+	// Note that environment variables provided here will take precedence
+	// over Tailscale-specific environment variables set by the operator,
+	// however running proxies with custom values for Tailscale environment
+	// variables (i.e TS_USERSPACE) is not recommended and might break in
+	// the future.
+	// +optional
+	Env []Env `json:"env,omitempty"`
 }
+
+type Env struct {
+	// Name of the environment variable. Must be a C_IDENTIFIER.
+	Name Name `json:"name"`
+	// Variable references $(VAR_NAME) are expanded using the previously defined
+	//  environment variables in the container and any service environment
+	// variables. If a variable cannot be resolved, the reference in the input
+	// string will be unchanged. Double $$ are reduced to a single $, which
+	// allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will
+	// produce the string literal "$(VAR_NAME)". Escaped references will never
+	// be expanded, regardless of whether the variable exists or not. Defaults
+	// to "".
+	// +optional
+	Value string `json:"value,omitempty"`
+}
+
+// +kubebuilder:validation:Type=string
+// +kubebuilder:validation:Pattern=`^[-._a-zA-Z][-._a-zA-Z0-9]*$`
+type Name string
 
 type ProxyClassStatus struct {
 	// List of status conditions to indicate the status of the ProxyClass.
