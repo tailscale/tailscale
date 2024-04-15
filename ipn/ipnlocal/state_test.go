@@ -441,7 +441,7 @@ func TestStateMachine(t *testing.T) {
 	// indicating that the UI should browse to the given URL.
 	t.Logf("\n\nLogin (interactive)")
 	notifies.expect(1)
-	b.StartLoginInteractive()
+	b.StartLoginInteractive(context.Background())
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls()
@@ -457,7 +457,7 @@ func TestStateMachine(t *testing.T) {
 	// we must always get a *new* login URL first.
 	t.Logf("\n\nLogin2 (interactive)")
 	notifies.expect(0)
-	b.StartLoginInteractive()
+	b.StartLoginInteractive(context.Background())
 	{
 		notifies.drain(0)
 		// backend asks control for another login sequence
@@ -677,7 +677,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
-	b.StartLoginInteractive()
+	b.StartLoginInteractive(context.Background())
 	t.Logf("\n\nLoginFinished3")
 	notifies.expect(3)
 	cc.persist.UserProfile.LoginName = "user2"
@@ -800,7 +800,7 @@ func TestStateMachine(t *testing.T) {
 			ControlURL: "https://localhost:1/",
 		},
 	})
-	b.StartLoginInteractive()
+	b.StartLoginInteractive(context.Background())
 	url3 := "https://localhost:1/3"
 	cc.send(nil, url3, false, nil)
 	{
