@@ -26,7 +26,6 @@ import (
 // functions.
 func TestLocalLogLines(t *testing.T) {
 	logListen := tstest.NewLogLineTracker(t.Logf, []string{
-		"SetPrefs: %v",
 		"[v1] peer keys: %s",
 		"[v1] v%v peers: %v",
 	})
@@ -81,7 +80,7 @@ func TestLocalLogLines(t *testing.T) {
 	persist := &persist.Persist{}
 	prefs := ipn.NewPrefs()
 	prefs.Persist = persist
-	lb.SetPrefs(prefs)
+	lb.SetPrefsForTest(prefs)
 
 	t.Run("after_prefs", testWantRemain("[v1] peer keys: %s", "[v1] v%v peers: %v"))
 
@@ -111,5 +110,5 @@ func TestLocalLogLines(t *testing.T) {
 		}},
 	})
 	lb.mu.Unlock()
-	t.Run("after_second_peer_status", testWantRemain("SetPrefs: %v"))
+	t.Run("after_second_peer_status", testWantRemain())
 }

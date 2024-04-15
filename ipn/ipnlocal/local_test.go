@@ -863,15 +863,6 @@ type legacyBackend interface {
 	// flow. This should trigger a new BrowseToURL notification
 	// eventually.
 	StartLoginInteractive()
-	// SetPrefs installs a new set of user preferences, including
-	// WantRunning. This may cause the wireguard engine to
-	// reconfigure or stop.
-	SetPrefs(*ipn.Prefs)
-	// RequestEngineStatus polls for an update from the wireguard
-	// engine. Only needed if you want to display byte
-	// counts. Connection events are emitted automatically without
-	// polling.
-	RequestEngineStatus()
 }
 
 // Verify that LocalBackend still implements the legacyBackend interface
@@ -1799,7 +1790,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			b.netMap = test.nm
 			b.pm = pm
 			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm)
-			b.SetPrefs(pm.CurrentPrefs().AsStruct())
+			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
+
 			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
 				t.Errorf("got %v want %v", got, test.exitNodeIDWant)
 			}
@@ -2059,14 +2051,6 @@ func TestApplySysPolicy(t *testing.T) {
 				}
 				if !prefs.Equals(&tt.wantPrefs) {
 					t.Errorf("prefs=%v, want %v", prefs.Pretty(), tt.wantPrefs.Pretty())
-				}
-			})
-
-			t.Run("set prefs", func(t *testing.T) {
-				b := newTestBackend(t)
-				b.SetPrefs(tt.prefs.Clone())
-				if !b.Prefs().Equals(tt.wantPrefs.View()) {
-					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), tt.wantPrefs.Pretty())
 				}
 			})
 
@@ -2639,6 +2623,14 @@ func TestRoundTraffic(t *testing.T) {
 				t.Errorf("unexpected rounding got %v want %v", result, tt.want)
 			}
 		})
-
 	}
+}
+
+func (b *LocalBackend) SetPrefsForTest(newp *ipn.Prefs) {
+	if newp == nil {
+		panic("SetPrefsForTest got nil prefs")
+	}
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+	b.setPrefsLockedOnEntry(newp, unlock)
 }

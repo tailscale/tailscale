@@ -2366,7 +2366,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	}
 }
 
-// pollRequestEngineStatus calls b.RequestEngineStatus every 2 seconds until ctx
+// pollRequestEngineStatus calls b.e.RequestStatus every 2 seconds until ctx
 // is done.
 func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 	ticker, tickerChannel := b.clock.NewTicker(2 * time.Second)
@@ -2374,7 +2374,7 @@ func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 	for {
 		select {
 		case <-tickerChannel:
-			b.RequestEngineStatus()
+			b.e.RequestStatus()
 		case <-ctx.Done():
 			return
 		}
@@ -3222,7 +3222,7 @@ func (b *LocalBackend) editPrefsLockedOnEntry(mp *ipn.MaskedPrefs, unlock unlock
 		return stripKeysFromPrefs(p0), nil
 	}
 	b.logf("EditPrefs: %v", mp.Pretty())
-	newPrefs := b.setPrefsLockedOnEntry("EditPrefs", p1, unlock)
+	newPrefs := b.setPrefsLockedOnEntry(p1, unlock)
 
 	// Note: don't perform any actions for the new prefs here. Not
 	// every prefs change goes through EditPrefs. Put your actions
@@ -3249,17 +3249,6 @@ func (b *LocalBackend) checkProfileNameLocked(p *ipn.Prefs) error {
 	return nil
 }
 
-// SetPrefs saves new user preferences and propagates them throughout
-// the system. Implements Backend.
-func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
-	if newp == nil {
-		panic("SetPrefs got nil prefs")
-	}
-	unlock := b.lockAndGetUnlock()
-	defer unlock()
-	b.setPrefsLockedOnEntry("SetPrefs", newp, unlock)
-}
-
 // wantIngressLocked reports whether this node has ingress configured. This bool
 // is sent to the coordination server (in Hostinfo.WireIngress) as an
 // optimization hint to know primarily which nodes are NOT using ingress, to
@@ -3277,7 +3266,7 @@ func (b *LocalBackend) wantIngressLocked() bool {
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a readonly copy of the new prefs.
-func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs, unlock unlockOnce) ipn.PrefsView {
+func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce) ipn.PrefsView {
 	defer unlock()
 
 	netMap := b.netMap
@@ -3305,10 +3294,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs, unl
 	hostInfoChanged := !oldHi.Equal(newHi)
 	cc := b.cc
 
-	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-	if caller == "SetPrefs" {
-		b.logf("SetPrefs: %v", newp.Pretty())
-	}
 	b.updateFilterLocked(netMap, newp.View())
 
 	if oldp.ShouldSSHBeRunning() && !newp.ShouldSSHBeRunning() {
@@ -4470,11 +4455,6 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 	}
 }
 
-// RequestEngineStatus implements Backend.
-func (b *LocalBackend) RequestEngineStatus() {
-	b.e.RequestStatus()
-}
-
 // stateMachine updates the state machine state based on other things
 // that have happened. It is invoked from the various callbacks that
 // feed events into LocalBackend.
@@ -4559,11 +4539,12 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.logf("requestEngineStatusAndWait")
 
 	b.statusLock.Lock()
+	defer b.statusLock.Unlock()
+
 	go b.e.RequestStatus()
 	b.logf("requestEngineStatusAndWait: waiting...")
 	b.statusChanged.Wait() // temporarily releases lock while waiting
 	b.logf("requestEngineStatusAndWait: got status update.")
-	b.statusLock.Unlock()
 }
 
 // setControlClientLocked sets the control client to cc,
