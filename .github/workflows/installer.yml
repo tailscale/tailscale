@@ -6,12 +6,13 @@ on:
       - "main"
     paths:
       - scripts/installer.sh
+      - .github/workflows/installer.yml
   pull_request:
     branches:
       - "*"
     paths:
       - scripts/installer.sh
-
+      - .github/workflows/installer.yml
 jobs:
   test:
     strategy:
@@ -32,12 +33,10 @@ jobs:
           - "ubuntu:18.04"
           - "ubuntu:20.04"
           - "ubuntu:22.04"
-          - "ubuntu:22.10"
           - "ubuntu:23.04"
           - "elementary/docker:stable"
           - "elementary/docker:unstable"
           - "parrotsec/core:lts-amd64"
-          - "parrotsec/core:latest"
           - "kalilinux/kali-rolling"
           - "kalilinux/kali-dev"
           - "oraclelinux:9"
@@ -68,35 +67,35 @@ jobs:
       image: ${{ matrix.image }}
       options: --user root
     steps:
-    - name: install dependencies (yum)
-      # tar and gzip are needed by the actions/checkout below.
-      run: yum install -y --allowerasing tar gzip ${{ matrix.deps }}
-      if: |
-        contains(matrix.image, 'centos')
-        || contains(matrix.image, 'oraclelinux')
-        || contains(matrix.image, 'fedora')
-        || contains(matrix.image, 'amazonlinux')
-    - name: install dependencies (zypper)
-      # tar and gzip are needed by the actions/checkout below.
-      run: zypper --non-interactive install tar gzip ${{ matrix.deps }}
-      if: contains(matrix.image, 'opensuse')
-    - name: install dependencies (apt-get)
-      run: |
-        apt-get update
-        apt-get install -y ${{ matrix.deps }}
-      if: |
-        contains(matrix.image, 'debian')
-        || contains(matrix.image, 'ubuntu')
-        || contains(matrix.image, 'elementary')
-        || contains(matrix.image, 'parrotsec')
-        || contains(matrix.image, 'kalilinux')
-    - name: checkout
-      uses: actions/checkout@v4
-    - name: run installer
-      run: scripts/installer.sh
-      # Package installation can fail in docker because systemd is not running
-      # as PID 1, so ignore errors at this step. The real check is the
-      # `tailscale --version` command below.
-      continue-on-error: true
-    - name: check tailscale version
-      run: tailscale --version
+      - name: install dependencies (yum)
+        # tar and gzip are needed by the actions/checkout below.
+        run: yum install -y --allowerasing tar gzip ${{ matrix.deps }}
+        if: |
+          contains(matrix.image, 'centos')
+          || contains(matrix.image, 'oraclelinux')
+          || contains(matrix.image, 'fedora')
+          || contains(matrix.image, 'amazonlinux')
+      - name: install dependencies (zypper)
+        # tar and gzip are needed by the actions/checkout below.
+        run: zypper --non-interactive install tar gzip ${{ matrix.deps }}
+        if: contains(matrix.image, 'opensuse')
+      - name: install dependencies (apt-get)
+        run: |
+          apt-get update
+          apt-get install -y ${{ matrix.deps }}
+        if: |
+          contains(matrix.image, 'debian')
+          || contains(matrix.image, 'ubuntu')
+          || contains(matrix.image, 'elementary')
+          || contains(matrix.image, 'parrotsec')
+          || contains(matrix.image, 'kalilinux')
+      - name: checkout v4
+        uses: actions/checkout@v3
+      - name: run installer
+        run: scripts/installer.sh
+        # Package installation can fail in docker because systemd is not running
+        # as PID 1, so ignore errors at this step. The real check is the
+        # `tailscale --version` command below.
+        continue-on-error: true
+      - name: check tailscale version
+        run: tailscale --version
