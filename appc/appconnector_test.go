@@ -24,9 +24,9 @@ func TestUpdateDomains(t *testing.T) {
 		ctx := context.Background()
 		var a *AppConnector
 		if shouldStore {
-			a = NewAppConnector(t.Logf, nil, &RouteInfo{}, fakeStoreRoutes)
+			a = NewAppConnector(t.Logf, &appctest.RouteCollector{}, &RouteInfo{}, fakeStoreRoutes)
 		} else {
-			a = NewAppConnector(t.Logf, nil, nil, nil)
+			a = NewAppConnector(t.Logf, &appctest.RouteCollector{}, nil, nil)
 		}
 		a.UpdateDomains([]string{"example.com"})
 
@@ -353,4 +353,170 @@ func prefixCompare(a, b netip.Prefix) int {
 		return a.Bits() - b.Bits()
 	}
 	return a.Addr().Compare(b.Addr())
+}
+
+func prefixes(in ...string) []netip.Prefix {
+	toRet := make([]netip.Prefix, len(in))
+	for i, s := range in {
+		toRet[i] = netip.MustParsePrefix(s)
+	}
+	return toRet
+}
+
+func TestUpdateRouteRouteRemoval(t *testing.T) {
+	for _, shouldStore := range []bool{false, true} {
+		ctx := context.Background()
+		rc := &appctest.RouteCollector{}
+
+		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
+			if !slices.Equal(routes, rc.Routes()) {
+				t.Fatalf("%s: (shouldStore=%t) routes want %v, got %v", prefix, shouldStore, routes, rc.Routes())
+			}
+			if !slices.Equal(removedRoutes, rc.RemovedRoutes()) {
+				t.Fatalf("%s: (shouldStore=%t) removedRoutes want %v, got %v", prefix, shouldStore, removedRoutes, rc.RemovedRoutes())
+			}
+		}
+
+		var a *AppConnector
+		if shouldStore {
+			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+		} else {
+			a = NewAppConnector(t.Logf, rc, nil, nil)
+		}
+		// nothing has yet been advertised
+		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
+
+		a.UpdateDomainsAndRoutes([]string{}, prefixes("1.2.3.1/32", "1.2.3.2/32"))
+		a.Wait(ctx)
+		// the routes passed to UpdateDomainsAndRoutes have been advertised
+		assertRoutes("simple update", prefixes("1.2.3.1/32", "1.2.3.2/32"), []netip.Prefix{})
+
+		// one route the same, one different
+		a.UpdateDomainsAndRoutes([]string{}, prefixes("1.2.3.1/32", "1.2.3.3/32"))
+		a.Wait(ctx)
+		// old behavior: routes are not removed, resulting routes are both old and new
+		// (we have dupe 1.2.3.1 routes because the test RouteAdvertiser doesn't have the deduplication
+		// the real one does)
+		wantRoutes := prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.1/32", "1.2.3.3/32")
+		wantRemovedRoutes := []netip.Prefix{}
+		if shouldStore {
+			// new behavior: routes are removed, resulting routes are new only
+			wantRoutes = prefixes("1.2.3.1/32", "1.2.3.1/32", "1.2.3.3/32")
+			wantRemovedRoutes = prefixes("1.2.3.2/32")
+		}
+		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+	}
+}
+
+func TestUpdateDomainRouteRemoval(t *testing.T) {
+	for _, shouldStore := range []bool{false, true} {
+		ctx := context.Background()
+		rc := &appctest.RouteCollector{}
+
+		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
+			if !slices.Equal(routes, rc.Routes()) {
+				t.Fatalf("%s: (shouldStore=%t) routes want %v, got %v", prefix, shouldStore, routes, rc.Routes())
+			}
+			if !slices.Equal(removedRoutes, rc.RemovedRoutes()) {
+				t.Fatalf("%s: (shouldStore=%t) removedRoutes want %v, got %v", prefix, shouldStore, removedRoutes, rc.RemovedRoutes())
+			}
+		}
+
+		var a *AppConnector
+		if shouldStore {
+			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+		} else {
+			a = NewAppConnector(t.Logf, rc, nil, nil)
+		}
+		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
+
+		a.UpdateDomainsAndRoutes([]string{"a.example.com", "b.example.com"}, []netip.Prefix{})
+		a.Wait(ctx)
+		// adding domains doesn't immediately cause any routes to be advertised
+		assertRoutes("update domains", []netip.Prefix{}, []netip.Prefix{})
+
+		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.1"))
+		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.2"))
+		a.ObserveDNSResponse(dnsResponse("b.example.com.", "1.2.3.3"))
+		a.ObserveDNSResponse(dnsResponse("b.example.com.", "1.2.3.4"))
+		a.Wait(ctx)
+		// observing dns responses causes routes to be advertised
+		assertRoutes("observed dns", prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.3/32", "1.2.3.4/32"), []netip.Prefix{})
+
+		a.UpdateDomainsAndRoutes([]string{"a.example.com"}, []netip.Prefix{})
+		a.Wait(ctx)
+		// old behavior, routes are not removed
+		wantRoutes := prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.3/32", "1.2.3.4/32")
+		wantRemovedRoutes := []netip.Prefix{}
+		if shouldStore {
+			// new behavior, routes are removed for b.example.com
+			wantRoutes = prefixes("1.2.3.1/32", "1.2.3.2/32")
+			wantRemovedRoutes = prefixes("1.2.3.3/32", "1.2.3.4/32")
+		}
+		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+	}
+}
+
+func TestUpdateWildcardRouteRemoval(t *testing.T) {
+	for _, shouldStore := range []bool{false, true} {
+		ctx := context.Background()
+		rc := &appctest.RouteCollector{}
+
+		assertRoutes := func(prefix string, routes, removedRoutes []netip.Prefix) {
+			if !slices.Equal(routes, rc.Routes()) {
+				t.Fatalf("%s: (shouldStore=%t) routes want %v, got %v", prefix, shouldStore, routes, rc.Routes())
+			}
+			if !slices.Equal(removedRoutes, rc.RemovedRoutes()) {
+				t.Fatalf("%s: (shouldStore=%t) removedRoutes want %v, got %v", prefix, shouldStore, removedRoutes, rc.RemovedRoutes())
+			}
+		}
+
+		var a *AppConnector
+		if shouldStore {
+			a = NewAppConnector(t.Logf, rc, &RouteInfo{}, fakeStoreRoutes)
+		} else {
+			a = NewAppConnector(t.Logf, rc, nil, nil)
+		}
+		assertRoutes("appc init", []netip.Prefix{}, []netip.Prefix{})
+
+		a.UpdateDomainsAndRoutes([]string{"a.example.com", "*.b.example.com"}, []netip.Prefix{})
+		a.Wait(ctx)
+		// adding domains doesn't immediately cause any routes to be advertised
+		assertRoutes("update domains", []netip.Prefix{}, []netip.Prefix{})
+
+		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.1"))
+		a.ObserveDNSResponse(dnsResponse("a.example.com.", "1.2.3.2"))
+		a.ObserveDNSResponse(dnsResponse("1.b.example.com.", "1.2.3.3"))
+		a.ObserveDNSResponse(dnsResponse("2.b.example.com.", "1.2.3.4"))
+		a.Wait(ctx)
+		// observing dns responses causes routes to be advertised
+		assertRoutes("observed dns", prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.3/32", "1.2.3.4/32"), []netip.Prefix{})
+
+		a.UpdateDomainsAndRoutes([]string{"a.example.com"}, []netip.Prefix{})
+		a.Wait(ctx)
+		// old behavior, routes are not removed
+		wantRoutes := prefixes("1.2.3.1/32", "1.2.3.2/32", "1.2.3.3/32", "1.2.3.4/32")
+		wantRemovedRoutes := []netip.Prefix{}
+		if shouldStore {
+			// new behavior, routes are removed for *.b.example.com
+			wantRoutes = prefixes("1.2.3.1/32", "1.2.3.2/32")
+			wantRemovedRoutes = prefixes("1.2.3.3/32", "1.2.3.4/32")
+		}
+		assertRoutes("removal", wantRoutes, wantRemovedRoutes)
+	}
+}
+
+func TestRoutesWithout(t *testing.T) {
+	assert := func(msg string, got, want []netip.Prefix) {
+		if !slices.Equal(want, got) {
+			t.Errorf("%s: want %v, got %v", msg, want, got)
+		}
+	}
+
+	assert("empty routes", routesWithout([]netip.Prefix{}, []netip.Prefix{}), []netip.Prefix{})
+	assert("a empty", routesWithout([]netip.Prefix{}, prefixes("1.1.1.1/32", "1.1.1.2/32")), []netip.Prefix{})
+	assert("b empty", routesWithout(prefixes("1.1.1.1/32", "1.1.1.2/32"), []netip.Prefix{}), prefixes("1.1.1.1/32", "1.1.1.2/32"))
+	assert("no overlap", routesWithout(prefixes("1.1.1.1/32", "1.1.1.2/32"), prefixes("1.1.1.3/32", "1.1.1.4/32")), prefixes("1.1.1.1/32", "1.1.1.2/32"))
+	assert("a has fewer", routesWithout(prefixes("1.1.1.1/32", "1.1.1.2/32"), prefixes("1.1.1.1/32", "1.1.1.2/32", "1.1.1.3/32", "1.1.1.4/32")), []netip.Prefix{})
+	assert("a has more", routesWithout(prefixes("1.1.1.1/32", "1.1.1.2/32", "1.1.1.3/32", "1.1.1.4/32"), prefixes("1.1.1.1/32", "1.1.1.3/32")), prefixes("1.1.1.2/32", "1.1.1.4/32"))
 }
