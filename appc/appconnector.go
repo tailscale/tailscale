@@ -23,6 +23,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/slicesx"
 )
 
 // RouteAdvertiser is an interface that allows the AppConnector to advertise
@@ -166,10 +167,26 @@ func (e *AppConnector) updateDomains(domains []string) {
 		for _, wc := range e.wildcards {
 			if dnsname.HasSuffix(d, wc) {
 				e.domains[d] = addrs
+				delete(oldDomains, d)
 				break
 			}
 		}
 	}
+
+	// Everything left in oldDomains is a domain we're no longer tracking
+	// and if we are storing route info we can unadvertise the routes
+	if e.ShouldStoreRoutes() {
+		toRemove := []netip.Prefix{}
+		for _, addrs := range oldDomains {
+			for _, a := range addrs {
+				toRemove = append(toRemove, netip.PrefixFrom(a, a.BitLen()))
+			}
+		}
+		if err := e.routeAdvertiser.UnadvertiseRoute(toRemove...); err != nil {
+			e.logf("failed to unadvertise routes on domain removal: %v: %v: %v", xmaps.Keys(oldDomains), toRemove, err)
+		}
+	}
+
 	e.logf("handling domains: %v and wildcards: %v", xmaps.Keys(e.domains), e.wildcards)
 }
 
@@ -192,6 +209,14 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 	}
 
 	var toRemove []netip.Prefix
+
+	// If we're storing routes and know e.controlRoutes is a good
+	// representation of what should be in AdvertisedRoutes we can stop
+	// advertising routes that used to be in e.controlRoutes but are not
+	// in routes.
+	if e.ShouldStoreRoutes() {
+		toRemove = routesWithout(e.controlRoutes, routes)
+	}
 
 nextRoute:
 	for _, r := range routes {
@@ -446,4 +471,16 @@ func (e *AppConnector) addDomainAddrLocked(domain string, addr netip.Addr) {
 
 func compareAddr(l, r netip.Addr) int {
 	return l.Compare(r)
+}
+
+// routesWithout returns a without b where a and b
+// are unsorted slices of netip.Prefix
+func routesWithout(a, b []netip.Prefix) []netip.Prefix {
+	m := make(map[netip.Prefix]bool, len(b))
+	for _, p := range b {
+		m[p] = true
+	}
+	return slicesx.Filter(make([]netip.Prefix, 0, len(a)), a, func(p netip.Prefix) bool {
+		return !m[p]
+	})
 }
