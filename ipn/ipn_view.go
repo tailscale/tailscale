@@ -64,24 +64,24 @@ func (v *PrefsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v PrefsView) ControlURL() string                 { return v.ж.ControlURL }
-func (v PrefsView) RouteAll() bool                     { return v.ж.RouteAll }
-func (v PrefsView) AllowSingleHosts() bool             { return v.ж.AllowSingleHosts }
-func (v PrefsView) ExitNodeID() tailcfg.StableNodeID   { return v.ж.ExitNodeID }
-func (v PrefsView) ExitNodeIP() netip.Addr             { return v.ж.ExitNodeIP }
-func (v PrefsView) InternalExitNodePrior() string      { return v.ж.InternalExitNodePrior }
-func (v PrefsView) ExitNodeAllowLANAccess() bool       { return v.ж.ExitNodeAllowLANAccess }
-func (v PrefsView) CorpDNS() bool                      { return v.ж.CorpDNS }
-func (v PrefsView) RunSSH() bool                       { return v.ж.RunSSH }
-func (v PrefsView) RunWebClient() bool                 { return v.ж.RunWebClient }
-func (v PrefsView) WantRunning() bool                  { return v.ж.WantRunning }
-func (v PrefsView) LoggedOut() bool                    { return v.ж.LoggedOut }
-func (v PrefsView) ShieldsUp() bool                    { return v.ж.ShieldsUp }
-func (v PrefsView) AdvertiseTags() views.Slice[string] { return views.SliceOf(v.ж.AdvertiseTags) }
-func (v PrefsView) Hostname() string                   { return v.ж.Hostname }
-func (v PrefsView) NotepadURLs() bool                  { return v.ж.NotepadURLs }
-func (v PrefsView) ForceDaemon() bool                  { return v.ж.ForceDaemon }
-func (v PrefsView) Egg() bool                          { return v.ж.Egg }
+func (v PrefsView) ControlURL() string                          { return v.ж.ControlURL }
+func (v PrefsView) RouteAll() bool                              { return v.ж.RouteAll }
+func (v PrefsView) AllowSingleHosts() bool                      { return v.ж.AllowSingleHosts }
+func (v PrefsView) ExitNodeID() tailcfg.StableNodeID            { return v.ж.ExitNodeID }
+func (v PrefsView) ExitNodeIP() netip.Addr                      { return v.ж.ExitNodeIP }
+func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.InternalExitNodePrior }
+func (v PrefsView) ExitNodeAllowLANAccess() bool                { return v.ж.ExitNodeAllowLANAccess }
+func (v PrefsView) CorpDNS() bool                               { return v.ж.CorpDNS }
+func (v PrefsView) RunSSH() bool                                { return v.ж.RunSSH }
+func (v PrefsView) RunWebClient() bool                          { return v.ж.RunWebClient }
+func (v PrefsView) WantRunning() bool                           { return v.ж.WantRunning }
+func (v PrefsView) LoggedOut() bool                             { return v.ж.LoggedOut }
+func (v PrefsView) ShieldsUp() bool                             { return v.ж.ShieldsUp }
+func (v PrefsView) AdvertiseTags() views.Slice[string]          { return views.SliceOf(v.ж.AdvertiseTags) }
+func (v PrefsView) Hostname() string                            { return v.ж.Hostname }
+func (v PrefsView) NotepadURLs() bool                           { return v.ж.NotepadURLs }
+func (v PrefsView) ForceDaemon() bool                           { return v.ж.ForceDaemon }
+func (v PrefsView) Egg() bool                                   { return v.ж.Egg }
 func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
@@ -105,7 +105,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
-	InternalExitNodePrior  string
+	InternalExitNodePrior  tailcfg.StableNodeID
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	RunSSH                 bool

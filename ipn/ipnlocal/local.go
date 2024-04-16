@@ -3096,7 +3096,7 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 		mp.ExitNodeIDSet = true
 		mp.ExitNodeID = ""
 		mp.InternalExitNodePriorSet = true
-		mp.InternalExitNodePrior = string(p0.ExitNodeID())
+		mp.InternalExitNodePrior = p0.ExitNodeID()
 	}
 	return b.editPrefsLockedOnEntry(mp, unlock)
 }
@@ -3105,6 +3105,13 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	if mp.SetsInternal() {
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
 	}
+
+	// Zeroing the ExitNodeId via localAPI must also zero the prior exit node.
+	if mp.ExitNodeIDSet && mp.ExitNodeID == "" {
+		mp.InternalExitNodePrior = ""
+		mp.InternalExitNodePriorSet = true
+	}
+
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 	return b.editPrefsLockedOnEntry(mp, unlock)

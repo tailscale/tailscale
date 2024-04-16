@@ -458,6 +458,44 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 }
 
+func TestZeroExitNodeViaLocalAPI(t *testing.T) {
+	lb := newTestLocalBackend(t)
+
+	// Give it an initial exit node in use.
+	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		ExitNodeIDSet: true,
+		Prefs: ipn.Prefs{
+			ExitNodeID: "foo",
+		},
+	}); err != nil {
+		t.Fatalf("enabling first exit node: %v", err)
+	}
+
+	// SetUseExitNodeEnabled(false) "remembers" the prior exit node.
+	if _, err := lb.SetUseExitNodeEnabled(false); err != nil {
+		t.Fatal("expected failure")
+	}
+
+	// Zero the exit node
+	pv, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		ExitNodeIDSet: true,
+		Prefs: ipn.Prefs{
+			ExitNodeID: "",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("enabling first exit node: %v", err)
+	}
+
+	// We just set the internal exit node to the empty string, so InternalExitNodePrior should
+	// also be zero'd
+	if got, want := pv.InternalExitNodePrior(), tailcfg.StableNodeID(""); got != want {
+		t.Fatalf("unexpected InternalExitNodePrior %q, want: %q", got, want)
+	}
+
+}
+
 func TestSetUseExitNodeEnabled(t *testing.T) {
 	lb := newTestLocalBackend(t)
 
@@ -488,7 +526,7 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 		if g, w := prefs.ExitNodeID(), tailcfg.StableNodeID(""); g != w {
 			t.Fatalf("unexpected exit node ID %q; want %q", g, w)
 		}
-		if g, w := prefs.InternalExitNodePrior(), "foo"; g != w {
+		if g, w := prefs.InternalExitNodePrior(), tailcfg.StableNodeID("foo"); g != w {
 			t.Fatalf("unexpected exit node prior %q; want %q", g, w)
 		}
 	}
@@ -500,7 +538,7 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 		if g, w := prefs.ExitNodeID(), tailcfg.StableNodeID("foo"); g != w {
 			t.Fatalf("unexpected exit node ID %q; want %q", g, w)
 		}
-		if g, w := prefs.InternalExitNodePrior(), "foo"; g != w {
+		if g, w := prefs.InternalExitNodePrior(), tailcfg.StableNodeID("foo"); g != w {
 			t.Fatalf("unexpected exit node prior %q; want %q", g, w)
 		}
 	}

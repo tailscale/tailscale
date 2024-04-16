@@ -107,11 +107,11 @@ type Prefs struct {
 
 	// InternalExitNodePrior is the most recently used ExitNodeID in string form. It is set by
 	// the backend on transition from exit node on to off and used by the
-	// backend. It's not of type tailcfg.StableNodeID because in the future we plan
-	// to overload this field to mean things like "Anything in country $FOO" too.
+	// backend.
 	//
-	// As an Internal field, it can't be set by LocalAPI clients.
-	InternalExitNodePrior string
+	// As an Internal field, it can't be set by LocalAPI clients, rather it is set indirectly
+	// when the ExitNodeID value is zero'd and via the set-use-exit-node-enabled endpoint.
+	InternalExitNodePrior tailcfg.StableNodeID
 
 	// ExitNodeAllowLANAccess indicates whether locally accessible subnets should be
 	// routed directly or via the exit node.
