@@ -2839,15 +2839,48 @@ func (b *LocalBackend) tryLookupUserName(uid string) string {
 // StartLoginInteractive attempts to pick up the in-progress flow where it left
 // off.
 func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
-	b.mu.Lock()
-	if b.cc == nil {
-		panic("LocalBackend.assertClient: b.cc == nil")
+	var (
+		boundCtx                context.Context
+		cancelCtx               context.CancelFunc
+		cc                      controlclient.Client
+		url                     string
+		timeSinceAuthURLCreated time.Duration
+	)
+
+	// There locking in Start is pretty s--uboptimal. Integration tests were
+	// sometimes failing (#7036) due to a race where b.cc was nil here (but
+	// assumed to be non-nil and panicking) due to Start locking and unlocking
+	// b.mu several times and the controlclient being torned down and recreated
+	// several times. Or something. It's a mess. As more mess, add a loop here
+	// waiting for the controlclient.
+	// TODO(bradfitz): fix all the Start locking (#11649) and delete all this.
+	for {
+		b.mu.Lock()
+		if b.cc == nil {
+			b.mu.Unlock()
+			if boundCtx == nil {
+				boundCtx, cancelCtx = context.WithTimeout(ctx, 5*time.Second) // set upper bound
+				defer cancelCtx()
+			}
+			select {
+			case <-boundCtx.Done():
+				if ctx.Err() == nil {
+					return errors.New("timeout waiting for controlclient to become available")
+				}
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+				// Try again.
+			}
+			continue
+		}
+		b.interact = true
+		url = b.authURL
+		timeSinceAuthURLCreated = b.clock.Since(b.authURLTime)
+		cc = b.cc
+		b.mu.Unlock()
+		break
 	}
-	b.interact = true
-	url := b.authURL
-	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
-	cc := b.cc
-	b.mu.Unlock()
+
 	b.logf("StartLoginInteractive: url=%v", url != "")
 
 	// Only use an authURL if it was sent down from control in the last
