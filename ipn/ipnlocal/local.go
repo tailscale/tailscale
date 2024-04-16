@@ -4827,15 +4827,16 @@ func (rbw *responseBodyWrapper) Close() error {
 }
 
 func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	// Some WebDAV clients include origin and refer headers, which peerapi does
+	// not like. Remove them.
+	req.Header.Del("origin")
+	req.Header.Del("referer")
+
 	bw := &requestBodyWrapper{}
 	if req.Body != nil {
 		bw.ReadCloser = req.Body
 		req.Body = bw
 	}
-
-	// Strip origin and referer headers
-	req.Header.Del("origin")
-	req.Header.Del("referer")
 
 	defer func() {
 		contentType := "unknown"
