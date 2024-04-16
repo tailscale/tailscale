@@ -97,7 +97,7 @@ func TestAwsAppRunnerDefaultRouteInterface(t *testing.T) {
 
 func BenchmarkDefaultRouteInterface(b *testing.B) {
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := DefaultRouteInterface(); err != nil {
 			b.Fatal(err)
 		}

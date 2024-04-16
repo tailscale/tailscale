@@ -903,7 +903,7 @@ func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wg.Wait()
-	for i := 0; i < len(dialers); i++ {
+	for range len(dialers) {
 		res := <-results
 		fmt.Fprintf(w, "[%s] connected=%v err=%v\n", res.name, res.conn != nil, res.err)
 		if res.conn != nil {

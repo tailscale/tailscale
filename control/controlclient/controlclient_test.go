@@ -9,7 +9,7 @@ import (
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		if name := t.Field(i).Name; name != "_" {
 			fields = append(fields, name)
 		}

@@ -64,7 +64,7 @@ func TestProxyFromEnvironment_setNoProxyUntil(t *testing.T) {
 	os.Setenv("HTTPS_PROXY", fakeProxyEnv)
 
 	req := &http.Request{URL: must.Get(url.Parse("https://example.com/"))}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		switch i {
 		case 1:
 			setNoProxyUntil(time.Minute)

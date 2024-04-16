@@ -103,7 +103,7 @@ func likelyHomeRouterIPDarwinExec() (ret netip.Addr, netif string, ok bool) {
 
 func TestFetchRoutingTable(t *testing.T) {
 	// Issue 1345: this used to be flaky on darwin.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		_, err := fetchRoutingTable()
 		if err != nil {
 			t.Fatal(err)

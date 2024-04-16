@@ -436,7 +436,7 @@ func (up *Updater) updateDebLike() error {
 		return fmt.Errorf("apt-get update failed: %w; output:\n%s", err, out)
 	}
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		out, err := exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver).CombinedOutput()
 		if err != nil {
 			if !bytes.Contains(out, []byte(`dpkg was interrupted`)) {

@@ -7,8 +7,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.7
-
 package rate
 
 import (
@@ -138,7 +136,7 @@ func TestSimultaneousRequests(t *testing.T) {
 	}
 
 	wg.Add(numRequests)
-	for i := 0; i < numRequests; i++ {
+	for range numRequests {
 		go f()
 	}
 	wg.Wait()

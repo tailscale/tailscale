@@ -61,7 +61,7 @@ func labelString(k any) string {
 	var sb strings.Builder
 	sb.WriteString("{")
 
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		if i > 0 {
 			sb.WriteString(",")
 		}

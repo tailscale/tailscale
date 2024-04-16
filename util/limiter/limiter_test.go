@@ -177,7 +177,7 @@ func TestDumpHTML(t *testing.T) {
 
 func allowed(t *testing.T, l *Limiter[string], key string, count int, now time.Time) {
 	t.Helper()
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if !l.allow(key, now) {
 			toks, ok := l.tokensForTest(key)
 			t.Errorf("after %d times: allow(%q, %q) = false, want true (%d tokens available, in cache = %v)", i, key, now, toks, ok)
@@ -187,7 +187,7 @@ func allowed(t *testing.T, l *Limiter[string], key string, count int, now time.T
 
 func denied(t *testing.T, l *Limiter[string], key string, count int, now time.Time) {
 	t.Helper()
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if l.allow(key, now) {
 			toks, ok := l.tokensForTest(key)
 			t.Errorf("after %d times: allow(%q, %q) = true, want false (%d tokens available, in cache = %v)", i, key, now, toks, ok)

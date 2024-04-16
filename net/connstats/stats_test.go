@@ -169,7 +169,7 @@ func Benchmark(b *testing.B) {
 		p := testPacketV4(ipproto.UDP, [4]byte{192, 168, 0, 1}, [4]byte{192, 168, 0, 2}, 123, 456, 789)
 		b.ResetTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			s := NewStatistics(0, 0, nil)
 			for j := 0; j < 1e3; j++ {
 				s.UpdateTxVirtual(p)
@@ -180,7 +180,7 @@ func Benchmark(b *testing.B) {
 		p := testPacketV4(ipproto.UDP, [4]byte{}, [4]byte{}, 0, 0, 789)
 		b.ResetTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			s := NewStatistics(0, 0, nil)
 			for j := 0; j < 1e3; j++ {
 				binary.BigEndian.PutUint32(p[20:], uint32(j)) // unique port combination
@@ -192,7 +192,7 @@ func Benchmark(b *testing.B) {
 		p := testPacketV4(ipproto.UDP, [4]byte{192, 168, 0, 1}, [4]byte{192, 168, 0, 2}, 123, 456, 789)
 		b.ResetTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			s := NewStatistics(0, 0, nil)
 			var group sync.WaitGroup
 			for j := 0; j < runtime.NumCPU(); j++ {
@@ -214,7 +214,7 @@ func Benchmark(b *testing.B) {
 		}
 		b.ResetTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			s := NewStatistics(0, 0, nil)
 			var group sync.WaitGroup
 			for j := 0; j < runtime.NumCPU(); j++ {

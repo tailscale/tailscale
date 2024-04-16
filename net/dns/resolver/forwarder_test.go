@@ -199,7 +199,7 @@ func BenchmarkNameFromQuery(b *testing.B) {
 	}
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, err := nameFromQuery(msg)
 		if err != nil {
 			b.Fatal(err)
@@ -413,7 +413,7 @@ func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) 
 		Class: dns.ClassINET,
 	})
 	builder.StartAnswers()
-	for i := 0; i < 120; i++ {
+	for i := range 120 {
 		builder.AResource(dns.ResourceHeader{
 			Name:  name,
 			Class: dns.ClassINET,

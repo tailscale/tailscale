@@ -70,7 +70,7 @@ func (nt *notifyThrottler) drain(count int) []ipn.Notify {
 	nt.mu.Unlock()
 
 	nn := []ipn.Notify{}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		select {
 		case n := <-ch:
 			nn = append(nn, n)
@@ -1039,7 +1039,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	// we would end up in state ipn.Running.
 	// The same should thus be true if these callbacks occur concurrently.
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

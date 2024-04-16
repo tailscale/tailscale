@@ -247,7 +247,7 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 		// Next, repeatedly get the server key to see if the node is
 		// behind a load balancer (incorrectly).
 		serverPubKeys := make(map[key.NodePublic]bool)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			func() {
 				rc := derphttp.NewRegionClient(fakePrivKey, h.logf, h.netMon, func() *tailcfg.DERPRegion {
 					return &tailcfg.DERPRegion{

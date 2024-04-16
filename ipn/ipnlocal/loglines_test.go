@@ -39,7 +39,7 @@ func TestLocalLogLines(t *testing.T) {
 
 	logid := func(hex byte) logid.PublicID {
 		var ret logid.PublicID
-		for i := 0; i < len(ret); i++ {
+		for i := range len(ret) {
 			ret[i] = hex
 		}
 		return ret

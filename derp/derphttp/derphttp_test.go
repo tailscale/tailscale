@@ -25,7 +25,7 @@ func TestSendRecv(t *testing.T) {
 	const numClients = 3
 	var clientPrivateKeys []key.NodePrivate
 	var clientKeys []key.NodePublic
-	for i := 0; i < numClients; i++ {
+	for range numClients {
 		priv := key.NewNode()
 		clientPrivateKeys = append(clientPrivateKeys, priv)
 		clientKeys = append(clientKeys, priv.Public())
@@ -66,7 +66,7 @@ func TestSendRecv(t *testing.T) {
 		}
 		wg.Wait()
 	}()
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		key := clientPrivateKeys[i]
 		c, err := NewClient(key, serverURL, t.Logf)
 		if err != nil {
@@ -311,7 +311,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 
 	// Wait for the watcher to run, then break the connection and check if it
 	// reconnected and received peer updates.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		select {
 		case peers := <-watcherChan:
 			if peers != 1 {
@@ -384,7 +384,7 @@ func TestBreakWatcherConn(t *testing.T) {
 
 	// Wait for the watcher to run, then break the connection and check if it
 	// reconnected and received peer updates.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		select {
 		case peers := <-watcherChan:
 			if peers != 1 {

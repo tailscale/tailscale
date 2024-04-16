@@ -223,7 +223,7 @@ func (s *Server) awaitUserAuth(ctx context.Context, session *browserSession) err
 
 func (s *Server) newSessionID() (string, error) {
 	raw := make([]byte, 16)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if _, err := rand.Read(raw); err != nil {
 			return "", err
 		}

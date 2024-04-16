@@ -67,7 +67,7 @@ func (ss *Slice[T]) Add(vs ...T) {
 
 // AddSlice adds all elements in vs to the set.
 func (ss *Slice[T]) AddSlice(vs views.Slice[T]) {
-	for i := 0; i < vs.Len(); i++ {
+	for i := range vs.Len() {
 		ss.Add(vs.At(i))
 	}
 }

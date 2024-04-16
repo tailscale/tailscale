@@ -93,7 +93,7 @@ func BenchmarkSetPeers(b *testing.B) {
 	b.ReportAllocs()
 	x := wglog.NewLogger(logger.Discard)
 	peers := [][]wgcfg.Peer{genPeers(0), genPeers(15), genPeers(16), genPeers(15)}
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		for _, p := range peers {
 			x.SetPeers(p)
 		}

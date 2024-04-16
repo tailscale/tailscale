@@ -88,7 +88,7 @@ func main() {
 
 		go func() {
 			// wait for tailscale to start before trying to fetch cert names
-			for i := 0; i < 60; i++ {
+			for range 60 {
 				st, err := localClient.Status(context.Background())
 				if err != nil {
 					log.Printf("error retrieving tailscale status; retrying: %v", err)

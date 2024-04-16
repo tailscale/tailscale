@@ -115,7 +115,7 @@ func TestDNSOverTCP(t *testing.T) {
 	}
 
 	results := map[dnsname.FQDN]string{}
-	for i := 0; i < len(wantResults); i++ {
+	for range len(wantResults) {
 		var respLength uint16
 		if err := binary.Read(c, binary.BigEndian, &respLength); err != nil {
 			t.Fatalf("reading len: %v", err)

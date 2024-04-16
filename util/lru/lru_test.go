@@ -77,7 +77,7 @@ func TestStressEvictions(t *testing.T) {
 		MaxEntries: cacheSize,
 	}
 
-	for i := 0; i < numProbes; i++ {
+	for range numProbes {
 		v := vals[rand.Intn(len(vals))]
 		c.Set(v, true)
 		if l := c.Len(); l > cacheSize {
@@ -106,7 +106,7 @@ func TestStressBatchedEvictions(t *testing.T) {
 
 	c := Cache[uint64, bool]{}
 
-	for i := 0; i < numProbes; i++ {
+	for range numProbes {
 		v := vals[rand.Intn(len(vals))]
 		c.Set(v, true)
 		if c.Len() == cacheSizeMax {
@@ -127,7 +127,7 @@ func TestLRUStress(t *testing.T) {
 		maxSize   = 500
 		numProbes = 5_000
 	)
-	for i := 0; i < numProbes; i++ {
+	for range numProbes {
 		n := rand.Intn(maxSize * 2)
 		op := rand.Intn(4)
 		switch op {
@@ -230,7 +230,7 @@ func BenchmarkLRU(b *testing.B) {
 
 	c := Cache[int, bool]{MaxEntries: lruSize}
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		k := rand.Intn(maxval)
 		if !c.Get(k) {
 			c.Set(k, true)

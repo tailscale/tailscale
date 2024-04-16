@@ -18,7 +18,7 @@ import (
 
 func TestInversePrefix(t *testing.T) {
 	t.Parallel()
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		for len := 0; len < 9; len++ {
 			addr := i & (0xFF << (8 - len))
 			idx := prefixIndex(uint8(addr), len)
@@ -32,7 +32,7 @@ func TestInversePrefix(t *testing.T) {
 
 func TestHostIndex(t *testing.T) {
 	t.Parallel()
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		got := hostIndex(uint8(i))
 		want := prefixIndex(uint8(i), 8)
 		if got != want {
@@ -63,7 +63,7 @@ func TestStrideTableInsert(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		addr := uint8(i)
 		slowVal, slowOK := slow.get(addr)
 		fastVal, fastOK := fast.get(addr)
@@ -103,7 +103,7 @@ func TestStrideTableInsertShuffled(t *testing.T) {
 
 	// Order of insertion should not affect the final shape of the stride table.
 	routes2 := append([]slowEntry[int](nil), routes...) // dup so we can print both slices on fail
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		rand.Shuffle(len(routes2), func(i, j int) { routes2[i], routes2[j] = routes2[j], routes2[i] })
 		rt2 := strideTable[int]{}
 		for _, route := range routes2 {
@@ -152,7 +152,7 @@ func TestStrideTableDelete(t *testing.T) {
 		t.Fatalf("slowTable has %d entries after deletes, want 50", cnt)
 	}
 
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		addr := uint8(i)
 		slowVal, slowOK := slow.get(addr)
 		fastVal, fastOK := fast.get(addr)
@@ -188,7 +188,7 @@ func TestStrideTableDeleteShuffle(t *testing.T) {
 
 	// Order of deletion should not affect the final shape of the stride table.
 	toDelete2 := append([]slowEntry[int](nil), toDelete...) // dup so we can print both slices on fail
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		rand.Shuffle(len(toDelete2), func(i, j int) { toDelete2[i], toDelete2[j] = toDelete2[j], toDelete2[i] })
 		rt2 := strideTable[int]{}
 		for _, route := range routes {
@@ -262,7 +262,7 @@ func forStrideCountAndOrdering(b *testing.B, fn func(b *testing.B, routes []slow
 func BenchmarkStrideTableInsertion(b *testing.B) {
 	forStrideCountAndOrdering(b, func(b *testing.B, routes []slowEntry[int]) {
 		val := 0
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			var rt strideTable[int]
 			for _, route := range routes {
 				rt.insert(route.addr, route.len, val)
@@ -285,7 +285,7 @@ func BenchmarkStrideTableDeletion(b *testing.B) {
 		}
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			rt2 := rt
 			for _, route := range routes {
 				rt2.delete(route.addr, route.len)
@@ -311,7 +311,7 @@ func BenchmarkStrideTableGet(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		writeSink, _ = rt.get(uint8(i))
 	}
 	gets := float64(b.N)

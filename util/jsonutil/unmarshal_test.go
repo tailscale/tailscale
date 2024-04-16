@@ -49,7 +49,7 @@ func BenchmarkUnmarshal(b *testing.B) {
 	var m any
 	j := []byte("5")
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		Unmarshal(j, &m)
 	}
 }
@@ -58,7 +58,7 @@ func BenchmarkStdUnmarshal(b *testing.B) {
 	var m any
 	j := []byte("5")
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		json.Unmarshal(j, &m)
 	}
 }

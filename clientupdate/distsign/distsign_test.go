@@ -445,7 +445,7 @@ type testServer struct {
 
 func newTestServer(t *testing.T) *testServer {
 	var roots []rootKeyPair
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		roots = append(roots, newRootKeyPair(t))
 	}
 

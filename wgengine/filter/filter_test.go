@@ -313,7 +313,7 @@ func BenchmarkFilter(b *testing.B) {
 			acl := newFilter(b.Logf)
 			b.ReportAllocs()
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				q := &packet.Parsed{}
 				q.Decode(bench.packet)
 				// This branch seems to have no measurable impact on performance.

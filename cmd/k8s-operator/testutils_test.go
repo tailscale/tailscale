@@ -522,7 +522,7 @@ func expectEvents(t *testing.T, rec *record.FakeRecorder, wantsEvents []string) 
 	t.Helper()
 	// Events are not expected to arrive in order.
 	seenEvents := make([]string, 0)
-	for i := 0; i < len(wantsEvents); i++ {
+	for range len(wantsEvents) {
 		timer := time.NewTimer(time.Second * 5)
 		defer timer.Stop()
 		select {

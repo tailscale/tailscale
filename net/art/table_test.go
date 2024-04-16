@@ -594,7 +594,7 @@ func TestInsertCompare(t *testing.T) {
 
 	seenVals4 := map[int]bool{}
 	seenVals6 := map[int]bool{}
-	for i := 0; i < 10_000; i++ {
+	for range 10_000 {
 		a := randomAddr()
 		slowVal, slowOK := slow.get(a)
 		fastVal, fastOK := fast.Get(a)
@@ -644,12 +644,12 @@ func TestInsertShuffled(t *testing.T) {
 		}
 	}()
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		pfxs2 := append([]slowPrefixEntry[int](nil), pfxs...)
 		rand.Shuffle(len(pfxs2), func(i, j int) { pfxs2[i], pfxs2[j] = pfxs2[j], pfxs2[i] })
 
 		addrs := make([]netip.Addr, 0, 10_000)
-		for i := 0; i < 10_000; i++ {
+		for range 10_000 {
 			addrs = append(addrs, randomAddr())
 		}
 
@@ -723,7 +723,7 @@ func TestDeleteCompare(t *testing.T) {
 
 	seenVals4 := map[int]bool{}
 	seenVals6 := map[int]bool{}
-	for i := 0; i < numProbes; i++ {
+	for range numProbes {
 		a := randomAddr()
 		slowVal, slowOK := slow.get(a)
 		fastVal, fastOK := fast.Get(a)
@@ -789,7 +789,7 @@ func TestDeleteShuffled(t *testing.T) {
 		rt.Delete(pfx.pfx)
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		pfxs2 := append([]slowPrefixEntry[int](nil), pfxs...)
 		toDelete2 := append([]slowPrefixEntry[int](nil), toDelete...)
 		rand.Shuffle(len(toDelete2), func(i, j int) { toDelete2[i], toDelete2[j] = toDelete2[j], toDelete2[i] })
@@ -806,7 +806,7 @@ func TestDeleteShuffled(t *testing.T) {
 
 		// Diffing a deep tree of tables gives cmp.Diff a nervous breakdown, so
 		// test for equivalence statistically with random probes instead.
-		for i := 0; i < numProbes; i++ {
+		for range numProbes {
 			a := randomAddr()
 			val1, ok1 := rt.Get(a)
 			val2, ok2 := rt2.Get(a)
@@ -909,7 +909,7 @@ func BenchmarkTableInsertion(b *testing.B) {
 		var startMem, endMem runtime.MemStats
 		runtime.ReadMemStats(&startMem)
 		b.StartTimer()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			var rt Table[int]
 			for _, route := range routes {
 				rt.Insert(route.pfx, route.val)
@@ -944,7 +944,7 @@ func BenchmarkTableDelete(b *testing.B) {
 
 		var t runningTimer
 		allocs, bytes := getMemCost(func() {
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				var rt Table[int]
 				for _, route := range routes {
 					rt.Insert(route.pfx, route.val)
@@ -983,7 +983,7 @@ func BenchmarkTableGet(b *testing.B) {
 			// cost is 16 bytes - presumably due to some amortized costs in
 			// the memory allocator? Either way, empirically 100 iterations
 			// reliably reports the correct cost.
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				_ = genAddr()
 			}
 		})
@@ -991,7 +991,7 @@ func BenchmarkTableGet(b *testing.B) {
 		addrBytes /= 100
 		var t runningTimer
 		allocs, bytes := getMemCost(func() {
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				addr := genAddr()
 				t.Start()
 				writeSink, _ = rt.Get(addr)

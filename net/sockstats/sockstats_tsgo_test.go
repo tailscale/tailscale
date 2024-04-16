@@ -62,7 +62,7 @@ func TestRadioMonitor(t *testing.T) {
 			"400 iterations: 2 sec active, 1 min idle",
 			func(tt *testTime, rm *radioMonitor) {
 				// 400 iterations to ensure values loop back around rm.usage array
-				for i := 0; i < 400; i++ {
+				for range 400 {
 					rm.active()
 					tt.Add(1 * time.Second)
 					rm.active()

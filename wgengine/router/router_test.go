@@ -28,7 +28,7 @@ func TestConfigEqual(t *testing.T) {
 	}
 	configType := reflect.TypeFor[Config]()
 	configFields := []string{}
-	for i := 0; i < configType.NumField(); i++ {
+	for i := range configType.NumField() {
 		configFields = append(configFields, configType.Field(i).Name)
 	}
 	if !reflect.DeepEqual(configFields, testedFields) {

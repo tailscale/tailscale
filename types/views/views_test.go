@@ -24,7 +24,7 @@ type viewStruct struct {
 
 func BenchmarkSliceIteration(b *testing.B) {
 	var data []viewStruct
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		data = append(data, viewStruct{Int: i})
 	}
 	b.ResetTimer()
@@ -33,7 +33,7 @@ func BenchmarkSliceIteration(b *testing.B) {
 		dv := SliceOf(data)
 		for it := 0; it < b.N; it++ {
 			sum := 0
-			for i := 0; i < dv.Len(); i++ {
+			for i := range dv.Len() {
 				sum += dv.At(i).Int
 			}
 		}
@@ -181,7 +181,7 @@ func TestSliceMapKey(t *testing.T) {
 	}
 
 	wantDiff := []Slice[string]{nilSlice, empty, sub1, sub2, sub3, u3}
-	for i := 0; i < len(wantDiff); i++ {
+	for i := range len(wantDiff) {
 		for j := i + 1; j < len(wantDiff); j++ {
 			si, sj := wantDiff[i], wantDiff[j]
 			ki, kj := wantDiff[i].MapKey(), wantDiff[j].MapKey()

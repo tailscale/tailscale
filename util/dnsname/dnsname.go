@@ -40,7 +40,7 @@ func ToFQDN(s string) (FQDN, error) {
 	}
 
 	st := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] != '.' {
 			continue
 		}

@@ -23,7 +23,7 @@ func retry(t *testing.T, fn func() error) {
 	t.Helper()
 	const tries = 3
 	var err error
-	for i := 0; i < tries; i++ {
+	for i := range tries {
 		err = fn()
 		if err != nil {
 			t.Logf("%dth invocation failed, trying again: %v", i, err)

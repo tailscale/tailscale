@@ -70,7 +70,7 @@ func TestRateLimiter(t *testing.T) {
 	lgtest := logTester(want, t, &testsRun)
 	lg := RateLimitedFnWithClock(lgtest, 1*time.Minute, 2, 50, nowf)
 	var prefixed Logf
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		lg("boring string with constant formatting %s", "(constant)")
 		lg("templated format string no. %d", i)
 		if i == 4 {
@@ -121,7 +121,7 @@ func TestLogOnChange(t *testing.T) {
 	lgtest := logTester(want, t, &testsRun)
 	lg := LogOnChange(lgtest, 5*time.Second, timeNow)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		lg("%s", "1 2 3 4 5 6")
 	}
 	lg("1 2 3 4 5 7")

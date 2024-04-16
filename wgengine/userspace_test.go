@@ -164,7 +164,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 
 	// Keep making a wgengine until we find an unused port
 	var ue *userspaceEngine
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		attempt := uint16(defaultPort + i)
 		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs)
 		if err != nil {
@@ -335,7 +335,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		m := map[netip.Addr]bool{
 			la1: true,
 		}
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			x = m[la1]
 			x = m[lanot]
 		}
@@ -347,7 +347,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 			la1: true,
 			la2: true,
 		}
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			x = m[la1]
 			x = m[lanot]
 		}
@@ -358,7 +358,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		f := func(t netip.Addr) bool {
 			return t == la1
 		}
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			x = f(la1)
 			x = f(lanot)
 		}
@@ -369,7 +369,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		f := func(t netip.Addr) bool {
 			return t == la1 || t == la2
 		}
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			x = f(la1)
 			x = f(lanot)
 		}

@@ -265,7 +265,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		// new interface has come up. Poll periodically until it
 		// does.
 		const tries = 20
-		for i := 0; i < tries; i++ {
+		for i := range tries {
 			found, err := setPrivateNetwork(luid)
 			if err != nil {
 				networkCategoryWarning.Set(fmt.Errorf("set-network-category: %w", err))
@@ -398,7 +398,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	slices.SortFunc(routes, (*routeData).Compare)
 
 	deduplicatedRoutes := []*routeData{}
-	for i := 0; i < len(routes); i++ {
+	for i := range len(routes) {
 		// There's only one way to get to a given IP+Mask, so delete
 		// all matches after the first.
 		if i > 0 && routes[i].Destination == routes[i-1].Destination {

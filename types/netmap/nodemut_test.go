@@ -44,7 +44,7 @@ func TestMapResponseContainsNonPatchFields(t *testing.T) {
 	}
 
 	rt := reflect.TypeFor[tailcfg.MapResponse]()
-	for i := 0; i < rt.NumField(); i++ {
+	for i := range rt.NumField() {
 		f := rt.Field(i)
 
 		var want bool

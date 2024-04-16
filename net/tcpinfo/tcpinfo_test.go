@@ -45,7 +45,7 @@ func TestRTT(t *testing.T) {
 	// Write a bunch of data to the conn to force TCP session establishment
 	// and a few packets.
 	junkData := bytes.Repeat([]byte("hello world\n"), 1024*1024)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, err := conn.Write(junkData); err != nil {
 			t.Fatalf("error writing junk data [%d]: %v", i, err)
 		}

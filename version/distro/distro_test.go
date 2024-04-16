@@ -8,7 +8,7 @@ import "testing"
 func BenchmarkGet(b *testing.B) {
 	b.ReportAllocs()
 	var d Distro
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		d = Get()
 	}
 	_ = d

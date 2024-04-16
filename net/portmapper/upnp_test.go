@@ -597,7 +597,7 @@ func TestGetUPnPPortMapping(t *testing.T) {
 			firstResponse netip.AddrPort
 			prevPort      uint16
 		)
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			sawRequestWithLease.Store(false)
 			res, err := c.Probe(ctx)
 			if err != nil {

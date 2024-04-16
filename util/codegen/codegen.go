@@ -201,7 +201,7 @@ func AssertStructUnchanged(t *types.Struct, tname, ctx string, it *ImportTracker
 	w("// A compilation failure here means this code must be regenerated, with the command at the top of this file.")
 	w("var _%s%sNeedsRegeneration = %s(struct {", tname, ctx, tname)
 
-	for i := 0; i < t.NumFields(); i++ {
+	for i := range t.NumFields() {
 		st := t.Field(i)
 		fname := st.Name()
 		ft := t.Field(i).Type()
@@ -253,7 +253,7 @@ func ContainsPointers(typ types.Type) bool {
 	case *types.Slice:
 		return true
 	case *types.Struct:
-		for i := 0; i < ft.NumFields(); i++ {
+		for i := range ft.NumFields() {
 			if ContainsPointers(ft.Field(i).Type()) {
 				return true
 			}

@@ -153,7 +153,7 @@ func TestZeroInitClock(t *testing.T) {
 		t.Errorf("clock has step %v, want 0", step)
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if got := clock.Now(); !got.Equal(start) {
 			t.Errorf("step %v: clock.Now() = %v, want %v", i, got, start)
 		}

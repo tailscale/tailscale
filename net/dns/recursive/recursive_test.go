@@ -613,7 +613,7 @@ func TestRecursionLimit(t *testing.T) {
 	// Fill out a CNAME chain equal to our recursion limit; we won't get
 	// this far since each CNAME is more than 1 level "deep", but this
 	// ensures that we have more than the limit.
-	for i := 0; i < maxDepth+1; i++ {
+	for i := range maxDepth + 1 {
 		curr := fmt.Sprintf("%d-tailscale.com.", i)
 
 		tailscaleNameservers := &dns.Msg{

@@ -148,7 +148,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 	}
 
 	fmt.Printf("%d disablement secrets have been generated and are printed below. Take note of them now, they WILL NOT be shown again.\n", nlInitArgs.numDisablements)
-	for i := 0; i < nlInitArgs.numDisablements; i++ {
+	for range nlInitArgs.numDisablements {
 		var secret [32]byte
 		if _, err := rand.Read(secret[:]); err != nil {
 			return err

@@ -142,7 +142,7 @@ func computeSyncIntersection(storage Chonk, localOffer, remoteOffer SyncOffer) (
 
 	if hasRemoteHead {
 		curs := localOffer.Head
-		for i := 0; i < maxSyncHeadIntersectionIter; i++ {
+		for range maxSyncHeadIntersectionIter {
 			parent, err := storage.AUM(curs)
 			if err != nil {
 				if err != os.ErrNotExist {

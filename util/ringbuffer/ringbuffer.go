@@ -51,7 +51,7 @@ func (rb *RingBuffer[T]) GetAll() []T {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	out := make([]T, len(rb.buf))
-	for i := 0; i < len(rb.buf); i++ {
+	for i := range len(rb.buf) {
 		x := (rb.pos + i) % rb.max
 		out[i] = rb.buf[x]
 	}

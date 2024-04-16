@@ -94,7 +94,7 @@ func benchmark(b *testing.B, size int64, reset func(s []byte)) {
 	b.SetBytes(size)
 	s := make([]byte, size)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		s = s[:size]
 		reset(s)
 		uniq.ModifySlice(&s)

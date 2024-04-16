@@ -1016,7 +1016,7 @@ func TestPublicKeyFetching(t *testing.T) {
 		pubKeyHTTPClient: ts.Client(),
 		timeNow:          clock.Now,
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
 		if err != nil {
 			t.Fatal(err)

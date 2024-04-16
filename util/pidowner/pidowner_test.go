@@ -31,7 +31,7 @@ func TestOwnerOfPID(t *testing.T) {
 func TestNotFoundError(t *testing.T) {
 	// Try a bunch of times to stumble upon a pid that doesn't exist...
 	const tries = 50
-	for i := 0; i < tries; i++ {
+	for range tries {
 		_, err := OwnerOfPID(rand.Intn(1e9))
 		if err == ErrNotImplemented {
 			t.Skip(err)
