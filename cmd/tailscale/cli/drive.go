@@ -5,7 +5,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -56,9 +55,6 @@ var driveCmd = &ffcli.Command{
 			ShortHelp:  "[ALPHA] List current shares",
 			Exec:       runDriveList,
 		},
-	},
-	Exec: func(context.Context, []string) error {
-		return errors.New("drive subcommand required; run 'tailscale drive -h' for details")
 	},
 }
 

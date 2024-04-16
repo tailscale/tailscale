@@ -25,10 +25,6 @@ func exitNodeCmd() *ffcli.Command {
 		Name:       "exit-node",
 		ShortUsage: "tailscale exit-node [flags]",
 		ShortHelp:  "Show machines on your tailnet configured as exit nodes",
-		LongHelp:   "Show machines on your tailnet configured as exit nodes",
-		Exec: func(context.Context, []string) error {
-			return errors.New("exit-node subcommand required; run 'tailscale exit-node -h' for details")
-		},
 		Subcommands: append([]*ffcli.Command{
 			{
 				Name:       "list",

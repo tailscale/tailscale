@@ -40,7 +40,7 @@ func TestShortUsage(t *testing.T) {
 	}
 
 	walkCommands(newRootCmd(), func(w cmdWalk) bool {
-		c, parents := w.cmd, w.parents
+		c, parents := w.Command, w.parents
 
 		// Words that we expect to be in the usage.
 		words := make([]string, len(parents)+1)
