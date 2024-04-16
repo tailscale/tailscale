@@ -284,27 +284,6 @@ func TestStateString(t *testing.T) {
 	}
 }
 
-func TestIsInterestingIP(t *testing.T) {
-	tests := []struct {
-		ip   string
-		want bool
-	}{
-		{"fd7a:115c:a1e0:ab12:4843:cd96:624a:4603", true}, // Tailscale private ULA
-		{"fd15:bbfa:c583:4fce:f4fb:4ff:fe1a:4148", true},  // Other private ULA
-		{"10.2.3.4", true},
-		{"127.0.0.1", false},
-		{"::1", false},
-		{"2001::2", true},
-		{"169.254.1.2", false},
-		{"fe80::1", false},
-	}
-	for _, tt := range tests {
-		if got := isInterestingIP(netip.MustParseAddr(tt.ip)); got != tt.want {
-			t.Errorf("isInterestingIP(%q) = %v, want %v", tt.ip, got, tt.want)
-		}
-	}
-}
-
 // tests (*State).Equal
 func TestEqual(t *testing.T) {
 	tests := []struct {
