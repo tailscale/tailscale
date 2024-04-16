@@ -345,7 +345,6 @@ func TestConfigFileAuthKey(t *testing.T) {
 
 func TestTwoNodes(t *testing.T) {
 	tstest.Shard(t)
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
 	tstest.Parallel(t)
 	env := newTestEnv(t)
 
@@ -400,7 +399,6 @@ func TestTwoNodes(t *testing.T) {
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	tstest.Shard(t)
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
 	tstest.Parallel(t)
 	env := newTestEnv(t)
 
@@ -658,17 +656,14 @@ func TestNoControlConnWhenDown(t *testing.T) {
 	d2 := n1.StartDaemon()
 	n1.AwaitResponding()
 
-	st := n1.MustStatus()
-	if got, want := st.BackendState, "Stopped"; got != want {
-		t.Fatalf("after restart, state = %q; want %q", got, want)
-	}
+	n1.AwaitBackendState("Stopped")
 
 	ip2 := n1.AwaitIP4()
 	if ip1 != ip2 {
 		t.Errorf("IPs different: %q vs %q", ip1, ip2)
 	}
 
-	// The real test: verify our daemon doesn't have an HTTP request open.:
+	// The real test: verify our daemon doesn't have an HTTP request open.
 	if n := env.Control.InServeMap(); n != 0 {
 		t.Errorf("in serve map = %d; want 0", n)
 	}
@@ -1007,7 +1002,6 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7036")
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
 	control := &testcontrol.Server{
@@ -1389,6 +1383,10 @@ func (n *testNode) AwaitIP6() netip.Addr {
 
 // AwaitRunning waits for n to reach the IPN state "Running".
 func (n *testNode) AwaitRunning() {
+	n.AwaitBackendState("Running")
+}
+
+func (n *testNode) AwaitBackendState(state string) {
 	t := n.env.t
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {
@@ -1396,8 +1394,8 @@ func (n *testNode) AwaitRunning() {
 		if err != nil {
 			return err
 		}
-		if st.BackendState != "Running" {
-			return fmt.Errorf("in state %q", st.BackendState)
+		if st.BackendState != state {
+			return fmt.Errorf("in state %q; want %q", st.BackendState, state)
 		}
 		return nil
 	}); err != nil {
