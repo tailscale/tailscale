@@ -227,8 +227,8 @@ var debugCmd = &ffcli.Command{
 		},
 		{
 			Name: "via",
-			ShortUsage: "tailscale via <site-id> <v4-cidr>\n" +
-				"tailscale via <v6-route>",
+			ShortUsage: "tailscale debug via <site-id> <v4-cidr>\n" +
+				"tailscale debug via <v6-route>",
 			Exec:      runVia,
 			ShortHelp: "Convert between site-specific IPv4 CIDRs and IPv6 'via' routes",
 		},
