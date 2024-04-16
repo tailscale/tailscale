@@ -37,28 +37,24 @@ var driveCmd = &ffcli.Command{
 			ShortUsage: driveShareUsage,
 			Exec:       runDriveShare,
 			ShortHelp:  "[ALPHA] create or modify a share",
-			UsageFunc:  usageFunc,
 		},
 		{
 			Name:       "rename",
 			ShortUsage: driveRenameUsage,
 			ShortHelp:  "[ALPHA] rename a share",
 			Exec:       runDriveRename,
-			UsageFunc:  usageFunc,
 		},
 		{
 			Name:       "unshare",
 			ShortUsage: driveUnshareUsage,
 			ShortHelp:  "[ALPHA] remove a share",
 			Exec:       runDriveUnshare,
-			UsageFunc:  usageFunc,
 		},
 		{
 			Name:       "list",
 			ShortUsage: driveListUsage,
 			ShortHelp:  "[ALPHA] list current shares",
 			Exec:       runDriveList,
-			UsageFunc:  usageFunc,
 		},
 	},
 	Exec: func(context.Context, []string) error {
