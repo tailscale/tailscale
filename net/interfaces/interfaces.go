@@ -343,6 +343,13 @@ func (s *State) Equal(s2 *State) bool {
 		s.PAC != s2.PAC {
 		return false
 	}
+	// If s2 has more interfaces than s, it's not equal.
+	if len(s.Interface) != len(s2.Interface) || len(s.InterfaceIPs) != len(s2.InterfaceIPs) {
+		return false
+	}
+	// Now that we know that both states have the same number of
+	// interfaces, we can check each interface in s against s2. If it's not
+	// present or not exactly equal, then the states are not equal.
 	for iname, i := range s.Interface {
 		i2, ok := s2.Interface[iname]
 		if !ok {
