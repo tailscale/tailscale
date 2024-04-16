@@ -286,6 +286,13 @@ func TestStateString(t *testing.T) {
 
 // tests (*State).Equal
 func TestEqual(t *testing.T) {
+	pfxs := func(addrs ...string) (ret []netip.Prefix) {
+		for _, addr := range addrs {
+			ret = append(ret, netip.MustParsePrefix(addr))
+		}
+		return ret
+	}
+
 	tests := []struct {
 		name   string
 		s1, s2 *State
@@ -358,6 +365,29 @@ func TestEqual(t *testing.T) {
 			s2: &State{
 				Interface: map[string]Interface{
 					"foo": {AltAddrs: []net.Addr{&net.TCPAddr{IP: net.ParseIP("5.6.7.8")}}},
+				},
+			},
+			want: false,
+		},
+
+		// See tailscale/corp#19124
+		{
+			name: "interface-removed",
+			s1: &State{
+				InterfaceIPs: map[string][]netip.Prefix{
+					"rmnet16":    pfxs("2607:1111:2222:3333:4444:5555:6666:7777/64"),
+					"rmnet17":    pfxs("2607:9999:8888:7777:666:5555:4444:3333/64"),
+					"tun0":       pfxs("100.64.1.2/32", "fd7a:115c:a1e0::1/128"),
+					"v4-rmnet16": pfxs("192.0.0.4/32"),
+					"wlan0":      pfxs("10.0.0.111/24"), // removed below
+				},
+			},
+			s2: &State{
+				InterfaceIPs: map[string][]netip.Prefix{
+					"rmnet16":    pfxs("2607:1111:2222:3333:4444:5555:6666:7777/64"),
+					"rmnet17":    pfxs("2607:9999:8888:7777:666:5555:4444:3333/64"),
+					"tun0":       pfxs("100.64.1.2/32", "fd7a:115c:a1e0::1/128"),
+					"v4-rmnet16": pfxs("192.0.0.4/32"),
 				},
 			},
 			want: false,
