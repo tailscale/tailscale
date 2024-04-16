@@ -1623,7 +1623,6 @@ func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
 	return b.state == ipn.Running &&
 		b.hostinfo != nil &&
 		b.hostinfo.FrontendLogID == opts.FrontendLogID &&
-		opts.LegacyMigrationPrefs == nil &&
 		opts.UpdatePrefs == nil &&
 		opts.AuthKey == ""
 }
@@ -1639,25 +1638,12 @@ func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
 // actually a supported operation (it should be, but it's very unclear
 // from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts ipn.Options) error {
-	if opts.LegacyMigrationPrefs != nil {
-		b.logf("Start: %v", opts.LegacyMigrationPrefs.Pretty())
-	} else {
-		b.logf("Start")
-	}
+	b.logf("Start")
 
 	b.mu.Lock()
-	if opts.LegacyMigrationPrefs == nil && !b.pm.CurrentPrefs().Valid() {
-		b.mu.Unlock()
-		return errors.New("no prefs provided")
-	}
 
 	if opts.UpdatePrefs != nil {
 		if err := b.checkPrefsLocked(opts.UpdatePrefs); err != nil {
-			b.mu.Unlock()
-			return err
-		}
-	} else if opts.LegacyMigrationPrefs != nil {
-		if err := b.checkPrefsLocked(opts.LegacyMigrationPrefs); err != nil {
 			b.mu.Unlock()
 			return err
 		}
@@ -1720,11 +1706,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.hostinfo = hostinfo
 	b.state = ipn.NoState
 
-	if err := b.migrateStateLocked(opts.LegacyMigrationPrefs); err != nil {
-		b.mu.Unlock()
-		return fmt.Errorf("loading requested state: %v", err)
-	}
-
 	if opts.UpdatePrefs != nil {
 		oldPrefs := b.pm.CurrentPrefs()
 		newPrefs := opts.UpdatePrefs.Clone()
@@ -1737,6 +1718,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			b.logf("failed to save UpdatePrefs state: %v", err)
 		}
 		b.setAtomicValuesFromPrefsLocked(pv)
+	} else {
+		b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 	}
 
 	prefs := b.pm.CurrentPrefs()
@@ -1799,9 +1782,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	// TODO(apenwarr): The only way to change the ServerURL is to
-	// re-run b.Start(), because this is the only place we create a
-	// new controlclient. SetPrefs() allows you to overwrite ServerURL,
-	// but it won't take effect until the next Start().
+	// re-run b.Start, because this is the only place we create a
+	// new controlclient. EditPrefs allows you to overwrite ServerURL,
+	// but it won't take effect until the next Start.
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
 		GetMachinePrivateKey:       b.createGetMachinePrivateKeyFunc(),
 		Logf:                       logger.WithPrefix(b.logf, "control: "),
@@ -2678,30 +2661,6 @@ func (b *LocalBackend) clearMachineKeyLocked() error {
 	}
 	b.machinePrivKey = key.MachinePrivate{}
 	b.logf("machine key cleared")
-	return nil
-}
-
-// migrateStateLocked migrates state from the frontend to the backend.
-// It is a no-op if prefs is nil
-// b.mu must be held.
-func (b *LocalBackend) migrateStateLocked(prefs *ipn.Prefs) (err error) {
-	if prefs == nil && !b.pm.CurrentPrefs().Valid() {
-		return fmt.Errorf("no prefs provided and no current profile")
-	}
-	if prefs != nil {
-		// Backend owns the state, but frontend is trying to migrate
-		// state into the backend.
-		b.logf("importing frontend prefs into backend store; frontend prefs: %s", prefs.Pretty())
-		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
-			MagicDNSName: b.netMap.MagicDNSSuffix(),
-			DomainName:   b.netMap.DomainName(),
-		}); err != nil {
-			return fmt.Errorf("store.WriteState: %v", err)
-		}
-	}
-
-	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
-
 	return nil
 }
 
