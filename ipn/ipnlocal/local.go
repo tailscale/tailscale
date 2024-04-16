@@ -206,10 +206,6 @@ type LocalBackend struct {
 	// is never called.
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
-	// lastProfileID tracks the last profile we've seen from the ProfileManager.
-	// It's used to detect when the user has changed their profile.
-	lastProfileID ipn.ProfileID
-
 	filterAtomic                 atomic.Pointer[filter.Filter]
 	containsViaIPFuncAtomic      syncs.AtomicValue[func(netip.Addr) bool]
 	shouldInterceptTCPPortAtomic syncs.AtomicValue[func(uint16) bool]
@@ -1603,30 +1599,6 @@ func (b *LocalBackend) getNewControlClientFunc() clientGen {
 	return b.ccGen
 }
 
-// startIsNoopLocked reports whether a Start call on this LocalBackend
-// with the provided Start Options would be a useless no-op.
-//
-// TODO(apenwarr): we shouldn't need this. The state machine is now
-// nearly clean enough where it can accept a new connection while in
-// any state, not just Running, and on any platform.  We'd want to add
-// a few more tests to state_test.go to ensure this continues to work
-// as expected.
-//
-// b.mu must be held.
-func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
-	// Options has 5 fields; check all of them:
-	//   * FrontendLogID
-	//   * StateKey
-	//   * Prefs
-	//   * UpdatePrefs
-	//   * AuthKey
-	return b.state == ipn.Running &&
-		b.hostinfo != nil &&
-		b.hostinfo.FrontendLogID == opts.FrontendLogID &&
-		opts.UpdatePrefs == nil &&
-		opts.AuthKey == ""
-}
-
 // Start applies the configuration specified in opts, and starts the
 // state machine.
 //
@@ -1648,7 +1620,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			return err
 		}
 	}
-	profileID := b.pm.CurrentProfile().ID
 	if b.state != ipn.Running && b.conf != nil && b.conf.Parsed.AuthKey != nil && opts.AuthKey == "" {
 		v := *b.conf.Parsed.AuthKey
 		if filename, ok := strings.CutPrefix(v, "file:"); ok {
@@ -1659,26 +1630,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			v = strings.TrimSpace(string(b))
 		}
 		opts.AuthKey = v
-	}
-
-	// The iOS client sends a "Start" whenever its UI screen comes
-	// up, just because it wants a netmap. That should be fixed,
-	// but meanwhile we can make Start cheaper here for such a
-	// case and not restart the world (which takes a few seconds).
-	// Instead, just send a notify with the state that iOS needs.
-	if b.startIsNoopLocked(opts) && profileID == b.lastProfileID && profileID != "" {
-		b.logf("Start: already running; sending notify")
-		nm := b.netMap
-		state := b.state
-		p := b.pm.CurrentPrefs()
-		b.mu.Unlock()
-		b.send(ipn.Notify{
-			State:         &state,
-			NetMap:        nm,
-			Prefs:         &p,
-			LoginFinished: new(empty.Message),
-		})
-		return nil
 	}
 
 	hostinfo := hostinfo.New()
@@ -3286,7 +3237,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	}); err != nil {
 		b.logf("failed to save new controlclient state: %v", err)
 	}
-	b.lastProfileID = b.pm.CurrentProfile().ID
 
 	unlock.UnlockEarly()
 
@@ -4711,7 +4661,6 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
-		b.lastProfileID = b.pm.CurrentProfile().ID
 	}
 	b.pauseOrResumeControlClientLocked()
 

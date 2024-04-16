@@ -572,25 +572,6 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(store.sawWrite(), qt.IsTrue)
 	}
 
-	// Test the fast-path frontend reconnection.
-	// This one is very finicky, so we have to force State==Running
-	// or it won't use the fast path.
-	// TODO: actually get to State==Running, rather than cheating.
-	//  That'll require spinning up a fake DERP server and putting it in
-	//  the netmap.
-	t.Logf("\n\nFastpath Start()")
-	notifies.expect(1)
-	b.state = ipn.Running
-	c.Assert(b.Start(ipn.Options{}), qt.IsNil)
-	{
-		nn := notifies.drain(1)
-		cc.assertCalls()
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
-		c.Assert(nn[0].NetMap, qt.IsNotNil)
-		c.Assert(nn[0].Prefs, qt.IsNotNil)
-	}
-
 	// undo the state hack above.
 	b.state = ipn.Starting
 
