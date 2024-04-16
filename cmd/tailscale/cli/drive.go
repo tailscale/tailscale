@@ -69,7 +69,7 @@ var driveCmd = &ffcli.Command{
 // runDriveShare is the entry point for the "tailscale drive share" command.
 func runDriveShare(ctx context.Context, args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: tailscale %v", driveShareUsage)
+		return fmt.Errorf("usage: %s", driveShareUsage)
 	}
 
 	name, path := args[0], args[1]
@@ -87,7 +87,7 @@ func runDriveShare(ctx context.Context, args []string) error {
 // runDriveUnshare is the entry point for the "tailscale drive unshare" command.
 func runDriveUnshare(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: tailscale %v", driveUnshareUsage)
+		return fmt.Errorf("usage: %s", driveUnshareUsage)
 	}
 	name := args[0]
 
@@ -101,7 +101,7 @@ func runDriveUnshare(ctx context.Context, args []string) error {
 // runDriveRename is the entry point for the "tailscale drive rename" command.
 func runDriveRename(ctx context.Context, args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: tailscale %v", driveRenameUsage)
+		return fmt.Errorf("usage: %s", driveRenameUsage)
 	}
 	oldName := args[0]
 	newName := args[1]
@@ -116,7 +116,7 @@ func runDriveRename(ctx context.Context, args []string) error {
 // runDriveList is the entry point for the "tailscale drive list" command.
 func runDriveList(ctx context.Context, args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("usage: tailscale %v", driveListUsage)
+		return fmt.Errorf("usage: %s", driveListUsage)
 	}
 
 	shares, err := localClient.DriveShareList(ctx)
