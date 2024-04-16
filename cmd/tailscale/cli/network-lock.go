@@ -26,7 +26,7 @@ import (
 
 var netlockCmd = &ffcli.Command{
 	Name:       "lock",
-	ShortUsage: "tailscale lock <sub-command> <arguments>",
+	ShortUsage: "tailscale lock <subcommand> [arguments...]",
 	ShortHelp:  "Manage tailnet lock",
 	LongHelp:   "Manage tailnet lock",
 	Subcommands: []*ffcli.Command{
@@ -48,6 +48,9 @@ func runNetworkLockNoSubcommand(ctx context.Context, args []string) error {
 	// Detect & handle the deprecated command 'lock tskey-wrap'.
 	if len(args) >= 2 && args[0] == "tskey-wrap" {
 		return runTskeyWrapCmd(ctx, args[1:])
+	}
+	if len(args) > 0 {
+		return fmt.Errorf("tailscale lock: unknown subcommand: %s", args[0])
 	}
 
 	return runNetworkLockStatus(ctx, args)
@@ -195,6 +198,10 @@ var nlStatusCmd = &ffcli.Command{
 }
 
 func runNetworkLockStatus(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("tailscale lock status: unexpected argument")
+	}
+
 	st, err := localClient.NetworkLockStatus(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)

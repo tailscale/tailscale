@@ -346,7 +346,7 @@ func outName(dst string) string {
 
 func runDebug(ctx context.Context, args []string) error {
 	if len(args) > 0 {
-		return errors.New("unknown arguments")
+		return fmt.Errorf("tailscale debug: unknown subcommand: %s", args[0])
 	}
 	var usedFlag bool
 	if out := debugArgs.cpuFile; out != "" {
@@ -401,7 +401,7 @@ func runDebug(ctx context.Context, args []string) error {
 		// to subcommands.
 		return nil
 	}
-	return errors.New("see 'tailscale debug --help")
+	return errors.New("tailscale debug: subcommand or flag required")
 }
 
 func runLocalCreds(ctx context.Context, args []string) error {

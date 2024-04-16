@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"context"
 	"flag"
 	"runtime"
 	"strings"
@@ -26,9 +25,6 @@ services on the host to use Tailscale in more ways.
 		return fs
 	})(),
 	Subcommands: configureSubcommands(),
-	Exec: func(ctx context.Context, args []string) error {
-		return flag.ErrHelp
-	},
 }
 
 func configureSubcommands() (out []*ffcli.Command) {

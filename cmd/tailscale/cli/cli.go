@@ -99,15 +99,32 @@ func Run(args []string) (err error) {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+		if noexec := (ffcli.NoExecError{}); errors.As(err, &noexec) {
+			// When the user enters an unknown subcommand, ffcli tries to run
+			// the closest valid parent subcommand with everything else as args,
+			// returning NoExecError if it doesn't have an Exec function.
+			cmd := noexec.Command
+			args := cmd.FlagSet.Args()
+			if len(cmd.Subcommands) > 0 {
+				if len(args) > 0 {
+					return fmt.Errorf("%s: unknown subcommand: %s", fullCmd(rootCmd, cmd), args[0])
+				}
+				subs := make([]string, 0, len(cmd.Subcommands))
+				for _, sub := range cmd.Subcommands {
+					subs = append(subs, sub.Name)
+				}
+				return fmt.Errorf("%s: missing subcommand: %s", fullCmd(rootCmd, cmd), strings.Join(subs, ", "))
+			}
+		}
 		return err
 	}
 
 	if envknob.Bool("TS_DUMP_HELP") {
 		walkCommands(rootCmd, func(w cmdWalk) bool {
 			fmt.Println("===")
-			c := w.cmd
 			// UsageFuncs are typically called during Command.Run which ensures
 			// FlagSet is not nil.
+			c := w.Command
 			if c.FlagSet == nil {
 				c.FlagSet = flag.NewFlagSet(c.Name, flag.ContinueOnError)
 			}
@@ -182,7 +199,12 @@ change in the future.
 			driveCmd,
 		},
 		FlagSet: rootfs,
-		Exec:    func(context.Context, []string) error { return flag.ErrHelp },
+		Exec: func(ctx context.Context, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("tailscale: unknown subcommand: %s", args[0])
+			}
+			return flag.ErrHelp
+		},
 	}
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands,
@@ -195,8 +217,8 @@ change in the future.
 	}
 
 	walkCommands(rootCmd, func(w cmdWalk) bool {
-		if w.cmd.UsageFunc == nil {
-			w.cmd.UsageFunc = usageFunc
+		if w.UsageFunc == nil {
+			w.UsageFunc = usageFunc
 		}
 		return true
 	})
@@ -220,8 +242,22 @@ var rootArgs struct {
 }
 
 type cmdWalk struct {
-	cmd     *ffcli.Command
+	*ffcli.Command
 	parents []*ffcli.Command
+}
+
+func (w cmdWalk) Path() string {
+	if len(w.parents) == 0 {
+		return w.Name
+	}
+
+	var sb strings.Builder
+	for _, p := range w.parents {
+		sb.WriteString(p.Name)
+		sb.WriteString(" ")
+	}
+	sb.WriteString(w.Name)
+	return sb.String()
 }
 
 // walkCommands calls f for root and all of its nested subcommands until f
@@ -241,6 +277,21 @@ func walkCommands(root *ffcli.Command, f func(w cmdWalk) (more bool)) {
 		return true
 	}
 	walk(root, nil, f)
+}
+
+// fullCmd returns the full "tailscale ... cmd" invocation for a subcommand.
+func fullCmd(root, cmd *ffcli.Command) (full string) {
+	walkCommands(root, func(w cmdWalk) bool {
+		if w.Command == cmd {
+			full = w.Path()
+			return false
+		}
+		return true
+	})
+	if full == "" {
+		return cmd.Name
+	}
+	return full
 }
 
 // usageFuncNoDefaultValues is like usageFunc but doesn't print default values.

@@ -44,12 +44,6 @@ var fileCmd = &ffcli.Command{
 		fileCpCmd,
 		fileGetCmd,
 	},
-	Exec: func(context.Context, []string) error {
-		// TODO(bradfitz): is there a better ffcli way to
-		// annotate subcommand-required commands that don't
-		// have an exec body of their own?
-		return errors.New("file subcommand required; run 'tailscale file -h' for details")
-	},
 }
 
 type countingReader struct {
