@@ -55,13 +55,13 @@ func exitNodeCmd() *ffcli.Command {
 					{
 						Name:       "connect",
 						ShortUsage: "tailscale exit-node connect",
-						ShortHelp:  "connect to most recently used exit node",
+						ShortHelp:  "Connect to most recently used exit node",
 						Exec:       exitNodeSetUse(true),
 					},
 					{
 						Name:       "disconnect",
 						ShortUsage: "tailscale exit-node disconnect",
-						ShortHelp:  "disconnect from current exit node, if any",
+						ShortHelp:  "Disconnect from current exit node, if any",
 						Exec:       exitNodeSetUse(false),
 					},
 				}

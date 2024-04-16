@@ -103,8 +103,9 @@ func Run(args []string) (err error) {
 	}
 
 	if envknob.Bool("TS_DUMP_HELP") {
-		walkCommands(rootCmd, func(c *ffcli.Command) {
+		walkCommands(rootCmd, func(w cmdWalk) bool {
 			fmt.Println("===")
+			c := w.cmd
 			// UsageFuncs are typically called during Command.Run which ensures
 			// FlagSet is not nil.
 			if c.FlagSet == nil {
@@ -115,6 +116,7 @@ func Run(args []string) (err error) {
 			} else {
 				fmt.Println(ffcli.DefaultUsageFunc(c))
 			}
+			return true
 		})
 		return
 	}
@@ -192,10 +194,11 @@ change in the future.
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
 
-	walkCommands(rootCmd, func(c *ffcli.Command) {
-		if c.UsageFunc == nil {
-			c.UsageFunc = usageFunc
+	walkCommands(rootCmd, func(w cmdWalk) bool {
+		if w.cmd.UsageFunc == nil {
+			w.cmd.UsageFunc = usageFunc
 		}
+		return true
 	})
 	return rootCmd
 }
@@ -216,11 +219,28 @@ var rootArgs struct {
 	socket string
 }
 
-func walkCommands(cmd *ffcli.Command, f func(*ffcli.Command)) {
-	f(cmd)
-	for _, sub := range cmd.Subcommands {
-		walkCommands(sub, f)
+type cmdWalk struct {
+	cmd     *ffcli.Command
+	parents []*ffcli.Command
+}
+
+// walkCommands calls f for root and all of its nested subcommands until f
+// returns false or all have been visited.
+func walkCommands(root *ffcli.Command, f func(w cmdWalk) (more bool)) {
+	var walk func(cmd *ffcli.Command, parents []*ffcli.Command, f func(cmdWalk) bool) bool
+	walk = func(cmd *ffcli.Command, parents []*ffcli.Command, f func(cmdWalk) bool) bool {
+		if !f(cmdWalk{cmd, parents}) {
+			return false
+		}
+		parents = append(parents, cmd)
+		for _, sub := range cmd.Subcommands {
+			if !walk(sub, parents, f) {
+				return false
+			}
+		}
+		return true
 	}
+	walk(root, nil, f)
 }
 
 // usageFuncNoDefaultValues is like usageFunc but doesn't print default values.
