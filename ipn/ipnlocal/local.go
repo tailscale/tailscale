@@ -4833,6 +4833,10 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 		req.Body = bw
 	}
 
+	// Strip origin and referer headers
+	req.Header.Del("origin")
+	req.Header.Del("referer")
+
 	defer func() {
 		contentType := "unknown"
 		switch req.Method {
