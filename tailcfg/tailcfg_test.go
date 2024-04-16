@@ -23,7 +23,7 @@ import (
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		fields = append(fields, t.Field(i).Name)
 	}
 	return

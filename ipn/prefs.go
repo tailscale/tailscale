@@ -363,7 +363,7 @@ func applyPrefsEdits(src, dst reflect.Value, mask map[string]reflect.Value) {
 
 func maskFields(v reflect.Value) map[string]reflect.Value {
 	mask := make(map[string]reflect.Value)
-	for i := 0; i < v.NumField(); i++ {
+	for i := range v.NumField() {
 		f := v.Type().Field(i).Name
 		if !strings.HasSuffix(f, "Set") {
 			continue

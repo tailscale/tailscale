@@ -342,7 +342,7 @@ func userIDFromString(v string) string {
 }
 
 func isAllDigit(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if b := s[i]; b < '0' || b > '9' {
 			return false
 		}

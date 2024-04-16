@@ -521,7 +521,7 @@ func BenchmarkLogNot200(b *testing.B) {
 	h := StdHandler(rh, HandlerOptions{QuietLoggingIfSuccessful: true})
 	req := httptest.NewRequest("GET", "/", nil)
 	rw := new(httptest.ResponseRecorder)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		*rw = httptest.ResponseRecorder{}
 		h.ServeHTTP(rw, req)
 	}
@@ -536,7 +536,7 @@ func BenchmarkLog(b *testing.B) {
 	h := StdHandler(rh, HandlerOptions{})
 	req := httptest.NewRequest("GET", "/", nil)
 	rw := new(httptest.ResponseRecorder)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		*rw = httptest.ResponseRecorder{}
 		h.ServeHTTP(rw, req)
 	}

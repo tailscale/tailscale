@@ -158,7 +158,7 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	gotConfigured := false
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		s, err := l.StatusWithoutPeers(ctx)
 		if err != nil {
 			t.Fatal(err)

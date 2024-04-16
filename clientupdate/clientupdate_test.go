@@ -663,7 +663,7 @@ func genTarball(t *testing.T, path string, files map[string]string) {
 
 func TestWriteFileOverwrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test")
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		content := fmt.Sprintf("content %d", i)
 		if err := writeFile(strings.NewReader(content), path, 0600); err != nil {
 			t.Fatal(err)

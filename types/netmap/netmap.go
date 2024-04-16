@@ -137,7 +137,7 @@ func (nm *NetworkMap) PeerByTailscaleIP(ip netip.Addr) (peer tailcfg.NodeView, o
 	}
 	for _, n := range nm.Peers {
 		ad := n.Addresses()
-		for i := 0; i < ad.Len(); i++ {
+		for i := range ad.Len() {
 			a := ad.At(i)
 			if a.Addr() == ip {
 				return n, true

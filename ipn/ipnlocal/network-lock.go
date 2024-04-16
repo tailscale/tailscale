@@ -338,7 +338,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 		}
 		bootstrapStateID := fmt.Sprintf("%d:%d", genesis.State.StateID1, genesis.State.StateID2)
 
-		for i := 0; i < persist.DisallowedTKAStateIDs().Len(); i++ {
+		for i := range persist.DisallowedTKAStateIDs().Len() {
 			stateID := persist.DisallowedTKAStateIDs().At(i)
 			if stateID == bootstrapStateID {
 				return fmt.Errorf("TKA with stateID of %q is disallowed on this node", stateID)
@@ -439,7 +439,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	}
 
 	filtered := make([]*ipnstate.TKAFilteredPeer, len(b.tka.filtered))
-	for i := 0; i < len(filtered); i++ {
+	for i := range len(filtered) {
 		filtered[i] = b.tka.filtered[i].Clone()
 	}
 
@@ -765,7 +765,7 @@ func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpd
 
 	var out []ipnstate.NetworkLockUpdate
 	cursor := b.tka.authority.Head()
-	for i := 0; i < maxEntries; i++ {
+	for range maxEntries {
 		aum, err := b.tka.storage.AUM(cursor)
 		if err != nil {
 			if err == os.ErrNotExist {

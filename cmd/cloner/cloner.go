@@ -102,7 +102,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 	writef("}")
 	writef("dst := new(%s)", name)
 	writef("*dst = *src")
-	for i := 0; i < t.NumFields(); i++ {
+	for i := range t.NumFields() {
 		fname := t.Field(i).Name()
 		ft := t.Field(i).Type()
 		if !codegen.ContainsPointers(ft) || codegen.HasNoClone(t.Tag(i)) {

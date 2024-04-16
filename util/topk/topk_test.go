@@ -49,7 +49,7 @@ func TestTopK(t *testing.T) {
 		}, 4, 1000)
 
 		// Add the first 10 integers with counts equal to 2x their value
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			topk.AddN(i, uint64(i*2))
 		}
 
@@ -82,7 +82,7 @@ func BenchmarkCountMinSketch(b *testing.B) {
 	b.ReportAllocs()
 
 	var enc [8]byte
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		binary.LittleEndian.PutUint64(enc[:], uint64(i))
 		cms.Add(enc[:])
 	}
@@ -104,7 +104,7 @@ func BenchmarkTopK(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				topk.Add(i)
 			}
 			out = topk.AppendTop(out[:0]) // should not allocate

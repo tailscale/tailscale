@@ -155,7 +155,7 @@ func TestProberRun(t *testing.T) {
 	const startingProbes = 100
 	var probes []*Probe
 
-	for i := 0; i < startingProbes; i++ {
+	for i := range startingProbes {
 		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, FuncProbe(func(context.Context) error {
 			mu.Lock()
 			defer mu.Unlock()

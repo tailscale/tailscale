@@ -145,7 +145,7 @@ func PickParams(err, probability float64) (hashes, buckets int) {
 }
 
 func (cms *CountMinSketch) init(hashes, buckets int) {
-	for i := 0; i < hashes; i++ {
+	for range hashes {
 		cms.hashes = append(cms.hashes, maphash.MakeSeed())
 	}
 

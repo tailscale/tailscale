@@ -38,7 +38,7 @@ func TestInterleave(t *testing.T) {
 func BenchmarkInterleave(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		Interleave(
 			[]int{1, 2, 3},
 			[]int{9, 8, 7},
@@ -48,7 +48,7 @@ func BenchmarkInterleave(b *testing.B) {
 
 func TestShuffle(t *testing.T) {
 	var sl []int
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		sl = append(sl, i)
 	}
 

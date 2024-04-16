@@ -45,7 +45,7 @@ func TestWaitGroupChan(t *testing.T) {
 
 func TestClosedChan(t *testing.T) {
 	ch := ClosedChan()
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-ch:
 		default:

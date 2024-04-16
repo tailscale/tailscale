@@ -949,7 +949,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	}
 
 	b.netMap = &netmap.NetworkMap{}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		b.netMap.Peers = append(b.netMap.Peers, (&tailcfg.Node{ID: (tailcfg.NodeID(i) + 1)}).View())
 	}
 	b.updatePeersFromNetmapLocked(b.netMap)

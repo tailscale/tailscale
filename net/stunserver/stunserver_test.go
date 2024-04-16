@@ -76,7 +76,7 @@ func BenchmarkServerSTUN(b *testing.B) {
 
 	tx := stun.NewTxID()
 	req := stun.Request(tx)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := cc.WriteToUDP(req, addr); err != nil {
 			b.Fatal(err)
 		}

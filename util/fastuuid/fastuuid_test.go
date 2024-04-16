@@ -23,21 +23,21 @@ func TestNewUUID(t *testing.T) {
 
 func BenchmarkBasic(b *testing.B) {
 	b.Run("NewUUID", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			NewUUID()
 		}
 	})
 
 	b.Run("uuid.New-unpooled", func(b *testing.B) {
 		uuid.DisableRandPool()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			uuid.New()
 		}
 	})
 
 	b.Run("uuid.New-pooled", func(b *testing.B) {
 		uuid.EnableRandPool()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			uuid.New()
 		}
 	})

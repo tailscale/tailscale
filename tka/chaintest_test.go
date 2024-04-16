@@ -209,7 +209,7 @@ func (c *testChain) buildChain() {
 	// in O(n+1) where n is the number of AUMs.
 	c.AUMs = make(map[string]AUM, len(c.Nodes))
 	c.AUMHashes = make(map[string]AUMHash, len(c.Nodes))
-	for i := 0; i < len(c.Nodes)+1; i++ {
+	for range len(c.Nodes) + 1 {
 		if len(pending) == 0 {
 			return
 		}

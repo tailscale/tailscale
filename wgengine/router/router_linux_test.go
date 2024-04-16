@@ -909,7 +909,7 @@ func TestDelRouteIdempotent(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			if err := lt.r.delRoute(cidr); err != nil {
 				t.Errorf("delRoute(i=%d): %v", i, err)
 			}

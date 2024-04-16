@@ -93,7 +93,7 @@ func (b *LocalBackend) driveSetShareLocked(share *drive.Share) (views.SliceView[
 
 	addedShare := false
 	var shares []*drive.Share
-	for i := 0; i < existingShares.Len(); i++ {
+	for i := range existingShares.Len() {
 		existing := existingShares.At(i)
 		if existing.Name() != share.Name {
 			if !addedShare && existing.Name() > share.Name {
@@ -152,7 +152,7 @@ func (b *LocalBackend) driveRenameShareLocked(oldName, newName string) (views.Sl
 
 	found := false
 	var shares []*drive.Share
-	for i := 0; i < existingShares.Len(); i++ {
+	for i := range existingShares.Len() {
 		existing := existingShares.At(i)
 		if existing.Name() == newName {
 			return existingShares, os.ErrExist
@@ -213,7 +213,7 @@ func (b *LocalBackend) driveRemoveShareLocked(name string) (views.SliceView[*dri
 
 	found := false
 	var shares []*drive.Share
-	for i := 0; i < existingShares.Len(); i++ {
+	for i := range existingShares.Len() {
 		existing := existingShares.At(i)
 		if existing.Name() != name {
 			shares = append(shares, existing.AsStruct())
@@ -281,7 +281,7 @@ func driveShareViewsEqual(a *views.SliceView[*drive.Share, drive.ShareView], b v
 		return false
 	}
 
-	for i := 0; i < a.Len(); i++ {
+	for i := range a.Len() {
 		if !drive.ShareViewsEqual(a.At(i), b.At(i)) {
 			return false
 		}

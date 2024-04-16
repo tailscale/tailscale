@@ -75,7 +75,7 @@ func TestInjectInboundLeak(t *testing.T) {
 	pkt := &packet.Parsed{}
 	const N = 10_000
 	ms0 := getMemStats()
-	for i := 0; i < N; i++ {
+	for range N {
 		outcome := ns.injectInbound(pkt, tunWrap)
 		if outcome != filter.DropSilently {
 			t.Fatalf("got outcome %v; want DropSilently", outcome)

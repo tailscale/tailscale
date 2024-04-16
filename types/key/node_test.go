@@ -162,7 +162,7 @@ func TestChallenge(t *testing.T) {
 func TestShard(t *testing.T) {
 	const N = 1_000
 	var shardCount [256]int
-	for i := 0; i < N; i++ {
+	for range N {
 		shardCount[NewNode().Public().Shard()]++
 	}
 	e := float64(N) / 256 // expected

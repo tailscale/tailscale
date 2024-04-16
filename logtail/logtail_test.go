@@ -77,7 +77,7 @@ func NewLogtailTestHarness(t *testing.T) (*LogtailTestServer, *Logger) {
 func TestDrainPendingMessages(t *testing.T) {
 	ts, l := NewLogtailTestHarness(t)
 
-	for i := 0; i < logLines; i++ {
+	for range logLines {
 		l.Write([]byte("log line"))
 	}
 
@@ -540,7 +540,7 @@ func BenchmarkWriteText(b *testing.B) {
 	l.clock = tstime.StdClock{}
 	l.buffer = discardBuffer{}
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		must.Get(l.Write(testdataTextLog))
 	}
 }
@@ -550,7 +550,7 @@ func BenchmarkWriteJSON(b *testing.B) {
 	l.clock = tstime.StdClock{}
 	l.buffer = discardBuffer{}
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		must.Get(l.Write(testdataJSONLog))
 	}
 }

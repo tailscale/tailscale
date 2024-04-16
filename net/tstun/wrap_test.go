@@ -222,7 +222,7 @@ func TestReadAndInject(t *testing.T) {
 	var seen = make(map[string]bool)
 	sizes := make([]int, 1)
 	// We expect the same packets back, in no particular order.
-	for i := 0; i < len(written)+len(injected); i++ {
+	for i := range len(written) + len(injected) {
 		packet := buf[:]
 		buffs := [][]byte{packet}
 		numPackets, err := tun.Read(buffs, sizes, 0)
@@ -283,7 +283,7 @@ func TestWriteAndInject(t *testing.T) {
 
 	seen := make(map[string]bool)
 	// We expect the same packets back, in no particular order.
-	for i := 0; i < len(written)+len(injected); i++ {
+	for i := range len(written) + len(injected) {
 		packet := <-chtun.Inbound
 		got := string(packet)
 		t.Logf("read %d: got %s", i, got)
@@ -470,7 +470,7 @@ func BenchmarkWrite(b *testing.B) {
 	defer tun.Close()
 
 	packet := [][]byte{udp4("5.6.7.8", "1.2.3.4", 89, 89)}
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, err := ftun.Write(packet, 0)
 		if err != nil {
 			b.Errorf("err = %v; want nil", err)
@@ -902,7 +902,7 @@ func TestCaptureHook(t *testing.T) {
 			pkt:  []byte("InjectOutboundPacketBuffer"),
 		},
 	}
-	for i := 0; i < len(want); i++ {
+	for i := range len(want) {
 		want[i].now = now
 	}
 	if !reflect.DeepEqual(captured, want) {

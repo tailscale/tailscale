@@ -46,7 +46,7 @@ type hasher interface {
 }
 
 func hashSuite(h hasher) {
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		for j := 0; j < 10; j++ {
 			h.HashUint8(0x01)
 			h.HashUint8(0x23)
@@ -133,7 +133,7 @@ func Fuzz(f *testing.F) {
 		c := qt.New(t)
 
 		execute := func(h hasher, r *rand.Rand) {
-			for i := 0; i < r.Intn(256); i++ {
+			for range r.Intn(256) {
 				switch r.Intn(5) {
 				case 0:
 					n := uint8(r.Uint64())
@@ -186,7 +186,7 @@ func Benchmark(b *testing.B) {
 	b.Run("Hash", func(b *testing.B) {
 		b.ReportAllocs()
 		h := must.Get(New512(sha256.New()))
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			h.Reset()
 			hashSuite(h)
 			h.Sum(sum[:0])
@@ -195,7 +195,7 @@ func Benchmark(b *testing.B) {
 	b.Run("Naive", func(b *testing.B) {
 		b.ReportAllocs()
 		h := newNaive()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			h.Reset()
 			hashSuite(h)
 			h.Sum(sum[:0])

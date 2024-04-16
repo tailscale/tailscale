@@ -64,7 +64,7 @@ func TestNoReuse(t *testing.T) {
 		serverHandshakes = map[[48]byte]bool{}
 		packets          = map[[32]byte]bool{}
 	)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		var (
 			clientRaw, serverRaw = memnet.NewConn("noise", 128000)
 			clientBuf, serverBuf bytes.Buffer
@@ -162,7 +162,7 @@ func (r *tamperReader) Read(bs []byte) (int, error) {
 
 func TestTampering(t *testing.T) {
 	// Tamper with every byte of the client initiation message.
-	for i := 0; i < 101; i++ {
+	for i := range 101 {
 		var (
 			clientConn, serverRaw = memnet.NewConn("noise", 128000)
 			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, i, 0}}
@@ -190,7 +190,7 @@ func TestTampering(t *testing.T) {
 	}
 
 	// Tamper with every byte of the server response message.
-	for i := 0; i < 51; i++ {
+	for i := range 51 {
 		var (
 			clientRaw, serverConn = memnet.NewConn("noise", 128000)
 			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, i, 0}}
@@ -215,7 +215,7 @@ func TestTampering(t *testing.T) {
 	}
 
 	// Tamper with every byte of the first server>client transport message.
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		var (
 			clientRaw, serverConn = memnet.NewConn("noise", 128000)
 			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, 51 + i, 0}}
@@ -256,7 +256,7 @@ func TestTampering(t *testing.T) {
 	}
 
 	// Tamper with every byte of the first client>server transport message.
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		var (
 			clientConn, serverRaw = memnet.NewConn("noise", 128000)
 			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, 101 + i, 0}}

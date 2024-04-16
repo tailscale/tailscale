@@ -56,7 +56,7 @@ func TestSendRecv(t *testing.T) {
 	const numClients = 3
 	var clientPrivateKeys []key.NodePrivate
 	var clientKeys []key.NodePublic
-	for i := 0; i < numClients; i++ {
+	for range numClients {
 		priv := key.NewNode()
 		clientPrivateKeys = append(clientPrivateKeys, priv)
 		clientKeys = append(clientKeys, priv.Public())
@@ -73,7 +73,7 @@ func TestSendRecv(t *testing.T) {
 	var recvChs []chan []byte
 	errCh := make(chan error, 3)
 
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		t.Logf("Connecting client %d ...", i)
 		cout, err := net.Dial("tcp", ln.Addr().String())
 		if err != nil {
@@ -111,7 +111,7 @@ func TestSendRecv(t *testing.T) {
 	var peerGoneCountNotHere expvar.Int
 
 	t.Logf("Starting read loops")
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		go func(i int) {
 			for {
 				m, err := clients[i].Recv()
@@ -233,7 +233,7 @@ func TestSendRecv(t *testing.T) {
 	wantUnknownPeers(1)
 
 	// PeerGoneNotHere is rate-limited to 3 times a second
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := clients[1].Send(neKey, callMe); err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +389,7 @@ func TestSendFreeze(t *testing.T) {
 		// if any tokens remain in the channel, they
 		// must have been generated after drainAny was
 		// called.
-		for i := 0; i < cap(ch); i++ {
+		for range cap(ch) {
 			select {
 			case <-ch:
 			default:
@@ -456,7 +456,7 @@ func TestSendFreeze(t *testing.T) {
 	aliceConn.Close()
 	cathyConn.Close()
 
-	for i := 0; i < cap(errCh); i++ {
+	for range cap(errCh) {
 		err := <-errCh
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
@@ -891,7 +891,7 @@ func TestMultiForwarder(t *testing.T) {
 	// run long enough concurrently with {Add,Remove}PacketForwarder loop above.
 	numMsgs := 5000
 	var fwd PacketForwarder
-	for i := 0; i < numMsgs; i++ {
+	for i := range numMsgs {
 		s.mu.Lock()
 		fwd = s.clientsMesh[u]
 		s.mu.Unlock()
@@ -1288,7 +1288,7 @@ func TestServerDupClients(t *testing.T) {
 
 func TestLimiter(t *testing.T) {
 	rl := rate.NewLimiter(rate.Every(time.Minute), 100)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		r := rl.Reserve()
 		d := r.Delay()
 		t.Logf("i=%d, allow=%v, d=%v", i, r.OK(), d)
@@ -1352,7 +1352,7 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	b.SetBytes(int64(len(msg)))
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if err := client.Send(clientKey, msg); err != nil {
 			b.Fatal(err)
 		}
@@ -1363,7 +1363,7 @@ func BenchmarkWriteUint32(b *testing.B) {
 	w := bufio.NewWriter(io.Discard)
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		writeUint32(w, 0x0ba3a)
 	}
 }
@@ -1381,7 +1381,7 @@ func BenchmarkReadUint32(b *testing.B) {
 	var err error
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sinkU32, err = readUint32(r)
 		if err != nil {
 			b.Fatal(err)
@@ -1454,7 +1454,7 @@ func TestClientSendRateLimiting(t *testing.T) {
 
 	// Flood should all succeed.
 	cw.ResetStats()
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		if err := c.send(key.NodePublic{}, pkt); err != nil {
 			t.Fatal(err)
 		}
@@ -1473,7 +1473,7 @@ func TestClientSendRateLimiting(t *testing.T) {
 		TokenBucketBytesPerSecond: 1,
 		TokenBucketBytesBurst:     int(bytes1 * 2),
 	})
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		if err := c.send(key.NodePublic{}, pkt); err != nil {
 			t.Fatal(err)
 		}

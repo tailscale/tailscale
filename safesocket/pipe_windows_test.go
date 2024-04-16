@@ -99,7 +99,7 @@ func TestExpectedWindowsTypes(t *testing.T) {
 		errs <- nil
 	}()
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := <-errs; err != nil {
 			t.Fatal(err)
 		}

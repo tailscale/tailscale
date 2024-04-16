@@ -453,7 +453,7 @@ func TestPickDERPFallback(t *testing.T) {
 	}
 
 	// Test that it's consistent.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		b := c.pickDERPFallback()
 		if a != b {
 			t.Fatalf("got inconsistent %d vs %d values", a, b)
@@ -463,7 +463,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// Test that that the pointer value of c is blended in and
 	// distribution over nodes works.
 	got := map[int]int{}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		c = newConn()
 		c.derpMap = dm
 		got[c.pickDERPFallback()]++
@@ -1408,7 +1408,7 @@ func TestReceiveFromAllocs(t *testing.T) {
 
 func BenchmarkReceiveFrom(b *testing.B) {
 	roundTrip := setUpReceiveFrom(b)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		roundTrip()
 	}
 }
@@ -1435,7 +1435,7 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 	}
 
 	buf := make([]byte, 2<<10)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			b.Fatalf("WriteTo: %v", err)
 		}
@@ -1484,7 +1484,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		conn.SetNetworkMap(&netmap.NetworkMap{
 			Peers: nodeViews([]*tailcfg.Node{
 				{
@@ -1567,13 +1567,13 @@ func TestRebindStress(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 2000; i++ {
+		for range 2000 {
 			conn.Rebind()
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 2000; i++ {
+		for range 2000 {
 			conn.Rebind()
 		}
 	}()
@@ -1827,7 +1827,7 @@ func TestStressSetNetworkMap(t *testing.T) {
 	prng := rand.New(rand.NewSource(int64(seed)))
 
 	const iters = 1000 // approx 0.5s on an m1 mac
-	for i := 0; i < iters; i++ {
+	for range iters {
 		for j := 0; j < npeers; j++ {
 			// Randomize which peers are present.
 			if prng.Int()&1 == 0 {
@@ -2215,7 +2215,7 @@ func Test_batchingUDPConn_coalesceMessages(t *testing.T) {
 			if got != len(tt.wantLens) {
 				t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
 			}
-			for i := 0; i < got; i++ {
+			for i := range got {
 				if msgs[i].Addr != addr {
 					t.Errorf("msgs[%d].Addr != passed addr", i)
 				}

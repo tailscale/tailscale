@@ -202,7 +202,7 @@ func TestDeepHash(t *testing.T) {
 	v := getVal()
 	hash1 := Hash(v)
 	t.Logf("hash: %v", hash1)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		v := getVal()
 		hash2 := Hash(v)
 		if hash1 != hash2 {
@@ -760,7 +760,7 @@ var sink Sum
 func BenchmarkHash(b *testing.B) {
 	b.ReportAllocs()
 	v := getVal()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink = Hash(v)
 	}
 }
@@ -809,14 +809,14 @@ var filterRules = []tailcfg.FilterRule{
 func BenchmarkHashPacketFilter(b *testing.B) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink = Hash(&filterRules)
 	}
 }
 
 func TestHashMapAcyclic(t *testing.T) {
 	m := map[int]string{}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		m[i] = fmt.Sprint(i)
 	}
 	got := map[string]bool{}
@@ -824,7 +824,7 @@ func TestHashMapAcyclic(t *testing.T) {
 	hb := &hashBuffer{Hash: sha256.New()}
 
 	hash := lookupTypeHasher(reflect.TypeFor[map[int]string]())
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		va := reflect.ValueOf(&m).Elem()
 		hb.Reset()
 		h := new(hasher)
@@ -862,7 +862,7 @@ func TestPrintArray(t *testing.T) {
 func BenchmarkHashMapAcyclic(b *testing.B) {
 	b.ReportAllocs()
 	m := map[int]string{}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		m[i] = fmt.Sprint(i)
 	}
 
@@ -873,7 +873,7 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 	h := new(hasher)
 	h.Block512.Hash = hb
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		h.Reset()
 		hash(h, pointerOf(va.Addr()))
 	}
@@ -883,14 +883,14 @@ func BenchmarkTailcfgNode(b *testing.B) {
 	b.ReportAllocs()
 
 	node := new(tailcfg.Node)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink = Hash(node)
 	}
 }
 
 func TestExhaustive(t *testing.T) {
 	seen := make(map[Sum]bool)
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		s := Hash(&i)
 		if seen[s] {
 			t.Fatalf("hash collision %v", i)
@@ -971,7 +971,7 @@ func BenchmarkHashArray(b *testing.B) {
 	}
 	x := &T{X: [32]byte{1: 1, 2: 2, 3: 3, 4: 4}}
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink = Hash(x)
 	}
 }
@@ -1134,7 +1134,7 @@ func BenchmarkAppendTo(b *testing.B) {
 
 	hashBuf := make([]byte, 0, 100)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		hashBuf = h.AppendTo(hashBuf[:0])
 	}
 }

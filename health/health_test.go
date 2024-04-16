@@ -15,7 +15,7 @@ import (
 func TestAppendWarnableDebugFlags(t *testing.T) {
 	resetWarnables()
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		w := NewWarnable(WithMapDebugFlag(fmt.Sprint(i)))
 		if i%2 == 0 {
 			w.Set(errors.New("boom"))
@@ -25,7 +25,7 @@ func TestAppendWarnableDebugFlags(t *testing.T) {
 	want := []string{"z", "y", "0", "2", "4", "6", "8"}
 
 	var got []string
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		got = append(got[:0], "z", "y")
 		got = AppendWarnableDebugFlags(got)
 		if !reflect.DeepEqual(got, want) {

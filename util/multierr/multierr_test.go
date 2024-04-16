@@ -111,7 +111,7 @@ var sink error
 
 func BenchmarkEmpty(b *testing.B) {
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink = multierr.New(nil, nil, nil, multierr.Error{})
 	}
 }
@@ -119,7 +119,7 @@ func BenchmarkEmpty(b *testing.B) {
 func BenchmarkNonEmpty(b *testing.B) {
 	merr := multierr.New(io.ErrShortBuffer, io.ErrNoProgress)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		sink = multierr.New(io.ErrUnexpectedEOF, merr, io.ErrClosedPipe)
 	}
 }

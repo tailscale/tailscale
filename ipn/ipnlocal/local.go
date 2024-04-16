@@ -446,7 +446,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		currentShares := b.pm.prefs.DriveShares()
 		if currentShares.Len() > 0 {
 			var shares []*drive.Share
-			for i := 0; i < currentShares.Len(); i++ {
+			for i := range currentShares.Len() {
 				shares = append(shares, currentShares.At(i).AsStruct())
 			}
 			fs.SetShares(shares)
@@ -1855,7 +1855,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	}
 	if prefs.Valid() {
 		ar := prefs.AdvertiseRoutes()
-		for i := 0; i < ar.Len(); i++ {
+		for i := range ar.Len() {
 			r := ar.At(i)
 			if r.Bits() == 0 {
 				// When offering a default route to the world, we
@@ -5418,7 +5418,7 @@ func (b *LocalBackend) OfferingExitNode() bool {
 	}
 	var def4, def6 bool
 	ar := b.pm.CurrentPrefs().AdvertiseRoutes()
-	for i := 0; i < ar.Len(); i++ {
+	for i := range ar.Len() {
 		r := ar.At(i)
 		if r.Bits() != 0 {
 			continue

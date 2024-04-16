@@ -109,7 +109,7 @@ func fileHasContents(name string, want string) check {
 
 func hexAll(v string) string {
 	var sb strings.Builder
-	for i := 0; i < len(v); i++ {
+	for i := range len(v) {
 		fmt.Fprintf(&sb, "%%%02x", v[i])
 	}
 	return sb.String()
@@ -604,7 +604,7 @@ func TestFileDeleteRace(t *testing.T) {
 		ps: ps,
 	}
 	buf := make([]byte, 2<<20)
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		rr := httptest.NewRecorder()
 		ph.ServeHTTP(rr, httptest.NewRequest("PUT", "http://100.100.100.101:123/v0/put/foo.txt", bytes.NewReader(buf[:rand.Intn(len(buf))])))
 		if res := rr.Result(); res.StatusCode != 200 {

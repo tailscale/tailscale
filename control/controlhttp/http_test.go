@@ -729,7 +729,7 @@ func (d *closeTrackDialer) Done() {
 	// Sleep/wait a few times on the assumption that things will close
 	// "eventually".
 	const iters = 100
-	for i := 0; i < iters; i++ {
+	for i := range iters {
 		d.mu.Lock()
 		if len(d.conns) == 0 {
 			d.mu.Unlock()

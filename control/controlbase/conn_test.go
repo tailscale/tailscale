@@ -91,7 +91,7 @@ func TestFastPath(t *testing.T) {
 
 	const packets = 10
 	s := "test"
-	for i := 0; i < packets; i++ {
+	for range packets {
 		// Many separate writes, to force separate Noise frames that
 		// all get buffered up and then all sent as a single slice to
 		// the server.
@@ -251,7 +251,7 @@ func TestConnMemoryOverhead(t *testing.T) {
 	}
 	defer closeAll()
 
-	for i := 0; i < num; i++ {
+	for range num {
 		client, server := pair(t)
 		closers = append(closers, client, server)
 		go func() {

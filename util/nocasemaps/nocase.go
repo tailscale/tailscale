@@ -91,7 +91,7 @@ func AppendSliceElem[K ~string, S []E, E any](m map[K]S, k K, vs ...E) {
 }
 
 func isLowerASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if c := s[i]; c >= utf8.RuneSelf || ('A' <= c && c <= 'Z') {
 			return false
 		}

@@ -387,7 +387,7 @@ func isProxyTarget(source string) bool {
 // allNumeric reports whether s only comprises of digits
 // and has at least one digit.
 func allNumeric(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] < '0' || s[i] > '9' {
 			return false
 		}

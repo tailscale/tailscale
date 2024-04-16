@@ -12,7 +12,7 @@ func TestRingBuffer(t *testing.T) {
 	const numItems = 10
 	rb := New[int](numItems)
 
-	for i := 0; i < numItems-1; i++ {
+	for i := range numItems - 1 {
 		rb.Add(i)
 	}
 

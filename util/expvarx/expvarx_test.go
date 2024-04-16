@@ -113,7 +113,7 @@ func TestSafeFuncSlowOnSlow(t *testing.T) {
 		slowValue.Store(v)
 	})
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if got := f.Value(); got != nil {
 			t.Fatalf("got value=%v; want nil", got)
 		}

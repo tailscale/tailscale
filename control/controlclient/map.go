@@ -563,7 +563,7 @@ var nodeFields = sync.OnceValue(getNodeFields)
 func getNodeFields() []string {
 	rt := reflect.TypeFor[tailcfg.Node]()
 	ret := make([]string, rt.NumField())
-	for i := 0; i < rt.NumField(); i++ {
+	for i := range rt.NumField() {
 		ret[i] = rt.Field(i).Name
 	}
 	return ret

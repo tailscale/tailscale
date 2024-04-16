@@ -213,7 +213,7 @@ func fastForwardWithAdvancer(
 
 	curs := nextAUM
 	state := startState
-	for i := 0; i < maxIter; i++ {
+	for range maxIter {
 		if done != nil && done(curs, state) {
 			return curs, state, nil
 		}

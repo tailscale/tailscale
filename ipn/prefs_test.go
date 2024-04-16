@@ -26,7 +26,7 @@ import (
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		fields = append(fields, t.Field(i).Name)
 	}
 	return
@@ -661,7 +661,7 @@ func TestMaskedPrefsFields(t *testing.T) {
 	// ApplyEdits assumes.
 	pt := reflect.TypeFor[Prefs]()
 	mt := reflect.TypeFor[MaskedPrefs]()
-	for i := 0; i < mt.NumField(); i++ {
+	for i := range mt.NumField() {
 		name := mt.Field(i).Name
 		if i == 0 {
 			if name != "Prefs" {

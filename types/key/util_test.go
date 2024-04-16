@@ -22,7 +22,7 @@ func TestRand(t *testing.T) {
 }
 
 func TestClamp25519Private(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		var k [32]byte
 		rand(k[:])
 		clamp25519Private(k[:])

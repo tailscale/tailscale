@@ -33,7 +33,7 @@ func ResourceCheck(tb testing.TB) {
 			return
 		}
 		// Goroutines might be still exiting.
-		for i := 0; i < 300; i++ {
+		for range 300 {
 			if runtime.NumGoroutine() <= startN {
 				return
 			}

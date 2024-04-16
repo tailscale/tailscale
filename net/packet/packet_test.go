@@ -512,7 +512,7 @@ func BenchmarkDecode(b *testing.B) {
 	for _, bench := range benches {
 		b.Run(bench.name, func(b *testing.B) {
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				var p Parsed
 				p.Decode(bench.buf)
 			}
@@ -624,7 +624,7 @@ func BenchmarkString(b *testing.B) {
 			var p Parsed
 			p.Decode(bench.buf)
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				sinkString = p.String()
 			}
 		})

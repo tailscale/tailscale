@@ -1019,7 +1019,7 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 					Name: "foo.bar.ts.net.",
 				},
 			}
-			for i := 0; i < size; i++ {
+			for i := range size {
 				res.Peers = append(res.Peers, &tailcfg.Node{
 					ID:         tailcfg.NodeID(i + 2),
 					Name:       fmt.Sprintf("peer%d.bar.ts.net.", i),
@@ -1046,7 +1046,7 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 
 			// Now for the core of the benchmark loop, just toggle
 			// a single node's online status.
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				if err := ms.HandleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
 					OnlineChange: map[tailcfg.NodeID]bool{
 						2: i%2 == 0,

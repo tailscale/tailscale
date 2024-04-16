@@ -10,7 +10,7 @@ import "os"
 
 var (
 	cmds = map[string]func(){}
-	err error
+	err  error
 )
 
 func register(name string, f func()) {

@@ -41,7 +41,7 @@ func TestCurrentFileDescriptors(t *testing.T) {
 
 	// Open some FDs.
 	const extra = 10
-	for i := 0; i < extra; i++ {
+	for i := range extra {
 		f, err := os.Open("/proc/self/stat")
 		if err != nil {
 			t.Fatal(err)
@@ -58,7 +58,7 @@ func TestCurrentFileDescriptors(t *testing.T) {
 
 func BenchmarkCurrentFileDescriptors(b *testing.B) {
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = CurrentFDs()
 	}
 }

@@ -67,7 +67,7 @@ func testRestartableProcessesImpl(N int, t *testing.T) {
 	const binary = "testrestartableprocesses"
 	fq := pathToTestProg(t, binary)
 
-	for i := 0; i < N; i++ {
+	for range N {
 		startTestProg(t, binary, "RestartableProcess")
 	}
 	t.Cleanup(func() {

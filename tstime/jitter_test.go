@@ -14,7 +14,7 @@ func TestRandomDurationBetween(t *testing.T) {
 	}
 	const min = 1 * time.Second
 	const max = 10 * time.Second
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		if got := RandomDurationBetween(min, max); got < min || got >= max {
 			t.Fatalf("%v (%d) out of range", got, got)
 		}

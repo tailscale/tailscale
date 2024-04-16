@@ -262,7 +262,7 @@ func (v Slice[T]) AsSlice() []T {
 //
 // As it runs in O(n) time, use with care.
 func (v Slice[T]) IndexFunc(f func(T) bool) int {
-	for i := 0; i < v.Len(); i++ {
+	for i := range v.Len() {
 		if f(v.At(i)) {
 			return i
 		}

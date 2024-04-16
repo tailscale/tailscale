@@ -587,7 +587,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 		return AUMHash{}, err
 	}
 
-	for i := 0; i < minChain; i++ {
+	for i := range minChain {
 		h := next.Hash()
 		verdict[h] |= retainStateActive
 

@@ -17,7 +17,7 @@ import (
 func TestAllocIPs(t *testing.T) {
 	n := NewInternet()
 	saw := map[netip.Addr]bool{}
-	for i := 0; i < 255; i++ {
+	for range 255 {
 		for _, f := range []func(*Interface) netip.Addr{n.allocIPv4, n.allocIPv6} {
 			ip := f(nil)
 			if saw[ip] {

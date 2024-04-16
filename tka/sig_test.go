@@ -143,7 +143,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 
 	outer := nestedSig
 	var lastNodeKey key.NodePrivate
-	for i := 0; i < 15; i++ { // 15 = max nesting level for CBOR
+	for range 15 { // 15 = max nesting level for CBOR
 		lastNodeKey = key.NewNode()
 		nodeKeyPub, _ := lastNodeKey.Public().MarshalBinary()
 

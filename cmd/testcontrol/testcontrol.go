@@ -29,7 +29,7 @@ func main() {
 		DERPMap:         derpMap,
 		ExplicitBaseURL: "http://127.0.0.1:9911",
 	}
-	for i := 0; i < *flagNFake; i++ {
+	for range *flagNFake {
 		control.AddFakeNode()
 	}
 	mux := http.NewServeMux()

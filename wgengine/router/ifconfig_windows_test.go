@@ -82,7 +82,7 @@ func TestRouteLess(t *testing.T) {
 }
 
 func TestRouteDataLessConsistent(t *testing.T) {
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		ri := randRouteData()
 		rj := randRouteData()
 		if ri.Less(rj) && rj.Less(ri) {

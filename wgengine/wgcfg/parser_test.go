@@ -85,7 +85,7 @@ func BenchmarkFromUAPI(b *testing.B) {
 	w.Flush()
 	r := bytes.NewReader(buf.Bytes())
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		r.Seek(0, io.SeekStart)
 		_, err := FromUAPI(r)
 		if err != nil {

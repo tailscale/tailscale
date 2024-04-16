@@ -186,7 +186,7 @@ func Test_packetsForSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hashes := make(map[string]int)
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				pkts := packetsForSize(int64(tt.size))
 				if len(pkts) != tt.wantPackets {
 					t.Errorf("packetsForSize(%d) got %d packets, want %d", tt.size, len(pkts), tt.wantPackets)

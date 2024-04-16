@@ -730,7 +730,7 @@ func TestCapturePcap(t *testing.T) {
 	const pcapHeaderSize = 24
 
 	// there is a lag before the io.Copy writes a packet to the pcap files
-	for i := 0; i < (timeLimit * 10); i++ {
+	for range timeLimit * 10 {
 		time.Sleep(100 * time.Millisecond)
 		if (fileSize(s1Pcap) > pcapHeaderSize) && (fileSize(s2Pcap) > pcapHeaderSize) {
 			break

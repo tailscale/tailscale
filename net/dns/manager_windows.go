@@ -198,7 +198,7 @@ func (m *windowsManager) setHosts(hosts []*HostEntry) error {
 
 	// This can fail spuriously with an access denied error, so retry it a
 	// few times.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err = atomicfile.WriteFile(hostsFile, outB, fileMode); err == nil {
 			return nil
 		}

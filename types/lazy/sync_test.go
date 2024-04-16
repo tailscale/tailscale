@@ -89,7 +89,7 @@ func TestSyncValueConcurrent(t *testing.T) {
 		routines = 10000
 	)
 	wg.Add(routines)
-	for i := 0; i < routines; i++ {
+	for range routines {
 		go func() {
 			defer wg.Done()
 			// Every goroutine waits for the go signal, so that more of them

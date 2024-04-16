@@ -47,7 +47,7 @@
 //
 //	var big *Item = ... // some large data structure that is slow to hash
 //	var manyBig []*Item
-//	for i := 0; i < 1000; i++ {
+//	for i := range 1000 {
 //		manyBig = append(manyBig, &big)
 //	}
 //	deephash.Hash(manyBig)
@@ -208,7 +208,7 @@ type Sum struct {
 }
 
 func (s1 *Sum) xor(s2 Sum) {
-	for i := 0; i < sha256.Size; i++ {
+	for i := range sha256.Size {
 		s1.sum[i] ^= s2.sum[i]
 	}
 }
@@ -492,7 +492,7 @@ func makeArrayHasher(t reflect.Type) typeHasherFunc {
 	nb := t.Elem().Size() // byte size of each array element
 	return func(h *hasher, p pointer) {
 		once.Do(init)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			hashElem(h, p.arrayIndex(i, nb))
 		}
 	}
@@ -545,7 +545,7 @@ func makeSliceHasher(t reflect.Type) typeHasherFunc {
 		h.HashUint8(1) // indicates visiting slice
 		n := p.sliceLen()
 		h.HashUint64(uint64(n))
-		for i := 0; i < n; i++ {
+		for i := range n {
 			pe := pa.arrayIndex(i, nb)
 			hashElem(h, pe)
 		}
