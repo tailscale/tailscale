@@ -662,16 +662,6 @@ func (s *State) keepInterfaceInStringSummary(ifName string) bool {
 	return false
 }
 
-// isInterestingIP reports whether ip is an interesting IP that we
-// should log in interfaces.State logging. We don't need to show
-// loopback, link-local addresses, or non-Tailscale ULA addresses.
-func isInterestingIP(ip netip.Addr) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-		return false
-	}
-	return true
-}
-
 var altNetInterfaces func() ([]Interface, error)
 
 // RegisterInterfaceGetter sets the function that's used to query
