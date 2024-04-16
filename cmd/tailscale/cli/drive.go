@@ -28,7 +28,7 @@ var driveCmd = &ffcli.Command{
 		driveRenameUsage,
 		driveUnshareUsage,
 		driveListUsage,
-	}, "\n  "),
+	}, "\n"),
 	LongHelp:  buildShareLongHelp(),
 	UsageFunc: usageFuncNoDefaultValues,
 	Subcommands: []*ffcli.Command{
