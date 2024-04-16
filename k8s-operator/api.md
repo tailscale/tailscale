@@ -23,7 +23,7 @@ Resource Types:
 
 
 
-
+Connector defines a Tailscale node that will be deployed in the cluster. The node can be configured to act as a Tailscale subnet router and/or a Tailscale exit node. Connector is a cluster-scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource
 
 <table>
     <thead>
@@ -55,7 +55,7 @@ Resource Types:
         <td><b><a href="#connectorspec">spec</a></b></td>
         <td>object</td>
         <td>
-          ConnectorSpec describes the desired Tailscale component.<br/>
+          ConnectorSpec describes the desired Tailscale component. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status<br/>
           <br/>
             <i>Validations</i>:<li>has(self.subnetRouter) || self.exitNode == true: A Connector needs to be either an exit node or a subnet router, or both.</li>
         </td>
@@ -76,7 +76,7 @@ Resource Types:
 
 
 
-ConnectorSpec describes the desired Tailscale component.
+ConnectorSpec describes the desired Tailscale component. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 
 <table>
     <thead>
@@ -267,7 +267,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+ProxyClass describes a set of configuration parameters that can be applied to proxy resources created by the Tailscale Kubernetes operator. To apply a given ProxyClass to resources created for a tailscale Ingress or Service, use tailscale.com/proxy-class=<proxyclass-name> label. To apply a given ProxyClass to resources created for a Connector, use connector.spec.proxyClass field. ProxyClass is a cluster scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.
 
 <table>
     <thead>
@@ -299,14 +299,14 @@ ConnectorCondition contains condition information for a Connector.
         <td><b><a href="#proxyclassspec">spec</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Specification of the desired state of the ProxyClass resource. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status<br/>
         </td>
         <td>true</td>
       </tr><tr>
         <td><b><a href="#proxyclassstatus">status</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Status of the ProxyClass. This is set and managed automatically. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -318,7 +318,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+Specification of the desired state of the ProxyClass resource. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 
 <table>
     <thead>
@@ -333,7 +333,7 @@ ConnectorCondition contains condition information for a Connector.
         <td><b><a href="#proxyclassspecstatefulset">statefulSet</a></b></td>
         <td>object</td>
         <td>
-          Proxy's StatefulSet spec.<br/>
+          Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).<br/>
         </td>
         <td>true</td>
       </tr></tbody>
@@ -345,7 +345,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-Proxy's StatefulSet spec.
+Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).
 
 <table>
     <thead>
@@ -1638,7 +1638,7 @@ The pod this Toleration is attached to tolerates any taint that matches the trip
 
 
 
-
+Status of the ProxyClass. This is set and managed automatically. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 
 <table>
     <thead>

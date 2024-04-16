@@ -31,6 +31,7 @@ spec:
       name: v1alpha1
       schema:
         openAPIV3Schema:
+          description: 'Connector defines a Tailscale node that will be deployed in the cluster. The node can be configured to act as a Tailscale subnet router and/or a Tailscale exit node. Connector is a cluster-scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource'
           type: object
           required:
             - spec
@@ -44,7 +45,7 @@ spec:
             metadata:
               type: object
             spec:
-              description: ConnectorSpec describes the desired Tailscale component.
+              description: 'ConnectorSpec describes the desired Tailscale component. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
               type: object
               properties:
                 exitNode:

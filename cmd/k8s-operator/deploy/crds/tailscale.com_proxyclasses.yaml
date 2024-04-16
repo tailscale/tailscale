@@ -21,6 +21,7 @@ spec:
       name: v1alpha1
       schema:
         openAPIV3Schema:
+          description: 'ProxyClass describes a set of configuration parameters that can be applied to proxy resources created by the Tailscale Kubernetes operator. To apply a given ProxyClass to resources created for a tailscale Ingress or Service, use tailscale.com/proxy-class=<proxyclass-name> label. To apply a given ProxyClass to resources created for a Connector, use connector.spec.proxyClass field. ProxyClass is a cluster scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.'
           type: object
           required:
             - spec
@@ -34,12 +35,13 @@ spec:
             metadata:
               type: object
             spec:
+              description: Specification of the desired state of the ProxyClass resource. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
               required:
                 - statefulSet
               properties:
                 statefulSet:
-                  description: Proxy's StatefulSet spec.
+                  description: Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).
                   type: object
                   properties:
                     annotations:
@@ -483,6 +485,7 @@ spec:
                                 description: Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty, otherwise just a regular string.
                                 type: string
             status:
+              description: Status of the ProxyClass. This is set and managed automatically. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
               properties:
                 conditions:

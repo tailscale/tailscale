@@ -17,13 +17,26 @@ var ProxyClassKind = "ProxyClass"
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ProxyClassReady")].reason`,description="Status of the ProxyClass."
 
+// ProxyClass describes a set of configuration parameters that can be applied to
+// proxy resources created by the Tailscale Kubernetes operator.
+// To apply a given ProxyClass to resources created for a tailscale Ingress or
+// Service, use tailscale.com/proxy-class=<proxyclass-name> label. To apply a
+// given ProxyClass to resources created for a Connector, use
+// connector.spec.proxyClass field.
+// ProxyClass is a cluster scoped resource.
+// More info:
+// https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.
 type ProxyClass struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
+	// Specification of the desired state of the ProxyClass resource.
+	// https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 	Spec ProxyClassSpec `json:"spec"`
 
 	// +optional
+	// Status of the ProxyClass. This is set and managed automatically.
+	// https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 	Status ProxyClassStatus `json:"status"`
 }
 
@@ -36,7 +49,9 @@ type ProxyClassList struct {
 }
 
 type ProxyClassSpec struct {
-	// Proxy's StatefulSet spec.
+	// Configuration parameters for the proxy's StatefulSet. Tailscale
+	// Kubernetes operator deploys a StatefulSet for each of the user
+	// configured proxies (Tailscale Ingress, Tailscale Service, Connector).
 	StatefulSet *StatefulSet `json:"statefulSet"`
 }
 

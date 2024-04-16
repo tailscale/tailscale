@@ -60,6 +60,7 @@ spec:
           name: v1alpha1
           schema:
             openAPIV3Schema:
+                description: 'Connector defines a Tailscale node that will be deployed in the cluster. The node can be configured to act as a Tailscale subnet router and/or a Tailscale exit node. Connector is a cluster-scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource'
                 properties:
                     apiVersion:
                         description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
@@ -70,7 +71,7 @@ spec:
                     metadata:
                         type: object
                     spec:
-                        description: ConnectorSpec describes the desired Tailscale component.
+                        description: 'ConnectorSpec describes the desired Tailscale component. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
                         properties:
                             exitNode:
                                 description: ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false. https://tailscale.com/kb/1103/exit-nodes
@@ -179,6 +180,7 @@ spec:
           name: v1alpha1
           schema:
             openAPIV3Schema:
+                description: 'ProxyClass describes a set of configuration parameters that can be applied to proxy resources created by the Tailscale Kubernetes operator. To apply a given ProxyClass to resources created for a tailscale Ingress or Service, use tailscale.com/proxy-class=<proxyclass-name> label. To apply a given ProxyClass to resources created for a Connector, use connector.spec.proxyClass field. ProxyClass is a cluster scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.'
                 properties:
                     apiVersion:
                         description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
@@ -189,9 +191,10 @@ spec:
                     metadata:
                         type: object
                     spec:
+                        description: Specification of the desired state of the ProxyClass resource. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
                         properties:
                             statefulSet:
-                                description: Proxy's StatefulSet spec.
+                                description: Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).
                                 properties:
                                     annotations:
                                         additionalProperties:
@@ -638,6 +641,7 @@ spec:
                             - statefulSet
                         type: object
                     status:
+                        description: Status of the ProxyClass. This is set and managed automatically. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
                         properties:
                             conditions:
                                 description: List of status conditions to indicate the status of the ProxyClass. Known condition types are `ProxyClassReady`.
