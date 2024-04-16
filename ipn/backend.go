@@ -232,18 +232,11 @@ var DebuggableComponents = []string{
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
-	// LegacyMigrationPrefs are used to migrate preferences from the
-	// frontend to the backend.
-	// If non-nil, they are imported as a new profile.
-	LegacyMigrationPrefs *Prefs `json:"Prefs"`
-	// UpdatePrefs, if provided, overrides Options.LegacyMigrationPrefs
-	// *and* the Prefs already stored in the backend state, *except* for
-	// the Persist member. If you just want to provide prefs, this is
-	// probably what you want.
+	// UpdatePrefs, if provided, overrides the Prefs already stored in the
+	// backend state, *except* for the Persist member.
 	//
 	// TODO(apenwarr): Rename this to Prefs, and possibly move Prefs.Persist
-	//   elsewhere entirely (as it always should have been). Or, move the
-	//   fancy state migration stuff out of Start().
+	// elsewhere entirely (as it always should have been).
 	UpdatePrefs *Prefs
 	// AuthKey is an optional node auth key used to authorize a
 	// new node key without user interaction.
