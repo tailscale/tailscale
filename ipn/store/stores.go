@@ -28,13 +28,13 @@ type Provider func(logf logger.Logf, arg string) (ipn.StateStore, error)
 
 var regOnce sync.Once
 
-var registerAvailableExternalStores func()
+var registerAvailableExternalStores []func()
 
 func registerDefaultStores() {
 	Register("mem:", mem.New)
 
-	if registerAvailableExternalStores != nil {
-		registerAvailableExternalStores()
+	for _, f := range registerAvailableExternalStores {
+		f()
 	}
 }
 
