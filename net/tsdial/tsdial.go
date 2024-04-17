@@ -142,10 +142,16 @@ func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 }
 
 var (
-	metricLinkChangeConnClosed = clientmetric.NewCounter("tsdial_linkchange_closes")
+	metricLinkChangeConnClosed      = clientmetric.NewCounter("tsdial_linkchange_closes")
+	metricChangeDeltaNoDefaultRoute = clientmetric.NewCounter("tsdial_changedelta_no_default_route")
 )
 
 func (d *Dialer) linkChanged(delta *netmon.ChangeDelta) {
+	// Track how often we see ChangeDeltas with no DefaultRouteInterface.
+	if delta.New.DefaultRouteInterface == "" {
+		metricChangeDeltaNoDefaultRoute.Add(1)
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var anyClosed bool
@@ -179,6 +185,14 @@ func changeAffectsConn(delta *netmon.ChangeDelta, conn net.Conn) bool {
 		delta.Old.HTTPProxy != delta.New.HTTPProxy {
 		return true
 	}
+
+	// In a few cases, we don't have a new DefaultRouteInterface (e.g. on
+	// Android; see tailscale/corp#19124); if so, pessimistically assume
+	// that all connections are affected.
+	if delta.New.DefaultRouteInterface == "" {
+		return true
+	}
+
 	if !delta.New.HasIP(lip) && delta.Old.HasIP(lip) {
 		// Our interface with this source IP went away.
 		return true
