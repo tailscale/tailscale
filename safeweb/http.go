@@ -128,6 +128,10 @@ type Config struct {
 	// unsafe-inline` in the Content-Security-Policy header to permit the use of
 	// inline CSS.
 	CSPAllowInlineStyles bool
+
+	// CookiesSameSiteLax specifies whether to use SameSite=Lax in cookies. The
+	// default is to set SameSite=Strict.
+	CookiesSameSiteLax bool
 }
 
 func (c *Config) setDefaults() error {
@@ -173,12 +177,16 @@ func NewServer(config Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to set defaults: %w", err)
 	}
 
+	sameSite := csrf.SameSiteStrictMode
+	if config.CookiesSameSiteLax {
+		sameSite = csrf.SameSiteLaxMode
+	}
 	s := &Server{
 		Config: config,
 		csp:    defaultCSP,
 		// only set Secure flag on CSRF cookies if we are in a secure context
 		// as otherwise the browser will reject the cookie
-		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext)),
+		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext), csrf.SameSite(sameSite)),
 	}
 	if config.CSPAllowInlineStyles {
 		s.csp = defaultCSP + `; style-src 'self' 'unsafe-inline'`
