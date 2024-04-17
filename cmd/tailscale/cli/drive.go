@@ -181,19 +181,9 @@ In order to access this share, other machines on the tailnet can connect to the 
 
   http://100.100.100.100:8080/mydomain.com/mylaptop/docs
 
-Permissions to access shares are controlled via ACLs. For example, to give yourself read/write access and give the group "home" read-only access to the above share, use the below ACL grants:
+Permissions to access shares are controlled via ACLs. For example, to give the group "home" read-only access to the above share, use the below ACL grant:
 
   "grants": [
-    {
-      "src": ["mylogin@domain.com"],
-      "dst": ["mylaptop's ip address"],
-      "app": {
-        "tailscale.com/cap/drive": [{
-          "shares": ["docs"],
-          "access": "rw"
-        }]
-      }
-    },
     {
       "src": ["group:home"],
       "dst": ["mylaptop"],
@@ -205,21 +195,21 @@ Permissions to access shares are controlled via ACLs. For example, to give yours
       }
     }]
 
-To categorically give yourself access to all your shares, you can use the below ACL grant:
+Whenever anyone in the group "home" connects to the share, they connect as if they are using your local machine user. They'll be able to read the same files as your user, and if they create files, those files will be owned by your user.%s
+
+On small tailnets, it may be convenient to categorically give all users full access to their own shares. That can be accomplished with the below grant.
 
   "grants": [
-    {
-      "src": ["autogroup:member"],
-      "dst": ["autogroup:self"],
-      "app": {
-        "tailscale.com/cap/drive": [{
-          "shares": ["*"],
-          "access": "rw"
-        }]
-      }
-    }]
-
-Whenever either you or anyone in the group "home" connects to the share, they connect as if they are using your local machine user. They'll be able to read the same files as your user and if they create files, those files will be owned by your user.%s
+	{
+	  "src": ["autogroup:member"],
+	  "dst": ["autogroup:self"],
+	  "app": {
+	    "tailscale.com/cap/drive": [{
+		  "shares": ["*"],
+		  "access": "rw"
+	    }]
+	  }
+	}]
 
 You can rename shares, for example you could rename the above share by running:
 
