@@ -37,7 +37,7 @@ require (
 	github.com/golangci/golangci-lint v1.52.2
 	github.com/google/go-cmp v0.6.0
 	github.com/google/go-containerregistry v0.18.0
-	github.com/google/nftables v0.1.1-0.20230115205135-9aa6fdf5a28c
+	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806
 	github.com/google/uuid v1.5.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
 	github.com/hdevalence/ed25519consensus v0.2.0
@@ -88,14 +88,14 @@ require (
 	go.uber.org/zap v1.26.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/crypto v0.18.0
+	golang.org/x/crypto v0.21.0
 	golang.org/x/exp v0.0.0-20240119083558-1b970713d09a
 	golang.org/x/mod v0.14.0
-	golang.org/x/net v0.20.0
+	golang.org/x/net v0.22.0
 	golang.org/x/oauth2 v0.16.0
 	golang.org/x/sync v0.6.0
-	golang.org/x/sys v0.17.0
-	golang.org/x/term v0.16.0
+	golang.org/x/sys v0.18.0
+	golang.org/x/term v0.18.0
 	golang.org/x/time v0.5.0
 	golang.org/x/tools v0.17.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
