@@ -842,7 +842,7 @@ var debugComponentLogsArgs struct {
 
 func runDebugComponentLogs(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: debug component-logs [" + strings.Join(ipn.DebuggableComponents, "|") + "]")
+		return errors.New("usage: tailscale debug component-logs [" + strings.Join(ipn.DebuggableComponents, "|") + "]")
 	}
 	component := args[0]
 	dur := debugComponentLogsArgs.forDur
@@ -865,7 +865,7 @@ var devStoreSetArgs struct {
 
 func runDevStoreSet(ctx context.Context, args []string) error {
 	if len(args) != 2 {
-		return errors.New("usage: dev-store-set --danger <key> <value>")
+		return errors.New("usage: tailscale debug dev-store-set --danger <key> <value>")
 	}
 	if !devStoreSetArgs.danger {
 		return errors.New("this command is dangerous; use --danger to proceed")
@@ -883,7 +883,7 @@ func runDevStoreSet(ctx context.Context, args []string) error {
 
 func runDebugDERP(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: debug derp <region>")
+		return errors.New("usage: tailscale debug derp <region>")
 	}
 	st, err := localClient.DebugDERPRegion(ctx, args[0])
 	if err != nil {

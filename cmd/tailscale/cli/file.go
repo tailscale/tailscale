@@ -554,7 +554,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 
 func runFileGet(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: file get <target-directory>")
+		return errors.New("usage: tailscale file get <target-directory>")
 	}
 	log.SetFlags(0)
 
