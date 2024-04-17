@@ -95,7 +95,7 @@ func runPing(ctx context.Context, args []string) error {
 	}
 
 	if len(args) != 1 || args[0] == "" {
-		return errors.New("usage: ping <hostname-or-IP>")
+		return errors.New("usage: tailscale ping <hostname-or-IP>")
 	}
 	var ip string
 

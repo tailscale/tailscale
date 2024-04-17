@@ -19,7 +19,7 @@ var idTokenCmd = &ffcli.Command{
 
 func runIDToken(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: id-token <aud>")
+		return errors.New("usage: tailscale id-token <aud>")
 	}
 
 	tr, err := localClient.IDToken(ctx, args[0])

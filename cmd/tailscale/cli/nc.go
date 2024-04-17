@@ -33,7 +33,7 @@ func runNC(ctx context.Context, args []string) error {
 	}
 
 	if len(args) != 2 {
-		return errors.New("usage: nc <hostname-or-IP> <port>")
+		return errors.New("usage: tailscale nc <hostname-or-IP> <port>")
 	}
 
 	hostOrIP, portStr := args[0], args[1]

@@ -461,7 +461,7 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 	)
 
 	if len(args) == 0 || len(args) > 2 {
-		return errors.New("usage: lock sign <node-key> [<rotation-key>]")
+		return errors.New("usage: tailscale lock sign <node-key> [<rotation-key>]")
 	}
 	if err := nodeKey.UnmarshalText([]byte(args[0])); err != nil {
 		return fmt.Errorf("decoding node-key: %w", err)
@@ -508,7 +508,7 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(secrets) != 1 {
-		return errors.New("usage: lock disable <disablement-secret>")
+		return errors.New("usage: tailscale lock disable <disablement-secret>")
 	}
 	return localClient.NetworkLockDisable(ctx, secrets[0])
 }
@@ -545,7 +545,7 @@ var nlDisablementKDFCmd = &ffcli.Command{
 
 func runNetworkLockDisablementKDF(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: lock disablement-kdf <hex-encoded-disablement-secret>")
+		return errors.New("usage: tailscale lock disablement-kdf <hex-encoded-disablement-secret>")
 	}
 	secret, err := hex.DecodeString(args[0])
 	if err != nil {
