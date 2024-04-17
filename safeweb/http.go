@@ -76,6 +76,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/gorilla/csrf"
@@ -89,7 +90,7 @@ var defaultCSP = strings.Join([]string{
 	`form-action 'self'`,      // disallow form submissions to other origins
 	`base-uri 'self'`,         // disallow base URIs from other origins
 	`block-all-mixed-content`, // disallow mixed content when serving over HTTPS
-	`object-src 'none'`,       // disallow embedding of resources from other origins
+	`object-src 'self'`,       // disallow embedding of resources from other origins
 }, "; ")
 
 // Config contains the configuration for a safeweb server.
@@ -128,6 +129,10 @@ type Config struct {
 	// unsafe-inline` in the Content-Security-Policy header to permit the use of
 	// inline CSS.
 	CSPAllowInlineStyles bool
+
+	// SameSiteLax specifies whether to use SameSite=Lax in cookies. The default
+	// is to set SameSite=Strict.
+	SameSiteLax bool
 }
 
 func (c *Config) setDefaults() error {
@@ -173,12 +178,16 @@ func NewServer(config Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to set defaults: %w", err)
 	}
 
+	sameSite := csrf.SameSiteStrictMode
+	if config.SameSiteLax {
+		sameSite = csrf.SameSiteLaxMode
+	}
 	s := &Server{
 		Config: config,
 		csp:    defaultCSP,
 		// only set Secure flag on CSRF cookies if we are in a secure context
 		// as otherwise the browser will reject the cookie
-		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext)),
+		csrfProtect: csrf.Protect(config.CSRFSecret, csrf.Secure(config.SecureContext), csrf.SameSite(sameSite)),
 	}
 	if config.CSPAllowInlineStyles {
 		s.csp = defaultCSP + `; style-src 'self' 'unsafe-inline'`
@@ -198,23 +207,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case bp == "" && ap == "": // neither match
 		http.NotFound(w, r)
 	case bp != "" && ap != "":
-		// Both muxes match the path. This can be because:
-		//  * one of them registers a wildcard "/" handler
-		//  * there are overlapping specific handlers
-		//
-		// If it's the former, route to the more-specific handler. If it's the
-		// latter - that's a bug so return an error to avoid mis-routing the
-		// request.
-		//
-		// TODO(awly): match the longest path instead of only special-casing
-		// "/".
-		switch {
-		case bp == "/":
-			s.serveAPI(w, r)
-		case ap == "/":
+		// Both muxes match the path. Route to the more-specific handler (as
+		// determined by the number of components in the path). If it somehow
+		// happens that both patterns are equally specific, something strange
+		// has happened; say so.
+		bpLen := len(strings.Split(path.Clean(bp), "/"))
+		apLen := len(strings.Split(path.Clean(ap), "/"))
+		if bpLen > apLen {
 			s.serveBrowser(w, r)
-		default:
-			log.Printf("conflicting mux paths in safeweb: request %q matches browser mux pattern %q and API mux patter %q; returning 500", r.URL.Path, bp, ap)
+		} else if apLen > bpLen {
+			s.serveAPI(w, r)
+		} else if bpLen == apLen {
+			log.Printf("conflicting mux paths in safeweb: request %q matches browser mux pattern %q and API mux pattern %q; returning 500", r.URL.Path, bp, ap)
 			http.Error(w, "multiple handlers match this request", http.StatusInternalServerError)
 		}
 	}
