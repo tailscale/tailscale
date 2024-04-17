@@ -164,11 +164,9 @@ This does not affect using the CLI to select or stop using an exit node. If you 
 If you enable or don't configure this policy, the Exit Node submenu will be shown in the Tailscale menu.
 
 If you disable this policy, the Exit Node submenu will be hidden from the Tailscale menu.]]></string>
-            <string id="KeyExpirationNoticeTime">Specify a custom key expiration notification time</string>
-            <string id="KeyExpirationNoticeTime_Help"><![CDATA[This policy can be used to configure how soon the notification appears before key expiry.
+            <string id="KeyExpirationNotice">Specify a custom key expiration notification time</string>
+            <string id="KeyExpirationNotice_Help"><![CDATA[This policy can be used to configure how soon the notification appears before key expiry.
 See https://tailscale.com/kb/1315/mdm-keys#set-the-key-expiration-notice-period for more details.
-
-Time intervals must be specified as a Go Duration: for example, 24h, 5h25m30s. Time units larger than hours are unsupported.
 
 If you enable this policy and supply a valid time interval, the key expiry notification will begin to display when the current key has less than that amount of time remaining.
 
@@ -208,22 +206,22 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
         <presentationTable>
             <presentation id="LoginURL">
                 <textBox refId="LoginURLPrompt">
-                    <label>Coordination server</label>
+                    <label>Coordination server:</label>
                 </textBox>
             </presentation>
             <presentation id="LogTarget">
                 <textBox refId="LogTargetPrompt">
-                    <label>Log server</label>
+                    <label>Log server:</label>
                 </textBox>
             </presentation>
             <presentation id="Tailnet">
                 <textBox refId="TailnetPrompt">
-                    <label>Tailnet</label>
+                    <label>Tailnet:</label>
                 </textBox>
             </presentation>
             <presentation id="ExitNodeID">
                 <textBox refId="ExitNodeIDPrompt">
-                    <label>Exit Node</label>
+                    <label>Exit Node:</label>
                 </textBox>
             </presentation>
             <presentation id="ManagedBy">
@@ -236,6 +234,12 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
                 <textBox refId="ManagedBySupportURL">
                     <label>Support URL:</label>
                 </textBox>
+            </presentation>
+            <presentation id="KeyExpirationNotice">
+                <textBox refId="KeyExpirationNoticePrompt">
+                    <label>Key expiration notice period:</label>
+                </textBox>
+                <text>Time intervals must be specified as a Go Duration: for example, 24h, 5h25m30s. Time units larger than hours are unsupported.</text>
             </presentation>
         </presentationTable>
     </resources>

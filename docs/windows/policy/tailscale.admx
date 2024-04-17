@@ -265,5 +265,12 @@
         <text id="ManagedBySupportURL" valueName="ManagedByURL" />
       </elements>
     </policy>
+    <policy name="KeyExpirationNotice" class="Machine" displayName="$(string.KeyExpirationNotice)" explainText="$(string.KeyExpirationNotice_Help)" presentation="$(presentation.KeyExpirationNotice)" key="Software\Policies\Tailscale">
+      <parentCategory ref="UI_Category" />
+      <supportedOn ref="SINCE_V1_50" />
+      <elements>
+        <text id="KeyExpirationNoticePrompt" valueName="KeyExpirationNotice" required="true" />
+      </elements>
+    </policy>
   </policies>
 </policyDefinitions>
