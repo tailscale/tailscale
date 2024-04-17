@@ -2242,8 +2242,8 @@ const (
 	// NodeAttrDisableWebClient disables using the web client.
 	NodeAttrDisableWebClient NodeCapability = "disable-web-client"
 
-	// NodeAttrExitDstNetworkFlowLog enables exit node destinations in network flow logs.
-	NodeAttrExitDstNetworkFlowLog NodeCapability = "exit-dst-network-flow-log"
+	// NodeAttrLogExitFlows enables exit node destinations in network flow logs.
+	NodeAttrLogExitFlows NodeCapability = "log-exit-flows"
 )
 
 // SetDNSRequest is a request to add a DNS record.
