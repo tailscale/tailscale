@@ -258,7 +258,6 @@ func TestWriteAndInject(t *testing.T) {
 	chtun, tun := newChannelTUN(t.Logf, false)
 	defer tun.Close()
 
-	const size = 2 // all payloads have this size
 	written := []string{"w0", "w1"}
 	injected := []string{"i0", "i1"}
 

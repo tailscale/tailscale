@@ -5,9 +5,7 @@ package tka
 
 import (
 	"crypto/ed25519"
-	"fmt"
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -98,22 +96,6 @@ func (s *scenarioTest) mkNodeWithForks(name string, signWithDefault bool, chains
 	}
 
 	return n
-}
-
-func aumsToNames(n *scenarioNode, aums []AUM) string {
-	out := make([]string, 0, len(aums))
-outer:
-	for _, a := range aums {
-		for name, candidate := range n.AUMs {
-			if candidate.Hash() == a.Hash() {
-				out = append(out, name)
-				continue outer
-			}
-		}
-		out = append(out, fmt.Sprintf("%x", a.Hash()))
-	}
-
-	return strings.Join(out, ",")
 }
 
 func (s *scenarioTest) syncBetween(n1, n2 *scenarioNode) error {

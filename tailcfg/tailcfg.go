@@ -122,7 +122,9 @@ type CapabilityVersion int
 //   - 79: 2023-10-05: Client understands UrgentSecurityUpdate in ClientVersion
 //   - 80: 2023-11-16: can handle c2n GET /tls-cert-status
 //   - 81: 2023-11-17: MapResponse.PacketFilters (incremental packet filter updates)
-const CurrentCapabilityVersion CapabilityVersion = 81
+//   - 82: 2023-12-01: Client understands NodeAttrLinuxMustUseIPTables, NodeAttrLinuxMustUseNfTables, c2n /netfilter-kind
+//   - 83: 2023-12-18: Client understands DefaultAutoUpdate
+const CurrentCapabilityVersion CapabilityVersion = 83
 
 type StableID string
 
@@ -1876,6 +1878,13 @@ type MapResponse struct {
 	// download and whether the client is using it. A nil value means no change
 	// or nothing to report.
 	ClientVersion *ClientVersion `json:",omitempty"`
+
+	// DefaultAutoUpdate is the default node auto-update setting for this
+	// tailnet. The node is free to opt-in or out locally regardless of this
+	// value. This value is only used on first MapResponse from control, the
+	// auto-update setting doesn't change if the tailnet admin flips the
+	// default after the node registered.
+	DefaultAutoUpdate opt.Bool `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available
@@ -2171,6 +2180,16 @@ const (
 	// NodeAttrDNSForwarderDisableTCPRetries disables retrying truncated
 	// DNS queries over TCP if the response is truncated.
 	NodeAttrDNSForwarderDisableTCPRetries NodeCapability = "dns-forwarder-disable-tcp-retries"
+
+	// NodeAttrLinuxMustUseIPTables forces Linux clients to use iptables for
+	// netfilter management.
+	// This cannot be set simultaneously with NodeAttrLinuxMustUseNfTables.
+	NodeAttrLinuxMustUseIPTables NodeCapability = "linux-netfilter?v=iptables"
+
+	// NodeAttrLinuxMustUseNfTables forces Linux clients to use nftables for
+	// netfilter management.
+	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
+	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
 )
 
 // SetDNSRequest is a request to add a DNS record.

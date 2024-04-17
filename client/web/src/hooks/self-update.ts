@@ -1,12 +1,9 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import { useCallback, useEffect, useState } from "react"
 import { apiFetch } from "src/api"
-
-// this type is deserialized from tailcfg.ClientVersion,
-// so it should not include fields not included in that type.
-export type VersionInfo = {
-  RunningLatest: boolean
-  LatestVersion?: string
-}
+import { VersionInfo } from "src/types"
 
 // see ipnstate.UpdateProgress
 export type UpdateProgress = {
@@ -26,15 +23,8 @@ export enum UpdateState {
 // useInstallUpdate initiates and tracks a Tailscale self-update via the LocalAPI,
 // and returns state messages showing the progress of the update.
 export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
-  if (!cv) {
-    return {
-      updateState: UpdateState.UpToDate,
-      updateLog: "",
-    }
-  }
-
   const [updateState, setUpdateState] = useState<UpdateState>(
-    cv.RunningLatest ? UpdateState.UpToDate : UpdateState.Available
+    cv?.RunningLatest ? UpdateState.UpToDate : UpdateState.Available
   )
 
   const [updateLog, setUpdateLog] = useState<string>("")
@@ -62,12 +52,11 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
     let tsAwayForPolls = 0
     let updateMessagesRead = 0
 
-    let timer = 0
+    let timer: NodeJS.Timeout | undefined
 
     function poll() {
-      apiFetch("/local/v0/update/progress", "GET")
-        .then((res) => res.json())
-        .then((res: UpdateProgress[]) => {
+      apiFetch<UpdateProgress[]>("/local/v0/update/progress", "GET")
+        .then((res) => {
           // res contains a list of UpdateProgresses that is strictly increasing
           // in size, so updateMessagesRead keeps track (across calls of poll())
           // of how many of those we have already read. This is why it is not
@@ -127,9 +116,12 @@ export function useInstallUpdate(currentVersion: string, cv?: VersionInfo) {
     // useEffect cleanup function
     return () => {
       if (timer) clearTimeout(timer)
-      timer = 0
+      timer = undefined
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { updateState, updateLog }
+  return !cv
+    ? { updateState: UpdateState.UpToDate, updateLog: "" }
+    : { updateState, updateLog }
 }

@@ -40,18 +40,6 @@ const maxActiveQueries = 256
 // the lint exception is necessary and on others it is not,
 // and plain ignore complains if the exception is unnecessary.
 
-// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
-//
-// This is particularly useful because certain conditions can cause indefinite hangs
-// (such as improper dbus auth followed by contextless dbus.Object.Call).
-// Such operations should be wrapped in a timeout context.
-const reconfigTimeout = time.Second
-
-type response struct {
-	pkt []byte
-	to  netip.AddrPort // response destination (request source)
-}
-
 // Manager manages system DNS settings.
 type Manager struct {
 	logf logger.Logf
@@ -105,6 +93,12 @@ func (m *Manager) Set(cfg Config) error {
 	if err := m.resolver.SetConfig(rcfg); err != nil {
 		return err
 	}
+
+	if err != nil {
+		m.logf("err: %s", err)
+		return err
+	}
+
 	if err := m.os.SetDNS(ocfg); err != nil {
 		health.SetDNSOSHealth(err)
 		return err
@@ -261,7 +255,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// builds.
 		} else {
 			health.SetDNSOSHealth(err)
-			return resolver.Config{}, OSConfig{}, err
+			return rcfg, OSConfig{}, err
 		}
 	}
 

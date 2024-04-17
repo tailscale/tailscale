@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 	"tailscale.com/version"
 )
@@ -116,7 +117,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ForceDaemon:            setArgs.forceDaemon,
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
-				Apply: setArgs.updateApply,
+				Apply: opt.NewBool(setArgs.updateApply),
 			},
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
@@ -167,12 +168,12 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return err
 		}
 	}
-	if maskedPrefs.AutoUpdateSet {
+	if maskedPrefs.AutoUpdateSet.ApplySet {
 		// On macsys, tailscaled will set the Sparkle auto-update setting. It
 		// does not use clientupdate.
 		if version.IsMacSysExt() {
 			apply := "0"
-			if maskedPrefs.AutoUpdate.Apply {
+			if maskedPrefs.AutoUpdate.Apply.EqualBool(true) {
 				apply = "1"
 			}
 			out, err := exec.Command("defaults", "write", "io.tailscale.ipn.macsys", "SUAutomaticallyUpdate", apply).CombinedOutput()
@@ -180,8 +181,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 				return fmt.Errorf("failed to enable automatic updates: %v, %q", err, out)
 			}
 		} else {
-			_, err := clientupdate.NewUpdater(clientupdate.Arguments{ForAutoUpdate: true})
-			if errors.Is(err, errors.ErrUnsupported) {
+			if !clientupdate.CanAutoUpdate() {
 				return errors.New("automatic updates are not supported on this platform")
 			}
 		}

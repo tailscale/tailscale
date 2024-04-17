@@ -114,7 +114,6 @@ func hexAll(v string) string {
 }
 
 func TestHandlePeerAPI(t *testing.T) {
-	const nodeFQDN = "self-node.tail-scale.ts.net."
 	tests := []struct {
 		name       string
 		isSelf     bool // the peer sending the request is owned by us

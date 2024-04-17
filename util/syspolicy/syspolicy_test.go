@@ -24,13 +24,6 @@ type testHandler struct {
 
 var someOtherError = errors.New("error other than not found")
 
-func setHandlerForTest(tb testing.TB, h Handler) {
-	tb.Helper()
-	oldHandler := handler
-	handler = h
-	tb.Cleanup(func() { handler = oldHandler })
-}
-
 func (th *testHandler) ReadString(key string) (string, error) {
 	if key != string(th.key) {
 		th.t.Errorf("ReadString(%q) want %q", key, th.key)
@@ -95,7 +88,7 @@ func TestGetString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setHandlerForTest(t, &testHandler{
+			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
 				s:   tt.handlerValue,
@@ -152,7 +145,7 @@ func TestGetUint64(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setHandlerForTest(t, &testHandler{
+			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
 				u64: tt.handlerValue,
@@ -204,7 +197,7 @@ func TestGetBoolean(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setHandlerForTest(t, &testHandler{
+			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
 				b:   tt.handlerValue,
@@ -265,7 +258,7 @@ func TestGetPreferenceOption(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setHandlerForTest(t, &testHandler{
+			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
 				s:   tt.handlerValue,
@@ -322,7 +315,7 @@ func TestGetVisibility(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setHandlerForTest(t, &testHandler{
+			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
 				s:   tt.handlerValue,
@@ -389,7 +382,7 @@ func TestGetDuration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setHandlerForTest(t, &testHandler{
+			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
 				s:   tt.handlerValue,

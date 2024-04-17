@@ -20,7 +20,7 @@ import (
 // based on the user who owns the other end of the connection.
 // If c is not backed by a named pipe, an error is returned.
 func GetConnIdentity(logf logger.Logf, c net.Conn) (ci *ConnIdentity, err error) {
-	ci = &ConnIdentity{conn: c}
+	ci = &ConnIdentity{conn: c, notWindows: false}
 	wcc, ok := c.(*safesocket.WindowsClientConn)
 	if !ok {
 		return nil, fmt.Errorf("not a WindowsClientConn: %T", c)

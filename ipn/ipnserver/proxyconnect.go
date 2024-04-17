@@ -48,7 +48,7 @@ func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) 
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "CONNECT hijack unavailable", http.StatusInternalServerError)
 		return
 	}
 	c, br, err := hj.Hijack()

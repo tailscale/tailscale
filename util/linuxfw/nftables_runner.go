@@ -429,7 +429,7 @@ func getOrCreateChain(c *nftables.Conn, cinfo chainInfo) (*nftables.Chain, error
 		return chain, nil
 	}
 
-	_ = c.AddChain(&nftables.Chain{
+	chain = c.AddChain(&nftables.Chain{
 		Name:     cinfo.name,
 		Table:    cinfo.table,
 		Type:     cinfo.chainType,
@@ -509,12 +509,24 @@ type NetfilterRunner interface {
 	// ClampMSSToPMTU adds a rule to the mangle/FORWARD chain to clamp MSS for
 	// traffic destined for the provided tun interface.
 	ClampMSSToPMTU(tun string, addr netip.Addr) error
+
+	// AddMagicsockPortRule adds a rule to the ts-input chain to accept
+	// incoming traffic on the specified port, to allow magicsock to
+	// communicate.
+	AddMagicsockPortRule(port uint16, network string) error
+
+	// DelMagicsockPortRule removes the rule created by AddMagicsockPortRule,
+	// if it exists.
+	DelMagicsockPortRule(port uint16, network string) error
 }
 
-// New creates a NetfilterRunner using either nftables or iptables.
-// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
-func New(logf logger.Logf) (NetfilterRunner, error) {
-	mode := detectFirewallMode(logf)
+// New creates a NetfilterRunner, auto-detecting whether to use
+// nftables or iptables.
+// As nftables is still experimental, iptables will be used unless
+// either the TS_DEBUG_FIREWALL_MODE environment variable, or the prefHint
+// parameter, is set to one of "nftables" or "auto".
+func New(logf logger.Logf, prefHint string) (NetfilterRunner, error) {
+	mode := detectFirewallMode(logf, prefHint)
 	switch mode {
 	case FirewallModeIPTables:
 		return newIPTablesRunner(logf)
@@ -578,6 +590,17 @@ func newLoadSaddrExpr(proto nftables.TableFamily, destReg uint32) (expr.Any, err
 		}, nil
 	default:
 		return nil, fmt.Errorf("table family %v is neither IPv4 nor IPv6", proto)
+	}
+}
+
+// newLoadDportExpr creates a new nftables express that loads the desination port
+// of a TCP/UDP packet into the given register.
+func newLoadDportExpr(destReg uint32) expr.Any {
+	return &expr.Payload{
+		DestRegister: destReg,
+		Base:         expr.PayloadBaseTransportHeader,
+		Offset:       2,
+		Len:          2,
 	}
 }
 
@@ -1259,6 +1282,125 @@ func addAcceptOutgoingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 
 	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("flush add rule: %w", err)
+	}
+
+	return nil
+}
+
+// createAcceptOnPortRule creates a rule to accept incoming packets to
+// a given destination UDP port.
+func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, port)
+	return &nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Meta{
+				Key:      expr.MetaKeyL4PROTO,
+				Register: 1,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{unix.IPPROTO_UDP},
+			},
+			newLoadDportExpr(1),
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     portBytes,
+			},
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind: expr.VerdictAccept,
+			},
+		},
+	}
+}
+
+// addAcceptOnPortRule adds a rule to accept incoming packets to
+// a given destination UDP port.
+func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
+	rule := createAcceptOnPortRule(table, chain, port)
+	_ = conn.AddRule(rule)
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush add rule: %w", err)
+	}
+
+	return nil
+}
+
+// addAcceptOnPortRule removes a rule to accept incoming packets to
+// a given destination UDP port.
+func removeAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
+	rule := createAcceptOnPortRule(table, chain, port)
+	rule, err := findRule(conn, rule)
+	if err != nil {
+		return fmt.Errorf("find rule: %v", err)
+	}
+
+	_ = conn.DelRule(rule)
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush del rule: %w", err)
+	}
+
+	return nil
+}
+
+// AddMagicsockPortRule adds a rule to nftables to allow incoming traffic on
+// the specified UDP port, so magicsock can accept incoming connections.
+// network must be either "udp4" or "udp6" - this determines whether the rule
+// is added for IPv4 or IPv6.
+func (n *nftablesRunner) AddMagicsockPortRule(port uint16, network string) error {
+	var filterTable *nftables.Table
+	switch network {
+	case "udp4":
+		filterTable = n.nft4.Filter
+	case "udp6":
+		filterTable = n.nft6.Filter
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	inputChain, err := getChainFromTable(n.conn, filterTable, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain: %v", err)
+	}
+
+	err = addAcceptOnPortRule(n.conn, filterTable, inputChain, port)
+	if err != nil {
+		return fmt.Errorf("add accept on port rule: %v", err)
+	}
+
+	return nil
+}
+
+// DelMagicsockPortRule removes a rule added by AddMagicsockPortRule to accept
+// incoming traffic on a particular UDP port.
+// network must be either "udp4" or "udp6" - this determines whether the rule
+// is removed for IPv4 or IPv6.
+func (n *nftablesRunner) DelMagicsockPortRule(port uint16, network string) error {
+	var filterTable *nftables.Table
+	switch network {
+	case "udp4":
+		filterTable = n.nft4.Filter
+	case "udp6":
+		filterTable = n.nft6.Filter
+	default:
+		return fmt.Errorf("unsupported network %s", network)
+	}
+
+	inputChain, err := getChainFromTable(n.conn, filterTable, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain: %v", err)
+	}
+
+	err = removeAcceptOnPortRule(n.conn, filterTable, inputChain, port)
+	if err != nil {
+		return fmt.Errorf("add accept on port rule: %v", err)
 	}
 
 	return nil

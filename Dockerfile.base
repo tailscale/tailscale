@@ -1,5 +1,5 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
-FROM alpine:3.16
+FROM alpine:3.18
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables iputils

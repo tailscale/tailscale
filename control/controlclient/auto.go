@@ -252,14 +252,6 @@ func (c *Auto) updateControl() {
 	}
 }
 
-// cancelAuthCtx cancels the existing auth goroutine's context
-// & creates a new one, causing it to restart.
-func (c *Auto) cancelAuthCtx() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cancelAuthCtxLocked()
-}
-
 // cancelAuthCtxLocked is like cancelAuthCtx, but assumes the caller holds c.mu.
 func (c *Auto) cancelAuthCtxLocked() {
 	if c.authCancel != nil {
@@ -269,14 +261,6 @@ func (c *Auto) cancelAuthCtxLocked() {
 		c.authCtx, c.authCancel = context.WithCancel(context.Background())
 		c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, c.logf)
 	}
-}
-
-// cancelMapCtx cancels the context for the existing mapPoll and liteUpdates
-// goroutines and creates a new one, causing them to restart.
-func (c *Auto) cancelMapCtx() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cancelMapCtxLocked()
 }
 
 // cancelMapCtxLocked is like cancelMapCtx, but assumes the caller holds c.mu.

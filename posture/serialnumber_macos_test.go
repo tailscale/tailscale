@@ -15,7 +15,7 @@ import (
 
 func TestGetSerialNumberMac(t *testing.T) {
 	// Do not run this test on CI, it can only be ran on macOS
-	// and we currenty only use Linux runners.
+	// and we currently only use Linux runners.
 	if cibuild.On() {
 		t.Skip()
 	}

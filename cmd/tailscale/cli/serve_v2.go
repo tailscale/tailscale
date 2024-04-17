@@ -93,14 +93,6 @@ var infoMap = map[serveMode]commandInfo{
 	},
 }
 
-func buildShortUsage(subcmd string) string {
-	return strings.Join([]string{
-		subcmd + " [flags] <target> [off]",
-		subcmd + " status [--json]",
-		subcmd + " reset",
-	}, "\n  ")
-}
-
 // errHelpFunc is standard error text that prompts users to
 // run `$subcmd --help` for information on how to use serve.
 var errHelpFunc = func(m serveMode) error {

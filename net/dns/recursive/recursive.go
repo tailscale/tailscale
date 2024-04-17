@@ -163,13 +163,6 @@ func (r *Resolver) logf(format string, args ...any) {
 	r.Logf(format, args...)
 }
 
-func (r *Resolver) dlogf(format string, args ...any) {
-	if r.Logf == nil || !debug() {
-		return
-	}
-	r.Logf(format, args...)
-}
-
 func (r *Resolver) depthlogf(depth int, format string, args ...any) {
 	if r.Logf == nil || !debug() {
 		return

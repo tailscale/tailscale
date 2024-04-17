@@ -501,7 +501,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	startLoginInteractive := func() { loginOnce.Do(func() { localClient.StartLoginInteractive(ctx) }) }
 
 	go func() {
-		var cv *tailcfg.ClientVersion
 		for {
 			n, err := watcher.Next()
 			if err != nil {
@@ -511,9 +510,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if n.ErrMessage != nil {
 				msg := *n.ErrMessage
 				fatalf("backend error: %v\n", msg)
-			}
-			if n.ClientVersion != nil {
-				cv = n.ClientVersion
 			}
 			if s := n.State; s != nil {
 				switch *s {
@@ -533,15 +529,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					} else if printed {
 						// Only need to print an update if we printed the "please click" message earlier.
 						fmt.Fprintf(Stderr, "Success.\n")
-						if cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-							if cv.UrgentSecurityUpdate {
-								fmt.Fprintf(Stderr, "\nSecurity update available: %v -> %v\n", version.Short(), cv.LatestVersion)
-							} else {
-								fmt.Fprintf(Stderr, "\nUpdate available: %v -> %v\n", version.Short(), cv.LatestVersion)
-							}
-							fmt.Fprintln(Stderr, "Changelog: https://tailscale.com/changelog/#client")
-							fmt.Fprintln(Stderr, "Run `tailscale update` or `tailscale set --auto-update` to update")
-						}
 					}
 					select {
 					case running <- true:
@@ -664,7 +651,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 func upWorthyWarning(s string) bool {
 	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
 		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
-		strings.Contains(s, healthmsg.LockedOut)
+		strings.Contains(s, healthmsg.LockedOut) ||
+		strings.Contains(strings.ToLower(s), "update available: ")
 }
 
 func checkUpWarnings(ctx context.Context) {
@@ -730,8 +718,8 @@ func init() {
 	addPrefFlagMapping("ssh", "RunSSH")
 	addPrefFlagMapping("webclient", "RunWebClient")
 	addPrefFlagMapping("nickname", "ProfileName")
-	addPrefFlagMapping("update-check", "AutoUpdate")
-	addPrefFlagMapping("auto-update", "AutoUpdate")
+	addPrefFlagMapping("update-check", "AutoUpdate.Check")
+	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
 }
@@ -740,9 +728,14 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 	prefsOfFlag[flagName] = prefNames
 	prefType := reflect.TypeOf(ipn.Prefs{})
 	for _, pref := range prefNames {
-		// Crash at runtime if there's a typo in the prefName.
-		if _, ok := prefType.FieldByName(pref); !ok {
-			panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+		t := prefType
+		for _, name := range strings.Split(pref, ".") {
+			// Crash at runtime if there's a typo in the prefName.
+			f, ok := t.FieldByName(name)
+			if !ok {
+				panic(fmt.Sprintf("invalid ipn.Prefs field %q", pref))
+			}
+			t = f.Type
 		}
 	}
 }
@@ -763,7 +756,11 @@ func updateMaskedPrefsFromUpOrSetFlag(mp *ipn.MaskedPrefs, flagName string) {
 	}
 	if prefs, ok := prefsOfFlag[flagName]; ok {
 		for _, pref := range prefs {
-			reflect.ValueOf(mp).Elem().FieldByName(pref + "Set").SetBool(true)
+			f := reflect.ValueOf(mp).Elem()
+			for _, name := range strings.Split(pref, ".") {
+				f = f.FieldByName(name + "Set")
+			}
+			f.SetBool(true)
 		}
 		return
 	}
@@ -1045,18 +1042,6 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 		}
 	}
 	return
-}
-
-func anyPeerAdvertisingRoutes(st *ipnstate.Status) bool {
-	for _, ps := range st.Peer {
-		if ps.PrimaryRoutes == nil {
-			continue
-		}
-		if ps.PrimaryRoutes.Len() > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func init() {

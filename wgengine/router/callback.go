@@ -56,6 +56,13 @@ func (r *CallbackRouter) Set(rcfg *Config) error {
 	return r.SetBoth(r.rcfg, r.dcfg)
 }
 
+// UpdateMagicsockPort implements the Router interface. This implementation
+// does nothing and returns nil because this router does not currently need
+// to know what the magicsock UDP port is.
+func (r *CallbackRouter) UpdateMagicsockPort(_ uint16, _ string) error {
+	return nil
+}
+
 // SetDNS implements dns.OSConfigurator.
 func (r *CallbackRouter) SetDNS(dcfg dns.OSConfig) error {
 	r.mu.Lock()

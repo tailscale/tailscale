@@ -7,7 +7,6 @@ import (
 	"flag"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -34,13 +33,6 @@ func TestFindModuleInfo(t *testing.T) {
 	if !strings.HasPrefix(modinfo, prefix) {
 		t.Errorf("unexpected modinfo contents %q", modinfo)
 	}
-}
-
-func exe() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
 }
 
 var findModuleInfoName = flag.String("module-info-file", "", "if non-empty, test findModuleInfo against this filename")

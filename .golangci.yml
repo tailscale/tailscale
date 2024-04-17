@@ -6,6 +6,7 @@ linters:
     - bidichk
     - gofmt
     - goimports
+    - govet
     - misspell
     - revive
 
@@ -34,6 +35,48 @@ linters-settings:
         replacement: 'any'
 
   goimports:
+
+  govet:
+    # Matches what we use in corp as of 2023-12-07
+    enable:
+      - asmdecl
+      - assign
+      - atomic
+      - bools
+      - buildtag
+      - cgocall
+      - copylocks
+      - deepequalerrors
+      - errorsas
+      - framepointer
+      - httpresponse
+      - ifaceassert
+      - loopclosure
+      - lostcancel
+      - nilfunc
+      - nilness
+      - printf
+      - reflectvaluecompare
+      - shift
+      - sigchanyzer
+      - sortslice
+      - stdmethods
+      - stringintconv
+      - structtag
+      - testinggoroutine
+      - tests
+      - unmarshal
+      - unreachable
+      - unsafeptr
+      - unusedresult
+    settings:
+      printf:
+        # List of print function names to check (in addition to default)
+        funcs:
+          - github.com/tailscale/tailscale/types/logger.Discard
+          # NOTE(andrew-d): this doesn't currently work because the printf
+          # analyzer doesn't support type declarations
+          #- github.com/tailscale/tailscale/types/logger.Logf
 
   misspell:
 

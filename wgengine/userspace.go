@@ -324,6 +324,13 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 		e.RequestStatus()
 	}
+	onPortUpdate := func(port uint16, network string) {
+		e.logf("onPortUpdate(port=%v, network=%s)", port, network)
+
+		if err := e.router.UpdateMagicsockPort(port, network); err != nil {
+			e.logf("UpdateMagicsockPort(port=%v, network=%s) failed: %w", port, network, err)
+		}
+	}
 	magicsockOpts := magicsock.Options{
 		Logf:             logf,
 		Port:             conf.ListenPort,
@@ -333,6 +340,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		NoteRecvActivity: e.noteRecvActivity,
 		NetMon:           e.netMon,
 		ControlKnobs:     conf.ControlKnobs,
+		OnPortUpdate:     onPortUpdate,
 	}
 
 	var err error
@@ -977,8 +985,6 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 	return e.statusCallback
 }
 
-var singleNewline = []byte{'\n'}
-
 var ErrEngineClosing = errors.New("engine closing; no status")
 
 func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
@@ -1479,8 +1485,7 @@ func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
 }
 
 var (
-	metricMagicDNSPacketIn = clientmetric.NewCounter("magicdns_packet_in") // for 100.100.100.100
-	metricReflectToOS      = clientmetric.NewCounter("packet_reflect_to_os")
+	metricReflectToOS = clientmetric.NewCounter("packet_reflect_to_os")
 
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")

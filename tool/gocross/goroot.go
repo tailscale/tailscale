@@ -6,7 +6,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -37,30 +36,6 @@ func makeGoroot(toolchainRoot, outPath string) error {
 	}
 	if err := linkFarm(filepath.Join(toolchainRoot, "bin"), filepath.Join(outPath, "bin")); err != nil {
 		return fmt.Errorf("creating GOROOT/bin link farm: %v", err)
-	}
-
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	s, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("opening %q: %v", src, err)
-	}
-	defer s.Close()
-
-	d, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE, 0755)
-	if err != nil {
-		return fmt.Errorf("opening %q: %v", dst, err)
-	}
-
-	if _, err := io.Copy(d, s); err != nil {
-		d.Close()
-		return fmt.Errorf("copying %q to %q: %v", src, dst, err)
-	}
-
-	if err := d.Close(); err != nil {
-		return fmt.Errorf("closing %q: %v", dst, err)
 	}
 
 	return nil

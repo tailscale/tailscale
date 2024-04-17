@@ -656,8 +656,6 @@ func v6addrs(aa []netip.Addr) (ret []netip.Addr) {
 	return ret
 }
 
-var errTLSHandshakeTimeout = errors.New("timeout doing TLS handshake")
-
 // TLSDialer is like Dialer but returns a func suitable for using with net/http.Transport.DialTLSContext.
 // It returns a *tls.Conn type on success.
 // On TLS cert validation failure, it can invoke a backup DNS resolution strategy.

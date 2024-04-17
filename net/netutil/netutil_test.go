@@ -6,6 +6,7 @@ package netutil
 import (
 	"io"
 	"net"
+	"net/netip"
 	"runtime"
 	"testing"
 )
@@ -64,4 +65,15 @@ func TestIPForwardingEnabledLinux(t *testing.T) {
 	if got {
 		t.Errorf("got true; want false")
 	}
+}
+
+func TestCheckReversePathFiltering(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("skipping on %s", runtime.GOOS)
+	}
+	warn, err := CheckReversePathFiltering([]netip.Prefix{
+		netip.MustParsePrefix("192.168.1.1/24"),
+	}, nil)
+	t.Logf("err: %v", err)
+	t.Logf("warnings: %v", warn)
 }

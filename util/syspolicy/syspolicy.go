@@ -68,6 +68,12 @@ func (p PreferenceOption) ShouldEnable(userChoice bool) bool {
 	}
 }
 
+// WillOverride checks if the choice administered by the policy is different
+// from the user's choice.
+func (p PreferenceOption) WillOverride(userChoice bool) bool {
+	return p.ShouldEnable(userChoice) != userChoice
+}
+
 // GetPreferenceOption loads a policy from the registry that can be
 // managed by an enterprise policy management system and allows administrative
 // overrides of users' choices in a way that we do not want tailcontrol to have

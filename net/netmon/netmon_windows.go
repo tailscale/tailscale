@@ -29,6 +29,7 @@ type winMon struct {
 	logf                  logger.Logf
 	ctx                   context.Context
 	cancel                context.CancelFunc
+	isActive              func() bool
 	messagec              chan eventMessage
 	addressChangeCallback *winipcfg.UnicastAddressChangeCallback
 	routeChangeCallback   *winipcfg.RouteChangeCallback
@@ -44,9 +45,10 @@ type winMon struct {
 	noDeadlockTicker *time.Ticker
 }
 
-func newOSMon(logf logger.Logf, _ *Monitor) (osMon, error) {
+func newOSMon(logf logger.Logf, pm *Monitor) (osMon, error) {
 	m := &winMon{
 		logf:             logf,
+		isActive:         pm.isActive,
 		messagec:         make(chan eventMessage, 1),
 		noDeadlockTicker: time.NewTicker(5000 * time.Hour), // arbitrary
 	}
@@ -130,6 +132,16 @@ func (m *winMon) Receive() (message, error) {
 
 // unicastAddressChanged is the callback we register with Windows to call when unicast address changes.
 func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibUnicastIPAddressRow) {
+	if !m.isActive() {
+		// Avoid starting a goroutine that sends events to messagec,
+		// or sending messages to messagec directly, if the monitor
+		// hasn't started and Receive is not yet reading from messagec.
+		//
+		// Doing so can lead to goroutine leaks or deadlocks, especially
+		// if the monitor is never started.
+		return
+	}
+
 	what := "addr"
 	if ip := row.Address.Addr(); ip.IsValid() && tsaddr.IsTailscaleIP(ip.Unmap()) {
 		what = "tsaddr"
@@ -141,6 +153,16 @@ func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *wini
 
 // routeChanged is the callback we register with Windows to call when route changes.
 func (m *winMon) routeChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibIPforwardRow2) {
+	if !m.isActive() {
+		// Avoid starting a goroutine that sends events to messagec,
+		// or sending messages to messagec directly, if the monitor
+		// hasn't started and Receive is not yet reading from messagec.
+		//
+		// Doing so can lead to goroutine leaks or deadlocks, especially
+		// if the monitor is never started.
+		return
+	}
+
 	what := "route"
 	ip := row.DestinationPrefix.Prefix().Addr().Unmap()
 	if ip.IsValid() && tsaddr.IsTailscaleIP(ip) {
@@ -158,4 +180,11 @@ func (m *winMon) somethingChanged(evt string) {
 	case m.messagec <- eventMessage{eventType: evt}:
 		return
 	}
+}
+
+// isActive reports whether this monitor has been started and not yet closed.
+func (m *Monitor) isActive() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started && !m.closed
 }

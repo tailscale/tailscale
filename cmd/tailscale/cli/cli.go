@@ -131,6 +131,7 @@ change in the future.
 			licensesCmd,
 			exitNodeCmd,
 			updateCmd,
+			whoisCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },

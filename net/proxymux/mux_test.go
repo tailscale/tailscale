@@ -138,8 +138,8 @@ func mkWorld(t *testing.T) (ret *world) {
 	}
 	go httpProxy.Serve(ret.httpListener)
 
-	socksProxy := socks5.Server{}
-	go socksProxy.Serve(ret.socksListener)
+	ret.socksProxy = &socks5.Server{}
+	go ret.socksProxy.Serve(ret.socksListener)
 
 	ret.httpClient = &http.Client{
 		Transport: &http.Transport{

@@ -2378,17 +2378,9 @@ func (h *Handler) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := clientupdate.NewUpdater(clientupdate.Arguments{
-		ForAutoUpdate: true,
-	})
-
-	if err != nil {
+	if !clientupdate.CanAutoUpdate() {
 		// if we don't support auto-update, just say that we're up to date
-		if errors.Is(err, errors.ErrUnsupported) {
-			json.NewEncoder(w).Encode(tailcfg.ClientVersion{RunningLatest: true})
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		json.NewEncoder(w).Encode(tailcfg.ClientVersion{RunningLatest: true})
 		return
 	}
 

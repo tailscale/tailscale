@@ -8,6 +8,12 @@ oauth: {}
   # clientId: ""
   # clientSecret: ""
 
+# enableConnector determines whether the operator should reconcile
+# connector.tailscale.com custom resources. If set to true you have to install
+# connector CRD in a separate step.
+# You can do so by running 'kubectl apply -f ./cmd/k8s-operator/deploy/crds'.
+enableConnector: "false"
+
 operatorConfig:
   image:
     repo: tailscale/k8s-operator
@@ -16,7 +22,7 @@ operatorConfig:
     tag: ""
     digest: ""
     pullPolicy: Always
-  logging: "info"
+  logging: "info" # info, debug, dev
   hostname: "tailscale-operator"
   nodeSelector:
     kubernetes.io/os: linux
@@ -47,7 +53,9 @@ proxyConfig:
   # ACL tag that operator will tag proxies with. Operator must be made owner of
   # these tags
   # https://tailscale.com/kb/1236/kubernetes-operator/?q=operator#setting-up-the-kubernetes-operator
-  defaultTags: tag:k8s
+  # Multiple tags can be passed as a comma-separated string i.e 'tag:k8s-proxies,tag:prod'.
+  # Note that if you pass multiple tags to this field via `--set` flag to helm upgrade/install commands you must escape the comma (for example, "tag:k8s-proxies\,tag:prod"). See https://github.com/helm/helm/issues/1556
+  defaultTags: "tag:k8s"
   firewallMode: auto
 
 # apiServerProxyConfig allows to configure whether the operator should expose

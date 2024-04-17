@@ -178,7 +178,7 @@ func (li *linuxImpl) parseProcNetFile(r *bufio.Reader, fileBase string) error {
 	// Scratch buffer for making inode strings.
 	inoBuf := make([]byte, 0, 50)
 
-	for err == nil {
+	for {
 		line, err := r.ReadSlice('\n')
 		if err == io.EOF {
 			break

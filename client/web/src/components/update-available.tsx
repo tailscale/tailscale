@@ -1,14 +1,21 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import React from "react"
-import { VersionInfo } from "src/hooks/self-update"
-import { Link } from "wouter"
+import { VersionInfo } from "src/types"
+import Button from "src/ui/button"
+import Card from "src/ui/card"
+import { useLocation } from "wouter"
 
 export function UpdateAvailableNotification({
   details,
 }: {
   details: VersionInfo
 }) {
+  const [, setLocation] = useLocation()
+
   return (
-    <div className="card">
+    <Card>
       <h2 className="mb-2">
         Update available{" "}
         {details.LatestVersion && `(v${details.LatestVersion})`}
@@ -19,13 +26,14 @@ export function UpdateAvailableNotification({
           : "A new update"}{" "}
         is now available. <ChangelogText version={details.LatestVersion} />
       </p>
-      <Link
-        className="button button-blue mt-3 text-sm inline-block"
-        to="/update"
+      <Button
+        className="mt-3 inline-block"
+        sizeVariant="small"
+        onClick={() => setLocation("/update")}
       >
         Update now
-      </Link>
-    </div>
+      </Button>
+    </Card>
   )
 }
 

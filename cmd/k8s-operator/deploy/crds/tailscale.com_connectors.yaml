@@ -1,0 +1,134 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.13.0
+  name: connectors.tailscale.com
+spec:
+  group: tailscale.com
+  names:
+    kind: Connector
+    listKind: ConnectorList
+    plural: connectors
+    shortNames:
+      - cn
+    singular: connector
+  scope: Cluster
+  versions:
+    - additionalPrinterColumns:
+        - description: Cluster CIDR ranges exposed to tailnet via subnet router
+          jsonPath: .status.subnetRouter.routes
+          name: SubnetRoutes
+          type: string
+        - description: Status of the components deployed by the connector
+          jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
+          name: Status
+          type: string
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+              type: string
+            kind:
+              description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: Desired state of the Connector resource.
+              type: object
+              required:
+                - subnetRouter
+              properties:
+                subnetRouter:
+                  description: SubnetRouter configures a Tailscale subnet router to be deployed in the cluster. If unset no subnet router will be deployed. https://tailscale.com/kb/1019/subnets/
+                  type: object
+                  required:
+                    - routes
+                  properties:
+                    hostname:
+                      description: Hostname is the tailnet hostname that should be assigned to the subnet router node. If unset hostname is defaulted to <connector name>-subnetrouter. Hostname can contain lower case letters, numbers and dashes, it must not start or end with a dash and must be between 2 and 63 characters long.
+                      type: string
+                      pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
+                    routes:
+                      description: Routes refer to in-cluster CIDRs that the subnet router should make available. Route values must be strings that represent a valid IPv4 or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes. https://tailscale.com/kb/1201/4via6-subnets/
+                      type: array
+                      items:
+                        type: string
+                        format: cidr
+                    tags:
+                      description: Tags that the Tailscale node will be tagged with. If you want the subnet router to be autoapproved, you can configure Tailscale ACLs to autoapprove the subnetrouter's CIDRs for these tags. See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes Defaults to tag:k8s. If you specify custom tags here, you must also make tag:k8s-operator owner of the custom tag. See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator. Tags cannot be changed once a Connector has been created. Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
+                      type: array
+                      items:
+                        type: string
+                        pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                  x-kubernetes-validations:
+                    - rule: has(self.tags) == has(oldSelf.tags)
+                      message: Subnetrouter tags cannot be changed. Delete and redeploy the Connector if you need to change it.
+            status:
+              description: Status of the Connector. This is set and managed by the Tailscale operator.
+              type: object
+              properties:
+                conditions:
+                  description: List of status conditions to indicate the status of the Connector. Known condition types are `ConnectorReady`.
+                  type: array
+                  items:
+                    description: ConnectorCondition contains condition information for a Connector.
+                    type: object
+                    required:
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: LastTransitionTime is the timestamp corresponding to the last status change of this condition.
+                        type: string
+                        format: date-time
+                      message:
+                        description: Message is a human readable description of the details of the last transition, complementing reason.
+                        type: string
+                      observedGeneration:
+                        description: If set, this represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.condition[x].observedGeneration is 9, the condition is out of date with respect to the current state of the Connector.
+                        type: integer
+                        format: int64
+                      reason:
+                        description: Reason is a brief machine readable explanation for the condition's last transition.
+                        type: string
+                      status:
+                        description: Status of the condition, one of ('True', 'False', 'Unknown').
+                        type: string
+                      type:
+                        description: Type of the condition, known values are (`SubnetRouterReady`).
+                        type: string
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+                subnetRouter:
+                  description: SubnetRouter status is the current status of a subnet router
+                  type: object
+                  required:
+                    - message
+                    - ready
+                    - reason
+                    - routes
+                  properties:
+                    message:
+                      description: Message is a more verbose reason for the current subnet router status
+                      type: string
+                    ready:
+                      description: Ready is the ready status of the subnet router
+                      type: string
+                    reason:
+                      description: Reason is the reason for the subnet router status
+                      type: string
+                    routes:
+                      description: Routes are the CIDRs currently exposed via subnet router
+                      type: string
+      served: true
+      storage: true
+      subresources:
+        status: {}

@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -300,32 +299,6 @@ func TestConnMemoryOverhead(t *testing.T) {
 	if ngo >= ng0+num/10 {
 		t.Errorf("goroutines didn't go back down; started at %v, now %v", ng0, ngo)
 	}
-}
-
-// mkConns creates synthetic Noise Conns wrapping the given net.Conns.
-// This function is for testing just the Conn transport logic without
-// having to muck about with Noise handshakes.
-func mkConns(s1, s2 net.Conn) (*Conn, *Conn) {
-	var k1, k2 [chp.KeySize]byte
-	if _, err := rand.Read(k1[:]); err != nil {
-		panic(err)
-	}
-	if _, err := rand.Read(k2[:]); err != nil {
-		panic(err)
-	}
-
-	ret1 := &Conn{
-		conn: s1,
-		tx:   txState{cipher: newCHP(k1)},
-		rx:   rxState{cipher: newCHP(k2)},
-	}
-	ret2 := &Conn{
-		conn: s2,
-		tx:   txState{cipher: newCHP(k2)},
-		rx:   rxState{cipher: newCHP(k1)},
-	}
-
-	return ret1, ret2
 }
 
 type readSink struct {

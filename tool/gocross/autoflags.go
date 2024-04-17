@@ -96,6 +96,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		cgo = true
 		buildFlags = append(buildFlags, "-buildmode=c-shared")
 		ldflags = append(ldflags, "-H", "windows", "-s")
+		cgoLdflags = append(cgoLdflags, "-static")
 		var mingwArch string
 		switch targetArch {
 		case "amd64":

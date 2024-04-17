@@ -558,7 +558,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				AllowSingleHosts: true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -575,7 +574,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode:    preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -594,7 +592,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode: preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -684,7 +681,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:        true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -701,7 +697,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:        true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -720,7 +715,6 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				},
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
-					Apply: false,
 				},
 			},
 		},
@@ -786,7 +780,7 @@ func TestPrefFlagMapping(t *testing.T) {
 	prefHasFlag := map[string]bool{}
 	for _, pv := range prefsOfFlag {
 		for _, pref := range pv {
-			prefHasFlag[pref] = true
+			prefHasFlag[strings.Split(pref, ".")[0]] = true
 		}
 	}
 
@@ -812,6 +806,10 @@ func TestPrefFlagMapping(t *testing.T) {
 			continue
 		case "RunWebClient":
 			// TODO(tailscale/corp#14335): Currently behind a feature flag.
+			continue
+		case "NetfilterKind":
+			// Handled by TS_DEBUG_FIREWALL_MODE env var, we don't want to have
+			// a CLI flag for this. The Pref is used by c2n.
 			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
@@ -1324,7 +1322,9 @@ func TestParseNLArgs(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			keys, disablements, err := parseNLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
-			if !reflect.DeepEqual(err, tc.wantErr) {
+			if (tc.wantErr == nil && err != nil) ||
+				(tc.wantErr != nil && err == nil) ||
+				(tc.wantErr != nil && err != nil && tc.wantErr.Error() != err.Error()) {
 				t.Fatalf("parseNLArgs(%v).err = %v, want %v", tc.input, err, tc.wantErr)
 			}
 

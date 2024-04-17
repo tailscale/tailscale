@@ -342,11 +342,11 @@ func getVal() *tailscaleTypes {
 }
 
 type IntThenByte struct {
-	i int
-	b byte
+	_ int
+	_ byte
 }
 
-type TwoInts struct{ a, b int }
+type TwoInts struct{ _, _ int }
 
 type IntIntByteInt struct {
 	i1, i2 int32
@@ -355,7 +355,6 @@ type IntIntByteInt struct {
 }
 
 func u8(n uint8) string   { return string([]byte{n}) }
-func u16(n uint16) string { return string(binary.LittleEndian.AppendUint16(nil, n)) }
 func u32(n uint32) string { return string(binary.LittleEndian.AppendUint32(nil, n)) }
 func u64(n uint64) string { return string(binary.LittleEndian.AppendUint64(nil, n)) }
 func ux(n uint) string {

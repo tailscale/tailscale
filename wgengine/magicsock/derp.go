@@ -424,8 +424,8 @@ func (c *Conn) setPeerLastDerpLocked(peer key.NodePublic, regionID, homeID int) 
 	}
 }
 
-// derpReadResult is the type sent by runDerpClient to ReceiveIPv4
-// when a DERP packet is available.
+// derpReadResult is the type sent by Conn.runDerpReader to connBind.receiveDERP
+// when a derp.ReceivedPacket is available.
 //
 // Notably, it doesn't include the derp.ReceivedPacket because we
 // don't want to give the receiver access to the aliased []byte.  To
@@ -542,6 +542,17 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 					c.addDerpPeerRoute(res.src, regionID, dc)
 				}
 			}
+			select {
+			case <-ctx.Done():
+				return
+			case c.derpRecvCh <- res:
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-didCopy:
+				continue
+			}
 		case derp.PingMessage:
 			// Best effort reply to the ping.
 			pingData := [8]byte(m)
@@ -553,6 +564,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 			continue
 		case derp.HealthMessage:
 			health.SetDERPRegionHealth(regionID, m.Problem)
+			continue
 		case derp.PeerGoneMessage:
 			switch m.Reason {
 			case derp.PeerGoneReasonDisconnected:
@@ -567,21 +579,9 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 					regionID, key.NodePublic(m.Peer).ShortString(), m.Reason)
 			}
 			c.removeDerpPeerRoute(key.NodePublic(m.Peer), regionID, dc)
+			continue
 		default:
 			// Ignore.
-			continue
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case c.derpRecvCh <- res:
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-didCopy:
 			continue
 		}
 	}

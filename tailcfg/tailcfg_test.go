@@ -4,7 +4,6 @@
 package tailcfg_test
 
 import (
-	"encoding"
 	"encoding/json"
 	"net/netip"
 	"os"
@@ -636,30 +635,6 @@ func TestNetInfoFields(t *testing.T) {
 	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
 		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, handled)
-	}
-}
-
-type keyIn interface {
-	String() string
-	MarshalText() ([]byte, error)
-}
-
-func testKey(t *testing.T, prefix string, in keyIn, out encoding.TextUnmarshaler) {
-	got, err := in.MarshalText()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := out.UnmarshalText(got); err != nil {
-		t.Fatal(err)
-	}
-	if s := in.String(); string(got) != s {
-		t.Errorf("MarshalText = %q != String %q", got, s)
-	}
-	if !strings.HasPrefix(string(got), prefix) {
-		t.Errorf("%q didn't start with prefix %q", got, prefix)
-	}
-	if reflect.ValueOf(out).Elem().Interface() != in {
-		t.Errorf("mismatch after unmarshal")
 	}
 }
 

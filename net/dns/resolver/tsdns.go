@@ -189,8 +189,6 @@ type Resolver struct {
 
 	// closed signals all goroutines to stop.
 	closed chan struct{}
-	// wg signals when all goroutines have stopped.
-	wg sync.WaitGroup
 
 	// mu guards the following fields from being updated while used.
 	mu           sync.Mutex
@@ -609,6 +607,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 			}
 		}
 		// Not authoritative, signal that forwarding is advisable.
+		metricDNSResolveLocalErrorRefused.Add(1)
 		return netip.Addr{}, dns.RCodeRefused
 	}
 
@@ -1248,6 +1247,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	resp := parser.response()
 	resp.Header.RCode = rcode
 	resp.IP = ip
+	metricDNSMagicDNSSuccessName.Add(1)
 	return marshalResponse(resp)
 }
 
@@ -1305,9 +1305,8 @@ var (
 	metricDNSFwdErrorContext         = clientmetric.NewCounter("dns_query_fwd_error_context")
 	metricDNSFwdErrorContextGotError = clientmetric.NewCounter("dns_query_fwd_error_context_got_error")
 
-	metricDNSFwdErrorType      = clientmetric.NewCounter("dns_query_fwd_error_type")
-	metricDNSFwdErrorParseAddr = clientmetric.NewCounter("dns_query_fwd_error_parse_addr")
-	metricDNSFwdTruncated      = clientmetric.NewCounter("dns_query_fwd_truncated")
+	metricDNSFwdErrorType = clientmetric.NewCounter("dns_query_fwd_error_type")
+	metricDNSFwdTruncated = clientmetric.NewCounter("dns_query_fwd_truncated")
 
 	metricDNSFwdUDP            = clientmetric.NewCounter("dns_query_fwd_udp")       // on entry
 	metricDNSFwdUDPWrote       = clientmetric.NewCounter("dns_query_fwd_udp_wrote") // sent UDP packet

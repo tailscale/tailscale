@@ -11,7 +11,7 @@
 //	senderDiscoPub [32]byte // nacl public key
 //	nonce          [24]byte
 //
-// The recipient then decrypts the bytes following (the nacl secretbox)
+// The recipient then decrypts the bytes following (the nacl box)
 // and then the inner payload structure is:
 //
 //	messageType     byte  (the MessageType constants below)
@@ -35,7 +35,7 @@ const Magic = "TS💬" // 6 bytes: 0x54 53 f0 9f 92 ac
 
 const keyLen = 32
 
-// NonceLen is the length of the nonces used by nacl secretboxes.
+// NonceLen is the length of the nonces used by nacl box.
 const NonceLen = 24
 
 type MessageType byte
@@ -70,7 +70,7 @@ func Source(p []byte) (src []byte, ok bool) {
 }
 
 // Parse parses the encrypted part of the message from inside the
-// nacl secretbox.
+// nacl box.
 func Parse(p []byte) (Message, error) {
 	if len(p) < 2 {
 		return nil, errShort

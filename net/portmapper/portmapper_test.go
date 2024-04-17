@@ -51,6 +51,7 @@ func TestClientProbeThenMap(t *testing.T) {
 	}
 	c := NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), nil)
 	defer c.Close()
+	c.debug.VerboseLogs = true
 	c.SetLocalPort(1234)
 	res, err := c.Probe(context.Background())
 	t.Logf("Probe: %+v, %v", res, err)

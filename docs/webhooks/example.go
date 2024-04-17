@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package webhooks provides example consumer code for Tailscale
+// Command webhooks provides example consumer code for Tailscale
 // webhooks.
-package webhooks
+package main
 
 import (
 	"crypto/hmac"

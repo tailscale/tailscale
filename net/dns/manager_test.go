@@ -636,13 +636,6 @@ func mustIPs(strs ...string) (ret []netip.Addr) {
 	return ret
 }
 
-func mustIPPs(strs ...string) (ret []netip.AddrPort) {
-	for _, s := range strs {
-		ret = append(ret, netip.MustParseAddrPort(s))
-	}
-	return ret
-}
-
 func mustRes(strs ...string) (ret []*dnstype.Resolver) {
 	for _, s := range strs {
 		ret = append(ret, &dnstype.Resolver{Addr: s})
@@ -670,26 +663,6 @@ func hosts(strs ...string) (ret map[dnsname.FQDN][]netip.Addr) {
 				panic("IP provided before name")
 			}
 			ret[key] = append(ret[key], ip)
-		} else {
-			fqdn, err := dnsname.ToFQDN(s)
-			if err != nil {
-				panic(err)
-			}
-			key = fqdn
-		}
-	}
-	return ret
-}
-
-func hostsR(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
-	var key dnsname.FQDN
-	ret = map[dnsname.FQDN][]dnstype.Resolver{}
-	for _, s := range strs {
-		if ip, err := netip.ParseAddr(s); err == nil {
-			if key == "" {
-				panic("IP provided before name")
-			}
-			ret[key] = append(ret[key], dnstype.Resolver{Addr: ip.String()})
 		} else {
 			fqdn, err := dnsname.ToFQDN(s)
 			if err != nil {

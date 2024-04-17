@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -76,6 +77,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/ptr"
@@ -88,6 +90,7 @@ import (
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
@@ -270,6 +273,9 @@ type LocalBackend struct {
 	currentUser         ipnauth.WindowsToken
 	selfUpdateProgress  []ipnstate.UpdateProgress
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
+	// capForcedNetfilter is the netfilter that control instructs Linux clients
+	// to use, unless overridden locally.
+	capForcedNetfilter string
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -729,6 +735,13 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.AuthURL = b.authURLSticky
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
+			if cv := b.lastClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+				if cv.UrgentSecurityUpdate {
+					s.Health = append(s.Health, fmt.Sprintf("Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+				} else {
+					s.Health = append(s.Health, fmt.Sprintf("Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+				}
+			}
 		}
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
@@ -761,7 +774,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				}
 				if !prefs.ExitNodeID().IsZero() {
 					if exitPeer, ok := b.netMap.PeerWithStableID(prefs.ExitNodeID()); ok {
-						var online = false
+						online := false
 						if v := exitPeer.Online(); v != nil {
 							online = *v
 						}
@@ -842,7 +855,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		if p.LastSeen() != nil {
 			lastSeen = *p.LastSeen()
 		}
-		var tailscaleIPs = make([]netip.Addr, 0, p.Addresses().Len())
+		tailscaleIPs := make([]netip.Addr, 0, p.Addresses().Len())
 		for i := range p.Addresses().LenIter() {
 			addr := p.Addresses().At(i)
 			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
@@ -892,6 +905,10 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	if n.PrimaryRoutes().Len() != 0 {
 		v := n.PrimaryRoutes()
 		ps.PrimaryRoutes = &v
+	}
+	if n.AllowedIPs().Len() != 0 {
+		v := n.AllowedIPs()
+		ps.AllowedIPs = &v
 	}
 
 	if n.Expired() {
@@ -1104,6 +1121,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if setExitNodeID(prefs, st.NetMap) {
 		prefsChanged = true
 	}
+	if applySysPolicy(prefs) {
+		prefsChanged = true
+	}
 
 	// Until recently, we did not store the account's tailnet name. So check if this is the case,
 	// and backfill it on incoming status update.
@@ -1212,6 +1232,79 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	b.authReconfig()
 }
 
+type preferencePolicyInfo struct {
+	key syspolicy.Key
+	get func(ipn.PrefsView) bool
+	set func(*ipn.Prefs, bool)
+}
+
+var preferencePolicies = []preferencePolicyInfo{
+	{
+		key: syspolicy.EnableIncomingConnections,
+		// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
+		// backend), so this has to convert between the two conventions.
+		get: func(p ipn.PrefsView) bool { return !p.ShieldsUp() },
+		set: func(p *ipn.Prefs, v bool) { p.ShieldsUp = !v },
+	},
+	{
+		key: syspolicy.EnableServerMode,
+		get: func(p ipn.PrefsView) bool { return p.ForceDaemon() },
+		set: func(p *ipn.Prefs, v bool) { p.ForceDaemon = v },
+	},
+	{
+		key: syspolicy.ExitNodeAllowLANAccess,
+		get: func(p ipn.PrefsView) bool { return p.ExitNodeAllowLANAccess() },
+		set: func(p *ipn.Prefs, v bool) { p.ExitNodeAllowLANAccess = v },
+	},
+	{
+		key: syspolicy.EnableTailscaleDNS,
+		get: func(p ipn.PrefsView) bool { return p.CorpDNS() },
+		set: func(p *ipn.Prefs, v bool) { p.CorpDNS = v },
+	},
+	{
+		key: syspolicy.EnableTailscaleSubnets,
+		get: func(p ipn.PrefsView) bool { return p.RouteAll() },
+		set: func(p *ipn.Prefs, v bool) { p.RouteAll = v },
+	},
+	{
+		key: syspolicy.CheckUpdates,
+		get: func(p ipn.PrefsView) bool { return p.AutoUpdate().Check },
+		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Check = v },
+	},
+	{
+		key: syspolicy.ApplyUpdates,
+		get: func(p ipn.PrefsView) bool { v, _ := p.AutoUpdate().Apply.Get(); return v },
+		set: func(p *ipn.Prefs, v bool) { p.AutoUpdate.Apply.Set(v) },
+	},
+	{
+		key: syspolicy.EnableRunExitNode,
+		get: func(p ipn.PrefsView) bool { return p.AdvertisesExitNode() },
+		set: func(p *ipn.Prefs, v bool) { p.SetAdvertiseExitNode(v) },
+	},
+}
+
+// applySysPolicy overwrites configured preferences with policies that may be
+// configured by the system administrator in an OS-specific way.
+func applySysPolicy(prefs *ipn.Prefs) (anyChange bool) {
+	if controlURL, err := syspolicy.GetString(syspolicy.ControlURL, prefs.ControlURL); err == nil && prefs.ControlURL != controlURL {
+		prefs.ControlURL = controlURL
+		anyChange = true
+	}
+
+	for _, opt := range preferencePolicies {
+		if po, err := syspolicy.GetPreferenceOption(opt.key); err == nil {
+			curVal := opt.get(prefs.View())
+			newVal := po.ShouldEnable(curVal)
+			if curVal != newVal {
+				opt.set(prefs, newVal)
+				anyChange = true
+			}
+		}
+	}
+
+	return anyChange
+}
+
 var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
@@ -1240,7 +1333,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			nm.Peers = append(nm.Peers, p)
 		}
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
-			return cmpx.Compare(a.ID(), b.ID())
+			return cmp.Compare(a.ID(), b.ID())
 		})
 		notify = &ipn.Notify{NetMap: nm}
 	} else if testenv.InTest() {
@@ -1300,6 +1393,24 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 // setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
 func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
+		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
+		changed := prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
+		prefs.ExitNodeID = exitNodeID
+		prefs.ExitNodeIP = netip.Addr{}
+		return changed
+	}
+
+	oldExitNodeID := prefs.ExitNodeID
+	if exitNodeIPStr, _ := syspolicy.GetString(syspolicy.ExitNodeIP, ""); exitNodeIPStr != "" {
+		exitNodeIP, err := netip.ParseAddr(exitNodeIPStr)
+		if exitNodeIP.IsValid() && err == nil {
+			prefsChanged = prefs.ExitNodeID != "" || prefs.ExitNodeIP != exitNodeIP
+			prefs.ExitNodeID = ""
+			prefs.ExitNodeIP = exitNodeIP
+		}
+	}
+
 	if nm == nil {
 		// No netmap, can't resolve anything.
 		return false
@@ -1327,7 +1438,7 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) 
 			// reference it directly for next time.
 			prefs.ExitNodeID = peer.StableID()
 			prefs.ExitNodeIP = netip.Addr{}
-			return true
+			return oldExitNodeID != prefs.ExitNodeID
 		}
 	}
 
@@ -1439,7 +1550,7 @@ func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
 	defer b.mu.Unlock()
 	ret := xmaps.Values(b.peers)
 	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
-		return cmpx.Compare(a.ID(), b.ID())
+		return cmp.Compare(a.ID(), b.ID())
 	})
 	return ret
 }
@@ -1658,25 +1769,26 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// new controlclient. SetPrefs() allows you to overwrite ServerURL,
 	// but it won't take effect until the next Start().
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
-		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
-		Logf:                 logger.WithPrefix(b.logf, "control: "),
-		Persist:              *persistv,
-		ServerURL:            serverURL,
-		AuthKey:              opts.AuthKey,
-		Hostinfo:             hostinfo,
-		HTTPTestClient:       httpTestClient,
-		DiscoPublicKey:       discoPublic,
-		DebugFlags:           debugFlags,
-		NetMon:               b.sys.NetMon.Get(),
-		Pinger:               b,
-		PopBrowserURL:        b.tellClientToBrowseToURL,
-		OnClientVersion:      b.onClientVersion,
-		OnControlTime:        b.em.onControlTime,
-		Dialer:               b.Dialer(),
-		Observer:             b,
-		C2NHandler:           http.HandlerFunc(b.handleC2N),
-		DialPlan:             &b.dialPlan, // pointer because it can't be copied
-		ControlKnobs:         b.sys.ControlKnobs(),
+		GetMachinePrivateKey:       b.createGetMachinePrivateKeyFunc(),
+		Logf:                       logger.WithPrefix(b.logf, "control: "),
+		Persist:                    *persistv,
+		ServerURL:                  serverURL,
+		AuthKey:                    opts.AuthKey,
+		Hostinfo:                   hostinfo,
+		HTTPTestClient:             httpTestClient,
+		DiscoPublicKey:             discoPublic,
+		DebugFlags:                 debugFlags,
+		NetMon:                     b.sys.NetMon.Get(),
+		Pinger:                     b,
+		PopBrowserURL:              b.tellClientToBrowseToURL,
+		OnClientVersion:            b.onClientVersion,
+		OnTailnetDefaultAutoUpdate: b.onTailnetDefaultAutoUpdate,
+		OnControlTime:              b.em.onControlTime,
+		Dialer:                     b.Dialer(),
+		Observer:                   b,
+		C2NHandler:                 http.HandlerFunc(b.handleC2N),
+		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
+		ControlKnobs:               b.sys.ControlKnobs(),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -2391,6 +2503,32 @@ func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 	b.send(ipn.Notify{ClientVersion: v})
 }
 
+func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
+	prefs := b.pm.CurrentPrefs()
+	if !prefs.Valid() {
+		b.logf("[unexpected]: received tailnet default auto-update callback but current prefs are nil")
+		return
+	}
+	if _, ok := prefs.AutoUpdate().Apply.Get(); ok {
+		// Apply was already set from a previous default or manually by the
+		// user. Tailnet default should not affect us, even if it changes.
+		return
+	}
+	b.logf("using tailnet default auto-update setting: %v", au)
+	prefsClone := prefs.AsStruct()
+	prefsClone.AutoUpdate.Apply = opt.NewBool(au)
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: *prefsClone,
+		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+			ApplySet: true,
+		},
+	})
+	if err != nil {
+		b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
+		return
+	}
+}
+
 // For testing lazy machine key generation.
 var panicOnMachineKeyGeneration = envknob.RegisterBool("TS_DEBUG_PANIC_MACHINE_KEY")
 
@@ -2863,27 +3001,11 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 	if !p.RunSSH {
 		return nil
 	}
-	switch runtime.GOOS {
-	case "linux":
-		if distro.Get() == distro.Synology && !envknob.UseWIPCode() {
-			return errors.New("The Tailscale SSH server does not run on Synology.")
-		}
-		if distro.Get() == distro.QNAP && !envknob.UseWIPCode() {
-			return errors.New("The Tailscale SSH server does not run on QNAP.")
-		}
-		b.updateSELinuxHealthWarning()
-		// otherwise okay
-	case "darwin":
-		// okay only in tailscaled mode for now.
-		if version.IsSandboxedMacOS() {
-			return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
-		}
-	case "freebsd", "openbsd":
-	default:
-		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
+	if err := envknob.CanRunTailscaleSSH(); err != nil {
+		return err
 	}
-	if !envknob.CanSSHD() {
-		return errors.New("The Tailscale SSH server has been administratively disabled.")
+	if runtime.GOOS == "linux" {
+		b.updateSELinuxHealthWarning()
 	}
 	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
 		return nil
@@ -3034,10 +3156,12 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// findExitNodeIDLocked returns whether it updated b.prefs, but
+	// setExitNodeID returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
 	setExitNodeID(newp, netMap)
+	// applySysPolicy does likewise so we can also ignore its return value.
+	applySysPolicy(newp)
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
@@ -3327,7 +3451,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 		}
 	}
 	slices.Sort(domains)
-	slices.Compact(domains)
+	domains = slices.Compact(domains)
 	b.appConnector.UpdateDomains(domains)
 }
 
@@ -3887,12 +4011,24 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		singleRouteThreshold = 1
 	}
 
+	b.mu.Lock()
+	netfilterKind := b.capForcedNetfilter // protected by b.mu
+	b.mu.Unlock()
+
+	if prefs.NetfilterKind() != "" {
+		if netfilterKind != "" {
+			b.logf("nodeattr netfilter preference %s overridden by c2n pref %s", netfilterKind, prefs.NetfilterKind())
+		}
+		netfilterKind = prefs.NetfilterKind()
+	}
+
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
 		SNATSubnetRoutes: !prefs.NoSNAT(),
 		NetfilterMode:    prefs.NetfilterMode(),
 		Routes:           peerRoutes(b.logf, cfg.Peers, singleRouteThreshold),
+		NetfilterKind:    netfilterKind,
 	}
 
 	if distro.Get() == distro.Synology {
@@ -3975,7 +4111,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
-	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply
+	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
@@ -3993,6 +4129,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// properly. This exists as an optimization to control to program fewer DNS
 	// records that have ingress enabled but are not actually being used.
 	hi.WireIngress = b.wantIngressLocked()
+	hi.AppConnector.Set(prefs.AppConnector().Advertise)
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -4066,7 +4203,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 	default:
 		b.logf("[unexpected] unknown newState %#v", newState)
 	}
-
 }
 
 // hasNodeKey reports whether a non-zero node key is present in the current
@@ -4400,6 +4536,14 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		osshare.SetFileSharingEnabled(fs, b.logf)
 	}
 	b.capFileSharing = fs
+
+	if hasCapability(nm, tailcfg.NodeAttrLinuxMustUseIPTables) {
+		b.capForcedNetfilter = "iptables"
+	} else if hasCapability(nm, tailcfg.NodeAttrLinuxMustUseNfTables) {
+		b.capForcedNetfilter = "nftables"
+	} else {
+		b.capForcedNetfilter = "" // empty string means client can auto-detect
+	}
 
 	b.MagicConn().SetSilentDisco(b.ControlKnobs().SilentDisco.Load())
 
@@ -4763,7 +4907,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		})
 	}
 	slices.SortFunc(ret, func(a, b *apitype.FileTarget) int {
-		return cmpx.Compare(a.Node.Name, b.Node.Name)
+		return cmp.Compare(a.Node.Name, b.Node.Name)
 	})
 	return ret, nil
 }
@@ -5181,15 +5325,6 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 		return nil, errors.New("no client")
 	}
 	return cc.DoNoiseRequest(req)
-}
-
-// tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
-// on prefs. It returns false if there are no prefs set.
-func (b *LocalBackend) tailscaleSSHEnabled() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	p := b.pm.CurrentPrefs()
-	return p.Valid() && p.RunSSH()
 }
 
 func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
@@ -5639,12 +5774,21 @@ func (b *LocalBackend) ObserveDNSResponse(res []byte) {
 	appConnector.ObserveDNSResponse(res)
 }
 
+// ErrDisallowedAutoRoute is returned by AdvertiseRoute when a route that is not allowed is requested.
+var ErrDisallowedAutoRoute = errors.New("route is not allowed")
+
 // AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
 // route advertisement if one is not already present in the existing routes.
+// If the route is disallowed, ErrDisallowedAutoRoute is returned.
 func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
+	if !allowedAutoRoute(ipp) {
+		return ErrDisallowedAutoRoute
+	}
 	currentRoutes := b.Prefs().AdvertiseRoutes()
-	// TODO(raggi): check if the new route is a subset of an existing route.
-	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool { return r == ipp }) {
+	if currentRoutes.ContainsFunc(func(r netip.Prefix) bool {
+		// TODO(raggi): add support for subset checks and avoid subset route creations.
+		return ipp.IsSingleIP() && r.Contains(ipp.Addr()) || r == ipp
+	}) {
 		return nil
 	}
 	routes := append(currentRoutes.AsSlice(), ipp)
@@ -5655,6 +5799,36 @@ func (b *LocalBackend) AdvertiseRoute(ipp netip.Prefix) error {
 		AdvertiseRoutesSet: true,
 	})
 	return err
+}
+
+var (
+	disallowedAddrs = []netip.Addr{
+		netip.MustParseAddr("::1"),
+		netip.MustParseAddr("::"),
+		netip.MustParseAddr("0.0.0.0"),
+	}
+	disallowedRanges = []netip.Prefix{
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("ff00::/8"),
+	}
+)
+
+// allowedAutoRoute determines if the route being added via AdvertiseRoute (the app connector featuge) should be allowed.
+func allowedAutoRoute(ipp netip.Prefix) bool {
+	// Note: blocking the addrs for globals, not solely the prefixes.
+	for _, addr := range disallowedAddrs {
+		if ipp.Addr() == addr {
+			return false
+		}
+	}
+	for _, pfx := range disallowedRanges {
+		if pfx.Overlaps(ipp) {
+			return false
+		}
+	}
+	// TODO(raggi): exclude tailscale service IPs and so on as well.
+	return true
 }
 
 // mayDeref dereferences p if non-nil, otherwise it returns the zero value.

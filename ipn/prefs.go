@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
@@ -45,6 +46,8 @@ func IsLoginServerSynonym(val any) bool {
 }
 
 // Prefs are the user modifiable settings of the Tailscale node agent.
+// When you add a Pref to this struct, remember to add a corresponding
+// field in MaskedPrefs, and check your field for equality in Prefs.Equals().
 type Prefs struct {
 	// ControlURL is the URL of the control server to use.
 	//
@@ -213,6 +216,11 @@ type Prefs struct {
 	// posture checks.
 	PostureChecking bool
 
+	// NetfilterKind specifies what netfilter implementation to use.
+	//
+	// Linux-only.
+	NetfilterKind string
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -230,7 +238,17 @@ type AutoUpdatePrefs struct {
 	// Apply specifies whether background auto-updates are enabled. When
 	// enabled, tailscaled will apply available updates in the background.
 	// Check must also be set when Apply is set.
-	Apply bool
+	Apply opt.Bool
+}
+
+func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
+	// This could almost be as easy as `au1.Apply == au2.Apply`, except that
+	// opt.Bool("") and opt.Bool("unset") should be treated as equal.
+	apply1, ok1 := au1.Apply.Get()
+	apply2, ok2 := au2.Apply.Get()
+	return au1.Check == au2.Check &&
+		apply1 == apply2 &&
+		ok1 == ok2
 }
 
 // AppConnectorPrefs are the app connector settings for the node agent.
@@ -241,34 +259,55 @@ type AppConnectorPrefs struct {
 }
 
 // MaskedPrefs is a Prefs with an associated bitmask of which fields are set.
+//
+// Each FooSet field maps to a corresponding Foo field in Prefs. FooSet can be
+// a struct, in which case inner fields of FooSet map to inner fields of Foo in
+// Prefs (see AutoUpdateSet for example).
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet             bool `json:",omitempty"`
-	RouteAllSet               bool `json:",omitempty"`
-	AllowSingleHostsSet       bool `json:",omitempty"`
-	ExitNodeIDSet             bool `json:",omitempty"`
-	ExitNodeIPSet             bool `json:",omitempty"`
-	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
-	CorpDNSSet                bool `json:",omitempty"`
-	RunSSHSet                 bool `json:",omitempty"`
-	RunWebClientSet           bool `json:",omitempty"`
-	WantRunningSet            bool `json:",omitempty"`
-	LoggedOutSet              bool `json:",omitempty"`
-	ShieldsUpSet              bool `json:",omitempty"`
-	AdvertiseTagsSet          bool `json:",omitempty"`
-	HostnameSet               bool `json:",omitempty"`
-	NotepadURLsSet            bool `json:",omitempty"`
-	ForceDaemonSet            bool `json:",omitempty"`
-	EggSet                    bool `json:",omitempty"`
-	AdvertiseRoutesSet        bool `json:",omitempty"`
-	NoSNATSet                 bool `json:",omitempty"`
-	NetfilterModeSet          bool `json:",omitempty"`
-	OperatorUserSet           bool `json:",omitempty"`
-	ProfileNameSet            bool `json:",omitempty"`
-	AutoUpdateSet             bool `json:",omitempty"`
-	AppConnectorSet           bool `json:",omitempty"`
-	PostureCheckingSet        bool `json:",omitempty"`
+	ControlURLSet             bool                `json:",omitempty"`
+	RouteAllSet               bool                `json:",omitempty"`
+	AllowSingleHostsSet       bool                `json:",omitempty"`
+	ExitNodeIDSet             bool                `json:",omitempty"`
+	ExitNodeIPSet             bool                `json:",omitempty"`
+	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
+	CorpDNSSet                bool                `json:",omitempty"`
+	RunSSHSet                 bool                `json:",omitempty"`
+	RunWebClientSet           bool                `json:",omitempty"`
+	WantRunningSet            bool                `json:",omitempty"`
+	LoggedOutSet              bool                `json:",omitempty"`
+	ShieldsUpSet              bool                `json:",omitempty"`
+	AdvertiseTagsSet          bool                `json:",omitempty"`
+	HostnameSet               bool                `json:",omitempty"`
+	NotepadURLsSet            bool                `json:",omitempty"`
+	ForceDaemonSet            bool                `json:",omitempty"`
+	EggSet                    bool                `json:",omitempty"`
+	AdvertiseRoutesSet        bool                `json:",omitempty"`
+	NoSNATSet                 bool                `json:",omitempty"`
+	NetfilterModeSet          bool                `json:",omitempty"`
+	OperatorUserSet           bool                `json:",omitempty"`
+	ProfileNameSet            bool                `json:",omitempty"`
+	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
+	AppConnectorSet           bool                `json:",omitempty"`
+	PostureCheckingSet        bool                `json:",omitempty"`
+	NetfilterKindSet          bool                `json:",omitempty"`
+}
+
+type AutoUpdatePrefsMask struct {
+	CheckSet bool `json:",omitempty"`
+	ApplySet bool `json:",omitempty"`
+}
+
+func (m AutoUpdatePrefsMask) Pretty(au AutoUpdatePrefs) string {
+	var fields []string
+	if m.CheckSet {
+		fields = append(fields, fmt.Sprintf("Check=%v", au.Check))
+	}
+	if m.ApplySet {
+		fields = append(fields, fmt.Sprintf("Apply=%v", au.Apply))
+	}
+	return strings.Join(fields, " ")
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -280,13 +319,34 @@ func (p *Prefs) ApplyEdits(m *MaskedPrefs) {
 	pv := reflect.ValueOf(p).Elem()
 	mv := reflect.ValueOf(m).Elem()
 	mpv := reflect.ValueOf(&m.Prefs).Elem()
-	fields := mv.NumField()
-	for i := 1; i < fields; i++ {
-		if mv.Field(i).Bool() {
-			newFieldValue := mpv.Field(i - 1)
-			pv.Field(i - 1).Set(newFieldValue)
+	applyPrefsEdits(mpv, pv, maskFields(mv))
+}
+
+func applyPrefsEdits(src, dst reflect.Value, mask map[string]reflect.Value) {
+	for n, m := range mask {
+		switch m.Kind() {
+		case reflect.Bool:
+			if m.Bool() {
+				dst.FieldByName(n).Set(src.FieldByName(n))
+			}
+		case reflect.Struct:
+			applyPrefsEdits(src.FieldByName(n), dst.FieldByName(n), maskFields(m))
+		default:
+			panic(fmt.Sprintf("unsupported mask field kind %v", m.Kind()))
 		}
 	}
+}
+
+func maskFields(v reflect.Value) map[string]reflect.Value {
+	mask := make(map[string]reflect.Value)
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Type().Field(i).Name
+		if !strings.HasSuffix(f, "Set") {
+			continue
+		}
+		mask[strings.TrimSuffix(f, "Set")] = v.Field(i)
+	}
+	return mask
 }
 
 // IsEmpty reports whether there are no masks set or if m is nil.
@@ -297,7 +357,7 @@ func (m *MaskedPrefs) IsEmpty() bool {
 	mv := reflect.ValueOf(m).Elem()
 	fields := mv.NumField()
 	for i := 1; i < fields; i++ {
-		if mv.Field(i).Bool() {
+		if !mv.Field(i).IsZero() {
 			return false
 		}
 	}
@@ -336,15 +396,38 @@ func (m *MaskedPrefs) Pretty() string {
 
 	for i := 1; i < mt.NumField(); i++ {
 		name := mt.Field(i).Name
-		if mv.Field(i).Bool() {
-			if !first {
-				sb.WriteString(" ")
+		mf := mv.Field(i)
+		switch mf.Kind() {
+		case reflect.Bool:
+			if mf.Bool() {
+				if !first {
+					sb.WriteString(" ")
+				}
+				first = false
+				f := mpv.Field(i - 1)
+				fmt.Fprintf(&sb, format(f),
+					strings.TrimSuffix(name, "Set"),
+					f.Interface())
 			}
-			first = false
-			f := mpv.Field(i - 1)
-			fmt.Fprintf(&sb, format(f),
-				strings.TrimSuffix(name, "Set"),
-				f.Interface())
+		case reflect.Struct:
+			if mf.IsZero() {
+				continue
+			}
+			mpf := mpv.Field(i - 1)
+			// This would be much simpler with reflect.MethodByName("Pretty"),
+			// but using MethodByName disables some linker optimizations and
+			// makes our binaries much larger. See
+			// https://github.com/tailscale/tailscale/issues/10627#issuecomment-1861211945
+			//
+			// Instead, have this explicit switch by field name to do type
+			// assertions.
+			switch name {
+			case "AutoUpdateSet":
+				p := mf.Interface().(AutoUpdatePrefsMask).Pretty(mpf.Interface().(AutoUpdatePrefs))
+				fmt.Fprintf(&sb, "%s={%s}", strings.TrimSuffix(name, "Set"), p)
+			default:
+				panic(fmt.Sprintf("unexpected MaskedPrefs field %q", name))
+			}
 		}
 	}
 	sb.WriteString("}")
@@ -409,6 +492,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.OperatorUser != "" {
 		fmt.Fprintf(&sb, "op=%q ", p.OperatorUser)
 	}
+	if p.NetfilterKind != "" {
+		fmt.Fprintf(&sb, "netfilterKind=%s ", p.NetfilterKind)
+	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
 	if p.Persist != nil {
@@ -444,8 +530,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		return false
 	}
 
-	return p != nil && p2 != nil &&
-		p.ControlURL == p2.ControlURL &&
+	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
@@ -467,13 +552,14 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
-		p.AutoUpdate == p2.AutoUpdate &&
+		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
-		p.PostureChecking == p2.PostureChecking
+		p.PostureChecking == p2.PostureChecking &&
+		p.NetfilterKind == p2.NetfilterKind
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
-	if au.Apply {
+	if au.Apply.EqualBool(true) {
 		return "update=on "
 	}
 	if au.Check {
@@ -533,7 +619,7 @@ func NewPrefs() *Prefs {
 		NetfilterMode:    preftype.NetfilterOn,
 		AutoUpdate: AutoUpdatePrefs{
 			Check: true,
-			Apply: false,
+			Apply: opt.Bool("unset"),
 		},
 	}
 }
@@ -570,7 +656,7 @@ func (p *Prefs) AdminPageURL() string {
 		// TODO(crawshaw): In future release, make this https://console.tailscale.com
 		url = "https://login.tailscale.com"
 	}
-	return url + "/admin/machines"
+	return url + "/admin"
 }
 
 // AdvertisesExitNode reports whether p is advertising both the v4 and

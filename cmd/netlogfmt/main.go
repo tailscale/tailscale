@@ -25,6 +25,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -45,7 +46,6 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
-	"tailscale.com/util/cmpx"
 	"tailscale.com/util/must"
 )
 
@@ -155,7 +155,7 @@ func printMessage(msg message) {
 		slices.SortFunc(traffic, func(x, y netlogtype.ConnectionCounts) int {
 			nx := x.TxPackets + x.TxBytes + x.RxPackets + x.RxBytes
 			ny := y.TxPackets + y.TxBytes + y.RxPackets + y.RxBytes
-			return cmpx.Compare(ny, nx)
+			return cmp.Compare(ny, nx)
 		})
 		var sum netlogtype.Counts
 		for _, cc := range traffic {

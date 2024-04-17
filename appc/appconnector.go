@@ -206,9 +206,8 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		if slices.Contains(addrs, addr) {
 			continue
 		}
-		// TODO(raggi): check for existing prefixes
 		if err := e.routeAdvertiser.AdvertiseRoute(netip.PrefixFrom(addr, addr.BitLen())); err != nil {
-			e.logf("failed to advertise route for %v: %v", addr, err)
+			e.logf("failed to advertise route for %s: %v: %v", domain, addr, err)
 			continue
 		}
 		e.logf("[v2] advertised route for %v: %v", domain, addr)
@@ -217,5 +216,4 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 		e.domains[domain] = append(addrs, addr)
 		e.mu.Unlock()
 	}
-
 }

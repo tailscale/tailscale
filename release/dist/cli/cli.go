@@ -6,10 +6,7 @@ package cli
 
 import (
 	"context"
-	"crypto"
-	"crypto/x509"
 	"encoding/binary"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -211,24 +208,6 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 
 	fmt.Println("Done! Took", time.Since(st))
 	return nil
-}
-
-func parseSigningKey(path string) (crypto.Signer, error) {
-	if path == "" {
-		return nil, nil
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	b, rest := pem.Decode(raw)
-	if b == nil {
-		return nil, fmt.Errorf("failed to decode PEM data in %q", path)
-	}
-	if len(rest) > 0 {
-		return nil, fmt.Errorf("trailing data in %q, please check that the key file was not corrupted", path)
-	}
-	return x509.ParseECPrivateKey(b.Bytes)
 }
 
 var genKeyArgs struct {

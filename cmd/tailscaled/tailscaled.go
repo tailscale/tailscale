@@ -512,6 +512,8 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
+		dialer.UserDialCustomResolver = dns.Quad100Resolver(ctx, sys.DNSManager.Get())
+
 		var addrs []string
 		if httpProxyListener != nil {
 			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
@@ -556,7 +558,10 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
-	lb.ConfigureWebClient(&tailscale.LocalClient{Socket: args.socketpath, UseSocketOnly: args.socketpath != ""})
+	lb.ConfigureWebClient(&tailscale.LocalClient{
+		Socket:        args.socketpath,
+		UseSocketOnly: args.socketpath != paths.DefaultTailscaledSocket(),
+	})
 	configureTaildrop(logf, lb)
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)

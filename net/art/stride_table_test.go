@@ -348,12 +348,6 @@ func (t *slowTable[T]) String() string {
 	return ret.String()
 }
 
-func (t *slowTable[T]) insert(addr uint8, prefixLen int, val T) {
-	t.delete(addr, prefixLen) // no-op if prefix doesn't exist
-
-	t.prefixes = append(t.prefixes, slowEntry[T]{addr, prefixLen, val})
-}
-
 func (t *slowTable[T]) delete(addr uint8, prefixLen int) {
 	pfx := make([]slowEntry[T], 0, len(t.prefixes))
 	for _, e := range t.prefixes {

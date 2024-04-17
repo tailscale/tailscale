@@ -9,6 +9,9 @@ vet: ## Run go vet
 tidy: ## Run go mod tidy
 	./tool/go mod tidy
 
+lint: ## Run golangci-lint
+	./tool/go run github.com/golangci/golangci-lint/cmd/golangci-lint run
+
 updatedeps: ## Update depaware deps
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
 	# it finds in its $$PATH is the right one.
@@ -50,6 +53,21 @@ check: staticcheck vet depaware buildwindows build386 buildlinuxarm buildwasm ##
 
 staticcheck: ## Run staticcheck.io checks
 	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go list ./... | grep -v tempfork)
+
+kube-generate-all: kube-generate-deepcopy ## Refresh generated files for Tailscale Kubernetes Operator
+	./tool/go generate ./cmd/k8s-operator
+
+# Tailscale operator watches Connector custom resources in a Kubernetes cluster
+# and caches them locally. Caching is done implicitly by controller-runtime
+# library (the middleware used by Tailscale operator to create kube control
+# loops). When a Connector resource is GET/LIST-ed from within our control loop,
+# the request goes through the cache. To ensure that cache contents don't get
+# modified by control loops, controller-runtime deep copies the requested
+# object. In order for this to work, Connector must implement deep copy
+# functionality so we autogenerate it here.
+# https://github.com/kubernetes-sigs/controller-runtime/blob/v0.16.3/pkg/cache/internal/cache_reader.go#L86-L89
+kube-generate-deepcopy: ## Refresh generated deepcopy functionality for Tailscale kube API types
+	./scripts/kube-deepcopy.sh
 
 spk: ## Build synology package for ${SYNO_ARCH} architecture and ${SYNO_DSM} DSM version
 	./tool/go run ./cmd/dist build synology/dsm${SYNO_DSM}/${SYNO_ARCH}

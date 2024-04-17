@@ -1,6 +1,10 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 import cx from "classnames"
 import React, { ReactNode } from "react"
+import PortalContainerContext from "src/ui/portal-container-context"
 
 type Props = {
   className?: string
@@ -100,7 +104,3 @@ export default function Popover(props: Props) {
 Popover.defaultProps = {
   sideOffset: 10,
 }
-
-const PortalContainerContext = React.createContext<HTMLElement | undefined>(
-  undefined
-)

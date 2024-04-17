@@ -26,7 +26,7 @@ if [ $# != 1 ]; then
 fi
 
 fail=0
-for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
+for file in $(find $1 \( -name '*.go' -or -name '*.tsx' -or -name '*.ts' -not -name '*.config.ts' \) -not -path '*/.git/*' -not -path '*/node_modules/*'); do
     case $file in
         $1/tempfork/*)
             # Skip, tempfork of third-party code
@@ -37,24 +37,36 @@ for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
         $1/cmd/tailscale/cli/authenticode_windows.go)
             # WireGuard copyright.
         ;;
-		*_string.go)
-			# Generated file from go:generate stringer
-		;;
-		$1/control/controlbase/noiseexplorer_test.go)
-			# Noiseexplorer.com copyright.
-		;;
+        *_string.go)
+          # Generated file from go:generate stringer
+        ;;
+        $1/control/controlbase/noiseexplorer_test.go)
+          # Noiseexplorer.com copyright.
+        ;;
         */zsyscall_windows.go)
             # Generated syscall wrappers
         ;;
+        $1/util/winutil/subprocess_windows_test.go)
+            # Subprocess test harness code
+        ;;
+        $1/util/winutil/testdata/testrestartableprocesses/main.go)
+            # Subprocess test harness code
+        ;;
+        *$1/k8s-operator/apis/v1alpha1/zz_generated.deepcopy.go)
+            # Generated kube deepcopy funcs file starts with a Go build tag + an empty line
+            header="$(head -5 $file | tail -n+3 )"
+        ;;
         *)
-            header="$(head -2 $file)"
+           header="$(head -2 $file)"
+        ;;
+    esac
+    if [ ! -z "$header" ]; then
             if ! check_file "$header"; then
                 fail=1
                 echo "${file#$1/} doesn't have the right copyright header:"
                 echo "$header" | sed -e 's/^/    /g'
             fi
-            ;;
-    esac
+    fi
 done
 
 if [ $fail -ne 0 ]; then

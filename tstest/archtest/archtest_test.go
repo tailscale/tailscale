@@ -14,7 +14,7 @@ import (
 func TestAlignedAtomicInt64(t *testing.T) {
 	type T struct {
 		A atomicbitops.Int64
-		x int32
+		_ int32
 		B atomicbitops.Int64
 	}
 

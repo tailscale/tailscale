@@ -85,13 +85,13 @@ func (fc plan9FileConn) SetWriteDeadline(t time.Time) error {
 	return syscall.EPLAN9
 }
 
-func connect(s *ConnectionStrategy) (net.Conn, error) {
-	f, err := os.OpenFile(s.path, os.O_RDWR, 0666)
+func connect(path string) (net.Conn, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0666)
 	if err != nil {
 		return nil, err
 	}
 
-	return plan9FileConn{name: s.path, file: f}, nil
+	return plan9FileConn{name: path, file: f}, nil
 }
 
 // Create an entry in /srv, open a pipe, write the

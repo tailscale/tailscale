@@ -78,7 +78,7 @@ func TestTypeIsMemHashable(t *testing.T) {
 
 func TestTypeIsRecursive(t *testing.T) {
 	type RecursiveStruct struct {
-		v *RecursiveStruct
+		_ *RecursiveStruct
 	}
 	type RecursiveChan chan *RecursiveChan
 

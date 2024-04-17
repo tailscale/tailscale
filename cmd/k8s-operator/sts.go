@@ -78,6 +78,10 @@ type tailscaleSTSConfig struct {
 
 	Hostname string
 	Tags     []string // if empty, use defaultTags
+
+	// Routes is a list of CIDRs to pass via --advertise-routes flag
+	// Should only be set if this is config for subnetRouter
+	Routes string
 }
 
 type tailscaleSTSReconciler struct {
@@ -415,6 +419,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 				},
 			},
 		})
+	} else if len(sts.Routes) > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_ROUTES",
+			Value: sts.Routes,
+		})
+
 	}
 	if a.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{

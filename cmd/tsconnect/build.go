@@ -83,26 +83,6 @@ func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
 	return json.Marshal(metadata)
 }
 
-func cleanDist() error {
-	log.Printf("Cleaning %s...\n", *distDir)
-	files, err := os.ReadDir(*distDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.MkdirAll(*distDir, 0755)
-		}
-		return err
-	}
-
-	for _, file := range files {
-		if file.Name() != "placeholder" {
-			if err := os.Remove(filepath.Join(*distDir, file.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func precompressDist(fastCompression bool) error {
 	log.Printf("Pre-compressing files in %s/...\n", *distDir)
 	return precompress.PrecompressDir(*distDir, precompress.Options{

@@ -217,3 +217,12 @@ func (b *LocalBackend) getSSHHostKeyPublicStrings() (ret []string) {
 	}
 	return ret
 }
+
+// tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
+// on prefs. It returns false if there are no prefs set.
+func (b *LocalBackend) tailscaleSSHEnabled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := b.pm.CurrentPrefs()
+	return p.Valid() && p.RunSSH()
+}

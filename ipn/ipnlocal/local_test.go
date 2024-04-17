@@ -5,6 +5,7 @@ package ipnlocal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -30,11 +31,13 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -262,7 +265,6 @@ func TestPeerRoutes(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestPeerAPIBase(t *testing.T) {
@@ -697,7 +699,6 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestStatusWithoutPeers(t *testing.T) {
@@ -1170,6 +1171,26 @@ func TestRouteAdvertiser(t *testing.T) {
 	}
 }
 
+func TestRouterAdvertiserIgnoresContainedRoutes(t *testing.T) {
+	b := newTestBackend(t)
+	testPrefix := netip.MustParsePrefix("192.0.0.0/24")
+	ra := appc.RouteAdvertiser(b)
+	must.Do(ra.AdvertiseRoute(testPrefix))
+
+	routes := b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+
+	must.Do(ra.AdvertiseRoute(netip.MustParsePrefix("192.0.0.8/32")))
+
+	// the above /32 is not added as it is contained within the /24
+	routes = b.Prefs().AdvertiseRoutes()
+	if routes.Len() != 1 || routes.At(0) != testPrefix {
+		t.Fatalf("got routes %v, want %v", routes, []netip.Prefix{testPrefix})
+	}
+}
+
 func TestObserveDNSResponse(t *testing.T) {
 	b := newTestBackend(t)
 
@@ -1329,4 +1350,779 @@ type routeCollector struct {
 func (rc *routeCollector) AdvertiseRoute(pfx netip.Prefix) error {
 	rc.routes = append(rc.routes, pfx)
 	return nil
+}
+
+type errorSyspolicyHandler struct {
+	t         *testing.T
+	err       error
+	key       syspolicy.Key
+	allowKeys map[syspolicy.Key]*string
+}
+
+func (h *errorSyspolicyHandler) ReadString(key string) (string, error) {
+	sk := syspolicy.Key(key)
+	if _, ok := h.allowKeys[sk]; !ok {
+		h.t.Errorf("ReadString: %q is not in list of permitted keys", h.key)
+	}
+	if sk == h.key {
+		return "", h.err
+	}
+	return "", syspolicy.ErrNoSuchKey
+}
+
+func (h *errorSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
+	h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
+	return 0, syspolicy.ErrNoSuchKey
+}
+
+func (h *errorSyspolicyHandler) ReadBoolean(key string) (bool, error) {
+	h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
+	return false, syspolicy.ErrNoSuchKey
+}
+
+type mockSyspolicyHandler struct {
+	t *testing.T
+	// stringPolicies is the collection of policies that we expect to see
+	// queried by the current test. If the policy is expected but unset, then
+	// use nil, otherwise use a string equal to the policy's desired value.
+	stringPolicies map[syspolicy.Key]*string
+	// failUnknownPolicies is set if policies other than those in stringPolicies
+	// (uint64 or bool policies are not supported by mockSyspolicyHandler yet)
+	// should be considered a test failure if they are queried.
+	failUnknownPolicies bool
+}
+
+func (h *mockSyspolicyHandler) ReadString(key string) (string, error) {
+	if s, ok := h.stringPolicies[syspolicy.Key(key)]; ok {
+		if s == nil {
+			return "", syspolicy.ErrNoSuchKey
+		}
+		return *s, nil
+	}
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadString(%q) unexpectedly called", key)
+	}
+	return "", syspolicy.ErrNoSuchKey
+}
+
+func (h *mockSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
+	}
+	return 0, syspolicy.ErrNoSuchKey
+}
+
+func (h *mockSyspolicyHandler) ReadBoolean(key string) (bool, error) {
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
+	}
+	return false, syspolicy.ErrNoSuchKey
+}
+
+func TestSetExitNodeIDPolicy(t *testing.T) {
+	pfx := netip.MustParsePrefix
+	tests := []struct {
+		name           string
+		exitNodeIPKey  bool
+		exitNodeIDKey  bool
+		exitNodeID     string
+		exitNodeIP     string
+		prefs          *ipn.Prefs
+		exitNodeIPWant string
+		exitNodeIDWant string
+		prefsChanged   bool
+		nm             *netmap.NetworkMap
+	}{
+		{
+			name:           "ExitNodeID key is set",
+			exitNodeIDKey:  true,
+			exitNodeID:     "123",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+		},
+		{
+			name:           "ExitNodeID key not set",
+			exitNodeIDKey:  true,
+			exitNodeIDWant: "",
+			prefsChanged:   false,
+		},
+		{
+			name:           "ExitNodeID key set, ExitNodeIP preference set",
+			exitNodeIDKey:  true,
+			exitNodeID:     "123",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+		},
+		{
+			name:           "ExitNodeID key not set, ExitNodeIP key set",
+			exitNodeIPKey:  true,
+			exitNodeIP:     "127.0.0.1",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPWant: "127.0.0.1",
+			prefsChanged:   false,
+		},
+		{
+			name:           "ExitNodeIP key set, existing ExitNodeIP pref",
+			exitNodeIPKey:  true,
+			exitNodeIP:     "127.0.0.1",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPWant: "127.0.0.1",
+			prefsChanged:   false,
+		},
+		{
+			name:           "existing preferences match policy",
+			exitNodeIDKey:  true,
+			exitNodeID:     "123",
+			prefs:          &ipn.Prefs{ExitNodeID: tailcfg.StableNodeID("123")},
+			exitNodeIDWant: "123",
+			prefsChanged:   false,
+		},
+		{
+			name:           "ExitNodeIP set if net map does not have corresponding node",
+			exitNodeIPKey:  true,
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIP:     "127.0.0.1",
+			exitNodeIPWant: "127.0.0.1",
+			prefsChanged:   false,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name: "a.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100.0.0.201/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+		{
+			name:           "ExitNodeIP cleared if net map has corresponding node - policy matches prefs",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPKey:  true,
+			exitNodeIP:     "127.0.0.1",
+			exitNodeIPWant: "",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name:     "a.tailnet",
+						StableID: tailcfg.StableNodeID("123"),
+						Addresses: []netip.Prefix{
+							pfx("127.0.0.1/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+		{
+			name:           "ExitNodeIP cleared if net map has corresponding node - no policy set",
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIPWant: "",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name:     "a.tailnet",
+						StableID: tailcfg.StableNodeID("123"),
+						Addresses: []netip.Prefix{
+							pfx("127.0.0.1/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+		{
+			name:           "ExitNodeIP cleared if net map has corresponding node - different exit node IP in policy",
+			exitNodeIPKey:  true,
+			prefs:          &ipn.Prefs{ExitNodeIP: netip.MustParseAddr("127.0.0.1")},
+			exitNodeIP:     "100.64.5.6",
+			exitNodeIPWant: "",
+			exitNodeIDWant: "123",
+			prefsChanged:   true,
+			nm: &netmap.NetworkMap{
+				Name: "foo.tailnet",
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						pfx("100.102.103.104/32"),
+						pfx("100::123/128"),
+					},
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						Name:     "a.tailnet",
+						StableID: tailcfg.StableNodeID("123"),
+						Addresses: []netip.Prefix{
+							pfx("100.64.5.6/32"),
+							pfx("100::201/128"),
+						},
+					}).View(),
+					(&tailcfg.Node{
+						Name: "b.tailnet",
+						Addresses: []netip.Prefix{
+							pfx("100::202/128"),
+						},
+					}).View(),
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			b := newTestBackend(t)
+			msh := &mockSyspolicyHandler{
+				t: t,
+				stringPolicies: map[syspolicy.Key]*string{
+					syspolicy.ExitNodeID: nil,
+					syspolicy.ExitNodeIP: nil,
+				},
+			}
+			if test.exitNodeIDKey {
+				msh.stringPolicies[syspolicy.ExitNodeID] = &test.exitNodeID
+			}
+			if test.exitNodeIPKey {
+				msh.stringPolicies[syspolicy.ExitNodeIP] = &test.exitNodeIP
+			}
+			syspolicy.SetHandlerForTest(t, msh)
+			if test.nm == nil {
+				test.nm = new(netmap.NetworkMap)
+			}
+			if test.prefs == nil {
+				test.prefs = ipn.NewPrefs()
+			}
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+			pm.prefs = test.prefs.View()
+			b.netMap = test.nm
+			b.pm = pm
+			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm)
+			b.SetPrefs(pm.CurrentPrefs().AsStruct())
+			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
+				t.Errorf("got %v want %v", got, test.exitNodeIDWant)
+			}
+			if got := b.pm.prefs.ExitNodeIP(); test.exitNodeIPWant == "" {
+				if got.String() != "invalid IP" {
+					t.Errorf("got %v want invalid IP", got)
+				}
+			} else if got.String() != test.exitNodeIPWant {
+				t.Errorf("got %v want %v", got, test.exitNodeIPWant)
+			}
+
+			if changed != test.prefsChanged {
+				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
+			}
+		})
+	}
+}
+
+func TestApplySysPolicy(t *testing.T) {
+	tests := []struct {
+		name           string
+		prefs          ipn.Prefs
+		wantPrefs      ipn.Prefs
+		wantAnyChange  bool
+		stringPolicies map[syspolicy.Key]string
+	}{
+		{
+			name: "empty prefs without policies",
+		},
+		{
+			name: "prefs set without policies",
+			prefs: ipn.Prefs{
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                true,
+				RouteAll:               true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                true,
+				RouteAll:               true,
+			},
+		},
+		{
+			name: "empty prefs with policies",
+			wantPrefs: ipn.Prefs{
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                true,
+				RouteAll:               true,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL:                "1",
+				syspolicy.EnableIncomingConnections: "never",
+				syspolicy.EnableServerMode:          "always",
+				syspolicy.ExitNodeAllowLANAccess:    "always",
+				syspolicy.EnableTailscaleDNS:        "always",
+				syspolicy.EnableTailscaleSubnets:    "always",
+			},
+		},
+		{
+			name: "prefs set with matching policies",
+			prefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:  "1",
+				ShieldsUp:   true,
+				ForceDaemon: true,
+			},
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL:                "1",
+				syspolicy.EnableIncomingConnections: "never",
+				syspolicy.EnableServerMode:          "always",
+				syspolicy.ExitNodeAllowLANAccess:    "never",
+				syspolicy.EnableTailscaleDNS:        "never",
+				syspolicy.EnableTailscaleSubnets:    "never",
+			},
+		},
+		{
+			name: "prefs set with conflicting policies",
+			prefs: ipn.Prefs{
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: false,
+				CorpDNS:                true,
+				RouteAll:               false,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:             "2",
+				ShieldsUp:              false,
+				ForceDaemon:            false,
+				ExitNodeAllowLANAccess: true,
+				CorpDNS:                false,
+				RouteAll:               true,
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL:                "2",
+				syspolicy.EnableIncomingConnections: "always",
+				syspolicy.EnableServerMode:          "never",
+				syspolicy.ExitNodeAllowLANAccess:    "always",
+				syspolicy.EnableTailscaleDNS:        "never",
+				syspolicy.EnableTailscaleSubnets:    "always",
+			},
+		},
+		{
+			name: "prefs set with neutral policies",
+			prefs: ipn.Prefs{
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: false,
+				CorpDNS:                true,
+				RouteAll:               true,
+			},
+			wantPrefs: ipn.Prefs{
+				ControlURL:             "1",
+				ShieldsUp:              true,
+				ForceDaemon:            true,
+				ExitNodeAllowLANAccess: false,
+				CorpDNS:                true,
+				RouteAll:               true,
+			},
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.EnableIncomingConnections: "user-decides",
+				syspolicy.EnableServerMode:          "user-decides",
+				syspolicy.ExitNodeAllowLANAccess:    "user-decides",
+				syspolicy.EnableTailscaleDNS:        "user-decides",
+				syspolicy.EnableTailscaleSubnets:    "user-decides",
+			},
+		},
+		{
+			name: "ControlURL",
+			wantPrefs: ipn.Prefs{
+				ControlURL: "set",
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ControlURL: "set",
+			},
+		},
+		{
+			name: "enable AutoUpdate apply does not unset check",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: opt.NewBool(false),
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: opt.NewBool(true),
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ApplyUpdates: "always",
+			},
+		},
+		{
+			name: "disable AutoUpdate apply does not unset check",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: opt.NewBool(true),
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: opt.NewBool(false),
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.ApplyUpdates: "never",
+			},
+		},
+		{
+			name: "enable AutoUpdate check does not unset apply",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: false,
+					Apply: opt.NewBool(true),
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: opt.NewBool(true),
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.CheckUpdates: "always",
+			},
+		},
+		{
+			name: "disable AutoUpdate check does not unset apply",
+			prefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: opt.NewBool(true),
+				},
+			},
+			wantPrefs: ipn.Prefs{
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: false,
+					Apply: opt.NewBool(true),
+				},
+			},
+			wantAnyChange: true,
+			stringPolicies: map[syspolicy.Key]string{
+				syspolicy.CheckUpdates: "never",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msh := &mockSyspolicyHandler{
+				t:              t,
+				stringPolicies: make(map[syspolicy.Key]*string, len(tt.stringPolicies)),
+			}
+			for p, v := range tt.stringPolicies {
+				v := v // construct a unique pointer for each policy value
+				msh.stringPolicies[p] = &v
+			}
+			syspolicy.SetHandlerForTest(t, msh)
+
+			t.Run("unit", func(t *testing.T) {
+				prefs := tt.prefs.Clone()
+
+				gotAnyChange := applySysPolicy(prefs)
+
+				if gotAnyChange && prefs.Equals(&tt.prefs) {
+					t.Errorf("anyChange but prefs is unchanged: %v", prefs.Pretty())
+				}
+				if !gotAnyChange && !prefs.Equals(&tt.prefs) {
+					t.Errorf("!anyChange but prefs changed from %v to %v", tt.prefs.Pretty(), prefs.Pretty())
+				}
+				if gotAnyChange != tt.wantAnyChange {
+					t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantAnyChange)
+				}
+				if !prefs.Equals(&tt.wantPrefs) {
+					t.Errorf("prefs=%v, want %v", prefs.Pretty(), tt.wantPrefs.Pretty())
+				}
+			})
+
+			t.Run("set prefs", func(t *testing.T) {
+				b := newTestBackend(t)
+				b.SetPrefs(tt.prefs.Clone())
+				if !b.Prefs().Equals(tt.wantPrefs.View()) {
+					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), tt.wantPrefs.Pretty())
+				}
+			})
+
+			t.Run("status update", func(t *testing.T) {
+				// Profile manager fills in blank ControlURL but it's not set
+				// in most test cases to avoid cluttering them, so adjust for
+				// that.
+				usePrefs := tt.prefs.Clone()
+				if usePrefs.ControlURL == "" {
+					usePrefs.ControlURL = ipn.DefaultControlURL
+				}
+				wantPrefs := tt.wantPrefs.Clone()
+				if wantPrefs.ControlURL == "" {
+					wantPrefs.ControlURL = ipn.DefaultControlURL
+				}
+
+				pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+				pm.prefs = usePrefs.View()
+
+				b := newTestBackend(t)
+				b.mu.Lock()
+				b.pm = pm
+				b.mu.Unlock()
+
+				b.SetControlClientStatus(b.cc, controlclient.Status{})
+				if !b.Prefs().Equals(wantPrefs.View()) {
+					t.Errorf("prefs=%v, want %v", b.Prefs().Pretty(), wantPrefs.Pretty())
+				}
+			})
+		})
+	}
+}
+
+func TestPreferencePolicyInfo(t *testing.T) {
+	tests := []struct {
+		name         string
+		initialValue bool
+		wantValue    bool
+		wantChange   bool
+		policyValue  string
+		policyError  error
+	}{
+		{
+			name:         "force enable modify",
+			initialValue: false,
+			wantValue:    true,
+			wantChange:   true,
+			policyValue:  "always",
+		},
+		{
+			name:         "force enable unchanged",
+			initialValue: true,
+			wantValue:    true,
+			policyValue:  "always",
+		},
+		{
+			name:         "force disable modify",
+			initialValue: true,
+			wantValue:    false,
+			wantChange:   true,
+			policyValue:  "never",
+		},
+		{
+			name:         "force disable unchanged",
+			initialValue: false,
+			wantValue:    false,
+			policyValue:  "never",
+		},
+		{
+			name:         "unforced enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyValue:  "user-decides",
+		},
+		{
+			name:         "unforced disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyValue:  "user-decides",
+		},
+		{
+			name:         "blank enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyValue:  "",
+		},
+		{
+			name:         "blank disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyValue:  "",
+		},
+		{
+			name:         "unset enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyError:  syspolicy.ErrNoSuchKey,
+		},
+		{
+			name:         "unset disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyError:  syspolicy.ErrNoSuchKey,
+		},
+		{
+			name:         "error enabled",
+			initialValue: true,
+			wantValue:    true,
+			policyError:  errors.New("test error"),
+		},
+		{
+			name:         "error disabled",
+			initialValue: false,
+			wantValue:    false,
+			policyError:  errors.New("test error"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, pp := range preferencePolicies {
+				t.Run(string(pp.key), func(t *testing.T) {
+					var h syspolicy.Handler
+
+					allPolicies := make(map[syspolicy.Key]*string, len(preferencePolicies)+1)
+					allPolicies[syspolicy.ControlURL] = nil
+					for _, pp := range preferencePolicies {
+						allPolicies[pp.key] = nil
+					}
+
+					if tt.policyError != nil {
+						h = &errorSyspolicyHandler{
+							t:         t,
+							err:       tt.policyError,
+							key:       pp.key,
+							allowKeys: allPolicies,
+						}
+					} else {
+						msh := &mockSyspolicyHandler{
+							t:                   t,
+							stringPolicies:      allPolicies,
+							failUnknownPolicies: true,
+						}
+						msh.stringPolicies[pp.key] = &tt.policyValue
+						h = msh
+					}
+					syspolicy.SetHandlerForTest(t, h)
+
+					prefs := defaultPrefs.AsStruct()
+					pp.set(prefs, tt.initialValue)
+
+					gotAnyChange := applySysPolicy(prefs)
+
+					if gotAnyChange != tt.wantChange {
+						t.Errorf("anyChange=%v, want %v", gotAnyChange, tt.wantChange)
+					}
+					got := pp.get(prefs.View())
+					if got != tt.wantValue {
+						t.Errorf("pref=%v, want %v", got, tt.wantValue)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
+	tests := []struct {
+		desc           string
+		before, after  opt.Bool
+		tailnetDefault bool
+	}{
+		{
+			before:         opt.Bool(""),
+			tailnetDefault: true,
+			after:          opt.NewBool(true),
+		},
+		{
+			before:         opt.Bool(""),
+			tailnetDefault: false,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.Bool("unset"),
+			tailnetDefault: true,
+			after:          opt.NewBool(true),
+		},
+		{
+			before:         opt.Bool("unset"),
+			tailnetDefault: false,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(false),
+			tailnetDefault: true,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(true),
+			tailnetDefault: false,
+			after:          opt.NewBool(true),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("before=%s after=%s", tt.before, tt.after), func(t *testing.T) {
+			b := newTestBackend(t)
+			p := ipn.NewPrefs()
+			p.AutoUpdate.Apply = tt.before
+			if err := b.pm.setPrefsLocked(p.View()); err != nil {
+				t.Fatal(err)
+			}
+			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)
+			if want, got := tt.after, b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
+				t.Errorf("got: %q, want %q", got, want)
+			}
+		})
+	}
 }

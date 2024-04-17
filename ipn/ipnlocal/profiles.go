@@ -4,11 +4,11 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
-	"net/netip"
 	"runtime"
 	"slices"
 	"strings"
@@ -18,8 +18,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/cmpx"
-	"tailscale.com/util/winutil"
 )
 
 var errAlreadyMigrated = errors.New("profile migration already completed")
@@ -115,7 +113,7 @@ func (pm *profileManager) allProfiles() (out []*ipn.LoginProfile) {
 		}
 	}
 	slices.SortFunc(out, func(a, b *ipn.LoginProfile) int {
-		return cmpx.Compare(a.Name, b.Name)
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return out
 }
@@ -443,36 +441,17 @@ func (pm *profileManager) NewProfile() {
 	pm.currentProfile = &ipn.LoginProfile{}
 }
 
-// defaultPrefs is the default prefs for a new profile.
+// defaultPrefs is the default prefs for a new profile. This initializes before
+// even this package's init() so do not rely on other parts of the system being
+// fully initialized here (for example, syspolicy will not be available on
+// Apple platforms).
 var defaultPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
 	prefs.LoggedOut = true
 	prefs.WantRunning = false
 
-	controlURL, _ := winutil.GetPolicyString("LoginURL")
-	prefs.ControlURL = controlURL
-
-	prefs.ExitNodeIP = resolveExitNodeIP(netip.Addr{})
-
-	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
-	// backend), so this has to convert between the two conventions.
-	shieldsUp, _ := winutil.GetPolicyString("AllowIncomingConnections")
-	prefs.ShieldsUp = shieldsUp == "never"
-	forceDaemon, _ := winutil.GetPolicyString("UnattendedMode")
-	prefs.ForceDaemon = forceDaemon == "always"
-
 	return prefs.View()
 }()
-
-func resolveExitNodeIP(defIP netip.Addr) (ret netip.Addr) {
-	ret = defIP
-	if exitNode, _ := winutil.GetPolicyString("ExitNodeIP"); exitNode != "" {
-		if ip, err := netip.ParseAddr(exitNode); err == nil {
-			ret = ip
-		}
-	}
-	return ret
-}
 
 // Store returns the StateStore used by the ProfileManager.
 func (pm *profileManager) Store() ipn.StateStore {

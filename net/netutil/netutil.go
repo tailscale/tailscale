@@ -53,12 +53,6 @@ func (ln *oneConnListener) Close() error {
 	return nil
 }
 
-type dummyListener struct{}
-
-func (dummyListener) Close() error                    { return nil }
-func (dummyListener) Addr() net.Addr                  { return dummyAddr("unused-address") }
-func (dummyListener) Accept() (c net.Conn, err error) { return nil, io.EOF }
-
 type dummyAddr string
 
 func (a dummyAddr) Network() string { return string(a) }

@@ -74,18 +74,6 @@ var icmp4ReplyBuffer = []byte{
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
 }
 
-var icmp4ReplyDecode = Parsed{
-	b:       icmp4ReplyBuffer,
-	subofs:  20,
-	dataofs: 24,
-	length:  len(icmp4ReplyBuffer),
-
-	IPVersion: 4,
-	IPProto:   ICMPv4,
-	Src:       mustIPPort("1.2.3.4:0"),
-	Dst:       mustIPPort("5.6.7.8:0"),
-}
-
 // ICMPv6 Router Solicitation
 var icmp6PacketBuffer = []byte{
 	0x60, 0x00, 0x00, 0x00, 0x00, 0x08, 0x3a, 0xff,
@@ -255,17 +243,6 @@ var udp4ReplyBuffer = []byte{
 	0x02, 0x37, 0x00, 0x7b, 0x00, 0x15, 0xd3, 0x9d,
 	// "reply_payload"
 	0x72, 0x65, 0x70, 0x6c, 0x79, 0x5f, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
-}
-
-var udp4ReplyDecode = Parsed{
-	b:       udp4ReplyBuffer,
-	subofs:  20,
-	dataofs: 28,
-	length:  len(udp4ReplyBuffer),
-
-	IPProto: UDP,
-	Src:     mustIPPort("1.2.3.4:567"),
-	Dst:     mustIPPort("5.6.7.8:123"),
 }
 
 // First TCP fragment of a packet with leading 24 bytes of 'a's

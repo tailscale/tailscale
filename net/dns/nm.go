@@ -25,6 +25,13 @@ const (
 	lowerPriority   = int32(200) // lower than all builtin auto priorities
 )
 
+// reconfigTimeout is the time interval within which Manager.{Up,Down} should complete.
+//
+// This is particularly useful because certain conditions can cause indefinite hangs
+// (such as improper dbus auth followed by contextless dbus.Object.Call).
+// Such operations should be wrapped in a timeout context.
+const reconfigTimeout = time.Second
+
 // nmManager uses the NetworkManager DBus API.
 type nmManager struct {
 	interfaceName string

@@ -9,9 +9,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
 
@@ -100,58 +103,54 @@ var (
 //
 // The WhoIsResponse is always populated, with a non-nil Node and UserProfile,
 // unless getTailscaleBrowserSession reports errNotUsingTailscale.
-func (s *Server) getSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, error) {
+func (s *Server) getSession(r *http.Request) (*browserSession, *apitype.WhoIsResponse, *ipnstate.Status, error) {
 	whoIs, whoIsErr := s.lc.WhoIs(r.Context(), r.RemoteAddr)
 	status, statusErr := s.lc.StatusWithoutPeers(r.Context())
 	switch {
 	case whoIsErr != nil:
-		return nil, nil, errNotUsingTailscale
+		return nil, nil, status, errNotUsingTailscale
 	case statusErr != nil:
-		return nil, whoIs, statusErr
+		return nil, whoIs, nil, statusErr
 	case status.Self == nil:
-		return nil, whoIs, errors.New("missing self node in tailscale status")
+		return nil, whoIs, status, errors.New("missing self node in tailscale status")
 	case whoIs.Node.IsTagged() && whoIs.Node.StableID == status.Self.ID:
-		return nil, whoIs, errTaggedLocalSource
+		return nil, whoIs, status, errTaggedLocalSource
 	case whoIs.Node.IsTagged():
-		return nil, whoIs, errTaggedRemoteSource
+		return nil, whoIs, status, errTaggedRemoteSource
 	case !status.Self.IsTagged() && status.Self.UserID != whoIs.UserProfile.ID:
-		return nil, whoIs, errNotOwner
+		return nil, whoIs, status, errNotOwner
 	}
 	srcNode := whoIs.Node.ID
 	srcUser := whoIs.UserProfile.ID
 
 	cookie, err := r.Cookie(sessionCookieName)
 	if errors.Is(err, http.ErrNoCookie) {
-		return nil, whoIs, errNoSession
+		return nil, whoIs, status, errNoSession
 	} else if err != nil {
-		return nil, whoIs, err
+		return nil, whoIs, status, err
 	}
 	v, ok := s.browserSessions.Load(cookie.Value)
 	if !ok {
-		return nil, whoIs, errNoSession
+		return nil, whoIs, status, errNoSession
 	}
 	session := v.(*browserSession)
 	if session.SrcNode != srcNode || session.SrcUser != srcUser {
 		// In this case the browser cookie is associated with another tailscale node.
 		// Maybe the source browser's machine was logged out and then back in as a different node.
 		// Return errNoSession because there is no session for this user.
-		return nil, whoIs, errNoSession
+		return nil, whoIs, status, errNoSession
 	} else if session.isExpired(s.timeNow()) {
 		// Session expired, remove from session map and return errNoSession.
 		s.browserSessions.Delete(session.ID)
-		return nil, whoIs, errNoSession
+		return nil, whoIs, status, errNoSession
 	}
-	return session, whoIs, nil
+	return session, whoIs, status, nil
 }
 
 // newSession creates a new session associated with the given source user/node,
 // and stores it back to the session cache. Creating of a new session includes
 // generating a new auth URL from the control server.
 func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*browserSession, error) {
-	a, err := s.newAuthURL(ctx, src.Node.ID)
-	if err != nil {
-		return nil, err
-	}
 	sid, err := s.newSessionID()
 	if err != nil {
 		return nil, err
@@ -160,12 +159,42 @@ func (s *Server) newSession(ctx context.Context, src *apitype.WhoIsResponse) (*b
 		ID:      sid,
 		SrcNode: src.Node.ID,
 		SrcUser: src.UserProfile.ID,
-		AuthID:  a.ID,
-		AuthURL: a.URL,
 		Created: s.timeNow(),
 	}
+
+	if s.controlSupportsCheckMode(ctx) {
+		// control supports check mode, so get a new auth URL and return.
+		a, err := s.newAuthURL(ctx, src.Node.ID)
+		if err != nil {
+			return nil, err
+		}
+		session.AuthID = a.ID
+		session.AuthURL = a.URL
+	} else {
+		// control does not support check mode, so there is no additional auth we can do.
+		session.Authenticated = true
+	}
+
 	s.browserSessions.Store(sid, session)
 	return session, nil
+}
+
+// controlSupportsCheckMode returns whether the current control server supports web client check mode, to verify a user's identity.
+// We assume that only "tailscale.com" control servers support check mode.
+// This allows the web client to be used with non-standard control servers.
+// If an error occurs getting the control URL, this method returns true to fail closed.
+//
+// TODO(juanfont/headscale#1623): adjust or remove this when headscale supports check mode.
+func (s *Server) controlSupportsCheckMode(ctx context.Context) bool {
+	prefs, err := s.lc.GetPrefs(ctx)
+	if err != nil {
+		return true
+	}
+	controlURL, err := url.Parse(prefs.ControlURLOrDefault())
+	if err != nil {
+		return true
+	}
+	return strings.HasSuffix(controlURL.Host, ".tailscale.com")
 }
 
 // awaitUserAuth blocks until the given session auth has been completed

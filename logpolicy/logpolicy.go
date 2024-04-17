@@ -714,7 +714,7 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 	}
 
 	if version.IsWindowsGUI() && strings.HasPrefix(netw, "tcp") {
-		if c, err := safesocket.Connect(safesocket.DefaultConnectionStrategy("")); err == nil {
+		if c, err := safesocket.Connect(""); err == nil {
 			fmt.Fprintf(c, "CONNECT %s HTTP/1.0\r\n\r\n", addr)
 			br := bufio.NewReader(c)
 			res, err := http.ReadResponse(br, nil)

@@ -19,8 +19,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const timeout = 15 * time.Second
-
 func retry(t *testing.T, fn func() error) {
 	t.Helper()
 	const tries = 3

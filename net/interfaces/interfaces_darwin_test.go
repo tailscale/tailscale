@@ -15,7 +15,7 @@ import (
 )
 
 func TestLikelyHomeRouterIPSyscallExec(t *testing.T) {
-	syscallIP, syscallOK := likelyHomeRouterIPBSDFetchRIB()
+	syscallIP, _, syscallOK := likelyHomeRouterIPBSDFetchRIB()
 	netstatIP, netstatIf, netstatOK := likelyHomeRouterIPDarwinExec()
 
 	if syscallOK != netstatOK || syscallIP != netstatIP {

@@ -795,3 +795,31 @@ func TestCleanupOldDownloads(t *testing.T) {
 		})
 	}
 }
+
+func TestParseUnraidPluginVersion(t *testing.T) {
+	tests := []struct {
+		plgPath string
+		wantVer string
+		wantErr string
+	}{
+		{plgPath: "testdata/tailscale-1.52.0.plg", wantVer: "1.52.0"},
+		{plgPath: "testdata/tailscale-1.54.0.plg", wantVer: "1.54.0"},
+		{plgPath: "testdata/tailscale-nover.plg", wantErr: "version not found in plg file"},
+		{plgPath: "testdata/tailscale-nover-path-mentioned.plg", wantErr: "version not found in plg file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.plgPath, func(t *testing.T) {
+			got, err := parseUnraidPluginVersion(tt.plgPath)
+			if got != tt.wantVer {
+				t.Errorf("got version: %q, want %q", got, tt.wantVer)
+			}
+			var gotErr string
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != tt.wantErr {
+				t.Errorf("got error: %q, want %q", gotErr, tt.wantErr)
+			}
+		})
+	}
+}

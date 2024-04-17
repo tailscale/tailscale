@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/health"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -50,6 +49,8 @@ func readResolv(r io.Reader) (OSConfig, error) {
 // resolvOwner returns the apparent owner of the resolv.conf
 // configuration in bs - one of "resolvconf", "systemd-resolved" or
 // "NetworkManager", or "" if no known owner was found.
+//
+//lint:ignore U1000 used in linux and freebsd code
 func resolvOwner(bs []byte) string {
 	likely := ""
 	b := bytes.NewBuffer(bs)
@@ -130,11 +131,13 @@ type directManager struct {
 	ctx      context.Context    // valid until Close
 	ctxClose context.CancelFunc // closes ctx
 
-	mu               sync.Mutex
-	wantResolvConf   []byte // if non-nil, what we expect /etc/resolv.conf to contain
+	mu             sync.Mutex
+	wantResolvConf []byte // if non-nil, what we expect /etc/resolv.conf to contain
+	//lint:ignore U1000 used in direct_linux.go
 	lastWarnContents []byte // last resolv.conf contents that we warned about
 }
 
+//lint:ignore U1000 used in manager_{freebsd,openbsd}.go
 func newDirectManager(logf logger.Logf) *directManager {
 	return newDirectManagerOnFS(logf, directFS{})
 }
@@ -286,52 +289,6 @@ func (m *directManager) setWant(want []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.wantResolvConf = want
-}
-
-var warnTrample = health.NewWarnable()
-
-// checkForFileTrample checks whether /etc/resolv.conf has been trampled
-// by another program on the system. (e.g. a DHCP client)
-func (m *directManager) checkForFileTrample() {
-	m.mu.Lock()
-	want := m.wantResolvConf
-	lastWarn := m.lastWarnContents
-	m.mu.Unlock()
-
-	if want == nil {
-		return
-	}
-
-	cur, err := m.fs.ReadFile(resolvConf)
-	if err != nil {
-		m.logf("trample: read error: %v", err)
-		return
-	}
-	if bytes.Equal(cur, want) {
-		warnTrample.Set(nil)
-		if lastWarn != nil {
-			m.mu.Lock()
-			m.lastWarnContents = nil
-			m.mu.Unlock()
-			m.logf("trample: resolv.conf again matches expected content")
-		}
-		return
-	}
-	if bytes.Equal(cur, lastWarn) {
-		// We already logged about this, so not worth doing it again.
-		return
-	}
-
-	m.mu.Lock()
-	m.lastWarnContents = cur
-	m.mu.Unlock()
-
-	show := cur
-	if len(show) > 1024 {
-		show = show[:1024]
-	}
-	m.logf("trample: resolv.conf changed from what we expected. did some other program interfere? current contents: %q", show)
-	warnTrample.Set(errors.New("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"))
 }
 
 func (m *directManager) SetDNS(config OSConfig) (err error) {

@@ -50,9 +50,7 @@ type TestIGDOptions struct {
 type igdCounters struct {
 	numUPnPDiscoRecv     int32
 	numUPnPOtherUDPRecv  int32
-	numUPnPHTTPRecv      int32
 	numPMPRecv           int32
-	numPMPDiscoRecv      int32
 	numPCPRecv           int32
 	numPCPDiscoRecv      int32
 	numPCPMapRecv        int32

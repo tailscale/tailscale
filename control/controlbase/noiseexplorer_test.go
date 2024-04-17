@@ -32,7 +32,6 @@ import (
 	"encoding/binary"
 	"hash"
 	"io"
-	"math"
 
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -105,10 +104,6 @@ var minNonce = uint32(0)
  * UTILITY FUNCTIONS                                                *
  * ---------------------------------------------------------------- */
 
-func getPublicKey(kp *keypair) [32]byte {
-	return kp.public_key
-}
-
 func isEmptyKey(k [32]byte) bool {
 	return subtle.ConstantTimeCompare(k[:], emptyKey[:]) == 1
 }
@@ -160,12 +155,6 @@ func generateKeypair() keypair {
 		return keypair{public_key, private_key}
 	}
 	return generateKeypair()
-}
-
-func generatePublicKey(private_key [32]byte) [32]byte {
-	var public_key [32]byte
-	curve25519.ScalarBaseMult(&public_key, &private_key)
-	return public_key
 }
 
 func encrypt(k [32]byte, n uint32, ad []byte, plaintext []byte) []byte {
@@ -246,12 +235,6 @@ func decryptWithAd(cs *cipherstate, ad []byte, ciphertext []byte) (*cipherstate,
 	return cs, plaintext, valid
 }
 
-func reKey(cs *cipherstate) *cipherstate {
-	e := encrypt(cs.k, math.MaxUint32, []byte{}, emptyKey[:])
-	copy(cs.k[:], e)
-	return cs
-}
-
 /* SymmetricState */
 
 func initializeSymmetric(protocolName []byte) symmetricstate {
@@ -271,19 +254,6 @@ func mixKey(ss *symmetricstate, ikm [32]byte) *symmetricstate {
 func mixHash(ss *symmetricstate, data []byte) *symmetricstate {
 	ss.h = getHash(ss.h[:], data)
 	return ss
-}
-
-func mixKeyAndHash(ss *symmetricstate, ikm [32]byte) *symmetricstate {
-	var tempH [32]byte
-	var tempK [32]byte
-	ss.ck, tempH, tempK = getHkdf(ss.ck, ikm[:])
-	ss = mixHash(ss, tempH[:])
-	ss.cs = initializeKey(tempK)
-	return ss
-}
-
-func getHandshakeHash(ss *symmetricstate) [32]byte {
-	return ss.h
 }
 
 func encryptAndHash(ss *symmetricstate, plaintext []byte) (*symmetricstate, []byte) {
@@ -471,5 +441,3 @@ func RecvMessage(session *noisesession, message *messagebuffer) (*noisesession, 
 	session.mc = session.mc + 1
 	return session, plaintext, valid
 }
-
-func main() {}

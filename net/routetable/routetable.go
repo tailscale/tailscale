@@ -15,7 +15,9 @@ import (
 )
 
 var (
+	//lint:ignore U1000 used in routetable_linux_test.go and routetable_bsd_test.go
 	defaultRouteIPv4 = RouteDestination{Prefix: netip.PrefixFrom(netip.IPv4Unspecified(), 0)}
+	//lint:ignore U1000 used in routetable_bsd_test.go
 	defaultRouteIPv6 = RouteDestination{Prefix: netip.PrefixFrom(netip.IPv6Unspecified(), 0)}
 )
 
