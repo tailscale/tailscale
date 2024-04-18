@@ -208,8 +208,12 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	a.mu.Lock()
-	if a.shouldExpose(svc) {
+	if a.shouldExposeClusterIP(svc) {
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
+		a.managedIngressProxies.Add(svc.UID)
+		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+	} else if a.shouldExposeDNSName(svc) {
+		sts.ClusterTargetDNSName = svc.Spec.ExternalName
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 	} else if ip := a.tailnetTargetAnnotation(svc); ip != "" {
@@ -303,13 +307,20 @@ func validateService(svc *corev1.Service) []string {
 }
 
 func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
+	return a.shouldExposeClusterIP(svc) || a.shouldExposeDNSName(svc)
+}
+
+func (a *ServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
 	// Headless services can't be exposed, since there is no ClusterIP to
 	// forward to.
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
 		return false
 	}
-
 	return a.hasLoadBalancerClass(svc) || a.hasExposeAnnotation(svc)
+}
+
+func (a *ServiceReconciler) shouldExposeDNSName(svc *corev1.Service) bool {
+	return a.hasExposeAnnotation(svc) && svc.Spec.Type == corev1.ServiceTypeExternalName && svc.Spec.ExternalName != ""
 }
 
 func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {

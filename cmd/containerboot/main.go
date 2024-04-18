@@ -376,6 +376,7 @@ authLoop:
 	// have changed.
 	const proxyTargetIPsResolvePeriod = time.Minute * 10
 	var ts time.Ticker
+	defer ts.Stop()
 	if cfg.ProxyTargetDNSName != "" {
 		ts = *time.NewTicker(proxyTargetIPsResolvePeriod)
 	}
@@ -471,14 +472,14 @@ runLoop:
 						log.Printf("unable to resolve DNS name %s: %v, retrying in %s", cfg.ProxyTargetDNSName, err, proxyTargetIPsResolvePeriod)
 						continue
 					}
-					backendsHaveChanged := slices.CompareFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) int {
+					backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
 						if ip1.Equal(ip2) {
-							return 0
+							return true
 						}
-						return -1
-					})
-					if len(addrs) > 0 && (backendsHaveChanged != 0 || ipsHaveChanged) && len(newBackendAddrs) > 0 {
-						log.Printf("installing ingresss proxy rules for backends %v", newBackendAddrs)
+						return false
+					}))
+					if len(addrs) > 0 && (backendsHaveChanged || ipsHaveChanged) && len(newBackendAddrs) > 0 {
+						log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
 						if err := installIngressForwardingRuleExternalNameService(ctx, newBackendAddrs, addrs, nfr); err != nil {
 							log.Fatalf("error installing ingress proxy rules: %v", err)
 						}
@@ -560,20 +561,19 @@ runLoop:
 				log.Printf("unable to resolve DNS name %s: %v, retrying in %s", cfg.ProxyTargetDNSName, err, proxyTargetIPsResolvePeriod.String())
 				continue
 			}
-			backendsHaveChanged := slices.CompareFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) int {
+			backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
 				if ip1.Equal(ip2) {
-					return 0
+					return true
 				}
-				return -1
-			})
-			if backendsHaveChanged != 0 && len(newBackendAddrs) != 0 && len(addrs) != 0 {
+				return false
+			}))
+			if backendsHaveChanged && len(newBackendAddrs) != 0 && len(addrs) != 0 {
 				log.Printf("Backend address change detected, installing proxy rules for backends %v", newBackendAddrs)
 				if err := installIngressForwardingRuleExternalNameService(ctx, newBackendAddrs, addrs, nfr); err != nil {
 					log.Fatalf("installing ingress proxy rules for DNS target %s: %v", cfg.ProxyTargetDNSName, err)
 				}
 			}
 			backendAddrs = newBackendAddrs
-
 		}
 	}
 	wg.Wait()
@@ -1065,8 +1065,8 @@ type settings struct {
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
 	ProxyTargetIP string
-	// ProxyTargetDNSName is a DNS name whose backing IP addresses all
-	// incoming Tailscale traffic should be proxied to.
+	// ProxyTargetDNSName is a DNS name to whose backing IP addresses all
+	// incoming Tailscale traffic should be proxied.
 	ProxyTargetDNSName string
 	// TailnetTargetIP is the destination IP to which all incoming
 	// non-Tailscale traffic should be proxied. This is typically a
