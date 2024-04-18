@@ -64,6 +64,10 @@ The Tailscale API does not currently support pagination. All results are returne
   - Update device key: [`POST /api/v2/device/{deviceID}/key`](#update-device-key)
 - **IP Address**
   - Set device IPv4 address: [`POST /api/v2/device/{deviceID}/ip`](#set-device-ipv4-address)
+- **Device posture attributes**
+  - Get device posture attributes: [`GET /api/v2/device/{deviceID}/attributes`](#get-device-posture-attributes)
+  - Set custom device posture attributes: [`POST /api/v2/device/{deviceID}/attributes/{attributeKey}`](#set-device-posture-attributes)
+  - Delete custom device posture attributes: [`DELETE /api/v2/device/{deviceID}/attributes/{attributeKey}`](#delete-custom-device-posture-attributes)
 
 **[Tailnet](#tailnet)**
 
@@ -709,6 +713,135 @@ This returns a 2xx code on success, with an empty JSON object in the response bo
 curl "https://api.tailscale.com/api/v2/device/11055/ip" \
 -u "tskey-api-xxxxx:" \
 --data-binary '{"ipv4": "100.80.0.1"}'
+```
+
+### Response
+
+The response is 2xx on success. The response body is currently an empty JSON object.
+
+## Get device posture attributes
+
+The posture attributes API endpoints can be called with OAuth access tokens with
+an `acl` or `devices` [scope][oauth-scopes], or personal access belonging to
+[user roles][user-roles] Owners, Admins, Network Admins, or IT Admins.
+
+```
+GET /api/v2/device/{deviceID}/attributes
+```
+
+Retrieve all posture attributes for the specified device. This returns a JSON object of all the key-value pairs of posture attributes for the device.
+
+### Parameters
+
+#### `deviceID` (required in URL path)
+
+The ID of the device to fetch posture attributes for.
+
+### Request example
+
+```
+curl "https://api.tailscale.com/api/v2/device/11055/attributes" \
+-u "tskey-api-xxxxx:"
+```
+
+### Response
+
+The response is 200 on success. The response body is a JSON object containing all the posture attributes assigned to the node. Attribute values can be strings, numbers or booleans.
+
+```json
+{
+  "attributes": {
+    "custom:myScore": 87,
+    "custom:diskEncryption": true,
+    "custom:myAttribute": "my_value",
+    "node:os": "linux",
+    "node:osVersion": "5.19.0-42-generic",
+    "node:tsReleaseTrack": "stable",
+    "node:tsVersion": "1.40.0",
+    "node:tsAutoUpdate": false
+  }
+}
+```
+
+## Set custom device posture attributes
+
+```
+POST /api/v2/device/{deviceID}/attributes/{attributeKey}
+```
+
+Create or update a custom posture attribute on the specified device. User-managed attributes must be in the `custom` namespace, which is indicated by prefixing the attribute key with `custom:`.
+
+Custom device posture attributes are available for the Personal and Enterprise plans.
+
+### Parameters
+
+#### `deviceID` (required in URL path)
+
+The ID of the device on which to set the custom posture attribute.
+
+#### `attributeKey` (required in URL path)
+
+The name of the posture attribute to set. This must be prefixed with `custom:`.
+
+Keys have a maximum length of 50 characters including the namespace, and can only contain letters, numbers, underscores, and colon.
+
+Keys are case-sensitive. Keys must be unique, but are checked for uniqueness in a case-insensitive manner. For example, `custom:MyAttribute` and `custom:myattribute` cannot both be set within a single tailnet.
+
+All values for a given key need to be of the same type, which is determined when the first value is written for a given key. For example, `custom:myattribute` cannot have a numeric value (`87`) for one node and a string value (`"78"`) for another node within the same tailnet.
+
+### Posture attribute `value` (required in POST body)
+
+```json
+{
+  "value": "foo"
+}
+```
+
+A value can be either a string, number or boolean.
+
+A string value can have a maximum length of 50 characters, and can only contain letters, numbers, underscores, and periods.
+
+A number value is an integer and must be a JSON safe number (up to 2^53 - 1).
+
+### Request example
+
+```
+curl "https://api.tailscale.com/api/v2/device/11055/attributes/custom:my_attribute" \
+-u "tskey-api-xxxxx:" \
+--data-binary '{"value": "my_value"}'
+```
+
+### Response
+
+The response is 2xx on success. The response body is currently an empty JSON object.
+
+## Delete custom device posture attributes
+
+```
+DELETE /api/v2/device/{deviceID}/attributes/{attributeKey}
+```
+
+Delete a posture attribute from the specified device. This is only applicable to user-managed posture attributes in the `custom` namespace, which is indicated by prefixing the attribute key with `custom:`.
+
+<PricingPlanNote feature="Custom device posture attributes" verb="are" plan="the Personal and Enterprise plans" />
+
+### Parameters
+
+#### `deviceID` (required in URL path)
+
+The ID of the device from which to delete the posture attribute.
+
+#### `attributeKey` (required in URL path)
+
+The name of the posture attribute to delete. This must be prefixed with `custom:`.
+
+Keys have a maximum length of 50 characters including the namespace, and can only contain letters, numbers, underscores, and a delimiting colon.
+
+### Request example
+
+```
+curl -X DELETE "https://api.tailscale.com/api/v2/device/11055/attributes/custom:my_attribute" \
+-u "tskey-api-xxxxx:"
 ```
 
 ### Response
