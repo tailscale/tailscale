@@ -109,8 +109,9 @@ type tailscaleSTSConfig struct {
 	ParentResourceUID   string
 	ChildResourceLabels map[string]string
 
-	ServeConfig     *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
-	ClusterTargetIP string           // ingress target
+	ServeConfig          *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
+	ClusterTargetIP      string           // ingress target IP
+	ClusterTargetDNSName string           // ingress target DNS name
 	// If set to true, operator should configure containerboot to forward
 	// cluster traffic via the proxy set up for Kubernetes Ingress.
 	ForwardClusterTrafficViaL7IngressProxy bool
@@ -534,6 +535,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEST_IP",
 			Value: sts.ClusterTargetIP,
+		})
+		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
+	} else if sts.ClusterTargetDNSName != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEST_DNS_NAME",
+			Value: sts.ClusterTargetDNSName,
 		})
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
 	} else if sts.TailnetTargetIP != "" {
