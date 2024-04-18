@@ -89,7 +89,7 @@ var defaultCSP = strings.Join([]string{
 	`form-action 'self'`,      // disallow form submissions to other origins
 	`base-uri 'self'`,         // disallow base URIs from other origins
 	`block-all-mixed-content`, // disallow mixed content when serving over HTTPS
-	`object-src 'none'`,       // disallow embedding of resources from other origins
+	`object-src 'self'`,       // disallow embedding of resources from other origins
 }, "; ")
 
 // Config contains the configuration for a safeweb server.
