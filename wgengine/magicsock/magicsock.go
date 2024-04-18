@@ -384,6 +384,10 @@ type Options struct {
 	// WireGuard state by its public key. If nil, it's not used.
 	// In regular use, this will be wgengine.(*userspaceEngine).PeerByKey.
 	PeerByKeyFunc func(key.NodePublic) (_ wgint.Peer, ok bool)
+
+	// DisablePortMapper, if true, disables the portmapper.
+	// This is primarily useful in tests.
+	DisablePortMapper bool
 }
 
 func (o *Options) logf() logger.Logf {
@@ -452,7 +456,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
 	portMapOpts := &portmapper.DebugKnobs{
-		DisableAll: func() bool { return c.onlyTCP443.Load() },
+		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
 	if opts.NetMon != nil {
