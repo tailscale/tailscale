@@ -33,6 +33,7 @@ const (
 	share11 = `sha re$%11`
 	share12 = `_sha re$%12`
 	file111 = `fi le$%111.txt`
+	file112 = `file112.txt`
 )
 
 func init() {
@@ -81,9 +82,13 @@ func TestFileManipulation(t *testing.T) {
 	s.checkFileStatus(remote1, share11, file111)
 	s.checkFileContents(remote1, share11, file111)
 
+	s.renameFile("renaming file across shares should fail", remote1, share11, file111, share12, file112, false)
+
+	s.renameFile("renaming file in same share should succeed", remote1, share11, file111, share11, file112, true)
+	s.checkFileContents(remote1, share11, file112)
+
 	s.addShare(remote1, share12, drive.PermissionReadOnly)
 	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, "hello world", false)
-
 	s.writeFile("writing file to non-existent remote should fail", "non-existent", share11, file111, "hello world", false)
 	s.writeFile("writing file to non-existent share should fail", remote1, "non-existent", file111, "hello world", false)
 }
@@ -241,7 +246,18 @@ func (s *system) writeFile(label, remoteName, shareName, name, contents string, 
 	if expectSuccess && err != nil {
 		s.t.Fatalf("%v: expected success writing file %q, but got error %v", label, path, err)
 	} else if !expectSuccess && err == nil {
-		s.t.Fatalf("%v: expected error writing file %q", label, path)
+		s.t.Fatalf("%v: expected error writing file %q, but got no error", label, path)
+	}
+}
+
+func (s *system) renameFile(label, remoteName, fromShare, fromFile, toShare, toFile string, expectSuccess bool) {
+	fromPath := pathTo(remoteName, fromShare, fromFile)
+	toPath := pathTo(remoteName, toShare, toFile)
+	err := s.client.Rename(fromPath, toPath, true)
+	if expectSuccess && err != nil {
+		s.t.Fatalf("%v: expected success moving file %q to %q, but got error %v", label, fromPath, toPath, err)
+	} else if !expectSuccess && err == nil {
+		s.t.Fatalf("%v: expected error moving file %q to %q, but got no error", label, fromPath, toPath)
 	}
 }
 
