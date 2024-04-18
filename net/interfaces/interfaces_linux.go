@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !android
+
 package interfaces
 
 import (
@@ -48,7 +50,6 @@ ens18   0000000A        00000000        0001    0       0       0       0000FFFF
 func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
 	if procNetRouteErr.Load() {
 		// If we failed to read /proc/net/route previously, don't keep trying.
-		// But if we're on Android, go into the Android path.
 		if runtime.GOOS == "android" {
 			return likelyHomeRouterIPAndroid()
 		}
@@ -177,11 +178,6 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 		d.InterfaceName = v
 		return d, nil
 	}
-	if runtime.GOOS == "android" {
-		v, err = defaultRouteInterfaceAndroidIPRoute()
-		d.InterfaceName = v
-		return d, err
-	}
 	// Issue 4038: the default route (such as on Unifi UDM Pro)
 	// might be in a non-default table, so it won't show up in
 	// /proc/net/route. Use netlink to find the default route.
@@ -306,40 +302,4 @@ func defaultRouteInterfaceProcNet() (string, error) {
 		return defaultRouteInterfaceProcNetInternal(4096)
 	}
 	return rc, err
-}
-
-// defaultRouteInterfaceAndroidIPRoute tries to find the machine's default route interface name
-// by parsing the "ip route" command output. We use this on Android where /proc/net/route
-// can be missing entries or have locked-down permissions.
-// See also comments in https://github.com/tailscale/tailscale/pull/666.
-func defaultRouteInterfaceAndroidIPRoute() (ifname string, err error) {
-	cmd := exec.Command("/system/bin/ip", "route", "show", "table", "0")
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", err
-	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("interfaces: running /system/bin/ip: %v", err)
-		return "", err
-	}
-	// Search for line like "default via 10.0.2.2 dev radio0 table 1016 proto static mtu 1500 "
-	lineread.Reader(out, func(line []byte) error {
-		const pfx = "default via "
-		if !mem.HasPrefix(mem.B(line), mem.S(pfx)) {
-			return nil
-		}
-		ff := strings.Fields(string(line))
-		for i, v := range ff {
-			if i > 0 && ff[i-1] == "dev" && ifname == "" {
-				ifname = v
-			}
-		}
-		return nil
-	})
-	cmd.Process.Kill()
-	cmd.Wait()
-	if ifname == "" {
-		return "", errors.New("no default routes found")
-	}
-	return ifname, nil
 }
