@@ -18,7 +18,9 @@
 //     previously advertised routes. To accept routes, use TS_EXTRA_ARGS to pass
 //     in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
-//     destination.
+//     destination defined by an IP address.
+//   - TS_DEST_DNS_NAME: proxy all incoming Tailscale traffic to the given
+//     destination defined by a DNS name. The DNS name will be periodically resolved and firewall rules updated accordingly.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination defined by an IP.
 //   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
@@ -82,12 +84,14 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,7 +126,8 @@ func main() {
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTo:                               defaultEnv("TS_DEST_IP", ""),
+		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
+		ProxyTargetDNSName:                    defaultEnv("TS_DEST_DNS_NAME", ""),
 		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
 		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
 		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
@@ -150,8 +155,8 @@ func main() {
 		if err := ensureTunFile(cfg.Root); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
-		if cfg.ProxyTo != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
+		if cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
+			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.ProxyTargetDNSName, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -341,13 +346,16 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
+		wantProxy         = cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
 
 		currentEgressIPs deephash.Sum
+
+		addrs        []netip.Prefix
+		backendAddrs []net.IP
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
@@ -362,6 +370,16 @@ authLoop:
 			log.Fatalf("error creating new netfilter runner: %v", err)
 		}
 	}
+
+	// If we are proxying to a target specified by a DNS name, periodically
+	// resolve the DNS name and update firewall rules if the backend IPs
+	// have changed.
+	const proxyTargetIPsResolvePeriod = time.Minute * 10
+	var ts time.Ticker
+	if cfg.ProxyTargetDNSName != "" {
+		ts = *time.NewTicker(proxyTargetIPsResolvePeriod)
+	}
+
 	notifyChan := make(chan ipn.Notify)
 	errChan := make(chan error)
 	go func() {
@@ -399,7 +417,7 @@ runLoop:
 				log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 			}
 			if n.NetMap != nil {
-				addrs := n.NetMap.SelfNode.Addresses().AsSlice()
+				addrs = n.NetMap.SelfNode.Addresses().AsSlice()
 				newCurrentIPs := deephash.Hash(&addrs)
 				ipsHaveChanged := newCurrentIPs != currentIPs
 
@@ -441,11 +459,31 @@ runLoop:
 					}
 					currentEgressIPs = newCurentEgressIPs
 				}
-				if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
+				if cfg.ProxyTargetIP != "" && len(addrs) > 0 && ipsHaveChanged {
 					log.Printf("Installing proxy rules")
-					if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
+					if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
 						log.Fatalf("installing ingress proxy rules: %v", err)
 					}
+				}
+				if cfg.ProxyTargetDNSName != "" {
+					newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
+					if err != nil {
+						log.Printf("unable to resolve DNS name %s: %v, retrying in %s", cfg.ProxyTargetDNSName, err, proxyTargetIPsResolvePeriod)
+						continue
+					}
+					backendsHaveChanged := slices.CompareFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) int {
+						if ip1.Equal(ip2) {
+							return 0
+						}
+						return -1
+					})
+					if len(addrs) > 0 && (backendsHaveChanged != 0 || ipsHaveChanged) && len(newBackendAddrs) > 0 {
+						log.Printf("installing ingresss proxy rules for backends %v", newBackendAddrs)
+						if err := installIngressForwardingRuleExternalNameService(ctx, newBackendAddrs, addrs, nfr); err != nil {
+							log.Fatalf("error installing ingress proxy rules: %v", err)
+						}
+					}
+					backendAddrs = newBackendAddrs
 				}
 				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) > 0 {
 					cd := n.NetMap.DNS.CertDomains[0]
@@ -511,12 +549,31 @@ runLoop:
 								os.Exit(0)
 							}
 						}
-
 					}
 					wg.Add(1)
 					go reaper()
 				}
 			}
+		case <-ts.C:
+			newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
+			if err != nil {
+				log.Printf("unable to resolve DNS name %s: %v, retrying in %s", cfg.ProxyTargetDNSName, err, proxyTargetIPsResolvePeriod.String())
+				continue
+			}
+			backendsHaveChanged := slices.CompareFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) int {
+				if ip1.Equal(ip2) {
+					return 0
+				}
+				return -1
+			})
+			if backendsHaveChanged != 0 && len(newBackendAddrs) != 0 && len(addrs) != 0 {
+				log.Printf("Backend address change detected, installing proxy rules for backends %v", newBackendAddrs)
+				if err := installIngressForwardingRuleExternalNameService(ctx, newBackendAddrs, addrs, nfr); err != nil {
+					log.Fatalf("installing ingress proxy rules for DNS target %s: %v", cfg.ProxyTargetDNSName, err)
+				}
+			}
+			backendAddrs = newBackendAddrs
+
 		}
 	}
 	wg.Wait()
@@ -757,12 +814,12 @@ func ensureTunFile(root string) error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTargetFQDN string, routes *string) error {
+func ensureIPForwarding(root, clusterProxyTargetIP, clusterProxyTargetDNSName, tailnetTargetiP, tailnetTargetFQDN string, routes *string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
-	if clusterProxyTarget != "" {
-		proxyIP, err := netip.ParseAddr(clusterProxyTarget)
+	if clusterProxyTargetIP != "" {
+		proxyIP, err := netip.ParseAddr(clusterProxyTargetIP)
 		if err != nil {
 			return fmt.Errorf("invalid cluster destination IP: %v", err)
 		}
@@ -770,6 +827,26 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, tailnetTarget
 			v4Forwarding = true
 		} else {
 			v6Forwarding = true
+		}
+	}
+	if clusterProxyTargetDNSName != "" {
+		ips, err := resolveDNS(context.Background(), clusterProxyTargetDNSName)
+		if err != nil {
+			return fmt.Errorf("error resolving DNS name %s: %w", clusterProxyTargetDNSName, err)
+		}
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				v4Forwarding = true
+				if v6Forwarding {
+					break
+				}
+			}
+			if ip.To16() != nil {
+				v6Forwarding = true
+				if v4Forwarding {
+					break
+				}
+			}
 		}
 	}
 	if tailnetTargetiP != "" {
@@ -918,15 +995,79 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	return nil
 }
 
+func installIngressForwardingRuleExternalNameService(ctx context.Context, backendAddrs []net.IP, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+	var (
+		tsv4       netip.Addr
+		tsv6       netip.Addr
+		v4Backends []netip.Addr
+		v6Backends []netip.Addr
+	)
+	for _, pfx := range tsIPs {
+		if pfx.IsSingleIP() && pfx.Addr().Is4() {
+			tsv4 = pfx.Addr()
+			continue
+		}
+		if pfx.IsSingleIP() && pfx.Addr().Is6() {
+			tsv6 = pfx.Addr()
+			continue
+		}
+	}
+	// TODO: log if more than one backend address is found and firewall is
+	// in nftables mode that only the first IP will be used.
+	for _, ip := range backendAddrs {
+		if ip.To4() != nil {
+			v4Backends = append(v4Backends, netip.AddrFrom4([4]byte(ip.To4())))
+		}
+		if ip.To16() != nil {
+			v6Backends = append(v6Backends, netip.AddrFrom16([16]byte(ip.To16())))
+		}
+	}
+
+	updateFirewall := func(dst netip.Addr, backendTargets []netip.Addr) error {
+		if err := nfr.DNATWithLoadBalancer(dst, backendTargets); err != nil {
+			return fmt.Errorf("installing DNAT rules for ingress backends %+#v: %w", backendTargets, err)
+		}
+		// The backend might advertize MSS higher than that of the
+		// tailscale interfaces. Clamp MSS of packets going out via
+		// tailscale0 interface to its MTU to prevent broken connections
+		// in environments where path MTU discovery is not working.
+		if err := nfr.ClampMSSToPMTU("tailscale0", dst); err != nil {
+			return fmt.Errorf("adding rule to clamp traffic via tailscale0: %v", err)
+		}
+		return nil
+	}
+
+	if len(v4Backends) != 0 {
+		if !tsv4.IsValid() {
+			log.Printf("backend targets %v contain at least one IPv4 address, but this node's Tailscale IPs do not contain a valid IPv4 address: %v", backendAddrs, tsIPs)
+		} else if err := updateFirewall(tsv4, v4Backends); err != nil {
+			return fmt.Errorf("Installing IPv4 firewall rules: %w", err)
+		}
+	}
+	if len(v6Backends) != 0 && !tsv6.IsValid() {
+		if !tsv6.IsValid() {
+			log.Printf("backend targets %v contain at least one IPv6 address, but this node's Tailscale IPs do not contain a valid IPv6 address: %v", backendAddrs, tsIPs)
+		} else if !nfr.HasIPV6NAT() {
+			log.Printf("backend targets %v contain at least one IPv6 address, but the chosen firewall mode does not support IPv6 NAT", backendAddrs)
+		} else if err := updateFirewall(tsv6, v6Backends); err != nil {
+			return fmt.Errorf("Installing IPv6 firewall rules: %w", err)
+		}
+	}
+	return nil
+}
+
 // settings is all the configuration for containerboot.
 type settings struct {
 	AuthKey  string
 	Hostname string
 	Routes   *string
-	// ProxyTo is the destination IP to which all incoming
+	// ProxyTargetIP is the destination IP to which all incoming
 	// Tailscale traffic should be proxied. If empty, no proxying
 	// is done. This is typically a locally reachable IP.
-	ProxyTo string
+	ProxyTargetIP string
+	// ProxyTargetDNSName is a DNS name whose backing IP addresses all
+	// incoming Tailscale traffic should be proxied to.
+	ProxyTargetDNSName string
 	// TailnetTargetIP is the destination IP to which all incoming
 	// non-Tailscale traffic should be proxied. This is typically a
 	// Tailscale IP.
@@ -966,8 +1107,14 @@ func (s *settings) validate() error {
 			return fmt.Errorf("error validating tailscaled configfile contents: %w", err)
 		}
 	}
-	if s.ProxyTo != "" && s.UserspaceMode {
+	if s.ProxyTargetIP != "" && s.UserspaceMode {
 		return errors.New("TS_DEST_IP is not supported with TS_USERSPACE")
+	}
+	if s.ProxyTargetDNSName != "" && s.UserspaceMode {
+		return errors.New("TS_DEST_DNS_NAME is not supported with TS_USERSPACE")
+	}
+	if s.ProxyTargetDNSName != "" && s.ProxyTargetIP != "" {
+		return errors.New("TS_DEST_DNS_NAME and TS_DEST_IP cannot both be set")
 	}
 	if s.TailnetTargetIP != "" && s.UserspaceMode {
 		return errors.New("TS_TAILNET_TARGET_IP is not supported with TS_USERSPACE")
@@ -991,6 +1138,16 @@ func (s *settings) validate() error {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is set but POD_IP is not set")
 	}
 	return nil
+}
+
+func resolveDNS(ctx context.Context, name string) ([]net.IP, error) {
+	ips, err := net.LookupIP(name)
+	if err != nil {
+		return nil, fmt.Errorf("error looking up IPs for DNS name %s: %w", name, err)
+	}
+	log.Printf("%s resolved to %v", name, ips)
+
+	return ips, nil
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

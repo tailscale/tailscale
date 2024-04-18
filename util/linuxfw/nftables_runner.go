@@ -114,7 +114,6 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 		dadderLen = 16
 		fam = unix.NFPROTO_IPV6
 	}
-
 	dnatRule := &nftables.Rule{
 		Table: nat,
 		Chain: preroutingCh,
@@ -143,6 +142,15 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 	}
 	n.conn.InsertRule(dnatRule)
 	return n.conn.Flush()
+}
+
+// DNATWithLoadBalancer currently just forwards all traffic destined for origDst
+// to the first IP address from the backend targets.
+// TODO (irbekrm): instead of doing this load balance traffic evenly to all
+// backend destinations.
+// https://github.com/tailscale/tailscale/commit/d37f2f508509c6c35ad724fd75a27685b90b575b#diff-a3bcbcd1ca198799f4f768dc56fea913e1945a6b3ec9dbec89325a84a19a85e7R148-R232
+func (n *nftablesRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error {
+	return n.AddDNATRule(origDst, dsts[0])
 }
 
 func (n *nftablesRunner) DNATNonTailscaleTraffic(tunname string, dst netip.Addr) error {
@@ -524,6 +532,14 @@ type NetfilterRunner interface {
 	// to the provided destination, as used in the Kubernetes ingress proxies.
 	AddDNATRule(origDst, dst netip.Addr) error
 
+	// DNATWithLoadBalancer adds a rule to the nat/PREROUTING chain to DNAT
+	// traffic destined for the given original destination to the given new
+	// destination(s) using round robin to load balance if more than one
+	// destination is provided. This is used to forward all traffic destined
+	// for the Tailscale interface to the provided destination(s), as used
+	// in the Kubernetes ingress proxies.
+	DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error
+
 	// AddSNATRuleForDst adds a rule to the nat/POSTROUTING chain to SNAT
 	// traffic destined for dst to src.
 	// This is used to forward traffic destined for the local machine over
@@ -533,7 +549,7 @@ type NetfilterRunner interface {
 	// DNATNonTailscaleTraffic adds a rule to the nat/PREROUTING chain to DNAT
 	// all traffic inbound from any interface except exemptInterface to dst.
 	// This is used to forward traffic destined for the local machine over
-	// the Tailscale interface, as used in the Kubernetes egress proxies.//
+	// the Tailscale interface, as used in the Kubernetes egress proxies.
 	DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error
 
 	// ClampMSSToPMTU adds a rule to the mangle/FORWARD chain to clamp MSS for
