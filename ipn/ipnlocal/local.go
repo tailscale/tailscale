@@ -2498,6 +2498,9 @@ func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 }
 
 func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
+
 	prefs := b.pm.CurrentPrefs()
 	if !prefs.Valid() {
 		b.logf("[unexpected]: received tailnet default auto-update callback but current prefs are nil")
@@ -2511,12 +2514,12 @@ func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
 	b.logf("using tailnet default auto-update setting: %v", au)
 	prefsClone := prefs.AsStruct()
 	prefsClone.AutoUpdate.Apply = opt.NewBool(au)
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
+	_, err := b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
 		Prefs: *prefsClone,
 		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
 			ApplySet: true,
 		},
-	})
+	}, unlock)
 	if err != nil {
 		b.logf("failed to apply tailnet-wide default for auto-updates (%v): %v", au, err)
 		return
