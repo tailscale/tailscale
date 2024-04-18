@@ -100,7 +100,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pathComponents := shared.CleanAndSplit(r.URL.Path)
 
 	if len(pathComponents) >= mpl {
-		h.delegate(pathComponents[mpl-1:], w, r)
+		h.delegate(mpl, pathComponents[mpl-1:], w, r)
 		return
 	}
 	h.handle(w, r)
@@ -129,24 +129,41 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // delegate sends the request to the Child WebDAV server.
-func (h *Handler) delegate(pathComponents []string, w http.ResponseWriter, r *http.Request) string {
+func (h *Handler) delegate(mpl int, pathComponents []string, w http.ResponseWriter, r *http.Request) {
+	dest := r.Header.Get("Destination")
+	if dest != "" {
+		// Rewrite destination header
+		destURL, err := url.Parse(dest)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		destinationComponents := shared.CleanAndSplit(destURL.Path)
+		if len(destinationComponents) < mpl || destinationComponents[mpl-1] != pathComponents[0] {
+			http.Error(w, "Destination across shares is not supported", http.StatusBadRequest)
+			return
+		}
+		updatedDest := shared.JoinEscaped(destinationComponents[mpl:]...)
+		r.Header.Set("Destination", updatedDest)
+	}
+
 	childName := pathComponents[0]
 	child := h.GetChild(childName)
 	if child == nil {
 		w.WriteHeader(http.StatusNotFound)
-		return childName
+		return
 	}
+
 	u, err := url.Parse(child.BaseURL)
 	if err != nil {
 		h.logf("warning: parse base URL %s failed: %s", child.BaseURL, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return childName
+		return
 	}
 	u.Path = path.Join(u.Path, shared.Join(pathComponents[1:]...))
 	r.URL = u
 	r.Host = u.Host
 	child.rp.ServeHTTP(w, r)
-	return childName
 }
 
 // SetChildren replaces the entire existing set of children with the given

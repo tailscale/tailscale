@@ -37,7 +37,7 @@ func (h *Handler) handlePROPFIND(w http.ResponseWriter, r *http.Request) {
 		bw := &bufferingResponseWriter{ResponseWriter: w}
 
 		mpl := h.maxPathLength(r)
-		h.delegate(pathComponents[mpl-1:], bw, r)
+		h.delegate(mpl, pathComponents[mpl-1:], bw, r)
 
 		// Fixup paths to add the requested path as a prefix.
 		pathPrefix := shared.Join(pathComponents[0:mpl]...)

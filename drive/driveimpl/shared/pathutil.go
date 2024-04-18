@@ -4,6 +4,7 @@
 package shared
 
 import (
+	"net/url"
 	"path"
 	"strings"
 )
@@ -31,6 +32,16 @@ func Join(parts ...string) string {
 	fullParts = append(fullParts, sepString)
 	for _, part := range parts {
 		fullParts = append(fullParts, part)
+	}
+	return path.Join(fullParts...)
+}
+
+// JoinEscaped is like Join but path escapes each part.
+func JoinEscaped(parts ...string) string {
+	fullParts := make([]string, 0, len(parts))
+	fullParts = append(fullParts, sepString)
+	for _, part := range parts {
+		fullParts = append(fullParts, url.PathEscape(part))
 	}
 	return path.Join(fullParts...)
 }
