@@ -447,7 +447,7 @@ func TestRouting(t *testing.T) {
 			browserPatterns: []string{"/foo/"},
 			apiPatterns:     []string{"/foo/bar/"},
 			requestPath:     "/foo/bar/baz",
-			want:            "multiple handlers match this request",
+			want:            "api",
 		},
 		{
 			desc:            "no match",
@@ -484,6 +484,71 @@ func TestRouting(t *testing.T) {
 			}
 			if got := strings.TrimSpace(string(resp)); got != tt.want {
 				t.Errorf("got response %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetMoreSpecificPattern(t *testing.T) {
+	for _, tt := range []struct {
+		desc string
+		a    string
+		b    string
+		want handlerType
+	}{
+		{
+			desc: "identical",
+			a:    "/foo/bar",
+			b:    "/foo/bar",
+			want: unknownHandler,
+		},
+		{
+			desc: "identical prefix",
+			a:    "/foo/bar/",
+			b:    "/foo/bar/",
+			want: unknownHandler,
+		},
+		{
+			desc: "trailing slash",
+			a:    "/foo",
+			b:    "/foo/", // path.Clean will strip the trailing slash.
+			want: unknownHandler,
+		},
+		{
+			desc: "same prefix",
+			a:    "/foo/bar/quux",
+			b:    "/foo/bar/",
+			want: apiHandler,
+		},
+		{
+			desc: "almost same prefix, but not a path component",
+			a:    "/goat/sheep/cheese",
+			b:    "/goat/sheepcheese/",
+			want: apiHandler,
+		},
+		{
+			desc: "attempt to make less-specific pattern look more specific",
+			a:    "/goat/cat/buddy",
+			b:    "/goat/../../../../../../../cat", // path.Clean catches this foolishness
+			want: apiHandler,
+		},
+		{
+			desc: "2 names for / (1)",
+			a:    "/",
+			b:    "/../../../../../../",
+			want: unknownHandler,
+		},
+		{
+			desc: "2 names for / (2)",
+			a:    "/",
+			b:    "///////",
+			want: unknownHandler,
+		},
+	} {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := checkHandlerType(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}

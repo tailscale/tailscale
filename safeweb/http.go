@@ -70,12 +70,14 @@
 package safeweb
 
 import (
+	"cmp"
 	crand "crypto/rand"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/gorilla/csrf"
@@ -195,6 +197,30 @@ func NewServer(config Config) (*Server, error) {
 	return s, nil
 }
 
+type handlerType int
+
+const (
+	unknownHandler handlerType = iota
+	apiHandler
+	browserHandler
+)
+
+// checkHandlerType returns either apiHandler or browserHandler, depending on
+// whether apiPattern or browserPattern is more specific (i.e. which pattern
+// contains more pathname components). If they are equally specific, it returns
+// unknownHandler.
+func checkHandlerType(apiPattern, browserPattern string) handlerType {
+	c := cmp.Compare(strings.Count(path.Clean(apiPattern), "/"), strings.Count(path.Clean(browserPattern), "/"))
+	switch {
+	case c > 0:
+		return apiHandler
+	case c < 0:
+		return browserHandler
+	default:
+		return unknownHandler
+	}
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, bp := s.BrowserMux.Handler(r)
 	_, ap := s.APIMux.Handler(r)
@@ -206,24 +232,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case bp == "" && ap == "": // neither match
 		http.NotFound(w, r)
 	case bp != "" && ap != "":
-		// Both muxes match the path. This can be because:
-		//  * one of them registers a wildcard "/" handler
-		//  * there are overlapping specific handlers
+		// Both muxes match the path. Route to the more-specific handler (as
+		// determined by the number of components in the path). If it somehow
+		// happens that both patterns are equally specific, something strange
+		// has happened; say so.
 		//
-		// If it's the former, route to the more-specific handler. If it's the
-		// latter - that's a bug so return an error to avoid mis-routing the
-		// request.
-		//
-		// TODO(awly): match the longest path instead of only special-casing
-		// "/".
-		switch {
-		case bp == "/":
+		// NOTE: checkHandlerType does not know about what the serve* handlers
+		// will do — including, possibly, redirecting to more specific patterns.
+		// If you have a less-specific pattern that redirects to something more
+		// specific, this logic will not do what you wanted.
+		handler := checkHandlerType(ap, bp)
+		switch handler {
+		case apiHandler:
 			s.serveAPI(w, r)
-		case ap == "/":
+		case browserHandler:
 			s.serveBrowser(w, r)
 		default:
-			log.Printf("conflicting mux paths in safeweb: request %q matches browser mux pattern %q and API mux patter %q; returning 500", r.URL.Path, bp, ap)
-			http.Error(w, "multiple handlers match this request", http.StatusInternalServerError)
+			s := http.StatusInternalServerError
+			log.Printf("conflicting mux paths in safeweb: request %q matches browser mux pattern %q and API mux pattern %q; returning %d", r.URL.Path, bp, ap, s)
+			http.Error(w, "multiple handlers match this request", s)
 		}
 	}
 }
