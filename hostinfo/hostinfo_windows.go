@@ -13,17 +13,27 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/winutil"
+	"tailscale.com/util/winutil/winenv"
 )
 
 func init() {
+	distroName = lazyDistroName.Get
 	osVersion = lazyOSVersion.Get
 	packageType = lazyPackageType.Get
 }
 
 var (
+	lazyDistroName  = &lazyAtomicValue[string]{f: ptr.To(distroNameWindows)}
 	lazyOSVersion   = &lazyAtomicValue[string]{f: ptr.To(osVersionWindows)}
 	lazyPackageType = &lazyAtomicValue[string]{f: ptr.To(packageTypeWindows)}
 )
+
+func distroNameWindows() string {
+	if winenv.IsWindowsServer() {
+		return "Server"
+	}
+	return ""
+}
 
 func osVersionWindows() string {
 	major, minor, build := windows.RtlGetNtVersionNumbers()
