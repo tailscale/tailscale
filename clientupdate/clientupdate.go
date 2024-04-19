@@ -1295,10 +1295,23 @@ func LatestTailscaleVersion(track string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if latest.Version == "" {
-		return "", fmt.Errorf("no latest version found for %q track", track)
+	ver := latest.Version
+	switch runtime.GOOS {
+	case "windows":
+		ver = latest.MSIsVersion
+	case "darwin":
+		ver = latest.MacZipsVersion
+	case "linux":
+		ver = latest.TarballsVersion
+		if distro.Get() == distro.Synology {
+			ver = latest.SPKsVersion
+		}
 	}
-	return latest.Version, nil
+
+	if ver == "" {
+		return "", fmt.Errorf("no latest version found for OS %q on %q track", runtime.GOOS, track)
+	}
+	return ver, nil
 }
 
 type trackPackages struct {
