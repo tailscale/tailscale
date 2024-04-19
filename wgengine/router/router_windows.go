@@ -329,7 +329,7 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 	for _, cidr := range local {
 		ft.logf("adding Tailscale-In rule to allow %v ...", cidr)
 		var d time.Duration
-		d, err := ft.runFirewall("add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+cidr, "profile=private", "enable=yes")
+		d, err := ft.runFirewall("add", "rule", "name=Tailscale-In", "dir=in", "action=allow", "localip="+cidr, "profile=private,domain", "enable=yes")
 		if err != nil {
 			ft.logf("error adding Tailscale-In rule to allow %v: %v", cidr, err)
 			return err

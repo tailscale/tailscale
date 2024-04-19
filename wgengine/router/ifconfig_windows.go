@@ -210,7 +210,7 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 			return false, fmt.Errorf("GetCategory: %v", err)
 		}
 
-		if cat != categoryPrivate {
+		if cat != categoryPrivate && cat != categoryDomain {
 			if err := n.SetCategory(categoryPrivate); err != nil {
 				return false, fmt.Errorf("SetCategory: %v", err)
 			}
