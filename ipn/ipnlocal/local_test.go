@@ -25,6 +25,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
+	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
@@ -3400,5 +3401,41 @@ func TestMinLatencyDERPregion(t *testing.T) {
 				t.Errorf("got region %v want region %v", got, tt.wantRegion)
 			}
 		})
+	}
+}
+
+func TestEnableAutoUpdates(t *testing.T) {
+	lb := newTestLocalBackend(t)
+
+	_, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+			ApplySet: true,
+		},
+		Prefs: ipn.Prefs{
+			AutoUpdate: ipn.AutoUpdatePrefs{
+				Apply: opt.NewBool(true),
+			},
+		},
+	})
+	// Enabling may fail, depending on which environment we are running this
+	// test in.
+	wantErr := !clientupdate.CanAutoUpdate()
+	gotErr := err != nil
+	if gotErr != wantErr {
+		t.Fatalf("enabling auto-updates: got error: %v (%v); want error: %v", gotErr, err, wantErr)
+	}
+
+	// Disabling should always succeed.
+	if _, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+			ApplySet: true,
+		},
+		Prefs: ipn.Prefs{
+			AutoUpdate: ipn.AutoUpdatePrefs{
+				Apply: opt.NewBool(false),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("disabling auto-updates: got error: %v", err)
 	}
 }

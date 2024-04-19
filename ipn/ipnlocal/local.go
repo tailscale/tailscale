@@ -2974,6 +2974,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkFunnelEnabledLocked(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := b.checkAutoUpdatePrefsLocked(p); err != nil {
+		errs = append(errs, err)
+	}
 	return multierr.New(errs...)
 }
 
@@ -3060,6 +3063,13 @@ func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
 func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 	if p.ShieldsUp && b.serveConfig.IsFunnelOn() {
 		return errors.New("Cannot enable shields-up when Funnel is enabled.")
+	}
+	return nil
+}
+
+func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
+	if p.AutoUpdate.Apply.EqualBool(true) && !clientupdate.CanAutoUpdate() {
+		return errors.New("Auto-updates are not supported on this platform.")
 	}
 	return nil
 }
