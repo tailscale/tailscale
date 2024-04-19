@@ -41,6 +41,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/proxymux"
@@ -529,6 +530,8 @@ func (s *Server) start() (reterr error) {
 	}
 	closePool.add(s.dialer)
 	sys.Set(eng)
+
+	s.dialer.UserDialCustomResolver = dns.Quad100Resolver(context.Background(), sys.DNSManager.Get())
 
 	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
