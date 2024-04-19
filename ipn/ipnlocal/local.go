@@ -2440,9 +2440,12 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	b.authURL = "" // but NOT clearing authURLSticky
 	b.mu.Unlock()
 
-	b.logf("popBrowserAuthNow: url=%v", url != "")
+	b.logf("popBrowserAuthNow: url=%v, key-expired=%v, seamless-key-renewal=%v", url != "", b.keyExpired, b.seamlessRenewalEnabled())
 
-	if !b.seamlessRenewalEnabled() {
+	// Deconfigure the local network data plane if:
+	// - seamless key renewal is not enabled;
+	// - key is expired (in which case tailnet connectivity is down anyway).
+	if !b.seamlessRenewalEnabled() || b.keyExpired {
 		b.blockEngineUpdates(true)
 		b.stopEngineAndWait()
 	}
