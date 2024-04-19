@@ -91,6 +91,14 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 			logf("[v1] wgcfg: skipped peer %s, doesn't offer DERP or disco", peer.Key().ShortString())
 			continue
 		}
+		// Skip expired peers; we'll end up failing to connect to them
+		// anyway, since control intentionally breaks node keys for
+		// expired peers so that we can't discover endpoints via DERP.
+		if peer.Expired() {
+			logf("[v1] wgcfg: skipped expired peer %s", peer.Key().ShortString())
+			continue
+		}
+
 		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
 			PublicKey: peer.Key(),
 			DiscoKey:  peer.DiscoKey(),
