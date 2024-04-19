@@ -533,7 +533,8 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer.UserDialCustomResolver = dns.Quad100Resolver(context.Background(), sys.DNSManager.Get())
 
-	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
+	// TODO(oxtoacart): do we need to support Taildrive on tsnet, and if so, how?
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
