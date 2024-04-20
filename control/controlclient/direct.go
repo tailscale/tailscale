@@ -6,6 +6,7 @@ package controlclient
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -586,10 +587,14 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.logf("RegisterReq: onode=%v node=%v fup=%v nks=%v",
 		request.OldNodeKey.ShortString(),
 		request.NodeKey.ShortString(), opt.URL != "", len(nodeKeySignature) > 0)
-	request.Auth.Oauth2Token = opt.Token
-	request.Auth.Provider = persist.Provider
-	request.Auth.LoginName = persist.UserProfile.LoginName
-	request.Auth.AuthKey = authKey
+	if opt.Token != nil || cmp.Or(persist.Provider, persist.UserProfile.LoginName, authKey) != "" {
+		request.Auth = &tailcfg.RegisterResponseAuth{
+			Oauth2Token: opt.Token,
+			Provider:    persist.Provider,
+			LoginName:   persist.UserProfile.LoginName,
+			AuthKey:     authKey,
+		}
+	}
 	err = signRegisterRequest(&request, c.serverURL, c.serverLegacyKey, machinePrivKey.Public())
 	if err != nil {
 		// If signing failed, clear all related fields

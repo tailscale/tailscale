@@ -335,7 +335,7 @@ func (src *RegisterRequest) Clone() *RegisterRequest {
 	}
 	dst := new(RegisterRequest)
 	*dst = *src
-	dst.Auth = *src.Auth.Clone()
+	dst.Auth = src.Auth.Clone()
 	dst.Hostinfo = src.Hostinfo.Clone()
 	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	if dst.Timestamp != nil {
@@ -353,7 +353,7 @@ var _RegisterRequestCloneNeedsRegeneration = RegisterRequest(struct {
 	NodeKey          key.NodePublic
 	OldNodeKey       key.NodePublic
 	NLKey            key.NLPublic
-	Auth             RegisterResponseAuth
+	Auth             *RegisterResponseAuth
 	Expiry           time.Time
 	Followup         string
 	Hostinfo         *Hostinfo
