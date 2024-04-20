@@ -803,7 +803,7 @@ var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
 	NodeKey          key.NodePublic
 	OldNodeKey       key.NodePublic
 	NLKey            key.NLPublic
-	Auth             RegisterResponseAuth
+	Auth             *RegisterResponseAuth
 	Expiry           time.Time
 	Followup         string
 	Hostinfo         *Hostinfo

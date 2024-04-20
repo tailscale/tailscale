@@ -585,7 +585,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		j, _ := json.MarshalIndent(req, "", "\t")
 		log.Printf("Got %T: %s", req, j)
 	}
-	if s.RequireAuthKey != "" && req.Auth.AuthKey != s.RequireAuthKey {
+	if s.RequireAuthKey != "" && (req.Auth == nil || req.Auth.AuthKey != s.RequireAuthKey) {
 		res := must.Get(s.encode(false, tailcfg.RegisterResponse{
 			Error: "invalid authkey",
 		}))
