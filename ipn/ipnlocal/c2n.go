@@ -300,6 +300,13 @@ func handleC2NUpdatePost(b *LocalBackend, w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Do not update if we have active inbound SSH connections. Control can set
+	// force=true query parameter to override this.
+	if r.FormValue("force") != "true" && b.sshServer != nil && b.sshServer.NumActiveConns() > 0 {
+		res.Err = "not updating due to active SSH connections"
+		return
+	}
+
 	// Check if update was already started, and mark as started.
 	if !b.trySetC2NUpdateStarted() {
 		res.Err = "update already started"
