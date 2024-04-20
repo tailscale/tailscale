@@ -93,6 +93,16 @@ type mapSession struct {
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
 	lastMaxExpiry          time.Duration
+
+	// breakPeersForFlowLogs is whether we've detected a situation
+	// that's incompatible with flow logs: the tailnet admin has enabled
+	// network flow logs, but the local machine has been configured to
+	// not log. In this case, to be conservative, we drop all peers
+	// but keep the map poll connection open. This way, the admin can
+	// still get back into the machine later if they first disable flow
+	// logs. But we otherwise disable connectivity over Tailscale.
+	// See https://github.com/tailscale/tailscale/issues/11793
+	breakPeersForFlowLogs bool
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -181,6 +191,8 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 			}
 		}
 		ms.controlKnobs.UpdateFromNodeAttributes(resp.Node.CapMap)
+
+		ms.breakPeersForFlowLogs = envknob.NoLogsNoSupport() && resp.Node.CapMap.Contains(tailcfg.CapabilityDataPlaneAuditLogs)
 	}
 
 	// Call Node.InitDisplayNames on any changed nodes.
@@ -219,6 +231,9 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 }
 
 func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
+	if ms.breakPeersForFlowLogs {
+		return false
+	}
 	if ms.controlKnobs != nil && ms.controlKnobs.DisableDeltaUpdates.Load() {
 		return false
 	}
@@ -803,6 +818,10 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 		MaxKeyDuration:    ms.lastMaxExpiry,
+	}
+
+	if ms.breakPeersForFlowLogs {
+		nm.Peers = nil
 	}
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {
