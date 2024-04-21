@@ -701,8 +701,6 @@ func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseAuthView) Provider() string  { return v.ж.Provider }
-func (v RegisterResponseAuthView) LoginName() string { return v.ж.LoginName }
 func (v RegisterResponseAuthView) Oauth2Token() *Oauth2Token {
 	if v.ж.Oauth2Token == nil {
 		return nil
@@ -716,8 +714,6 @@ func (v RegisterResponseAuthView) AuthKey() string { return v.ж.AuthKey }
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterResponseAuthViewNeedsRegeneration = RegisterResponseAuth(struct {
 	_           structs.Incomparable
-	Provider    string
-	LoginName   string
 	Oauth2Token *Oauth2Token
 	AuthKey     string
 }{})

@@ -321,8 +321,6 @@ func (src *RegisterResponseAuth) Clone() *RegisterResponseAuth {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterResponseAuthCloneNeedsRegeneration = RegisterResponseAuth(struct {
 	_           structs.Incomparable
-	Provider    string
-	LoginName   string
 	Oauth2Token *Oauth2Token
 	AuthKey     string
 }{})

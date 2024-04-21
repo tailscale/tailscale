@@ -1070,10 +1070,8 @@ func (st SignatureType) String() string {
 type RegisterResponseAuth struct {
 	_ structs.Incomparable
 
-	// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
+	// At most one of Oauth2Token or AuthKey is set.
 
-	Provider    string       `json:",omitempty"`
-	LoginName   string       `json:",omitempty"`
 	Oauth2Token *Oauth2Token `json:",omitempty"`
 	AuthKey     string       `json:",omitempty"`
 }
