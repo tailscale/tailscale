@@ -671,9 +671,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			request.NodeKey.ShortString())
 		return true, "", nil, nil
 	}
-	if resp.Login.Provider != "" {
-		persist.Provider = resp.Login.Provider
-	}
 	persist.UserProfile = tailcfg.UserProfile{
 		ID:            resp.User.ID,
 		DisplayName:   resp.Login.DisplayName,
