@@ -1,0 +1,9 @@
+FROM ubuntu:20.04
+
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    git-core \
+    ca-certificates
+RUN git clone https://github.com/qnap-dev/QDK.git
+RUN cd /QDK && ./InstallToUbuntu.sh install
+ENV PATH="/usr/share/QDK/bin:${PATH}"

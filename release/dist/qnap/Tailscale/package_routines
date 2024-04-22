@@ -1,0 +1,143 @@
+######################################################################
+# List of available definitions (it's not necessary to uncomment them)
+######################################################################
+###### Command definitions #####
+#CMD_AWK="/bin/awk"
+#CMD_CAT="/bin/cat"
+#CMD_CHMOD="/bin/chmod"
+#CMD_CHOWN="/bin/chown"
+#CMD_CP="/bin/cp"
+#CMD_CUT="/bin/cut"
+#CMD_DATE="/bin/date"
+#CMD_ECHO="/bin/echo"
+#CMD_EXPR="/usr/bin/expr"
+#CMD_FIND="/usr/bin/find"
+#CMD_GETCFG="/sbin/getcfg"
+#CMD_GREP="/bin/grep"
+#CMD_GZIP="/bin/gzip"
+#CMD_HOSTNAME="/bin/hostname"
+#CMD_LN="/bin/ln"
+#CMD_LOG_TOOL="/sbin/log_tool"
+#CMD_MD5SUM="/bin/md5sum"
+#CMD_MKDIR="/bin/mkdir"
+#CMD_MV="/bin/mv"
+#CMD_RM="/bin/rm"
+#CMD_RMDIR="/bin/rmdir"
+#CMD_SED="/bin/sed"
+#CMD_SETCFG="/sbin/setcfg"
+#CMD_SLEEP="/bin/sleep"
+#CMD_SORT="/usr/bin/sort"
+#CMD_SYNC="/bin/sync"
+#CMD_TAR="/bin/tar"
+#CMD_TOUCH="/bin/touch"
+#CMD_WGET="/usr/bin/wget"
+#CMD_WLOG="/sbin/write_log"
+#CMD_XARGS="/usr/bin/xargs"
+#CMD_7Z="/usr/local/sbin/7z"
+#
+###### System definitions #####
+#SYS_EXTRACT_DIR="$(pwd)"
+#SYS_CONFIG_DIR="/etc/config"
+#SYS_INIT_DIR="/etc/init.d"
+#SYS_STARTUP_DIR="/etc/rcS.d"
+#SYS_SHUTDOWN_DIR="/etc/rcK.d"
+#SYS_RSS_IMG_DIR="/home/httpd/RSS/images"
+#SYS_QPKG_DATA_FILE_GZIP="./data.tar.gz"
+#SYS_QPKG_DATA_FILE_BZIP2="./data.tar.bz2"
+#SYS_QPKG_DATA_FILE_7ZIP="./data.tar.7z"
+#SYS_QPKG_DATA_CONFIG_FILE="./conf.tar.gz"
+#SYS_QPKG_DATA_MD5SUM_FILE="./md5sum"
+#SYS_QPKG_DATA_PACKAGES_FILE="./Packages.gz"
+#SYS_QPKG_CONFIG_FILE="$SYS_CONFIG_DIR/qpkg.conf"
+#SYS_QPKG_CONF_FIELD_QPKGFILE="QPKG_File"
+#SYS_QPKG_CONF_FIELD_NAME="Name"
+#SYS_QPKG_CONF_FIELD_VERSION="Version"
+#SYS_QPKG_CONF_FIELD_ENABLE="Enable"
+#SYS_QPKG_CONF_FIELD_DATE="Date"
+#SYS_QPKG_CONF_FIELD_SHELL="Shell"
+#SYS_QPKG_CONF_FIELD_INSTALL_PATH="Install_Path"
+#SYS_QPKG_CONF_FIELD_CONFIG_PATH="Config_Path"
+#SYS_QPKG_CONF_FIELD_WEBUI="WebUI"
+#SYS_QPKG_CONF_FIELD_WEBPORT="Web_Port"
+#SYS_QPKG_CONF_FIELD_SERVICEPORT="Service_Port"
+#SYS_QPKG_CONF_FIELD_SERVICE_PIDFILE="Pid_File"
+#SYS_QPKG_CONF_FIELD_AUTHOR="Author"
+#SYS_QPKG_CONF_FIELD_RC_NUMBER="RC_Number"
+## The following variables are assigned values at run-time.
+#SYS_HOSTNAME=$($CMD_HOSTNAME)
+## Data file name (one of SYS_QPKG_DATA_FILE_GZIP, SYS_QPKG_DATA_FILE_BZIP2,
+## or SYS_QPKG_DATA_FILE_7ZIP)
+#SYS_QPKG_DATA_FILE=
+## Base location.
+#SYS_QPKG_BASE=""
+## Base location of QPKG installed packages.
+#SYS_QPKG_INSTALL_PATH=""
+## Location of installed software.
+#SYS_QPKG_DIR=""
+## If the QPKG should be enabled or disabled after the installation/upgrade.
+#SYS_QPKG_SERVICE_ENABLED=""
+## Architecture of the device the QPKG is installed on.
+#SYS_CPU_ARCH=""
+## Name and location of system shares
+#SYS_PUBLIC_SHARE=""
+#SYS_PUBLIC_PATH=""
+#SYS_DOWNLOAD_SHARE=""
+#SYS_DOWNLOAD_PATH=""
+#SYS_MULTIMEDIA_SHARE=""
+#SYS_MULTIMEDIA_PATH=""
+#SYS_RECORDINGS_SHARE=""
+#SYS_RECORDINGS_PATH=""
+#SYS_USB_SHARE=""
+#SYS_USB_PATH=""
+#SYS_WEB_SHARE=""
+#SYS_WEB_PATH=""
+## Path to ipkg or opkg package tool if installed.
+#CMD_PKG_TOOL=
+#
+######################################################################
+# All package specific functions shall call 'err_log MSG' if an error
+# is detected that shall terminate the installation.
+######################################################################
+#
+######################################################################
+# Define any package specific operations that shall be performed when
+# the package is removed.
+######################################################################
+#PKG_PRE_REMOVE="{
+#}"
+#
+#PKG_MAIN_REMOVE="{
+#}"
+#
+PKG_POST_REMOVE="{
+    rm -f /home/httpd/cgi-bin/qpkg/Tailscale
+    rm -rf /tmp/tailscale
+    if [ -f /etc/resolv.pre-tailscale-backup.conf ] && grep -q 100.100.100.100 /etc/resolv.conf; then
+        mv /etc/resolv.pre-tailscale-backup.conf /etc/resolv.conf
+    fi
+}"
+#
+######################################################################
+# Define any package specific initialization that shall be performed
+# before the package is installed.
+######################################################################
+#pkg_init(){
+#}
+#
+######################################################################
+# Define any package specific requirement checks that shall be
+# performed before the package is installed.
+######################################################################
+#pkg_check_requirement(){
+#}
+#
+######################################################################
+# Define any package specific operations that shall be performed when
+# the package is installed.
+######################################################################
+pkg_install(){
+    ${CMD_MKDIR} -p ${SYS_QPKG_DIR}/state
+}
+
+#pkg_post_install(){
+#}

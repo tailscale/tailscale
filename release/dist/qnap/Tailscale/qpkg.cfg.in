@@ -1,0 +1,99 @@
+# Name of the packaged application.
+QPKG_NAME="Tailscale"
+# Name of the display application.
+#QPKG_DISPLAY_NAME=""
+# Version of the packaged application.
+QPKG_VER="$QPKG_VER"
+# Author or maintainer of the package
+QPKG_AUTHOR="Tailscale Inc."
+# License for the packaged application
+#QPKG_LICENSE=""
+# One-line description of the packaged application
+#QPKG_SUMMARY="Connect all your devices using WireGuard, without the hassle."
+
+# Preferred number in start/stop sequence.
+QPKG_RC_NUM="101"
+# Init-script used to control the start and stop of the installed application.
+QPKG_SERVICE_PROGRAM="Tailscale.sh"
+
+# Optional 1 is enable. Path of starting/ stopping shall script. (no start/stop on App Center)
+#QPKG_DISABLE_APPCENTER_UI_SERVICE=1
+
+# Specifies any packages required for the current package to operate.
+QPKG_REQUIRE=""
+# Specifies what packages cannot be installed if the current package
+# is to operate properly.
+#QPKG_CONFLICT="Python"
+# Name of configuration file (multiple definitions are allowed).
+#QPKG_CONFIG="Tailscale.cfg"
+#QPKG_CONFIG="/etc/config/myApp.conf"
+# Port number used by service program.
+QPKG_SERVICE_PORT="41641"
+# Location of file with running service's PID
+#QPKG_SERVICE_PIDFILE=""
+# Relative path to web interface
+QPKG_WEBUI="/cgi-bin/qpkg/Tailscale/index.cgi"
+# Port number for the web interface.
+#QPKG_WEB_PORT=""
+# Port number for the SSL web interface.
+#QPKG_WEB_SSL_PORT=""
+
+# Use QTS HTTP Proxy and set Proxy_Path in the qpkg.conf.
+# When the QPKG has its own HTTP service port, and want clients to connect via QTS HTTP port (default 8080).
+# Usually use this option when the QPKG need to connect via myQNAPcloud service.
+QPKG_USE_PROXY="1"
+#QPKG_PROXY_PATH="/qpkg_name"
+
+#Desktop Application (since 4.1)
+# Set value to 1 means to open the QPKG's Web UI inside QTS desktop instead of new window.
+#QPKG_DESKTOP_APP="1"
+# Desktop Application Window default inner width (since 4.1) (not over 1178)
+#QPKG_DESKTOP_APP_WIN_WIDTH=""
+# Desktop Application Window default inner height (since 4.1) (not over 600)
+#QPKG_DESKTOP_APP_WIN_HEIGHT=""
+
+# Minimum QTS version requirement
+QTS_MINI_VERSION="5.0.0"
+# Maximum QTS version requirement
+#QTS_MAX_VERSION="5.0.0"
+
+# Select volume
+# 1: support installation
+# 2: support migration
+# 3 (1+2): support both installation and migration
+QPKG_VOLUME_SELECT="1"
+
+# Set timeout for QPKG enable and QPKG disable (since 4.1.0)
+# Format in seconds (enable, disable)
+#QPKG_TIMEOUT="10,30"
+
+# Visible setting for the QPKG that has web UI, show this QPKG on the Main menu of
+# 1(default): administrators, 2: all NAS users.
+QPKG_VISIBLE="1"
+
+# Location of icons for the packaged application.
+QDK_DATA_DIR_ICONS="icons"
+# Location of files specific to arm-x19 packages.
+#QDK_DATA_DIR_X19="arm-x19"
+# Location of files specific to arm-x31 packages.
+#QDK_DATA_DIR_X31="arm-x31"
+# Location of files specific to arm-x41 packages.
+#QDK_DATA_DIR_X41="arm_al"
+# Location of files specific to x86 packages.
+#QDK_DATA_DIR_X86="x86"
+# Location of files specific to x86 (64-bit) packages.
+#QDK_DATA_DIR_X86_64="x86_64"
+# Location of files common to all architectures.
+QDK_DATA_DIR_SHARED="shared"
+# Location of configuration files.
+#QDK_DATA_DIR_CONFIG="config"
+# Name of local data package.
+#QDK_DATA_FILE=""
+# Name of extra package (multiple definitions are allowed).
+#QDK_EXTRA_FILE=""
+# For QNAP code signing (currently can be done only inside QNAP)
+# Uncomment the following four options if you want to enable code signing for this QPKG
+#QNAP_CODE_SIGNING="0"
+#QNAP_CODE_SIGNING_SERVER_IP="codesigning.qnap.com.tw"
+#QNAP_CODE_SIGNING_SERVER_PORT="5001"
+#QNAP_CODE_SIGNING_CSV="build_sign.csv"
