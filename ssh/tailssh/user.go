@@ -34,14 +34,7 @@ type userMeta struct {
 
 // GroupIds returns the list of group IDs that the user is a member of.
 func (u *userMeta) GroupIds() ([]string, error) {
-	if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy {
-		// Gokrazy is a single-user appliance with ~no userspace.
-		// There aren't users to look up (no /etc/passwd, etc)
-		// so rather than fail below, just hardcode root.
-		// TODO(bradfitz): fix os/user upstream instead?
-		return []string{"0"}, nil
-	}
-	return u.User.GroupIds()
+	return osuser.GetGroupIds(&u.User)
 }
 
 // userLookup is like os/user.Lookup but it returns a *userMeta wrapper
@@ -51,6 +44,7 @@ func userLookup(username string) (*userMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &userMeta{User: *u, loginShellCached: s}, nil
 }
 
