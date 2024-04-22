@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/clientupdate"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -339,6 +340,7 @@ func TestProfileManagement(t *testing.T) {
 			t.Fatalf("Profiles = %v; want %v", profiles, wantProfiles)
 		}
 		p := pm.CurrentPrefs()
+		t.Logf("\tCurrentPrefs = %s", p.Pretty())
 		if !p.Valid() {
 			t.Fatalf("CurrentPrefs = %v; want valid", p)
 		}
@@ -458,6 +460,27 @@ func TestProfileManagement(t *testing.T) {
 	delete(wantProfiles, "tagged-node.2.ts.net")
 	wantCurProfile = "user@2.example.com"
 	checkProfiles(t)
+
+	if !clientupdate.CanAutoUpdate() {
+		t.Logf("Save an invalid AutoUpdate pref value")
+		prefs := pm.CurrentPrefs().AsStruct()
+		prefs.AutoUpdate.Apply.Set(true)
+		if err := pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}); err != nil {
+			t.Fatal(err)
+		}
+		if !pm.CurrentPrefs().AutoUpdate().Apply.EqualBool(true) {
+			t.Fatal("SetPrefs failed to save auto-update setting")
+		}
+		// Re-load profiles to trigger migration for invalid auto-update value.
+		pm, err = newProfileManagerWithGOOS(store, logger.Discard, "linux")
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkProfiles(t)
+		if pm.CurrentPrefs().AutoUpdate().Apply.EqualBool(true) {
+			t.Fatal("invalid auto-update setting persisted after reload")
+		}
+	}
 }
 
 // TestProfileManagementWindows tests going into and out of Unattended mode on
