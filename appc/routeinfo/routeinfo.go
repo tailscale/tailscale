@@ -9,29 +9,28 @@ import (
 )
 
 type RouteInfo struct {
-	// routes set with --advertise-routes
-	Local []netip.Prefix
 	// routes from the 'routes' section of an app connector acl
 	Control []netip.Prefix
 	// routes discovered by observing dns lookups for configured domains
 	Discovered map[string]*DatedRoutes
+
+	Wildcards []string
 }
 
 func NewRouteInfo() *RouteInfo {
 	discovered := make(map[string]*DatedRoutes)
 	return &RouteInfo{
-		Local:      []netip.Prefix{},
 		Control:    []netip.Prefix{},
 		Discovered: discovered,
 	}
 }
 
 // RouteInfo.Routes returns a slice containing all the routes stored from the wanted resources.
-func (ri *RouteInfo) Routes(local, control, discovered bool) []netip.Prefix {
-	var ret []netip.Prefix
-	if local {
-		ret = ri.Local
+func (ri *RouteInfo) Routes(control, discovered bool) []netip.Prefix {
+	if ri == nil {
+		return []netip.Prefix{}
 	}
+	var ret []netip.Prefix
 	if control && len(ret) == 0 {
 		ret = ri.Control
 	} else if control {
@@ -48,6 +47,14 @@ func (ri *RouteInfo) Routes(local, control, discovered bool) []netip.Prefix {
 	return ret
 }
 
+func (ri *RouteInfo) DomainRoutes() map[string][]netip.Addr {
+	drCopy := make(map[string][]netip.Addr)
+	for k, v := range ri.Discovered {
+		drCopy[k] = append(drCopy[k], v.AddrsSlice()...)
+	}
+	return drCopy
+}
+
 type DatedRoutes struct {
 	// routes discovered for a domain, and when they were last seen in a dns query
 	Routes map[netip.Prefix]time.Time
@@ -59,6 +66,16 @@ func (dr *DatedRoutes) RoutesSlice() []netip.Prefix {
 	var routes []netip.Prefix
 	for k := range dr.Routes {
 		routes = append(routes, k)
+	}
+	return routes
+}
+
+func (dr *DatedRoutes) AddrsSlice() []netip.Addr {
+	var routes []netip.Addr
+	for k := range dr.Routes {
+		if k.IsSingleIP() {
+			routes = append(routes, k.Addr())
+		}
 	}
 	return routes
 }

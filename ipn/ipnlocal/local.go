@@ -3189,29 +3189,6 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 	return b.editPrefsLockedOnEntry(mp, unlock)
 }
 
-func (b *LocalBackend) PatchPrefsHandler(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
-	// we believe that for the purpose of figuring out advertisedRoutes setPrefsLockedOnEntry is _only_ called when
-	// up or set is used on the tailscale cli _not_ when we calculate the new advertisedRoutes field.
-	if b.appConnector != nil && b.appConnector.ShouldStoreRoutes && mp.AdvertiseRoutesSet {
-		routeInfo := b.appConnector.RouteInfo()
-		curRoutes := routeInfo.Routes(false, true, true)
-		routeInfo.Local = mp.AdvertiseRoutes
-		b.appConnector.UpdateRouteInfo(routeInfo)
-		// When b.appConnector != nil, AppConnectorSet = true means
-		// The appConnector is turned off, in this case we should not
-		// append the remote routes to mp.AdvertiseRoutes. Appc will be
-		// set to nil first and unadvertise remote routes, but these remote routes
-		// will then be advertised again when the prefs are sent.
-		if !mp.AppConnectorSet {
-			curRoutes = append(curRoutes, mp.AdvertiseRoutes...)
-			slices.SortFunc(curRoutes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
-			curRoutes = slices.Compact(curRoutes)
-			mp.AdvertiseRoutes = curRoutes
-		}
-	}
-	return b.EditPrefs(mp)
-}
-
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	if mp.SetsInternal() {
 		return ipn.PrefsView{}, errors.New("can't set Internal fields")
@@ -3653,7 +3630,8 @@ func (b *LocalBackend) authReconfig() {
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
-
+	fmt.Println("kevin -- try lock1", b.mu.TryLock())
+	b.mu.Unlock()
 	if blocked {
 		b.logf("[v1] authReconfig: blocked, skipping.")
 		return
@@ -3666,6 +3644,8 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")
 		return
 	}
+	fmt.Println("kevin -- try lock2", b.mu.TryLock())
+	b.mu.Unlock()
 
 	var flags netmap.WGConfigFlags
 	if prefs.RouteAll() {
@@ -3680,7 +3660,8 @@ func (b *LocalBackend) authReconfig() {
 			flags &^= netmap.AllowSubnetRoutes
 		}
 	}
-
+	fmt.Println("kevin -- try lock3", b.mu.TryLock())
+	b.mu.Unlock()
 	// Keep the dialer updated about whether we're supposed to use
 	// an exit node's DNS server (so SOCKS5/HTTP outgoing dials
 	// can use it for name resolution)
@@ -3695,8 +3676,11 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("wgcfg: %v", err)
 		return
 	}
-
+	fmt.Println("kevin -- try lock 4", b.mu.TryLock())
+	b.mu.Unlock()
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
+	fmt.Println("kevin -- try lock 5", b.mu.TryLock())
+	b.mu.Unlock()
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
@@ -4188,11 +4172,14 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneCGNATRoute bool) *router.Config {
+	fmt.Println("kevin -- try lock 6", b.mu.TryLock())
+	b.mu.Unlock()
 	singleRouteThreshold := 10_000
 	if oneCGNATRoute {
 		singleRouteThreshold = 1
 	}
-
+	fmt.Println("kevin -- try lock 7", b.mu.TryLock())
+	b.mu.Unlock()
 	b.mu.Lock()
 	netfilterKind := b.capForcedNetfilter // protected by b.mu
 	b.mu.Unlock()
@@ -4204,9 +4191,11 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		netfilterKind = prefs.NetfilterKind()
 	}
 
+	toAdvertise := b.appConnector.RouteInfo().Routes(true, true)
+	toAdvertise = append(toAdvertise, prefs.AdvertiseRoutes().AsSlice()...)
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
-		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
+		SubnetRoutes:     unmapIPPrefixes(toAdvertise),
 		SNATSubnetRoutes: !prefs.NoSNAT(),
 		NetfilterMode:    prefs.NetfilterMode(),
 		Routes:           peerRoutes(b.logf, cfg.Peers, singleRouteThreshold),
@@ -4290,7 +4279,13 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	if h := prefs.Hostname(); h != "" {
 		hi.Hostname = h
 	}
-	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
+
+	var routableIPs []netip.Prefix
+	if b.appConnector != nil {
+		routableIPs = append(routableIPs, b.appConnector.RouteInfo().Routes(true, true)...)
+	}
+	routableIPs = append(routableIPs, prefs.AdvertiseRoutes().AsSlice()...)
+	hi.RoutableIPs = routableIPs
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
@@ -6212,38 +6207,50 @@ var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 // AdvertiseRoute implements the appc.RouteAdvertiser interface. It sets a new
 // route advertisement if one is not already present in the existing routes.
 // If the route is disallowed, ErrDisallowedAutoRoute is returned.
-func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
-	finalRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
-	newRoutes := false
+func (b *LocalBackend) AdvertiseRouteInfo(ri *routeinfo.RouteInfo) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	pref := b.pm.CurrentPrefs()
+	newRoutes := pref.AdvertiseRoutes().AsSlice()
+	oldHi := b.hostinfo
+	oldRoutes := oldHi.RoutableIPs
+	newHi := oldHi.Clone()
+	if newHi == nil {
+		newHi = new(tailcfg.Hostinfo)
+	}
+	routeInfoRoutes := ri.Routes(true, true)
 
-	for _, ipp := range ipps {
+	for _, ipp := range routeInfoRoutes {
 		if !allowedAutoRoute(ipp) {
 			continue
 		}
-		if slices.Contains(finalRoutes, ipp) {
+		if slices.Contains(newRoutes, ipp) {
 			continue
 		}
 
 		// If the new prefix is already contained by existing routes, skip it.
-		if coveredRouteRangeNoDefault(finalRoutes, ipp) {
+		if coveredRouteRangeNoDefault(newRoutes, ipp) {
 			continue
 		}
 
-		finalRoutes = append(finalRoutes, ipp)
-		newRoutes = true
+		newRoutes = append(newRoutes, ipp)
 	}
 
-	if !newRoutes {
-		return nil
+	slices.SortFunc(oldRoutes, comparePrefix)
+	slices.SortFunc(newRoutes, comparePrefix)
+
+	if slices.CompareFunc(oldRoutes, newRoutes, comparePrefix) != 0 {
+		return
 	}
 
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: finalRoutes,
-		},
-		AdvertiseRoutesSet: true,
-	})
-	return err
+	newHi.RoutableIPs = newRoutes
+	b.hostinfo = newHi
+
+	if !oldHi.Equal(newHi) {
+		b.doSetHostinfoFilterServices()
+	}
+
+	b.authReconfig()
 }
 
 // coveredRouteRangeNoDefault checks if a route is already included in a slice of
@@ -6264,28 +6271,6 @@ func coveredRouteRangeNoDefault(finalRoutes []netip.Prefix, ipp netip.Prefix) bo
 		}
 	}
 	return false
-}
-
-// UnadvertiseRoute implements the appc.RouteAdvertiser interface. It removes
-// a route advertisement if one is present in the existing routes.
-func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
-	currentRoutes := b.Prefs().AdvertiseRoutes().AsSlice()
-	finalRoutes := currentRoutes[:0]
-
-	for _, ipp := range currentRoutes {
-		if slices.Contains(toRemove, ipp) {
-			continue
-		}
-		finalRoutes = append(finalRoutes, ipp)
-	}
-
-	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: finalRoutes,
-		},
-		AdvertiseRoutesSet: true,
-	})
-	return err
 }
 
 // namespace a key with the profile manager's current profile key, if any
@@ -6314,8 +6299,8 @@ func (b *LocalBackend) StoreRouteInfo(ri *routeinfo.RouteInfo) error {
 // ReadRouteInfo implements the appc.RouteAdvertiser interface. It reads
 // RouteInfo from StateStore per profile.
 func (b *LocalBackend) ReadRouteInfo() (*routeinfo.RouteInfo, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	// b.mu.Lock()
+	// defer b.mu.Unlock()
 	if b.pm.CurrentProfile().ID == "" {
 		return &routeinfo.RouteInfo{}, nil
 	}
@@ -6375,4 +6360,8 @@ func mayDeref[T any](p *T) (v T) {
 		return v
 	}
 	return *p
+}
+
+func comparePrefix(i, j netip.Prefix) int {
+	return i.Addr().Compare(j.Addr())
 }
