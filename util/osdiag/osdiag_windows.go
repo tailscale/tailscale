@@ -5,10 +5,8 @@ package osdiag
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"unicode/utf16"
@@ -18,7 +16,6 @@ import (
 	"github.com/dblohm7/wingoes/pe"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"tailscale.com/types/logger"
 	"tailscale.com/util/osdiag/internal/wsc"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/authenticode"
@@ -34,15 +31,6 @@ const (
 	initialValueBufLen = 80    // large enough to contain a stringified GUID encoded as UTF-16
 )
 
-func logSupportInfo(logf logger.Logf, reason LogSupportInfoReason) {
-	var b strings.Builder
-	if err := getSupportInfo(&b, reason); err != nil {
-		logf("error encoding support info: %v", err)
-		return
-	}
-	logf("%s", b.String())
-}
-
 const (
 	supportInfoKeyModules    = "modules"
 	supportInfoKeyPageFile   = "pageFile"
@@ -51,7 +39,7 @@ const (
 	supportInfoKeyWinsockLSP = "winsockLSP"
 )
 
-func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
+func supportInfo(reason LogSupportInfoReason) map[string]any {
 	output := make(map[string]any)
 
 	regInfo, err := getRegistrySupportInfo(registry.LOCAL_MACHINE, []string{winutil.RegPolicyBase, winutil.RegBase})
@@ -86,8 +74,7 @@ func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
 		}
 	}
 
-	enc := json.NewEncoder(w)
-	return enc.Encode(output)
+	return output
 }
 
 type getRegistrySupportInfoBufs struct {
