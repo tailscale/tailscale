@@ -143,6 +143,13 @@ func (srv *server) trackActiveConn(c *conn, add bool) {
 	delete(srv.activeConns, c)
 }
 
+// NumActiveConns returns the number of active SSH connections.
+func (srv *server) NumActiveConns() int {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return len(srv.activeConns)
+}
+
 // HandleSSHConn handles a Tailscale SSH connection from c.
 // This is the entry point for all SSH connections.
 // When this returns, the connection is closed.

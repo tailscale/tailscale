@@ -123,6 +123,10 @@ func getControlDebugFlags() []string {
 type SSHServer interface {
 	HandleSSHConn(net.Conn) error
 
+	// NumActiveConns returns the number of connections passed to HandleSSHConn
+	// that are still active.
+	NumActiveConns() int
+
 	// OnPolicyChange is called when the SSH access policy changes,
 	// so that existing sessions can be re-evaluated for validity
 	// and closed if they'd no longer be accepted.
