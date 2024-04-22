@@ -88,6 +88,8 @@ type Build struct {
 	// number of CPU cores, which empirically keeps the builder responsive
 	// without impacting overall build time.
 	goBuildLimit chan struct{}
+
+	onCloseFuncs []func() error // funcs to be called when Builder is closed
 }
 
 // NewBuild creates a new Build rooted at repo, and writing artifacts to out.
@@ -126,9 +128,19 @@ func NewBuild(repo, out string) (*Build, error) {
 	return b, nil
 }
 
-// Close ends the build and cleans up temporary files.
+func (b *Build) AddOnCloseFunc(f func() error) {
+	b.onCloseFuncs = append(b.onCloseFuncs, f)
+}
+
+// Close ends the build, cleans up temporary files,
+// and runs any onCloseFuncs.
 func (b *Build) Close() error {
-	return os.RemoveAll(b.Tmp)
+	var errs []error
+	errs = append(errs, os.RemoveAll(b.Tmp))
+	for _, f := range b.onCloseFuncs {
+		errs = append(errs, f())
+	}
+	return errors.Join(errs...)
 }
 
 // Build builds all targets concurrently.
