@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
@@ -365,6 +366,16 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 		savedPrefs.ControlURL != ipn.DefaultControlURL &&
 		ipn.IsLoginServerSynonym(savedPrefs.ControlURL) {
 		savedPrefs.ControlURL = ""
+	}
+	// Before
+	// https://github.com/tailscale/tailscale/pull/11814/commits/1613b18f8280c2bce786980532d012c9f0454fa2#diff-314ba0d799f70c8998940903efb541e511f352b39a9eeeae8d475c921d66c2ac
+	// prefs could set AutoUpdate.Apply=true via EditPrefs or tailnet
+	// auto-update defaults. After that change, such value is "invalid" and
+	// cause any EditPrefs calls to fail (other than disabling autp-updates).
+	//
+	// Reset AutoUpdate.Apply if we detect such invalid prefs.
+	if savedPrefs.AutoUpdate.Apply.EqualBool(true) && !clientupdate.CanAutoUpdate() {
+		savedPrefs.AutoUpdate.Apply.Clear()
 	}
 	return savedPrefs.View(), nil
 }
