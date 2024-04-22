@@ -540,7 +540,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
 	} else if sts.ClusterTargetDNSName != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_DEST_DNS_NAME",
+			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
 			Value: sts.ClusterTargetDNSName,
 		})
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterDNSName, sts.ClusterTargetDNSName)

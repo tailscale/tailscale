@@ -129,7 +129,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		annots["tailscale.com/operator-last-set-cluster-ip"] = opts.clusterTargetIP
 	} else if opts.clusterTargetDNS != "" {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
-			Name:  "TS_DEST_DNS_NAME",
+			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
 			Value: opts.clusterTargetDNS,
 		})
 		annots["tailscale.com/operator-last-set-cluster-dns-name"] = opts.clusterTargetDNS

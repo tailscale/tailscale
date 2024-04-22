@@ -19,8 +19,10 @@
 //     in --accept-routes.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination defined by an IP address.
-//   - TS_DEST_DNS_NAME: proxy all incoming Tailscale traffic to the given
+//   - TS_EXPERIMENTAL_DEST_DNS_NAME: proxy all incoming Tailscale traffic to the given
 //     destination defined by a DNS name. The DNS name will be periodically resolved and firewall rules updated accordingly.
+//     This is currently intended to be used by the Kubernetes operator (ExternalName Services).
+//     This is an experimental env var and will likely change in the future.
 //   - TS_TAILNET_TARGET_IP: proxy all incoming non-Tailscale traffic to the given
 //     destination defined by an IP.
 //   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
@@ -84,6 +86,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -127,7 +130,7 @@ func main() {
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
 		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
-		ProxyTargetDNSName:                    defaultEnv("TS_DEST_DNS_NAME", ""),
+		ProxyTargetDNSName:                    defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
 		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
 		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
 		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
@@ -156,7 +159,7 @@ func main() {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
 		if cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.ProxyTargetDNSName, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
+			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -371,14 +374,41 @@ authLoop:
 		}
 	}
 
-	// If we are proxying to a target specified by a DNS name, periodically
-	// resolve the DNS name and update firewall rules if the backend IPs
-	// have changed.
-	const proxyTargetIPsResolvePeriod = time.Minute * 10
-	var ts time.Ticker
-	defer ts.Stop()
-	if cfg.ProxyTargetDNSName != "" {
-		ts = *time.NewTicker(proxyTargetIPsResolvePeriod)
+	// Setup for proxies that are configured to proxy to a target specified
+	// by a DNS name (TS_EXPERIMENTAL_DEST_DNS_NAME).
+	const defaultCheckPeriod = time.Minute * 10 // how often to check what IPs the DNS name resolves to
+	var (
+		tc                    = make(chan string, 1)
+		failedResolveAttempts int
+		t                     *time.Timer = time.AfterFunc(defaultCheckPeriod, func() {
+			if cfg.ProxyTargetDNSName != "" {
+				tc <- "recheck"
+			}
+		})
+	)
+	defer t.Stop()
+	// resetTimer resets timer for when to next attempt to resolve the DNS
+	// name for the proxy configured with TS_EXPERIMENTAL_DEST_DNS_NAME. The
+	// timer gets reset to 10 minutes from now unless the last resolution
+	// attempt failed. If one or more consecutive previous resolution
+	// attempts failed, the next resolution attempt will happen after the smallest
+	// of (10 minutes, 2 ^ number-of-consecutive-failed-resolution-attempts
+	// seconds) i.e 2s, 4s, 8s ... 10 minutes.
+	resetTimer := func(lastResolveFailed bool) {
+		if !lastResolveFailed {
+			log.Printf("reconfigureTimer: next DNS resolution attempt in %s", defaultCheckPeriod)
+			t.Reset(defaultCheckPeriod)
+			failedResolveAttempts = 0
+			return
+		}
+		minDelay := 2 // 2 seconds
+		nextTick := time.Second * time.Duration(math.Pow(float64(minDelay), float64(failedResolveAttempts)))
+		if nextTick > defaultCheckPeriod {
+			nextTick = defaultCheckPeriod // cap at 10 minutes
+		}
+		log.Printf("reconfigureTimer: last DNS resolution attempt failed, next DNS resolution attempt in %v", nextTick)
+		t.Reset(nextTick)
+		failedResolveAttempts++
 	}
 
 	notifyChan := make(chan ipn.Notify)
@@ -444,7 +474,7 @@ runLoop:
 					egressAddrs = node.Addresses().AsSlice()
 					newCurentEgressIPs = deephash.Hash(&egressAddrs)
 					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
-					if egressIPsHaveChanged && len(egressAddrs) > 0 {
+					if egressIPsHaveChanged && len(egressAddrs) != 0 {
 						for _, egressAddr := range egressAddrs {
 							ea := egressAddr.Addr()
 							// TODO (irbekrm): make it work for IPv6 too.
@@ -460,33 +490,32 @@ runLoop:
 					}
 					currentEgressIPs = newCurentEgressIPs
 				}
-				if cfg.ProxyTargetIP != "" && len(addrs) > 0 && ipsHaveChanged {
+				if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
 					log.Printf("Installing proxy rules")
 					if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
 						log.Fatalf("installing ingress proxy rules: %v", err)
 					}
 				}
-				if cfg.ProxyTargetDNSName != "" {
+				if cfg.ProxyTargetDNSName != "" && len(addrs) != 0 && ipsHaveChanged {
 					newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
 					if err != nil {
-						log.Printf("unable to resolve DNS name %s: %v, retrying in %s", cfg.ProxyTargetDNSName, err, proxyTargetIPsResolvePeriod)
+						log.Printf("[unexpected] error resolving DNS name %s: %v", cfg.ProxyTargetDNSName, err)
+						resetTimer(true)
 						continue
 					}
 					backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
-						if ip1.Equal(ip2) {
-							return true
-						}
-						return false
+						return slices.ContainsFunc(newBackendAddrs, func(ip net.IP) bool { return ip.Equal(ip1) })
 					}))
-					if len(addrs) > 0 && (backendsHaveChanged || ipsHaveChanged) && len(newBackendAddrs) > 0 {
+					if backendsHaveChanged {
 						log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
-						if err := installIngressForwardingRuleExternalNameService(ctx, newBackendAddrs, addrs, nfr); err != nil {
+						if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
 							log.Fatalf("error installing ingress proxy rules: %v", err)
 						}
 					}
+					resetTimer(false)
 					backendAddrs = newBackendAddrs
 				}
-				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) > 0 {
+				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) != 0 {
 					cd := n.NetMap.DNS.CertDomains[0]
 					prev := certDomain.Swap(ptr.To(cd))
 					if prev == nil || *prev != cd {
@@ -496,7 +525,7 @@ runLoop:
 						}
 					}
 				}
-				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) > 0 {
+				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
 					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
 					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
 						log.Fatalf("installing egress proxy rules: %v", err)
@@ -508,7 +537,7 @@ runLoop:
 				// enabled, set up proxy rule each time the
 				// tailnet IPs of this node change (including
 				// the first time they become available).
-				if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) > 0 {
+				if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) != 0 {
 					log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
 					if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
 						log.Fatalf("installing rules to forward traffic to node's tailnet IP: %v", err)
@@ -555,25 +584,24 @@ runLoop:
 					go reaper()
 				}
 			}
-		case <-ts.C:
+		case <-tc:
 			newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
 			if err != nil {
-				log.Printf("unable to resolve DNS name %s: %v, retrying in %s", cfg.ProxyTargetDNSName, err, proxyTargetIPsResolvePeriod.String())
+				log.Printf("[unexpected] error resolving DNS name %s: %v", cfg.ProxyTargetDNSName, err)
+				resetTimer(true)
 				continue
 			}
 			backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
-				if ip1.Equal(ip2) {
-					return true
-				}
-				return false
+				return slices.ContainsFunc(newBackendAddrs, func(ip net.IP) bool { return ip.Equal(ip1) })
 			}))
-			if backendsHaveChanged && len(newBackendAddrs) != 0 && len(addrs) != 0 {
+			if backendsHaveChanged && len(addrs) != 0 {
 				log.Printf("Backend address change detected, installing proxy rules for backends %v", newBackendAddrs)
-				if err := installIngressForwardingRuleExternalNameService(ctx, newBackendAddrs, addrs, nfr); err != nil {
+				if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
 					log.Fatalf("installing ingress proxy rules for DNS target %s: %v", cfg.ProxyTargetDNSName, err)
 				}
 			}
 			backendAddrs = newBackendAddrs
+			resetTimer(false)
 		}
 	}
 	wg.Wait()
@@ -814,7 +842,7 @@ func ensureTunFile(root string) error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(root, clusterProxyTargetIP, clusterProxyTargetDNSName, tailnetTargetiP, tailnetTargetFQDN string, routes *string) error {
+func ensureIPForwarding(root, clusterProxyTargetIP, tailnetTargetIP, tailnetTargetFQDN string, routes *string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
@@ -829,28 +857,8 @@ func ensureIPForwarding(root, clusterProxyTargetIP, clusterProxyTargetDNSName, t
 			v6Forwarding = true
 		}
 	}
-	if clusterProxyTargetDNSName != "" {
-		ips, err := resolveDNS(context.Background(), clusterProxyTargetDNSName)
-		if err != nil {
-			return fmt.Errorf("error resolving DNS name %s: %w", clusterProxyTargetDNSName, err)
-		}
-		for _, ip := range ips {
-			if ip.To4() != nil {
-				v4Forwarding = true
-				if v6Forwarding {
-					break
-				}
-			}
-			if ip.To16() != nil {
-				v6Forwarding = true
-				if v4Forwarding {
-					break
-				}
-			}
-		}
-	}
-	if tailnetTargetiP != "" {
-		proxyIP, err := netip.ParseAddr(tailnetTargetiP)
+	if tailnetTargetIP != "" {
+		proxyIP, err := netip.ParseAddr(tailnetTargetIP)
 		if err != nil {
 			return fmt.Errorf("invalid tailnet destination IP: %v", err)
 		}
@@ -878,7 +886,10 @@ func ensureIPForwarding(root, clusterProxyTargetIP, clusterProxyTargetDNSName, t
 			}
 		}
 	}
+	return enableIPForwarding(v4Forwarding, v6Forwarding, root)
+}
 
+func enableIPForwarding(v4Forwarding, v6Forwarding bool, root string) error {
 	var paths []string
 	if v4Forwarding {
 		paths = append(paths, filepath.Join(root, "proc/sys/net/ipv4/ip_forward"))
@@ -995,7 +1006,7 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	return nil
 }
 
-func installIngressForwardingRuleExternalNameService(ctx context.Context, backendAddrs []net.IP, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+func installIngressForwardingRuleForDNSTarget(ctx context.Context, backendAddrs []net.IP, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	var (
 		tsv4       netip.Addr
 		tsv6       netip.Addr
@@ -1021,6 +1032,16 @@ func installIngressForwardingRuleExternalNameService(ctx context.Context, backen
 		if ip.To16() != nil {
 			v6Backends = append(v6Backends, netip.AddrFrom16([16]byte(ip.To16())))
 		}
+	}
+
+	// Enable IP forwarding here as opposed to at the start of containerboot
+	// as the IPv4/IPv6 requirements might have changed.
+	// For Kubernetes operator proxies, forwarding for both IPv4 and IPv6 is
+	// enabled by an init container, so in practice enabling forwarding here
+	// is only needed if this proxy has been configured by manually setting
+	// TS_EXPERIMENTAL_DEST_DNS_NAME env var for a containerboot instance.
+	if err := enableIPForwarding(len(v4Backends) != 0, len(v6Backends) != 0, ""); err != nil {
+		log.Printf("[unexpected] failed to ensure IP forwarding: %v", err)
 	}
 
 	updateFirewall := func(dst netip.Addr, backendTargets []netip.Addr) error {
@@ -1111,10 +1132,10 @@ func (s *settings) validate() error {
 		return errors.New("TS_DEST_IP is not supported with TS_USERSPACE")
 	}
 	if s.ProxyTargetDNSName != "" && s.UserspaceMode {
-		return errors.New("TS_DEST_DNS_NAME is not supported with TS_USERSPACE")
+		return errors.New("TS_EXPERIMENTAL_DEST_DNS_NAME is not supported with TS_USERSPACE")
 	}
 	if s.ProxyTargetDNSName != "" && s.ProxyTargetIP != "" {
-		return errors.New("TS_DEST_DNS_NAME and TS_DEST_IP cannot both be set")
+		return errors.New("TS_EXPERIMENTAL_DEST_DNS_NAME and TS_DEST_IP cannot both be set")
 	}
 	if s.TailnetTargetIP != "" && s.UserspaceMode {
 		return errors.New("TS_TAILNET_TARGET_IP is not supported with TS_USERSPACE")
@@ -1141,13 +1162,25 @@ func (s *settings) validate() error {
 }
 
 func resolveDNS(ctx context.Context, name string) ([]net.IP, error) {
-	ips, err := net.LookupIP(name)
+	// TODO (irbekrm): look at using recursive.Resolver instead to resolve
+	// the DNS names as well as retrieve TTLs. It looks though that this
+	// seems to return very short TTLs (shorter than on the actual records).
+	ip4s, err := net.DefaultResolver.LookupIP(ctx, "ip4", name)
 	if err != nil {
-		return nil, fmt.Errorf("error looking up IPs for DNS name %s: %w", name, err)
+		if e, ok := err.(*net.DNSError); !(ok && e.IsNotFound) {
+			return nil, fmt.Errorf("error looking up IPv4 addresses: %v", err)
+		}
 	}
-	log.Printf("%s resolved to %v", name, ips)
-
-	return ips, nil
+	ip6s, err := net.DefaultResolver.LookupIP(ctx, "ip6", name)
+	if err != nil {
+		if e, ok := err.(*net.DNSError); !(ok && e.IsNotFound) {
+			return nil, fmt.Errorf("error looking up IPv6 addresses: %v", err)
+		}
+	}
+	if len(ip4s) == 0 && len(ip6s) == 0 {
+		return nil, fmt.Errorf("no IPv4 or IPv6 addresses found for host: %s", name)
+	}
+	return append(ip4s, ip6s...), nil
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if
