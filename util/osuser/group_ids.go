@@ -46,5 +46,9 @@ func getGroupIdsWithId(usernameOrUID string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("running 'id' command: %w", err)
 	}
-	return strings.Split(string(out), "\x00"), nil
+	return parseGroupIds(out), nil
+}
+
+func parseGroupIds(cmdOutput []byte) []string {
+	return strings.Split(strings.Trim(string(cmdOutput), "\n\x00"), "\x00")
 }
