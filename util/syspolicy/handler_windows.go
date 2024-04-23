@@ -93,3 +93,13 @@ func (windowsHandler) ReadBoolean(key string) (bool, error) {
 	}
 	return value != 0, err
 }
+
+func (windowsHandler) ReadStringArray(key string) ([]string, error) {
+	value, err := winutil.GetPolicyStringArray(key)
+	if errors.Is(err, winutil.ErrNoValue) {
+		err = ErrNoSuchKey
+	} else if err != nil {
+		windowsErrors.Add(1)
+	}
+	return value, err
+}

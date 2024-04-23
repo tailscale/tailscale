@@ -1568,6 +1568,11 @@ func (h *errorSyspolicyHandler) ReadBoolean(key string) (bool, error) {
 	return false, syspolicy.ErrNoSuchKey
 }
 
+func (h *errorSyspolicyHandler) ReadStringArray(key string) ([]string, error) {
+	h.t.Errorf("ReadStringArray(%q) unexpectedly called", key)
+	return nil, syspolicy.ErrNoSuchKey
+}
+
 type mockSyspolicyHandler struct {
 	t *testing.T
 	// stringPolicies is the collection of policies that we expect to see
@@ -1605,6 +1610,13 @@ func (h *mockSyspolicyHandler) ReadBoolean(key string) (bool, error) {
 		h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
 	}
 	return false, syspolicy.ErrNoSuchKey
+}
+
+func (h *mockSyspolicyHandler) ReadStringArray(key string) ([]string, error) {
+	if h.failUnknownPolicies {
+		h.t.Errorf("ReadStringArray(%q) unexpectedly called", key)
+	}
+	return nil, syspolicy.ErrNoSuchKey
 }
 
 func TestSetExitNodeIDPolicy(t *testing.T) {

@@ -25,6 +25,9 @@ type Handler interface {
 	// ReadBool reads the policy setting's boolean value for the given key.
 	// It should return ErrNoSuchKey if the key does not have a value set.
 	ReadBoolean(key string) (bool, error)
+	// ReadStringArray reads the policy setting's string array value for the given key.
+	// It should return ErrNoSuchKey if the key does not have a value set.
+	ReadStringArray(key string) ([]string, error)
 }
 
 // ErrNoSuchKey is returned by a Handler when the specified key does not have a
@@ -44,6 +47,10 @@ func (defaultHandler) ReadUInt64(_ string) (uint64, error) {
 
 func (defaultHandler) ReadBoolean(_ string) (bool, error) {
 	return false, ErrNoSuchKey
+}
+
+func (defaultHandler) ReadStringArray(_ string) ([]string, error) {
+	return nil, ErrNoSuchKey
 }
 
 // markHandlerInUse is called before handler methods are called.

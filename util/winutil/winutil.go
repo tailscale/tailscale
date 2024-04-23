@@ -45,6 +45,10 @@ func GetPolicyInteger(name string) (uint64, error) {
 	return getPolicyInteger(name)
 }
 
+func GetPolicyStringArray(name string) ([]string, error) {
+	return getPolicyStringArray(name)
+}
+
 // GetRegString looks up a registry path in the local machine path, or returns
 // an empty string and error.
 //

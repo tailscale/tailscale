@@ -57,6 +57,10 @@ func getPolicyString(name string) (string, error) {
 	return s, err
 }
 
+func getPolicyStringArray(name string) ([]string, error) {
+	return getRegStringsInternal(regPolicyBase, name)
+}
+
 func getRegString(name string) (string, error) {
 	s, err := getRegStringInternal(regBase, name)
 	if err != nil {
