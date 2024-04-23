@@ -13,6 +13,12 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
+var testIsNotExistErr = "exitcode:1"
+
+func init() {
+	isNotExistError = func(e error) bool { return e.Error() == testIsNotExistErr }
+}
+
 func TestAddAndDeleteChains(t *testing.T) {
 	iptr := NewFakeIPTablesRunner()
 	err := iptr.AddChains()

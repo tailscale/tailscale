@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -103,26 +102,6 @@ func getTailscaleFwmarkMask() []byte {
 // getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark in bytes.
 func getTailscaleSubnetRouteMark() []byte {
 	return []byte{0x00, 0x04, 0x00, 0x00}
-}
-
-// errCode extracts and returns the process exit code from err, or
-// zero if err is nil.
-func errCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var e *exec.ExitError
-	if ok := errors.As(err, &e); ok {
-		return e.ExitCode()
-	}
-	s := err.Error()
-	if strings.HasPrefix(s, "exitcode:") {
-		code, err := strconv.Atoi(s[9:])
-		if err == nil {
-			return code
-		}
-	}
-	return -42
 }
 
 // checkIPv6 checks whether the system appears to have a working IPv6
