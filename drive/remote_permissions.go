@@ -39,7 +39,7 @@ func ParsePermissions(rawGrants [][]byte) (Permissions, error) {
 		var g grant
 		err := json.Unmarshal(rawGrant, &g)
 		if err != nil {
-			return nil, fmt.Errorf("unmarshal raw grants: %v", err)
+			return nil, fmt.Errorf("unmarshal raw grants %s: %v", rawGrant, err)
 		}
 		for _, share := range g.Shares {
 			existingPermission := permissions[share]
