@@ -47,6 +47,7 @@ import (
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -281,13 +282,30 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	closePool.add(tsTUNDev)
 
+	rtr := conf.Router
+	if version.IsMobile() {
+		// Android and iOS don't handle large numbers of routes well, so we
+		// wrap the Router with one that consolidates routes down to the
+		// smallest number possible.
+		//
+		// On Android, too many routes at VPN configuration time result in an
+		// android.os.TransactionTooLargeException because Android's VPNBuilder
+		// tries to send the entire set of routes to the VPNService as a single
+		// Bundle, which is typically limited to 1 MB. The number of routes
+		// that's too much seems to be very roughly around 4000.
+		//
+		// On iOS, the VPNExtension is limited to only 50 MB of memory, so
+		// keeping the number of routes down helps with memory consumption.
+		rtr = router.ConsolidatingRoutes(logf, rtr)
+	}
+
 	e := &userspaceEngine{
 		timeNow:        mono.Now,
 		logf:           logf,
 		reqCh:          make(chan struct{}, 1),
 		waitCh:         make(chan struct{}),
 		tundev:         tsTUNDev,
-		router:         conf.Router,
+		router:         rtr,
 		confListenPort: conf.ListenPort,
 		birdClient:     conf.BIRDClient,
 		controlKnobs:   conf.ControlKnobs,
