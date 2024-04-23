@@ -7,8 +7,9 @@
 package qnap
 
 import (
-	"errors"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -39,13 +40,7 @@ func (t *target) Build(b *dist.Build) ([]string, error) {
 		return nil, fmt.Errorf("docker not found, cannot build: %w", err)
 	}
 
-	if t.signer != nil {
-		if err := t.setUpSignatureFiles(b); err != nil {
-			return nil, err
-		}
-	}
-
-	qnapBuilds := getQnapBuilds(b)
+	qnapBuilds := getQnapBuilds(b, t.signer)
 	inner, err := qnapBuilds.buildInnerPackage(b, t.goenv)
 	if err != nil {
 		return nil, err
@@ -77,8 +72,8 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 		"-v", fmt.Sprintf("%s:/tailscale", inner.tailscalePath),
 		"-v", fmt.Sprintf("%s:/tailscaled", inner.tailscaledPath),
 		// Tailscale folder has QNAP package setup files needed for building.
-		"-v", fmt.Sprintf("%s:/Tailscale", filepath.Join(b.Repo, "release/dist/qnap/Tailscale")),
-		"-v", fmt.Sprintf("%s:/build-qpkg.sh", filepath.Join(b.Repo, "release/dist/qnap/build-qpkg.sh")),
+		"-v", fmt.Sprintf("%s:/Tailscale", filepath.Join(qnapBuilds.tmpDir, "files/Tailscale")),
+		"-v", fmt.Sprintf("%s:/build-qpkg.sh", filepath.Join(qnapBuilds.tmpDir, "files/scripts/build-qpkg.sh")),
 		"-v", fmt.Sprintf("%s:/out", b.Out),
 		"build.tailscale.io/qdk:latest",
 		"/build-qpkg.sh",
@@ -101,40 +96,6 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 	return []string{filePath, filePath + ".md5"}, nil
 }
 
-func (t *target) setUpSignatureFiles(b *dist.Build) error {
-	return b.Once(fmt.Sprintf("qnap-signature-%s-%s", t.signer.privateKeyPath, t.signer.certificatePath), func() error {
-		log.Print("Setting up qnap signature files")
-
-		key, err := os.ReadFile(t.signer.privateKeyPath)
-		if err != nil {
-			return err
-		}
-		cert, err := os.ReadFile(t.signer.certificatePath)
-		if err != nil {
-			return err
-		}
-
-		// QNAP's qbuild command expects key and cert files to be in the root
-		// of the project directory (in our case release/dist/qnap/Tailscale).
-		// So here, we copy the key and cert over to the project folder for the
-		// duration of qnap package building and then delete them on close.
-
-		keyPath := filepath.Join(b.Repo, "release/dist/qnap/Tailscale/private_key")
-		if err := os.WriteFile(keyPath, key, 0400); err != nil {
-			return err
-		}
-		certPath := filepath.Join(b.Repo, "release/dist/qnap/Tailscale/certificate")
-		if err := os.WriteFile(certPath, cert, 0400); err != nil {
-			return err
-		}
-
-		b.AddOnCloseFunc(func() error {
-			return errors.Join(os.Remove(keyPath), os.Remove(certPath))
-		})
-		return nil
-	})
-}
-
 type qnapBuildsMemoizeKey struct{}
 
 type innerPkg struct {
@@ -148,11 +109,99 @@ type qnapBuilds struct {
 	// It is used to avoid repeated compilations for the same architecture.
 	innerPkgs     dist.Memoize[*innerPkg]
 	dockerImageMu sync.Mutex
+	// tmpDir is a temp directory used for building qpkgs.
+	// It gets cleaned up when the dist.Build is closed.
+	tmpDir string
 }
 
 // getQnapBuilds returns the qnapBuilds for b, creating one if needed.
-func getQnapBuilds(b *dist.Build) *qnapBuilds {
-	return b.Extra(qnapBuildsMemoizeKey{}, func() any { return new(qnapBuilds) }).(*qnapBuilds)
+func getQnapBuilds(b *dist.Build, signer *signer) *qnapBuilds {
+	return b.Extra(qnapBuildsMemoizeKey{}, func() any {
+		builds, err := newQNAPBuilds(b, signer)
+		if err != nil {
+			panic(fmt.Errorf("setUpTmpDir: %v", err))
+		}
+		return builds
+	}).(*qnapBuilds)
+}
+
+//go:embed all:files
+var buildFiles embed.FS
+
+// newQNAPBuilds creates a new qnapBuilds instance to hold context shared by
+// all qnap targets, and sets up its local temp directory used for building.
+//
+// The qnapBuilds.tmpDir is filled with the contents of the buildFiles embedded
+// FS for building.
+//
+// We do this to allow for this tailscale.com/release/dist/qnap package to be
+// used from both the corp and OSS repos. When built from OSS source directly,
+// this is a superfluous extra step, but when imported as a go module to another
+// repo (such as corp), we must do this to allow for the module's build files
+// to be reachable and editable from docker.
+//
+// This runs only once per dist.Build instance, is shared by all qnap targets,
+// and gets cleaned up upon close of the dist.Build.
+//
+// When a signer is provided, newQNAPBuilds also sets up the qpkg signature
+// files in qbuild's expected location within m.tmpDir.
+func newQNAPBuilds(b *dist.Build, signer *signer) (*qnapBuilds, error) {
+	m := new(qnapBuilds)
+
+	log.Print("Setting up qnap tmp build directory")
+	m.tmpDir = filepath.Join(b.Repo, "tmp-qnap-build")
+	b.AddOnCloseFunc(func() error {
+		return os.RemoveAll(m.tmpDir)
+	})
+
+	if err := fs.WalkDir(buildFiles, "files", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		outPath := filepath.Join(m.tmpDir, path)
+		if d.IsDir() {
+			return os.MkdirAll(outPath, 0700)
+		}
+		file, err := fs.ReadFile(buildFiles, path)
+		if err != nil {
+			return err
+		}
+		perm := fs.FileMode(0600)
+		if filepath.Ext(path) == ".sh" {
+			perm = 0700
+		}
+		return os.WriteFile(outPath, file, perm)
+	}); err != nil {
+		return nil, err
+	}
+
+	if signer != nil {
+		log.Print("Setting up qnap signing files")
+
+		key, err := os.ReadFile(signer.privateKeyPath)
+		if err != nil {
+			return nil, err
+		}
+		cert, err := os.ReadFile(signer.certificatePath)
+		if err != nil {
+			return nil, err
+		}
+
+		// QNAP's qbuild command expects key and cert files to be in the root
+		// of the project directory (in our case release/dist/qnap/Tailscale).
+		// So here, we copy the key and cert over to the project folder for the
+		// duration of qnap package building and then delete them on close.
+
+		keyPath := filepath.Join(m.tmpDir, "files/Tailscale/private_key")
+		if err := os.WriteFile(keyPath, key, 0400); err != nil {
+			return nil, err
+		}
+		certPath := filepath.Join(m.tmpDir, "files/Tailscale/certificate")
+		if err := os.WriteFile(certPath, cert, 0400); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
 }
 
 // buildInnerPackage builds the go binaries used for qnap packages.
@@ -181,7 +230,7 @@ func (m *qnapBuilds) buildInnerPackage(b *dist.Build, goenv map[string]string) (
 		// So here, we move the binaries into a directory within the b.Repo
 		// path and clean it up when the builder closes.
 
-		tmpDir := filepath.Join(b.Repo, fmt.Sprintf("/tmp-qnap-%s-%s-%s", b.Version.Short, goenv["GOOS"], goenv["GOARCH"]))
+		tmpDir := filepath.Join(m.tmpDir, fmt.Sprintf("/binaries-%s-%s-%s", b.Version.Short, goenv["GOOS"], goenv["GOARCH"]))
 		if err = os.MkdirAll(tmpDir, 0755); err != nil {
 			return nil, err
 		}
@@ -216,9 +265,9 @@ func (m *qnapBuilds) makeDockerImage(b *dist.Build) error {
 		log.Printf("Building qnapbuilder docker image")
 
 		cmd := b.Command(b.Repo, "docker", "build",
-			"-f", filepath.Join(b.Repo, "release/dist/qnap/Dockerfile.qpkg"),
+			"-f", filepath.Join(m.tmpDir, "files/scripts/Dockerfile.qpkg"),
 			"-t", "build.tailscale.io/qdk:latest",
-			filepath.Join(b.Repo, "release/dist/qnap/"),
+			filepath.Join(m.tmpDir, "files/scripts"),
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
