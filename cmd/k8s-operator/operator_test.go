@@ -1424,6 +1424,73 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 	}
 }
 
+func Test_externalNameService(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. A External name Service that should be exposed via Tailscale gets
+	// created.
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// 1. Create an ExternalName Service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationExpose: "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "foo.com",
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	opts := configOpts{
+		stsName:          shortName,
+		secretName:       fullName,
+		namespace:        "default",
+		parentType:       "svc",
+		hostname:         "default-test",
+		clusterTargetDNS: "foo.com",
+	}
+
+	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+
+	// 2. Change the ExternalName and verify that changes get propagated.
+	mustUpdate(t, sr, "default", "test", func(s *corev1.Service) {
+		s.Spec.ExternalName = "bar.com"
+	})
+	expectReconciled(t, sr, "default", "test")
+	opts.clusterTargetDNS = "bar.com"
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+}
+
 func toFQDN(t *testing.T, s string) dnsname.FQDN {
 	t.Helper()
 	fqdn, err := dnsname.ToFQDN(s)

@@ -87,6 +87,7 @@ const (
 	// ensure that it does not get removed when a ProxyClass configuration
 	// is applied.
 	podAnnotationLastSetClusterIP         = "tailscale.com/operator-last-set-cluster-ip"
+	podAnnotationLastSetClusterDNSName    = "tailscale.com/operator-last-set-cluster-dns-name"
 	podAnnotationLastSetTailnetTargetIP   = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
 	podAnnotationLastSetTailnetTargetFQDN = "tailscale.com/operator-last-set-ts-tailnet-target-fqdn"
 	// podAnnotationLastSetConfigFileHash is sha256 hash of the current tailscaled configuration contents.
@@ -109,8 +110,9 @@ type tailscaleSTSConfig struct {
 	ParentResourceUID   string
 	ChildResourceLabels map[string]string
 
-	ServeConfig     *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
-	ClusterTargetIP string           // ingress target
+	ServeConfig          *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
+	ClusterTargetIP      string           // ingress target IP
+	ClusterTargetDNSName string           // ingress target DNS name
 	// If set to true, operator should configure containerboot to forward
 	// cluster traffic via the proxy set up for Kubernetes Ingress.
 	ForwardClusterTrafficViaL7IngressProxy bool
@@ -536,6 +538,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Value: sts.ClusterTargetIP,
 		})
 		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
+	} else if sts.ClusterTargetDNSName != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
+			Value: sts.ClusterTargetDNSName,
+		})
+		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterDNSName, sts.ClusterTargetDNSName)
 	} else if sts.TailnetTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_TAILNET_TARGET_IP",

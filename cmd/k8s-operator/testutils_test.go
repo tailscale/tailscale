@@ -43,6 +43,7 @@ type configOpts struct {
 	tailnetTargetIP                                string
 	tailnetTargetFQDN                              string
 	clusterTargetIP                                string
+	clusterTargetDNS                               string
 	subnetRoutes                                   string
 	isExitNode                                     bool
 	confFileHash                                   string
@@ -126,6 +127,12 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			Value: opts.clusterTargetIP,
 		})
 		annots["tailscale.com/operator-last-set-cluster-ip"] = opts.clusterTargetIP
+	} else if opts.clusterTargetDNS != "" {
+		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
+			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
+			Value: opts.clusterTargetDNS,
+		})
+		annots["tailscale.com/operator-last-set-cluster-dns-name"] = opts.clusterTargetDNS
 	}
 	if opts.serveConfig != nil {
 		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
