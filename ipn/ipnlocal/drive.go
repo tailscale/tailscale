@@ -4,10 +4,10 @@
 package ipnlocal
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"slices"
-	"strings"
 
 	"tailscale.com/drive"
 	"tailscale.com/ipn"
@@ -318,40 +318,47 @@ func (b *LocalBackend) updateDrivePeersLocked(nm *netmap.NetworkMap) {
 func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Remote {
 	driveRemotes := make([]*drive.Remote, 0, len(nm.Peers))
 	for _, p := range nm.Peers {
-		// Exclude mullvad exit nodes from list of Taildrive peers
-		// TODO(oxtoacart) - once we have a better mechanism for finding only accessible sharers
-		// (see below) we can remove this logic.
-		if strings.HasSuffix(p.Name(), ".mullvad.ts.net.") {
-			continue
-		}
-
 		peerID := p.ID()
 		url := fmt.Sprintf("%s/%s", peerAPIBase(nm, p), taildrivePrefix[1:])
 		driveRemotes = append(driveRemotes, &drive.Remote{
 			Name: p.DisplayName(false),
 			URL:  url,
 			Available: func() bool {
-				// TODO(oxtoacart): need to figure out a performant and reliable way to only
-				// show the peers that have shares to which we have access
-				// This will require work on the control server to transmit the inverse
-				// of the "tailscale.com/cap/drive" capability.
-				// For now, at least limit it only to nodes that are online.
-				// Note, we have to iterate the latest netmap because the peer we got from the first iteration may not be it
+				// Peers are available to Taildrive if:
+				// - They are online
+				// - They are allowed to share at least one folder with us
 				b.mu.Lock()
 				latestNetMap := b.netMap
 				b.mu.Unlock()
 
-				for _, candidate := range latestNetMap.Peers {
-					if candidate.ID() == peerID {
-						online := candidate.Online()
-						// TODO(oxtoacart): for some reason, this correctly
-						// catches when a node goes from offline to online,
-						// but not the other way around...
-						return online != nil && *online
+				idx, found := slices.BinarySearchFunc(latestNetMap.Peers, peerID, func(candidate tailcfg.NodeView, id tailcfg.NodeID) int {
+					return cmp.Compare(candidate.ID(), id)
+				})
+				if !found {
+					return false
+				}
+
+				peer := latestNetMap.Peers[idx]
+
+				// Exclude offline peers.
+				// TODO(oxtoacart): for some reason, this correctly
+				// catches when a node goes from offline to online,
+				// but not the other way around...
+				online := peer.Online()
+				if online == nil || !*online {
+					return false
+				}
+
+				// Check that the peer is allowed to share with us.
+				addresses := peer.Addresses()
+				for i := range addresses.Len() {
+					addr := addresses.At(i)
+					capsMap := b.PeerCaps(addr.Addr())
+					if capsMap.HasCapability(tailcfg.PeerCapabilityTaildriveSharer) {
+						return true
 					}
 				}
 
-				// peer not found, must not be available
 				return false
 			},
 		})
