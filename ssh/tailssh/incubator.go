@@ -12,6 +12,7 @@
 package tailssh
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -121,22 +122,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		if isShell {
 			incubatorArgs = append(incubatorArgs, "--shell")
 		}
-		// Only the macOS version of the login command supports executing a
-		// command, all other versions only support launching a shell
-		// without taking any arguments.
-		shouldUseLoginCmd := isShell || runtime.GOOS == "darwin"
-		if hostinfo.IsSELinuxEnforcing() {
-			// If we're running on a SELinux-enabled system, the login
-			// command will be unable to set the correct context for the
-			// shell. Fall back to using the incubator to launch the shell.
-			// See http://github.com/tailscale/tailscale/issues/4908.
-			shouldUseLoginCmd = false
-		}
-		if shouldUseLoginCmd {
-			if lp, err := exec.LookPath("login"); err == nil {
-				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
-			}
-		}
+
 		incubatorArgs = append(incubatorArgs, "--cmd="+name)
 		if len(args) > 0 {
 			incubatorArgs = append(incubatorArgs, "--")
@@ -164,19 +150,18 @@ func (stdRWC) Close() error {
 }
 
 type incubatorArgs struct {
-	uid          int
-	gid          int
-	groups       string
-	localUser    string
-	remoteUser   string
-	remoteIP     string
-	ttyName      string
-	hasTTY       bool
-	cmdName      string
-	isSFTP       bool
-	isShell      bool
-	loginCmdPath string
-	cmdArgs      []string
+	uid        int
+	gid        int
+	groups     string
+	localUser  string
+	remoteUser string
+	remoteIP   string
+	ttyName    string
+	hasTTY     bool
+	cmdName    string
+	isSFTP     bool
+	isShell    bool
+	cmdArgs    []string
 }
 
 func parseIncubatorArgs(args []string) (a incubatorArgs) {
@@ -192,7 +177,6 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 	flags.StringVar(&a.cmdName, "cmd", "", "the cmd to launch (ignored in sftp mode)")
 	flags.BoolVar(&a.isShell, "shell", false, "is launching a shell (with no cmds)")
 	flags.BoolVar(&a.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
-	flags.StringVar(&a.loginCmdPath, "login-cmd", "", "the path to `login` cmd")
 	flags.Parse(args)
 	a.cmdArgs = flags.Args()
 	return a
@@ -231,14 +215,8 @@ func beIncubator(args []string) error {
 		}
 	}
 
-	euid := os.Geteuid()
-	runningAsRoot := euid == 0
-	if runningAsRoot && ia.loginCmdPath != "" {
-		// Check if we can exec into the login command instead of trying to
-		// incubate ourselves.
-		if la := ia.loginArgs(); la != nil {
-			return unix.Exec(ia.loginCmdPath, la, os.Environ())
-		}
+	if handled, err := tryLoginShell(logf, ia); handled {
+		return err
 	}
 
 	// Inform the system that we are about to log someone in.
@@ -310,6 +288,143 @@ func beIncubator(args []string) error {
 		os.Exit(code)
 	}
 	return err
+}
+
+// tryLoginShell attempts to handle the ssh session by creating a full login
+// shell. If it was able to do so, it returns true plus any error from running
+// that shell. If it was unable to do so, it returns false, nil.
+//
+// We prefer to create a login shell using either the login command
+// (e.g. /usr/bin/login) or using the su command (e.g. /usr/bin/su). A login
+// shell has the advantage of running PAM authentication, which will set up the
+// connected user's environment. See https://github.com/tailscale/tailscale/issues/11854.
+//
+// login is preferred over su because it supports the `-h` option, allowing the
+// system to record the remote IP associated with the login.
+//
+// However, login is subject to some limitations.
+//
+// 1. login cannot be used to execute commands except on macOS.
+// 2. On Linux and BSD, login requires a TTY to keep running.
+//
+// Unlike login, su often does not require a TTY, so on Linux hosts that have
+// an su command which accepts the right flags, we fall back to using that when
+// no TTY is available.
+//
+// Note - one nuance of this is that when we use login with the -h option, the
+// shell will use the "remote" PAM profile. When we fall back to using "su",
+// the shell will use the "login" PAM profile.
+func tryLoginShell(logf logger.Logf, ia incubatorArgs) (bool, error) {
+	euid := os.Geteuid()
+	runningAsRoot := euid == 0
+
+	// Decide whether we should attempt to get a full login shell using either
+	// the login or su commands.
+	attemptLoginShell := true
+	switch {
+	case ia.isSFTP:
+		// If we're going to run an sFTP server, we don't want a shell
+		attemptLoginShell = false
+	case !runningAsRoot:
+		// We have to be root in order to create a login shell.
+		attemptLoginShell = false
+	case hostinfo.IsSELinuxEnforcing():
+		// If we're running on a SELinux-enabled system, neiher login nor su
+		// will be able to set the correct context for the shell. So, we don't
+		// bother trying to run them and instead fall back to using the
+		// incubator to launch the shell.
+		// See http://github.com/tailscale/tailscale/issues/4908.
+		attemptLoginShell = false
+	}
+
+	if !attemptLoginShell {
+		logf("not attempting login shell")
+		return false, nil
+	}
+
+	shouldUseLoginCmd := ia.isShell || runtime.GOOS == "darwin"
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd":
+		if !ia.hasTTY {
+			// We can only use login command if a shell was requested with a TTY. If
+			// there is no TTY, login exits immediately, which breaks things likes
+			// mosh and VSCode.
+			shouldUseLoginCmd = false
+		}
+	}
+
+	if shouldUseLoginCmd {
+		if loginCmdPath, err := exec.LookPath("login"); err == nil {
+			logf("using %s command", loginCmdPath)
+			return true, unix.Exec(loginCmdPath, ia.loginArgs(loginCmdPath), os.Environ())
+		}
+	}
+
+	// We weren't able to use login, maybe we can use su.
+	// Currently, we only support falling back to su on Linux. This
+	// potentially could work on BSDs as well, but requires testing.
+	canUseSU := runtime.GOOS == "linux"
+	if !canUseSU {
+		logf("not attempting su")
+		return false, nil
+	}
+	return tryLoginWithSU(logf, ia)
+}
+
+// tryLoginWithSU attempts to start a login shell using su instead of login. If
+// su is available and supports the necessary arguments, this returns true,
+// plus the result of executing su. Otherwise, it returns false, nil.
+func tryLoginWithSU(logf logger.Logf, ia incubatorArgs) (bool, error) {
+	su, err := exec.LookPath("su")
+	if err != nil {
+		// Can't find su, don't bother trying.
+		logf("can't find su command")
+		return false, nil
+	}
+
+	// Get help text to inspect supported flags.
+	out, err := exec.Command(su, "-h").CombinedOutput()
+	if err != nil {
+		logf("%s doesn't support -h, don't use", su)
+		// Can't even call su -h, don't bother trying.
+		return false, nil
+	}
+
+	supportsFlag := func(flag string) bool {
+		return bytes.Contains(out, []byte(flag))
+	}
+
+	// Make sure su supports the necessary flags.
+	if !supportsFlag("-l") {
+		logf("%s doesn't support -l, don't use", su)
+		return false, nil
+	}
+	if !supportsFlag("-c") {
+		logf("%s doesn't support -c, don't use", su)
+		return false, nil
+	}
+
+	loginArgs := []string{
+		"-l",
+	}
+	if ia.hasTTY && supportsFlag("-P") {
+		// Allocate a pseudo terminal for improved security. In particular,
+		// this can help avoid TIOCSTI ioctl terminal injection.
+		loginArgs = append(loginArgs, "-P")
+	}
+	loginArgs = append(loginArgs, ia.localUser)
+
+	if !ia.isShell && ia.cmdName != "" {
+		// We only execute the requested command if we're not requesting a
+		// shell. When requesting a shell, the command is the requested shell,
+		// which is redundant because `su -l` will give the user their default
+		// shell.
+		loginArgs = append(loginArgs, "-c", ia.cmdName)
+		loginArgs = append(loginArgs, ia.cmdArgs...)
+	}
+
+	logf("logging in with su %+v", loginArgs)
+	return true, unix.Exec("/usr/bin/su", loginArgs, os.Environ())
 }
 
 const (
@@ -731,18 +846,11 @@ func fileExists(path string) bool {
 }
 
 // loginArgs returns the arguments to use to exec the login binary.
-// It returns nil if the login binary should not be used.
-// The login binary is only used:
-//   - on darwin, if the client is requesting a shell or a command.
-//   - on linux and BSD, if the client is requesting a shell with a TTY.
-func (ia *incubatorArgs) loginArgs() []string {
-	if ia.isSFTP {
-		return nil
-	}
+func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 	switch runtime.GOOS {
 	case "darwin":
 		args := []string{
-			ia.loginCmdPath,
+			loginCmdPath,
 			"-f", // already authenticated
 
 			// login typically discards the previous environment, but we want to
@@ -761,29 +869,17 @@ func (ia *incubatorArgs) loginArgs() []string {
 		}
 		return args
 	case "linux":
-		if !ia.isShell || !ia.hasTTY {
-			// We can only use login command if a shell was requested with a TTY. If
-			// there is no TTY, login exits immediately, which breaks things likes
-			// mosh and VSCode.
-			return nil
-		}
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
 			//
 			// Arch uses a different login binary that makes the -h flag set the PAM
 			// service to "remote". So if they don't have that configured, don't
 			// pass -h.
-			return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
+			return []string{loginCmdPath, "-f", ia.localUser, "-p"}
 		}
-		return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
+		return []string{loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
 	case "freebsd", "openbsd":
-		if !ia.isShell || !ia.hasTTY {
-			// We can only use login command if a shell was requested with a TTY. If
-			// there is no TTY, login exits immediately, which breaks things likes
-			// mosh and VSCode.
-			return nil
-		}
-		return []string{ia.loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
+		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
 }
