@@ -14,10 +14,8 @@ spec:
         - name: sysctler
           securityContext:
             privileged: true
-          command: ["/bin/sh"]
-          args:
-            - -c
-            - sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
+          command: ["/bin/sh", "-c"]
+          args: [sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi]
       resources:
         requests:
           cpu: 1m
