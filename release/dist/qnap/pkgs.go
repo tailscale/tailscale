@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"tailscale.com/release/dist"
@@ -160,15 +161,15 @@ func newQNAPBuilds(b *dist.Build, signer *signer) (*qnapBuilds, error) {
 		}
 		outPath := filepath.Join(m.tmpDir, path)
 		if d.IsDir() {
-			return os.MkdirAll(outPath, 0700)
+			return os.MkdirAll(outPath, 0755)
 		}
 		file, err := fs.ReadFile(buildFiles, path)
 		if err != nil {
 			return err
 		}
-		perm := fs.FileMode(0600)
-		if filepath.Ext(path) == ".sh" {
-			perm = 0700
+		perm := fs.FileMode(0644)
+		if slices.Contains([]string{".sh", ".cgi"}, filepath.Ext(path)) {
+			perm = 0755
 		}
 		return os.WriteFile(outPath, file, perm)
 	}); err != nil {
