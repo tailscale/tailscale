@@ -3630,8 +3630,6 @@ func (b *LocalBackend) authReconfig() {
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
-	fmt.Println("kevin -- try lock1", b.mu.TryLock())
-	b.mu.Unlock()
 	if blocked {
 		b.logf("[v1] authReconfig: blocked, skipping.")
 		return
@@ -3644,8 +3642,6 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")
 		return
 	}
-	fmt.Println("kevin -- try lock2", b.mu.TryLock())
-	b.mu.Unlock()
 
 	var flags netmap.WGConfigFlags
 	if prefs.RouteAll() {
@@ -3660,8 +3656,6 @@ func (b *LocalBackend) authReconfig() {
 			flags &^= netmap.AllowSubnetRoutes
 		}
 	}
-	fmt.Println("kevin -- try lock3", b.mu.TryLock())
-	b.mu.Unlock()
 	// Keep the dialer updated about whether we're supposed to use
 	// an exit node's DNS server (so SOCKS5/HTTP outgoing dials
 	// can use it for name resolution)
@@ -3676,11 +3670,8 @@ func (b *LocalBackend) authReconfig() {
 		b.logf("wgcfg: %v", err)
 		return
 	}
-	fmt.Println("kevin -- try lock 4", b.mu.TryLock())
-	b.mu.Unlock()
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
-	fmt.Println("kevin -- try lock 5", b.mu.TryLock())
-	b.mu.Unlock()
+
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
@@ -4172,14 +4163,11 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneCGNATRoute bool) *router.Config {
-	fmt.Println("kevin -- try lock 6", b.mu.TryLock())
-	b.mu.Unlock()
 	singleRouteThreshold := 10_000
 	if oneCGNATRoute {
 		singleRouteThreshold = 1
 	}
-	fmt.Println("kevin -- try lock 7", b.mu.TryLock())
-	b.mu.Unlock()
+
 	b.mu.Lock()
 	netfilterKind := b.capForcedNetfilter // protected by b.mu
 	b.mu.Unlock()
@@ -6209,7 +6197,6 @@ var ErrDisallowedAutoRoute = errors.New("route is not allowed")
 // If the route is disallowed, ErrDisallowedAutoRoute is returned.
 func (b *LocalBackend) AdvertiseRouteInfo(ri *routeinfo.RouteInfo) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	pref := b.pm.CurrentPrefs()
 	newRoutes := pref.AdvertiseRoutes().AsSlice()
 	oldHi := b.hostinfo
@@ -6249,6 +6236,7 @@ func (b *LocalBackend) AdvertiseRouteInfo(ri *routeinfo.RouteInfo) {
 	if !oldHi.Equal(newHi) {
 		b.doSetHostinfoFilterServices()
 	}
+	b.mu.Unlock()
 
 	b.authReconfig()
 }

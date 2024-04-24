@@ -115,6 +115,8 @@ func (e *AppConnector) RouteInfo() *routeinfo.RouteInfo {
 // then update local routes of routeInfo in store as the current advertised routes.
 func (e *AppConnector) RecreateRouteInfoFromStore(localRoutes []netip.Prefix) {
 	e.queue.Add(func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		ri := e.RouteInfo()
 		err := e.routeAdvertiser.StoreRouteInfo(ri)
 		if err != nil {
@@ -140,6 +142,8 @@ func (e *AppConnector) UpdateRouteInfo(ri *routeinfo.RouteInfo) {
 
 func (e *AppConnector) UnadvertiseRemoteRoutes() {
 	e.queue.Add(func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		e.routeAdvertiser.AdvertiseRouteInfo(nil)
 	})
 }
@@ -219,16 +223,9 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 	}
 
 	var routeInfo *routeinfo.RouteInfo
-	var err error
 	e.routeInfo.Control = routes
 	if e.ShouldStoreRoutes {
 		routeInfo = e.RouteInfo()
-		if err != nil {
-			if err != ipn.ErrStateNotExist {
-				e.logf("Appc: Unsuccessful Read RouteInfo: ", err)
-			}
-			routeInfo = routeinfo.NewRouteInfo()
-		}
 		routeInfo.Control = routes
 		e.routeAdvertiser.StoreRouteInfo(e.routeInfo)
 	}
@@ -402,53 +399,10 @@ func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[stri
 	return domain, isRouted
 }
 
-// // scheduleAdvertisement schedules an advertisement of the given address
-// // associated with the given domain.
-// func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Prefix) {
-// 	e.queue.Add(func() {
-// 		if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
-// 			e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)
-// 			return
-// 		}
-// 		e.mu.Lock()
-// 		defer e.mu.Unlock()
-
-// 		for _, route := range routes {
-// 			if !route.IsSingleIP() {
-// 				continue
-// 			}
-// 			addr := route.Addr()
-// 			if !e.hasDomainAddrLocked(domain, addr) {
-// 				e.addDomainAddrLocked(domain, addr)
-// 				e.logf("[v2] advertised route for %v: %v", domain, addr)
-// 			}
-// 		}
-// 	})
-// }
-
-// func (e *AppConnector) scheduleUnadvertisement(domain string, routes ...netip.Prefix) {
-// 	e.queue.Add(func() {
-// 		if err := e.routeAdvertiser.UnadvertiseRoute(routes...); err != nil {
-// 			e.logf("failed to unadvertise routes for %s: %v: %v", domain, routes, err)
-// 			return
-// 		}
-// 		e.mu.Lock()
-// 		defer e.mu.Unlock()
-
-// 		for _, route := range routes {
-// 			if !route.IsSingleIP() {
-// 				continue
-// 			}
-// 			addr := route.Addr()
-
-// 			// e.deleteDomainAddrLocked(domain, addr)
-// 			e.logf("[v2] unadvertised route for %v: %v", domain, addr)
-// 		}
-// 	})
-// }
-
 func (e *AppConnector) scheduleAdvertiseRouteInfo(ri *routeinfo.RouteInfo) {
 	e.queue.Add(func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 		e.routeAdvertiser.AdvertiseRouteInfo(ri)
 	})
 }
