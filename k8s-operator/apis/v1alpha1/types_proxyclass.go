@@ -94,6 +94,11 @@ type Pod struct {
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// Proxy Pod's affinity rules.
+	// By default, the Tailscale Kubernetes operator does not apply any affinity rules.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
 	// Configuration for the proxy container running tailscale.
 	// +optional
 	TailscaleContainer *Container `json:"tailscaleContainer,omitempty"`

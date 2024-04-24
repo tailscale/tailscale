@@ -195,6 +195,11 @@ func (in *Pod) DeepCopyInto(out *Pod) {
 			(*out)[key] = val
 		}
 	}
+	if in.Affinity != nil {
+		in, out := &in.Affinity, &out.Affinity
+		*out = new(v1.Affinity)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.TailscaleContainer != nil {
 		in, out := &in.TailscaleContainer, &out.TailscaleContainer
 		*out = new(Container)

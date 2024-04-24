@@ -8,4 +8,4 @@ set -eu
 # files. We want to exclude all kube-related code from plan9 builds because some
 # apimachinery libraries refer to syscalls that are not available for plan9
 # https://github.com/kubernetes/apimachinery/blob/v0.28.2/pkg/util/net/util.go#L42-L63 
-sed -i "1 s|$| \&\& \!plan9|" k8s-operator/apis/v1alpha1/zz_generated.deepcopy.go
+sed -i.bak "1 s|$| \\&\\& \\!plan9|" k8s-operator/apis/v1alpha1/zz_generated.deepcopy.go && rm k8s-operator/apis/v1alpha1/zz_generated.deepcopy.go.bak

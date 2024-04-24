@@ -66,6 +66,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "docker-creds"}},
 					NodeName:         "some-node",
 					NodeSelector:     map[string]string{"beta.kubernetes.io/os": "linux"},
+					Affinity:         &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{}}},
 					Tolerations:      []corev1.Toleration{{Key: "", Operator: "Exists"}},
 					TailscaleContainer: &tsapi.Container{
 						SecurityContext: &corev1.SecurityContext{
@@ -139,6 +140,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.ImagePullSecrets = proxyClassAllOpts.Spec.StatefulSet.Pod.ImagePullSecrets
 	wantSS.Spec.Template.Spec.NodeName = proxyClassAllOpts.Spec.StatefulSet.Pod.NodeName
 	wantSS.Spec.Template.Spec.NodeSelector = proxyClassAllOpts.Spec.StatefulSet.Pod.NodeSelector
+	wantSS.Spec.Template.Spec.Affinity = proxyClassAllOpts.Spec.StatefulSet.Pod.Affinity
 	wantSS.Spec.Template.Spec.Tolerations = proxyClassAllOpts.Spec.StatefulSet.Pod.Tolerations
 	wantSS.Spec.Template.Spec.Containers[0].SecurityContext = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.SecurityContext
 	wantSS.Spec.Template.Spec.InitContainers[0].SecurityContext = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleInitContainer.SecurityContext
@@ -176,6 +178,7 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.ImagePullSecrets = proxyClassAllOpts.Spec.StatefulSet.Pod.ImagePullSecrets
 	wantSS.Spec.Template.Spec.NodeName = proxyClassAllOpts.Spec.StatefulSet.Pod.NodeName
 	wantSS.Spec.Template.Spec.NodeSelector = proxyClassAllOpts.Spec.StatefulSet.Pod.NodeSelector
+	wantSS.Spec.Template.Spec.Affinity = proxyClassAllOpts.Spec.StatefulSet.Pod.Affinity
 	wantSS.Spec.Template.Spec.Tolerations = proxyClassAllOpts.Spec.StatefulSet.Pod.Tolerations
 	wantSS.Spec.Template.Spec.Containers[0].SecurityContext = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.SecurityContext
 	wantSS.Spec.Template.Spec.Containers[0].Resources = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.Resources
