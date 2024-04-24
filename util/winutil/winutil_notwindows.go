@@ -21,6 +21,8 @@ func getPolicyString(name string) (string, error) { return "", ErrNoValue }
 
 func getPolicyInteger(name string) (uint64, error) { return 0, ErrNoValue }
 
+func getPolicyStringArray(name string) ([]string, error) { return nil, ErrNoValue }
+
 func getRegString(name string) (string, error) { return "", ErrNoValue }
 
 func getRegInteger(name string) (uint64, error) { return 0, ErrNoValue }

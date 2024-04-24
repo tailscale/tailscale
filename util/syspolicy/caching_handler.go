@@ -16,6 +16,7 @@ type CachingHandler struct {
 	strings  map[string]string
 	uint64s  map[string]uint64
 	bools    map[string]bool
+	strArrs  map[string][]string
 	notFound map[string]bool
 	handler  Handler
 }
@@ -27,6 +28,7 @@ func NewCachingHandler(handler Handler) *CachingHandler {
 		strings:  make(map[string]string),
 		uint64s:  make(map[string]uint64),
 		bools:    make(map[string]bool),
+		strArrs:  make(map[string][]string),
 		notFound: make(map[string]bool),
 	}
 }
@@ -94,5 +96,27 @@ func (ch *CachingHandler) ReadBoolean(key string) (bool, error) {
 		return false, err
 	}
 	ch.bools[key] = val
+	return val, nil
+}
+
+// ReadBoolean reads the policy settings boolean value given the key.
+// ReadBoolean first reads from the handler's cache before resorting to using the handler.
+func (ch *CachingHandler) ReadStringArray(key string) ([]string, error) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if val, ok := ch.strArrs[key]; ok {
+		return val, nil
+	}
+	if notFound := ch.notFound[key]; notFound {
+		return nil, ErrNoSuchKey
+	}
+	val, err := ch.handler.ReadStringArray(key)
+	if errors.Is(err, ErrNoSuchKey) {
+		ch.notFound[key] = true
+		return nil, err
+	} else if err != nil {
+		return nil, err
+	}
+	ch.strArrs[key] = val
 	return val, nil
 }

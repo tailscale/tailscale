@@ -18,6 +18,7 @@ type testHandler struct {
 	s     string
 	u64   uint64
 	b     bool
+	sArr  []string
 	err   error
 	calls int // used for testing reads from cache vs. handler
 }
@@ -46,6 +47,14 @@ func (th *testHandler) ReadBoolean(key string) (bool, error) {
 	}
 	th.calls++
 	return th.b, th.err
+}
+
+func (th *testHandler) ReadStringArray(key string) ([]string, error) {
+	if key != string(th.key) {
+		th.t.Errorf("ReadStringArray(%q) want %q", key, th.key)
+	}
+	th.calls++
+	return th.sArr, th.err
 }
 
 func TestGetString(t *testing.T) {
