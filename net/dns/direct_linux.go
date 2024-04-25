@@ -58,7 +58,7 @@ func (m *directManager) runFileWatcher() {
 	}
 }
 
-var warnTrample = health.NewWarnable()
+var warnTrample = health.Global.NewWarnable()
 
 // checkForFileTrample checks whether /etc/resolv.conf has been trampled
 // by another program on the system. (e.g. a DHCP client)

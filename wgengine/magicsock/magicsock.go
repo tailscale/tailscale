@@ -666,7 +666,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		// NOTE(andrew-d): I don't love that we're depending on the
 		// health package here, but I'd rather do that and not store
 		// the exact same state in two different places.
-		GetLastDERPActivity: health.GetDERPRegionReceivedTime,
+		GetLastDERPActivity: health.Global.GetDERPRegionReceivedTime,
 	})
 	if err != nil {
 		return nil, err
@@ -2471,7 +2471,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		}
 		ruc.setConnLocked(pconn, network, c.bind.BatchSize())
 		if network == "udp4" {
-			health.SetUDP4Unbound(false)
+			health.Global.SetUDP4Unbound(false)
 		}
 		return nil
 	}
@@ -2482,7 +2482,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// we get a link change and we can try binding again.
 	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
 	if network == "udp4" {
-		health.SetUDP4Unbound(true)
+		health.Global.SetUDP4Unbound(true)
 	}
 	return fmt.Errorf("failed to bind any ports (tried %v)", ports)
 }

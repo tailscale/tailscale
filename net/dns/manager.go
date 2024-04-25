@@ -94,10 +94,10 @@ func (m *Manager) Set(cfg Config) error {
 		return err
 	}
 	if err := m.os.SetDNS(ocfg); err != nil {
-		health.SetDNSOSHealth(err)
+		health.Global.SetDNSOSHealth(err)
 		return err
 	}
-	health.SetDNSOSHealth(nil)
+	health.Global.SetDNSOSHealth(nil)
 
 	return nil
 }
@@ -248,7 +248,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// This is currently (2022-10-13) expected on certain iOS and macOS
 			// builds.
 		} else {
-			health.SetDNSOSHealth(err)
+			health.Global.SetDNSOSHealth(err)
 			return resolver.Config{}, OSConfig{}, err
 		}
 	}

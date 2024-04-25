@@ -195,7 +195,7 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
-	c.unregisterHealthWatch = health.RegisterWatcher(direct.ReportHealthChange)
+	c.unregisterHealthWatch = health.Global.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
 
 }
@@ -316,7 +316,7 @@ func (c *Auto) authRoutine() {
 		}
 
 		if goal == nil {
-			health.SetAuthRoutineInError(nil)
+			health.Global.SetAuthRoutineInError(nil)
 			// Wait for user to Login or Logout.
 			<-ctx.Done()
 			c.logf("[v1] authRoutine: context done.")
@@ -343,7 +343,7 @@ func (c *Auto) authRoutine() {
 			f = "TryLogin"
 		}
 		if err != nil {
-			health.SetAuthRoutineInError(err)
+			health.Global.SetAuthRoutineInError(err)
 			report(err, f)
 			bo.BackOff(ctx, err)
 			continue
@@ -373,7 +373,7 @@ func (c *Auto) authRoutine() {
 		}
 
 		// success
-		health.SetAuthRoutineInError(nil)
+		health.Global.SetAuthRoutineInError(nil)
 		c.mu.Lock()
 		c.urlToVisit = ""
 		c.loggedIn = true
@@ -503,11 +503,11 @@ func (c *Auto) mapRoutine() {
 			c.logf("[v1] mapRoutine: context done.")
 			continue
 		}
-		health.SetOutOfPollNetMap()
+		health.Global.SetOutOfPollNetMap()
 
 		err := c.direct.PollNetMap(ctx, mrs)
 
-		health.SetOutOfPollNetMap()
+		health.Global.SetOutOfPollNetMap()
 		c.mu.Lock()
 		c.inMapPoll = false
 		if c.state == StateSynchronized {

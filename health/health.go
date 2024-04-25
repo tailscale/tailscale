@@ -17,20 +17,31 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
 )
 
 var (
+	mu           sync.Mutex
+	debugHandler map[string]http.Handler
+)
+
+// Global is a global health tracker for the process.
+//
+// TODO(bradfitz): move this to tsd.System so a process can have multiple
+// tsnet/etc instances with their own health trackers.
+var Global = new(Tracker)
+
+type Tracker struct {
 	// mu guards everything in this var block.
 	mu sync.Mutex
 
-	sysErr    = map[Subsystem]error{}                   // error key => err (or nil for no error)
-	watchers  = set.HandleSet[func(Subsystem, error)]{} // opt func to run if error state changes
-	warnables = set.Set[*Warnable]{}
+	sysErr    map[Subsystem]error                   // subsystem => err (or nil for no error)
+	watchers  set.HandleSet[func(Subsystem, error)] // opt func to run if error state changes
+	warnables set.Set[*Warnable]
 	timer     *time.Timer
-
-	debugHandler = map[string]http.Handler{}
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -38,19 +49,19 @@ var (
 	lastStreamedMapResponse time.Time
 	derpHomeRegion          int
 	derpHomeless            bool
-	derpRegionConnected     = map[int]bool{}
-	derpRegionHealthProblem = map[int]string{}
-	derpRegionLastFrame     = map[int]time.Time{}
+	derpRegionConnected     map[int]bool
+	derpRegionHealthProblem map[int]string
+	derpRegionLastFrame     map[int]time.Time
 	lastMapRequestHeard     time.Time // time we got a 200 from control for a MapRequest
 	ipnState                string
 	ipnWantRunning          bool
-	anyInterfaceUp          = true // until told otherwise
+	anyInterfaceUp          opt.Bool // empty means unknown (assume true)
 	udp4Unbound             bool
 	controlHealth           []string
 	lastLoginErr            error
 	localLogConfigErr       error
-	tlsConnectionErrors     = map[string]error{} // map[ServerName]error
-)
+	tlsConnectionErrors     map[string]error // map[ServerName]error
+}
 
 // Subsystem is the name of a subsystem whose health can be monitored.
 type Subsystem string
@@ -78,14 +89,17 @@ const (
 
 // NewWarnable returns a new warnable item that the caller can mark
 // as health or in warning state.
-func NewWarnable(opts ...WarnableOpt) *Warnable {
+func (t *Tracker) NewWarnable(opts ...WarnableOpt) *Warnable {
 	w := new(Warnable)
 	for _, o := range opts {
 		o.mod(w)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	warnables.Add(w)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.warnables == nil {
+		t.warnables = set.Set[*Warnable]{}
+	}
+	t.warnables.Add(w)
 	return w
 }
 
@@ -151,12 +165,12 @@ func (w *Warnable) get() error {
 
 // AppendWarnableDebugFlags appends to base any health items that are currently in failed
 // state and were created with MapDebugFlag.
-func AppendWarnableDebugFlags(base []string) []string {
+func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
 	ret := base
 
-	mu.Lock()
-	defer mu.Unlock()
-	for w := range warnables {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for w := range t.warnables {
 		if w.debugFlag == "" {
 			continue
 		}
@@ -172,75 +186,78 @@ func AppendWarnableDebugFlags(base []string) []string {
 // error changes state either to unhealthy or from unhealthy. It is
 // not called on transition from unknown to healthy. It must be non-nil
 // and is run in its own goroutine. The returned func unregisters it.
-func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
-	mu.Lock()
-	defer mu.Unlock()
-	handle := watchers.Add(cb)
-	if timer == nil {
-		timer = time.AfterFunc(time.Minute, timerSelfCheck)
+func (t *Tracker) RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.watchers == nil {
+		t.watchers = set.HandleSet[func(Subsystem, error)]{}
+	}
+	handle := t.watchers.Add(cb)
+	if t.timer == nil {
+		t.timer = time.AfterFunc(time.Minute, t.timerSelfCheck)
 	}
 	return func() {
-		mu.Lock()
-		defer mu.Unlock()
-		delete(watchers, handle)
-		if len(watchers) == 0 && timer != nil {
-			timer.Stop()
-			timer = nil
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		delete(t.watchers, handle)
+		if len(t.watchers) == 0 && t.timer != nil {
+			t.timer.Stop()
+			t.timer = nil
 		}
 	}
 }
 
 // SetRouterHealth sets the state of the wgengine/router.Router.
-func SetRouterHealth(err error) { setErr(SysRouter, err) }
+func (t *Tracker) SetRouterHealth(err error) { t.setErr(SysRouter, err) }
 
 // RouterHealth returns the wgengine/router.Router error state.
-func RouterHealth() error { return get(SysRouter) }
+func (t *Tracker) RouterHealth() error { return t.get(SysRouter) }
 
 // SetDNSHealth sets the state of the net/dns.Manager
-func SetDNSHealth(err error) { setErr(SysDNS, err) }
+func (t *Tracker) SetDNSHealth(err error) { t.setErr(SysDNS, err) }
 
 // DNSHealth returns the net/dns.Manager error state.
-func DNSHealth() error { return get(SysDNS) }
+func (t *Tracker) DNSHealth() error { return t.get(SysDNS) }
 
 // SetDNSOSHealth sets the state of the net/dns.OSConfigurator
-func SetDNSOSHealth(err error) { setErr(SysDNSOS, err) }
+func (t *Tracker) SetDNSOSHealth(err error) { t.setErr(SysDNSOS, err) }
 
 // SetDNSManagerHealth sets the state of the Linux net/dns manager's
 // discovery of the /etc/resolv.conf situation.
-func SetDNSManagerHealth(err error) { setErr(SysDNSManager, err) }
+func (t *Tracker) SetDNSManagerHealth(err error) { t.setErr(SysDNSManager, err) }
 
 // DNSOSHealth returns the net/dns.OSConfigurator error state.
-func DNSOSHealth() error { return get(SysDNSOS) }
+func (t *Tracker) DNSOSHealth() error { return t.get(SysDNSOS) }
 
 // SetTKAHealth sets the health of the tailnet key authority.
-func SetTKAHealth(err error) { setErr(SysTKA, err) }
+func (t *Tracker) SetTKAHealth(err error) { t.setErr(SysTKA, err) }
 
 // TKAHealth returns the tailnet key authority error state.
-func TKAHealth() error { return get(SysTKA) }
+func (t *Tracker) TKAHealth() error { return t.get(SysTKA) }
 
 // SetLocalLogConfigHealth sets the error state of this client's local log configuration.
-func SetLocalLogConfigHealth(err error) {
-	mu.Lock()
-	defer mu.Unlock()
-	localLogConfigErr = err
+func (t *Tracker) SetLocalLogConfigHealth(err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.localLogConfigErr = err
 }
 
 // SetTLSConnectionError sets the error state for connections to a specific
 // host. Setting the error to nil will clear any previously-set error.
-func SetTLSConnectionError(host string, err error) {
-	mu.Lock()
-	defer mu.Unlock()
+func (t *Tracker) SetTLSConnectionError(host string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if err == nil {
-		delete(tlsConnectionErrors, host)
+		delete(t.tlsConnectionErrors, host)
 	} else {
-		tlsConnectionErrors[host] = err
+		mak.Set(&t.tlsConnectionErrors, host, err)
 	}
 }
 
 func RegisterDebugHandler(typ string, h http.Handler) {
 	mu.Lock()
 	defer mu.Unlock()
-	debugHandler[typ] = h
+	mak.Set(&debugHandler, typ, h)
 }
 
 func DebugHandler(typ string) http.Handler {
@@ -249,24 +266,27 @@ func DebugHandler(typ string) http.Handler {
 	return debugHandler[typ]
 }
 
-func get(key Subsystem) error {
-	mu.Lock()
-	defer mu.Unlock()
-	return sysErr[key]
+func (t *Tracker) get(key Subsystem) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sysErr[key]
 }
 
-func setErr(key Subsystem, err error) {
-	mu.Lock()
-	defer mu.Unlock()
-	setLocked(key, err)
+func (t *Tracker) setErr(key Subsystem, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.setLocked(key, err)
 }
 
-func setLocked(key Subsystem, err error) {
-	old, ok := sysErr[key]
+func (t *Tracker) setLocked(key Subsystem, err error) {
+	if t.sysErr == nil {
+		t.sysErr = map[Subsystem]error{}
+	}
+	old, ok := t.sysErr[key]
 	if !ok && err == nil {
 		// Initial happy path.
-		sysErr[key] = nil
-		selfCheckLocked()
+		t.sysErr[key] = nil
+		t.selfCheckLocked()
 		return
 	}
 	if ok && (old == nil) == (err == nil) {
@@ -274,22 +294,22 @@ func setLocked(key Subsystem, err error) {
 		// don't run callbacks, but exact error might've
 		// changed, so note it.
 		if err != nil {
-			sysErr[key] = err
+			t.sysErr[key] = err
 		}
 		return
 	}
-	sysErr[key] = err
-	selfCheckLocked()
-	for _, cb := range watchers {
+	t.sysErr[key] = err
+	t.selfCheckLocked()
+	for _, cb := range t.watchers {
 		go cb(key, err)
 	}
 }
 
-func SetControlHealth(problems []string) {
-	mu.Lock()
-	defer mu.Unlock()
-	controlHealth = problems
-	selfCheckLocked()
+func (t *Tracker) SetControlHealth(problems []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.controlHealth = problems
+	t.selfCheckLocked()
 }
 
 // GotStreamedMapResponse notes that we got a tailcfg.MapResponse
@@ -297,161 +317,161 @@ func SetControlHealth(problems []string) {
 //
 // This also notes that a map poll is in progress. To unset that, call
 // SetOutOfPollNetMap().
-func GotStreamedMapResponse() {
-	mu.Lock()
-	defer mu.Unlock()
-	lastStreamedMapResponse = time.Now()
-	if !inMapPoll {
-		inMapPoll = true
-		inMapPollSince = time.Now()
+func (t *Tracker) GotStreamedMapResponse() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastStreamedMapResponse = time.Now()
+	if !t.inMapPoll {
+		t.inMapPoll = true
+		t.inMapPollSince = time.Now()
 	}
-	selfCheckLocked()
+	t.selfCheckLocked()
 }
 
 // SetOutOfPollNetMap records that the client is no longer in
 // an HTTP map request long poll to the control plane.
-func SetOutOfPollNetMap() {
-	mu.Lock()
-	defer mu.Unlock()
-	if !inMapPoll {
+func (t *Tracker) SetOutOfPollNetMap() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.inMapPoll {
 		return
 	}
-	inMapPoll = false
-	lastMapPollEndedAt = time.Now()
-	selfCheckLocked()
+	t.inMapPoll = false
+	t.lastMapPollEndedAt = time.Now()
+	t.selfCheckLocked()
 }
 
 // GetInPollNetMap reports whether the client has an open
 // HTTP long poll open to the control plane.
-func GetInPollNetMap() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return inMapPoll
+func (t *Tracker) GetInPollNetMap() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.inMapPoll
 }
 
 // SetMagicSockDERPHome notes what magicsock's view of its home DERP is.
 //
 // The homeless parameter is whether magicsock is running in DERP-disconnected
 // mode, without discovering and maintaining a connection to its home DERP.
-func SetMagicSockDERPHome(region int, homeless bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	derpHomeRegion = region
-	derpHomeless = homeless
-	selfCheckLocked()
+func (t *Tracker) SetMagicSockDERPHome(region int, homeless bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.derpHomeRegion = region
+	t.derpHomeless = homeless
+	t.selfCheckLocked()
 }
 
 // NoteMapRequestHeard notes whenever we successfully sent a map request
 // to control for which we received a 200 response.
-func NoteMapRequestHeard(mr *tailcfg.MapRequest) {
-	mu.Lock()
-	defer mu.Unlock()
+func (t *Tracker) NoteMapRequestHeard(mr *tailcfg.MapRequest) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	// TODO: extract mr.HostInfo.NetInfo.PreferredDERP, compare
 	// against SetMagicSockDERPHome and
 	// SetDERPRegionConnectedState
 
-	lastMapRequestHeard = time.Now()
-	selfCheckLocked()
+	t.lastMapRequestHeard = time.Now()
+	t.selfCheckLocked()
 }
 
-func SetDERPRegionConnectedState(region int, connected bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	derpRegionConnected[region] = connected
-	selfCheckLocked()
+func (t *Tracker) SetDERPRegionConnectedState(region int, connected bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	mak.Set(&t.derpRegionConnected, region, connected)
+	t.selfCheckLocked()
 }
 
 // SetDERPRegionHealth sets or clears any problem associated with the
 // provided DERP region.
-func SetDERPRegionHealth(region int, problem string) {
-	mu.Lock()
-	defer mu.Unlock()
+func (t *Tracker) SetDERPRegionHealth(region int, problem string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if problem == "" {
-		delete(derpRegionHealthProblem, region)
+		delete(t.derpRegionHealthProblem, region)
 	} else {
-		derpRegionHealthProblem[region] = problem
+		mak.Set(&t.derpRegionHealthProblem, region, problem)
 	}
-	selfCheckLocked()
+	t.selfCheckLocked()
 }
 
 // NoteDERPRegionReceivedFrame is called to note that a frame was received from
 // the given DERP region at the current time.
-func NoteDERPRegionReceivedFrame(region int) {
-	mu.Lock()
-	defer mu.Unlock()
-	derpRegionLastFrame[region] = time.Now()
-	selfCheckLocked()
+func (t *Tracker) NoteDERPRegionReceivedFrame(region int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	mak.Set(&t.derpRegionLastFrame, region, time.Now())
+	t.selfCheckLocked()
 }
 
 // GetDERPRegionReceivedTime returns the last time that a frame was received
 // from the given DERP region, or the zero time if no communication with that
 // region has occurred.
-func GetDERPRegionReceivedTime(region int) time.Time {
-	mu.Lock()
-	defer mu.Unlock()
-	return derpRegionLastFrame[region]
+func (t *Tracker) GetDERPRegionReceivedTime(region int) time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.derpRegionLastFrame[region]
 }
 
 // state is an ipn.State.String() value: "Running", "Stopped", "NeedsLogin", etc.
-func SetIPNState(state string, wantRunning bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	ipnState = state
-	ipnWantRunning = wantRunning
-	selfCheckLocked()
+func (t *Tracker) SetIPNState(state string, wantRunning bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ipnState = state
+	t.ipnWantRunning = wantRunning
+	t.selfCheckLocked()
 }
 
 // SetAnyInterfaceUp sets whether any network interface is up.
-func SetAnyInterfaceUp(up bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	anyInterfaceUp = up
-	selfCheckLocked()
+func (t *Tracker) SetAnyInterfaceUp(up bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.anyInterfaceUp.Set(up)
+	t.selfCheckLocked()
 }
 
 // SetUDP4Unbound sets whether the udp4 bind failed completely.
-func SetUDP4Unbound(unbound bool) {
-	mu.Lock()
-	defer mu.Unlock()
-	udp4Unbound = unbound
-	selfCheckLocked()
+func (t *Tracker) SetUDP4Unbound(unbound bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.udp4Unbound = unbound
+	t.selfCheckLocked()
 }
 
 // SetAuthRoutineInError records the latest error encountered as a result of a
 // login attempt. Providing a nil error indicates successful login, or that
 // being logged in w/coordination is not currently desired.
-func SetAuthRoutineInError(err error) {
-	mu.Lock()
-	defer mu.Unlock()
-	lastLoginErr = err
+func (t *Tracker) SetAuthRoutineInError(err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastLoginErr = err
 }
 
-func timerSelfCheck() {
-	mu.Lock()
-	defer mu.Unlock()
+func (t *Tracker) timerSelfCheck() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	checkReceiveFuncs()
-	selfCheckLocked()
-	if timer != nil {
-		timer.Reset(time.Minute)
+	t.selfCheckLocked()
+	if t.timer != nil {
+		t.timer.Reset(time.Minute)
 	}
 }
 
-func selfCheckLocked() {
-	if ipnState == "" {
+func (t *Tracker) selfCheckLocked() {
+	if t.ipnState == "" {
 		// Don't check yet.
 		return
 	}
-	setLocked(SysOverall, overallErrorLocked())
+	t.setLocked(SysOverall, t.overallErrorLocked())
 }
 
 // OverallError returns a summary of the health state.
 //
 // If there are multiple problems, the error will be of type
 // multierr.Error.
-func OverallError() error {
-	mu.Lock()
-	defer mu.Unlock()
-	return overallErrorLocked()
+func (t *Tracker) OverallError() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.overallErrorLocked()
 }
 
 var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
@@ -459,11 +479,11 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 // networkErrorf creates an error that indicates issues with outgoing network
 // connectivity. Any active warnings related to network connectivity will
 // automatically be appended to it.
-func networkErrorf(format string, a ...any) error {
+func (t *Tracker) networkErrorf(format string, a ...any) error {
 	errs := []error{
 		fmt.Errorf(format, a...),
 	}
-	for w := range warnables {
+	for w := range t.warnables {
 		if !w.hasConnectivityImpact {
 			continue
 		}
@@ -477,53 +497,53 @@ func networkErrorf(format string, a ...any) error {
 	return multierr.New(errs...)
 }
 
-var errNetworkDown = networkErrorf("network down")
-var errNotInMapPoll = networkErrorf("not in map poll")
+var errNetworkDown = errors.New("network down")
+var errNotInMapPoll = errors.New("not in map poll")
 var errNoDERPHome = errors.New("no DERP home")
-var errNoUDP4Bind = networkErrorf("no udp4 bind")
+var errNoUDP4Bind = errors.New("no udp4 bind")
 
-func overallErrorLocked() error {
-	if !anyInterfaceUp {
+func (t *Tracker) overallErrorLocked() error {
+	if v, ok := t.anyInterfaceUp.Get(); ok && !v {
 		return errNetworkDown
 	}
-	if localLogConfigErr != nil {
-		return localLogConfigErr
+	if t.localLogConfigErr != nil {
+		return t.localLogConfigErr
 	}
-	if !ipnWantRunning {
-		return fmt.Errorf("state=%v, wantRunning=%v", ipnState, ipnWantRunning)
+	if !t.ipnWantRunning {
+		return fmt.Errorf("state=%v, wantRunning=%v", t.ipnState, t.ipnWantRunning)
 	}
-	if lastLoginErr != nil {
-		return fmt.Errorf("not logged in, last login error=%v", lastLoginErr)
+	if t.lastLoginErr != nil {
+		return fmt.Errorf("not logged in, last login error=%v", t.lastLoginErr)
 	}
 	now := time.Now()
-	if !inMapPoll && (lastMapPollEndedAt.IsZero() || now.Sub(lastMapPollEndedAt) > 10*time.Second) {
+	if !t.inMapPoll && (t.lastMapPollEndedAt.IsZero() || now.Sub(t.lastMapPollEndedAt) > 10*time.Second) {
 		return errNotInMapPoll
 	}
 	const tooIdle = 2*time.Minute + 5*time.Second
-	if d := now.Sub(lastStreamedMapResponse).Round(time.Second); d > tooIdle {
-		return networkErrorf("no map response in %v", d)
+	if d := now.Sub(t.lastStreamedMapResponse).Round(time.Second); d > tooIdle {
+		return t.networkErrorf("no map response in %v", d)
 	}
-	if !derpHomeless {
-		rid := derpHomeRegion
+	if !t.derpHomeless {
+		rid := t.derpHomeRegion
 		if rid == 0 {
 			return errNoDERPHome
 		}
-		if !derpRegionConnected[rid] {
-			return networkErrorf("not connected to home DERP region %v", rid)
+		if !t.derpRegionConnected[rid] {
+			return t.networkErrorf("not connected to home DERP region %v", rid)
 		}
-		if d := now.Sub(derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
-			return networkErrorf("haven't heard from home DERP region %v in %v", rid, d)
+		if d := now.Sub(t.derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
+			return t.networkErrorf("haven't heard from home DERP region %v in %v", rid, d)
 		}
 	}
-	if udp4Unbound {
+	if t.udp4Unbound {
 		return errNoUDP4Bind
 	}
 
 	// TODO: use
-	_ = inMapPollSince
-	_ = lastMapPollEndedAt
-	_ = lastStreamedMapResponse
-	_ = lastMapRequestHeard
+	_ = t.inMapPollSince
+	_ = t.lastMapPollEndedAt
+	_ = t.lastStreamedMapResponse
+	_ = t.lastMapRequestHeard
 
 	var errs []error
 	for _, recv := range receiveFuncs {
@@ -531,27 +551,27 @@ func overallErrorLocked() error {
 			errs = append(errs, fmt.Errorf("%s is not running", recv.name))
 		}
 	}
-	for sys, err := range sysErr {
+	for sys, err := range t.sysErr {
 		if err == nil || sys == SysOverall {
 			continue
 		}
 		errs = append(errs, fmt.Errorf("%v: %w", sys, err))
 	}
-	for w := range warnables {
+	for w := range t.warnables {
 		if err := w.get(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	for regionID, problem := range derpRegionHealthProblem {
+	for regionID, problem := range t.derpRegionHealthProblem {
 		errs = append(errs, fmt.Errorf("derp%d: %v", regionID, problem))
 	}
-	for _, s := range controlHealth {
+	for _, s := range t.controlHealth {
 		errs = append(errs, errors.New(s))
 	}
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		errs = append(errs, err)
 	}
-	for serverName, err := range tlsConnectionErrors {
+	for serverName, err := range t.tlsConnectionErrors {
 		errs = append(errs, fmt.Errorf("TLS connection error for %q: %w", serverName, err))
 	}
 	if e := fakeErrForTesting(); len(errs) == 0 && e != "" {

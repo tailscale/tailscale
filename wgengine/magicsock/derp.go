@@ -165,7 +165,7 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 	if testenv.InTest() && !checkControlHealthDuringNearestDERPInTests {
 		connectedToControl = true
 	} else {
-		connectedToControl = health.GetInPollNetMap()
+		connectedToControl = health.Global.GetInPollNetMap()
 	}
 	if !connectedToControl {
 		c.mu.Lock()
@@ -201,12 +201,12 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 	defer c.mu.Unlock()
 	if !c.wantDerpLocked() {
 		c.myDerp = 0
-		health.SetMagicSockDERPHome(0, c.homeless)
+		health.Global.SetMagicSockDERPHome(0, c.homeless)
 		return false
 	}
 	if c.homeless {
 		c.myDerp = 0
-		health.SetMagicSockDERPHome(0, c.homeless)
+		health.Global.SetMagicSockDERPHome(0, c.homeless)
 		return false
 	}
 	if derpNum == c.myDerp {
@@ -217,7 +217,7 @@ func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
 		metricDERPHomeChange.Add(1)
 	}
 	c.myDerp = derpNum
-	health.SetMagicSockDERPHome(derpNum, c.homeless)
+	health.Global.SetMagicSockDERPHome(derpNum, c.homeless)
 
 	if c.privateKey.IsZero() {
 		// No private key yet, so DERP connections won't come up anyway.
@@ -525,8 +525,8 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 		return n
 	}
 
-	defer health.SetDERPRegionConnectedState(regionID, false)
-	defer health.SetDERPRegionHealth(regionID, "")
+	defer health.Global.SetDERPRegionConnectedState(regionID, false)
+	defer health.Global.SetDERPRegionHealth(regionID, "")
 
 	// peerPresent is the set of senders we know are present on this
 	// connection, based on messages we've received from the server.
@@ -538,7 +538,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 	for {
 		msg, connGen, err := dc.RecvDetail()
 		if err != nil {
-			health.SetDERPRegionConnectedState(regionID, false)
+			health.Global.SetDERPRegionConnectedState(regionID, false)
 			// Forget that all these peers have routes.
 			for peer := range peerPresent {
 				delete(peerPresent, peer)
@@ -576,14 +576,14 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 
 		now := time.Now()
 		if lastPacketTime.IsZero() || now.Sub(lastPacketTime) > frameReceiveRecordRate {
-			health.NoteDERPRegionReceivedFrame(regionID)
+			health.Global.NoteDERPRegionReceivedFrame(regionID)
 			lastPacketTime = now
 		}
 
 		switch m := msg.(type) {
 		case derp.ServerInfoMessage:
-			health.SetDERPRegionConnectedState(regionID, true)
-			health.SetDERPRegionHealth(regionID, "") // until declared otherwise
+			health.Global.SetDERPRegionConnectedState(regionID, true)
+			health.Global.SetDERPRegionHealth(regionID, "") // until declared otherwise
 			c.logf("magicsock: derp-%d connected; connGen=%v", regionID, connGen)
 			continue
 		case derp.ReceivedPacket:
@@ -623,7 +623,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 			}()
 			continue
 		case derp.HealthMessage:
-			health.SetDERPRegionHealth(regionID, m.Problem)
+			health.Global.SetDERPRegionHealth(regionID, m.Problem)
 			continue
 		case derp.PeerGoneMessage:
 			switch m.Reason {

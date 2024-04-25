@@ -970,7 +970,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.logf("wgengine: Reconfig: configuring router")
 		e.networkLogger.ReconfigRoutes(routerCfg)
 		err := e.router.Set(routerCfg)
-		health.SetRouterHealth(err)
+		health.Global.SetRouterHealth(err)
 		if err != nil {
 			return err
 		}
@@ -979,7 +979,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		// assigned address.
 		e.logf("wgengine: Reconfig: configuring DNS")
 		err = e.dns.Set(*dnsCfg)
-		health.SetDNSHealth(err)
+		health.Global.SetDNSHealth(err)
 		if err != nil {
 			return err
 		}
@@ -1183,7 +1183,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 		e.logf("[v1] LinkChange: minor")
 	}
 
-	health.SetAnyInterfaceUp(up)
+	health.Global.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
 	if !up || changed {
 		if err := e.dns.FlushCaches(); err != nil {

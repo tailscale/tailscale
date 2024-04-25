@@ -8,15 +8,13 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-
-	"tailscale.com/util/set"
 )
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
-	resetWarnables()
+	var tr Tracker
 
 	for i := range 10 {
-		w := NewWarnable(WithMapDebugFlag(fmt.Sprint(i)))
+		w := tr.NewWarnable(WithMapDebugFlag(fmt.Sprint(i)))
 		if i%2 == 0 {
 			w.Set(errors.New("boom"))
 		}
@@ -27,15 +25,9 @@ func TestAppendWarnableDebugFlags(t *testing.T) {
 	var got []string
 	for range 20 {
 		got = append(got[:0], "z", "y")
-		got = AppendWarnableDebugFlags(got)
+		got = tr.AppendWarnableDebugFlags(got)
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("AppendWarnableDebugFlags = %q; want %q", got, want)
 		}
 	}
-}
-
-func resetWarnables() {
-	mu.Lock()
-	defer mu.Unlock()
-	warnables = set.Set[*Warnable]{}
 }
