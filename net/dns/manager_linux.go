@@ -31,6 +31,11 @@ func (kv kv) String() string {
 
 var publishOnce sync.Once
 
+var (
+	globalDnsMode string
+	dnsModeMutex  sync.RWMutex
+)
+
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
 	env := newOSConfigEnv{
 		fs:                directFS{},
@@ -44,6 +49,8 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	if err != nil {
 		return nil, err
 	}
+
+	setGlobalDnsMode(mode)
 	publishOnce.Do(func() {
 		sanitizedMode := strings.ReplaceAll(mode, "-", "_")
 		m := clientmetric.NewGauge(fmt.Sprintf("dns_manager_linux_mode_%s", sanitizedMode))
@@ -424,4 +431,18 @@ func dbusReadString(name, objectPath, iface, member string) (string, error) {
 		return s, nil
 	}
 	return result.String(), nil
+}
+
+// setGlobalDnsMode safely sets the global DNS mode variable
+func setGlobalDnsMode(mode string) {
+	dnsModeMutex.Lock()
+	defer dnsModeMutex.Unlock()
+	globalDnsMode = mode
+}
+
+// GetGlobalDnsMode safely returns the global DNS mode variable
+func GetGlobalDnsMode() string {
+	dnsModeMutex.RLock()
+	defer dnsModeMutex.RUnlock()
+	return globalDnsMode
 }
