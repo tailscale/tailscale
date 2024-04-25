@@ -722,8 +722,8 @@ The response is 2xx on success. The response body is currently an empty JSON obj
 ## Get device posture attributes
 
 The posture attributes API endpoints can be called with OAuth access tokens with
-an `acl` or `devices` [scope][oauth-scopes], or personal access belonging to
-[user roles][user-roles] Owners, Admins, Network Admins, or IT Admins.
+an `acl` or `devices` [scope](https://tailscale.com/kb/1215/oauth-clients#scopes), or personal access belonging to
+[user roles](https://tailscale.com/kb/1138/user-roles) Owners, Admins, Network Admins, or IT Admins.
 
 ```
 GET /api/v2/device/{deviceID}/attributes
