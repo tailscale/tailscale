@@ -2250,6 +2250,9 @@ const (
 
 	// NodeAttrLogExitFlows enables exit node destinations in network flow logs.
 	NodeAttrLogExitFlows NodeCapability = "log-exit-flows"
+
+	// NodeAttrAutoExitNode permits the automatic exit nodes feature.
+	NodeAttrAutoExitNode NodeCapability = "auto-exit-node"
 )
 
 // SetDNSRequest is a request to add a DNS record.
