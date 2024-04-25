@@ -14,9 +14,9 @@ func TestAppendWarnableDebugFlags(t *testing.T) {
 	var tr Tracker
 
 	for i := range 10 {
-		w := tr.NewWarnable(WithMapDebugFlag(fmt.Sprint(i)))
+		w := NewWarnable(WithMapDebugFlag(fmt.Sprint(i)))
 		if i%2 == 0 {
-			w.Set(errors.New("boom"))
+			tr.SetWarnable(w, errors.New("boom"))
 		}
 	}
 
