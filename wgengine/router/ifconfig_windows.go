@@ -235,7 +235,7 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 	return nil, fmt.Errorf("interfaceFromLUID: interface with LUID %v not found", luid)
 }
 
-var networkCategoryWarning = health.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
+var networkCategoryWarning = health.Global.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	var mtu = tstun.DefaultTUNMTU()

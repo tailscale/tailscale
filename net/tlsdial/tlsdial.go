@@ -80,10 +80,10 @@ func Config(host string, base *tls.Config) *tls.Config {
 		// any verification.
 		if certIsSelfSigned(cs.PeerCertificates[0]) {
 			// Self-signed certs are never valid.
-			health.SetTLSConnectionError(cs.ServerName, fmt.Errorf("certificate is self-signed"))
+			health.Global.SetTLSConnectionError(cs.ServerName, fmt.Errorf("certificate is self-signed"))
 		} else {
 			// Ensure we clear any error state for this ServerName.
-			health.SetTLSConnectionError(cs.ServerName, nil)
+			health.Global.SetTLSConnectionError(cs.ServerName, nil)
 		}
 
 		// First try doing x509 verification with the system's

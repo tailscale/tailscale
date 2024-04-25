@@ -358,7 +358,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	}
 	hi, _ := json.Marshal(hostinfo.New())
 	h.logf("user bugreport hostinfo: %s", hi)
-	if err := health.OverallError(); err != nil {
+	if err := health.Global.OverallError(); err != nil {
 		h.logf("user bugreport health: %s", err.Error())
 	} else {
 		h.logf("user bugreport health: ok")

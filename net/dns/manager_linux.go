@@ -271,7 +271,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			return "direct", nil
 		}
 
-		health.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
+		health.Global.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
 		dbg("nm-safe", "no")
 		return "systemd-resolved", nil
 	default:

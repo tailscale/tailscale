@@ -894,10 +894,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
-	if health.RouterHealth() != nil {
+	if health.Global.RouterHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
 	}
-	extraDebugFlags = health.AppendWarnableDebugFlags(extraDebugFlags)
+	extraDebugFlags = health.Global.AppendWarnableDebugFlags(extraDebugFlags)
 	if hostinfo.DisabledEtcAptSource() {
 		extraDebugFlags = append(extraDebugFlags, "warn-etc-apt-source-disabled")
 	}
@@ -970,7 +970,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 	defer res.Body.Close()
 
-	health.NoteMapRequestHeard(request)
+	health.Global.NoteMapRequestHeard(request)
 	watchdogTimer.Reset(watchdogTimeout)
 
 	if nu == nil {
@@ -1041,7 +1041,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		metricMapResponseMessages.Add(1)
 
 		if isStreaming {
-			health.GotStreamedMapResponse()
+			health.Global.GotStreamedMapResponse()
 		}
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {

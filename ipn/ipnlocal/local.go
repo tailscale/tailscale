@@ -426,7 +426,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.linkChange(&netmon.ChangeDelta{New: netMon.InterfaceState()})
 	b.unregisterNetMon = netMon.RegisterChangeCallback(b.linkChange)
 
-	b.unregisterHealthWatch = health.RegisterWatcher(b.onHealthChange)
+	b.unregisterHealthWatch = health.Global.RegisterWatcher(b.onHealthChange)
 
 	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
 		tunWrap.PeerAPIPort = b.GetPeerAPIPort
@@ -761,7 +761,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				}
 			}
 		}
-		if err := health.OverallError(); err != nil {
+		if err := health.Global.OverallError(); err != nil {
 			switch e := err.(type) {
 			case multierr.Error:
 				for _, err := range e.Errors() {
@@ -820,7 +820,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
 		ss.OS = version.OS()
-		ss.Online = health.GetInPollNetMap()
+		ss.Online = health.Global.GetInPollNetMap()
 		if b.netMap != nil {
 			ss.InNetworkMap = true
 			if hi := b.netMap.SelfNode.Hostinfo(); hi.Valid() {
@@ -1221,7 +1221,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if st.NetMap != nil {
 		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
 			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
-			health.SetLocalLogConfigHealth(errors.New(msg))
+			health.Global.SetLocalLogConfigHealth(errors.New(msg))
 			// Connecting to this tailnet without logging is forbidden; boot us outta here.
 			b.mu.Lock()
 			prefs.WantRunning = false
@@ -1818,7 +1818,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
-var warnInvalidUnsignedNodes = health.NewWarnable()
+var warnInvalidUnsignedNodes = health.Global.NewWarnable()
 
 // updateFilterLocked updates the packet filter in wgengine based on the
 // given netMap and user preferences.
@@ -3044,7 +3044,7 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
 }
 
-var warnExitNodeUsage = health.NewWarnable(health.WithConnectivityImpact())
+var warnExitNodeUsage = health.Global.NewWarnable(health.WithConnectivityImpact())
 
 // updateExitNodeUsageWarning updates a warnable meant to notify users of
 // configuration issues that could break exit node usage.
@@ -4254,7 +4254,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 
 	// prefs may change irrespective of state; WantRunning should be explicitly
 	// set before potential early return even if the state is unchanged.
-	health.SetIPNState(newState.String(), prefs.Valid() && prefs.WantRunning())
+	health.Global.SetIPNState(newState.String(), prefs.Valid() && prefs.WantRunning())
 	if oldState == newState {
 		return
 	}
@@ -4692,9 +4692,9 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.pauseOrResumeControlClientLocked()
 
 	if nm != nil {
-		health.SetControlHealth(nm.ControlHealth)
+		health.Global.SetControlHealth(nm.ControlHealth)
 	} else {
-		health.SetControlHealth(nil)
+		health.Global.SetControlHealth(nil)
 	}
 
 	// Determine if file sharing is enabled
@@ -5675,7 +5675,7 @@ func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	return b.sshServer, nil
 }
 
-var warnSSHSELinux = health.NewWarnable()
+var warnSSHSELinux = health.Global.NewWarnable()
 
 func (b *LocalBackend) updateSELinuxHealthWarning() {
 	if hostinfo.IsSELinuxEnforcing() {
@@ -5908,7 +5908,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
-	health.SetLocalLogConfigHealth(nil)
+	health.Global.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
 

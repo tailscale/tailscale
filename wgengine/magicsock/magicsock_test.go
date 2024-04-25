@@ -3120,14 +3120,14 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 
 			report := &netcheck.Report{PreferredDERP: tt.reportDERP}
 
-			oldConnected := health.GetInPollNetMap()
+			oldConnected := health.Global.GetInPollNetMap()
 			if tt.connectedToControl != oldConnected {
 				if tt.connectedToControl {
-					health.GotStreamedMapResponse()
-					t.Cleanup(health.SetOutOfPollNetMap)
+					health.Global.GotStreamedMapResponse()
+					t.Cleanup(health.Global.SetOutOfPollNetMap)
 				} else {
-					health.SetOutOfPollNetMap()
-					t.Cleanup(health.GotStreamedMapResponse)
+					health.Global.SetOutOfPollNetMap()
+					t.Cleanup(health.Global.GotStreamedMapResponse)
 				}
 			}
 
