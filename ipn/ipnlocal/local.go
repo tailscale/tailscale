@@ -1017,6 +1017,8 @@ func (b *LocalBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	return nil
 }
 
+var noLogsNoSupportNotifyOnce sync.Once
+
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st controlclient.Status) {
@@ -1220,20 +1222,11 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	if st.NetMap != nil {
 		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
-			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
+			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from the tailscaled command line."
 			health.SetLocalLogConfigHealth(errors.New(msg))
-			// Connecting to this tailnet without logging is forbidden; boot us outta here.
-			b.mu.Lock()
-			prefs.WantRunning = false
-			p := prefs.View()
-			if err := b.pm.SetPrefs(p, ipn.NetworkProfile{
-				MagicDNSName: st.NetMap.MagicDNSSuffix(),
-				DomainName:   st.NetMap.DomainName(),
-			}); err != nil {
-				b.logf("Failed to save new controlclient state: %v", err)
-			}
-			b.mu.Unlock()
-			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &p})
+			noLogsNoSupportNotifyOnce.Do(func() {
+				b.send(ipn.Notify{ErrMessage: ptr.To(msg)})
+			})
 			return
 		}
 		if netMap != nil {
