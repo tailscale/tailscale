@@ -38,10 +38,12 @@ type Tracker struct {
 	// mu guards everything in this var block.
 	mu sync.Mutex
 
-	sysErr    map[Subsystem]error                   // subsystem => err (or nil for no error)
-	watchers  set.HandleSet[func(Subsystem, error)] // opt func to run if error state changes
-	warnables set.Set[*Warnable]
-	timer     *time.Timer
+	warnables   []*Warnable // keys ever set
+	warnableVal map[*Warnable]error
+
+	sysErr   map[Subsystem]error                   // subsystem => err (or nil for no error)
+	watchers set.HandleSet[func(Subsystem, error)] // opt func to run if error state changes
+	timer    *time.Timer
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -87,19 +89,16 @@ const (
 	SysTKA = Subsystem("tailnet-lock")
 )
 
-// NewWarnable returns a new warnable item that the caller can mark
-// as health or in warning state.
-func (t *Tracker) NewWarnable(opts ...WarnableOpt) *Warnable {
+// NewWarnable returns a new warnable item that the caller can mark as health or
+// in warning state via Tracker.SetWarnable.
+//
+// NewWarnable is generally called in init and stored in a package global. It
+// can be used by multiple Trackers.
+func NewWarnable(opts ...WarnableOpt) *Warnable {
 	w := new(Warnable)
 	for _, o := range opts {
 		o.mod(w)
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.warnables == nil {
-		t.warnables = set.Set[*Warnable]{}
-	}
-	t.warnables.Add(w)
 	return w
 }
 
@@ -132,35 +131,25 @@ type warnOptFunc func(*Warnable)
 func (f warnOptFunc) mod(w *Warnable) { f(w) }
 
 // Warnable is a health check item that may or may not be in a bad warning state.
-// The caller of NewWarnable is responsible for calling Set to update the state.
+// The caller of NewWarnable is responsible for calling Tracker.SetWarnable to update the state.
 type Warnable struct {
 	debugFlag string // optional MapRequest.DebugFlag to send when unhealthy
 
 	// If true, this warning is related to configuration of networking stack
 	// on the machine that impacts connectivity.
 	hasConnectivityImpact bool
-
-	isSet atomic.Bool
-	mu    sync.Mutex
-	err   error
 }
 
 // Set updates the Warnable's state.
 // If non-nil, it's considered unhealthy.
-func (w *Warnable) Set(err error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.err = err
-	w.isSet.Store(err != nil)
-}
-
-func (w *Warnable) get() error {
-	if !w.isSet.Load() {
-		return nil
+func (t *Tracker) SetWarnable(w *Warnable, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	l0 := len(t.warnableVal)
+	mak.Set(&t.warnableVal, w, err)
+	if len(t.warnableVal) != l0 {
+		t.warnables = append(t.warnables, w)
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.err
 }
 
 // AppendWarnableDebugFlags appends to base any health items that are currently in failed
@@ -170,11 +159,11 @@ func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for w := range t.warnables {
+	for w, err := range t.warnableVal {
 		if w.debugFlag == "" {
 			continue
 		}
-		if err := w.get(); err != nil {
+		if err != nil {
 			ret = append(ret, w.debugFlag)
 		}
 	}
@@ -476,18 +465,20 @@ func (t *Tracker) OverallError() error {
 
 var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 
-// networkErrorf creates an error that indicates issues with outgoing network
+// networkErrorfLocked creates an error that indicates issues with outgoing network
 // connectivity. Any active warnings related to network connectivity will
 // automatically be appended to it.
-func (t *Tracker) networkErrorf(format string, a ...any) error {
+//
+// t.mu must be held.
+func (t *Tracker) networkErrorfLocked(format string, a ...any) error {
 	errs := []error{
 		fmt.Errorf(format, a...),
 	}
-	for w := range t.warnables {
+	for _, w := range t.warnables {
 		if !w.hasConnectivityImpact {
 			continue
 		}
-		if err := w.get(); err != nil {
+		if err := t.warnableVal[w]; err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -521,7 +512,7 @@ func (t *Tracker) overallErrorLocked() error {
 	}
 	const tooIdle = 2*time.Minute + 5*time.Second
 	if d := now.Sub(t.lastStreamedMapResponse).Round(time.Second); d > tooIdle {
-		return t.networkErrorf("no map response in %v", d)
+		return t.networkErrorfLocked("no map response in %v", d)
 	}
 	if !t.derpHomeless {
 		rid := t.derpHomeRegion
@@ -529,10 +520,10 @@ func (t *Tracker) overallErrorLocked() error {
 			return errNoDERPHome
 		}
 		if !t.derpRegionConnected[rid] {
-			return t.networkErrorf("not connected to home DERP region %v", rid)
+			return t.networkErrorfLocked("not connected to home DERP region %v", rid)
 		}
 		if d := now.Sub(t.derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
-			return t.networkErrorf("haven't heard from home DERP region %v in %v", rid, d)
+			return t.networkErrorfLocked("haven't heard from home DERP region %v in %v", rid, d)
 		}
 	}
 	if t.udp4Unbound {
@@ -557,8 +548,8 @@ func (t *Tracker) overallErrorLocked() error {
 		}
 		errs = append(errs, fmt.Errorf("%v: %w", sys, err))
 	}
-	for w := range t.warnables {
-		if err := w.get(); err != nil {
+	for _, w := range t.warnables {
+		if err := t.warnableVal[w]; err != nil {
 			errs = append(errs, err)
 		}
 	}

@@ -235,7 +235,7 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 	return nil, fmt.Errorf("interfaceFromLUID: interface with LUID %v not found", luid)
 }
 
-var networkCategoryWarning = health.Global.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
+var networkCategoryWarning = health.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	var mtu = tstun.DefaultTUNMTU()
@@ -268,10 +268,10 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		for i := range tries {
 			found, err := setPrivateNetwork(luid)
 			if err != nil {
-				networkCategoryWarning.Set(fmt.Errorf("set-network-category: %w", err))
+				health.Global.SetWarnable(networkCategoryWarning, fmt.Errorf("set-network-category: %w", err))
 				log.Printf("setPrivateNetwork(try=%d): %v", i, err)
 			} else {
-				networkCategoryWarning.Set(nil)
+				health.Global.SetWarnable(networkCategoryWarning, nil)
 				if found {
 					if i > 0 {
 						log.Printf("setPrivateNetwork(try=%d): success", i)

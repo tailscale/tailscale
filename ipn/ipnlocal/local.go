@@ -1818,7 +1818,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
-var warnInvalidUnsignedNodes = health.Global.NewWarnable()
+var warnInvalidUnsignedNodes = health.NewWarnable()
 
 // updateFilterLocked updates the packet filter in wgengine based on the
 // given netMap and user preferences.
@@ -1851,10 +1851,10 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 
 		if packetFilterPermitsUnlockedNodes(b.peers, packetFilter) {
 			err := errors.New("server sent invalid packet filter permitting traffic to unlocked nodes; rejecting all packets for safety")
-			warnInvalidUnsignedNodes.Set(err)
+			health.Global.SetWarnable(warnInvalidUnsignedNodes, err)
 			packetFilter = nil
 		} else {
-			warnInvalidUnsignedNodes.Set(nil)
+			health.Global.SetWarnable(warnInvalidUnsignedNodes, nil)
 		}
 	}
 	if prefs.Valid() {
@@ -3044,7 +3044,7 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
 }
 
-var warnExitNodeUsage = health.Global.NewWarnable(health.WithConnectivityImpact())
+var warnExitNodeUsage = health.NewWarnable(health.WithConnectivityImpact())
 
 // updateExitNodeUsageWarning updates a warnable meant to notify users of
 // configuration issues that could break exit node usage.
@@ -3057,7 +3057,7 @@ func updateExitNodeUsageWarning(p ipn.PrefsView, state *interfaces.State) {
 			result = fmt.Errorf("%s: %v, %s", healthmsg.WarnExitNodeUsage, warn, comment)
 		}
 	}
-	warnExitNodeUsage.Set(result)
+	health.Global.SetWarnable(warnExitNodeUsage, result)
 }
 
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
@@ -5675,13 +5675,13 @@ func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	return b.sshServer, nil
 }
 
-var warnSSHSELinux = health.Global.NewWarnable()
+var warnSSHSELinux = health.NewWarnable()
 
 func (b *LocalBackend) updateSELinuxHealthWarning() {
 	if hostinfo.IsSELinuxEnforcing() {
-		warnSSHSELinux.Set(errors.New("SELinux is enabled; Tailscale SSH may not work. See https://tailscale.com/s/ssh-selinux"))
+		health.Global.SetWarnable(warnSSHSELinux, errors.New("SELinux is enabled; Tailscale SSH may not work. See https://tailscale.com/s/ssh-selinux"))
 	} else {
-		warnSSHSELinux.Set(nil)
+		health.Global.SetWarnable(warnSSHSELinux, nil)
 	}
 }
 

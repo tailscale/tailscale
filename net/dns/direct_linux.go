@@ -58,7 +58,7 @@ func (m *directManager) runFileWatcher() {
 	}
 }
 
-var warnTrample = health.Global.NewWarnable()
+var warnTrample = health.NewWarnable()
 
 // checkForFileTrample checks whether /etc/resolv.conf has been trampled
 // by another program on the system. (e.g. a DHCP client)
@@ -78,7 +78,7 @@ func (m *directManager) checkForFileTrample() {
 		return
 	}
 	if bytes.Equal(cur, want) {
-		warnTrample.Set(nil)
+		health.Global.SetWarnable(warnTrample, nil)
 		if lastWarn != nil {
 			m.mu.Lock()
 			m.lastWarnContents = nil
@@ -101,7 +101,7 @@ func (m *directManager) checkForFileTrample() {
 		show = show[:1024]
 	}
 	m.logf("trample: resolv.conf changed from what we expected. did some other program interfere? current contents: %q", show)
-	warnTrample.Set(errors.New("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"))
+	health.Global.SetWarnable(warnTrample, errors.New("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"))
 }
 
 func (m *directManager) closeInotifyOnDone(ctx context.Context, in *gonotify.Inotify) {
