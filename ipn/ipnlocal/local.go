@@ -6253,6 +6253,7 @@ func mayDeref[T any](p *T) (v T) {
 }
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
+var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
 
 // SuggestExitNode computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
@@ -6266,6 +6267,9 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	netMap := b.netMap
 	b.mu.Unlock()
+	if lastReport == nil || netMap == nil {
+		return response, ErrCannotSuggestExitNode
+	}
 	seed := time.Now().UnixNano()
 	r := rand.New(rand.NewSource(seed))
 	return suggestExitNode(lastReport, netMap, r)
