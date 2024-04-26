@@ -1,11 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Common code for FreeBSD and Darwin. This might also work on other
+// Common code for FreeBSD. This might also work on other
 // BSD systems (e.g. OpenBSD) but has not been tested.
-// Not used on iOS. See defaultroute_ios.go.
+// Not used on iOS or macOS. See defaultroute_darwin.go.
 
-//go:build !ios && (darwin || freebsd)
+//go:build freebsd
 
 package netmon
 
