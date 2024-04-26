@@ -582,7 +582,7 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	if sts.ProxyClass != "" {
 		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClass)
-		ss = applyProxyClassToStatefulSet(proxyClass, ss)
+		ss = applyProxyClassToStatefulSet(proxyClass, ss, sts, logger)
 	}
 	updateSS := func(s *appsv1.StatefulSet) {
 		s.Spec = ss.Spec
@@ -613,8 +613,28 @@ func mergeStatefulSetLabelsOrAnnots(current, custom map[string]string, managed [
 	return custom
 }
 
-func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) *appsv1.StatefulSet {
-	if pc == nil || ss == nil || pc.Spec.StatefulSet == nil {
+func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, stsCfg *tailscaleSTSConfig, logger *zap.SugaredLogger) *appsv1.StatefulSet {
+	if pc == nil || ss == nil {
+		return ss
+	}
+	if pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
+		if stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "" && !stsCfg.ForwardClusterTrafficViaL7IngressProxy {
+			enableMetrics(ss, pc)
+		} else if stsCfg.ForwardClusterTrafficViaL7IngressProxy {
+			// TODO (irbekrm): fix this
+			// For Ingress proxies that have been configured with
+			// tailscale.com/experimental-forward-cluster-traffic-via-ingress
+			// annotation, all cluster traffic is forwarded to the
+			// Ingress backend(s).
+			logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
+		} else {
+			// TODO (irbekrm): fix this
+			// For egress proxies, currently all cluster traffic is forwarded to the tailnet target.
+			logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
+		}
+	}
+
+	if pc.Spec.StatefulSet == nil {
 		return ss
 	}
 
@@ -679,6 +699,21 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) 
 		}
 	}
 	return ss
+}
+
+func enableMetrics(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass) {
+	for i, c := range ss.Spec.Template.Spec.Containers {
+		if c.Name == "tailscale" {
+			// Serve metrics on on <pod-ip>:9001/debug/metrics. If
+			// we didn't specify Pod IP here, the proxy would, in
+			// some cases, also listen to its Tailscale IP- we don't
+			// want folks to start relying on this side-effect as a
+			// feature.
+			ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env, corev1.EnvVar{Name: "TS_TAILSCALED_EXTRA_ARGS", Value: "--debug=$(POD_IP):9001"})
+			ss.Spec.Template.Spec.Containers[i].Ports = append(ss.Spec.Template.Spec.Containers[i].Ports, corev1.ContainerPort{Name: "metrics", Protocol: "TCP", HostPort: 9001, ContainerPort: 9001})
+			break
+		}
+	}
 }
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if

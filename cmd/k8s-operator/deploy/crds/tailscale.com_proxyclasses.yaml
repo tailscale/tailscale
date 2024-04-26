@@ -37,9 +37,16 @@ spec:
             spec:
               description: Specification of the desired state of the ProxyClass resource. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
-              required:
-                - statefulSet
               properties:
+                metrics:
+                  description: Configuration for proxy metrics. Metrics are currently not supported for egress proxies and for Ingress proxies that have been configured with tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation.
+                  type: object
+                  required:
+                    - enable
+                  properties:
+                    enable:
+                      description: Setting enable to true will make the proxy serve Tailscale metrics at <pod-ip>:9001/debug/metrics. Defaults to false.
+                      type: boolean
                 statefulSet:
                   description: Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).
                   type: object

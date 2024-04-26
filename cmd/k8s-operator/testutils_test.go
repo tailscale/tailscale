@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -54,6 +55,10 @@ type configOpts struct {
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
 	t.Helper()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tsContainer := corev1.Container{
 		Name:  "tailscale",
 		Image: "tailscale/tailscale",
@@ -205,18 +210,23 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		if err := cl.Get(context.Background(), types.NamespacedName{Name: opts.proxyClass}, proxyClass); err != nil {
 			t.Fatalf("error getting ProxyClass: %v", err)
 		}
-		return applyProxyClassToStatefulSet(proxyClass, ss)
+		return applyProxyClassToStatefulSet(proxyClass, ss, new(tailscaleSTSConfig), zl.Sugar())
 	}
 	return ss
 }
 
 func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
 	t.Helper()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tsContainer := corev1.Container{
 		Name:  "tailscale",
 		Image: "tailscale/tailscale",
 		Env: []corev1.EnvVar{
 			{Name: "TS_USERSPACE", Value: "true"},
+			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
 			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
@@ -301,7 +311,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 		if err := cl.Get(context.Background(), types.NamespacedName{Name: opts.proxyClass}, proxyClass); err != nil {
 			t.Fatalf("error getting ProxyClass: %v", err)
 		}
-		return applyProxyClassToStatefulSet(proxyClass, ss)
+		return applyProxyClassToStatefulSet(proxyClass, ss, new(tailscaleSTSConfig), zl.Sugar())
 	}
 	return ss
 }
