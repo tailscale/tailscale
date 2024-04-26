@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -195,7 +194,7 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
 	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
-	c.unregisterHealthWatch = health.Global.RegisterWatcher(direct.ReportHealthChange)
+	c.unregisterHealthWatch = opts.HealthTracker.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
 
 }
@@ -316,7 +315,7 @@ func (c *Auto) authRoutine() {
 		}
 
 		if goal == nil {
-			health.Global.SetAuthRoutineInError(nil)
+			c.direct.health.SetAuthRoutineInError(nil)
 			// Wait for user to Login or Logout.
 			<-ctx.Done()
 			c.logf("[v1] authRoutine: context done.")
@@ -343,7 +342,7 @@ func (c *Auto) authRoutine() {
 			f = "TryLogin"
 		}
 		if err != nil {
-			health.Global.SetAuthRoutineInError(err)
+			c.direct.health.SetAuthRoutineInError(err)
 			report(err, f)
 			bo.BackOff(ctx, err)
 			continue
@@ -373,7 +372,7 @@ func (c *Auto) authRoutine() {
 		}
 
 		// success
-		health.Global.SetAuthRoutineInError(nil)
+		c.direct.health.SetAuthRoutineInError(nil)
 		c.mu.Lock()
 		c.urlToVisit = ""
 		c.loggedIn = true
@@ -503,11 +502,11 @@ func (c *Auto) mapRoutine() {
 			c.logf("[v1] mapRoutine: context done.")
 			continue
 		}
-		health.Global.SetOutOfPollNetMap()
+		c.direct.health.SetOutOfPollNetMap()
 
 		err := c.direct.PollNetMap(ctx, mrs)
 
-		health.Global.SetOutOfPollNetMap()
+		c.direct.health.SetOutOfPollNetMap()
 		c.mu.Lock()
 		c.inMapPoll = false
 		if c.state == StateSynchronized {

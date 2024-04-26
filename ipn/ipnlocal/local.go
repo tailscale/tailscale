@@ -1763,6 +1763,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		DiscoPublicKey:             discoPublic,
 		DebugFlags:                 debugFlags,
 		NetMon:                     b.sys.NetMon.Get(),
+		HealthTracker:              b.health,
 		Pinger:                     b,
 		PopBrowserURL:              b.tellClientToBrowseToURL,
 		OnClientVersion:            b.onClientVersion,

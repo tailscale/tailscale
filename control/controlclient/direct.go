@@ -69,6 +69,7 @@ type Direct struct {
 	clock                      tstime.Clock
 	logf                       logger.Logf
 	netMon                     *netmon.Monitor // or nil
+	health                     *health.Tracker
 	discoPubKey                key.DiscoPublic
 	getMachinePrivKey          func() (key.MachinePrivate, error)
 	debugFlags                 []string
@@ -119,10 +120,11 @@ type Options struct {
 	Hostinfo                   *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey             key.DiscoPublic
 	Logf                       logger.Logf
-	HTTPTestClient             *http.Client                 // optional HTTP client to use (for tests only)
-	NoiseTestClient            *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
-	DebugFlags                 []string                     // debug settings to send to control
-	NetMon                     *netmon.Monitor              // optional network monitor
+	HTTPTestClient             *http.Client    // optional HTTP client to use (for tests only)
+	NoiseTestClient            *http.Client    // optional HTTP client to use for noise RPCs (tests only)
+	DebugFlags                 []string        // debug settings to send to control
+	NetMon                     *netmon.Monitor // optional network monitor
+	HealthTracker              *health.Tracker
 	PopBrowserURL              func(url string)             // optional func to open browser
 	OnClientVersion            func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
 	OnControlTime              func(time.Time)              // optional func to notify callers of new time from control
@@ -248,7 +250,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), health.Global, tr.TLSClientConfig)
+		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
 		tr.DialContext = dnscache.Dialer(opts.Dialer.SystemDial, dnsCache)
 		tr.DialTLSContext = dnscache.TLSDialer(opts.Dialer.SystemDial, dnsCache, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
@@ -271,6 +273,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		discoPubKey:                opts.DiscoPublicKey,
 		debugFlags:                 opts.DebugFlags,
 		netMon:                     opts.NetMon,
+		health:                     opts.HealthTracker,
 		skipIPForwardingCheck:      opts.SkipIPForwardingCheck,
 		pinger:                     opts.Pinger,
 		popBrowser:                 opts.PopBrowserURL,
@@ -894,10 +897,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
-	if health.Global.RouterHealth() != nil {
+	if c.health.RouterHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
 	}
-	extraDebugFlags = health.Global.AppendWarnableDebugFlags(extraDebugFlags)
+	extraDebugFlags = c.health.AppendWarnableDebugFlags(extraDebugFlags)
 	if hostinfo.DisabledEtcAptSource() {
 		extraDebugFlags = append(extraDebugFlags, "warn-etc-apt-source-disabled")
 	}
@@ -970,7 +973,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 	defer res.Body.Close()
 
-	health.Global.NoteMapRequestHeard(request)
+	c.health.NoteMapRequestHeard(request)
 	watchdogTimer.Reset(watchdogTimeout)
 
 	if nu == nil {
@@ -1041,7 +1044,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		metricMapResponseMessages.Add(1)
 
 		if isStreaming {
-			health.Global.GotStreamedMapResponse()
+			c.health.GotStreamedMapResponse()
 		}
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
