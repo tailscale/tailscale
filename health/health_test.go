@@ -31,3 +31,21 @@ func TestAppendWarnableDebugFlags(t *testing.T) {
 		}
 	}
 }
+
+// Test that all exported methods on *Tracker don't panic with a nil receiver.
+func TestNilMethodsDontCrash(t *testing.T) {
+	var nilt *Tracker
+	rv := reflect.ValueOf(nilt)
+	for i := 0; i < rv.NumMethod(); i++ {
+		mt := rv.Type().Method(i)
+		t.Logf("calling Tracker.%s ...", mt.Name)
+		var args []reflect.Value
+		for j := 0; j < mt.Type.NumIn(); j++ {
+			if j == 0 && mt.Type.In(j) == reflect.TypeFor[*Tracker]() {
+				continue
+			}
+			args = append(args, reflect.Zero(mt.Type.In(j)))
+		}
+		rv.Method(i).Call(args)
+	}
+}

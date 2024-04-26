@@ -140,9 +140,27 @@ type Warnable struct {
 	hasConnectivityImpact bool
 }
 
+// nil reports whether t is nil.
+// It exists to accept nil *Tracker receivers on all methods
+// to at least not crash. But because a nil receiver indicates
+// some lost Tracker plumbing, we want to capture stack trace
+// samples when it occurs.
+func (t *Tracker) nil() bool {
+	if t != nil {
+		return false
+	}
+	// TODO(bradfitz): open source our "unexpected" package
+	// and use it here to capture samples of stacks where
+	// t is nil.
+	return true
+}
+
 // Set updates the Warnable's state.
 // If non-nil, it's considered unhealthy.
 func (t *Tracker) SetWarnable(w *Warnable, err error) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	l0 := len(t.warnableVal)
@@ -155,6 +173,10 @@ func (t *Tracker) SetWarnable(w *Warnable, err error) {
 // AppendWarnableDebugFlags appends to base any health items that are currently in failed
 // state and were created with MapDebugFlag.
 func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
+	if t.nil() {
+		return base
+	}
+
 	ret := base
 
 	t.mu.Lock()
@@ -176,6 +198,9 @@ func (t *Tracker) AppendWarnableDebugFlags(base []string) []string {
 // not called on transition from unknown to healthy. It must be non-nil
 // and is run in its own goroutine. The returned func unregisters it.
 func (t *Tracker) RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
+	if t.nil() {
+		return func() {}
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.watchers == nil {
@@ -226,6 +251,9 @@ func (t *Tracker) TKAHealth() error { return t.get(SysTKA) }
 
 // SetLocalLogConfigHealth sets the error state of this client's local log configuration.
 func (t *Tracker) SetLocalLogConfigHealth(err error) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.localLogConfigErr = err
@@ -234,6 +262,9 @@ func (t *Tracker) SetLocalLogConfigHealth(err error) {
 // SetTLSConnectionError sets the error state for connections to a specific
 // host. Setting the error to nil will clear any previously-set error.
 func (t *Tracker) SetTLSConnectionError(host string, err error) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err == nil {
@@ -256,12 +287,18 @@ func DebugHandler(typ string) http.Handler {
 }
 
 func (t *Tracker) get(key Subsystem) error {
+	if t.nil() {
+		return nil
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sysErr[key]
 }
 
 func (t *Tracker) setErr(key Subsystem, err error) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.setLocked(key, err)
@@ -295,6 +332,9 @@ func (t *Tracker) setLocked(key Subsystem, err error) {
 }
 
 func (t *Tracker) SetControlHealth(problems []string) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.controlHealth = problems
@@ -307,6 +347,9 @@ func (t *Tracker) SetControlHealth(problems []string) {
 // This also notes that a map poll is in progress. To unset that, call
 // SetOutOfPollNetMap().
 func (t *Tracker) GotStreamedMapResponse() {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.lastStreamedMapResponse = time.Now()
@@ -320,6 +363,9 @@ func (t *Tracker) GotStreamedMapResponse() {
 // SetOutOfPollNetMap records that the client is no longer in
 // an HTTP map request long poll to the control plane.
 func (t *Tracker) SetOutOfPollNetMap() {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.inMapPoll {
@@ -333,6 +379,9 @@ func (t *Tracker) SetOutOfPollNetMap() {
 // GetInPollNetMap reports whether the client has an open
 // HTTP long poll open to the control plane.
 func (t *Tracker) GetInPollNetMap() bool {
+	if t.nil() {
+		return false
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.inMapPoll
@@ -343,6 +392,9 @@ func (t *Tracker) GetInPollNetMap() bool {
 // The homeless parameter is whether magicsock is running in DERP-disconnected
 // mode, without discovering and maintaining a connection to its home DERP.
 func (t *Tracker) SetMagicSockDERPHome(region int, homeless bool) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.derpHomeRegion = region
@@ -353,6 +405,9 @@ func (t *Tracker) SetMagicSockDERPHome(region int, homeless bool) {
 // NoteMapRequestHeard notes whenever we successfully sent a map request
 // to control for which we received a 200 response.
 func (t *Tracker) NoteMapRequestHeard(mr *tailcfg.MapRequest) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// TODO: extract mr.HostInfo.NetInfo.PreferredDERP, compare
@@ -364,6 +419,9 @@ func (t *Tracker) NoteMapRequestHeard(mr *tailcfg.MapRequest) {
 }
 
 func (t *Tracker) SetDERPRegionConnectedState(region int, connected bool) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	mak.Set(&t.derpRegionConnected, region, connected)
@@ -373,6 +431,9 @@ func (t *Tracker) SetDERPRegionConnectedState(region int, connected bool) {
 // SetDERPRegionHealth sets or clears any problem associated with the
 // provided DERP region.
 func (t *Tracker) SetDERPRegionHealth(region int, problem string) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if problem == "" {
@@ -386,6 +447,9 @@ func (t *Tracker) SetDERPRegionHealth(region int, problem string) {
 // NoteDERPRegionReceivedFrame is called to note that a frame was received from
 // the given DERP region at the current time.
 func (t *Tracker) NoteDERPRegionReceivedFrame(region int) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	mak.Set(&t.derpRegionLastFrame, region, time.Now())
@@ -396,6 +460,9 @@ func (t *Tracker) NoteDERPRegionReceivedFrame(region int) {
 // from the given DERP region, or the zero time if no communication with that
 // region has occurred.
 func (t *Tracker) GetDERPRegionReceivedTime(region int) time.Time {
+	if t.nil() {
+		return time.Time{}
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.derpRegionLastFrame[region]
@@ -403,6 +470,9 @@ func (t *Tracker) GetDERPRegionReceivedTime(region int) time.Time {
 
 // state is an ipn.State.String() value: "Running", "Stopped", "NeedsLogin", etc.
 func (t *Tracker) SetIPNState(state string, wantRunning bool) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.ipnState = state
@@ -412,6 +482,9 @@ func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 
 // SetAnyInterfaceUp sets whether any network interface is up.
 func (t *Tracker) SetAnyInterfaceUp(up bool) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.anyInterfaceUp.Set(up)
@@ -420,6 +493,9 @@ func (t *Tracker) SetAnyInterfaceUp(up bool) {
 
 // SetUDP4Unbound sets whether the udp4 bind failed completely.
 func (t *Tracker) SetUDP4Unbound(unbound bool) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.udp4Unbound = unbound
@@ -430,12 +506,18 @@ func (t *Tracker) SetUDP4Unbound(unbound bool) {
 // login attempt. Providing a nil error indicates successful login, or that
 // being logged in w/coordination is not currently desired.
 func (t *Tracker) SetAuthRoutineInError(err error) {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.lastLoginErr = err
 }
 
 func (t *Tracker) timerSelfCheck() {
+	if t.nil() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	checkReceiveFuncs()
@@ -458,6 +540,9 @@ func (t *Tracker) selfCheckLocked() {
 // If there are multiple problems, the error will be of type
 // multierr.Error.
 func (t *Tracker) OverallError() error {
+	if t.nil() {
+		return nil
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.overallErrorLocked()
