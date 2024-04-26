@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
@@ -157,6 +158,7 @@ func getURL(ctx context.Context, urlStr string) error {
 }
 
 func checkDerp(ctx context.Context, derpRegion string) (err error) {
+	ht := new(health.Tracker)
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return fmt.Errorf("create derp map request: %w", err)
@@ -195,6 +197,8 @@ func checkDerp(ctx context.Context, derpRegion string) (err error) {
 
 	c1 := derphttp.NewRegionClient(priv1, log.Printf, nil, getRegion)
 	c2 := derphttp.NewRegionClient(priv2, log.Printf, nil, getRegion)
+	c1.HealthTracker = ht
+	c2.HealthTracker = ht
 	defer func() {
 		if err != nil {
 			c1.Close()

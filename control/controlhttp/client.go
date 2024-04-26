@@ -38,6 +38,7 @@ import (
 
 	"tailscale.com/control/controlbase"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netutil"
@@ -433,7 +434,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr,
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	tr.TLSClientConfig = tlsdial.Config(a.Hostname, tr.TLSClientConfig)
+	tr.TLSClientConfig = tlsdial.Config(a.Hostname, health.Global, tr.TLSClientConfig)
 	if !tr.TLSClientConfig.InsecureSkipVerify {
 		panic("unexpected") // should be set by tlsdial.Config
 	}

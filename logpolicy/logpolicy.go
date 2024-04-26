@@ -30,6 +30,7 @@ import (
 	"golang.org/x/term"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -782,7 +783,7 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) 
 		tr.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}
 	}
 
-	tr.TLSClientConfig = tlsdial.Config(host, tr.TLSClientConfig)
+	tr.TLSClientConfig = tlsdial.Config(host, health.Global, tr.TLSClientConfig)
 
 	return tr
 }

@@ -24,6 +24,7 @@ import (
 	_ "tailscale.com/derp/derphttp"
 	_ "tailscale.com/drive/driveimpl"
 	_ "tailscale.com/envknob"
+	_ "tailscale.com/health"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/conffile"
 	_ "tailscale.com/ipn/ipnlocal"

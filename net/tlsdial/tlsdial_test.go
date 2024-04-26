@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"sync/atomic"
 	"testing"
+
+	"tailscale.com/health"
 )
 
 func resetOnce() {
@@ -105,7 +107,8 @@ func TestFallbackRootWorks(t *testing.T) {
 		},
 		DisableKeepAlives: true, // for test cleanup ease
 	}
-	tr.TLSClientConfig = Config("tlsdial.test", tr.TLSClientConfig)
+	ht := new(health.Tracker)
+	tr.TLSClientConfig = Config("tlsdial.test", ht, tr.TLSClientConfig)
 	c := &http.Client{Transport: tr}
 
 	ctr0 := atomic.LoadInt32(&counterFallbackOK)

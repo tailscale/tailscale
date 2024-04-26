@@ -400,6 +400,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 		}
 		return derpMap.Regions[regionID]
 	})
+	dc.HealthTracker = health.Global
 
 	dc.SetCanAckPings(true)
 	dc.NotePreferred(c.myDerp == regionID)

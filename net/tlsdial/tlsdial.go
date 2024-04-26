@@ -46,7 +46,8 @@ var tlsdialWarningPrinted sync.Map // map[string]bool
 // Config returns a tls.Config for connecting to a server.
 // If base is non-nil, it's cloned as the base config before
 // being configured and returned.
-func Config(host string, base *tls.Config) *tls.Config {
+// If ht is non-nil, it's used to report health errors.
+func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 	var conf *tls.Config
 	if base == nil {
 		conf = new(tls.Config)
@@ -78,12 +79,14 @@ func Config(host string, base *tls.Config) *tls.Config {
 	conf.VerifyConnection = func(cs tls.ConnectionState) error {
 		// Perform some health checks on this certificate before we do
 		// any verification.
-		if certIsSelfSigned(cs.PeerCertificates[0]) {
-			// Self-signed certs are never valid.
-			health.Global.SetTLSConnectionError(cs.ServerName, fmt.Errorf("certificate is self-signed"))
-		} else {
-			// Ensure we clear any error state for this ServerName.
-			health.Global.SetTLSConnectionError(cs.ServerName, nil)
+		if ht != nil {
+			if certIsSelfSigned(cs.PeerCertificates[0]) {
+				// Self-signed certs are never valid.
+				ht.SetTLSConnectionError(cs.ServerName, fmt.Errorf("certificate is self-signed"))
+			} else {
+				// Ensure we clear any error state for this ServerName.
+				ht.SetTLSConnectionError(cs.ServerName, nil)
+			}
 		}
 
 		// First try doing x509 verification with the system's
@@ -204,7 +207,7 @@ func NewTransport() *http.Transport {
 				return nil, err
 			}
 			var d tls.Dialer
-			d.Config = Config(host, nil)
+			d.Config = Config(host, nil, nil)
 			return d.DialContext(ctx, network, addr)
 		},
 	}
