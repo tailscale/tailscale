@@ -358,7 +358,7 @@ func run() (err error) {
 		sys.Set(netMon)
 	}
 
-	pol := logpolicy.New(logtail.CollectionNode, netMon, nil /* use log.Printf */)
+	pol := logpolicy.New(logtail.CollectionNode, netMon, sys.HealthTracker(), nil /* use log.Printf */)
 	pol.SetVerbosityLevel(args.verbose)
 	logPol = pol
 	defer func() {
@@ -677,7 +677,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			// configuration being unavailable (from the noop
 			// manager). More in Issue 4017.
 			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, "") // empty interface name
+			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), "") // empty interface name
 			if err != nil {
 				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 			}
@@ -699,13 +699,13 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, err
 		}
 
-		r, err := router.New(logf, dev, sys.NetMon.Get())
+		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker())
 		if err != nil {
 			dev.Close()
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, devName)
+		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), devName)
 		if err != nil {
 			dev.Close()
 			r.Close()

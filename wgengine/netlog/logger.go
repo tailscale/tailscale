@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/connstats"
@@ -92,7 +93,7 @@ var testClient *http.Client
 // The IP protocol and source port are always zero.
 // The sock is used to populated the PhysicalTraffic field in Message.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor) error {
+func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logid.PrivateID, tun, sock Device, netMon *netmon.Monitor, health *health.Tracker) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 	if nl.logger != nil {
@@ -101,7 +102,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 
 	// Startup a log stream to Tailscale's logging service.
 	logf := log.Printf
-	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, logf)}
+	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, health, logf)}
 	if testClient != nil {
 		httpc = testClient
 	}

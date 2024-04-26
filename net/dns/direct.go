@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
@@ -116,8 +117,9 @@ func restartResolved() error {
 // The caller must call Down before program shutdown
 // or as cleanup if the program terminates unexpectedly.
 type directManager struct {
-	logf logger.Logf
-	fs   wholeFileFS
+	logf   logger.Logf
+	health *health.Tracker
+	fs     wholeFileFS
 	// renameBroken is set if fs.Rename to or from /etc/resolv.conf
 	// fails. This can happen in some container runtimes, where
 	// /etc/resolv.conf is bind-mounted from outside the container,
@@ -140,14 +142,15 @@ type directManager struct {
 }
 
 //lint:ignore U1000 used in manager_{freebsd,openbsd}.go
-func newDirectManager(logf logger.Logf) *directManager {
-	return newDirectManagerOnFS(logf, directFS{})
+func newDirectManager(logf logger.Logf, health *health.Tracker) *directManager {
+	return newDirectManagerOnFS(logf, health, directFS{})
 }
 
-func newDirectManagerOnFS(logf logger.Logf, fs wholeFileFS) *directManager {
+func newDirectManagerOnFS(logf logger.Logf, health *health.Tracker, fs wholeFileFS) *directManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &directManager{
 		logf:     logf,
+		health:   health,
 		fs:       fs,
 		ctx:      ctx,
 		ctxClose: cancel,

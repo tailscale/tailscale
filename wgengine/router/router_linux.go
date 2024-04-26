@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
@@ -69,7 +70,7 @@ type linuxRouter struct {
 	magicsockPortV6 uint16
 }
 
-func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
 		return nil, err

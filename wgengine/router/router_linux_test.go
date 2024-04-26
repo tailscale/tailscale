@@ -886,7 +886,7 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 	mon.Start()
 	lt.mon = mon
 
-	r, err := newUserspaceRouter(logf, lt.tun, mon)
+	r, err := newUserspaceRouter(logf, lt.tun, mon, nil)
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)

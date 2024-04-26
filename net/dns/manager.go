@@ -42,7 +42,8 @@ const maxActiveQueries = 256
 
 // Manager manages system DNS settings.
 type Manager struct {
-	logf logger.Logf
+	logf   logger.Logf
+	health *health.Tracker
 
 	activeQueriesAtomic int32
 
@@ -55,7 +56,7 @@ type Manager struct {
 
 // NewManagers created a new manager from the given config.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")
 	}
@@ -64,6 +65,7 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, 
 		logf:     logf,
 		resolver: resolver.New(logf, netMon, linkSel, dialer, knobs),
 		os:       oscfg,
+		health:   health,
 	}
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
@@ -94,10 +96,10 @@ func (m *Manager) Set(cfg Config) error {
 		return err
 	}
 	if err := m.os.SetDNS(ocfg); err != nil {
-		health.Global.SetDNSOSHealth(err)
+		m.health.SetDNSOSHealth(err)
 		return err
 	}
-	health.Global.SetDNSOSHealth(nil)
+	m.health.SetDNSOSHealth(nil)
 
 	return nil
 }
@@ -248,7 +250,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// This is currently (2022-10-13) expected on certain iOS and macOS
 			// builds.
 		} else {
-			health.Global.SetDNSOSHealth(err)
+			m.health.SetDNSOSHealth(err)
 			return resolver.Config{}, OSConfig{}, err
 		}
 	}
@@ -453,12 +455,12 @@ func (m *Manager) FlushCaches() error {
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func CleanUp(logf logger.Logf, interfaceName string) {
-	oscfg, err := NewOSConfigurator(logf, interfaceName)
+	oscfg, err := NewOSConfigurator(logf, nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil, &tsdial.Dialer{Logf: logf}, nil, nil)
+	dns := NewManager(logf, oscfg, nil, nil, &tsdial.Dialer{Logf: logf}, nil, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

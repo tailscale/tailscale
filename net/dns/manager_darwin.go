@@ -8,11 +8,12 @@ import (
 	"os"
 
 	"go4.org/mem"
+	"tailscale.com/health"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
 
-func NewOSConfigurator(logf logger.Logf, ifName string) (OSConfigurator, error) {
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, ifName string) (OSConfigurator, error) {
 	return &darwinConfigurator{logf: logf, ifName: ifName}, nil
 }
 

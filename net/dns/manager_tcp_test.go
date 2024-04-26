@@ -87,7 +87,7 @@ func TestDNSOverTCP(t *testing.T) {
 			SearchDomains: fqdns("coffee.shop"),
 		},
 	}
-	m := NewManager(t.Logf, &f, nil, new(tsdial.Dialer), nil, nil)
+	m := NewManager(t.Logf, &f, nil, nil, new(tsdial.Dialer), nil, nil)
 	m.resolver.TestOnlySetHook(f.SetResolver)
 	m.Set(Config{
 		Hosts: hosts(
@@ -172,7 +172,7 @@ func TestDNSOverTCP_TooLarge(t *testing.T) {
 			SearchDomains: fqdns("coffee.shop"),
 		},
 	}
-	m := NewManager(log, &f, nil, new(tsdial.Dialer), nil, nil)
+	m := NewManager(log, &f, nil, nil, new(tsdial.Dialer), nil, nil)
 	m.resolver.TestOnlySetHook(f.SetResolver)
 	m.Set(Config{
 		Hosts:         hosts("andrew.ts.com.", "1.2.3.4"),

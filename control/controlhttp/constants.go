@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
@@ -78,6 +79,9 @@ type Dialer struct {
 	Logf logger.Logf
 
 	NetMon *netmon.Monitor
+
+	// HealthTracker, if non-nil, is the health tracker to use.
+	HealthTracker *health.Tracker
 
 	// DialPlan, if set, contains instructions from the control server on
 	// how to connect to it. If present, we will try the methods in this

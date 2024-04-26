@@ -286,7 +286,7 @@ func TestLinuxDNSMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var logBuf tstest.MemLogger
-			got, err := dnsMode(logBuf.Logf, tt.env)
+			got, err := dnsMode(logBuf.Logf, nil, tt.env)
 			if err != nil {
 				t.Fatal(err)
 			}

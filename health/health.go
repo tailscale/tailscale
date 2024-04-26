@@ -30,15 +30,9 @@ var (
 	debugHandler map[string]http.Handler
 )
 
-// Global is a global health tracker for the process.
-//
-// TODO(bradfitz): finish moving all reference to this plumb it (ultimately out
-// from tsd.System) so a process can have multiple tsnet/etc instances with
-// their own health trackers. But for now (2024-04-25), the tsd.System value
-// given out is just this one, until that's the only remaining Global reference
-// remaining.
-var Global = new(Tracker)
-
+// Tracker tracks the health of various Tailscale subsystems,
+// comparing each subsystems' state with each other to make sure
+// they're consistent based on the user's intended state.
 type Tracker struct {
 	// mu guards everything in this var block.
 	mu sync.Mutex
