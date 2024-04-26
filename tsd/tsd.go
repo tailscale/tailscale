@@ -23,6 +23,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/net/dns"
@@ -63,6 +64,8 @@ type System struct {
 
 	controlKnobs controlknobs.Knobs
 	proxyMap     proxymap.Mapper
+
+	healthTracker health.Tracker
 }
 
 // NetstackImpl is the interface that *netstack.Impl implements.
@@ -132,6 +135,19 @@ func (s *System) ControlKnobs() *controlknobs.Knobs {
 // ProxyMapper returns the ephemeral ip:port mapper.
 func (s *System) ProxyMapper() *proxymap.Mapper {
 	return &s.proxyMap
+}
+
+// HealthTracker returns the system health tracker.
+func (s *System) HealthTracker() *health.Tracker {
+	// TODO(bradfitz): plumb the tsd.System.HealthTracker() value
+	// everywhere and then then remove this use of the global
+	// and remove health.Global entirely. But for now we keep
+	// the two in sync during plumbing.
+	const stillPlumbing = true
+	if stillPlumbing {
+		return health.Global
+	}
+	return &s.healthTracker
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

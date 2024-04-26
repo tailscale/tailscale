@@ -31,6 +31,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -51,10 +52,11 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
-	TLSConfig *tls.Config        // optional; nil means default
-	DNSCache  *dnscache.Resolver // optional; nil means no caching
-	MeshKey   string             // optional; for trusted clients
-	IsProber  bool               // optional; for probers to optional declare themselves as such
+	TLSConfig     *tls.Config        // optional; nil means default
+	HealthTracker *health.Tracker    // optional; used if non-nil only
+	DNSCache      *dnscache.Resolver // optional; nil means no caching
+	MeshKey       string             // optional; for trusted clients
+	IsProber      bool               // optional; for probers to optional declare themselves as such
 
 	// WatchConnectionChanges is whether the client wishes to subscribe to
 	// notifications about clients connecting & disconnecting.
@@ -115,6 +117,7 @@ func (c *Client) String() string {
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+// The healthTracker parameter is also optional.
 func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, netMon *netmon.Monitor, getRegion func() *tailcfg.DERPRegion) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
@@ -612,7 +615,7 @@ func (c *Client) dialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 }
 
 func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
-	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
+	tlsConf := tlsdial.Config(c.tlsServerName(node), c.HealthTracker, c.TLSConfig)
 	if node != nil {
 		if node.InsecureForTests {
 			tlsConf.InsecureSkipVerify = true
