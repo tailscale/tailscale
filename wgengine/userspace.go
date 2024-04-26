@@ -98,6 +98,7 @@ type userspaceEngine struct {
 	dns              *dns.Manager
 	magicConn        *magicsock.Conn
 	netMon           *netmon.Monitor
+	health           *health.Tracker
 	netMonOwned      bool                // whether we created netMon (and thus need to close it)
 	netMonUnregister func()              // unsubscribes from changes; used regardless of netMonOwned
 	birdClient       BIRDClient          // or nil
@@ -187,6 +188,9 @@ type Config struct {
 	// NetMon optionally provides an existing network monitor to re-use.
 	// If nil, a new network monitor is created.
 	NetMon *netmon.Monitor
+
+	// HealthTracker, if non-nil, is the health tracker to use.
+	HealthTracker *health.Tracker
 
 	// Dialer is the dialer to use for outbound connections.
 	// If nil, a new Dialer is created
@@ -310,6 +314,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		birdClient:     conf.BIRDClient,
 		controlKnobs:   conf.ControlKnobs,
 		reconfigureVPN: conf.ReconfigureVPN,
+		health:         conf.HealthTracker,
 	}
 
 	if e.birdClient != nil {
@@ -372,6 +377,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		IdleFunc:         e.tundev.IdleDuration,
 		NoteRecvActivity: e.noteRecvActivity,
 		NetMon:           e.netMon,
+		HealthTracker:    e.health,
 		ControlKnobs:     conf.ControlKnobs,
 		OnPortUpdate:     onPortUpdate,
 		PeerByKeyFunc:    e.PeerByKey,
@@ -970,7 +976,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.logf("wgengine: Reconfig: configuring router")
 		e.networkLogger.ReconfigRoutes(routerCfg)
 		err := e.router.Set(routerCfg)
-		health.Global.SetRouterHealth(err)
+		e.health.SetRouterHealth(err)
 		if err != nil {
 			return err
 		}
@@ -979,7 +985,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		// assigned address.
 		e.logf("wgengine: Reconfig: configuring DNS")
 		err = e.dns.Set(*dnsCfg)
-		health.Global.SetDNSHealth(err)
+		e.health.SetDNSHealth(err)
 		if err != nil {
 			return err
 		}
@@ -1183,7 +1189,7 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 		e.logf("[v1] LinkChange: minor")
 	}
 
-	health.Global.SetAnyInterfaceUp(up)
+	e.health.SetAnyInterfaceUp(up)
 	e.magicConn.SetNetworkUp(up)
 	if !up || changed {
 		if err := e.dns.FlushCaches(); err != nil {

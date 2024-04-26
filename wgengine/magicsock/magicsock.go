@@ -91,6 +91,7 @@ type Conn struct {
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
 	netMon                 *netmon.Monitor      // or nil
+	health                 *health.Tracker      // or nil
 	controlKnobs           *controlknobs.Knobs  // or nil
 
 	// ================================================================
@@ -369,8 +370,12 @@ type Options struct {
 	NoteRecvActivity func(key.NodePublic)
 
 	// NetMon is the network monitor to use.
-	// With one, the portmapper won't be used.
+	// If nil, the portmapper won't be used.
 	NetMon *netmon.Monitor
+
+	// HealthTracker optionally specifies the health tracker to
+	// report errors and warnings to.
+	HealthTracker *health.Tracker
 
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
@@ -463,6 +468,7 @@ func NewConn(opts Options) (*Conn, error) {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	}
 	c.netMon = opts.NetMon
+	c.health = opts.HealthTracker
 	c.onPortUpdate = opts.OnPortUpdate
 	c.getPeerByKey = opts.PeerByKeyFunc
 
@@ -666,7 +672,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		// NOTE(andrew-d): I don't love that we're depending on the
 		// health package here, but I'd rather do that and not store
 		// the exact same state in two different places.
-		GetLastDERPActivity: health.Global.GetDERPRegionReceivedTime,
+		GetLastDERPActivity: c.health.GetDERPRegionReceivedTime,
 	})
 	if err != nil {
 		return nil, err
@@ -2471,7 +2477,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		}
 		ruc.setConnLocked(pconn, network, c.bind.BatchSize())
 		if network == "udp4" {
-			health.Global.SetUDP4Unbound(false)
+			c.health.SetUDP4Unbound(false)
 		}
 		return nil
 	}
@@ -2482,7 +2488,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// we get a link change and we can try binding again.
 	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize())
 	if network == "udp4" {
-		health.Global.SetUDP4Unbound(true)
+		c.health.SetUDP4Unbound(true)
 	}
 	return fmt.Errorf("failed to bind any ports (tried %v)", ports)
 }

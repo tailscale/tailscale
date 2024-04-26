@@ -651,6 +651,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	conf := wgengine.Config{
 		ListenPort:    args.port,
 		NetMon:        sys.NetMon.Get(),
+		HealthTracker: sys.HealthTracker(),
 		Dialer:        sys.Dialer.Get(),
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),

@@ -327,6 +327,16 @@ type LocalBackend struct {
 	outgoingFiles map[string]*ipn.OutgoingFile
 }
 
+// HealthTracker returns the health tracker for the backend.
+func (b *LocalBackend) HealthTracker() *health.Tracker {
+	return b.health
+}
+
+// NetMon returns the network monitor for the backend.
+func (b *LocalBackend) NetMon() *netmon.Monitor {
+	return b.sys.NetMon.Get()
+}
+
 type updateStatus struct {
 	started bool
 }

@@ -3113,21 +3113,23 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
+			ht := new(health.Tracker)
 			c := newConn()
 			c.logf = t.Logf
 			c.myDerp = tt.old
 			c.derpMap = derpMap
+			c.health = ht
 
 			report := &netcheck.Report{PreferredDERP: tt.reportDERP}
 
-			oldConnected := health.Global.GetInPollNetMap()
+			oldConnected := ht.GetInPollNetMap()
 			if tt.connectedToControl != oldConnected {
 				if tt.connectedToControl {
-					health.Global.GotStreamedMapResponse()
-					t.Cleanup(health.Global.SetOutOfPollNetMap)
+					ht.GotStreamedMapResponse()
+					t.Cleanup(ht.SetOutOfPollNetMap)
 				} else {
-					health.Global.SetOutOfPollNetMap()
-					t.Cleanup(health.Global.GotStreamedMapResponse)
+					ht.SetOutOfPollNetMap()
+					t.Cleanup(ht.GotStreamedMapResponse)
 				}
 			}
 
