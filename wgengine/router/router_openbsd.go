@@ -12,6 +12,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
+	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
@@ -30,7 +31,7 @@ type openbsdRouter struct {
 	routes  set.Set[netip.Prefix]
 }
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err

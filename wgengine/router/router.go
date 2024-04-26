@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
@@ -44,9 +45,9 @@ type Router interface {
 //
 // If netMon is nil, it's not used. It's currently (2021-07-20) only
 // used on Linux in some situations.
-func New(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor) (Router, error) {
+func New(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
 	logf = logger.WithPrefix(logf, "router: ")
-	return newUserspaceRouter(logf, tundev, netMon)
+	return newUserspaceRouter(logf, tundev, netMon, health)
 }
 
 // CleanUp restores the system network configuration to its original state

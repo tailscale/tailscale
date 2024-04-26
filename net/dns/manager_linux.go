@@ -31,7 +31,7 @@ func (kv kv) String() string {
 
 var publishOnce sync.Once
 
-func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName string) (ret OSConfigurator, err error) {
 	env := newOSConfigEnv{
 		fs:                directFS{},
 		dbusPing:          dbusPing,
@@ -40,7 +40,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		nmVersionBetween:  nmVersionBetween,
 		resolvconfStyle:   resolvconfStyle,
 	}
-	mode, err := dnsMode(logf, env)
+	mode, err := dnsMode(logf, health, env)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +52,9 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	logf("dns: using %q mode", mode)
 	switch mode {
 	case "direct":
-		return newDirectManagerOnFS(logf, env.fs), nil
+		return newDirectManagerOnFS(logf, health, env.fs), nil
 	case "systemd-resolved":
-		return newResolvedManager(logf, interfaceName)
+		return newResolvedManager(logf, health, interfaceName)
 	case "network-manager":
 		return newNMManager(interfaceName)
 	case "debian-resolvconf":
@@ -63,7 +63,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 		return newOpenresolvManager(logf)
 	default:
 		logf("[unexpected] detected unknown DNS mode %q, using direct manager as last resort", mode)
-		return newDirectManagerOnFS(logf, env.fs), nil
+		return newDirectManagerOnFS(logf, health, env.fs), nil
 	}
 }
 
@@ -77,7 +77,7 @@ type newOSConfigEnv struct {
 	resolvconfStyle   func() string
 }
 
-func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
+func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret string, err error) {
 	var debug []kv
 	dbg := func(k, v string) {
 		debug = append(debug, kv{k, v})
@@ -271,7 +271,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			return "direct", nil
 		}
 
-		health.Global.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
+		health.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
 		dbg("nm-safe", "no")
 		return "systemd-resolved", nil
 	default:

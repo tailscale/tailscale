@@ -453,13 +453,13 @@ func tryFixLogStateLocation(dir, cmdname string, logf logger.Logf) {
 // The logf parameter is optional; if non-nil, information logs (e.g. when
 // migrating state) are sent to that logger, and global changes to the log
 // package are avoided. If nil, logs will be printed using log.Printf.
-func New(collection string, netMon *netmon.Monitor, logf logger.Logf) *Policy {
-	return NewWithConfigPath(collection, "", "", netMon, logf)
+func New(collection string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) *Policy {
+	return NewWithConfigPath(collection, "", "", netMon, health, logf)
 }
 
 // NewWithConfigPath is identical to New, but uses the specified directory and
 // command name. If either is empty, it derives them automatically.
-func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, logf logger.Logf) *Policy {
+func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) *Policy {
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -555,7 +555,7 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		PrivateID:    newc.PrivateID,
 		Stderr:       logWriter{console},
 		CompressLogs: true,
-		HTTPC:        &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, netMon, logf)},
+		HTTPC:        &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, netMon, health, logf)},
 	}
 	if collection == logtail.CollectionNode {
 		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
@@ -570,7 +570,7 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		conf.BaseURL = val
 		u, _ := url.Parse(val)
-		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, logf)}
+		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, health, logf)}
 	}
 
 	filchOptions := filch.Options{
@@ -742,7 +742,7 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 //
 // The logf parameter is optional; if non-nil, logs are printed using the
 // provided function; if nil, log.Printf will be used instead.
-func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) http.RoundTripper {
+func NewLogtailTransport(host string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) http.RoundTripper {
 	if testenv.InTest() {
 		return noopPretendSuccessTransport{}
 	}
@@ -783,7 +783,7 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) 
 		tr.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}
 	}
 
-	tr.TLSClientConfig = tlsdial.Config(host, health.Global, tr.TLSClientConfig)
+	tr.TLSClientConfig = tlsdial.Config(host, health, tr.TLSClientConfig)
 
 	return tr
 }

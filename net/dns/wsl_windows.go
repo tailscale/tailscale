@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"tailscale.com/health"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/winutil"
 )
@@ -54,12 +55,14 @@ func wslDistros() ([]string, error) {
 // wslManager is a DNS manager for WSL2 linux distributions.
 // It configures /etc/wsl.conf and /etc/resolv.conf.
 type wslManager struct {
-	logf logger.Logf
+	logf   logger.Logf
+	health *health.Tracker
 }
 
-func newWSLManager(logf logger.Logf) *wslManager {
+func newWSLManager(logf logger.Logf, health *health.Tracker) *wslManager {
 	m := &wslManager{
-		logf: logf,
+		logf:   logf,
+		health: health,
 	}
 	return m
 }
@@ -73,7 +76,7 @@ func (wm *wslManager) SetDNS(cfg OSConfig) error {
 	}
 	managers := make(map[string]*directManager)
 	for _, distro := range distros {
-		managers[distro] = newDirectManagerOnFS(wm.logf, wslFS{
+		managers[distro] = newDirectManagerOnFS(wm.logf, wm.health, wslFS{
 			user:   "root",
 			distro: distro,
 		})

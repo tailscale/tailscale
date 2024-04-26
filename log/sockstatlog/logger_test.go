@@ -23,7 +23,7 @@ func TestResourceCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lg, err := NewLogger(td, logger.Discard, id.Public(), nil)
+	lg, err := NewLogger(td, logger.Discard, id.Public(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/winutil"
@@ -44,11 +45,11 @@ type windowsManager struct {
 	closing bool
 }
 
-func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName string) (OSConfigurator, error) {
 	ret := &windowsManager{
 		logf:       logf,
 		guid:       interfaceName,
-		wslManager: newWSLManager(logf),
+		wslManager: newWSLManager(logf, health),
 	}
 
 	if isWindows10OrBetter() {

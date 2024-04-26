@@ -139,14 +139,6 @@ func (s *System) ProxyMapper() *proxymap.Mapper {
 
 // HealthTracker returns the system health tracker.
 func (s *System) HealthTracker() *health.Tracker {
-	// TODO(bradfitz): plumb the tsd.System.HealthTracker() value
-	// everywhere and then then remove this use of the global
-	// and remove health.Global entirely. But for now we keep
-	// the two in sync during plumbing.
-	const stillPlumbing = true
-	if stillPlumbing {
-		return health.Global
-	}
 	return &s.healthTracker
 }
 

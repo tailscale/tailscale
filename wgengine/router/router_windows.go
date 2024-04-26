@@ -22,6 +22,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
@@ -31,12 +32,13 @@ import (
 type winRouter struct {
 	logf                func(fmt string, args ...any)
 	netMon              *netmon.Monitor // may be nil
+	health              *health.Tracker
 	nativeTun           *tun.NativeTun
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	firewall            *firewallTweaker
 }
 
-func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (Router, error) {
 	nativeTun := tundev.(*tun.NativeTun)
 	luid := winipcfg.LUID(nativeTun.LUID())
 	guid, err := luid.GUID()
@@ -47,6 +49,7 @@ func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Moni
 	return &winRouter{
 		logf:      logf,
 		netMon:    netMon,
+		health:    health,
 		nativeTun: nativeTun,
 		firewall: &firewallTweaker{
 			logf:    logger.WithPrefix(logf, "firewall: "),
@@ -80,7 +83,7 @@ func (r *winRouter) Set(cfg *Config) error {
 	}
 	r.firewall.set(localAddrs, cfg.Routes, cfg.LocalRoutes)
 
-	err := configureInterface(cfg, r.nativeTun)
+	err := configureInterface(cfg, r.nativeTun, r.health)
 	if err != nil {
 		r.logf("ConfigureInterface: %v", err)
 		return err

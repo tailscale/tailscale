@@ -31,6 +31,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
@@ -504,7 +505,8 @@ func (s *Server) start() (reterr error) {
 		return fmt.Errorf("%v is not a directory", s.rootPath)
 	}
 
-	if err := s.startLogger(&closePool); err != nil {
+	sys := new(tsd.System)
+	if err := s.startLogger(&closePool, sys.HealthTracker()); err != nil {
 		return err
 	}
 
@@ -514,7 +516,6 @@ func (s *Server) start() (reterr error) {
 	}
 	closePool.add(s.netMon)
 
-	sys := new(tsd.System)
 	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		ListenPort:    s.Port,
@@ -627,7 +628,7 @@ func (s *Server) start() (reterr error) {
 	return nil
 }
 
-func (s *Server) startLogger(closePool *closeOnErrorPool) error {
+func (s *Server) startLogger(closePool *closeOnErrorPool, health *health.Tracker) error {
 	if testenv.InTest() {
 		return nil
 	}
@@ -658,7 +659,7 @@ func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 		Stderr:       io.Discard, // log everything to Buffer
 		Buffer:       s.logbuffer,
 		CompressLogs: true,
-		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
+		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, health, s.logf)},
 		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
 	s.logtail = logtail.NewLogger(c, s.logf)
