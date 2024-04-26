@@ -22,6 +22,7 @@ func NewRouteInfo() *RouteInfo {
 	return &RouteInfo{
 		Control:    []netip.Prefix{},
 		Discovered: discovered,
+		Wildcards:  []string{},
 	}
 }
 

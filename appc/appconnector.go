@@ -98,6 +98,8 @@ func (e *AppConnector) UpdateDomainsAndRoutes(domains []string, routes []netip.P
 }
 
 func (e *AppConnector) RouteInfo() *routeinfo.RouteInfo {
+	// e.mu.Lock()
+	// defer e.mu.Unlock()
 	if e.routeInfo == nil {
 		ret, err := e.routeAdvertiser.ReadRouteInfo()
 		if err != nil {
@@ -113,7 +115,7 @@ func (e *AppConnector) RouteInfo() *routeinfo.RouteInfo {
 
 // RecreateRouteInfoFromStore searches from presist store for existing routeInfo for current profile,
 // then update local routes of routeInfo in store as the current advertised routes.
-func (e *AppConnector) RecreateRouteInfoFromStore(localRoutes []netip.Prefix) {
+func (e *AppConnector) RecreateRouteInfoFromStore() {
 	e.queue.Add(func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()

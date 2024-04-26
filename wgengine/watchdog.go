@@ -39,7 +39,7 @@ func NewWatchdog(e Engine) Engine {
 		wrap:     e,
 		logf:     log.Printf,
 		fatalf:   log.Fatalf,
-		maxWait:  45 * time.Second,
+		maxWait:  45 * time.Minute,
 		inFlight: make(map[inFlightKey]time.Time),
 	}
 }

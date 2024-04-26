@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/appc/routeinfo"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -716,6 +717,18 @@ func (lc *LocalClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 		return nil, err
 	}
 	var p ipn.Prefs
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, fmt.Errorf("invalid prefs JSON: %w", err)
+	}
+	return &p, nil
+}
+
+func (lc *LocalClient) GetRouteInfo(ctx context.Context) (*routeinfo.RouteInfo, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/routeInfo")
+	if err != nil {
+		return nil, err
+	}
+	var p routeinfo.RouteInfo
 	if err := json.Unmarshal(body, &p); err != nil {
 		return nil, fmt.Errorf("invalid prefs JSON: %w", err)
 	}

@@ -316,6 +316,12 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:       "appc-routes",
+			ShortUsage: "tailscale debug appc-routes",
+			Exec:       runDebugAppc,
+			ShortHelp:  "Prints the routes the node is advertising if it is running as an appConnector. ",
+		},
 	},
 }
 
@@ -1113,5 +1119,16 @@ func runDebugDialTypes(ctx context.Context, args []string) error {
 	}
 
 	fmt.Printf("%s", body)
+	return nil
+}
+
+func runDebugAppc(ctx context.Context, args []string) error {
+	prefs, err := localClient.GetRouteInfo(ctx)
+	if err != nil {
+		return err
+	}
+	j, _ := json.MarshalIndent(prefs, "", "\t")
+	outln(string(j))
+
 	return nil
 }

@@ -3573,7 +3573,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 	if b.appConnector == nil || shouldAppCStoreRoutesHasChanged {
 		b.appConnector = appc.NewAppConnector(b.logf, b, shouldAppCStoreRoutes)
 		if shouldAppCStoreRoutes {
-			b.appConnector.RecreateRouteInfoFromStore(prefs.AsStruct().AdvertiseRoutes)
+			b.appConnector.RecreateRouteInfoFromStore()
 		} else if shouldAppCStoreRoutesHasChanged && !shouldAppCStoreRoutes {
 			b.appConnector.UpdateRouteInfo(nil)
 		}
@@ -4179,7 +4179,9 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		netfilterKind = prefs.NetfilterKind()
 	}
 
+	b.mu.Lock()
 	toAdvertise := b.appConnector.RouteInfo().Routes(true, true)
+	b.mu.Unlock()
 	toAdvertise = append(toAdvertise, prefs.AdvertiseRoutes().AsSlice()...)
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
@@ -4270,7 +4272,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 
 	var routableIPs []netip.Prefix
 	if b.appConnector != nil {
-		routableIPs = append(routableIPs, b.appConnector.RouteInfo().Routes(true, true)...)
+		routableIPs = b.appConnector.RouteInfo().Routes(true, true)
 	}
 	routableIPs = append(routableIPs, prefs.AdvertiseRoutes().AsSlice()...)
 	hi.RoutableIPs = routableIPs
@@ -6094,6 +6096,16 @@ func (b *LocalBackend) StreamDebugCapture(ctx context.Context, w io.Writer) erro
 		return s.Close()
 	}
 	return nil
+}
+
+func (b *LocalBackend) AppcRouteInfo() *routeinfo.RouteInfo {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.appConnector == nil {
+		return nil
+	}
+	ri := b.appConnector.RouteInfo()
+	return ri
 }
 
 func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {

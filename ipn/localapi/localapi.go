@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"tailscale.com/appc/routeinfo"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/drive"
@@ -114,6 +115,7 @@ var handler = map[string]localAPIHandler{
 	"query-feature":               (*Handler).serveQueryFeature,
 	"reload-config":               (*Handler).reloadConfig,
 	"reset-auth":                  (*Handler).serveResetAuth,
+	"routeInfo":                   (*Handler).serveRouteInfo,
 	"serve-config":                (*Handler).serveServeConfig,
 	"set-dns":                     (*Handler).serveSetDNS,
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
@@ -1385,6 +1387,26 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
+}
+
+func (h *Handler) serveRouteInfo(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "routeInfo access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var ri *routeinfo.RouteInfo
+
+	ri = h.b.AppcRouteInfo()
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(ri)
+
 }
 
 type resJSON struct {
