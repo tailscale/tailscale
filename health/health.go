@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/cibuild"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
@@ -151,6 +153,11 @@ type Warnable struct {
 func (t *Tracker) nil() bool {
 	if t != nil {
 		return false
+	}
+	if cibuild.On() {
+		stack := make([]byte, 1<<10)
+		stack = stack[:runtime.Stack(stack, false)]
+		fmt.Fprintf(os.Stderr, "## WARNING: (non-fatal) nil health.Tracker (being strict in CI):\n%s\n", stack)
 	}
 	// TODO(bradfitz): open source our "unexpected" package
 	// and use it here to capture samples of stacks where

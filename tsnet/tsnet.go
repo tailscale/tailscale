@@ -233,7 +233,7 @@ func (s *Server) Loopback() (addr string, proxyCred, localAPICred string, err er
 		// out the CONNECT code from tailscaled/proxy.go that uses
 		// httputil.ReverseProxy and adding auth support.
 		go func() {
-			lah := localapi.NewHandler(s.lb, s.logf, s.netMon, s.logid)
+			lah := localapi.NewHandler(s.lb, s.logf, s.logid)
 			lah.PermitWrite = true
 			lah.PermitRead = true
 			lah.RequiredPassword = s.localAPICred
@@ -517,11 +517,12 @@ func (s *Server) start() (reterr error) {
 	sys := new(tsd.System)
 	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		ListenPort:   s.Port,
-		NetMon:       s.netMon,
-		Dialer:       s.dialer,
-		SetSubsystem: sys.Set,
-		ControlKnobs: sys.ControlKnobs(),
+		ListenPort:    s.Port,
+		NetMon:        s.netMon,
+		Dialer:        s.dialer,
+		SetSubsystem:  sys.Set,
+		ControlKnobs:  sys.ControlKnobs(),
+		HealthTracker: sys.HealthTracker(),
 	})
 	if err != nil {
 		return err
@@ -606,7 +607,7 @@ func (s *Server) start() (reterr error) {
 	go s.printAuthURLLoop()
 
 	// Run the localapi handler, to allow fetching LetsEncrypt certs.
-	lah := localapi.NewHandler(lb, logf, s.netMon, s.logid)
+	lah := localapi.NewHandler(lb, logf, s.logid)
 	lah.PermitWrite = true
 	lah.PermitRead = true
 

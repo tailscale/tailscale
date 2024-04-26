@@ -199,7 +199,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer onDone()
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
-		lah := localapi.NewHandler(lb, s.logf, s.netMon, s.backendLogID)
+		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
 		lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
 		lah.PermitCert = s.connCanFetchCerts(ci)
 		lah.ConnIdentity = ci
