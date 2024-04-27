@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
@@ -259,12 +260,13 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 
 func newTestClient(t *testing.T, igd *TestIGD) *Client {
 	var c *Client
-	c = NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), func() {
+	c = NewClient(t.Logf, netmon.NewStatic(), nil, new(controlknobs.Knobs), func() {
 		t.Logf("port map changed")
 		t.Logf("have mapping: %v", c.HaveMapping())
 	})
 	c.testPxPPort = igd.TestPxPPort()
 	c.testUPnPPort = igd.TestUPnPPort()
+	c.netMon = netmon.NewStatic()
 	c.SetGatewayLookupFunc(testIPAndGateway)
 	return c
 }

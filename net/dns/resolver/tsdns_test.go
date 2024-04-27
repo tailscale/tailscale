@@ -28,6 +28,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
 
@@ -313,7 +314,11 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func newResolver(t testing.TB) *Resolver {
-	return New(t.Logf, nil /* no network monitor */, nil /* no link selector */, new(tsdial.Dialer), nil /* no control knobs */)
+	return New(t.Logf,
+		nil, // no link selector
+		tsdial.NewDialer(netmon.NewStatic()),
+		nil, // no control knobs
+	)
 }
 
 func TestResolveLocal(t *testing.T) {
@@ -1009,7 +1014,13 @@ func TestForwardLinkSelection(t *testing.T) {
 	// routes differently.
 	specialIP := netaddr.IPv4(1, 2, 3, 4)
 
-	fwd := newForwarder(t.Logf, nil, linkSelFunc(func(ip netip.Addr) string {
+	netMon, err := netmon.New(logger.WithPrefix(t.Logf, ".... netmon: "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { netMon.Close() })
+
+	fwd := newForwarder(t.Logf, netMon, linkSelFunc(func(ip netip.Addr) string {
 		if ip == netaddr.IPv4(1, 2, 3, 4) {
 			return "special"
 		}

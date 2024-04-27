@@ -232,7 +232,7 @@ func (l *Logger) SetVerbosityLevel(level int) {
 	atomic.StoreInt64(&l.stderrLevel, int64(level))
 }
 
-// SetNetMon sets the optional the network monitor.
+// SetNetMon sets the network monitor.
 //
 // It should not be changed concurrently with log writes and should
 // only be set once.

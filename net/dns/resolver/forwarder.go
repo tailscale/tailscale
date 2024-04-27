@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -186,7 +185,7 @@ type resolverAndDelay struct {
 // forwarder forwards DNS packets to a number of upstream nameservers.
 type forwarder struct {
 	logf    logger.Logf
-	netMon  *netmon.Monitor
+	netMon  *netmon.Monitor     // always non-nil
 	linkSel ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absorbs it
 	dialer  *tsdial.Dialer
 
@@ -214,11 +213,10 @@ type forwarder struct {
 	cloudHostFallback []resolverAndDelay
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *forwarder {
+	if netMon == nil {
+		panic("nil netMon")
+	}
 	f := &forwarder{
 		logf:         logger.WithPrefix(logf, "forward: "),
 		netMon:       netMon,
@@ -410,7 +408,6 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 		SingleHost:             dohURL.Hostname(),
 		SingleHostStaticResult: allIPs,
 		Logf:                   f.logf,
-		NetMon:                 f.netMon,
 	})
 	c = &http.Client{
 		Transport: &http.Transport{
@@ -584,7 +581,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}
 
 	// Kick off the race between the UDP and TCP queries.
-	rh := race.New[[]byte](timeout, firstUDP, thenTCP)
+	rh := race.New(timeout, firstUDP, thenTCP)
 	resp, err := rh.Start(ctx)
 	if err == nil {
 		return resp, nil

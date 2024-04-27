@@ -2273,7 +2273,6 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 		t.Skip("test broken on macOS; see https://github.com/tailscale/tailscale/issues/11894")
 	}
 	tests := []struct {
-		desc           string
 		before, after  opt.Bool
 		tailnetDefault bool
 	}{
@@ -2309,7 +2308,7 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("before=%s after=%s", tt.before, tt.after), func(t *testing.T) {
+		t.Run(fmt.Sprintf("before=%s,after=%s", tt.before, tt.after), func(t *testing.T) {
 			b := newTestBackend(t)
 			p := ipn.NewPrefs()
 			p.AutoUpdate.Apply = tt.before

@@ -181,7 +181,7 @@ func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]*dnstype.Resolver) {
 // it delegates to upstream nameservers if any are set.
 type Resolver struct {
 	logf               logger.Logf
-	netMon             *netmon.Monitor  // or nil
+	netMon             *netmon.Monitor  // non-nil
 	dialer             *tsdial.Dialer   // non-nil
 	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
@@ -205,10 +205,13 @@ type ForwardLinkSelector interface {
 }
 
 // New returns a new resolver.
-// netMon optionally specifies a network monitor to use for socket rebinding.
-func New(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *Resolver {
+func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *Resolver {
 	if dialer == nil {
 		panic("nil Dialer")
+	}
+	netMon := dialer.NetMon()
+	if netMon == nil {
+		logf("nil netMon")
 	}
 	r := &Resolver{
 		logf:     logger.WithPrefix(logf, "resolver: "),

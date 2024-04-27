@@ -15,6 +15,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -36,7 +37,8 @@ func startMesh(s *derp.Server) error {
 
 func startMeshWithHost(s *derp.Server, host string) error {
 	logf := logger.WithPrefix(log.Printf, fmt.Sprintf("mesh(%q): ", host))
-	c, err := derphttp.NewClient(s.PrivateKey(), "https://"+host+"/derp", logf)
+	netMon := netmon.NewStatic() // good enough for cmd/derper; no need for netns fanciness
+	c, err := derphttp.NewClient(s.PrivateKey(), "https://"+host+"/derp", logf, netMon)
 	if err != nil {
 		return err
 	}

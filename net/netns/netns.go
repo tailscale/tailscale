@@ -56,8 +56,10 @@ func SetDisableBindConnToInterface(v bool) {
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
 func Listener(logf logger.Logf, netMon *netmon.Monitor) *net.ListenConfig {
+	if netMon == nil {
+		panic("netns.Listener called with nil netMon")
+	}
 	if disabled.Load() {
 		return new(net.ListenConfig)
 	}
@@ -68,8 +70,10 @@ func Listener(logf logger.Logf, netMon *netmon.Monitor) *net.ListenConfig {
 // hook func initialized as necessary to run in a logical network
 // namespace that doesn't route back into Tailscale. It also handles
 // using a SOCKS if configured in the environment with ALL_PROXY.
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
 func NewDialer(logf logger.Logf, netMon *netmon.Monitor) Dialer {
+	if netMon == nil {
+		panic("netns.NewDialer called with nil netMon")
+	}
 	return FromDialer(logf, netMon, &net.Dialer{
 		KeepAlive: netknob.PlatformTCPKeepAlive(),
 	})
@@ -79,8 +83,10 @@ func NewDialer(logf logger.Logf, netMon *netmon.Monitor) Dialer {
 // network namespace that doesn't route back into Tailscale. It also
 // handles using a SOCKS if configured in the environment with
 // ALL_PROXY.
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
 func FromDialer(logf logger.Logf, netMon *netmon.Monitor, d *net.Dialer) Dialer {
+	if netMon == nil {
+		panic("netns.FromDialer called with nil netMon")
+	}
 	if disabled.Load() {
 		return d
 	}

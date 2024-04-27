@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
@@ -140,7 +141,7 @@ func TestRunDerpProbeNodePair(t *testing.T) {
 		}
 	}()
 	newClient := func() *derphttp.Client {
-		c, err := derphttp.NewClient(key.NewNode(), serverURL, t.Logf)
+		c, err := derphttp.NewClient(key.NewNode(), serverURL, t.Logf, netmon.NewStatic())
 		if err != nil {
 			t.Fatalf("NewClient: %v", err)
 		}

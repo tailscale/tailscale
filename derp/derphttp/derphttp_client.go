@@ -71,7 +71,7 @@ type Client struct {
 
 	privateKey key.NodePrivate
 	logf       logger.Logf
-	netMon     *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
+	netMon     *netmon.Monitor // always non-nil
 	dialer     func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// Either url or getRegion is non-nil:
@@ -116,9 +116,11 @@ func (c *Client) String() string {
 
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
 // The healthTracker parameter is also optional.
 func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, netMon *netmon.Monitor, getRegion func() *tailcfg.DERPRegion) *Client {
+	if netMon == nil {
+		panic("nil netMon")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		privateKey: privateKey,
@@ -140,7 +142,10 @@ func NewNetcheckClient(logf logger.Logf) *Client {
 
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
-func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf) (*Client, error) {
+func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf, netMon *netmon.Monitor) (*Client, error) {
+	if netMon == nil {
+		panic("nil netMon")
+	}
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("derphttp.NewClient: %v", err)
@@ -157,6 +162,7 @@ func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf) (
 		ctx:        ctx,
 		cancelCtx:  cancel,
 		clock:      tstime.StdClock{},
+		netMon:     netMon,
 	}
 	return c, nil
 }

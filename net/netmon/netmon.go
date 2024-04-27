@@ -55,6 +55,7 @@ type Monitor struct {
 	om     osMon         // nil means not supported on this platform
 	change chan bool     // send false to wake poller, true to also force ChangeDeltas be sent
 	stop   chan struct{} // closed on Stop
+	static bool          // static Monitor that doesn't actually monitor
 
 	// Things that must be set early, before use,
 	// and not change at runtime.
@@ -139,6 +140,17 @@ func New(logf logger.Logf) (*Monitor, error) {
 	return m, nil
 }
 
+// NewStatic returns a Monitor that's a one-time snapshot of the network state
+// but doesn't actually monitor for changes. It should only be used in tests
+// and situations like cleanups or short-lived CLI programs.
+func NewStatic() *Monitor {
+	m := &Monitor{static: true}
+	if st, err := m.interfaceStateUncached(); err == nil {
+		m.ifState = st
+	}
+	return m
+}
+
 // InterfaceState returns the latest snapshot of the machine's network
 // interfaces.
 //
@@ -168,6 +180,10 @@ func (m *Monitor) SetTailscaleInterfaceName(ifName string) {
 // It's the same as interfaces.LikelyHomeRouterIP, but it caches the
 // result until the monitor detects a network change.
 func (m *Monitor) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
+	if m.static {
+		return
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.gwValid {
@@ -190,6 +206,9 @@ func (m *Monitor) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 // notified (in their own goroutine) when the network state changes.
 // To remove this callback, call unregister (or close the monitor).
 func (m *Monitor) RegisterChangeCallback(callback ChangeFunc) (unregister func()) {
+	if m.static {
+		return func() {}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	handle := m.cbs.Add(callback)
@@ -210,6 +229,9 @@ type RuleDeleteCallback func(table uint8, priority uint32)
 // notified (in their own goroutine) when a Linux ip rule is deleted.
 // To remove this callback, call unregister (or close the monitor).
 func (m *Monitor) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unregister func()) {
+	if m.static {
+		return func() {}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	handle := m.ruleDelCB.Add(callback)
@@ -223,6 +245,9 @@ func (m *Monitor) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unreg
 // Start starts the monitor.
 // A monitor can only be started & closed once.
 func (m *Monitor) Start() {
+	if m.static {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.started || m.closed {
@@ -244,6 +269,9 @@ func (m *Monitor) Start() {
 
 // Close closes the monitor.
 func (m *Monitor) Close() error {
+	if m.static {
+		return nil
+	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -275,6 +303,9 @@ func (m *Monitor) Close() error {
 // ChangeFunc callbacks will be called within the event coalescing
 // period (under a fraction of a second).
 func (m *Monitor) InjectEvent() {
+	if m.static {
+		return
+	}
 	select {
 	case m.change <- true:
 	default:
@@ -290,6 +321,9 @@ func (m *Monitor) InjectEvent() {
 // This is like InjectEvent but only fires ChangeFunc callbacks
 // if the network state differed at all.
 func (m *Monitor) Poll() {
+	if m.static {
+		return
+	}
 	select {
 	case m.change <- false:
 	default:

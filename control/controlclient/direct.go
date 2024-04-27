@@ -56,6 +56,7 @@ import (
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/systemd"
+	"tailscale.com/util/testenv"
 	"tailscale.com/util/zstdframe"
 )
 
@@ -68,7 +69,7 @@ type Direct struct {
 	serverURL                  string              // URL of the tailcontrol server
 	clock                      tstime.Clock
 	logf                       logger.Logf
-	netMon                     *netmon.Monitor // or nil
+	netMon                     *netmon.Monitor // non-nil
 	health                     *health.Tracker
 	discoPubKey                key.DiscoPublic
 	getMachinePrivKey          func() (key.MachinePrivate, error)
@@ -120,10 +121,9 @@ type Options struct {
 	Hostinfo                   *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey             key.DiscoPublic
 	Logf                       logger.Logf
-	HTTPTestClient             *http.Client    // optional HTTP client to use (for tests only)
-	NoiseTestClient            *http.Client    // optional HTTP client to use for noise RPCs (tests only)
-	DebugFlags                 []string        // debug settings to send to control
-	NetMon                     *netmon.Monitor // optional network monitor
+	HTTPTestClient             *http.Client // optional HTTP client to use (for tests only)
+	NoiseTestClient            *http.Client // optional HTTP client to use for noise RPCs (tests only)
+	DebugFlags                 []string     // debug settings to send to control
 	HealthTracker              *health.Tracker
 	PopBrowserURL              func(url string)             // optional func to open browser
 	OnClientVersion            func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
@@ -213,6 +213,19 @@ func NewDirect(opts Options) (*Direct, error) {
 	if opts.GetMachinePrivateKey == nil {
 		return nil, errors.New("controlclient.New: no GetMachinePrivateKey specified")
 	}
+	if opts.Dialer == nil {
+		if testenv.InTest() {
+			panic("no Dialer")
+		}
+		return nil, errors.New("controlclient.New: no Dialer specified")
+	}
+	netMon := opts.Dialer.NetMon()
+	if netMon == nil {
+		if testenv.InTest() {
+			panic("no NetMon in Dialer")
+		}
+		return nil, errors.New("controlclient.New: Dialer has nil NetMon")
+	}
 	if opts.ControlKnobs == nil {
 		opts.ControlKnobs = &controlknobs.Knobs{}
 	}
@@ -233,9 +246,8 @@ func NewDirect(opts Options) (*Direct, error) {
 	dnsCache := &dnscache.Resolver{
 		Forward:          dnscache.Get().Forward, // use default cache's forwarder
 		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, opts.NetMon),
+		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, netMon),
 		Logf:             opts.Logf,
-		NetMon:           opts.NetMon,
 	}
 
 	httpc := opts.HTTPTestClient
@@ -272,7 +284,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		authKey:                    opts.AuthKey,
 		discoPubKey:                opts.DiscoPublicKey,
 		debugFlags:                 opts.DebugFlags,
-		netMon:                     opts.NetMon,
+		netMon:                     netMon,
 		health:                     opts.HealthTracker,
 		skipIPForwardingCheck:      opts.SkipIPForwardingCheck,
 		pinger:                     opts.Pinger,

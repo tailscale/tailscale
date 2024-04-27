@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -73,7 +74,7 @@ func (tt noiseClientTest) run(t *testing.T) {
 	})
 	defer hs.Close()
 
-	dialer := new(tsdial.Dialer)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
 	nc, err := NewNoiseClient(NoiseOpts{
 		PrivKey:      clientPrivate,
 		ServerPubKey: serverPrivate.Public(),
