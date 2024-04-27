@@ -575,6 +575,16 @@ jobs:
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
+  ssh:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: run ssh tests
+      run: |
+        export PATH=$(./tool/go env GOROOT)/bin:$PATH
+        make sshintegrationtest
+
   check_mergeability:
     if: always()
     runs-on: ubuntu-22.04
