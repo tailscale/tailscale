@@ -559,25 +559,26 @@ runLoop:
 					log.Println("Startup complete, waiting for shutdown signal")
 					startupTasksDone = true
 
-					// Reap all processes, since we are PID1 and need to collect zombies. We can
-					// only start doing this once we've stopped shelling out to things
-					// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
-					// and wedge bringup.
+					// Wait on tailscaled process. It won't
+					// be cleaned up by default when the
+					// container exits as it is not PID1.
+					// TODO (irbekrm): perhaps we can
+					// replace the reaper by a running
+					// cmd.Wait in a goroutine immediately
+					// after starting tailscaled?
 					reaper := func() {
 						defer wg.Done()
 						for {
 							var status unix.WaitStatus
-							pid, err := unix.Wait4(-1, &status, 0, nil)
+							_, err := unix.Wait4(daemonProcess.Pid, &status, 0, nil)
 							if errors.Is(err, unix.EINTR) {
 								continue
 							}
 							if err != nil {
-								log.Fatalf("Waiting for exited processes: %v", err)
+								log.Fatalf("Waiting for tailscaled to exit: %v", err)
 							}
-							if pid == daemonProcess.Pid {
-								log.Printf("Tailscaled exited")
-								os.Exit(0)
-							}
+							log.Print("tailscaled exited")
+							os.Exit(0)
 						}
 					}
 					wg.Add(1)
