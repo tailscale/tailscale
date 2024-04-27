@@ -681,8 +681,10 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 }
 
 func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
-	health.ReceiveDERP.Enter()
-	defer health.ReceiveDERP.Exit()
+	if s := c.Conn.health.ReceiveFuncStats(health.ReceiveDERP); s != nil {
+		s.Enter()
+		defer s.Exit()
+	}
 
 	for dm := range c.derpRecvCh {
 		if c.isClosed() {

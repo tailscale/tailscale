@@ -30,11 +30,39 @@ var (
 	debugHandler map[string]http.Handler
 )
 
+// ReceiveFunc is one of the three magicsock Receive funcs (IPv4, IPv6, or
+// DERP).
+type ReceiveFunc int
+
+// ReceiveFunc indices for Tracker.MagicSockReceiveFuncs.
+const (
+	ReceiveIPv4 ReceiveFunc = 0
+	ReceiveIPv6 ReceiveFunc = 1
+	ReceiveDERP ReceiveFunc = 2
+)
+
+func (f ReceiveFunc) String() string {
+	if f < 0 || int(f) >= len(receiveNames) {
+		return fmt.Sprintf("ReceiveFunc(%d)", f)
+	}
+	return receiveNames[f]
+}
+
+var receiveNames = []string{
+	ReceiveIPv4: "ReceiveIPv4",
+	ReceiveIPv6: "ReceiveIPv6",
+	ReceiveDERP: "ReceiveDERP",
+}
+
 // Tracker tracks the health of various Tailscale subsystems,
 // comparing each subsystems' state with each other to make sure
 // they're consistent based on the user's intended state.
 type Tracker struct {
-	// mu guards everything in this var block.
+	// MagicSockReceiveFuncs tracks the state of the three
+	// magicsock receive functions: IPv4, IPv6, and DERP.
+	MagicSockReceiveFuncs [3]ReceiveFuncStats // indexed by ReceiveFunc values
+
+	// mu guards everything that follows.
 	mu sync.Mutex
 
 	warnables   []*Warnable // keys ever set
@@ -524,7 +552,7 @@ func (t *Tracker) timerSelfCheck() {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	checkReceiveFuncs()
+	t.checkReceiveFuncsLocked()
 	t.selfCheckLocked()
 	if t.timer != nil {
 		t.timer.Reset(time.Minute)
@@ -626,9 +654,10 @@ func (t *Tracker) overallErrorLocked() error {
 	_ = t.lastMapRequestHeard
 
 	var errs []error
-	for _, recv := range receiveFuncs {
-		if recv.missing {
-			errs = append(errs, fmt.Errorf("%s is not running", recv.name))
+	for i := range t.MagicSockReceiveFuncs {
+		f := &t.MagicSockReceiveFuncs[i]
+		if f.missing {
+			errs = append(errs, fmt.Errorf("%s is not running", f.name))
 		}
 	}
 	for sys, err := range t.sysErr {
@@ -664,63 +693,69 @@ func (t *Tracker) overallErrorLocked() error {
 	return multierr.New(errs...)
 }
 
-var (
-	ReceiveIPv4 = ReceiveFuncStats{name: "ReceiveIPv4"}
-	ReceiveIPv6 = ReceiveFuncStats{name: "ReceiveIPv6"}
-	ReceiveDERP = ReceiveFuncStats{name: "ReceiveDERP"}
-
-	receiveFuncs = []*ReceiveFuncStats{&ReceiveIPv4, &ReceiveIPv6, &ReceiveDERP}
-)
-
-func init() {
-	if runtime.GOOS == "js" {
-		receiveFuncs = receiveFuncs[2:] // ignore IPv4 and IPv6
-	}
-}
-
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
 type ReceiveFuncStats struct {
 	// name is the name of the receive func.
+	// It's lazily populated.
 	name string
 	// numCalls is the number of times the receive func has ever been called.
 	// It is required because it is possible for a receive func's wireguard-go goroutine
 	// to be active even though the receive func isn't.
 	// The wireguard-go goroutine alternates between calling the receive func and
 	// processing what the func returned.
-	numCalls uint64 // accessed atomically
+	numCalls atomic.Uint64
 	// prevNumCalls is the value of numCalls last time the health check examined it.
 	prevNumCalls uint64
 	// inCall indicates whether the receive func is currently running.
-	inCall uint32 // bool, accessed atomically
+	inCall atomic.Bool
 	// missing indicates whether the receive func is not running.
 	missing bool
 }
 
 func (s *ReceiveFuncStats) Enter() {
-	atomic.AddUint64(&s.numCalls, 1)
-	atomic.StoreUint32(&s.inCall, 1)
+	s.numCalls.Add(1)
+	s.inCall.Store(true)
 }
 
 func (s *ReceiveFuncStats) Exit() {
-	atomic.StoreUint32(&s.inCall, 0)
+	s.inCall.Store(false)
 }
 
-func checkReceiveFuncs() {
-	for _, recv := range receiveFuncs {
-		recv.missing = false
-		prev := recv.prevNumCalls
-		numCalls := atomic.LoadUint64(&recv.numCalls)
-		recv.prevNumCalls = numCalls
+// ReceiveFuncStats returns the ReceiveFuncStats tracker for the given func
+// type.
+//
+// If t is nil, it returns nil.
+func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
+	if t == nil {
+		return nil
+	}
+	return &t.MagicSockReceiveFuncs[which]
+}
+
+func (t *Tracker) checkReceiveFuncsLocked() {
+	for i := range t.MagicSockReceiveFuncs {
+		f := &t.MagicSockReceiveFuncs[i]
+		if f.name == "" {
+			f.name = (ReceiveFunc(i)).String()
+		}
+		if runtime.GOOS == "js" && i < 2 {
+			// Skip IPv4 and IPv6 on js.
+			continue
+		}
+		f.missing = false
+		prev := f.prevNumCalls
+		numCalls := f.numCalls.Load()
+		f.prevNumCalls = numCalls
 		if numCalls > prev {
 			// OK: the function has gotten called since last we checked
 			continue
 		}
-		if atomic.LoadUint32(&recv.inCall) == 1 {
+		if f.inCall.Load() {
 			// OK: the function is active, probably blocked due to inactivity
 			continue
 		}
 		// Not OK: The function is not active, and not accumulating new calls.
 		// It is probably MIA.
-		recv.missing = true
+		f.missing = true
 	}
 }
