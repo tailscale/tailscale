@@ -6,6 +6,7 @@ package netutil
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -145,8 +146,6 @@ func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, er
 // disabled or set to 'loose' mode for exit node functionality on any
 // interface.
 //
-// The state param can be nil, in which case interfaces.GetState is used.
-//
 // The routes should only be advertised routes, and should not contain the
 // node's Tailscale IPs.
 //
@@ -159,11 +158,7 @@ func CheckReversePathFiltering(state *interfaces.State) (warn []string, err erro
 	}
 
 	if state == nil {
-		var err error
-		state, err = interfaces.GetState()
-		if err != nil {
-			return nil, err
-		}
+		return nil, errors.New("no link state")
 	}
 
 	// The kernel uses the maximum value for rp_filter between the 'all'
