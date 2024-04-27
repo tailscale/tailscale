@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -2268,6 +2269,9 @@ func TestPreferencePolicyInfo(t *testing.T) {
 }
 
 func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("test broken on macOS; see https://github.com/tailscale/tailscale/issues/11894")
+	}
 	tests := []struct {
 		desc           string
 		before, after  opt.Bool
