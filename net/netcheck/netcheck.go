@@ -1657,7 +1657,6 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 				Forward:     net.DefaultResolver,
 				UseLastGood: true,
 				Logf:        c.logf,
-				NetMon:      c.NetMon,
 			}
 		}
 		resolver := c.resolver

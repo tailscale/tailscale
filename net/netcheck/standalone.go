@@ -24,12 +24,15 @@ import (
 // to bind, errors will be returned, if one or both protocols can bind no error
 // is returned.
 func (c *Client) Standalone(ctx context.Context, bindAddr string) error {
+	if c.NetMon == nil {
+		panic("netcheck.Client.NetMon must be set")
+	}
 	if bindAddr == "" {
 		bindAddr = ":0"
 	}
 	var errs []error
 
-	u4, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, nil)).ListenPacket(ctx, "udp4", bindAddr)
+	u4, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.NetMon)).ListenPacket(ctx, "udp4", bindAddr)
 	if err != nil {
 		c.logf("udp4: %v", err)
 		errs = append(errs, err)
@@ -37,7 +40,7 @@ func (c *Client) Standalone(ctx context.Context, bindAddr string) error {
 		go readPackets(ctx, c.logf, u4, c.ReceiveSTUNPacket)
 	}
 
-	u6, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, nil)).ListenPacket(ctx, "udp6", bindAddr)
+	u6, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.NetMon)).ListenPacket(ctx, "udp6", bindAddr)
 	if err != nil {
 		c.logf("udp6: %v", err)
 		errs = append(errs, err)

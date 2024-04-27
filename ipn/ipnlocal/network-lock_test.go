@@ -20,6 +20,8 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -50,6 +52,7 @@ func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
 		HTTPTestClient:  c,
 		NoiseTestClient: c,
 		Observer:        observerFunc(func(controlclient.Status) {}),
+		Dialer:          tsdial.NewDialer(netmon.NewStatic()),
 	}
 
 	cc, err := controlclient.NewNoStart(opts)

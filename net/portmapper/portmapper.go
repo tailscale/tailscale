@@ -198,8 +198,7 @@ func (m *pmpMapping) Release(ctx context.Context) {
 
 // NewClient returns a new portmapping client.
 //
-// The netMon parameter is optional; if non-nil it's used to do faster interface
-// lookups.
+// The netMon parameter is required.
 //
 // The debug argument allows configuring the behaviour of the portmapper for
 // debugging; if nil, a sensible set of defaults will be used.
@@ -211,10 +210,13 @@ func (m *pmpMapping) Release(ctx context.Context) {
 // whenever the port mapping status has changed. If nil, it doesn't make a
 // callback.
 func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, controlKnobs *controlknobs.Knobs, onChange func()) *Client {
+	if netMon == nil {
+		panic("nil netMon")
+	}
 	ret := &Client{
 		logf:         logf,
 		netMon:       netMon,
-		ipAndGateway: interfaces.LikelyHomeRouterIP,
+		ipAndGateway: interfaces.LikelyHomeRouterIP, // TODO(bradfitz): move this to netMon
 		onChange:     onChange,
 		controlKnobs: controlKnobs,
 	}

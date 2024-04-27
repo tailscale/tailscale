@@ -24,7 +24,6 @@ import (
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
-	"tailscale.com/types/logger"
 )
 
 func TestHairpinSTUN(t *testing.T) {
@@ -157,14 +156,8 @@ func TestHairpinWait(t *testing.T) {
 }
 
 func newTestClient(t testing.TB) *Client {
-	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
-	if err != nil {
-		t.Fatalf("netmon.New: %v", err)
-	}
-	t.Cleanup(func() { netMon.Close() })
-
 	c := &Client{
-		NetMon: netMon,
+		NetMon: netmon.NewStatic(),
 		Logf:   t.Logf,
 	}
 	return c

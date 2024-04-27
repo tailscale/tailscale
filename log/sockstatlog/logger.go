@@ -93,10 +93,15 @@ func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
 // The returned Logger is not yet enabled, and must be shut down with Shutdown when it is no longer needed.
 // Logs will be uploaded to the log server using a new log ID derived from the provided backend logID.
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+//
+// The netMon parameter is optional. It should be specified in environments where
+// Tailscaled is manipulating the routing table.
 func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor, health *health.Tracker) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
+	}
+	if netMon == nil {
+		netMon = netmon.NewStatic()
 	}
 
 	if err := os.MkdirAll(logdir, 0755); err != nil && !os.IsExist(err) {

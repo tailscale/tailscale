@@ -53,7 +53,7 @@ func New(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *he
 // CleanUp restores the system network configuration to its original state
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
-func CleanUp(logf logger.Logf, interfaceName string) {
+func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
 	cleanUp(logf, interfaceName)
 }
 

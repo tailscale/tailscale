@@ -55,15 +55,17 @@ type Manager struct {
 }
 
 // NewManagers created a new manager from the given config.
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")
+	}
+	if dialer.NetMon() == nil {
+		panic("Dialer has nil NetMon")
 	}
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, netMon, linkSel, dialer, knobs),
+		resolver: resolver.New(logf, linkSel, dialer, knobs),
 		os:       oscfg,
 		health:   health,
 	}
@@ -454,13 +456,15 @@ func (m *Manager) FlushCaches() error {
 // CleanUp restores the system DNS configuration to its original state
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
-func CleanUp(logf logger.Logf, interfaceName string) {
+func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
 	oscfg, err := NewOSConfigurator(logf, nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil, nil, &tsdial.Dialer{Logf: logf}, nil, nil)
+	d := &tsdial.Dialer{Logf: logf}
+	d.SetNetMon(netMon)
+	dns := NewManager(logf, oscfg, nil, d, nil, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

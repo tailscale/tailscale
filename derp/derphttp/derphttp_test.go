@@ -16,11 +16,14 @@ import (
 	"time"
 
 	"tailscale.com/derp"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/key"
 )
 
 func TestSendRecv(t *testing.T) {
 	serverPrivateKey := key.NewNode()
+
+	netMon := netmon.NewStatic()
 
 	const numClients = 3
 	var clientPrivateKeys []key.NodePrivate
@@ -68,7 +71,7 @@ func TestSendRecv(t *testing.T) {
 	}()
 	for i := range numClients {
 		key := clientPrivateKeys[i]
-		c, err := NewClient(key, serverURL, t.Logf)
+		c, err := NewClient(key, serverURL, t.Logf, netMon)
 		if err != nil {
 			t.Fatalf("client %d: %v", i, err)
 		}
@@ -183,7 +186,7 @@ func TestPing(t *testing.T) {
 		}
 	}()
 
-	c, err := NewClient(key.NewNode(), serverURL, t.Logf)
+	c, err := NewClient(key.NewNode(), serverURL, t.Logf, netmon.NewStatic())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -236,7 +239,7 @@ func newTestServer(t *testing.T, k key.NodePrivate) (serverURL string, s *derp.S
 }
 
 func newWatcherClient(t *testing.T, watcherPrivateKey key.NodePrivate, serverToWatchURL string) (c *Client) {
-	c, err := NewClient(watcherPrivateKey, serverToWatchURL, t.Logf)
+	c, err := NewClient(watcherPrivateKey, serverToWatchURL, t.Logf, netmon.NewStatic())
 	if err != nil {
 		t.Fatal(err)
 	}
