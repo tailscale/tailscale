@@ -90,7 +90,7 @@ type Conn struct {
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
-	netMon                 *netmon.Monitor      // or nil
+	netMon                 *netmon.Monitor      // must be non-nil
 	health                 *health.Tracker      // or nil
 	controlKnobs           *controlknobs.Knobs  // or nil
 
@@ -370,7 +370,7 @@ type Options struct {
 	NoteRecvActivity func(key.NodePublic)
 
 	// NetMon is the network monitor to use.
-	// If nil, the portmapper won't be used.
+	// It must be non-nil.
 	NetMon *netmon.Monitor
 
 	// HealthTracker optionally specifies the health tracker to
@@ -451,6 +451,10 @@ func newConn() *Conn {
 // As the set of possible endpoints for a Conn changes, the
 // callback opts.EndpointsFunc is called.
 func NewConn(opts Options) (*Conn, error) {
+	if opts.NetMon == nil {
+		return nil, errors.New("magicsock.Options.NetMon must be non-nil")
+	}
+
 	c := newConn()
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
@@ -464,9 +468,7 @@ func NewConn(opts Options) (*Conn, error) {
 		DisableAll: func() bool { return opts.DisablePortMapper || c.onlyTCP443.Load() },
 	}
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, portMapOpts, opts.ControlKnobs, c.onPortMapChanged)
-	if opts.NetMon != nil {
-		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
-	}
+	c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
 	c.onPortUpdate = opts.OnPortUpdate

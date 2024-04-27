@@ -47,6 +47,7 @@ import (
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
 	"tailscale.com/net/stun/stuntest"
@@ -155,6 +156,7 @@ type magicStack struct {
 	tsTun      *tstun.Wrapper          // wrapped tun that implements filtering and wgengine hooks
 	dev        *device.Device          // the wireguard-go Device that connects the previous things
 	wgLogger   *wglog.Logger           // wireguard-go log wrapper
+	netMon     *netmon.Monitor         // always non-nil
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -168,8 +170,14 @@ func newMagicStack(t testing.TB, logf logger.Logf, l nettype.PacketListener, der
 func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
 	t.Helper()
 
+	netMon, err := netmon.New(logf)
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
+		NetMon:                 netMon,
 		Logf:                   logf,
 		DisablePortMapper:      true,
 		TestOnlyPacketListener: l,
@@ -211,6 +219,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		tsTun:      tsTun,
 		dev:        dev,
 		wgLogger:   wgLogger,
+		netMon:     netMon,
 	}
 }
 
@@ -228,6 +237,7 @@ func (s *magicStack) String() string {
 func (s *magicStack) Close() {
 	s.dev.Close()
 	s.conn.Close()
+	s.netMon.Close()
 }
 
 func (s *magicStack) Public() key.NodePublic {
@@ -372,6 +382,12 @@ func TestNewConn(t *testing.T) {
 		}
 	}
 
+	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	defer netMon.Close()
+
 	stunAddr, stunCleanupFn := stuntest.Serve(t)
 	defer stunCleanupFn()
 
@@ -381,6 +397,7 @@ func TestNewConn(t *testing.T) {
 		DisablePortMapper: true,
 		EndpointsFunc:     epFunc,
 		Logf:              t.Logf,
+		NetMon:            netMon,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -497,9 +514,16 @@ func TestDeviceStartStop(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
+	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	defer netMon.Close()
+
 	conn, err := NewConn(Options{
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {},
 		Logf:          t.Logf,
+		NetMon:        netMon,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1243,7 +1267,15 @@ func Test32bitAlignment(t *testing.T) {
 func newTestConn(t testing.TB) *Conn {
 	t.Helper()
 	port := pickPort(t)
+
+	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	t.Cleanup(func() { netMon.Close() })
+
 	conn, err := NewConn(Options{
+		NetMon:                 netMon,
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
 		Port:                   port,
@@ -3145,48 +3177,24 @@ func TestMaybeRebindOnError(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	t.Run("darwin should rebind", func(t *testing.T) {
-		conn, err := NewConn(Options{
-			EndpointsFunc: func(eps []tailcfg.Endpoint) {},
-			Logf:          t.Logf,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
+	conn := newTestConn(t)
+	defer conn.Close()
 
+	t.Run("darwin-rebind", func(t *testing.T) {
 		rebound := conn.maybeRebindOnError("darwin", syscall.EPERM)
 		if !rebound {
 			t.Errorf("darwin should rebind on syscall.EPERM")
 		}
 	})
 
-	t.Run("linux should not rebind", func(t *testing.T) {
-		conn, err := NewConn(Options{
-			EndpointsFunc: func(eps []tailcfg.Endpoint) {},
-			Logf:          t.Logf,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-
+	t.Run("linux-not-rebind", func(t *testing.T) {
 		rebound := conn.maybeRebindOnError("linux", syscall.EPERM)
 		if rebound {
 			t.Errorf("linux should not rebind on syscall.EPERM")
 		}
 	})
 
-	t.Run("should not rebind if recently rebind recently performed", func(t *testing.T) {
-		conn, err := NewConn(Options{
-			EndpointsFunc: func(eps []tailcfg.Endpoint) {},
-			Logf:          t.Logf,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-
+	t.Run("no-frequent-rebind", func(t *testing.T) {
 		conn.lastEPERMRebind.Store(time.Now().Add(-1 * time.Second))
 		rebound := conn.maybeRebindOnError("darwin", syscall.EPERM)
 		if rebound {
