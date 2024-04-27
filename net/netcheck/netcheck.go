@@ -159,19 +159,17 @@ func cloneDurationMap(m map[int]time.Duration) map[int]time.Duration {
 // active probes, and must receive STUN packet replies via ReceiveSTUNPacket.
 // Client can be used in a standalone fashion via the Standalone method.
 type Client struct {
+	// NetMon is the netmon.Monitor to use to get the current
+	// (cached) network interface.
+	// It must be non-nil.
+	NetMon *netmon.Monitor
+
 	// Verbose enables verbose logging.
 	Verbose bool
 
 	// Logf optionally specifies where to log to.
 	// If nil, log.Printf is used.
 	Logf logger.Logf
-
-	// NetMon optionally provides a netmon.Monitor to use to get the current
-	// (cached) network interface.
-	// If nil, the interface will be looked up dynamically.
-	// TODO(bradfitz): make NetMon required. As of 2023-08-01, it basically always is
-	// present anyway.
-	NetMon *netmon.Monitor
 
 	// TimeNow, if non-nil, is used instead of time.Now.
 	TimeNow func() time.Time
@@ -781,6 +779,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	if dm == nil {
 		return nil, errors.New("netcheck: GetReport: DERP map is nil")
 	}
+	if c.NetMon == nil {
+		return nil, errors.New("netcheck: GetReport: Client.NetMon is nil")
+	}
 
 	c.mu.Lock()
 	if c.curState != nil {
@@ -844,18 +845,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		return c.finishAndStoreReport(rs, dm), nil
 	}
 
-	var ifState *interfaces.State
-	if c.NetMon == nil {
-		directState, err := interfaces.GetState()
-		if err != nil {
-			c.logf("[v1] interfaces: %v", err)
-			return nil, err
-		} else {
-			ifState = directState
-		}
-	} else {
-		ifState = c.NetMon.InterfaceState()
-	}
+	ifState := c.NetMon.InterfaceState()
 
 	// See if IPv6 works at all, or if it's been hard disabled at the
 	// OS level.

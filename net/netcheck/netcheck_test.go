@@ -19,10 +19,12 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 )
 
 func TestHairpinSTUN(t *testing.T) {
@@ -154,13 +156,25 @@ func TestHairpinWait(t *testing.T) {
 	})
 }
 
+func newTestClient(t testing.TB) *Client {
+	netMon, err := netmon.New(logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	t.Cleanup(func() { netMon.Close() })
+
+	c := &Client{
+		NetMon: netMon,
+		Logf:   t.Logf,
+	}
+	return c
+}
+
 func TestBasic(t *testing.T) {
 	stunAddr, cleanup := stuntest.Serve(t)
 	defer cleanup()
 
-	c := &Client{
-		Logf: t.Logf,
-	}
+	c := newTestClient(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -202,9 +216,8 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	dm := stuntest.DERPMapOf(stunAddr)
 	dm.Regions[1].Nodes[0].STUNOnly = true
 
-	c := &Client{
-		Logf: t.Logf,
-	}
+	c := newTestClient(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
@@ -895,14 +908,11 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 	stunAddr, cleanup := stuntest.Serve(t)
 	defer cleanup()
 
-	c := &Client{
-		Logf:              t.Logf,
-		testEnoughRegions: 1,
-
-		// Set the delay long enough that we have time to cancel it
-		// when our STUN probe succeeds.
-		testCaptivePortalDelay: 10 * time.Second,
-	}
+	c := newTestClient(t)
+	c.testEnoughRegions = 1
+	// Set the delay long enough that we have time to cancel it
+	// when our STUN probe succeeds.
+	c.testCaptivePortalDelay = 10 * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
