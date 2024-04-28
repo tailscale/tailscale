@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/creack/pty"
@@ -146,7 +147,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 }
 
-const debugIncubator = false
+var debugIncubator atomic.Bool
 
 type stdRWC struct{}
 
@@ -224,7 +225,7 @@ func beIncubator(args []string) error {
 	}
 
 	logf := logger.Discard
-	if debugIncubator {
+	if debugIncubator.Load() {
 		// We don't own stdout or stderr, so the only place we can log is syslog.
 		if sl, err := syslog.New(syslog.LOG_INFO|syslog.LOG_DAEMON, "tailscaled-ssh"); err == nil {
 			logf = log.New(sl, "", 0).Printf
