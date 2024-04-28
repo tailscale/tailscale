@@ -14,7 +14,6 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/envknob"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/linuxfw"
@@ -119,7 +118,7 @@ func setBypassMark(fd uintptr) error {
 }
 
 func bindToDevice(fd uintptr) error {
-	ifc, err := interfaces.DefaultRouteInterface()
+	ifc, err := netmon.DefaultRouteInterface()
 	if err != nil {
 		// Make sure we bind to *some* interface,
 		// or we could get a routing loop.

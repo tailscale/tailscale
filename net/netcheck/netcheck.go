@@ -388,7 +388,7 @@ const numIncrementalRegions = 3
 
 // makeProbePlan generates the probe plan for a DERPMap, given the most
 // recent report and whether IPv6 is configured on an interface.
-func makeProbePlan(dm *tailcfg.DERPMap, ifState *State, last *Report) (plan probePlan) {
+func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (plan probePlan) {
 	if last == nil || len(last.RegionLatency) == 0 {
 		return makeProbePlanInitial(dm, ifState)
 	}

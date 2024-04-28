@@ -3,7 +3,7 @@
 
 //go:build !android
 
-package interfaces
+package netmon
 
 import (
 	"bufio"

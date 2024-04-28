@@ -3,7 +3,7 @@
 
 //go:build !linux && !windows && !darwin && !freebsd && !android
 
-package interfaces
+package netmon
 
 import "errors"
 

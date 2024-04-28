@@ -5,7 +5,7 @@
 
 //go:build freebsd
 
-package interfaces
+package netmon
 
 import (
 	"syscall"

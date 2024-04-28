@@ -35,7 +35,6 @@ import (
 	_ "tailscale.com/logtail/backoff"
 	_ "tailscale.com/net/dns"
 	_ "tailscale.com/net/dnsfallback"
-	_ "tailscale.com/net/interfaces"
 	_ "tailscale.com/net/netmon"
 	_ "tailscale.com/net/netns"
 	_ "tailscale.com/net/proxymux"

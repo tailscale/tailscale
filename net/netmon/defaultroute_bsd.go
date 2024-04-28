@@ -7,7 +7,7 @@
 
 //go:build !ios && (darwin || freebsd)
 
-package interfaces
+package netmon
 
 import "net"
 

@@ -3,7 +3,7 @@
 
 //go:build ios
 
-package interfaces
+package netmon
 
 import (
 	"log"

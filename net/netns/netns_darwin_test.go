@@ -6,7 +6,7 @@ package netns
 import (
 	"testing"
 
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 )
 
 func TestGetInterfaceIndex(t *testing.T) {
@@ -63,7 +63,7 @@ func TestGetInterfaceIndex(t *testing.T) {
 			t.Skip("no tailscale interface on this machine")
 		}
 
-		defaultIdx, err := interfaces.DefaultRouteInterfaceIndex()
+		defaultIdx, err := netmon.DefaultRouteInterfaceIndex()
 		if err != nil {
 			t.Fatal(err)
 		}

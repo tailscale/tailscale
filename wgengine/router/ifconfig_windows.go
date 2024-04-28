@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/health"
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/util/multierr"
@@ -110,7 +110,7 @@ func monitorDefaultRoutes(tun *tun.NativeTun) (*winipcfg.RouteChangeCallback, er
 }
 
 func getDefaultRouteMTU() (uint32, error) {
-	mtus, err := interfaces.NonTailscaleMTUs()
+	mtus, err := netmon.NonTailscaleMTUs()
 	if err != nil {
 		return 0, err
 	}

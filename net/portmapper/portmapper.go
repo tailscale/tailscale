@@ -21,7 +21,6 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -216,7 +215,7 @@ func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, cont
 	ret := &Client{
 		logf:         logf,
 		netMon:       netMon,
-		ipAndGateway: interfaces.LikelyHomeRouterIP, // TODO(bradfitz): move this to netMon
+		ipAndGateway: netmon.LikelyHomeRouterIP, // TODO(bradfitz): move this to method on netMon
 		onChange:     onChange,
 		controlKnobs: controlKnobs,
 	}

@@ -32,8 +32,8 @@ import (
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -603,7 +603,7 @@ func TestFileTargets(t *testing.T) {
 
 func TestInternalAndExternalInterfaces(t *testing.T) {
 	type interfacePrefix struct {
-		i   interfaces.Interface
+		i   netmon.Interface
 		pfx netip.Prefix
 	}
 
@@ -613,7 +613,7 @@ func TestInternalAndExternalInterfaces(t *testing.T) {
 		}
 		return pfxs
 	}
-	iList := func(ips ...interfacePrefix) (il interfaces.List) {
+	iList := func(ips ...interfacePrefix) (il netmon.InterfaceList) {
 		for _, ip := range ips {
 			il = append(il, ip.i)
 		}
@@ -621,7 +621,7 @@ func TestInternalAndExternalInterfaces(t *testing.T) {
 	}
 	newInterface := func(name, pfx string, wsl2, loopback bool) interfacePrefix {
 		ippfx := netip.MustParsePrefix(pfx)
-		ip := interfaces.Interface{
+		ip := netmon.Interface{
 			Interface: &net.Interface{},
 			AltAddrs: []net.Addr{
 				netipx.PrefixIPNet(ippfx),
@@ -645,7 +645,7 @@ func TestInternalAndExternalInterfaces(t *testing.T) {
 	tests := []struct {
 		name    string
 		goos    string
-		il      interfaces.List
+		il      netmon.InterfaceList
 		wantInt []netip.Prefix
 		wantExt []netip.Prefix
 	}{

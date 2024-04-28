@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -162,7 +161,7 @@ func (m *Monitor) InterfaceState() *State {
 }
 
 func (m *Monitor) interfaceStateUncached() (*State, error) {
-	return interfaces.GetState()
+	return GetState()
 }
 
 // SetTailscaleInterfaceName sets the name of the Tailscale interface. For
@@ -189,7 +188,7 @@ func (m *Monitor) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 	if m.gwValid {
 		return m.gw, m.gwSelfIP, true
 	}
-	gw, myIP, ok = interfaces.LikelyHomeRouterIP()
+	gw, myIP, ok = LikelyHomeRouterIP()
 	changed := false
 	if ok {
 		changed = m.gw != gw || m.gwSelfIP != myIP
@@ -376,7 +375,7 @@ func (m *Monitor) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
 // isInterestingInterface reports whether the provided interface should be
 // considered when checking for network state changes.
 // The ips parameter should be the IPs of the provided interface.
-func (m *Monitor) isInterestingInterface(i interfaces.Interface, ips []netip.Prefix) bool {
+func (m *Monitor) isInterestingInterface(i Interface, ips []netip.Prefix) bool {
 	if !m.om.IsInterestingInterface(i.Name) {
 		return false
 	}

@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sys/cpu"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 )
@@ -52,7 +51,7 @@ func controlC(network, address string, c syscall.RawConn) error {
 	}
 
 	if canV4 {
-		iface, err := interfaces.GetWindowsDefault(windows.AF_INET)
+		iface, err := netmon.GetWindowsDefault(windows.AF_INET)
 		if err != nil {
 			return err
 		}
@@ -62,7 +61,7 @@ func controlC(network, address string, c syscall.RawConn) error {
 	}
 
 	if canV6 {
-		iface, err := interfaces.GetWindowsDefault(windows.AF_INET6)
+		iface, err := netmon.GetWindowsDefault(windows.AF_INET6)
 		if err != nil {
 			return err
 		}

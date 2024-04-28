@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -89,7 +88,7 @@ func withSockStats(ctx context.Context, label Label, logf logger.Logf) context.C
 		// had a chance to populate knownInterfaces). In that case, we'll have
 		// to get the list of interfaces ourselves.
 		if len(sockStats.knownInterfaces) == 0 {
-			if ifaces, err := interfaces.GetList(); err == nil {
+			if ifaces, err := netmon.GetInterfaceList(); err == nil {
 				for _, iface := range ifaces {
 					counters.rxBytesByInterface[iface.Index] = &atomic.Uint64{}
 					counters.txBytesByInterface[iface.Index] = &atomic.Uint64{}
