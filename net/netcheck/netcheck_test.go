@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
@@ -673,7 +672,7 @@ func TestMakeProbePlan(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ifState := &interfaces.State{
+			ifState := &netmon.State{
 				HaveV6: tt.have6if,
 				HaveV4: !tt.no4,
 			}

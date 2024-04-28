@@ -16,13 +16,13 @@ import (
 	"strconv"
 	"strings"
 
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 )
 
 // protocolsRequiredForForwarding reports whether IPv4 and/or IPv6 protocols are
 // required to forward the specified routes.
 // The state param must be specified.
-func protocolsRequiredForForwarding(routes []netip.Prefix, state *interfaces.State) (v4, v6 bool) {
+func protocolsRequiredForForwarding(routes []netip.Prefix, state *netmon.State) (v4, v6 bool) {
 	if len(routes) == 0 {
 		// Nothing to route, so no need to warn.
 		return false, false
@@ -59,7 +59,7 @@ func protocolsRequiredForForwarding(routes []netip.Prefix, state *interfaces.Sta
 // It returns an error if it is unable to determine if IP forwarding is enabled.
 // It returns a warning describing configuration issues if IP forwarding is
 // non-functional or partly functional.
-func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, err error) {
+func CheckIPForwarding(routes []netip.Prefix, state *netmon.State) (warn, err error) {
 	if runtime.GOOS != "linux" {
 		switch runtime.GOOS {
 		case "dragonfly", "freebsd", "netbsd", "openbsd":
@@ -152,7 +152,7 @@ func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, er
 // This function returns an error if it is unable to determine whether reverse
 // path filtering is enabled, or a warning describing configuration issues if
 // reverse path fitering is non-functional or partly functional.
-func CheckReversePathFiltering(state *interfaces.State) (warn []string, err error) {
+func CheckReversePathFiltering(state *netmon.State) (warn []string, err error) {
 	if runtime.GOOS != "linux" {
 		return nil, nil
 	}

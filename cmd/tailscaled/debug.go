@@ -23,7 +23,6 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
@@ -73,7 +72,7 @@ func debugMode(args []string) error {
 }
 
 func runMonitor(ctx context.Context, loop bool) error {
-	dump := func(st *interfaces.State) {
+	dump := func(st *netmon.State) {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}

@@ -64,7 +64,7 @@ type Monitor struct {
 	mu         sync.Mutex // guards all following fields
 	cbs        set.HandleSet[ChangeFunc]
 	ruleDelCB  set.HandleSet[RuleDeleteCallback]
-	ifState    *interfaces.State
+	ifState    *State
 	gwValid    bool       // whether gw and gwSelfIP are valid
 	gw         netip.Addr // our gateway's IP
 	gwSelfIP   netip.Addr // our own IP address (that corresponds to gw)
@@ -88,12 +88,12 @@ type ChangeDelta struct {
 	// Old is the old interface state, if known.
 	// It's nil if the old state is unknown.
 	// Do not mutate it.
-	Old *interfaces.State
+	Old *State
 
 	// New is the new network state.
 	// It is always non-nil.
 	// Do not mutate it.
-	New *interfaces.State
+	New *State
 
 	// Major is our legacy boolean of whether the network changed in some major
 	// way.
@@ -155,13 +155,13 @@ func NewStatic() *Monitor {
 // interfaces.
 //
 // The returned value is owned by Mon; it must not be modified.
-func (m *Monitor) InterfaceState() *interfaces.State {
+func (m *Monitor) InterfaceState() *State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.ifState
 }
 
-func (m *Monitor) interfaceStateUncached() (*interfaces.State, error) {
+func (m *Monitor) interfaceStateUncached() (*State, error) {
 	return interfaces.GetState()
 }
 
@@ -421,7 +421,7 @@ var (
 // up callers and updates the monitor's state if so.
 //
 // If forceCallbacks is true, they're always notified.
-func (m *Monitor) handlePotentialChange(newState *interfaces.State, forceCallbacks bool) {
+func (m *Monitor) handlePotentialChange(newState *State, forceCallbacks bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	oldState := m.ifState
@@ -476,7 +476,7 @@ func (m *Monitor) handlePotentialChange(newState *interfaces.State, forceCallbac
 // a bunch of connections and rebinding.
 //
 // TODO(bradiftz): tigten this definition.
-func (m *Monitor) IsMajorChangeFrom(s1, s2 *interfaces.State) bool {
+func (m *Monitor) IsMajorChangeFrom(s1, s2 *State) bool {
 	if s1 == nil && s2 == nil {
 		return false
 	}

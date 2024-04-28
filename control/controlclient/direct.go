@@ -36,7 +36,6 @@ import (
 	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
@@ -1284,7 +1283,7 @@ var clock tstime.Clock = tstime.StdClock{}
 //
 // TODO(bradfitz): Change controlclient.Options.SkipIPForwardingCheck into a
 // func([]netip.Prefix) error signature instead.
-func ipForwardingBroken(routes []netip.Prefix, state *interfaces.State) bool {
+func ipForwardingBroken(routes []netip.Prefix, state *netmon.State) bool {
 	warn, err := netutil.CheckIPForwarding(routes, state)
 	if err != nil {
 		// Oh well, we tried. This is just for debugging.
