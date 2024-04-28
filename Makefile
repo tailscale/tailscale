@@ -108,6 +108,18 @@ publishdevnameserver: ## Build and publish k8s-nameserver image to location spec
 	@test "${REPO}" != "ghcr.io/tailscale/k8s-nameserver" || (echo "REPO=... must not be ghcr.io/tailscale/k8s-nameserver" && exit 1)
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-nameserver ./build_docker.sh
 
+.PHONY: sshintegrationtest
+sshintegrationtest: ## Run the SSH integration tests in various Docker containers
+	@GOOS=linux GOARCH=amd64 go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test && \
+	GOOS=linux GOARCH=amd64 go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled && \
+	echo "Testing on ubuntu:focal" && docker build --build-arg="BASE=ubuntu:focal" -t ssh-ubuntu-focal ssh/tailssh/testcontainers && \
+	echo "Testing on ubuntu:jammy" && docker build --build-arg="BASE=ubuntu:jammy" -t ssh-ubuntu-jammy ssh/tailssh/testcontainers && \
+	echo "Testing on ubuntu:mantic" && docker build --build-arg="BASE=ubuntu:mantic" -t ssh-ubuntu-mantic ssh/tailssh/testcontainers && \
+	echo "Testing on ubuntu:noble" && docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers && \
+	echo "Testing on fedora:38" && docker build --build-arg="BASE=dokken/fedora-38" -t ssh-fedora-38 ssh/tailssh/testcontainers && \
+	echo "Testing on fedora:39" && docker build --build-arg="BASE=dokken/fedora-39" -t ssh-fedora-39 ssh/tailssh/testcontainers && \
+	echo "Testing on fedora:40" && docker build --build-arg="BASE=dokken/fedora-40" -t ssh-fedora-40 ssh/tailssh/testcontainers
+
 help: ## Show this help
 	@echo "\nSpecify a command. The choices are:\n"
 	@grep -hE '^[0-9a-zA-Z_-]+:.*?## .*$$' ${MAKEFILE_LIST} | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[0;36m%-20s\033[m %s\n", $$1, $$2}'

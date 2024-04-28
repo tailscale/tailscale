@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/creack/pty"
@@ -115,6 +116,10 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		"--tty-name=",     // updated in-place by startWithPTY
 	}
 
+	if debugTest.Load() {
+		incubatorArgs = append(incubatorArgs, "--debug-test")
+	}
+
 	if isSFTP {
 		incubatorArgs = append(incubatorArgs, "--sftp")
 	} else {
@@ -146,7 +151,8 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 }
 
-const debugIncubator = false
+var debugIncubator bool
+var debugTest atomic.Bool
 
 type stdRWC struct{}
 
@@ -177,6 +183,7 @@ type incubatorArgs struct {
 	isShell      bool
 	loginCmdPath string
 	cmdArgs      []string
+	debugTest    bool
 }
 
 func parseIncubatorArgs(args []string) (a incubatorArgs) {
@@ -193,6 +200,7 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 	flags.BoolVar(&a.isShell, "shell", false, "is launching a shell (with no cmds)")
 	flags.BoolVar(&a.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
 	flags.StringVar(&a.loginCmdPath, "login-cmd", "", "the path to `login` cmd")
+	flags.BoolVar(&a.debugTest, "debug-test", false, "should debug in test mode")
 	flags.Parse(args)
 	a.cmdArgs = flags.Args()
 	return a
@@ -228,6 +236,16 @@ func beIncubator(args []string) error {
 		// We don't own stdout or stderr, so the only place we can log is syslog.
 		if sl, err := syslog.New(syslog.LOG_INFO|syslog.LOG_DAEMON, "tailscaled-ssh"); err == nil {
 			logf = log.New(sl, "", 0).Printf
+		}
+	} else if ia.debugTest {
+		// In testing, we don't always have syslog, log to a temp file
+		if logFile, err := os.OpenFile("/tmp/tailscalessh.log", os.O_APPEND|os.O_WRONLY, 0666); err == nil {
+			lf := log.New(logFile, "", 0)
+			logf = func(msg string, args ...any) {
+				lf.Printf(msg, args...)
+				logFile.Sync()
+			}
+			defer logFile.Close()
 		}
 	}
 

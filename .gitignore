@@ -9,6 +9,7 @@
 
 cmd/tailscale/tailscale
 cmd/tailscaled/tailscaled
+ssh/tailssh/testcontainers/tailscaled
 
 # Test binary, built with `go test -c`
 *.test
