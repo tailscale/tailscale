@@ -5,7 +5,6 @@ package syncs
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -134,19 +133,11 @@ func TestMap(t *testing.T) {
 
 	t.Run("LoadOrStore", func(t *testing.T) {
 		var m Map[string, string]
-		var wg sync.WaitGroup
-		wg.Add(2)
+		var wg WaitGroup
 		var ok1, ok2 bool
-		go func() {
-			defer wg.Done()
-			_, ok1 = m.LoadOrStore("", "")
-		}()
-		go func() {
-			defer wg.Done()
-			_, ok2 = m.LoadOrStore("", "")
-		}()
+		wg.Go(func() { _, ok1 = m.LoadOrStore("", "") })
+		wg.Go(func() { _, ok2 = m.LoadOrStore("", "") })
 		wg.Wait()
-
 		if ok1 == ok2 {
 			t.Errorf("exactly one LoadOrStore should load")
 		}
