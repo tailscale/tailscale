@@ -34,7 +34,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
@@ -445,19 +444,19 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<h1>Interfaces</h1>")
 
-	if dr, err := interfaces.DefaultRoute(); err == nil {
+	if dr, err := netmon.DefaultRoute(); err == nil {
 		fmt.Fprintf(w, "<h3>Default route is %q(%d)</h3>\n", html.EscapeString(dr.InterfaceName), dr.InterfaceIndex)
 	} else {
 		fmt.Fprintf(w, "<h3>Could not get the default route: %s</h3>\n", html.EscapeString(err.Error()))
 	}
 
-	if hasCGNATInterface, err := interfaces.HasCGNATInterface(); hasCGNATInterface {
+	if hasCGNATInterface, err := netmon.HasCGNATInterface(); hasCGNATInterface {
 		fmt.Fprintln(w, "<p>There is another interface using the CGNAT range.</p>")
 	} else if err != nil {
 		fmt.Fprintf(w, "<p>Could not check for CGNAT interfaces: %s</p>\n", html.EscapeString(err.Error()))
 	}
 
-	i, err := interfaces.GetList()
+	i, err := netmon.GetInterfaceList()
 	if err != nil {
 		fmt.Fprintf(w, "Could not get interfaces: %s\n", html.EscapeString(err.Error()))
 		return
@@ -469,12 +468,12 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprintf(w, "<th>%v</th> ", v)
 	}
 	fmt.Fprint(w, "</tr>\n")
-	i.ForeachInterface(func(iface interfaces.Interface, ipps []netip.Prefix) {
+	i.ForeachInterface(func(iface netmon.Interface, ipps []netip.Prefix) {
 		fmt.Fprint(w, "<tr>")
 		for _, v := range []any{iface.Index, iface.Name, iface.MTU, iface.Flags, ipps} {
 			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(fmt.Sprintf("%v", v)))
 		}
-		if extras, err := interfaces.InterfaceDebugExtras(iface.Index); err == nil && extras != "" {
+		if extras, err := netmon.InterfaceDebugExtras(iface.Index); err == nil && extras != "" {
 			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(extras))
 		} else if err != nil {
 			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(err.Error()))

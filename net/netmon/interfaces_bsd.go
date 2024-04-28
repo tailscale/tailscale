@@ -6,7 +6,7 @@
 
 //go:build darwin || freebsd
 
-package interfaces
+package netmon
 
 import (
 	"errors"

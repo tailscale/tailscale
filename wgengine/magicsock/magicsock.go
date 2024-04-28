@@ -33,7 +33,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/connstats"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -936,7 +935,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	eps = c.endpointTracker.update(time.Now(), eps)
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
-		ips, loopback, err := interfaces.LocalAddresses()
+		ips, loopback, err := netmon.LocalAddresses()
 		if err != nil {
 			return nil, err
 		}

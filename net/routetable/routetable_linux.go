@@ -13,8 +13,8 @@ import (
 
 	"github.com/tailscale/netlink"
 	"golang.org/x/sys/unix"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 )
 
@@ -141,12 +141,12 @@ func (r RouteEntryLinux) ScopeName() string {
 func Get(max int) ([]RouteEntry, error) {
 	// Fetching the list of interfaces can race with fetching our route
 	// table, but we do it anyway since it's helpful for debugging.
-	ifs, err := interfaces.GetList()
+	ifs, err := netmon.GetInterfaceList()
 	if err != nil {
 		return nil, err
 	}
 
-	ifsByIdx := make(map[int]interfaces.Interface)
+	ifsByIdx := make(map[int]netmon.Interface)
 	for _, iif := range ifs {
 		ifsByIdx[iif.Index] = iif
 	}

@@ -356,7 +356,7 @@ jobs:
       # some Android breakages early.
       # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
     - name: build some
-      run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/interfaces ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version
+      run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/netmon ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version
       env:
         GOOS: android
         GOARCH: arm64

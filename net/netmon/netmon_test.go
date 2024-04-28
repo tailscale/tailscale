@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/net/interfaces"
 	"tailscale.com/util/mak"
 )
 
@@ -116,8 +115,6 @@ func TestMonitorMode(t *testing.T) {
 
 // tests (*State).IsMajorChangeFrom
 func TestIsMajorChangeFrom(t *testing.T) {
-	type State = interfaces.State
-	type Interface = interfaces.Interface
 	tests := []struct {
 		name   string
 		s1, s2 *State

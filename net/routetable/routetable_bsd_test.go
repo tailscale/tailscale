@@ -15,11 +15,11 @@ import (
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 )
 
 func TestRouteEntryFromMsg(t *testing.T) {
-	ifs := map[int]interfaces.Interface{
+	ifs := map[int]netmon.Interface{
 		1: {
 			Interface: &net.Interface{
 				Name: "iface0",

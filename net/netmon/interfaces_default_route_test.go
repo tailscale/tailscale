@@ -3,7 +3,7 @@
 
 //go:build linux || (darwin && !ts_macext)
 
-package interfaces
+package netmon
 
 import (
 	"testing"

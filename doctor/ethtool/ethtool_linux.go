@@ -8,7 +8,7 @@ import (
 	"sort"
 
 	"github.com/safchain/ethtool"
-	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
@@ -21,7 +21,7 @@ func ethtoolImpl(logf logger.Logf) error {
 	}
 	defer et.Close()
 
-	interfaces.ForeachInterface(func(iface interfaces.Interface, _ []netip.Prefix) {
+	netmon.ForeachInterface(func(iface netmon.Interface, _ []netip.Prefix) {
 		ilogf := logger.WithPrefix(logf, iface.Name+": ")
 		features, err := et.Features(iface.Name)
 		if err == nil {

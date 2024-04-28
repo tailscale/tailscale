@@ -59,7 +59,6 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
@@ -2029,18 +2028,18 @@ var removeFromDefaultRoute = []netip.Prefix{
 // Given that "internal" routes don't leave the device, we choose to
 // trust them more, allowing access to them when an Exit Node is enabled.
 func internalAndExternalInterfaces() (internal, external []netip.Prefix, err error) {
-	il, err := interfaces.GetList()
+	il, err := netmon.GetInterfaceList()
 	if err != nil {
 		return nil, nil, err
 	}
 	return internalAndExternalInterfacesFrom(il, runtime.GOOS)
 }
 
-func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (internal, external []netip.Prefix, err error) {
+func internalAndExternalInterfacesFrom(il netmon.InterfaceList, goos string) (internal, external []netip.Prefix, err error) {
 	// We use an IPSetBuilder here to canonicalize the prefixes
 	// and to remove any duplicate entries.
 	var internalBuilder, externalBuilder netipx.IPSetBuilder
-	if err := il.ForeachInterfaceAddress(func(iface interfaces.Interface, pfx netip.Prefix) {
+	if err := il.ForeachInterfaceAddress(func(iface netmon.Interface, pfx netip.Prefix) {
 		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return
 		}
@@ -2084,7 +2083,7 @@ func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (interna
 
 func interfaceRoutes() (ips *netipx.IPSet, hostIPs []netip.Addr, err error) {
 	var b netipx.IPSetBuilder
-	if err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netip.Prefix) {
+	if err := netmon.ForeachInterfaceAddress(func(_ netmon.Interface, pfx netip.Prefix) {
 		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return
 		}
@@ -3647,7 +3646,7 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 	// use fine-grained routes if another interfaces is also using the CGNAT
 	// IP range.
 	if versionOS == "macOS" {
-		hasCGNATInterface, err := interfaces.HasCGNATInterface()
+		hasCGNATInterface, err := netmon.HasCGNATInterface()
 		if err != nil {
 			logf("shouldUseOneCGNATRoute: Could not determine if any interfaces use CGNAT: %v", err)
 			return false
