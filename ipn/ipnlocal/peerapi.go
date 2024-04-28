@@ -36,6 +36,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
@@ -51,7 +52,7 @@ const (
 	taildrivePrefix = "/v0/drive"
 )
 
-var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
+var initListenConfig func(*net.ListenConfig, netip.Addr, *netmon.State, string) error
 
 // addH2C is non-nil on platforms where we want to add H2C
 // ("cleartext" HTTP/2) support to the peerAPI.
@@ -69,7 +70,7 @@ type peerAPIServer struct {
 	taildrop *taildrop.Manager
 }
 
-func (s *peerAPIServer) listen(ip netip.Addr, ifState *interfaces.State) (ln net.Listener, err error) {
+func (s *peerAPIServer) listen(ip netip.Addr, ifState *netmon.State) (ln net.Listener, err error) {
 	// Android for whatever reason often has problems creating the peerapi listener.
 	// But since we started intercepting it with netstack, it's not even important that
 	// we have a real kernel-level listener. So just create a dummy listener on Android

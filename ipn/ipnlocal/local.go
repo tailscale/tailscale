@@ -258,7 +258,7 @@ type LocalBackend struct {
 	authURLTime      time.Time // when the authURL was received from the control server
 	interact         bool
 	egg              bool
-	prevIfState      *interfaces.State
+	prevIfState      *netmon.State
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
@@ -3066,7 +3066,7 @@ var warnExitNodeUsage = health.NewWarnable(health.WithConnectivityImpact())
 
 // updateExitNodeUsageWarning updates a warnable meant to notify users of
 // configuration issues that could break exit node usage.
-func updateExitNodeUsageWarning(p ipn.PrefsView, state *interfaces.State, health *health.Tracker) {
+func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, health *health.Tracker) {
 	var result error
 	if p.ExitNodeIP().IsValid() || p.ExitNodeID() != "" {
 		warn, _ := netutil.CheckReversePathFiltering(state)
