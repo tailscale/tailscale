@@ -2256,6 +2256,9 @@ const (
 
 	// NodeAttrStoreAppCRoutes configures the node to store app connector routes persistently.
 	NodeAttrStoreAppCRoutes NodeCapability = "store-appc-routes"
+
+	// NodeAttrSuggestExitNodeUI allows the currently suggested exit node to appear in the client GUI.
+	NodeAttrSuggestExitNodeUI NodeCapability = "suggest-exit-node-ui"
 )
 
 // SetDNSRequest is a request to add a DNS record.
