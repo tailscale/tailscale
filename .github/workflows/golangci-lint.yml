@@ -32,7 +32,7 @@ jobs:
 
       - name: golangci-lint
         # Note: this is the 'v3' tag as of 2023-08-14
-        uses: golangci/golangci-lint-action@639cd343e1d3b897ff35927a75193d57cfcba299
+        uses: golangci/golangci-lint-action@82d40c283aeb1f2b6595839195e95c2d6a49081b
         with:
           version: v1.56
 
