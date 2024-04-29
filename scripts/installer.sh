@@ -527,6 +527,14 @@ main() {
 			;;
 		apk)
 			set -x
+			if ! grep -Eq '^http.*\/community$' /etc/apk/repositories; then
+				if type setup-apkrepos >/dev/null; then
+					$SUDO setup-apkrepos -c -1
+				else
+					echo "installing tailscale requires the community repo to be enabled in /etc/apk/repositories"
+					exit 1
+				fi
+			fi
 			$SUDO apk add tailscale
 			$SUDO rc-update add tailscale
 			$SUDO rc-service tailscale start
