@@ -171,44 +171,16 @@ func main() {
 		}
 	}
 
-	if cfg.InKubernetes {
-		initKube(cfg.Root)
-	}
-
 	// Context is used for all setup stuff until we're in steady
 	// state, so that if something is hanging we eventually time out
 	// and crashloop the container.
 	bootCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if cfg.InKubernetes && cfg.KubeSecret != "" {
-		canPatch, err := kc.CheckSecretPermissions(bootCtx, cfg.KubeSecret)
-		if err != nil {
-			log.Fatalf("Some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
-		}
-		cfg.KubernetesCanPatch = canPatch
-
-		if cfg.AuthKey == "" && !isOneStepConfig(cfg) {
-			key, err := findKeyInKubeSecret(bootCtx, cfg.KubeSecret)
-			if err != nil {
-				log.Fatalf("Getting authkey from kube secret: %v", err)
-			}
-			if key != "" {
-				// This behavior of pulling authkeys from kube secrets was added
-				// at the same time as the patch permission, so we can enforce
-				// that we must be able to patch out the authkey after
-				// authenticating if you want to use this feature. This avoids
-				// us having to deal with the case where we might leave behind
-				// an unnecessary reusable authkey in a secret, like a rake in
-				// the grass.
-				if !cfg.KubernetesCanPatch {
-					log.Fatalf("authkey found in TS_KUBE_SECRET, but the pod doesn't have patch permissions on the secret to manage the authkey.")
-				}
-				log.Print("Using authkey found in kube secret")
-				cfg.AuthKey = key
-			} else {
-				log.Print("No authkey found in kube secret and TS_AUTHKEY not provided, login will be interactive if needed.")
-			}
+	if cfg.InKubernetes {
+		initKubeClient(cfg.Root)
+		if err := cfg.setupKube(bootCtx); err != nil {
+			log.Fatalf("error setting up for running on Kubernetes: %v", err)
 		}
 	}
 

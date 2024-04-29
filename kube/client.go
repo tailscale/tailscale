@@ -49,7 +49,18 @@ func readFile(n string) ([]byte, error) {
 
 // Client handles connections to Kubernetes.
 // It expects to be run inside a cluster.
-type Client struct {
+type Client interface {
+	GetSecret(context.Context, string) (*Secret, error)
+	UpdateSecret(context.Context, *Secret) error
+	CreateSecret(context.Context, *Secret) error
+	StrategicMergePatchSecret(context.Context, string, *Secret, string) error
+	JSONPatchSecret(context.Context, string, []JSONPatch) error
+	CheckSecretPermissions(context.Context, string) (bool, bool, error)
+	SetDialer(dialer func(context.Context, string, string) (net.Conn, error))
+	SetURL(string)
+}
+
+type client struct {
 	mu          sync.Mutex
 	url         string
 	ns          string
@@ -59,7 +70,7 @@ type Client struct {
 }
 
 // New returns a new client
-func New() (*Client, error) {
+func New() (Client, error) {
 	ns, err := readFile("namespace")
 	if err != nil {
 		return nil, err
@@ -72,7 +83,7 @@ func New() (*Client, error) {
 	if ok := cp.AppendCertsFromPEM(caCert); !ok {
 		return nil, fmt.Errorf("kube: error in creating root cert pool")
 	}
-	return &Client{
+	return &client{
 		url: defaultURL,
 		ns:  string(ns),
 		client: &http.Client{
@@ -87,23 +98,23 @@ func New() (*Client, error) {
 
 // SetURL sets the URL to use for the Kubernetes API.
 // This is used only for testing.
-func (c *Client) SetURL(url string) {
+func (c *client) SetURL(url string) {
 	c.url = url
 }
 
 // SetDialer sets the dialer to use when establishing a connection
 // to the Kubernetes API server.
-func (c *Client) SetDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
+func (c *client) SetDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
 	c.client.Transport.(*http.Transport).DialContext = dialer
 }
 
-func (c *Client) expireToken() {
+func (c *client) expireToken() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokenExpiry = time.Now()
 }
 
-func (c *Client) getOrRenewToken() (string, error) {
+func (c *client) getOrRenewToken() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tk, te := c.token, c.tokenExpiry
@@ -120,7 +131,7 @@ func (c *Client) getOrRenewToken() (string, error) {
 	return c.token, nil
 }
 
-func (c *Client) secretURL(name string) string {
+func (c *client) secretURL(name string) string {
 	if name == "" {
 		return fmt.Sprintf("%s/api/v1/namespaces/%s/secrets", c.url, c.ns)
 	}
@@ -153,7 +164,7 @@ func setHeader(key, value string) func(*http.Request) {
 // decoded from JSON.
 // If the request fails with a 401, the token is expired and a new one is
 // requested.
-func (c *Client) doRequest(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error {
+func (c *client) doRequest(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error {
 	req, err := c.newRequest(ctx, method, url, in)
 	if err != nil {
 		return err
@@ -178,7 +189,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, in, out any,
 	return nil
 }
 
-func (c *Client) newRequest(ctx context.Context, method, url string, in any) (*http.Request, error) {
+func (c *client) newRequest(ctx context.Context, method, url string, in any) (*http.Request, error) {
 	tk, err := c.getOrRenewToken()
 	if err != nil {
 		return nil, err
@@ -209,7 +220,7 @@ func (c *Client) newRequest(ctx context.Context, method, url string, in any) (*h
 }
 
 // GetSecret fetches the secret from the Kubernetes API.
-func (c *Client) GetSecret(ctx context.Context, name string) (*Secret, error) {
+func (c *client) GetSecret(ctx context.Context, name string) (*Secret, error) {
 	s := &Secret{Data: make(map[string][]byte)}
 	if err := c.doRequest(ctx, "GET", c.secretURL(name), nil, s); err != nil {
 		return nil, err
@@ -218,18 +229,18 @@ func (c *Client) GetSecret(ctx context.Context, name string) (*Secret, error) {
 }
 
 // CreateSecret creates a secret in the Kubernetes API.
-func (c *Client) CreateSecret(ctx context.Context, s *Secret) error {
+func (c *client) CreateSecret(ctx context.Context, s *Secret) error {
 	s.Namespace = c.ns
 	return c.doRequest(ctx, "POST", c.secretURL(""), s, nil)
 }
 
 // UpdateSecret updates a secret in the Kubernetes API.
-func (c *Client) UpdateSecret(ctx context.Context, s *Secret) error {
+func (c *client) UpdateSecret(ctx context.Context, s *Secret) error {
 	return c.doRequest(ctx, "PUT", c.secretURL(s.Name), s, nil)
 }
 
 // JSONPatch is a JSON patch operation.
-// It currently (2023-03-02) only supports the "remove" operation.
+// It currently (2023-03-02) only supports "add" and "remove" operations.
 //
 // https://tools.ietf.org/html/rfc6902
 type JSONPatch struct {
@@ -239,8 +250,8 @@ type JSONPatch struct {
 }
 
 // JSONPatchSecret updates a secret in the Kubernetes API using a JSON patch.
-// It currently (2023-03-02) only supports the "remove" operation.
-func (c *Client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
+// It currently (2023-03-02) only supports "add" and "remove" operations.
+func (c *client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
 	for _, p := range patch {
 		if p.Op != "remove" && p.Op != "add" {
 			panic(fmt.Errorf("unsupported JSON patch operation: %q", p.Op))
@@ -252,7 +263,7 @@ func (c *Client) JSONPatchSecret(ctx context.Context, name string, patch []JSONP
 // StrategicMergePatchSecret updates a secret in the Kubernetes API using a
 // strategic merge patch.
 // If a fieldManager is provided, it will be used to track the patch.
-func (c *Client) StrategicMergePatchSecret(ctx context.Context, name string, s *Secret, fieldManager string) error {
+func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *Secret, fieldManager string) error {
 	surl := c.secretURL(name)
 	if fieldManager != "" {
 		uv := url.Values{
@@ -267,7 +278,7 @@ func (c *Client) StrategicMergePatchSecret(ctx context.Context, name string, s *
 
 // CheckSecretPermissions checks the secret access permissions of the current
 // pod. It returns an error if the basic permissions tailscale needs are
-// missing, and reports whether the patch permission is additionally present.
+// missing, and reports whether the patch and create permissions are additionally present.
 //
 // Errors encountered during the access checking process are logged, but ignored
 // so that the pod tries to fail alive if the permissions exist and there's just
@@ -275,7 +286,7 @@ func (c *Client) StrategicMergePatchSecret(ctx context.Context, name string, s *
 // should always be able to use SSARs to assess their own permissions, but since
 // we didn't use to check permissions this way we'll be cautious in case some
 // old version of k8s deviates from the current behavior.
-func (c *Client) CheckSecretPermissions(ctx context.Context, secretName string) (canPatch bool, err error) {
+func (c *client) CheckSecretPermissions(ctx context.Context, secretName string) (canPatch, canCreate bool, err error) {
 	var errs []error
 	for _, verb := range []string{"get", "update"} {
 		ok, err := c.checkPermission(ctx, verb, secretName)
@@ -286,19 +297,24 @@ func (c *Client) CheckSecretPermissions(ctx context.Context, secretName string) 
 		}
 	}
 	if len(errs) > 0 {
-		return false, multierr.New(errs...)
+		return false, false, multierr.New(errs...)
 	}
-	ok, err := c.checkPermission(ctx, "patch", secretName)
+	canPatch, err = c.checkPermission(ctx, "patch", secretName)
 	if err != nil {
 		log.Printf("error checking patch permission on secret %s: %v", secretName, err)
-		return false, nil
+		return false, false, nil
 	}
-	return ok, nil
+	canCreate, err = c.checkPermission(ctx, "create", secretName)
+	if err != nil {
+		log.Printf("error checking create permission on secret %s: %v", secretName, err)
+		return false, false, nil
+	}
+	return canPatch, canCreate, nil
 }
 
 // checkPermission reports whether the current pod has permission to use the
-// given verb (e.g. get, update, patch) on secretName.
-func (c *Client) checkPermission(ctx context.Context, verb, secretName string) (bool, error) {
+// given verb (e.g. get, update, patch, create) on secretName.
+func (c *client) checkPermission(ctx context.Context, verb, secretName string) (bool, error) {
 	sar := map[string]any{
 		"apiVersion": "authorization.k8s.io/v1",
 		"kind":       "SelfSubjectAccessReview",
@@ -321,4 +337,11 @@ func (c *Client) checkPermission(ctx context.Context, verb, secretName string) (
 		return false, err
 	}
 	return res.Status.Allowed, nil
+}
+
+func IsNotFoundErr(err error) bool {
+	if st, ok := err.(*Status); ok && st.Code == 404 {
+		return true
+	}
+	return false
 }
