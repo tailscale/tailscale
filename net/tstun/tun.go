@@ -53,6 +53,9 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		dev.Close()
 		return nil, "", err
 	}
+	if err := setLinkFeatures(dev); err != nil {
+		logf("setting link features: %v", err)
+	}
 	if err := setLinkAttrs(dev); err != nil {
 		logf("setting link attributes: %v", err)
 	}
