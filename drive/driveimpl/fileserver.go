@@ -6,6 +6,7 @@ package driveimpl
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/tailscale/xnet/webdav"
@@ -107,9 +108,42 @@ func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	h.ServeHTTP(w, r)
+
+	// Rewrite text/html content type to text/plain, to prevent stored XSS
+	// vulnerabilities. This has the effect of not being able to serve HTML
+	// content via Taildrive, which is fine because this is a file sharing, not
+	// web serving, tool.
+	rw := &contentTypeRewritingResponseWriter{
+		ResponseWriter: w,
+	}
+	h.ServeHTTP(rw, r)
 }
 
 func (s *FileServer) Close() error {
 	return s.l.Close()
+}
+
+var contentTypeRewrites = map[string]string{
+	"text/html": "text/plain",
+}
+
+// contentTypeRewritingResponseWriter rewrites content types according to the
+// above contentTypeRewrites map.
+type contentTypeRewritingResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (rw *contentTypeRewritingResponseWriter) Header() http.Header {
+	result := rw.ResponseWriter.Header()
+	contentTypes := result.Values("Content-Type")
+	if len(contentTypes) > 0 {
+		for i, contentType := range contentTypes {
+			for from, to := range contentTypeRewrites {
+				contentType = strings.ReplaceAll(contentType, from, to)
+			}
+			contentTypes[i] = contentType
+		}
+		result["Content-Type"] = contentTypes
+	}
+	return result
 }

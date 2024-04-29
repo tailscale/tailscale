@@ -10,10 +10,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,8 +34,10 @@ const (
 	remote2 = `_rem ote$%2`
 	share11 = `sha re$%11`
 	share12 = `_sha re$%12`
-	file111 = `fi le$%111.txt`
-	file112 = `file112.txt`
+	file111 = `fi le$%111.html`
+	file112 = `file112.html`
+
+	contents = "<html>hello world</html>"
 )
 
 func init() {
@@ -56,7 +60,7 @@ func TestDirectoryListing(t *testing.T) {
 	s.checkDirList("remote with one share should contain that share", shared.Join(domain, remote1), share11)
 	s.addShare(remote1, share12, drive.PermissionReadOnly)
 	s.checkDirList("remote with two shares should contain both in lexicographical order", shared.Join(domain, remote1), share12, share11)
-	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
+	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, contents, true)
 	s.checkDirList("remote share should contain file", shared.Join(domain, remote1, share11), file111)
 
 	s.addRemote(remote2)
@@ -78,9 +82,13 @@ func TestFileManipulation(t *testing.T) {
 
 	s.addRemote(remote1)
 	s.addShare(remote1, share11, drive.PermissionReadWrite)
-	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
+	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, contents, true)
 	s.checkFileStatus(remote1, share11, file111)
 	s.checkFileContents(remote1, share11, file111)
+	// Despite this being an HTML file, Content-Type should be text/plain to
+	// prevent user agents from treating this as an HTML page. This prevents
+	// Taildrive from being used to distribute malicious JavaScript.
+	s.checkContentType(remote1, share11, file111, "text/plain")
 
 	s.renameFile("renaming file across shares should fail", remote1, share11, file111, share12, file112, false)
 
@@ -88,9 +96,9 @@ func TestFileManipulation(t *testing.T) {
 	s.checkFileContents(remote1, share11, file112)
 
 	s.addShare(remote1, share12, drive.PermissionReadOnly)
-	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, "hello world", false)
-	s.writeFile("writing file to non-existent remote should fail", "non-existent", share11, file111, "hello world", false)
-	s.writeFile("writing file to non-existent share should fail", remote1, "non-existent", file111, "hello world", false)
+	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, contents, false)
+	s.writeFile("writing file to non-existent remote should fail", "non-existent", share11, file111, contents, false)
+	s.writeFile("writing file to non-existent share should fail", remote1, "non-existent", file111, contents, false)
 }
 
 type local struct {
@@ -124,6 +132,7 @@ func (r *remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 type system struct {
 	t       *testing.T
 	local   *local
+	baseURL string
 	client  *gowebdav.Client
 	remotes map[string]*remote
 }
@@ -149,11 +158,13 @@ func newSystem(t *testing.T) *system {
 		}
 	}()
 
-	client := gowebdav.NewAuthClient(fmt.Sprintf("http://%s", l.Addr()), &noopAuthorizer{})
+	baseURL := fmt.Sprintf("http://%s", l.Addr())
+	client := gowebdav.NewAuthClient(baseURL, &noopAuthorizer{})
 	client.SetTransport(&http.Transport{DisableKeepAlives: true})
 	s := &system{
 		t:       t,
 		local:   &local{l: l, fs: fs},
+		baseURL: baseURL,
 		client:  client,
 		remotes: make(map[string]*remote),
 	}
@@ -272,6 +283,21 @@ func (s *system) checkFileContents(remoteName, shareName, name string) {
 	actual := s.readViaWebDAV(remoteName, shareName, name)
 	if expected != actual {
 		s.t.Errorf("%s/%s/%s should show same contents via WebDAV read as local read\nwant: %q\nhave: %q", remoteName, shareName, name, expected, actual)
+	}
+}
+
+func (s *system) checkContentType(remoteName, shareName, name, expectedContentType string) {
+	client := http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	p := pathTo(remoteName, shareName, name)
+	resp, err := client.Head(fmt.Sprintf("%s/%s", s.baseURL, url.PathEscape(p)))
+	if err != nil {
+		s.t.Fatalf("unable to check content type: %s", err)
+	}
+	actual := resp.Header.Get("Content-Type")
+	if !strings.Contains(actual, expectedContentType) {
+		s.t.Errorf("%q has wrong Content-Type \nwant: %q\nhave: %q", p, expectedContentType, actual)
 	}
 }
 
