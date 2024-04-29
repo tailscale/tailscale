@@ -16,7 +16,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.44.7
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
-	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/creack/pty v1.1.21
 	github.com/dave/courtney v0.4.0
 	github.com/dave/jennifer v1.7.0

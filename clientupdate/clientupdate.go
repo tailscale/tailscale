@@ -1019,6 +1019,20 @@ func (up *Updater) updateLinuxBinary() error {
 	return nil
 }
 
+func restartSystemdUnit(ctx context.Context) error {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		// Likely not a systemd-managed distro.
+		return errors.ErrUnsupported
+	}
+	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl daemon-reload failed: %w\noutput: %s", err, out)
+	}
+	if out, err := exec.Command("systemctl", "restart", "tailscaled.service").CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl restart failed: %w\noutput: %s", err, out)
+	}
+	return nil
+}
+
 func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
 	dlDir, err := os.UserCacheDir()
 	if err != nil {
