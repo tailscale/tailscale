@@ -15,7 +15,6 @@ import (
 	"net/netip"
 	"os"
 	"reflect"
-	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -2283,9 +2282,6 @@ func TestPreferencePolicyInfo(t *testing.T) {
 }
 
 func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("test broken on macOS; see https://github.com/tailscale/tailscale/issues/11894")
-	}
 	tests := []struct {
 		before, after  opt.Bool
 		tailnetDefault bool
@@ -2330,7 +2326,14 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 				t.Fatal(err)
 			}
 			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)
-			if want, got := tt.after, b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
+			want := tt.after
+			// On platforms that don't support auto-update we can never
+			// transition to auto-updates being enabled. The value should
+			// remain unchanged after onTailnetDefaultAutoUpdate.
+			if !clientupdate.CanAutoUpdate() && want.EqualBool(true) {
+				want = tt.before
+			}
+			if got := b.pm.CurrentPrefs().AutoUpdate().Apply; got != want {
 				t.Errorf("got: %q, want %q", got, want)
 			}
 		})
