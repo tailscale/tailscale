@@ -428,7 +428,8 @@ The ID of the device.
 
 ```sh
 curl -X POST 'https://api.tailscale.com/api/v2/device/12345/expire' \
-  -u "tskey-api-xxxxx:"
+  -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json"
 ```
 
 ### Response
@@ -508,6 +509,7 @@ The new list of enabled subnet routes.
 ```sh
 curl "https://api.tailscale.com/api/v2/device/11055/routes" \
 -u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
 --data-binary '{"routes": ["10.0.0.0/16", "192.168.1.0/24"]}'
 ```
 
@@ -556,6 +558,7 @@ Specify whether the device is authorized. False to deauthorize an authorized dev
 ```sh
 curl "https://api.tailscale.com/api/v2/device/11055/authorized" \
 -u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
 --data-binary '{"authorized": true}'
 ```
 
@@ -605,6 +608,7 @@ The new list of tags for the device.
 ```sh
 curl "https://api.tailscale.com/api/v2/device/11055/tags" \
 -u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
 --data-binary '{"tags": ["tag:foo", "tag:bar"]}'
 ```
 
@@ -667,6 +671,7 @@ This returns a 2xx code on success, with an empty JSON object in the response bo
 ```sh
 curl "https://api.tailscale.com/api/v2/device/11055/key" \
 -u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
 --data-binary '{"keyExpiryDisabled": true}'
 ```
 
@@ -712,6 +717,7 @@ This returns a 2xx code on success, with an empty JSON object in the response bo
 ```sh
 curl "https://api.tailscale.com/api/v2/device/11055/ip" \
 -u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
 --data-binary '{"ipv4": "100.80.0.1"}'
 ```
 
@@ -808,6 +814,7 @@ A number value is an integer and must be a JSON safe number (up to 2^53 - 1).
 ```
 curl "https://api.tailscale.com/api/v2/device/11055/attributes/custom:my_attribute" \
 -u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
 --data-binary '{"value": "my_value"}'
 ```
 
@@ -918,7 +925,7 @@ The response will contain a JSON object with the fields:
 
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl" \
-  -u "tskey-api-xxxxx:" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response in HuJSON format
@@ -958,8 +965,8 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl" \
-  -u "tskey-api-xxxxx:" \
-  -H "Accept: application/json" \
+  -u "tskey-api-xxxxx:"
+  -H "Accept: application/json"
 ```
 
 ### Response in JSON format
@@ -1000,7 +1007,7 @@ Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl?details=1" \
-  -u "tskey-api-xxxxx:" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response (with details)
@@ -1072,6 +1079,7 @@ Learn about the [ACL policy properties you can include in the request](https://t
 POST /api/v2/tailnet/example.com/acl
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   -H "If-Match: \"e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c\""
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
@@ -1184,6 +1192,7 @@ Learn about [tailnet policy file entries](https://tailscale.com/kb/1018).
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFor=user1@example.com&type=user" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
   // Declare tests to check functionality of ACL rules. User must be a valid user with registered machines.
@@ -1267,6 +1276,7 @@ Learn more about [tailnet policy file tests](https://tailscale.com/kb/1018/#test
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '
   [
     {"src": "user1@example.com", "accept": ["example-host-1:22"], "deny": ["example-host-2:100"]}
@@ -1288,6 +1298,7 @@ The `POST` body should be a JSON object with a JSON or HuJSON representation of 
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '
   {
     "acls": [
@@ -1548,6 +1559,7 @@ Note the following about required vs. optional values:
 ```jsonc
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/keys" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '
 {
   "capabilities": {
@@ -1759,6 +1771,7 @@ Adding DNS nameservers with the MagicDNS on:
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '{"dns": ["8.8.8.8"]}'
 ```
 
@@ -1778,6 +1791,7 @@ The response is a JSON object containing the new list of nameservers and the sta
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '{"dns": []}'
 ```
 
@@ -1864,6 +1878,7 @@ The DNS preferences in JSON. Currently, MagicDNS is the only setting available:
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '{"magicDNS": true}'
 ```
 
@@ -1947,6 +1962,7 @@ Specify a list of search paths in a JSON object:
 ```sh
 curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths" \
   -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
   --data-binary '{"searchPaths": ["user1.example.com", "user2.example.com"]}'
 ```
 
