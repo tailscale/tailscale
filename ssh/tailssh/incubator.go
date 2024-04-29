@@ -12,6 +12,7 @@
 package tailssh
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -126,22 +127,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		if isShell {
 			incubatorArgs = append(incubatorArgs, "--shell")
 		}
-		// Only the macOS version of the login command supports executing a
-		// command, all other versions only support launching a shell
-		// without taking any arguments.
-		shouldUseLoginCmd := isShell || runtime.GOOS == "darwin"
-		if hostinfo.IsSELinuxEnforcing() {
-			// If we're running on a SELinux-enabled system, the login
-			// command will be unable to set the correct context for the
-			// shell. Fall back to using the incubator to launch the shell.
-			// See http://github.com/tailscale/tailscale/issues/4908.
-			shouldUseLoginCmd = false
-		}
-		if shouldUseLoginCmd {
-			if lp, err := exec.LookPath("login"); err == nil {
-				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
-			}
-		}
+
 		incubatorArgs = append(incubatorArgs, "--cmd="+name)
 		if len(args) > 0 {
 			incubatorArgs = append(incubatorArgs, "--")
@@ -170,20 +156,19 @@ func (stdRWC) Close() error {
 }
 
 type incubatorArgs struct {
-	uid          int
-	gid          int
-	groups       string
-	localUser    string
-	remoteUser   string
-	remoteIP     string
-	ttyName      string
-	hasTTY       bool
-	cmdName      string
-	isSFTP       bool
-	isShell      bool
-	loginCmdPath string
-	cmdArgs      []string
-	debugTest    bool
+	uid        int
+	gid        int
+	groups     string
+	localUser  string
+	remoteUser string
+	remoteIP   string
+	ttyName    string
+	hasTTY     bool
+	cmdName    string
+	isSFTP     bool
+	isShell    bool
+	cmdArgs    []string
+	debugTest  bool
 }
 
 func parseIncubatorArgs(args []string) (a incubatorArgs) {
@@ -199,7 +184,6 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 	flags.StringVar(&a.cmdName, "cmd", "", "the cmd to launch (ignored in sftp mode)")
 	flags.BoolVar(&a.isShell, "shell", false, "is launching a shell (with no cmds)")
 	flags.BoolVar(&a.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
-	flags.StringVar(&a.loginCmdPath, "login-cmd", "", "the path to `login` cmd")
 	flags.BoolVar(&a.debugTest, "debug-test", false, "should debug in test mode")
 	flags.Parse(args)
 	a.cmdArgs = flags.Args()
@@ -207,14 +191,11 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
-// It is responsible for informing the system of a new login session for the user.
-// This is sometimes necessary for mounting home directories and decrypting file
-// systems.
+// It is responsible for informing the system of a new login session for the
+// user. This is sometimes necessary for mounting home directories and
+// decrypting file systems.
 //
-// Tailscaled launches the incubator as the same user as it was
-// launched as.  The incubator then registers a new session with the
-// OS, sets its UID and groups to the specified `--uid`, `--gid` and
-// `--groups` and then launches the requested `--cmd`.
+// Tailscaled launches the incubator as the same user as it was launched as.
 func beIncubator(args []string) error {
 	// To defend against issues like https://golang.org/issue/1435,
 	// defensively lock our current goroutine's thread to the current
@@ -249,14 +230,15 @@ func beIncubator(args []string) error {
 		}
 	}
 
-	euid := os.Geteuid()
-	runningAsRoot := euid == 0
-	if runningAsRoot && ia.loginCmdPath != "" {
-		// Check if we can exec into the login command instead of trying to
-		// incubate ourselves.
-		if la := ia.loginArgs(); la != nil {
-			return unix.Exec(ia.loginCmdPath, la, os.Environ())
-		}
+	if ia.isSFTP {
+		return dropPrivilegesAndHandleSFTP(logf, ia)
+	}
+
+	attemptLoginShell := shouldAttemptLoginShell()
+	if !attemptLoginShell {
+		logf("not attempting login shell")
+	} else if handled, err := tryLoginCmd(logf, ia); handled {
+		return err
 	}
 
 	// Inform the system that we are about to log someone in.
@@ -268,34 +250,187 @@ func beIncubator(args []string) error {
 		defer sessionCloser()
 	}
 
-	var groupIDs []int
-	for _, g := range strings.Split(ia.groups, ",") {
-		gid, err := strconv.ParseInt(g, 10, 32)
-		if err != nil {
+	if attemptLoginShell {
+		// We weren't able to use login, maybe we can use su.
+		if handled, err := tryLoginWithSU(logf, ia); handled {
 			return err
+		} else {
+			logf("not attempting su")
 		}
-		groupIDs = append(groupIDs, int(gid))
 	}
 
-	if err := dropPrivileges(logf, ia.uid, ia.gid, groupIDs); err != nil {
+	// Fall back to dropping privileges.
+	return dropPrivilegesAndRun(logf, ia)
+}
+
+// dropPrivilegesAndHandleSFTP serves FTP connections with dropped privileges.
+func dropPrivilegesAndHandleSFTP(logf logger.Logf, ia incubatorArgs) error {
+	if err := dropPrivileges(logf, ia); err != nil {
 		return err
 	}
 
-	if ia.isSFTP {
-		logf("handling sftp")
+	logf("handling sftp")
 
-		server, err := sftp.NewServer(stdRWC{})
-		if err != nil {
-			return err
-		}
-		// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
-		// when sftp is patched to report clean termination.
-		if err := server.Serve(); err != nil && err != io.EOF {
-			return err
-		}
-		return nil
+	server, err := sftp.NewServer(stdRWC{})
+	if err != nil {
+		return err
+	}
+	// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
+	// when sftp is patched to report clean termination.
+	if err := server.Serve(); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
+}
+
+// shouldAttemptLoginShell decides whether we should attempt to get a full
+// login shell with the login or su commands.
+func shouldAttemptLoginShell() bool {
+	euid := os.Geteuid()
+	runningAsRoot := euid == 0
+
+	switch {
+	case !runningAsRoot:
+		// We have to be root in order to create a login shell.
+		return false
+	case hostinfo.IsSELinuxEnforcing():
+		// If we're running on a SELinux-enabled system, neiher login nor su
+		// will be able to set the correct context for the shell. So, we don't
+		// bother trying to run them and instead fall back to using the
+		// incubator to launch the shell.
+		// See http://github.com/tailscale/tailscale/issues/4908.
+		return false
 	}
 
+	return true
+}
+
+// tryLoginCmd attempts to handle the ssh session by creating a full login
+// shell using the login command. If it was able to do so, it returns true,
+// plus any error from running that shell. If it was unable to do so, it
+// returns (false, nil).
+//
+// Creating a login shell in this way allows us to register the remote IP of
+// the login session, trigger PAM authentication, and get the "remote" PAM
+// profile.
+//
+// However, login is subject to some limitations.
+//
+// 1. login cannot be used to execute commands except on macOS.
+// 2. On Linux and BSD, login requires a TTY to keep running.
+//
+// In these cases, tryLoginCmd returns (false, nil) to indicate that processing
+// should fall through to other methods, such as using the su command.
+func tryLoginCmd(logf logger.Logf, ia incubatorArgs) (bool, error) {
+	// Only the macOS version of the login command supports executing a
+	// command, all other versions only support launching a shell without
+	// taking any arguments.
+	if !ia.isShell && runtime.GOOS != "darwin" {
+		logf("won't use login because we're not in a shell or on macOS")
+		return false, nil
+	}
+
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd":
+		if !ia.hasTTY {
+			logf("can't use login because of missing TTY")
+			// We can only use the login command if a shell was requested with
+			// a TTY. If there is no TTY, login exits immediately, which
+			// breaks things like mosh and VSCode.
+			return false, nil
+		}
+	}
+
+	if loginCmdPath, err := exec.LookPath("login"); err == nil {
+		loginArgs := ia.loginArgs(loginCmdPath)
+		logf("logging in with %s %+v", loginCmdPath, loginArgs)
+		// replace the running process
+		return true, unix.Exec(loginCmdPath, loginArgs, os.Environ())
+	} else {
+		logf("failed to get login args: %s", err)
+	}
+
+	return false, nil
+}
+
+// tryLoginWithSU attempts to start a login shell using su. If su is available
+// and supports the necessary arguments, this returns true, plus the result of
+// executing su. Otherwise, it returns (false, nil).
+//
+// Creating a login shell in this way allows us to trigger PAM authentication
+// and get the "login" PAM profile.
+//
+// Unlike login, su often does not require a TTY, so on Linux hosts that have
+// an su command which accepts the right flags, we'll use su instead of login
+// when no TTY is available.
+func tryLoginWithSU(logf logger.Logf, ia incubatorArgs) (bool, error) {
+	// Currently, we only support falling back to su on Linux. This
+	// potentially could work on BSDs as well, but requires testing.
+	if runtime.GOOS != "linux" {
+		return false, nil
+	}
+
+	su, err := exec.LookPath("su")
+	if err != nil {
+		logf("can't find su command")
+		return false, nil
+	}
+
+	// Get help text to inspect supported flags.
+	out, err := exec.Command(su, "-h").CombinedOutput()
+	if err != nil {
+		logf("%s doesn't support -h, don't use", su)
+		return false, nil
+	}
+
+	supportsFlag := func(flag string) bool {
+		return bytes.Contains(out, []byte(flag))
+	}
+
+	// Make sure su supports the necessary flags.
+	if !supportsFlag("--login") {
+		logf("%s doesn't support --login, don't use", su)
+		return false, nil
+	}
+	if !supportsFlag("--command") {
+		logf("%s doesn't support --command, don't use", su)
+		return false, nil
+	}
+
+	loginArgs := []string{
+		"--login",
+	}
+	if ia.hasTTY && supportsFlag("--pty") {
+		// Allocate a pseudo terminal for improved security. In particular,
+		// this can help avoid TIOCSTI ioctl terminal injection.
+		loginArgs = append(loginArgs, "--pty")
+	}
+	loginArgs = append(loginArgs, ia.localUser)
+
+	if !ia.isShell && ia.cmdName != "" {
+		// We only execute the requested command if we're not requesting a
+		// shell. When requesting a shell, the command is the requested shell,
+		// which is redundant because `su -l` will give the user their default
+		// shell.
+		loginArgs = append(loginArgs, "--command", ia.cmdName)
+		loginArgs = append(loginArgs, ia.cmdArgs...)
+	}
+
+	logf("logging in with %s %+v", su, loginArgs)
+	// replace the running process
+	return true, unix.Exec(su, loginArgs, os.Environ())
+}
+
+// dropPrivilegesAndRun is a last resort if we couldn't use login or su. It
+// drops privileges for the current process, registers a new session with the
+// OS, sets its UID, GID and groups to the specified values, and then launches
+// the requested `--cmd`.
+func dropPrivilegesAndRun(logf logger.Logf, ia incubatorArgs) error {
+	if err := dropPrivileges(logf, ia); err != nil {
+		return err
+	}
+
+	logf("running %s %+v", ia.cmdName, ia.cmdArgs)
 	cmd := exec.Command(ia.cmdName, ia.cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -303,18 +438,15 @@ func beIncubator(args []string) error {
 	cmd.Env = os.Environ()
 
 	if ia.hasTTY {
-		// If we were launched with a tty then we should
-		// mark that as the ctty of the child. However,
-		// as the ctty is being passed from the parent
-		// we set the child to foreground instead which
-		// also passes the ctty.
-		// However, we can not do this if never had a tty to
-		// begin with.
+		// If we were launched with a tty then we should mark that as the ctty
+		// of the child. However, as the ctty is being passed from the parent
+		// we set the child to foreground instead which also passes the ctty.
+		// However, we can not do this if never had a tty to begin with.
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Foreground: true,
 		}
 	}
-	err = cmd.Run()
+	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
 		code := ps.ExitCode()
@@ -344,17 +476,34 @@ const (
 	assertPrivilegesWereDroppedByAttemptingToUnDrop = false
 )
 
-// dropPrivileges contains all the logic for dropping privileges to a different
+// dropPrivileges determines the required user ID and group IDs for this
+// incubator and then calls doDropPrivileges to drop privileges for the current
+// process.
+func dropPrivileges(logf logger.Logf, ia incubatorArgs) error {
+	var groupIDs []int
+	for _, g := range strings.Split(ia.groups, ",") {
+		gid, err := strconv.ParseInt(g, 10, 32)
+		if err != nil {
+			return err
+		}
+		groupIDs = append(groupIDs, int(gid))
+	}
+
+	return doDropPrivileges(logf, ia.uid, ia.gid, groupIDs)
+}
+
+// doDropPrivileges contains all the logic for dropping privileges to a different
 // UID, GID, and set of supplementary groups. This function is
 // security-sensitive and ordering-dependent; please be very cautious if/when
 // refactoring.
 //
-// WARNING: if you change this function, you *MUST* run the TestDropPrivileges
+// WARNING: if you change this function, you *MUST* run the TestDoDropPrivileges
 // test in this package as root on at least Linux, FreeBSD and Darwin. This can
 // be done by running:
 //
-//	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDropPrivileges
-func dropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+//	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDoDropPrivileges
+func doDropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+	logf("dropping privileges")
 	fatalf := func(format string, args ...any) {
 		logf("[unexpected] error dropping privileges: "+format, args...)
 		os.Exit(1)
@@ -749,18 +898,11 @@ func fileExists(path string) bool {
 }
 
 // loginArgs returns the arguments to use to exec the login binary.
-// It returns nil if the login binary should not be used.
-// The login binary is only used:
-//   - on darwin, if the client is requesting a shell or a command.
-//   - on linux and BSD, if the client is requesting a shell with a TTY.
-func (ia *incubatorArgs) loginArgs() []string {
-	if ia.isSFTP {
-		return nil
-	}
+func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 	switch runtime.GOOS {
 	case "darwin":
 		args := []string{
-			ia.loginCmdPath,
+			loginCmdPath,
 			"-f", // already authenticated
 
 			// login typically discards the previous environment, but we want to
@@ -779,29 +921,17 @@ func (ia *incubatorArgs) loginArgs() []string {
 		}
 		return args
 	case "linux":
-		if !ia.isShell || !ia.hasTTY {
-			// We can only use login command if a shell was requested with a TTY. If
-			// there is no TTY, login exits immediately, which breaks things likes
-			// mosh and VSCode.
-			return nil
-		}
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
 			//
 			// Arch uses a different login binary that makes the -h flag set the PAM
 			// service to "remote". So if they don't have that configured, don't
 			// pass -h.
-			return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
+			return []string{loginCmdPath, "-f", ia.localUser, "-p"}
 		}
-		return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
+		return []string{loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
 	case "freebsd", "openbsd":
-		if !ia.isShell || !ia.hasTTY {
-			// We can only use login command if a shell was requested with a TTY. If
-			// there is no TTY, login exits immediately, which breaks things likes
-			// mosh and VSCode.
-			return nil
-		}
-		return []string{ia.loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
+		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
 }

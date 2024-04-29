@@ -92,9 +92,18 @@ func TestIntegrationSSH(t *testing.T) {
 		homeDir = "/Users/testuser"
 	}
 
+	_, err := exec.LookPath("su")
+	suPresent := err == nil
+
+	// Some operating systems like Fedora seem to require login to be present
+	// in order for su to work.
+	_, err = exec.LookPath("login")
+	loginPresent := err == nil
+
 	tests := []struct {
 		cmd  string
 		want []string
+		skip bool
 	}{
 		{
 			cmd:  "id",
@@ -103,10 +112,15 @@ func TestIntegrationSSH(t *testing.T) {
 		{
 			cmd:  "pwd",
 			want: []string{homeDir},
+			skip: runtime.GOOS != "linux" || !suPresent || !loginPresent,
 		},
 	}
 
 	for _, test := range tests {
+		if test.skip {
+			continue
+		}
+
 		// run every test both without and with a shell
 		for _, shell := range []bool{false, true} {
 			shellQualifier := "no_shell"
