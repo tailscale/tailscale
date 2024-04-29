@@ -189,8 +189,8 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 						{
 							Name:    "sysctler",
 							Image:   "tailscale/tailscale",
-							Command: []string{"/bin/sh"},
-							Args:    []string{"-c", "sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1"},
+							Command: []string{"/bin/sh", "-c"},
+							Args:    []string{"sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi"},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: ptr.To(true),
 							},
