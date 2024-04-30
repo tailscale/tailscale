@@ -4594,6 +4594,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.authURLSticky = ""
 	b.authURLTime = time.Time{}
 	b.activeLogin = ""
+	b.resetDialPlan()
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
 	b.enterStateLockedOnEntry(ipn.Stopped, unlock)
 }
@@ -4675,7 +4676,7 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 	// b.mu is now unlocked, after editPrefsLockedOnEntry.
 
 	// Clear any previous dial plan(s), if set.
-	b.dialPlan.Store(nil)
+	b.resetDialPlan()
 
 	if cc == nil {
 		// Double Logout can happen via repeated IPN
@@ -5878,13 +5879,17 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 	unlock := b.lockAndGetUnlock()
 	defer unlock()
 
+	oldControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
 	if err := b.pm.SwitchProfile(profile); err != nil {
 		return err
 	}
 
-	// TODO: Check if serverUrl in the switched profile is actually changed;
-	// if not, then no need to reset dial plan
-	b.dialPlan.Store(nil)
+	// As an optimization, only reset the dialPlan if the control URL
+	// changed; we treat an empty URL as "unknown" and always reset.
+	newControlURL := b.pm.CurrentPrefs().ControlURLOrDefault()
+	if oldControlURL != newControlURL || oldControlURL == "" || newControlURL == "" {
+		b.resetDialPlan()
+	}
 
 	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
@@ -5934,6 +5939,17 @@ func (b *LocalBackend) initTKALocked() error {
 	}
 
 	return nil
+}
+
+// resetDialPlan resets the dialPlan for this LocalBackend. It will log if
+// anything is reset.
+//
+// It is safe to call this concurrently, with or without b.mu held.
+func (b *LocalBackend) resetDialPlan() {
+	old := b.dialPlan.Swap(nil)
+	if old != nil {
+		b.logf("resetDialPlan: did reset")
+	}
 }
 
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
@@ -5994,6 +6010,11 @@ func (b *LocalBackend) NewProfile() error {
 	defer unlock()
 
 	b.pm.NewProfile()
+
+	// The new profile doesn't yet have a ControlURL because it hasn't been
+	// set. Conservatively reset the dialPlan.
+	b.resetDialPlan()
+
 	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
@@ -6022,6 +6043,7 @@ func (b *LocalBackend) ResetAuth() error {
 	if err := b.pm.DeleteAllProfiles(); err != nil {
 		return err
 	}
+	b.resetDialPlan() // always reset if we're removing everything
 	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
