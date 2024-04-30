@@ -601,6 +601,8 @@ func TestFilterDiscoLoop(t *testing.T) {
 	}
 }
 
+// TODO(andrew-d): refactor this test to no longer use addrFam, after #11945
+// removed it in natConfigFromWGConfig
 func TestNATCfg(t *testing.T) {
 	node := func(ip, masqIP netip.Addr, otherAllowedIPs ...netip.Prefix) wgcfg.Peer {
 		p := wgcfg.Peer{
@@ -800,7 +802,7 @@ func TestNATCfg(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(fmt.Sprintf("%v/%v", addrFam, tc.name), func(t *testing.T) {
-				ncfg := natConfigFromWGConfig(tc.wcfg, addrFam)
+				ncfg := natConfigFromWGConfig(tc.wcfg)
 				for peer, want := range tc.snatMap {
 					if got := ncfg.selectSrcIP(selfNativeIP, peer); got != want {
 						t.Errorf("selectSrcIP[%v]: got %v; want %v", peer, got, want)
