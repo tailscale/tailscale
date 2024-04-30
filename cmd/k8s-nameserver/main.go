@@ -93,7 +93,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sig
-	log.Printf("OS signal (%s) received, shutting down\n", s)
+	log.Printf("OS signal (%s) received, shutting down", s)
 	cancel()    // exit the records reconciler and configmap watcher goroutines
 	udpSig <- s // stop the UDP listener
 	tcpSig <- s // stop the TCP listener
@@ -116,7 +116,7 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 			w.WriteMsg(m)
 		}()
 		if len(r.Question) < 1 {
-			log.Print("[unexpected] nameserver received a request with no questions\n")
+			log.Print("[unexpected] nameserver received a request with no questions")
 			m = r.SetRcodeFormatError(r)
 			return
 		}
@@ -143,17 +143,24 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 				m = m.SetRcode(r, dns.RcodeNameError)
 				return
 			}
-			// TODO (irbekrm): what TTL?
+			// TODO (irbekrm): TTL is currently set to 0, meaning
+			// that cluster workloads will not cache the DNS
+			// records. Revisit this in future when we understand
+			// the usage patterns better- is it putting too much
+			// load on kube DNS server or is this fine?
 			for _, ip := range ips {
 				rr := &dns.A{Hdr: dns.RR_Header{Name: q, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: ip}
 				m.SetRcode(r, dns.RcodeSuccess)
 				m.Answer = append(m.Answer, rr)
 			}
 		case dns.TypeAAAA:
-			// TODO (irbekrm): implement IPv6 support
+			// TODO (irbekrm): implement IPv6 support.
+			// Kubernetes distributions that I am most familiar with
+			// default to IPv4 for Pod CIDR ranges and often many cases don't
+			// support IPv6 at all, so this should not be crucial for now.
 			fallthrough
 		default:
-			log.Printf("[unexpected] nameserver received a query for an unsupported record type: %s\n", r.Question[0].String())
+			log.Printf("[unexpected] nameserver received a query for an unsupported record type: %s", r.Question[0].String())
 			m.SetRcode(r, dns.RcodeNotImplemented)
 		}
 	}
@@ -163,19 +170,19 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 // runRecordsReconciler ensures that nameserver's in-memory records are
 // reset when the provided configuration changes.
 func (n *nameserver) runRecordsReconciler(ctx context.Context) {
-	log.Print("updating nameserver's records from the provided configuration...\n")
+	log.Print("updating nameserver's records from the provided configuration...")
 	if err := n.resetRecords(); err != nil { // ensure records are up to date before the nameserver starts
-		log.Fatalf("error setting nameserver's records: %v\n", err)
+		log.Fatalf("error setting nameserver's records: %v", err)
 	}
-	log.Print("nameserver's records were updated\n")
+	log.Print("nameserver's records were updated")
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Printf("context cancelled, exiting records reconciler\n")
+				log.Printf("context cancelled, exiting records reconciler")
 				return
 			case <-n.configWatcher:
-				log.Print("configuration update detected, resetting records\n")
+				log.Print("configuration update detected, resetting records")
 				if err := n.resetRecords(); err != nil {
 					// TODO (irbekrm): this runs in a
 					// container that will be thrown away,
@@ -183,9 +190,9 @@ func (n *nameserver) runRecordsReconciler(ctx context.Context) {
 					// need to ensure that the DNS server
 					// terminates connections more
 					// gracefully.
-					log.Fatalf("error resetting records: %v\n", err)
+					log.Fatalf("error resetting records: %v", err)
 				}
-				log.Print("nameserver records were reset\n")
+				log.Print("nameserver records were reset")
 			}
 		}
 	}()
@@ -197,11 +204,11 @@ func (n *nameserver) runRecordsReconciler(ctx context.Context) {
 func (n *nameserver) resetRecords() error {
 	dnsCfgBytes, err := n.configReader()
 	if err != nil {
-		log.Printf("error reading nameserver's configuration: %v\n", err)
+		log.Printf("error reading nameserver's configuration: %v", err)
 		return err
 	}
 	if dnsCfgBytes == nil || len(dnsCfgBytes) < 1 {
-		log.Print("nameserver's configuration is empty, any in-memory records will be unset\n")
+		log.Print("nameserver's configuration is empty, any in-memory records will be unset")
 		n.mu.Lock()
 		n.ip4 = make(map[dnsname.FQDN][]net.IP)
 		n.mu.Unlock()
@@ -224,21 +231,21 @@ func (n *nameserver) resetRecords() error {
 		n.ip4 = ip4
 	}()
 
-	if dnsCfg.IP4 == nil || len(dnsCfg.IP4) == 0 {
-		log.Print("nameserver's configuration contains no records, any in-memory records will be unset\n")
+	if len(dnsCfg.IP4) == 0 {
+		log.Print("nameserver's configuration contains no records, any in-memory records will be unset")
 		return nil
 	}
 
 	for fqdn, ips := range dnsCfg.IP4 {
 		fqdn, err := dnsname.ToFQDN(fqdn)
 		if err != nil {
-			log.Printf("invalid nameserver's configuration: %s is not a valid FQDN: %v; skipping this record\n", fqdn, err)
+			log.Printf("invalid nameserver's configuration: %s is not a valid FQDN: %v; skipping this record", fqdn, err)
 			continue // one invalid hostname should not break the whole nameserver
 		}
 		for _, ipS := range ips {
 			ip := net.ParseIP(ipS).To4()
 			if ip == nil { // To4 returns nil if IP is not a IPv4 address
-				log.Printf("invalid nameserver's configuration: %v does not appear to be an IPv4 address; skipping this record\n", ipS)
+				log.Printf("invalid nameserver's configuration: %v does not appear to be an IPv4 address; skipping this record", ipS)
 				continue // one invalid IP address should not break the whole nameserver
 			}
 			ip4[fqdn] = []net.IP{ip}
@@ -252,12 +259,12 @@ func listenAndServe(net, addr string, shutdown chan os.Signal) {
 	s := &dns.Server{Addr: addr, Net: net}
 	go func() {
 		<-shutdown
-		log.Printf("shutting down server for %s\n", net)
+		log.Printf("shutting down server for %s", net)
 		s.Shutdown()
 	}()
-	log.Printf("listening for %s queries on %s\n", net, addr)
+	log.Printf("listening for %s queries on %s", net, addr)
 	if err := s.ListenAndServe(); err != nil {
-		log.Fatalf("error running %s server: %v\n", net, err)
+		log.Fatalf("error running %s server: %v", net, err)
 	}
 }
 
@@ -268,7 +275,7 @@ func ensureWatcherForKubeConfigMap(ctx context.Context) chan string {
 	c := make(chan string)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("error creating a new watcher for the mounted ConfigMap: %v\n", err)
+		log.Fatalf("error creating a new watcher for the mounted ConfigMap: %v", err)
 	}
 	// kubelet mounts configmap to a Pod using a series of symlinks, one of
 	// which is <mount-dir>/..data that Kubernetes recommends consumers to
@@ -277,31 +284,22 @@ func ensureWatcherForKubeConfigMap(ctx context.Context) chan string {
 	toWatch := filepath.Join(defaultDNSConfigDir, kubeletMountedConfigLn)
 	go func() {
 		defer watcher.Close()
-		log.Printf("starting file watch for %s\n", defaultDNSConfigDir)
+		log.Printf("starting file watch for %s", defaultDNSConfigDir)
 		for {
 			select {
 			case <-ctx.Done():
-				log.Print("context cancelled, exiting ConfigMap watcher\n")
+				log.Print("context cancelled, exiting ConfigMap watcher")
 				return
 			case event, ok := <-watcher.Events:
 				if !ok {
 					log.Fatal("watcher finished; exiting")
 				}
 				if event.Name == toWatch {
-					msg := fmt.Sprintf("ConfigMap update received: %s\n", event)
+					msg := fmt.Sprintf("ConfigMap update received: %s", event)
 					log.Print(msg)
 					c <- msg
 				}
 			case err, ok := <-watcher.Errors:
-				if !ok {
-					// TODO (irbekrm): this runs in a
-					// container that will be thrown away,
-					// so this should be ok. But maybe still
-					// need to ensure that the DNS server
-					// terminates connections more
-					// gracefully.
-					log.Fatalf("[unexpected] configuration watcher error: errors watcher finished: %v\n", err)
-				}
 				if err != nil {
 					// TODO (irbekrm): this runs in a
 					// container that will be thrown away,
@@ -309,13 +307,22 @@ func ensureWatcherForKubeConfigMap(ctx context.Context) chan string {
 					// need to ensure that the DNS server
 					// terminates connections more
 					// gracefully.
-					log.Fatalf("[unexpected] error watching configuration: %v\n", err)
+					log.Fatalf("[unexpected] error watching configuration: %v", err)
+				}
+				if !ok {
+					// TODO (irbekrm): this runs in a
+					// container that will be thrown away,
+					// so this should be ok. But maybe still
+					// need to ensure that the DNS server
+					// terminates connections more
+					// gracefully.
+					log.Fatalf("[unexpected] errors watcher exited")
 				}
 			}
 		}
 	}()
 	if err = watcher.Add(defaultDNSConfigDir); err != nil {
-		log.Fatalf("failed setting up a watcher for the mounted ConfigMap: %v\n", err)
+		log.Fatalf("failed setting up a watcher for the mounted ConfigMap: %v", err)
 	}
 	return c
 }
