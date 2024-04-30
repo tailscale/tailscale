@@ -602,8 +602,8 @@ func TestFilterDiscoLoop(t *testing.T) {
 }
 
 // TODO(andrew-d): refactor this test to no longer use addrFam, after #11945
-// removed it in natConfigFromWGConfig
-func TestNATCfg(t *testing.T) {
+// removed it in peerConfigFromWGConfig
+func TestPeerCfg_NAT(t *testing.T) {
 	node := func(ip, masqIP netip.Addr, otherAllowedIPs ...netip.Prefix) wgcfg.Peer {
 		p := wgcfg.Peer{
 			PublicKey: key.NewNode().Public(),
@@ -802,19 +802,19 @@ func TestNATCfg(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(fmt.Sprintf("%v/%v", addrFam, tc.name), func(t *testing.T) {
-				ncfg := natConfigFromWGConfig(tc.wcfg)
+				pcfg := peerConfigFromWGConfig(tc.wcfg)
 				for peer, want := range tc.snatMap {
-					if got := ncfg.selectSrcIP(selfNativeIP, peer); got != want {
+					if got := pcfg.selectSrcIP(selfNativeIP, peer); got != want {
 						t.Errorf("selectSrcIP[%v]: got %v; want %v", peer, got, want)
 					}
 				}
 				for dstIP, want := range tc.dnatMap {
-					if got := ncfg.mapDstIP(dstIP); got != want {
+					if got := pcfg.mapDstIP(dstIP); got != want {
 						t.Errorf("mapDstIP[%v]: got %v; want %v", dstIP, got, want)
 					}
 				}
 				if t.Failed() {
-					t.Logf("%v", ncfg)
+					t.Logf("%v", pcfg)
 				}
 			})
 		}
