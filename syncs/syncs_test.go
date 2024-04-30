@@ -5,11 +5,66 @@ package syncs
 
 import (
 	"context"
+	"io"
+	"os"
 	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestAtomicValue(t *testing.T) {
+	{
+		// Always wrapping should not allocate for simple values
+		// because wrappedValue[T] has the same memory layout as T.
+		var v AtomicValue[bool]
+		bools := []bool{true, false}
+		if n := int(testing.AllocsPerRun(1000, func() {
+			for _, b := range bools {
+				v.Store(b)
+			}
+		})); n != 0 {
+			t.Errorf("AllocsPerRun = %d, want 0", n)
+		}
+	}
+
+	{
+		var v AtomicValue[int]
+		got, gotOk := v.LoadOk()
+		if got != 0 || gotOk {
+			t.Fatalf("LoadOk = (%v, %v), want (0, false)", got, gotOk)
+		}
+		v.Store(1)
+		got, gotOk = v.LoadOk()
+		if got != 1 || !gotOk {
+			t.Fatalf("LoadOk = (%v, %v), want (1, true)", got, gotOk)
+		}
+	}
+
+	{
+		var v AtomicValue[error]
+		got, gotOk := v.LoadOk()
+		if got != nil || gotOk {
+			t.Fatalf("LoadOk = (%v, %v), want (nil, false)", got, gotOk)
+		}
+		v.Store(io.EOF)
+		got, gotOk = v.LoadOk()
+		if got != io.EOF || !gotOk {
+			t.Fatalf("LoadOk = (%v, %v), want (EOF, true)", got, gotOk)
+		}
+		err := &os.PathError{}
+		v.Store(err)
+		got, gotOk = v.LoadOk()
+		if got != err || !gotOk {
+			t.Fatalf("LoadOk = (%v, %v), want (%v, true)", got, gotOk, err)
+		}
+		v.Store(nil)
+		got, gotOk = v.LoadOk()
+		if got != nil || !gotOk {
+			t.Fatalf("LoadOk = (%v, %v), want (nil, true)", got, gotOk)
+		}
+	}
+}
 
 func TestWaitGroupChan(t *testing.T) {
 	wg := NewWaitGroupChan()
