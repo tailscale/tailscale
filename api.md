@@ -93,6 +93,10 @@ The Tailscale API does not currently support pagination. All results are returne
   - **Search paths**
     - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths`](#get-search-paths)
     - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#set-search-paths)
+  - **Split DNS**
+    - Get split DNS: [`GET /api/v2/tailnet/{tailnet}/dns/split-dns`](#get-split-dns)
+    - Update split DNS: [`PATCH /api/v2/tailnet/{tailnet}/dns/split-dns`](#update-split-dns)
+    - Set split DNS: [`PUT /api/v2/tailnet/{tailnet}/dns/split-dns`](#set-split-dns)
 
 # Device
 
@@ -1973,5 +1977,163 @@ The response is a JSON object containing the new list of search paths.
 ```jsonc
 {
   "searchPaths": ["user1.example.com", "user2.example.com"],
+}
+```
+
+## Get split DNS
+
+```http
+GET /api/v2/tailnet/{tailnet}/dns/split-dns
+```
+
+Retrieves the split DNS settings, which is a map from domains to lists of nameservers, that is currently set for the given tailnet.
+
+### Parameters
+
+#### `tailnet` (required in URL path)
+
+The tailnet organization name.
+
+### Request example
+
+```sh
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/split-dns" \
+  -u "tskey-api-xxxxx:"
+```
+
+### Response
+
+```jsonc
+{
+  "example.com": ["1.1.1.1", "1.2.3.4"],
+  "other.com": ["2.2.2.2"]
+}
+```
+
+## Update split DNS
+
+```http
+PATCH /api/v2/tailnet/{tailnet}/dns/split-dns
+```
+
+Performs partial updates of the split DNS settings for a given tailnet. Only domains specified in the request map will be modified. Setting the value of a mapping to "null" clears the nameservers for that domain.
+
+### Parameters
+
+#### `tailnet` (required in URL path)
+
+The tailnet organization name.
+
+#### `PATCH` body format
+
+Specify mappings from domain name to a list of nameservers in a JSON object:
+
+```jsonc
+{
+  "example.com": ["1.1.1.1", "1.2.3.4"],
+  "other.com": ["2.2.2.2"]
+}
+```
+
+### Request example: updating split DNS settings for multiple domains
+
+```sh
+curl -X PATCH "https://api.tailscale.com/api/v2/tailnet/example.com/dns/split-dns" \
+  -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
+  --data-binary '{"example.com": ["1.1.1.1", "1.2.3.4"], "other.com": ["2.2.2.2"]}'
+```
+
+### Response: updating split DNS settings for multiple domains
+
+The response is a JSON object containing the updated map of split DNS settings.
+
+```jsonc
+{
+  "example.com": ["1.1.1.1", "1.2.3.4"],
+  "other.com": ["2.2.2.2"],
+  <existing unmodified key / value pairs>
+}
+```
+
+### Request example: unsetting nameservers for a domain
+
+```sh
+curl -X PATCH "https://api.tailscale.com/api/v2/tailnet/example.com/dns/split-dns" \
+  -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
+  --data-binary '{"example.com": null}'
+```
+
+### Response: unsetting nameservers for a domain
+
+The response is a JSON object containing the updated map of split DNS settings.
+
+```jsonc
+{
+  <existing unmodified key / value pairs without example.com>
+}
+```
+
+## Set split DNS
+
+```http
+PUT /api/v2/tailnet/{tailnet}/dns/split-dns
+```
+
+Replaces the split DNS settings for a given tailnet. Setting the value of a mapping to "null" clears the nameservers for that domain. Sending an empty object clears nameservers for all domains.
+
+### Parameters
+
+#### `tailnet` (required in URL path)
+
+The tailnet organization name.
+
+#### `PUT` body format
+
+Specify mappings from domain name to a list of nameservers in a JSON object:
+
+```jsonc
+{
+  "example.com": ["1.2.3.4"],
+  "other.com": ["2.2.2.2"]
+}
+```
+
+### Request example: setting multiple domains
+
+```sh
+curl -X PUT "https://api.tailscale.com/api/v2/tailnet/example.com/dns/split-dns" \
+  -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
+  --data-binary '{"example.com": ["1.2.3.4"], "other.com": ["2.2.2.2"]}'
+```
+
+### Response: unsetting nameservers for a domain
+
+The response is a JSON object containing the updated map of split DNS settings.
+
+```jsonc
+{
+  "example.com": ["1.2.3.4"],
+  "other.com": ["2.2.2.2"]
+}
+```
+
+### Request example: unsetting all domains
+
+```sh
+curl -X PUT "https://api.tailscale.com/api/v2/tailnet/example.com/dns/split-dns" \
+  -u "tskey-api-xxxxx:" \
+  -H "Content-Type: application/json" \
+  --data-binary '{}'
+```
+
+### Response: unsetting nameservers for a domain
+
+The response is a JSON object containing the updated map of split DNS settings.
+
+```jsonc
+{
 }
 ```
