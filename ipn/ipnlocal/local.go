@@ -5881,6 +5881,11 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 	if err := b.pm.SwitchProfile(profile); err != nil {
 		return err
 	}
+
+	// TODO: Check if serverUrl in the switched profile is actually changed;
+	// if not, then no need to reset dial plan
+	b.dialPlan.Store(nil)
+
 	return b.resetForProfileChangeLockedOnEntry(unlock)
 }
 
