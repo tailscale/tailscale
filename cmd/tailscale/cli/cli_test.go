@@ -655,12 +655,13 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			goos: "linux",
 			args: upArgsFromOSArgs("linux"),
 			want: &ipn.Prefs{
-				ControlURL:       ipn.DefaultControlURL,
-				WantRunning:      true,
-				NoSNAT:           false,
-				NetfilterMode:    preftype.NetfilterOn,
-				CorpDNS:          true,
-				AllowSingleHosts: true,
+				ControlURL:          ipn.DefaultControlURL,
+				WantRunning:         true,
+				NoSNAT:              false,
+				NoStatefulFiltering: "false",
+				NetfilterMode:       preftype.NetfilterOn,
+				CorpDNS:             true,
+				AllowSingleHosts:    true,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
 				},
@@ -694,7 +695,8 @@ func TestPrefsFromUpArgs(t *testing.T) {
 					netip.MustParsePrefix("0.0.0.0/0"),
 					netip.MustParsePrefix("::/0"),
 				},
-				NetfilterMode: preftype.NetfilterOn,
+				NoStatefulFiltering: "false",
+				NetfilterMode:       preftype.NetfilterOn,
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
 				},
@@ -781,9 +783,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			},
 			wantWarn: "netfilter=nodivert; add iptables calls to ts-* chains manually.",
 			want: &ipn.Prefs{
-				WantRunning:   true,
-				NetfilterMode: preftype.NetfilterNoDivert,
-				NoSNAT:        true,
+				WantRunning:         true,
+				NetfilterMode:       preftype.NetfilterNoDivert,
+				NoSNAT:              true,
+				NoStatefulFiltering: "true",
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
 				},
@@ -797,9 +800,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			},
 			wantWarn: "netfilter=off; configure iptables yourself.",
 			want: &ipn.Prefs{
-				WantRunning:   true,
-				NetfilterMode: preftype.NetfilterOff,
-				NoSNAT:        true,
+				WantRunning:         true,
+				NetfilterMode:       preftype.NetfilterOff,
+				NoSNAT:              true,
+				NoStatefulFiltering: "true",
 				AutoUpdate: ipn.AutoUpdatePrefs{
 					Check: true,
 				},
@@ -813,8 +817,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
-				WantRunning: true,
-				NoSNAT:      true,
+				WantRunning:         true,
+				NoSNAT:              true,
+				NoStatefulFiltering: "true",
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
 				},
@@ -831,8 +836,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				netfilterMode:   "off",
 			},
 			want: &ipn.Prefs{
-				WantRunning: true,
-				NoSNAT:      true,
+				WantRunning:         true,
+				NoSNAT:              true,
+				NoStatefulFiltering: "true",
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::aabb:10.0.0.0/112"),
 				},
@@ -1031,6 +1037,7 @@ func TestUpdatePrefs(t *testing.T) {
 				HostnameSet:               true,
 				NetfilterModeSet:          true,
 				NoSNATSet:                 true,
+				NoStatefulFilteringSet:    true,
 				OperatorUserSet:           true,
 				RouteAllSet:               true,
 				RunSSHSet:                 true,

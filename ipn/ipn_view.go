@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
@@ -86,6 +87,7 @@ func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
 func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
+func (v PrefsView) NoStatefulFiltering() opt.Bool         { return v.ж.NoStatefulFiltering }
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() string                  { return v.ж.OperatorUser }
 func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
@@ -120,6 +122,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	NoSNAT                 bool
+	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
 	ProfileName            string

@@ -203,6 +203,21 @@ type Prefs struct {
 	// Linux-only.
 	NoSNAT bool
 
+	// NoStatefulFiltering specifies whether to apply stateful filtering
+	// when advertising routes in AdvertiseRoutes. The default is to apply
+	// stateful filtering.
+	//
+	// To allow inbound connections from advertised routes, both NoSNAT and
+	// NoStatefulFiltering must be true.
+	//
+	// This is an opt.Bool because it was added after NoSNAT, but is backfilled
+	// based on the value of that parameter. We need to treat it as a tristate:
+	// true, false, or unset, and backfill based on that value. See
+	// ipn/ipnlocal for more details on the backfill.
+	//
+	// Linux-only.
+	NoStatefulFiltering opt.Bool `json:",omitempty"`
+
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
 	NetfilterMode preftype.NetfilterMode
@@ -302,6 +317,7 @@ type MaskedPrefs struct {
 	EggSet                    bool                `json:",omitempty"`
 	AdvertiseRoutesSet        bool                `json:",omitempty"`
 	NoSNATSet                 bool                `json:",omitempty"`
+	NoStatefulFilteringSet    bool                `json:",omitempty"`
 	NetfilterModeSet          bool                `json:",omitempty"`
 	OperatorUserSet           bool                `json:",omitempty"`
 	ProfileNameSet            bool                `json:",omitempty"`
@@ -501,6 +517,13 @@ func (p *Prefs) pretty(goos string) string {
 	if len(p.AdvertiseRoutes) > 0 || p.NoSNAT {
 		fmt.Fprintf(&sb, "snat=%v ", !p.NoSNAT)
 	}
+	if len(p.AdvertiseRoutes) > 0 || p.NoStatefulFiltering.EqualBool(true) {
+		// Only print if we're advertising any routes, or the user has
+		// turned off stateful filtering (NoStatefulFiltering=true ⇒
+		// StatefulFiltering=false).
+		bb, _ := p.NoStatefulFiltering.Get()
+		fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
+	}
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
 	}
@@ -569,6 +592,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
+		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&

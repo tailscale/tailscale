@@ -94,11 +94,49 @@ ip route add 192.168.16.0/24 dev tailscale0 table 52` + basic,
 		{
 			name: "addr and routes and subnet routes with netfilter",
 			in: &Config{
-				LocalAddrs:       mustCIDRs("100.101.102.104/10"),
-				Routes:           mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
-				SubnetRoutes:     mustCIDRs("200.0.0.0/8"),
-				SNATSubnetRoutes: true,
-				NetfilterMode:    netfilterOn,
+				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
+				Routes:            mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
+				SubnetRoutes:      mustCIDRs("200.0.0.0/8"),
+				SNATSubnetRoutes:  true,
+				StatefulFiltering: true,
+				NetfilterMode:     netfilterOn,
+			},
+			want: `
+up
+ip addr add 100.101.102.104/10 dev tailscale0
+ip route add 10.0.0.0/8 dev tailscale0 table 52
+ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
+				`v4/filter/FORWARD -j ts-forward
+v4/filter/INPUT -j ts-input
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-forward -o tailscale0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+v4/filter/ts-forward -o tailscale0 -j ACCEPT
+v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
+v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
+v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/nat/POSTROUTING -j ts-postrouting
+v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+v6/filter/FORWARD -j ts-forward
+v6/filter/INPUT -j ts-input
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/nat/POSTROUTING -j ts-postrouting
+v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
+`,
+		},
+		{
+			name: "addr and routes and subnet routes with netfilter but no stateful filtering",
+			in: &Config{
+				LocalAddrs:        mustCIDRs("100.101.102.104/10"),
+				Routes:            mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
+				SubnetRoutes:      mustCIDRs("200.0.0.0/8"),
+				SNATSubnetRoutes:  true,
+				StatefulFiltering: false,
+				NetfilterMode:     netfilterOn,
 			},
 			want: `
 up
@@ -411,6 +449,22 @@ func insertRule(n *fakeIPTablesRunner, curIPT map[string][]string, chain, newRul
 	return nil
 }
 
+func insertRuleAt(n *fakeIPTablesRunner, curIPT map[string][]string, chain string, pos int, newRule string) {
+	rules, ok := curIPT[chain]
+	if !ok {
+		n.t.Fatalf("no %s chain exists", chain)
+	}
+
+	// If the given position is after the end of the chain, error.
+	if pos > len(rules) {
+		n.t.Fatalf("position %d > len(chain %s) %d", pos, chain, len(chain))
+	}
+
+	// Insert the rule at the given position
+	rules = slices.Insert(rules, pos, newRule)
+	curIPT[chain] = rules
+}
+
 func appendRule(n *fakeIPTablesRunner, curIPT map[string][]string, chain, newRule string) error {
 	// Get current rules for filter/ts-input chain with according IP version
 	curTSInputRules, ok := curIPT[chain]
@@ -605,6 +659,33 @@ func (n *fakeIPTablesRunner) DelSNATRule() error {
 	delRule := fmt.Sprintf("-m mark --mark %s/%s -j MASQUERADE", linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		if err := deleteRule(n, ipt, "nat/ts-postrouting", delRule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n *fakeIPTablesRunner) AddStatefulRule(tunname string) error {
+	newRule := fmt.Sprintf("-o %s -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP", tunname)
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		// Mimic the real runner and insert after the 'accept all' rule
+		wantRule := fmt.Sprintf("-o %s -j ACCEPT", tunname)
+
+		const chain = "filter/ts-forward"
+		pos := slices.Index(ipt[chain], wantRule)
+		if pos < 0 {
+			n.t.Fatalf("no rule %q in chain %s", wantRule, chain)
+		}
+
+		insertRuleAt(n, ipt, chain, pos, newRule)
+	}
+	return nil
+}
+
+func (n *fakeIPTablesRunner) DelStatefulRule(tunname string) error {
+	delRule := fmt.Sprintf("-o %s -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP", tunname)
+	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
+		if err := deleteRule(n, ipt, "filter/ts-forward", delRule); err != nil {
 			return err
 		}
 	}

@@ -88,9 +88,10 @@ type Config struct {
 	SubnetRoutes []netip.Prefix
 
 	// Linux-only things below, ignored on other platforms.
-	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
-	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules
-	NetfilterKind    string                 // what kind of netfilter to use (nftables, iptables)
+	SNATSubnetRoutes  bool                   // SNAT traffic to local subnets
+	StatefulFiltering bool                   // Apply stateful filtering to inbound connections
+	NetfilterMode     preftype.NetfilterMode // how much to manage netfilter rules
+	NetfilterKind     string                 // what kind of netfilter to use (nftables, iptables)
 }
 
 func (a *Config) Equal(b *Config) bool {

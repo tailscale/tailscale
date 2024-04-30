@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,7 @@ type iptablesInterface interface {
 	Append(table, chain string, args ...string) error
 	Exists(table, chain string, args ...string) (bool, error)
 	Delete(table, chain string, args ...string) error
+	List(table, chain string) ([]string, error)
 	ClearChain(table, chain string) error
 	NewChain(table, chain string) error
 	DeleteChain(table, chain string) error
@@ -525,6 +527,67 @@ func (i *iptablesRunner) DelSNATRule() error {
 	for _, ipt := range i.getNATTables() {
 		if err := ipt.Delete("nat", "ts-postrouting", args...); err != nil {
 			return fmt.Errorf("deleting %v in nat/ts-postrouting: %w", args, err)
+		}
+	}
+	return nil
+}
+
+func statefulRuleArgs(tunname string) []string {
+	return []string{"-o", tunname, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP"}
+}
+
+// AddStatefulRule adds a netfilter rule for stateful packet filtering using
+// conntrack.
+func (i *iptablesRunner) AddStatefulRule(tunname string) error {
+	// Drop packets that are destined for the tailscale interface if
+	// they're a new connection, per conntrack, to prevent hosts on the
+	// same subnet from being able to use this device as a way to forward
+	// packets on to the Tailscale network.
+	//
+	// The conntrack states are:
+	//    NEW         A packet which creates a new connection.
+	//    ESTABLISHED A packet which belongs to an existing connection
+	//                (i.e., a reply packet, or outgoing packet on a
+	//                connection which has seen replies).
+	//    RELATED     A packet which is related to, but not part of, an
+	//                existing connection, such as an ICMP error.
+	//    INVALID     A packet which could not be identified for some
+	//                reason: this includes running out of memory and ICMP
+	//                errors which don't correspond to any known
+	//                connection. Generally these packets should be
+	//                dropped.
+	//
+	// We drop NEW packets to prevent connections from coming "into"
+	// Tailscale from other hosts on the same network segment; we drop
+	// INVALID packets as well.
+	args := statefulRuleArgs(tunname)
+	for _, ipt := range i.getTables() {
+		// First, find the final "accept" rule.
+		rules, err := ipt.List("filter", "ts-forward")
+		if err != nil {
+			return fmt.Errorf("listing rules in filter/ts-forward: %w", err)
+		}
+		want := fmt.Sprintf("-A %s -o %s -j ACCEPT", "ts-forward", tunname)
+
+		pos := slices.Index(rules, want)
+		if pos < 0 {
+			return fmt.Errorf("couldn't find final ACCEPT rule in filter/ts-forward")
+		}
+
+		if err := ipt.Insert("filter", "ts-forward", pos, args...); err != nil {
+			return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+		}
+	}
+	return nil
+}
+
+// DelStatefulRule removes the netfilter rule for stateful packet filtering
+// using conntrack.
+func (i *iptablesRunner) DelStatefulRule(tunname string) error {
+	args := statefulRuleArgs(tunname)
+	for _, ipt := range i.getTables() {
+		if err := ipt.Delete("filter", "ts-forward", args...); err != nil {
+			return fmt.Errorf("deleting %v in filter/ts-forward: %w", args, err)
 		}
 	}
 	return nil
