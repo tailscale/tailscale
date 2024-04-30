@@ -106,8 +106,8 @@ type Wrapper struct {
 	// timeNow, if non-nil, will be used to obtain the current time.
 	timeNow func() time.Time
 
-	// natConfig stores the current NAT configuration.
-	natConfig atomic.Pointer[natConfig]
+	// peerConfig stores the current NAT configuration.
+	peerConfig atomic.Pointer[peerConfig]
 
 	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
 	// allocated in wrap() and the underlying arrays should never grow.
@@ -505,9 +505,9 @@ func (t *Wrapper) sendVectorOutbound(r tunVectorReadResult) {
 
 // snat does SNAT on p if the destination address requires a different source address.
 func (t *Wrapper) snat(p *packet.Parsed) {
-	nc := t.natConfig.Load()
+	pc := t.peerConfig.Load()
 	oldSrc := p.Src.Addr()
-	newSrc := nc.selectSrcIP(oldSrc, p.Dst.Addr())
+	newSrc := pc.selectSrcIP(oldSrc, p.Dst.Addr())
 	if oldSrc != newSrc {
 		checksum.UpdateSrcAddr(p, newSrc)
 	}
@@ -515,9 +515,9 @@ func (t *Wrapper) snat(p *packet.Parsed) {
 
 // dnat does destination NAT on p.
 func (t *Wrapper) dnat(p *packet.Parsed) {
-	nc := t.natConfig.Load()
+	pc := t.peerConfig.Load()
 	oldDst := p.Dst.Addr()
-	newDst := nc.mapDstIP(oldDst)
+	newDst := pc.mapDstIP(oldDst)
 	if newDst != oldDst {
 		checksum.UpdateDstAddr(p, newDst)
 	}
@@ -545,11 +545,11 @@ func findV6(addrs []netip.Prefix) netip.Addr {
 	return netip.Addr{}
 }
 
-// natConfig is the configuration for NAT.
+// peerConfig is the configuration for different peers.
 // It should be treated as immutable.
 //
 // The nil value is a valid configuration.
-type natConfig struct {
+type peerConfig struct {
 	// nativeAddr4 and nativeAddr6 are the IPv4/IPv6 Tailscale Addresses of
 	// the current node.
 	//
@@ -573,12 +573,12 @@ type natConfig struct {
 	masqAddrCounts map[netip.Addr]int
 }
 
-func (c *natConfig) String() string {
+func (c *peerConfig) String() string {
 	if c == nil {
-		return "natConfig(nil)"
+		return "peerConfig(nil)"
 	}
 	var b strings.Builder
-	b.WriteString("natConfig{")
+	b.WriteString("peerConfig{")
 	fmt.Fprintf(&b, "nativeAddr4: %v, ", c.nativeAddr4)
 	fmt.Fprintf(&b, "nativeAddr6: %v, ", c.nativeAddr6)
 	fmt.Fprint(&b, "listenAddrs: [")
@@ -610,7 +610,7 @@ func (c *natConfig) String() string {
 // mapDstIP returns the destination IP to use for a packet to dst.
 // If dst is not one of the listen addresses, it is returned as-is,
 // otherwise the native address is returned.
-func (c *natConfig) mapDstIP(oldDst netip.Addr) netip.Addr {
+func (c *peerConfig) mapDstIP(oldDst netip.Addr) netip.Addr {
 	if c == nil {
 		return oldDst
 	}
@@ -627,7 +627,7 @@ func (c *natConfig) mapDstIP(oldDst netip.Addr) netip.Addr {
 
 // selectSrcIP returns the source IP to use for a packet to dst.
 // If the packet is not from the native address, it is returned as-is.
-func (c *natConfig) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
+func (c *peerConfig) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	if c == nil {
 		return oldSrc
 	}
@@ -644,9 +644,9 @@ func (c *natConfig) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	return eip
 }
 
-// natConfigFromWGConfig generates a natConfig from nm. If NAT is not required,
-// it returns nil.
-func natConfigFromWGConfig(wcfg *wgcfg.Config) *natConfig {
+// peerConfigFromWGConfig generates a peerConfig from nm. If NAT is not required,
+// and no additional configuration is present, it returns nil.
+func peerConfigFromWGConfig(wcfg *wgcfg.Config) *peerConfig {
 	if wcfg == nil {
 		return nil
 	}
@@ -728,7 +728,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natConfig {
 	if len(listenAddrs) == 0 && len(masqAddrCounts) == 0 {
 		return nil
 	}
-	return &natConfig{
+	return &peerConfig{
 		nativeAddr4:    nativeAddr4,
 		nativeAddr6:    nativeAddr6,
 		listenAddrs:    views.MapOf(listenAddrs),
@@ -739,11 +739,11 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natConfig {
 
 // SetNetMap is called when a new NetworkMap is received.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
-	cfg := natConfigFromWGConfig(wcfg)
+	cfg := peerConfigFromWGConfig(wcfg)
 
-	old := t.natConfig.Swap(cfg)
+	old := t.peerConfig.Swap(cfg)
 	if !reflect.DeepEqual(old, cfg) {
-		t.logf("nat config: %v", cfg)
+		t.logf("peer config: %v", cfg)
 	}
 }
 
