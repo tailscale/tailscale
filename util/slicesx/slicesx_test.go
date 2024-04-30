@@ -136,3 +136,18 @@ func TestFilterNoAllocations(t *testing.T) {
 		t.Fatalf("got %.4f allocs, want 1", allocs)
 	}
 }
+
+func TestAppendMatching(t *testing.T) {
+	v := []string{"one", "two", "three", "four"}
+	got := AppendMatching(v[:0], v, func(s string) bool { return len(s) > 3 })
+
+	want := []string{"three", "four"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v; want %v", got, want)
+	}
+
+	wantOrigMem := []string{"three", "four", "three", "four"}
+	if !reflect.DeepEqual(v, wantOrigMem) {
+		t.Errorf("got %v; want %v", v, wantOrigMem)
+	}
+}

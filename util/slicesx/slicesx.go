@@ -91,3 +91,13 @@ func Filter[S ~[]T, T any](dst, src S, fn func(T) bool) S {
 	}
 	return dst
 }
+
+// AppendMatching appends elements in ps to dst if f(x) is true.
+func AppendMatching[T any](dst, ps []T, f func(T) bool) []T {
+	for _, p := range ps {
+		if f(p) {
+			dst = append(dst, p)
+		}
+	}
+	return dst
+}
