@@ -1196,7 +1196,6 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)
 }
-
 func Test_isMagicDNSName(t *testing.T) {
 	tests := []struct {
 		in   string

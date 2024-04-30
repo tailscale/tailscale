@@ -56,6 +56,9 @@ func Test_generate(t *testing.T) {
 	if !strings.Contains(installContentsWithCRD.String(), "name: proxyclasses.tailscale.com") {
 		t.Errorf("ProxyClass CRD not found in default chart install")
 	}
+	if !strings.Contains(installContentsWithCRD.String(), "name: dnsconfigs.tailscale.com") {
+		t.Errorf("DNSConfig CRD not found in default chart install")
+	}
 
 	// Test that CRDs can be excluded from Helm chart install
 	installContentsWithoutCRD := bytes.NewBuffer([]byte{})
@@ -70,5 +73,8 @@ func Test_generate(t *testing.T) {
 	}
 	if strings.Contains(installContentsWithoutCRD.String(), "name: connectors.tailscale.com") {
 		t.Errorf("ProxyClass CRD found in chart install that should not contain a CRD")
+	}
+	if strings.Contains(installContentsWithoutCRD.String(), "name: dnsconfigs.tailscale.com") {
+		t.Errorf("DNSConfig CRD found in chart install that should not contain a CRD")
 	}
 }
