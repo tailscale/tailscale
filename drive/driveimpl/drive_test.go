@@ -10,10 +10,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,7 +114,31 @@ func TestPermissions(t *testing.T) {
 	if err := s.client.Rename(pathTo(remote1, share12, file111), pathTo(remote1, share12, file112), true); err == nil {
 		t.Error("moving file on read-only remote should fail")
 	}
+}
 
+// TestSecretTokenAuth verifies that the fileserver running at localhost cannot
+// be accessed directly without the correct secret token. This matters because
+// if a victim can be induced to visit the localhost URL and access a malicious
+// file on their own share, it could allow a Mark-of-the-Web bypass attack.
+func TestSecretTokenAuth(t *testing.T) {
+	s := newSystem(t)
+
+	fileserverAddr := s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	addr := strings.Split(fileserverAddr, "|")[1]
+	u := fmt.Sprintf("http://%s/%s/%s", addr, "fakesecret", url.PathEscape(file111))
+	resp, err := client.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected %d for incorrect secret token, but got %d", http.StatusForbidden, resp.StatusCode)
+	}
 }
 
 type local struct {
@@ -183,7 +209,7 @@ func newSystem(t *testing.T) *system {
 	return s
 }
 
-func (s *system) addRemote(name string) {
+func (s *system) addRemote(name string) string {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		s.t.Fatalf("failed to Listen: %s", err)
@@ -222,6 +248,8 @@ func (s *system) addRemote(name string) {
 			DisableKeepAlives:     true,
 			ResponseHeaderTimeout: 5 * time.Second,
 		})
+
+	return fileServer.Addr()
 }
 
 func (s *system) addShare(remoteName, shareName string, permission drive.Permission) {

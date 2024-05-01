@@ -95,6 +95,9 @@ type FileSystemForRemote interface {
 	// sandboxed where we can't spawn user-specific sub-processes and instead
 	// rely on the UI application that's already running as an unprivileged
 	// user to access the filesystem for us.
+	//
+	// Note that this includes both the file server's secret token and its
+	// address, delimited by a pipe |.
 	SetFileServerAddr(addr string)
 
 	// SetShares sets the complete set of shares exposed by this node. If

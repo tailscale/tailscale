@@ -51,17 +51,18 @@ type FileSystemForRemote struct {
 
 	// mu guards the below values. Acquire a write lock before updating any of
 	// them, acquire a read lock before reading any of them.
-	mu             sync.RWMutex
-	fileServerAddr string
-	shares         []*drive.Share
-	children       map[string]*compositedav.Child
-	userServers    map[string]*userServer
+	mu sync.RWMutex
+	// fileServerTokenAndAddr is the secretToken|fileserverAddress
+	fileServerTokenAndAddr string
+	shares                 []*drive.Share
+	children               map[string]*compositedav.Child
+	userServers            map[string]*userServer
 }
 
 // SetFileServerAddr implements drive.FileSystemForRemote.
 func (s *FileSystemForRemote) SetFileServerAddr(addr string) {
 	s.mu.Lock()
-	s.fileServerAddr = addr
+	s.fileServerTokenAndAddr = addr
 	s.mu.Unlock()
 }
 
@@ -113,11 +114,58 @@ func (s *FileSystemForRemote) SetShares(shares []*drive.Share) {
 }
 
 func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child {
+	getTokenAndAddr := func(shareName string) (string, string, error) {
+		s.mu.RLock()
+		var share *drive.Share
+		i, shareFound := slices.BinarySearchFunc(s.shares, shareName, func(s *drive.Share, name string) int {
+			return strings.Compare(s.Name, name)
+		})
+		if shareFound {
+			share = s.shares[i]
+		}
+		userServers := s.userServers
+		fileServerTokenAndAddr := s.fileServerTokenAndAddr
+		s.mu.RUnlock()
+
+		if !shareFound {
+			return "", "", fmt.Errorf("unknown share %v", shareName)
+		}
+
+		var tokenAndAddr string
+		if !drive.AllowShareAs() {
+			tokenAndAddr = fileServerTokenAndAddr
+		} else {
+			userServer, found := userServers[share.As]
+			if found {
+				userServer.mu.RLock()
+				tokenAndAddr = userServer.tokenAndAddr
+				userServer.mu.RUnlock()
+			}
+		}
+
+		if tokenAndAddr == "" {
+			return "", "", fmt.Errorf("unable to determine address for share %v", shareName)
+		}
+
+		parts := strings.Split(tokenAndAddr, "|")
+		if len(parts) != 2 {
+			return "", "", fmt.Errorf("invalid address for share %v", shareName)
+		}
+
+		return parts[0], parts[1], nil
+	}
+
 	return &compositedav.Child{
 		Child: &dirfs.Child{
 			Name: share.Name,
 		},
-		BaseURL: fmt.Sprintf("http://%v/%v", hex.EncodeToString([]byte(share.Name)), url.PathEscape(share.Name)),
+		BaseURL: func() (string, error) {
+			secretToken, _, err := getTokenAndAddr(share.Name)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("http://%s/%s/%s", hex.EncodeToString([]byte(share.Name)), secretToken, url.PathEscape(share.Name)), nil
+		},
 		Transport: &http.Transport{
 			Dial: func(_, shareAddr string) (net.Conn, error) {
 				shareNameHex, _, err := net.SplitHostPort(shareAddr)
@@ -132,36 +180,9 @@ func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child
 				}
 				shareName := string(shareNameBytes)
 
-				s.mu.RLock()
-				var share *drive.Share
-				i, shareFound := slices.BinarySearchFunc(s.shares, shareName, func(s *drive.Share, name string) int {
-					return strings.Compare(s.Name, name)
-				})
-				if shareFound {
-					share = s.shares[i]
-				}
-				userServers := s.userServers
-				fileServerAddr := s.fileServerAddr
-				s.mu.RUnlock()
-
-				if !shareFound {
-					return nil, fmt.Errorf("unknown share %v", shareName)
-				}
-
-				var addr string
-				if !drive.AllowShareAs() {
-					addr = fileServerAddr
-				} else {
-					userServer, found := userServers[share.As]
-					if found {
-						userServer.mu.RLock()
-						addr = userServer.addr
-						userServer.mu.RUnlock()
-					}
-				}
-
-				if addr == "" {
-					return nil, fmt.Errorf("unable to determine address for share %v", shareName)
+				_, addr, err := getTokenAndAddr(shareName)
+				if err != nil {
+					return nil, err
 				}
 
 				_, err = netip.ParseAddrPort(addr)
@@ -253,10 +274,10 @@ type userServer struct {
 
 	// mu guards the below values. Acquire a write lock before updating any of
 	// them, acquire a read lock before reading any of them.
-	mu     sync.RWMutex
-	cmd    *exec.Cmd
-	addr   string
-	closed bool
+	mu           sync.RWMutex
+	cmd          *exec.Cmd
+	tokenAndAddr string
+	closed       bool
 }
 
 func (s *userServer) Close() error {
@@ -366,7 +387,7 @@ func (s *userServer) run() error {
 		}
 	}()
 	s.mu.Lock()
-	s.addr = strings.TrimSpace(addr)
+	s.tokenAndAddr = strings.TrimSpace(addr)
 	s.mu.Unlock()
 	return cmd.Wait()
 }
