@@ -213,6 +213,7 @@ func TestCollectPanic(t *testing.T) {
 
 func TestControlTimeLogLine(t *testing.T) {
 	tstest.Shard(t)
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/11962")
 	tstest.Parallel(t)
 	env := newTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
