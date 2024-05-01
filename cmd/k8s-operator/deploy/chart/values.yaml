@@ -37,6 +37,7 @@ operatorConfig:
   resources: {}
 
   podAnnotations: {}
+  podLabels: {}
 
   tolerations: []
 

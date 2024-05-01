@@ -21,6 +21,9 @@ spec:
       {{- end }}
       labels:
         app: operator
+        {{- with .Values.operatorConfig.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
