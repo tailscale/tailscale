@@ -162,7 +162,7 @@ func (h *Handler) delegate(mpl int, pathComponents []string, w http.ResponseWrit
 
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		h.logf("warning: parse base URL %s failed: %s", child.BaseURL, err)
+		h.logf("warning: parse base URL %s failed: %s", baseURL, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
