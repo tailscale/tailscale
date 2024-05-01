@@ -110,8 +110,8 @@ func runSSH(ctx context.Context, args []string) error {
 	// mode, so 'nc' isn't very useful.
 	if runtime.GOOS != "darwin" {
 		socketArg := ""
-		if rootArgs.socket != "" && rootArgs.socket != paths.DefaultTailscaledSocket() {
-			socketArg = fmt.Sprintf("--socket=%q", rootArgs.socket)
+		if localClient.Socket != "" && localClient.Socket != paths.DefaultTailscaledSocket() {
+			socketArg = fmt.Sprintf("--socket=%q", localClient.Socket)
 		}
 
 		argv = append(argv,
