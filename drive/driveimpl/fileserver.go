@@ -5,6 +5,7 @@ package driveimpl
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -117,7 +118,8 @@ func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := shared.CleanAndSplit(r.URL.Path)
 
 	token := parts[0]
-	if token != s.secretToken {
+	a, b := []byte(token), []byte(s.secretToken)
+	if len(a) != len(b) || subtle.ConstantTimeCompare(a, b) != 1 {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
