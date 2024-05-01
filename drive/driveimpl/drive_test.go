@@ -131,7 +131,11 @@ func TestSecretTokenAuth(t *testing.T) {
 		Transport: &http.Transport{DisableKeepAlives: true},
 	}
 	addr := strings.Split(fileserverAddr, "|")[1]
-	u := fmt.Sprintf("http://%s/%s/%s", addr, "fakesecret", url.PathEscape(file111))
+	wrongSecret, err := generateSecretToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := fmt.Sprintf("http://%s/%s/%s", addr, wrongSecret, url.PathEscape(file111))
 	resp, err := client.Get(u)
 	if err != nil {
 		t.Fatal(err)
