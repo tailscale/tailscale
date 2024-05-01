@@ -78,7 +78,9 @@ func CleanUpArgs(args []string) []string {
 	return out
 }
 
-var localClient tailscale.LocalClient
+var localClient = tailscale.LocalClient{
+	Socket: paths.DefaultTailscaledSocket(),
+}
 
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) (err error) {
@@ -139,13 +141,6 @@ func Run(args []string) (err error) {
 		return
 	}
 
-	localClient.Socket = rootArgs.socket
-	rootCmd.FlagSet.Visit(func(f *flag.Flag) {
-		if f.Name == "socket" {
-			localClient.UseSocketOnly = true
-		}
-	})
-
 	err = rootCmd.Run(context.Background())
 	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
 		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
@@ -158,7 +153,12 @@ func Run(args []string) (err error) {
 
 func newRootCmd() *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
-	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled socket")
+	rootfs.Func("socket", "path to tailscaled socket", func(s string) error {
+		localClient.Socket = s
+		localClient.UseSocketOnly = true
+		return nil
+	})
+	rootfs.Lookup("socket").DefValue = localClient.Socket
 
 	rootCmd := &ffcli.Command{
 		Name:       "tailscale",
@@ -235,10 +235,6 @@ func fatalf(format string, a ...any) {
 
 // Fatalf, if non-nil, is used instead of log.Fatalf.
 var Fatalf func(format string, a ...any)
-
-var rootArgs struct {
-	socket string
-}
 
 type cmdWalk struct {
 	*ffcli.Command
