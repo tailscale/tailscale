@@ -368,6 +368,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if err != nil {
 		return nil, err
 	}
+	pm.health = sys.HealthTracker()
 	if sds, ok := store.(ipn.StateStoreDialerSetter); ok {
 		sds.SetDialer(dialer.SystemDial)
 	}
@@ -770,29 +771,13 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.AuthURL = b.authURLSticky
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
-			if cv := b.lastClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-				if cv.UrgentSecurityUpdate {
-					s.Health = append(s.Health, fmt.Sprintf("Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
-				} else {
-					s.Health = append(s.Health, fmt.Sprintf("Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
-				}
-			}
 		}
-		if err := b.health.OverallError(); err != nil {
-			switch e := err.(type) {
-			case multierr.Error:
-				for _, err := range e.Errors() {
-					s.Health = append(s.Health, err.Error())
-				}
-			default:
-				s.Health = append(s.Health, err.Error())
-			}
-		}
+		s.Health = b.health.AppendWarnings(s.Health)
+
+		// TODO(bradfitz): move this health check into a health.Warnable
+		// and remove from here.
 		if m := b.sshOnButUnusableHealthCheckMessageLocked(); m != "" {
 			s.Health = append(s.Health, m)
-		}
-		if version.IsUnstableBuild() {
-			s.Health = append(s.Health, "This is an unstable (development) version of Tailscale; frequent updates and bugs are likely")
 		}
 		if b.netMap != nil {
 			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)
@@ -2517,6 +2502,7 @@ func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
 	b.mu.Lock()
 	b.lastClientVersion = v
+	b.health.SetLatestVersion(v)
 	b.mu.Unlock()
 	b.send(ipn.Notify{ClientVersion: v})
 }

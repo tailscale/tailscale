@@ -23,6 +23,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
+	"tailscale.com/version"
 )
 
 var (
@@ -71,6 +72,9 @@ type Tracker struct {
 	sysErr   map[Subsystem]error                   // subsystem => err (or nil for no error)
 	watchers set.HandleSet[func(Subsystem, error)] // opt func to run if error state changes
 	timer    *time.Timer
+
+	latestVersion   *tailcfg.ClientVersion // or nil
+	checkForUpdates bool
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -543,7 +547,37 @@ func (t *Tracker) SetAuthRoutineInError(err error) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if err == nil && t.lastLoginErr == nil {
+		return
+	}
 	t.lastLoginErr = err
+	t.selfCheckLocked()
+}
+
+// SetLatestVersion records the latest version of the Tailscale client.
+// v can be nil if unknown.
+func (t *Tracker) SetLatestVersion(v *tailcfg.ClientVersion) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.latestVersion = v
+	t.selfCheckLocked()
+}
+
+// SetCheckForUpdates sets whether the client wants to check for updates.
+func (t *Tracker) SetCheckForUpdates(v bool) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.checkForUpdates == v {
+		return
+	}
+	t.checkForUpdates = v
+	t.selfCheckLocked()
 }
 
 func (t *Tracker) timerSelfCheck() {
@@ -565,6 +599,23 @@ func (t *Tracker) selfCheckLocked() {
 		return
 	}
 	t.setLocked(SysOverall, t.overallErrorLocked())
+}
+
+// AppendWarnings appends all current health warnings to dst and returns the
+// result.
+func (t *Tracker) AppendWarnings(dst []string) []string {
+	err := t.OverallError()
+	if err == nil {
+		return dst
+	}
+	if me, ok := err.(multierr.Error); ok {
+		for _, err := range me.Errors() {
+			dst = append(dst, err.Error())
+		}
+	} else {
+		dst = append(dst, err.Error())
+	}
+	return dst
 }
 
 // OverallError returns a summary of the health state.
@@ -609,42 +660,76 @@ var errNetworkDown = errors.New("network down")
 var errNotInMapPoll = errors.New("not in map poll")
 var errNoDERPHome = errors.New("no DERP home")
 var errNoUDP4Bind = errors.New("no udp4 bind")
+var errUnstable = errors.New("This is an unstable (development) version of Tailscale; frequent updates and bugs are likely")
 
 func (t *Tracker) overallErrorLocked() error {
+	var errs []error
+	add := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	merged := func() error {
+		return multierr.New(errs...)
+	}
+
+	if t.checkForUpdates {
+		if cv := t.latestVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+			if cv.UrgentSecurityUpdate {
+				add(fmt.Errorf("Security update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+			} else {
+				add(fmt.Errorf("Update available: %v -> %v, run `tailscale update` or `tailscale set --auto-update` to update", version.Short(), cv.LatestVersion))
+			}
+		}
+	}
+	if version.IsUnstableBuild() {
+		add(errUnstable)
+	}
+
 	if v, ok := t.anyInterfaceUp.Get(); ok && !v {
-		return errNetworkDown
+		add(errNetworkDown)
+		return merged()
 	}
 	if t.localLogConfigErr != nil {
-		return t.localLogConfigErr
+		add(t.localLogConfigErr)
+		return merged()
 	}
 	if !t.ipnWantRunning {
-		return fmt.Errorf("state=%v, wantRunning=%v", t.ipnState, t.ipnWantRunning)
+		add(fmt.Errorf("state=%v, wantRunning=%v", t.ipnState, t.ipnWantRunning))
+		return merged()
 	}
 	if t.lastLoginErr != nil {
-		return fmt.Errorf("not logged in, last login error=%v", t.lastLoginErr)
+		add(fmt.Errorf("not logged in, last login error=%v", t.lastLoginErr))
+		return merged()
 	}
 	now := time.Now()
 	if !t.inMapPoll && (t.lastMapPollEndedAt.IsZero() || now.Sub(t.lastMapPollEndedAt) > 10*time.Second) {
-		return errNotInMapPoll
+		add(errNotInMapPoll)
+		return merged()
 	}
 	const tooIdle = 2*time.Minute + 5*time.Second
 	if d := now.Sub(t.lastStreamedMapResponse).Round(time.Second); d > tooIdle {
-		return t.networkErrorfLocked("no map response in %v", d)
+		add(t.networkErrorfLocked("no map response in %v", d))
+		return merged()
 	}
 	if !t.derpHomeless {
 		rid := t.derpHomeRegion
 		if rid == 0 {
-			return errNoDERPHome
+			add(errNoDERPHome)
+			return merged()
 		}
 		if !t.derpRegionConnected[rid] {
-			return t.networkErrorfLocked("not connected to home DERP region %v", rid)
+			add(t.networkErrorfLocked("not connected to home DERP region %v", rid))
+			return merged()
 		}
 		if d := now.Sub(t.derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
-			return t.networkErrorfLocked("haven't heard from home DERP region %v in %v", rid, d)
+			add(t.networkErrorfLocked("haven't heard from home DERP region %v in %v", rid, d))
+			return merged()
 		}
 	}
 	if t.udp4Unbound {
-		return errNoUDP4Bind
+		add(errNoUDP4Bind)
+		return merged()
 	}
 
 	// TODO: use
@@ -653,7 +738,6 @@ func (t *Tracker) overallErrorLocked() error {
 	_ = t.lastStreamedMapResponse
 	_ = t.lastMapRequestHeard
 
-	var errs []error
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
 		if f.missing {
