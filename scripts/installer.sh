@@ -527,7 +527,7 @@ main() {
 			;;
 		apk)
 			set -x
-			if ! grep -Eq '^http.*\/community$' /etc/apk/repositories; then
+			if ! grep -Eq '^http.*/community$' /etc/apk/repositories; then
 				if type setup-apkrepos >/dev/null; then
 					$SUDO setup-apkrepos -c -1
 				else

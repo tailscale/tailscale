@@ -32,7 +32,6 @@ jobs:
           - "ubuntu:18.04"
           - "ubuntu:20.04"
           - "ubuntu:22.04"
-          - "ubuntu:22.10"
           - "ubuntu:23.04"
           - "elementary/docker:stable"
           - "elementary/docker:unstable"
@@ -91,7 +90,10 @@ jobs:
         || contains(matrix.image, 'parrotsec')
         || contains(matrix.image, 'kalilinux')
     - name: checkout
-      uses: actions/checkout@v4
+      # We cannot use v4, as it requires a newer glibc version than some of the
+      # tested images provide. See
+      # https://github.com/actions/checkout/issues/1487
+      uses: actions/checkout@v3
     - name: run installer
       run: scripts/installer.sh
       # Package installation can fail in docker because systemd is not running
