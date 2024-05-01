@@ -345,6 +345,7 @@ func TestConfigFileAuthKey(t *testing.T) {
 
 func TestTwoNodes(t *testing.T) {
 	tstest.Shard(t)
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/11960")
 	tstest.Parallel(t)
 	env := newTestEnv(t)
 
