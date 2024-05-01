@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -30,8 +31,9 @@ var debug = envknob.RegisterBool("TS_DEBUG_PROFILES")
 //
 // It is not safe for concurrent use.
 type profileManager struct {
-	store ipn.StateStore
-	logf  logger.Logf
+	store  ipn.StateStore
+	logf   logger.Logf
+	health *health.Tracker
 
 	currentUserID  ipn.WindowsUserID
 	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile // always non-nil
@@ -102,6 +104,7 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	}
 	pm.currentProfile = prof
 	pm.prefs = prefs
+	pm.updateHealth()
 	return nil
 }
 
@@ -285,6 +288,7 @@ func newUnusedID(knownProfiles map[ipn.ProfileID]*ipn.LoginProfile) (ipn.Profile
 // is not new.
 func (pm *profileManager) setPrefsLocked(clonedPrefs ipn.PrefsView) error {
 	pm.prefs = clonedPrefs
+	pm.updateHealth()
 	if pm.currentProfile.ID == "" {
 		return nil
 	}
@@ -336,6 +340,7 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 		return err
 	}
 	pm.prefs = prefs
+	pm.updateHealth()
 	pm.currentProfile = kp
 	return pm.setAsUserSelectedProfileLocked()
 }
@@ -443,12 +448,20 @@ func (pm *profileManager) writeKnownProfiles() error {
 	return pm.WriteState(ipn.KnownProfilesStateKey, b)
 }
 
+func (pm *profileManager) updateHealth() {
+	if !pm.prefs.Valid() {
+		return
+	}
+	pm.health.SetCheckForUpdates(pm.prefs.AutoUpdate().Check)
+}
+
 // NewProfile creates and switches to a new unnamed profile. The new profile is
 // not persisted until SetPrefs is called with a logged-in user.
 func (pm *profileManager) NewProfile() {
 	metricNewProfile.Add(1)
 
 	pm.prefs = defaultPrefs
+	pm.updateHealth()
 	pm.currentProfile = &ipn.LoginProfile{}
 }
 
