@@ -50,11 +50,17 @@ func TestComplete(t *testing.T) {
 				cmd := &ffcli.Command{
 					Name: "ping",
 					FlagSet: newFlagSet("prog ping", flag.ContinueOnError, func(fs *flag.FlagSet) {
-						fs.String("until", "", "when pinging should end")
+						fs.String("until", "", "when pinging should end\nline break!")
 						ffcomplete.Flag(fs, "until", ffcomplete.Fixed("forever", "direct"))
 					}),
 				}
-				ffcomplete.Args(cmd, ffcomplete.Fixed("jupiter", "neptune", "venus"))
+				ffcomplete.Args(cmd, ffcomplete.Fixed(
+					"jupiter\t5th planet\nand largets",
+					"neptune\t8th planet",
+					"venus\t2nd planet",
+					"\tonly description",
+					"\nonly line break",
+				))
 				return cmd
 			}(),
 		},
@@ -170,9 +176,9 @@ func TestComplete(t *testing.T) {
 			showDescs: true,
 			wantComp: []string{
 				"--until\twhen pinging should end",
-				"jupiter",
-				"neptune",
-				"venus",
+				"jupiter\t5th planet",
+				"neptune\t8th planet",
+				"venus\t2nd planet",
 			},
 			wantDir: ffcomplete.ShellCompDirectiveNoFileComp,
 		},

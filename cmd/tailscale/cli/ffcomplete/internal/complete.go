@@ -193,12 +193,26 @@ walk:
 	}
 
 	// Strip any descriptions if they were suppressed.
-	if !descs {
-		for i := range words {
-			words[i], _, _ = strings.Cut(words[i], "\t")
+	clean := words[:0]
+	for _, w := range words {
+		if !descs {
+			w, _, _ = strings.Cut(w, "\t")
 		}
+		w = cutAny(w, "\n\r")
+		if w == "" || w[0] == '\t' {
+			continue
+		}
+		clean = append(clean, w)
 	}
-	return words, dir, nil
+	return clean, dir, nil
+}
+
+func cutAny(s, cutset string) string {
+	i := strings.IndexAny(s, cutset)
+	if i == -1 {
+		return s
+	}
+	return s[:i]
 }
 
 // splitFlagArgs separates a list of command-line arguments into arguments
