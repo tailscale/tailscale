@@ -380,6 +380,7 @@ var writeMethods = map[string]bool{
 	"MKCOL":     true,
 	"MOVE":      true,
 	"PROPPATCH": true,
+	"DELETE":    true,
 }
 
 // canSudo checks wether we can sudo -u the configured executable as the
