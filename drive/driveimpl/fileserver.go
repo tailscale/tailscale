@@ -50,17 +50,26 @@ func NewFileServer() (*FileServer, error) {
 	}
 	// }
 
-	tokenBytes := make([]byte, 32)
-	_, err = rand.Read(tokenBytes)
+	secretToken, err := generateSecretToken()
 	if err != nil {
-		return nil, fmt.Errorf("generate token bytes: %w", err)
+		return nil, err
 	}
 
 	return &FileServer{
 		l:             l,
-		secretToken:   hex.EncodeToString(tokenBytes),
+		secretToken:   secretToken,
 		shareHandlers: make(map[string]http.Handler),
 	}, nil
+}
+
+// generateSecretToken generates a hex-encoded 256 bit secet.
+func generateSecretToken() (string, error) {
+	tokenBytes := make([]byte, 32)
+	_, err := rand.Read(tokenBytes)
+	if err != nil {
+		return "", fmt.Errorf("generateSecretToken: %w", err)
+	}
+	return hex.EncodeToString(tokenBytes), nil
 }
 
 // Addr returns the address at which this FileServer is listening. This
@@ -109,11 +118,21 @@ func (s *FileServer) SetShares(shares map[string]string) {
 	}
 }
 
-// ServeHTTP implements the http.Handler interface. In order to prevent
-// Mark-of-the-Web bypass attacks if someone visits this fileserver directly
-// within a browser, it requires that the first path element be this file
-// server's secret token. Without knowing the secret token, it's impossible
-// to construct a URL that passes validation.
+// ServeHTTP implements the http.Handler interface. This requires a secret
+// token in the path in order to prevent Mark-of-the-Web (MOTW) bypass attacks
+// of the below sort:
+//
+//  1. Attacker with write access to the share puts a malicious file via
+//     http://100.100.100.100:8080/<tailnet>/<machine>/</share>/bad.exe
+//  2. Attacker then induces victim to visit
+//     http://localhost:[PORT]/<share>/bad.exe
+//  3. Because that is loaded from localhost, it does not get the MOTW
+//     thereby bypasses some OS-level security.
+//
+// The path on this file server is actually not as above, but rather
+// http://localhost:[PORT]/<secretToken>/<share>/bad.exe. Unless the attacker
+// can discover the secretToken, the attacker cannot craft a localhost URL that
+// will work.
 func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := shared.CleanAndSplit(r.URL.Path)
 
