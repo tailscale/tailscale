@@ -88,9 +88,31 @@ func TestFileManipulation(t *testing.T) {
 	s.checkFileContents(remote1, share11, file112)
 
 	s.addShare(remote1, share12, drive.PermissionReadOnly)
-	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, "hello world", false)
 	s.writeFile("writing file to non-existent remote should fail", "non-existent", share11, file111, "hello world", false)
 	s.writeFile("writing file to non-existent share should fail", remote1, "non-existent", file111, "hello world", false)
+}
+
+func TestPermissions(t *testing.T) {
+	s := newSystem(t)
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share12, drive.PermissionReadOnly)
+
+	s.writeFile("writing file to read-only remote should fail", remote1, share12, file111, "hello world", false)
+	if err := s.client.Mkdir(path.Join(remote1, share12), 0644); err == nil {
+		t.Error("making directory on read-only remote should fail")
+	}
+
+	// Now, write file directly to file system so that we can test permissions
+	// on other operations.
+	s.write(remote1, share12, file111, "hello world")
+	if err := s.client.Remove(pathTo(remote1, share12, file111)); err == nil {
+		t.Error("deleting file from read-only remote should fail")
+	}
+	if err := s.client.Rename(pathTo(remote1, share12, file111), pathTo(remote1, share12, file112), true); err == nil {
+		t.Error("moving file on read-only remote should fail")
+	}
+
 }
 
 type local struct {
@@ -322,6 +344,14 @@ func (s *system) read(remoteName, shareName, name string) string {
 	}
 
 	return string(b)
+}
+
+func (s *system) write(remoteName, shareName, name, contents string) {
+	filename := filepath.Join(s.remotes[remoteName].shares[shareName], name)
+	err := os.WriteFile(filename, []byte(contents), 0644)
+	if err != nil {
+		s.t.Fatalf("failed to WriteFile: %s", err)
+	}
 }
 
 func (s *system) readViaWebDAV(remoteName, shareName, name string) string {
