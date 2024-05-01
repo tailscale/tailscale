@@ -77,7 +77,6 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 		if ifc != nil {
 			d.InterfaceName = ifc.Name
 			d.InterfaceIndex = ifc.Index
-			log.Printf("defaultroute_darwin: using lastKnownDefaultRouteInterface %s %v", d.InterfaceName, d.InterfaceIndex)
 			return d, nil
 		}
 	}
@@ -93,6 +92,5 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	}
 	d.InterfaceName = iface.Name
 	d.InterfaceIndex = idx
-	log.Printf("defaultroute_darwin: using table dervied default if %s %v", d.InterfaceName, d.InterfaceIndex)
 	return d, nil
 }
