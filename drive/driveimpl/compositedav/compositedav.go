@@ -27,10 +27,10 @@ import (
 type Child struct {
 	*dirfs.Child
 
-	// BaseURL is the base URL of the WebDAV service to which we'll proxy
+	// BaseURL returns the base URL of the WebDAV service to which we'll proxy
 	// requests for this Child. We will append the filename from the original
 	// URL to this.
-	BaseURL string
+	BaseURL func() (string, error)
 
 	// Transport (if specified) is the http transport to use when communicating
 	// with this Child's WebDAV service.
@@ -154,7 +154,13 @@ func (h *Handler) delegate(mpl int, pathComponents []string, w http.ResponseWrit
 		return
 	}
 
-	u, err := url.Parse(child.BaseURL)
+	baseURL, err := child.BaseURL()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	u, err := url.Parse(baseURL)
 	if err != nil {
 		h.logf("warning: parse base URL %s failed: %s", child.BaseURL, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

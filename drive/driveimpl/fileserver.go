@@ -4,6 +4,9 @@
 package driveimpl
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -17,6 +20,7 @@ import (
 // serve up files as an unprivileged user.
 type FileServer struct {
 	l             net.Listener
+	secretToken   string
 	shareHandlers map[string]http.Handler
 	sharesMu      sync.RWMutex
 }
@@ -41,18 +45,27 @@ func NewFileServer() (*FileServer, error) {
 	// TODO(oxtoacart): actually get safesocket working in more environments (MacOS Sandboxed, Windows, ???)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listen: %w", err)
 	}
 	// }
+
+	tokenBytes := make([]byte, 32)
+	_, err = rand.Read(tokenBytes)
+	if err != nil {
+		return nil, fmt.Errorf("generate token bytes: %w", err)
+	}
+
 	return &FileServer{
 		l:             l,
+		secretToken:   hex.EncodeToString(tokenBytes),
 		shareHandlers: make(map[string]http.Handler),
 	}, nil
 }
 
-// Addr returns the address at which this FileServer is listening.
+// Addr returns the address at which this FileServer is listening. This
+// includes the secret token in front of the address, delimited by a pipe |.
 func (s *FileServer) Addr() string {
-	return s.l.Addr().String()
+	return fmt.Sprintf("%s|%s", s.secretToken, s.l.Addr().String())
 }
 
 // Serve() starts serving files and blocks until it encounters a fatal error.
@@ -95,11 +108,22 @@ func (s *FileServer) SetShares(shares map[string]string) {
 	}
 }
 
-// ServeHTTP implements the http.Handler interface.
+// ServeHTTP implements the http.Handler interface. In order to prevent
+// Mark-of-the-Web bypass attacks if someone visits this fileserver directly
+// within a browser, it requires that the first path element be this file
+// server's secret token. Without knowing the secret token, it's impossible
+// to construct a URL that passes validation.
 func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := shared.CleanAndSplit(r.URL.Path)
-	r.URL.Path = shared.Join(parts[1:]...)
-	share := parts[0]
+
+	token := parts[0]
+	if token != s.secretToken {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	r.URL.Path = shared.Join(parts[2:]...)
+	share := parts[1]
 	s.sharesMu.RLock()
 	h, found := s.shareHandlers[share]
 	s.sharesMu.RUnlock()
