@@ -35,6 +35,9 @@ func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 		wsScheme = "ws"
 		host = net.JoinHostPort(host, d.HTTPPort)
 	}
+	if d.HTTPSPort != "" && d.HTTPSPort != "443" {
+		host = net.JoinHostPort(host, d.HTTPSPort)
+	}
 	wsURL := &url.URL{
 		Scheme: wsScheme,
 		Host:   host,
