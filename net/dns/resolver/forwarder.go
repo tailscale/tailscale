@@ -859,7 +859,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("waiting to send NXDOMAIN: %w", ctx.Err())
 		case responseChan <- res:
 			return nil
 		}
@@ -885,7 +885,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("waiting to send SERVFAIL: %w", ctx.Err())
 			case responseChan <- res:
 				return nil
 			}
@@ -915,6 +915,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			resb, err := f.send(ctx, fq, *rr)
 			if err != nil {
+				err = fmt.Errorf("resolving using %q: %w", rr.name.Addr, err)
 				select {
 				case errc <- err:
 				case <-ctx.Done():
@@ -936,7 +937,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			select {
 			case <-ctx.Done():
 				metricDNSFwdErrorContext.Add(1)
-				return ctx.Err()
+				return fmt.Errorf("waiting to send response: %w", ctx.Err())
 			case responseChan <- packet{v, query.family, query.addr}:
 				metricDNSFwdSuccess.Add(1)
 				return nil
@@ -969,7 +970,16 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 				metricDNSFwdErrorContextGotError.Add(1)
 				return firstErr
 			}
-			return ctx.Err()
+
+			// If we haven't got an error or a successful response,
+			// include all resolvers in the error message so we can
+			// at least see what what servers we're trying to
+			// query.
+			var resolverAddrs []string
+			for _, rr := range resolvers {
+				resolverAddrs = append(resolverAddrs, rr.name.Addr)
+			}
+			return fmt.Errorf("waiting for response or error from %v: %w", resolverAddrs, ctx.Err())
 		}
 	}
 }
