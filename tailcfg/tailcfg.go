@@ -132,7 +132,8 @@ type CapabilityVersion int
 //   - 89: 2024-03-23: Client no longer respects deleted PeerChange.Capabilities (use CapMap)
 //   - 90: 2024-04-03: Client understands PeerCapabilityTaildrive.
 //   - 91: 2024-04-24: Client understands PeerCapabilityTaildriveSharer.
-const CurrentCapabilityVersion CapabilityVersion = 91
+//   - 92: 2024-05-06: Client understands NodeAttrUserDialUseRoutes.
+const CurrentCapabilityVersion CapabilityVersion = 92
 
 type StableID string
 
@@ -2259,6 +2260,10 @@ const (
 
 	// NodeAttrSuggestExitNodeUI allows the currently suggested exit node to appear in the client GUI.
 	NodeAttrSuggestExitNodeUI NodeCapability = "suggest-exit-node-ui"
+
+	// NodeAttrUserDialUseRoutes makes UserDial use either the peer dialer or the system dialer,
+	// depending on the destination address and the configured routes.
+	NodeAttrUserDialUseRoutes NodeCapability = "user-dial-routes"
 )
 
 // SetDNSRequest is a request to add a DNS record.

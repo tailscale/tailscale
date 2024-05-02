@@ -14,9 +14,11 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
@@ -65,6 +67,8 @@ type Dialer struct {
 
 	netnsDialerOnce sync.Once
 	netnsDialer     netns.Dialer
+
+	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
 	mu               sync.Mutex
 	closed           bool
@@ -127,6 +131,23 @@ func (d *Dialer) SetExitDNSDoH(doh string) {
 	if d.dnsCache != nil {
 		d.dnsCache.Flush()
 	}
+}
+
+// SetRoutes configures the dialer to dial the specified routes via Tailscale,
+// and the specified localRoutes using the default interface.
+func (d *Dialer) SetRoutes(routes, localRoutes []netip.Prefix) {
+	var rt *bart.Table[bool]
+	if len(routes) > 0 || len(localRoutes) > 0 {
+		rt = &bart.Table[bool]{}
+		for _, r := range routes {
+			rt.Insert(r, true)
+		}
+		for _, r := range localRoutes {
+			rt.Insert(r, false)
+		}
+	}
+
+	d.routes.Store(rt)
 }
 
 func (d *Dialer) Close() error {
@@ -387,6 +408,15 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 		}
 		return d.NetstackDialTCP(ctx, ipp)
 	}
+
+	if routes := d.routes.Load(); routes != nil {
+		if isTailscaleRoute, _ := routes.Get(ipp.Addr()); isTailscaleRoute {
+			return d.getPeerDialer().DialContext(ctx, network, ipp.String())
+		}
+
+		return d.SystemDial(ctx, network, ipp.String())
+	}
+
 	// Workaround for macOS for now: dial Tailscale IPs with peer dialer.
 	// TODO(bradfitz): fix dialing subnet routers, public IPs via exit nodes,
 	// etc. This is a temporary partial for macOS. We need to plumb ART tables &
@@ -424,7 +454,7 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 }
 
 // getPeerDialer returns the *net.Dialer to use to dial peers (e.g. for peerapi,
-// or "tailscale nc")
+// "tailscale nc", or querying internal DNS servers over Tailscale)
 //
 // This is not used in netstack mode.
 //
