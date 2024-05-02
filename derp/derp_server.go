@@ -69,10 +69,6 @@ func init() {
 	}
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
 const (
 	perClientSendQueueDepth = 32 // packets buffered for sending
 	writeTimeout            = 2 * time.Second

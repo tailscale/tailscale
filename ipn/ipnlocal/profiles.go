@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"time"
 
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
@@ -196,10 +195,6 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 func (pm *profileManager) Reset() {
 	pm.currentUserID = ""
 	pm.NewProfile()
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }
 
 // SetPrefs sets the current profile's prefs to the provided value.
