@@ -138,7 +138,7 @@ func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	token := parts[0]
 	a, b := []byte(token), []byte(s.secretToken)
-	if len(a) != len(b) || subtle.ConstantTimeCompare(a, b) != 1 {
+	if subtle.ConstantTimeCompare(a, b) != 1 {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
