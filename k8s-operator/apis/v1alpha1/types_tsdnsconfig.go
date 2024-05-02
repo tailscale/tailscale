@@ -17,7 +17,7 @@ var DNSConfigKind = "DNSConfig"
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=dc
-// +kubebuilder:printcolumn:name="NameserverIP",type="string",JSONPath=`.status.nameserverStatus.ip`,description="Service IP address of the nameserver"
+// +kubebuilder:printcolumn:name="NameserverIP",type="string",JSONPath=`.status.nameserver.ip`,description="Service IP address of the nameserver"
 
 type DNSConfig struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -60,7 +60,7 @@ type DNSConfigStatus struct {
 	// +optional
 	Conditions []ConnectorCondition `json:"conditions"`
 	// +optional
-	NameserverStatus *NameserverStatus `json:"nameserverStatus"`
+	Nameserver *NameserverStatus `json:"nameserver"`
 }
 
 type NameserverStatus struct {

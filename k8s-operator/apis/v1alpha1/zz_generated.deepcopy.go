@@ -252,8 +252,8 @@ func (in *DNSConfigStatus) DeepCopyInto(out *DNSConfigStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.NameserverStatus != nil {
-		in, out := &in.NameserverStatus, &out.NameserverStatus
+	if in.Nameserver != nil {
+		in, out := &in.Nameserver, &out.Nameserver
 		*out = new(NameserverStatus)
 		**out = **in
 	}

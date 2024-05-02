@@ -36,7 +36,6 @@ const (
 	// provided by a mounted Kubernetes Configmap. The Configmap mounted at
 	// /config is the only supported way for configuring this nameserver.
 	defaultDNSConfigDir    = "/config"
-	defaultDNSFile         = "dns.json"
 	kubeletMountedConfigLn = "..data"
 )
 
@@ -331,9 +330,9 @@ func ensureWatcherForKubeConfigMap(ctx context.Context) chan string {
 type configReaderFunc func() ([]byte, error)
 
 // configMapConfigReader reads the desired nameserver configuration from a
-// dns.json file in a ConfigMap mounted at /config.
+// records.json file in a ConfigMap mounted at /config.
 var configMapConfigReader configReaderFunc = func() ([]byte, error) {
-	if contents, err := os.ReadFile(filepath.Join(defaultDNSConfigDir, defaultDNSFile)); err == nil {
+	if contents, err := os.ReadFile(filepath.Join(defaultDNSConfigDir, operatorutils.DNSRecordsCMKey)); err == nil {
 		return contents, nil
 	} else if os.IsNotExist(err) {
 		return nil, nil

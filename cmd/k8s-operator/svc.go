@@ -90,7 +90,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
-	targetIP := a.tailnetTargetAnnotation(svc)
+	targetIP := tailnetTargetAnnotation(svc)
 	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
 	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" && targetFQDN == "" {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
@@ -216,7 +216,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.ClusterTargetDNSName = svc.Spec.ExternalName
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
-	} else if ip := a.tailnetTargetAnnotation(svc); ip != "" {
+	} else if ip := tailnetTargetAnnotation(svc); ip != "" {
 		sts.TailnetTargetIP = ip
 		a.managedEgressProxies.Add(svc.UID)
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
@@ -250,7 +250,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	if !a.hasLoadBalancerClass(svc) {
+	if !isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) {
 		logger.Debugf("service is not a LoadBalancer, so not updating ingress")
 		return nil
 	}
@@ -310,29 +310,27 @@ func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
 	return a.shouldExposeClusterIP(svc) || a.shouldExposeDNSName(svc)
 }
 
+func (a *ServiceReconciler) shouldExposeDNSName(svc *corev1.Service) bool {
+	return hasExposeAnnotation(svc) && svc.Spec.Type == corev1.ServiceTypeExternalName && svc.Spec.ExternalName != ""
+}
+
 func (a *ServiceReconciler) shouldExposeClusterIP(svc *corev1.Service) bool {
-	// Headless services can't be exposed, since there is no ClusterIP to
-	// forward to.
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
 		return false
 	}
-	return a.hasLoadBalancerClass(svc) || a.hasExposeAnnotation(svc)
+	return isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) || hasExposeAnnotation(svc)
 }
 
-func (a *ServiceReconciler) shouldExposeDNSName(svc *corev1.Service) bool {
-	return a.hasExposeAnnotation(svc) && svc.Spec.Type == corev1.ServiceTypeExternalName && svc.Spec.ExternalName != ""
-}
-
-func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {
+func isTailscaleLoadBalancerService(svc *corev1.Service, isDefaultLoadBalancer bool) bool {
 	return svc != nil &&
 		svc.Spec.Type == corev1.ServiceTypeLoadBalancer &&
 		(svc.Spec.LoadBalancerClass != nil && *svc.Spec.LoadBalancerClass == "tailscale" ||
-			svc.Spec.LoadBalancerClass == nil && a.isDefaultLoadBalancer)
+			svc.Spec.LoadBalancerClass == nil && isDefaultLoadBalancer)
 }
 
 // hasExposeAnnotation reports whether Service has the tailscale.com/expose
 // annotation set
-func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
+func hasExposeAnnotation(svc *corev1.Service) bool {
 	return svc != nil && svc.Annotations[AnnotationExpose] == "true"
 }
 
@@ -340,7 +338,7 @@ func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
 // annotation or of the deprecated tailscale.com/ts-tailnet-target-ip
 // annotation. If neither is set, it returns an empty string. If both are set,
 // it returns the value of the new annotation.
-func (a *ServiceReconciler) tailnetTargetAnnotation(svc *corev1.Service) string {
+func tailnetTargetAnnotation(svc *corev1.Service) string {
 	if svc == nil {
 		return ""
 	}

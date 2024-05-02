@@ -17,7 +17,7 @@ spec:
   versions:
     - additionalPrinterColumns:
         - description: Service IP address of the nameserver
-          jsonPath: .status.nameserverStatus.ip
+          jsonPath: .status.nameserver.ip
           name: NameserverIP
           type: string
       name: v1alpha1
@@ -85,7 +85,7 @@ spec:
                   x-kubernetes-list-map-keys:
                     - type
                   x-kubernetes-list-type: map
-                nameserverStatus:
+                nameserver:
                   type: object
                   properties:
                     ip:
