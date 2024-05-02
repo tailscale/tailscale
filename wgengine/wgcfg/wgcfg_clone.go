@@ -43,8 +43,9 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	DNS            []netip.Addr
 	Peers          []Peer
 	NetworkLogging struct {
-		NodeID   logid.PrivateID
-		DomainID logid.PrivateID
+		NodeID             logid.PrivateID
+		DomainID           logid.PrivateID
+		LogExitFlowEnabled bool
 	}
 }{})
 
