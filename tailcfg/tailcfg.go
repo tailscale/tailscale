@@ -2263,7 +2263,8 @@ const (
 	NodeAttrSuggestExitNodeUI NodeCapability = "suggest-exit-node-ui"
 
 	// NodeAttrUserDialUseRoutes makes UserDial use either the peer dialer or the system dialer,
-	// depending on the destination address and the configured routes.
+	// depending on the destination address and the configured routes. When present, it also makes
+	// the DNS forwarder use UserDial instead of SystemDial when dialing resolvers.
 	NodeAttrUserDialUseRoutes NodeCapability = "user-dial-routes"
 )
 
