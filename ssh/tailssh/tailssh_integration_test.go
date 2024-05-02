@@ -1,9 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build integrationtest
-// +build integrationtest
-
 package tailssh
 
 import (
@@ -23,6 +20,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path"
 	"runtime"
 	"strings"
 	"testing"
@@ -81,24 +79,19 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
+var homeDir = "/home/testuser"
+
+func init() {
+	if runtime.GOOS == "darwin" {
+		homeDir = "/Users/testuser"
+	}
+}
+
 func TestIntegrationSSH(t *testing.T) {
 	debugTest.Store(true)
 	t.Cleanup(func() {
 		debugTest.Store(false)
 	})
-
-	homeDir := "/home/testuser"
-	if runtime.GOOS == "darwin" {
-		homeDir = "/Users/testuser"
-	}
-
-	_, err := exec.LookPath("su")
-	suPresent := err == nil
-
-	// Some operating systems like Fedora seem to require login to be present
-	// in order for su to work.
-	_, err = exec.LookPath("login")
-	loginPresent := err == nil
 
 	tests := []struct {
 		cmd  string
@@ -112,15 +105,11 @@ func TestIntegrationSSH(t *testing.T) {
 		{
 			cmd:  "pwd",
 			want: []string{homeDir},
-			skip: runtime.GOOS != "linux" || !suPresent || !loginPresent,
+			skip: !expectPAMToCreateHomeDir(),
 		},
 	}
 
 	for _, test := range tests {
-		if test.skip {
-			continue
-		}
-
 		// run every test both without and with a shell
 		for _, shell := range []bool{false, true} {
 			shellQualifier := "no_shell"
@@ -129,6 +118,10 @@ func TestIntegrationSSH(t *testing.T) {
 			}
 
 			t.Run(fmt.Sprintf("%s_%s", test.cmd, shellQualifier), func(t *testing.T) {
+				if test.skip {
+					t.SkipNow()
+				}
+
 				s := testSession(t)
 
 				if shell {
@@ -159,13 +152,23 @@ func TestIntegrationSFTP(t *testing.T) {
 		debugTest.Store(false)
 	})
 
-	filePath := "/tmp/sftptest.dat"
+	baseDir := homeDir
+	if !expectPAMToCreateHomeDir() {
+		baseDir = "/tmp"
+	}
+
+	filePath := path.Join(baseDir, "sftptest.dat")
 	wantText := "hello world"
 
 	cl := testClient(t)
 	scl, err := sftp.NewClient(cl)
 	if err != nil {
 		t.Fatalf("can't get sftp client: %s", err)
+	}
+
+	_, err = scl.Stat(baseDir)
+	if err != nil {
+		t.Fatalf("can't stat %s: %s", homeDir, err)
 	}
 
 	file, err := scl.Create(filePath)
@@ -201,6 +204,21 @@ func TestIntegrationSFTP(t *testing.T) {
 	} else if !strings.Contains(got, "testuser") {
 		t.Fatalf("unexpected file owner group: %s", got)
 	}
+}
+
+// expectPAMToCreateHomeDir tells us whether the test can expect pam_mkhomedir
+// to actually make the home directory. This returns true if and only if both
+// su and login commands are available on the path.
+func expectPAMToCreateHomeDir() bool {
+	_, err := exec.LookPath("su")
+	suPresent := err == nil
+
+	// Some operating systems like Fedora seem to require login to be present
+	// in order for su to work.
+	_, err = exec.LookPath("login")
+	loginPresent := err == nil
+
+	return suPresent && loginPresent
 }
 
 type session struct {

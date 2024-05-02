@@ -104,6 +104,12 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		remoteUser = strings.Join(ci.node.Tags().AsSlice(), ",")
 	}
 
+	incubatorArgs := ss.buildIncubatorArgs(lu, gids, remoteUser, ci.src.Addr().String(), isSFTP, isShell, name, args)
+	log.Printf("ZZZZ incubator args are: %+s", incubatorArgs)
+	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+}
+
+func (ss *sshSession) buildIncubatorArgs(lu *userMeta, gids, remoteUser, remoteIP string, isSFTP, isShell bool, cmdName string, cmdArgs []string) []string {
 	incubatorArgs := []string{
 		"be-child",
 		"ssh",
@@ -112,7 +118,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		"--groups=" + gids,
 		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
-		"--remote-ip=" + ci.src.Addr().String(),
+		"--remote-ip=" + remoteIP,
 		"--has-tty=false", // updated in-place by startWithPTY
 		"--tty-name=",     // updated in-place by startWithPTY
 	}
@@ -122,19 +128,34 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	}
 
 	if isSFTP {
-		incubatorArgs = append(incubatorArgs, "--sftp")
-	} else {
-		if isShell {
-			incubatorArgs = append(incubatorArgs, "--shell")
+		// We have two ways of running an SFTP server.
+		// 1. Immediately launch incubator as SFTP server
+		// 2. Launch incubator to spawn itself as SFTP server inside of a login
+		//    shell.
+		// The second method is preferred because it allows PAM authentication
+		// to run.
+		su, _ := findSUCommand(ss.logf)
+		if su == "" {
+			// We can't use su, just serve sftp directly
+			incubatorArgs = append(incubatorArgs, "--sftp")
+			return incubatorArgs
 		}
 
-		incubatorArgs = append(incubatorArgs, "--cmd="+name)
-		if len(args) > 0 {
-			incubatorArgs = append(incubatorArgs, "--")
-			incubatorArgs = append(incubatorArgs, args...)
-		}
+		// We can use su, tell incubator to spawn itself
+		cmdName = ss.conn.srv.tailscaledPath
+		cmdArgs = ss.buildIncubatorArgs(lu, gids, remoteUser, remoteIP, false, false, "", nil)
 	}
-	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+	if isShell {
+		incubatorArgs = append(incubatorArgs, "--shell")
+	}
+
+	incubatorArgs = append(incubatorArgs, "--cmd="+cmdName)
+	if len(cmdArgs) > 0 {
+		incubatorArgs = append(incubatorArgs, "--")
+		incubatorArgs = append(incubatorArgs, cmdArgs...)
+	}
+
+	return incubatorArgs
 }
 
 var debugIncubator bool
@@ -229,6 +250,7 @@ func beIncubator(args []string) error {
 			defer logFile.Close()
 		}
 	}
+	logf("ZZZZ Being incubator with args %+s", args)
 
 	if ia.isSFTP {
 		return dropPrivilegesAndHandleSFTP(logf, ia)
@@ -364,43 +386,15 @@ func tryLoginCmd(logf logger.Logf, ia incubatorArgs) (bool, error) {
 // an su command which accepts the right flags, we'll use su instead of login
 // when no TTY is available.
 func tryLoginWithSU(logf logger.Logf, ia incubatorArgs) (bool, error) {
-	// Currently, we only support falling back to su on Linux. This
-	// potentially could work on BSDs as well, but requires testing.
-	if runtime.GOOS != "linux" {
-		return false, nil
-	}
-
-	su, err := exec.LookPath("su")
-	if err != nil {
-		logf("can't find su command")
-		return false, nil
-	}
-
-	// Get help text to inspect supported flags.
-	out, err := exec.Command(su, "-h").CombinedOutput()
-	if err != nil {
-		logf("%s doesn't support -h, don't use", su)
-		return false, nil
-	}
-
-	supportsFlag := func(flag string) bool {
-		return bytes.Contains(out, []byte(flag))
-	}
-
-	// Make sure su supports the necessary flags.
-	if !supportsFlag("--login") {
-		logf("%s doesn't support --login, don't use", su)
-		return false, nil
-	}
-	if !supportsFlag("--command") {
-		logf("%s doesn't support --command, don't use", su)
+	su, supportsPTY := findSUCommand(logf)
+	if su == "" {
 		return false, nil
 	}
 
 	loginArgs := []string{
 		"--login",
 	}
-	if ia.hasTTY && supportsFlag("--pty") {
+	if ia.hasTTY && supportsPTY {
 		// Allocate a pseudo terminal for improved security. In particular,
 		// this can help avoid TIOCSTI ioctl terminal injection.
 		loginArgs = append(loginArgs, "--pty")
@@ -419,6 +413,52 @@ func tryLoginWithSU(logf logger.Logf, ia incubatorArgs) (bool, error) {
 	logf("logging in with %s %+v", su, loginArgs)
 	// replace the running process
 	return true, unix.Exec(su, loginArgs, os.Environ())
+}
+
+// findSUCommand finds the su command and returns the path to it, if and only
+// if.
+//
+// 1. We're running on Linux
+// 2. The su command is on the path
+// 3. The su command supports the -h, --login, and --command flags
+//
+// This also returns a boolean indicating whether or not su supports the --pty
+// flag.
+func findSUCommand(logf logger.Logf) (string, bool) {
+	// Currently, we only support using su on Linux. This potentially could
+	// work on BSDs as well, but requires testing.
+	if runtime.GOOS != "linux" {
+		return "", false
+	}
+
+	su, err := exec.LookPath("su")
+	if err != nil {
+		logf("can't find su command")
+		return "", false
+	}
+
+	// Get help text to inspect supported flags.
+	out, err := exec.Command(su, "-h").CombinedOutput()
+	if err != nil {
+		logf("%s doesn't support -h, don't use", su)
+		return "", false
+	}
+
+	supportsFlag := func(flag string) bool {
+		return bytes.Contains(out, []byte(flag))
+	}
+
+	// Make sure su supports the necessary flags.
+	if !supportsFlag("--login") {
+		logf("%s doesn't support --login, don't use", su)
+		return "", false
+	}
+	if !supportsFlag("--command") {
+		logf("%s doesn't support --command, don't use", su)
+		return "", false
+	}
+
+	return su, supportsFlag("--pty")
 }
 
 // dropPrivilegesAndRun is a last resort if we couldn't use login or su. It
