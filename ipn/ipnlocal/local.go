@@ -3590,6 +3590,7 @@ func (b *LocalBackend) authReconfig() {
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := nm.HasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
+	userDialUseRoutes := nm.HasCap(tailcfg.NodeAttrUserDialUseRoutes)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
@@ -3646,6 +3647,12 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
+
+	if userDialUseRoutes {
+		b.dialer.SetRoutes(rcfg.Routes, rcfg.LocalRoutes)
+	} else {
+		b.dialer.SetRoutes(nil, nil)
+	}
 
 	b.initPeerAPIListener()
 }
