@@ -40,9 +40,9 @@ const (
 //   - For tailscale Ingress, a mapping of the Ingress's MagicDNSName to the IP address of
 //     the ingress proxy Pod.
 //   - For egress proxies configured via tailscale.com/tailnet-fqdn annotation, a
-//     mapping of the the tailnet FQDN to the IP address of the egress proxy Pod.
+//     mapping of the tailnet FQDN to the IP address of the egress proxy Pod.
 //
-// Records will only created if there is exactly one ready
+// Records will only be created if there is exactly one ready
 // tailscale.com/v1alpha1.DNSConfig instance in the cluster (so that we know
 // that there is a ts.net nameserver deployed in the cluster).
 type dnsRecordsReconciler struct {
@@ -80,8 +80,8 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	// Check that there is a ts.net nameserver deployed to the cluster by
-	// checking that there is a ready tailscale.com/v1alpha1.DNSConfig
-	// resource.
+	// checking that there is tailscale.com/v1alpha1.DNSConfig resource in a
+	// Ready state.
 	dnsCfgLst := new(tsapi.DNSConfigList)
 	if err = dnsRR.List(ctx, dnsCfgLst); err != nil {
 		return reconcile.Result{}, fmt.Errorf("error listing DNSConfigs: %w", err)
@@ -128,7 +128,7 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 	}
 	isEgressFQDNSvc, err := dnsRR.isSvcForFQDNEgressProxy(ctx, headlessSvc)
 	if err != nil {
-		return fmt.Errorf("error checking whether Service is for an egress proxy: %w", err)
+		return fmt.Errorf("error checking whether the Service is for an egress proxy: %w", err)
 	}
 	if !(isEgressFQDNSvc || isManagedByType(headlessSvc, "ingress")) {
 		logger.Debug("Service is not fronting a proxy that we create DNS records for; do nothing")
@@ -175,25 +175,27 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 	labels := map[string]string{discoveryv1.LabelServiceName: headlessSvc.Name} // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
 	eps, err := getSingleObject[discoveryv1.EndpointSlice](ctx, dnsRR.Client, dnsRR.tsNamespace, labels)
 	if err != nil {
-		return fmt.Errorf("error getting proxy EndpointSlice: %w", err)
+		return fmt.Errorf("error getting the EndpointSlice for the proxy's headless Service: %w", err)
 	}
 	if eps == nil {
-		logger.Debugf("proxy EndpointSlice does not yet exist. We will reconcile again once it's created")
+		logger.Debugf("proxy's headless Service EndpointSlice does not yet exist. We will reconcile again once it's created")
 		return nil
 	}
+	// An EndpointSlice for a Service can have a list of endpoints that each
+	// can have multiple addresses - these are the IP addresses of any Pods
+	// selected by that Service. Pick all the IPv4 addresses.
 	ips := make([]string, 0)
 	for _, ep := range eps.Endpoints {
-		for _, ip := range ips {
+		for _, ip := range ep.Addresses {
 			if !net.IsIPv4String(ip) {
 				logger.Infof("EndpointSlice contains IP address %q that is not IPv4, ignoring. Currently only IPv4 is supported", ip)
 			} else {
 				ips = append(ips, ip)
 			}
 		}
-		ips = append(ips, ep.Addresses...)
 	}
 	if len(ips) == 0 {
-		logger.Debugf("No endpoint addresses found. We will reconcile again once they are created.")
+		logger.Debugf("EndpointSlice for the Service contains no IPv4 addresses. We will reconcile again once they are created.")
 		return nil
 	}
 	updateFunc := func(rec *operatorutils.Records) {
@@ -208,7 +210,7 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 // maybeCleanup ensures that the DNS record for the proxy has been removed from
 // dnsrecords ConfigMap and the tailscale.com/dns-records-reconciler finalizer
 // has been removed from the Service. If the record is not found in the
-// ConfigMap, the ConfigMap does not exist or the Service does not have
+// ConfigMap, the ConfigMap does not exist, or the Service does not have
 // tailscale.com/magic-dnsname annotation, just remove the finalizer.
 func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, headlessSvc *corev1.Service, logger *zap.SugaredLogger) error {
 	ix := slices.Index(headlessSvc.Finalizers, dnsRecordsRecocilerFinalizer)
@@ -219,23 +221,23 @@ func (h *dnsRecordsReconciler) maybeCleanup(ctx context.Context, headlessSvc *co
 	cm := &corev1.ConfigMap{}
 	err := h.Client.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: h.tsNamespace}, cm)
 	if apierrors.IsNotFound(err) {
-		logger.Debug("dsnrecords ConfigMap not found")
+		logger.Debug("'dsnrecords' ConfigMap not found")
 		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
 	}
 	if err != nil {
-		return fmt.Errorf("error retrieving dnsrecords ConfigMap: %w", err)
+		return fmt.Errorf("error retrieving 'dnsrecords' ConfigMap: %w", err)
 	}
 	if cm.Data == nil {
-		logger.Debug("dnsrecords ConfigMap contains no records")
+		logger.Debug("'dnsrecords' ConfigMap contains no records")
 		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
 	}
 	_, ok := cm.Data[operatorutils.DNSRecordsCMKey]
 	if !ok {
-		logger.Debug("dnsrecords ConfigMap contains no records")
+		logger.Debug("'dnsrecords' ConfigMap contains no records")
 		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
 	}
-	fqdn, ok := headlessSvc.GetAnnotations()[annotationTSMagicDNSName]
-	if !ok || fqdn == "" {
+	fqdn, _ := headlessSvc.GetAnnotations()[annotationTSMagicDNSName]
+	if fqdn == "" {
 		return h.removeHeadlessSvcFinalizer(ctx, headlessSvc)
 	}
 	logger.Infof("removing DNS record for MagicDNS name %s", fqdn)

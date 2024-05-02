@@ -427,7 +427,7 @@ ConnectorCondition contains condition information for a Connector.
         </td>
         <td>false</td>
       </tr><tr>
-        <td><b><a href="#dnsconfigstatusnameserverstatus">nameserverStatus</a></b></td>
+        <td><b><a href="#dnsconfigstatusnameserver">nameserver</a></b></td>
         <td>object</td>
         <td>
           <br/>
@@ -503,7 +503,7 @@ ConnectorCondition contains condition information for a Connector.
 </table>
 
 
-### DNSConfig.status.nameserverStatus
+### DNSConfig.status.nameserver
 <sup><sup>[↩ Parent](#dnsconfigstatus)</sup></sup>
 
 

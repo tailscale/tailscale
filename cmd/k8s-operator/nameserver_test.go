@@ -77,7 +77,7 @@ func TestNameserverReconciler(t *testing.T) {
 		svc.Spec.ClusterIP = "1.2.3.4"
 	})
 	expectReconciled(t, nr, "", "test")
-	dnsCfg.Status.NameserverStatus = &tsapi.NameserverStatus{
+	dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
 		IP: "1.2.3.4",
 	}
 	dnsCfg.Finalizers = []string{FinalizerName}

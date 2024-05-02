@@ -141,7 +141,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return res, fmt.Errorf("error getting Service: %w", err)
 	}
 	if ip := svc.Spec.ClusterIP; ip != "" && ip != "None" {
-		dnsCfg.Status.NameserverStatus = &tsapi.NameserverStatus{
+		dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
 			IP: ip,
 		}
 		return setStatus(&dnsCfg, tsapi.NameserverReady, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated)
