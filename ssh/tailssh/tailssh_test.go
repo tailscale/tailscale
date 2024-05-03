@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineread"
 	"tailscale.com/util/must"
@@ -87,7 +88,7 @@ func TestMatchRule(t *testing.T) {
 			name: "expired",
 			rule: &tailcfg.SSHRule{
 				Action:      someAction,
-				RuleExpires: timePtr(time.Unix(100, 0)),
+				RuleExpires: ptr.To(time.Unix(100, 0)),
 			},
 			ci:      &sshConnInfo{},
 			wantErr: errRuleExpired,
@@ -221,8 +222,6 @@ func TestMatchRule(t *testing.T) {
 		})
 	}
 }
-
-func timePtr(t time.Time) *time.Time { return &t }
 
 // localState implements ipnLocalBackend for testing.
 type localState struct {
