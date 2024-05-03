@@ -244,6 +244,8 @@ func NewFakeUserspaceEngine(logf logger.Logf, opts ...any) (Engine, error) {
 			conf.SetSubsystem = v
 		case *controlknobs.Knobs:
 			conf.ControlKnobs = v
+		case *health.Tracker:
+			conf.HealthTracker = v
 		default:
 			return nil, fmt.Errorf("unknown option type %T", v)
 		}
