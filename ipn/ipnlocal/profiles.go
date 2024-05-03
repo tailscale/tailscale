@@ -485,7 +485,8 @@ func (pm *profileManager) CurrentPrefs() ipn.PrefsView {
 
 // ReadStartupPrefsForTest reads the startup prefs from disk. It is only used for testing.
 func ReadStartupPrefsForTest(logf logger.Logf, store ipn.StateStore) (ipn.PrefsView, error) {
-	pm, err := newProfileManager(store, logf)
+	ht := new(health.Tracker) // in tests, don't care about the health status
+	pm, err := newProfileManager(store, logf, ht)
 	if err != nil {
 		return ipn.PrefsView{}, err
 	}
@@ -494,8 +495,8 @@ func ReadStartupPrefsForTest(logf logger.Logf, store ipn.StateStore) (ipn.PrefsV
 
 // newProfileManager creates a new ProfileManager using the provided StateStore.
 // It also loads the list of known profiles from the StateStore.
-func newProfileManager(store ipn.StateStore, logf logger.Logf) (*profileManager, error) {
-	return newProfileManagerWithGOOS(store, logf, envknob.GOOS())
+func newProfileManager(store ipn.StateStore, logf logger.Logf, health *health.Tracker) (*profileManager, error) {
+	return newProfileManagerWithGOOS(store, logf, health, envknob.GOOS())
 }
 
 func readAutoStartKey(store ipn.StateStore, goos string) (ipn.StateKey, error) {
@@ -528,7 +529,7 @@ func readKnownProfiles(store ipn.StateStore) (map[ipn.ProfileID]*ipn.LoginProfil
 	return knownProfiles, nil
 }
 
-func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos string) (*profileManager, error) {
+func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, ht *health.Tracker, goos string) (*profileManager, error) {
 	logf = logger.WithPrefix(logf, "pm: ")
 	stateKey, err := readAutoStartKey(store, goos)
 	if err != nil {
@@ -544,6 +545,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 		store:         store,
 		knownProfiles: knownProfiles,
 		logf:          logf,
+		health:        ht,
 	}
 
 	if stateKey != "" {

@@ -26,6 +26,7 @@ import (
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -642,7 +643,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	h.ps = &peerAPIServer{
 		b: &LocalBackend{
 			e:     eng,
@@ -692,7 +693,7 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
-		pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 		var a *appc.AppConnector
 		if shouldStore {
 			a = appc.NewAppConnector(t.Logf, &appctest.RouteCollector{}, &appc.RouteInfo{}, fakeStoreRoutes)
@@ -764,7 +765,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 
 		rc := &appctest.RouteCollector{}
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
-		pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 		var a *appc.AppConnector
 		if shouldStore {
 			a = appc.NewAppConnector(t.Logf, rc, &appc.RouteInfo{}, fakeStoreRoutes)
@@ -827,7 +828,7 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 
 		rc := &appctest.RouteCollector{}
 		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
-		pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 		var a *appc.AppConnector
 		if shouldStore {
 			a = appc.NewAppConnector(t.Logf, rc, &appc.RouteInfo{}, fakeStoreRoutes)
