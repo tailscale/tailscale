@@ -48,7 +48,6 @@ func NewFileServer() (*FileServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
-	// }
 
 	secretToken, err := generateSecretToken()
 	if err != nil {
