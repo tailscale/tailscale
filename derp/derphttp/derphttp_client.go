@@ -136,8 +136,15 @@ func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, netMon *netmo
 
 // NewNetcheckClient returns a Client that's only able to have its DialRegionTLS method called.
 // It's used by the netcheck package.
-func NewNetcheckClient(logf logger.Logf) *Client {
-	return &Client{logf: logf, clock: tstime.StdClock{}}
+func NewNetcheckClient(logf logger.Logf, netMon *netmon.Monitor) *Client {
+	if netMon == nil {
+		panic("nil netMon")
+	}
+	return &Client{
+		logf:   logf,
+		clock:  tstime.StdClock{},
+		netMon: netMon,
+	}
 }
 
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
