@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tcnksm/go-httpstat"
@@ -1257,9 +1258,9 @@ func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, nee
 	for _, reg := range need {
 		go func(reg *tailcfg.DERPRegion) {
 			defer wg.Done()
-			if d, err := c.measureICMPLatency(ctx, reg, p); err != nil {
+			if d, ok, err := c.measureICMPLatency(ctx, reg, p); err != nil {
 				c.logf("[v1] measuring ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
-			} else {
+			} else if ok {
 				c.logf("[v1] ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, d)
 				rs.mu.Lock()
 				if l, ok := rs.report.RegionLatency[reg.RegionID]; !ok {
@@ -1281,9 +1282,9 @@ func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, nee
 	return nil
 }
 
-func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion, p *ping.Pinger) (time.Duration, error) {
+func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion, p *ping.Pinger) (_ time.Duration, ok bool, err error) {
 	if len(reg.Nodes) == 0 {
-		return 0, fmt.Errorf("no nodes for region %d (%v)", reg.RegionID, reg.RegionCode)
+		return 0, false, fmt.Errorf("no nodes for region %d (%v)", reg.RegionID, reg.RegionCode)
 	}
 
 	// Try pinging the first node in the region
@@ -1295,7 +1296,7 @@ func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion
 	// TODO(andrew-d): this is a bit ugly
 	nodeAddr := c.nodeAddr(ctx, node, probeIPv4)
 	if !nodeAddr.IsValid() {
-		return 0, fmt.Errorf("no address for node %v", node.Name)
+		return 0, false, fmt.Errorf("no address for node %v", node.Name)
 	}
 	addr := &net.IPAddr{
 		IP:   net.IP(nodeAddr.Addr().AsSlice()),
@@ -1304,7 +1305,14 @@ func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion
 
 	// Use the unique node.Name field as the packet data to reduce the
 	// likelihood that we get a mismatched echo response.
-	return p.Send(ctx, addr, []byte(node.Name))
+	d, err := p.Send(ctx, addr, []byte(node.Name))
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return d, true, nil
 }
 
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
