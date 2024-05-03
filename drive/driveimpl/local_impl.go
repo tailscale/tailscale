@@ -27,6 +27,10 @@ const (
 // NewFileSystemForLocal starts serving a filesystem for local clients.
 // Inbound connections must be handed to HandleConn.
 func NewFileSystemForLocal(logf logger.Logf) *FileSystemForLocal {
+	return newFileSystemForLocal(logf, &compositedav.StatCache{TTL: statCacheTTL})
+}
+
+func newFileSystemForLocal(logf logger.Logf, statCache *compositedav.StatCache) *FileSystemForLocal {
 	if logf == nil {
 		logf = log.Printf
 	}
@@ -34,7 +38,7 @@ func NewFileSystemForLocal(logf logger.Logf) *FileSystemForLocal {
 		logf: logf,
 		h: &compositedav.Handler{
 			Logf:      logf,
-			StatCache: &compositedav.StatCache{TTL: statCacheTTL},
+			StatCache: statCache,
 		},
 		listener: newConnListener(),
 	}

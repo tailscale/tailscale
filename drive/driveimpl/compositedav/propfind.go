@@ -24,33 +24,26 @@ func (h *Handler) handlePROPFIND(w http.ResponseWriter, r *http.Request) {
 		// Delegate to a Child.
 		depth := getDepth(r)
 
-		cached := h.StatCache.get(r.URL.Path, depth)
-		if cached != nil {
-			w.Header().Del("Content-Length")
-			w.WriteHeader(http.StatusMultiStatus)
-			w.Write(cached)
-			return
-		}
+		status, result := h.StatCache.getOr(r.URL.Path, depth, func() (int, []byte) {
+			// Use a buffering ResponseWriter so that we can manipulate the result.
+			// The only thing we use from the original ResponseWriter is Header().
+			bw := &bufferingResponseWriter{ResponseWriter: w}
 
-		// Use a buffering ResponseWriter so that we can manipulate the result.
-		// The only thing we use from the original ResponseWriter is Header().
-		bw := &bufferingResponseWriter{ResponseWriter: w}
+			mpl := h.maxPathLength(r)
+			h.delegate(mpl, pathComponents[mpl-1:], bw, r)
 
-		mpl := h.maxPathLength(r)
-		h.delegate(mpl, pathComponents[mpl-1:], bw, r)
+			// Fixup paths to add the requested path as a prefix.
+			pathPrefix := shared.Join(pathComponents[0:mpl]...)
+			b := hrefRegex.ReplaceAll(bw.buf.Bytes(), []byte(fmt.Sprintf("<D:href>%s/$1</D:href>", pathPrefix)))
 
-		// Fixup paths to add the requested path as a prefix.
-		pathPrefix := shared.Join(pathComponents[0:mpl]...)
-		b := hrefRegex.ReplaceAll(bw.buf.Bytes(), []byte(fmt.Sprintf("<D:href>%s/$1</D:href>", pathPrefix)))
-
-		if h.StatCache != nil && bw.status == http.StatusMultiStatus && b != nil {
-			h.StatCache.set(r.URL.Path, depth, b)
-		}
+			return bw.status, b
+		})
 
 		w.Header().Del("Content-Length")
-		w.WriteHeader(bw.status)
-		w.Write(b)
-
+		w.WriteHeader(status)
+		if result != nil {
+			w.Write(result)
+		}
 		return
 	}
 

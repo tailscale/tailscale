@@ -4,6 +4,7 @@
 package compositedav
 
 import (
+	"net/http"
 	"sync"
 	"time"
 
@@ -23,6 +24,23 @@ type StatCache struct {
 	// mu guards the below values.
 	mu                   sync.Mutex
 	cachesByDepthAndPath map[int]*ttlcache.Cache[string, []byte]
+}
+
+// getOr checks the cache for the named value at the given depth. If a cached
+// value was found, it returns http.StatusMultiStatus along with the cached
+// value. Otherwise, it executes the given function and returns the resulting
+// status and value. If the function returned http.StatusMultiStatus, getOr
+// caches the resulting value at the given name and depth before returning.
+func (c *StatCache) getOr(name string, depth int, or func() (int, []byte)) (int, []byte) {
+	cached := c.get(name, depth)
+	if cached != nil {
+		return http.StatusMultiStatus, cached
+	}
+	status, next := or()
+	if c != nil && status == http.StatusMultiStatus && next != nil {
+		c.set(name, depth, next)
+	}
+	return status, next
 }
 
 func (c *StatCache) get(name string, depth int) []byte {
