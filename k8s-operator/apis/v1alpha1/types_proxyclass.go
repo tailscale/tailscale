@@ -57,7 +57,9 @@ type ProxyClassSpec struct {
 	// Configuration for proxy metrics. Metrics are currently not supported
 	// for egress proxies and for Ingress proxies that have been configured
 	// with tailscale.com/experimental-forward-cluster-traffic-via-ingress
-	// annotation.
+	// annotation. Note that the metrics are currently considered unstable
+	// and will likely change in breaking ways in the future - we only
+	// recommend that you use those for debugging purposes.
 	// +optional
 	Metrics *Metrics `json:"metrics,omitempty"`
 }
