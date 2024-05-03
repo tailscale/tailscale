@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/nettest"
 )
 
 func BenchmarkHandleBootstrapDNS(b *testing.B) {
@@ -55,6 +56,8 @@ func getBootstrapDNS(t *testing.T, q string) dnsEntryMap {
 }
 
 func TestUnpublishedDNS(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
+
 	const published = "login.tailscale.com"
 	const unpublished = "log.tailscale.io"
 
