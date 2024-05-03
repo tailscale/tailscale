@@ -58,6 +58,9 @@ const (
 	// installations and uses the Sparkle naming convention, even though it does
 	// not actually control updates, merely the UI for that setting.
 	AutoUpdateVisibility Key = "ApplyUpdates"
+	// SuggestedExitNodeVisibility controls the visibility of suggested exit nodes in the client GUI.
+	// When this system policy is set to 'hide', an exit node suggestion won't be presented to the user as part of the exit nodes picker.
+	SuggestedExitNodeVisibility Key = "SuggestedExitNode"
 
 	// Keys with a string value formatted for use with time.ParseDuration().
 	KeyExpirationNoticeTime Key = "KeyExpirationNotice" // default 24 hours
@@ -84,4 +87,8 @@ const (
 	// ManagedByURL is a valid URL pointing to a support help desk for Tailscale within the
 	// organization. A button in the client UI provides easy access to this URL.
 	ManagedByURL Key = "ManagedByURL"
+
+	// Keys with a string array value.
+	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
+	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
 )
