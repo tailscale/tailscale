@@ -25,6 +25,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/appc/appctest"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
@@ -3434,6 +3435,357 @@ func TestMinLatencyDERPregion(t *testing.T) {
 				t.Errorf("got region %v want region %v", got, tt.wantRegion)
 			}
 		})
+	}
+}
+
+func TestSuggestLastExitNode(t *testing.T) {
+	tests := []struct {
+		name                      string
+		lastSuggestedExitNode     lastSuggestedExitNode
+		wantRes                   apitype.ExitNodeSuggestionResponse
+		wantLastSuggestedExitNode lastSuggestedExitNode
+		wantErr                   error
+	}{
+		{
+			name:                      "last suggested exit node is populated",
+			lastSuggestedExitNode:     lastSuggestedExitNode{id: "test", name: "test"},
+			wantRes:                   apitype.ExitNodeSuggestionResponse{ID: "test", Name: "test"},
+			wantLastSuggestedExitNode: lastSuggestedExitNode{id: "test", name: "test"},
+		},
+		{
+			name:    "last suggested exit node is not populated",
+			wantErr: ErrUnableToSuggestLastExitNode,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := suggestLastExitNode(tt.lastSuggestedExitNode)
+			if got != tt.wantRes || err != tt.wantErr {
+				t.Errorf("got %v error %v, want %v error %v", got, err, tt.wantRes, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLocalBackendSuggestExitNode(t *testing.T) {
+	tests := []struct {
+		name                      string
+		lastSuggestedExitNode     lastSuggestedExitNode
+		report                    netcheck.Report
+		netMap                    netmap.NetworkMap
+		wantID                    tailcfg.StableNodeID
+		wantName                  string
+		wantErr                   error
+		wantLastSuggestedExitNode lastSuggestedExitNode
+	}{
+		{
+			name:                  "nil netmap, returns last suggested exit node",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			report: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: -1,
+					3: 0,
+				},
+			},
+			wantID:                    "test",
+			wantName:                  "test",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+		},
+		{
+			name:                  "nil report, returns last suggested exit node",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+			},
+			wantID:                    "test",
+			wantName:                  "test",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+		},
+		{
+			name:                  "found better derp node, last suggested exit node updates",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			report: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 10,
+					3: 5,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "foo",
+						Name:     "foo",
+						DERP:     "127.3.3.40:3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+				},
+			},
+			wantID:                    "foo",
+			wantName:                  "foo",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "foo", id: "foo"},
+		},
+		{
+			name:                  "found better mullvad node, last suggested exit node updates",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "San Jose", id: "3"},
+			report: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 0,
+					2: 0,
+					3: 0,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {
+							Latitude:  40.73061,
+							Longitude: -73.935242,
+						},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						Name: "Dallas",
+						Hostinfo: (&tailcfg.Hostinfo{
+							Location: &tailcfg.Location{
+								Latitude:  32.89748,
+								Longitude: -97.040443,
+								Priority:  100,
+							},
+						}).View(),
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						Name: "San Jose",
+						Hostinfo: (&tailcfg.Hostinfo{
+							Location: &tailcfg.Location{
+								Latitude:  37.3382082,
+								Longitude: -121.8863286,
+								Priority:  20,
+							},
+						}).View(),
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+				},
+			},
+			wantID:                    "2",
+			wantName:                  "Dallas",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "Dallas", id: "2"},
+		},
+		{
+			name:                  "ErrNoPreferredDERP, use last suggested exit node",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			report: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 10,
+					3: 5,
+				},
+				PreferredDERP: 0,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "foo",
+						Name:     "foo",
+						DERP:     "127.3.3.40:3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+				},
+			},
+			wantID:                    "test",
+			wantName:                  "test",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+		},
+		{
+			name:                  "ErrNoPreferredDERP, use last suggested exit node",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			report: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 10,
+					3: 5,
+				},
+				PreferredDERP: 0,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "foo",
+						Name:     "foo",
+						DERP:     "127.3.3.40:3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+				},
+			},
+			wantID:                    "test",
+			wantName:                  "test",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+		},
+		{
+			name: "unable to use last suggested exit node",
+			report: netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 10,
+					3: 5,
+				},
+				PreferredDERP: 0,
+			},
+			wantErr: ErrCannotSuggestExitNode,
+		},
+	}
+
+	for _, tt := range tests {
+		lb := newTestLocalBackend(t)
+		lb.lastSuggestedExitNode = tt.lastSuggestedExitNode
+		lb.netMap = &tt.netMap
+		lb.sys.MagicSock.Get().SetLastNetcheckReport(context.Background(), tt.report)
+		got, err := lb.SuggestExitNode()
+		if got.ID != tt.wantID {
+			t.Errorf("ID=%v, want=%v", got.ID, tt.wantID)
+		}
+		if got.Name != tt.wantName {
+			t.Errorf("Name=%v, want=%v", got.Name, tt.wantName)
+		}
+		if lb.lastSuggestedExitNode != tt.wantLastSuggestedExitNode {
+			t.Errorf("lastSuggestedExitNode=%v, want=%v", lb.lastSuggestedExitNode, tt.wantLastSuggestedExitNode)
+		}
+		if err != tt.wantErr {
+			t.Errorf("Error=%v, want=%v", err, tt.wantErr)
+		}
 	}
 }
 

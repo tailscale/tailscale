@@ -151,6 +151,12 @@ type watchSession struct {
 	sessionID string
 }
 
+// lastSuggestedExitNode stores the last suggested exit node ID and name in local backend.
+type lastSuggestedExitNode struct {
+	id   tailcfg.StableNodeID
+	name string
+}
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -324,6 +330,10 @@ type LocalBackend struct {
 
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
+
+	// lastSuggestedExitNode stores the last suggested exit node ID and name.
+	// lastSuggestedExitNode updates whenever the suggestion changes.
+	lastSuggestedExitNode lastSuggestedExitNode
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -5957,7 +5967,8 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	}
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
-	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
+	b.lastSuggestedExitNode = lastSuggestedExitNode{} // Reset last suggested exit node.
+	b.enterStateLockedOnEntry(ipn.NoState, unlock)    // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
@@ -6334,6 +6345,7 @@ func mayDeref[T any](p *T) (v T) {
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
+var ErrUnableToSuggestLastExitNode = errors.New("unable to suggest last exit node")
 
 // SuggestExitNode computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
@@ -6346,13 +6358,41 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	b.mu.Lock()
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	netMap := b.netMap
+	lastSuggestedExitNode := b.lastSuggestedExitNode
 	b.mu.Unlock()
 	if lastReport == nil || netMap == nil {
-		return response, ErrCannotSuggestExitNode
+		last, err := suggestLastExitNode(lastSuggestedExitNode)
+		if err != nil {
+			return response, ErrCannotSuggestExitNode
+		}
+		return last, err
 	}
 	seed := time.Now().UnixNano()
 	r := rand.New(rand.NewSource(seed))
-	return suggestExitNode(lastReport, netMap, r)
+	res, err := suggestExitNode(lastReport, netMap, r)
+	if err != nil {
+		last, err := suggestLastExitNode(lastSuggestedExitNode)
+		if err != nil {
+			return response, ErrCannotSuggestExitNode
+		}
+		return last, err
+	}
+	b.mu.Lock()
+	b.lastSuggestedExitNode.id = res.ID
+	b.lastSuggestedExitNode.name = res.Name
+	b.mu.Unlock()
+	return res, err
+}
+
+// suggestLastExitNode formats a response with the last suggested exit node's ID and name.
+// Used as a fallback before returning a nil response and error.
+func suggestLastExitNode(lastSuggestedExitNode lastSuggestedExitNode) (res apitype.ExitNodeSuggestionResponse, err error) {
+	if lastSuggestedExitNode.id != "" && lastSuggestedExitNode.name != "" {
+		res.ID = lastSuggestedExitNode.id
+		res.Name = lastSuggestedExitNode.name
+		return res, nil
+	}
+	return res, ErrUnableToSuggestLastExitNode
 }
 
 func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand.Rand) (res apitype.ExitNodeSuggestionResponse, err error) {
