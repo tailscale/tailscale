@@ -312,7 +312,6 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var bucket string
-	bumpStartIfNeeded := func() {}
 	var startRecorded bool
 	if bs := h.opts.BucketedStats; bs != nil {
 		bucket = bs.bucketForRequest(r)
@@ -320,13 +319,11 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			switch v := bs.Started.Map.Get(bucket).(type) {
 			case *expvar.Int:
 				// If we've already seen this bucket for, count it immediately.
-				v.Add(1)
-				startRecorded = true
-			case nil:
 				// Otherwise, for newly seen paths, only count retroactively
 				// (so started-finished doesn't go negative) so we don't fill
 				// this LabelMap up with internet scanning spam.
-				bumpStartIfNeeded = func() { bs.Started.Add(bucket, 1) }
+				v.Add(1)
+				startRecorded = true
 			}
 		}
 	}
@@ -445,8 +442,12 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// gets most of the way there but there are also plenty of URLs that are
 		// almost right but result in 400s too. Seem easier to just only ignore
 		// all 4xx and 5xx.
-		if startRecorded || msg.Code < 400 {
-			bumpStartIfNeeded()
+		if startRecorded {
+			bs.Finished.Add(bucket, 1)
+		} else if msg.Code < 400 {
+			// This is the first non-error request for this bucket,
+			// so count it now retroactively.
+			bs.Started.Add(bucket, 1)
 			bs.Finished.Add(bucket, 1)
 		}
 	}
