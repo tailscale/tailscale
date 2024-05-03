@@ -97,7 +97,7 @@ func Inject(root *ffcli.Command, hide func(*ffcli.Command), usageFunc func(*ffcl
 		&ffcli.Command{
 			Name:       "completion",
 			ShortUsage: root.Name + " completion <shell> [--flags] [--descs]",
-			ShortHelp:  "Shell tab-completion scripts.",
+			ShortHelp:  "Shell tab-completion scripts",
 			LongHelp:   fmt.Sprintf(cobra.UsageTemplate, root.Name),
 
 			// Print help if run without args.
