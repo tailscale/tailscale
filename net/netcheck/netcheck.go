@@ -1176,7 +1176,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 
 	var ip netip.Addr
 
-	dc := derphttp.NewNetcheckClient(c.logf)
+	dc := derphttp.NewNetcheckClient(c.logf, c.NetMon)
 	defer dc.Close()
 
 	tlsConn, tcpConn, node, err := dc.DialRegionTLS(ctx, reg)
