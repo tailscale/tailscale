@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"sync"
 	"testing"
@@ -462,5 +463,26 @@ func TestLocalAddrNoMutex(t *testing.T) {
 	_, err := c.LocalAddr()
 	if got, want := fmt.Sprint(err), "client not connected"; got != want {
 		t.Errorf("got error %q; want %q", got, want)
+	}
+}
+
+func TestProbe(t *testing.T) {
+	h := Handler(nil)
+
+	tests := []struct {
+		path string
+		want int
+	}{
+		{"/derp/probe", 200},
+		{"/derp/latency-check", 200},
+		{"/derp/sdf", http.StatusUpgradeRequired},
+	}
+
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", tt.path, nil))
+		if got := rec.Result().StatusCode; got != tt.want {
+			t.Errorf("for path %q got HTTP status %v; want %v", tt.path, got, tt.want)
+		}
 	}
 }
