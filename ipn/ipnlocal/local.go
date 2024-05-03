@@ -364,11 +364,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if loginFlags&controlclient.LocalBackendStartKeyOSNeutral != 0 {
 		goos = ""
 	}
-	pm, err := newProfileManagerWithGOOS(store, logf, goos)
+	pm, err := newProfileManagerWithGOOS(store, logf, sys.HealthTracker(), goos)
 	if err != nil {
 		return nil, err
 	}
-	pm.health = sys.HealthTracker()
 	if sds, ok := store.(ipn.StateStoreDialerSetter); ok {
 		sds.SetDialer(dialer.SystemDial)
 	}

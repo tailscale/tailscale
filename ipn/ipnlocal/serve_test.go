@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -686,7 +687,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	dir := t.TempDir()
 	b.SetVarRoot(dir)
 
-	pm := must.Get(newProfileManager(new(mem.Store), logf))
+	pm := must.Get(newProfileManager(new(mem.Store), logf, new(health.Tracker)))
 	pm.currentProfile = &ipn.LoginProfile{ID: "id0"}
 	b.pm = pm
 

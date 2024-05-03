@@ -29,6 +29,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -1849,7 +1850,7 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			if test.prefs == nil {
 				test.prefs = ipn.NewPrefs()
 			}
-			pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 			pm.prefs = test.prefs.View()
 			b.netMap = test.nm
 			b.pm = pm
@@ -2131,7 +2132,7 @@ func TestApplySysPolicy(t *testing.T) {
 					wantPrefs.ControlURL = ipn.DefaultControlURL
 				}
 
-				pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+				pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 				pm.prefs = usePrefs.View()
 
 				b := newTestBackend(t)

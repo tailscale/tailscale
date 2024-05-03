@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -148,7 +149,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 	temp := t.TempDir()
 
 	cc := fakeControlClient(t, client)
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -188,7 +189,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -380,7 +381,7 @@ func TestTKASync(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			nodePriv := key.NewNode()
 			nlPriv := key.NewNLPrivate()
-			pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 			must.Do(pm.SetPrefs((&ipn.Prefs{
 				Persist: &persist.Persist{
 					PrivateNodeKey: nodePriv,
@@ -602,7 +603,7 @@ func TestTKADisable(t *testing.T) {
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -693,7 +694,7 @@ func TestTKASign(t *testing.T) {
 	toSign := key.NewNode()
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -782,7 +783,7 @@ func TestTKAForceDisable(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -877,7 +878,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 	// toSign := key.NewNode()
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -1010,7 +1011,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	cosignPriv := key.NewNLPrivate()
 	compromisedPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -1101,7 +1102,7 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 
 	// Cosign using the cosigning key.
 	{
-		pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, new(health.Tracker)))
 		must.Do(pm.SetPrefs((&ipn.Prefs{
 			Persist: &persist.Persist{
 				PrivateNodeKey: nodePriv,
