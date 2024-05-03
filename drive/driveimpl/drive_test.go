@@ -184,7 +184,7 @@ func newSystem(t *testing.T) *system {
 	// Make sure we don't leak goroutines
 	tstest.ResourceCheck(t)
 
-	fs := NewFileSystemForLocal(log.Printf)
+	fs := newFileSystemForLocal(log.Printf, nil)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to Listen: %s", err)
