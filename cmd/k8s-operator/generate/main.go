@@ -38,10 +38,10 @@ func main() {
 	}
 	repoRoot := "../../"
 	switch os.Args[1] {
-	case "helmcrd": // insert CRD to Helm templates behind a installCRDs=true conditional check
-		log.Print("Adding Connector CRD to Helm templates")
+	case "helmcrd": // insert CRDs to Helm templates behind a installCRDs=true conditional check
+		log.Print("Adding CRDs to Helm templates")
 		if err := generate("./"); err != nil {
-			log.Fatalf("error adding Connector CRD to Helm templates: %v", err)
+			log.Fatalf("error adding CRDs to Helm templates: %v", err)
 		}
 		return
 	case "staticmanifests": // generate static manifests from Helm templates (including the CRD)
