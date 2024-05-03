@@ -191,7 +191,12 @@ func main() {
 			http.Error(w, "derp server disabled", http.StatusNotFound)
 		}))
 	}
-	mux.HandleFunc("/derp/probe", probeHandler)
+
+	// These two endpoints are the same. Different versions of the clients
+	// have assumes different paths over time so we support both.
+	mux.HandleFunc("/derp/probe", derphttp.ProbeHandler)
+	mux.HandleFunc("/derp/latency-check", derphttp.ProbeHandler)
+
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", tsweb.BrowserHeaderHandlerFunc(handleBootstrapDNS))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -368,17 +373,6 @@ func isChallengeChar(c rune) bool {
 	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
 		('0' <= c && c <= '9') ||
 		c == '.' || c == '-' || c == '_'
-}
-
-// probeHandler is the endpoint that js/wasm clients hit to measure
-// DERP latency, since they can't do UDP STUN queries.
-func probeHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "HEAD", "GET":
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-	default:
-		http.Error(w, "bogus probe method", http.StatusMethodNotAllowed)
-	}
 }
 
 var validProdHostname = regexp.MustCompile(`^derp([^.]*)\.tailscale\.com\.?$`)

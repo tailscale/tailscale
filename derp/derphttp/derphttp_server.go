@@ -20,6 +20,16 @@ const fastStartHeader = "Derp-Fast-Start"
 
 func Handler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// These are installed both here and in cmd/derper. The check here
+		// catches both cmd/derper run with DERP disabled (STUN only mode) as
+		// well as DERP being run in tests with derphttp.Handler directly,
+		// as netcheck still assumes this replies.
+		switch r.URL.Path {
+		case "/derp/probe", "/derp/latency-check":
+			ProbeHandler(w, r)
+			return
+		}
+
 		up := strings.ToLower(r.Header.Get("Upgrade"))
 		if up != "websocket" && up != "derp" {
 			if up != "" {
@@ -57,4 +67,15 @@ func Handler(s *derp.Server) http.Handler {
 
 		s.Accept(r.Context(), netConn, conn, netConn.RemoteAddr().String())
 	})
+}
+
+// ProbeHandler is the endpoint that clients without UDP access (including js/wasm) hit to measure
+// DERP latency, as a replacement for UDP STUN queries.
+func ProbeHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "HEAD", "GET":
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	default:
+		http.Error(w, "bogus probe method", http.StatusMethodNotAllowed)
+	}
 }
