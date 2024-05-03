@@ -312,7 +312,7 @@ func (b *LocalBackend) updateDrivePeersLocked(nm *netmap.NetworkMap) {
 		driveRemotes = b.driveRemotesFromPeers(nm)
 	}
 
-	fs.SetRemotes(b.netMap.Domain, driveRemotes, &driveTransport{b: b})
+	fs.SetRemotes(b.netMap.Domain, driveRemotes, b.newDriveTransport())
 }
 
 func (b *LocalBackend) driveRemotesFromPeers(nm *netmap.NetworkMap) []*drive.Remote {

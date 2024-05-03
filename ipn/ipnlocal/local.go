@@ -4823,13 +4823,6 @@ func (b *LocalBackend) updatePeersFromNetmapLocked(nm *netmap.NetworkMap) {
 	}
 }
 
-// driveTransport is an http.RoundTripper that uses the latest value of
-// b.Dialer().PeerAPITransport() for each round trip and imposes a short
-// dial timeout to avoid hanging on connecting to offline/unreachable hosts.
-type driveTransport struct {
-	b *LocalBackend
-}
-
 // responseBodyWrapper wraps an io.ReadCloser and stores
 // the number of bytesRead.
 type responseBodyWrapper struct {
@@ -4881,6 +4874,20 @@ func (rbw *responseBodyWrapper) Close() error {
 	rbw.logAccess(errStr)
 
 	return err
+}
+
+// driveTransport is an http.RoundTripper that wraps
+// b.Dialer().PeerAPITransport() with metrics tracking.
+type driveTransport struct {
+	b  *LocalBackend
+	tr *http.Transport
+}
+
+func (b *LocalBackend) newDriveTransport() *driveTransport {
+	return &driveTransport{
+		b:  b,
+		tr: b.Dialer().PeerAPITransport(),
+	}
 }
 
 func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
@@ -4940,18 +4947,7 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 		}
 	}()
 
-	// dialTimeout is fairly aggressive to avoid hangs on contacting offline or
-	// unreachable hosts.
-	dialTimeout := 1 * time.Second // TODO(oxtoacart): tune this
-
-	tr := dt.b.Dialer().PeerAPITransport().Clone()
-	dialContext := tr.DialContext
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, dialTimeout)
-		defer cancel()
-		return dialContext(ctxWithTimeout, network, addr)
-	}
-	return tr.RoundTrip(req)
+	return dt.tr.RoundTrip(req)
 }
 
 // roundTraffic rounds bytes. This is used to preserve user privacy within logs.
