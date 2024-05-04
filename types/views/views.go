@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 
@@ -275,6 +276,14 @@ func (v Slice[T]) IndexFunc(f func(T) bool) int {
 // As it runs in O(n) time, use with care.
 func (v Slice[T]) ContainsFunc(f func(T) bool) bool {
 	return slices.ContainsFunc(v.ж, f)
+}
+
+// AppendStrings appends the string representation of each element in v to dst.
+func AppendStrings[T fmt.Stringer](dst []string, v Slice[T]) []string {
+	for _, x := range v.ж {
+		dst = append(dst, x.String())
+	}
+	return dst
 }
 
 // SliceContains reports whether v contains element e.
