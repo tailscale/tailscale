@@ -124,8 +124,6 @@ func TestViewUtils(t *testing.T) {
 	c.Check(v.IndexFunc(func(s string) bool { return strings.HasPrefix(s, "z") }), qt.Equals, -1)
 	c.Check(SliceContains(v, "bar"), qt.Equals, true)
 	c.Check(SliceContains(v, "baz"), qt.Equals, false)
-	c.Check(SliceContainsFunc(v, func(s string) bool { return strings.HasPrefix(s, "f") }), qt.Equals, true)
-	c.Check(SliceContainsFunc(v, func(s string) bool { return len(s) > 3 }), qt.Equals, false)
 	c.Check(SliceEqualAnyOrder(v, v), qt.Equals, true)
 	c.Check(SliceEqualAnyOrder(v, SliceOf([]string{"bar", "foo"})), qt.Equals, true)
 	c.Check(SliceEqualAnyOrder(v, SliceOf([]string{"foo"})), qt.Equals, false)

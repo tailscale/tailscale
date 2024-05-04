@@ -3696,8 +3696,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
-	selfV6Only := views.SliceContainsFunc(nm.GetAddresses(), tsaddr.PrefixIs6) &&
-		!views.SliceContainsFunc(nm.GetAddresses(), tsaddr.PrefixIs4)
+	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
+		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
 	dcfg.OnlyIPv6 = selfV6Only
 
 	// Populate MagicDNS records. We do this unconditionally so that

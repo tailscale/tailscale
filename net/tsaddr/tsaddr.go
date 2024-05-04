@@ -181,7 +181,7 @@ func NewContainsIPFunc(addrs views.Slice[netip.Prefix]) func(ip netip.Addr) bool
 	// If any addr is more than a single IP, then just do the slow
 	// linear thing until
 	// https://github.com/inetaf/netaddr/issues/139 is done.
-	if views.SliceContainsFunc(addrs, func(p netip.Prefix) bool { return !p.IsSingleIP() }) {
+	if addrs.ContainsFunc(func(p netip.Prefix) bool { return !p.IsSingleIP() }) {
 		acopy := addrs.AsSlice()
 		return func(ip netip.Addr) bool {
 			for _, a := range acopy {
