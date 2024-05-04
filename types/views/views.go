@@ -274,12 +274,7 @@ func (v Slice[T]) IndexFunc(f func(T) bool) int {
 //
 // As it runs in O(n) time, use with care.
 func (v Slice[T]) ContainsFunc(f func(T) bool) bool {
-	for _, x := range v.ж {
-		if f(x) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(v.ж, f)
 }
 
 // SliceContains reports whether v contains element e.
@@ -287,11 +282,6 @@ func (v Slice[T]) ContainsFunc(f func(T) bool) bool {
 // As it runs in O(n) time, use with care.
 func SliceContains[T comparable](v Slice[T], e T) bool {
 	return slices.Contains(v.ж, e)
-}
-
-// SliceContainsFunc reports whether f reports true for any element in v.
-func SliceContainsFunc[T any](v Slice[T], f func(T) bool) bool {
-	return slices.ContainsFunc(v.ж, f)
 }
 
 // SliceEqual is like the standard library's slices.Equal, but for two views.
