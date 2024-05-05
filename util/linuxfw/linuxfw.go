@@ -109,7 +109,8 @@ func getTailscaleSubnetRouteMark() []byte {
 // missing.  It does not check that IPv6 is currently functional or
 // that there's a global address, just that the system would support
 // IPv6 if it were on an IPv6 network.
-func CheckIPv6(logf logger.Logf) error {
+// CheckIPv6 can be overridden in tests.
+var CheckIPv6 = func(logf logger.Logf) error {
 	_, err := os.Stat("/proc/sys/net/ipv6")
 	if os.IsNotExist(err) {
 		return err

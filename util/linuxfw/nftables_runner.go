@@ -590,6 +590,10 @@ func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nftables connection: %w", err)
 	}
+	return newNfTablesRunnerWithConn(logf, conn), nil
+}
+
+func newNfTablesRunnerWithConn(logf logger.Logf, conn *nftables.Conn) *nftablesRunner {
 	nft4 := &nftable{Proto: nftables.TableFamilyIPv4}
 
 	v6err := CheckIPv6(logf)
@@ -611,7 +615,7 @@ func newNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 		nft4:        nft4,
 		nft6:        nft6,
 		v6Available: supportsV6,
-	}, nil
+	}
 }
 
 // newLoadSaddrExpr creates a new nftables expression that loads the source
