@@ -24,6 +24,7 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -111,6 +112,7 @@ func startNode(t *testing.T, ctx context.Context, controlURL, hostname string) (
 }
 
 func TestSNIProxyWithNetmapConfig(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
 	c, controlURL := startControl(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -189,6 +191,7 @@ func TestSNIProxyWithNetmapConfig(t *testing.T) {
 }
 
 func TestSNIProxyWithFlagConfig(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
 	_, controlURL := startControl(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

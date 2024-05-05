@@ -396,9 +396,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 	have6if := ifState.HaveV6
 	have4if := ifState.HaveV4
 	plan = make(probePlan)
-	if !have4if && !have6if {
-		return plan
-	}
+
 	had4 := len(last.RegionV4Latency) > 0
 	had6 := len(last.RegionV6Latency) > 0
 	hadBoth := have6if && had4 && had6
@@ -452,10 +450,10 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 			if try > 1 {
 				delay += time.Duration(try) * 50 * time.Millisecond
 			}
-			if do4 {
+			if do4 || n.IsTestNode() {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
-			if do6 {
+			if do6 || n.IsTestNode() {
 				p6 = append(p6, probe{delay: delay, node: n.Name, proto: probeIPv6})
 			}
 		}
@@ -478,10 +476,10 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 		for try := 0; try < 3; try++ {
 			n := reg.Nodes[try%len(reg.Nodes)]
 			delay := time.Duration(try) * defaultInitialRetransmitTime
-			if ifState.HaveV4 && nodeMight4(n) {
+			if ifState.HaveV4 && nodeMight4(n) || n.IsTestNode() {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
-			if ifState.HaveV6 && nodeMight6(n) {
+			if ifState.HaveV6 && nodeMight6(n) || n.IsTestNode() {
 				p6 = append(p6, probe{delay: delay, node: n.Name, proto: probeIPv6})
 			}
 		}
