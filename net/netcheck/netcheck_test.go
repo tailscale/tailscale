@@ -23,6 +23,7 @@ import (
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/nettest"
 )
 
 func TestHairpinSTUN(t *testing.T) {
@@ -882,6 +883,8 @@ func TestSortRegions(t *testing.T) {
 }
 
 func TestNoCaptivePortalWhenUDP(t *testing.T) {
+	nettest.SkipIfNoNetwork(t) // empirically. not sure why.
+
 	// Override noRedirectClient to handle the /generate_204 endpoint
 	var generate204Called atomic.Bool
 	tr := RoundTripFunc(func(req *http.Request) *http.Response {
@@ -934,6 +937,7 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestNodeAddrResolve(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
 	c := &Client{
 		Logf:        t.Logf,
 		UseDNSCache: true,

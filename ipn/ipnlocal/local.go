@@ -614,6 +614,8 @@ func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
 	return true, nil
 }
 
+var assumeNetworkUpdateForTest = envknob.RegisterBool("TS_ASSUME_NETWORK_UP_FOR_TEST")
+
 // pauseOrResumeControlClientLocked pauses b.cc if there is no network available
 // or if the LocalBackend is in Stopped state with a valid NetMap. In all other
 // cases, it unpauses it. It is a no-op if b.cc is nil.
@@ -624,7 +626,7 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest()))
+	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.

@@ -183,6 +183,10 @@ type DERPNode struct {
 	CanPort80 bool `json:",omitempty"`
 }
 
+func (n *DERPNode) IsTestNode() bool {
+	return n.STUNTestIP != "" || n.IPv4 == "127.0.0.1"
+}
+
 // DotInvalid is a fake DNS TLD used in tests for an invalid hostname.
 const DotInvalid = ".invalid"
 
