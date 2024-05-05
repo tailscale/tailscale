@@ -508,11 +508,10 @@ func newFakeNftablesRunner(t *testing.T, conn *nftables.Conn) *nftablesRunner {
 	nft6 := &nftable{Proto: nftables.TableFamilyIPv6}
 
 	return &nftablesRunner{
-		conn:           conn,
-		nft4:           nft4,
-		nft6:           nft6,
-		v6Available:    true,
-		v6NATAvailable: true,
+		conn:        conn,
+		nft4:        nft4,
+		nft6:        nft6,
+		v6Available: true,
 	}
 }
 
@@ -872,7 +871,7 @@ func TestCreateDummyPostroutingChains(t *testing.T) {
 	if err := runner.createDummyPostroutingChains(); err != nil {
 		t.Fatalf("createDummyPostroutingChains() failed: %v", err)
 	}
-	for _, table := range runner.getNATTables() {
+	for _, table := range runner.getTables() {
 		nt, err := getTableIfExists(conn, table.Proto, tsDummyTableName)
 		if err != nil {
 			t.Fatalf("getTableIfExists() failed: %v", err)
