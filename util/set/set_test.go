@@ -53,7 +53,7 @@ func TestSet(t *testing.T) {
 }
 
 func TestSetOf(t *testing.T) {
-	s := SetOf[int]([]int{1, 2, 3, 4, 4, 1})
+	s := Of(1, 2, 3, 4, 4, 1)
 	if s.Len() != 4 {
 		t.Errorf("wrong len %d; want 4", s.Len())
 	}
@@ -74,20 +74,20 @@ func TestEqual(t *testing.T) {
 	tests := []test{
 		{
 			"equal",
-			SetOf([]int{1, 2, 3, 4}),
-			SetOf([]int{1, 2, 3, 4}),
+			Of(1, 2, 3, 4),
+			Of(1, 2, 3, 4),
 			true,
 		},
 		{
 			"not equal",
-			SetOf([]int{1, 2, 3, 4}),
-			SetOf([]int{1, 2, 3, 5}),
+			Of(1, 2, 3, 4),
+			Of(1, 2, 3, 5),
 			false,
 		},
 		{
 			"different lengths",
-			SetOf([]int{1, 2, 3, 4, 5}),
-			SetOf([]int{1, 2, 3, 5}),
+			Of(1, 2, 3, 4, 5),
+			Of(1, 2, 3, 5),
 			false,
 		},
 	}
@@ -100,7 +100,7 @@ func TestEqual(t *testing.T) {
 }
 
 func TestClone(t *testing.T) {
-	s := SetOf[int]([]int{1, 2, 3, 4, 4, 1})
+	s := Of(1, 2, 3, 4, 4, 1)
 	if s.Len() != 4 {
 		t.Errorf("wrong len %d; want 4", s.Len())
 	}
@@ -122,8 +122,8 @@ func TestSetJSONRoundTrip(t *testing.T) {
 	}{
 		{"empty", make(Set[string]), make(Set[int])},
 		{"nil", nil, nil},
-		{"one-item", SetOf([]string{"one"}), SetOf([]int{1})},
-		{"multiple-items", SetOf([]string{"one", "two", "three"}), SetOf([]int{1, 2, 3})},
+		{"one-item", Of("one"), Of(1)},
+		{"multiple-items", Of("one", "two", "three"), Of(1, 2, 3)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
@@ -156,5 +156,14 @@ func TestSetJSONRoundTrip(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestMake(t *testing.T) {
+	var s Set[int]
+	s.Make()
+	s.Add(1)
+	if !s.Contains(1) {
+		t.Error("missing 1")
 	}
 }
