@@ -14,6 +14,11 @@ type Set[T comparable] map[T]struct{}
 
 // SetOf returns a new set constructed from the elements in slice.
 func SetOf[T comparable](slice []T) Set[T] {
+	return Of(slice...)
+}
+
+// Of returns a new set constructed from the elements in slice.
+func Of[T comparable](slice ...T) Set[T] {
 	s := make(Set[T])
 	s.AddSlice(slice)
 	return s
@@ -38,6 +43,13 @@ func (s Set[T]) AddSlice(es []T) {
 func (s Set[T]) AddSet(es Set[T]) {
 	for e := range es {
 		s.Add(e)
+	}
+}
+
+// Make lazily initializes the map pointed to by s to be non-nil.
+func (s *Set[T]) Make() {
+	if *s == nil {
+		*s = make(Set[T])
 	}
 }
 
