@@ -142,6 +142,9 @@ func ProxyFromEnvironment(req *http.Request) (ret *url.URL, _ error) {
 			return
 		}
 		log.Printf("tshttpproxy: using proxy %q for URL: %q", ss, req.URL.String())
+		if strings.HasPrefix(req.URL.String(), "https://controlplane.tailscale.com/key") {
+			panic("XXX saw controlplane.tailscale.com/key in test")
+		}
 		mak.Set(&logMessagePrinted, ss, true)
 	}()
 
