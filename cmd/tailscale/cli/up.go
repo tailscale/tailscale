@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -477,11 +476,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
-	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
 
 	go func() {
 		interrupt := make(chan os.Signal, 1)
@@ -494,29 +488,57 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	}()
 
 	running := make(chan bool, 1) // gets value once in state ipn.Running
-	pumpErr := make(chan error, 1)
+	watchErr := make(chan error, 1)
 
-	// localAPIMu should be held while doing mutable LocalAPI calls
-	// to the backend. In particular, it prevents StartLoginInteractive from
-	// being called from the watcher goroutine while the Start call from
-	// the other goroutine is in progress.
-	// See https://github.com/tailscale/tailscale/issues/7036#issuecomment-2053771466
-	// TODO(bradfitz): simplify this once #11649 is cleaned up and Start is
-	// hopefully removed.
-	var localAPIMu sync.Mutex
+	// Special case: bare "tailscale up" means to just start
+	// running, if there's ever been a login.
+	if simpleUp {
+		_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
+			Prefs: ipn.Prefs{
+				WantRunning: true,
+			},
+			WantRunningSet: true,
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		if err := localClient.CheckPrefs(ctx, prefs); err != nil {
+			return err
+		}
 
-	startLoginInteractive := sync.OnceFunc(func() {
-		localAPIMu.Lock()
-		defer localAPIMu.Unlock()
-		localClient.StartLoginInteractive(ctx)
-	})
+		authKey, err := upArgs.getAuthKey()
+		if err != nil {
+			return err
+		}
+		authKey, err = resolveAuthKey(ctx, authKey, upArgs.advertiseTags)
+		if err != nil {
+			return err
+		}
+		err = localClient.Start(ctx, ipn.Options{
+			AuthKey:     authKey,
+			UpdatePrefs: prefs,
+		})
+		if err != nil {
+			return err
+		}
+		if upArgs.forceReauth {
+			localClient.StartLoginInteractive(ctx)
+		}
+	}
+
+	watcher, err := localClient.WatchIPNBus(watchCtx, ipn.NotifyInitialState)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
 
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		for {
 			n, err := watcher.Next()
 			if err != nil {
-				pumpErr <- err
+				watchErr <- err
 				return
 			}
 			if n.ErrMessage != nil {
@@ -526,7 +548,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if s := n.State; s != nil {
 				switch *s {
 				case ipn.NeedsLogin:
-					startLoginInteractive()
+					localClient.StartLoginInteractive(ctx)
 				case ipn.NeedsMachineAuth:
 					printed = true
 					if env.upArgs.json {
@@ -583,47 +605,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
-	// Special case: bare "tailscale up" means to just start
-	// running, if there's ever been a login.
-	if simpleUp {
-		localAPIMu.Lock()
-		_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
-			Prefs: ipn.Prefs{
-				WantRunning: true,
-			},
-			WantRunningSet: true,
-		})
-		localAPIMu.Unlock()
-		if err != nil {
-			return err
-		}
-	} else {
-		if err := localClient.CheckPrefs(ctx, prefs); err != nil {
-			return err
-		}
-
-		authKey, err := upArgs.getAuthKey()
-		if err != nil {
-			return err
-		}
-		authKey, err = resolveAuthKey(ctx, authKey, upArgs.advertiseTags)
-		if err != nil {
-			return err
-		}
-		localAPIMu.Lock()
-		err = localClient.Start(ctx, ipn.Options{
-			AuthKey:     authKey,
-			UpdatePrefs: prefs,
-		})
-		localAPIMu.Unlock()
-		if err != nil {
-			return err
-		}
-		if upArgs.forceReauth {
-			startLoginInteractive()
-		}
-	}
-
 	// This whole 'up' mechanism is too complicated and results in
 	// hairy stuff like this select. We're ultimately waiting for
 	// 'running' to be done, but even in the case where
@@ -647,7 +628,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		default:
 		}
 		return watchCtx.Err()
-	case err := <-pumpErr:
+	case err := <-watchErr:
 		select {
 		case <-running:
 			return nil
