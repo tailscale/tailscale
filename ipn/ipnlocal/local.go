@@ -440,7 +440,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
-	b.setFilter(filter.NewAllowNone(logf, &netipx.IPSet{}))
+	noneFilter := filter.NewAllowNone(logf, &netipx.IPSet{})
+	b.setFilter(noneFilter)
+	b.e.SetJailedFilter(noneFilter)
 
 	b.setTCPPortsIntercepted(nil)
 
@@ -1935,7 +1937,9 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 
 	if !haveNetmap {
 		b.logf("[v1] netmap packet filter: (not ready yet)")
-		b.setFilter(filter.NewAllowNone(b.logf, logNets))
+		noneFilter := filter.NewAllowNone(b.logf, logNets)
+		b.setFilter(noneFilter)
+		b.e.SetJailedFilter(noneFilter)
 		return
 	}
 
@@ -1947,6 +1951,9 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		b.logf("[v1] netmap packet filter: %v filters", len(packetFilter))
 		b.setFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
 	}
+	// The filter for a jailed node is the exact same as a ShieldsUp filter.
+	oldJailedFilter := b.e.GetJailedFilter()
+	b.e.SetJailedFilter(filter.NewShieldsUpFilter(localNets, logNets, oldJailedFilter, b.logf))
 
 	if b.sshServer != nil {
 		go b.sshServer.OnPolicyChange()

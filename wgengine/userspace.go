@@ -1037,6 +1037,14 @@ func (e *userspaceEngine) SetFilter(filt *filter.Filter) {
 	e.tundev.SetFilter(filt)
 }
 
+func (e *userspaceEngine) GetJailedFilter() *filter.Filter {
+	return e.tundev.GetJailedFilter()
+}
+
+func (e *userspaceEngine) SetJailedFilter(filt *filter.Filter) {
+	e.tundev.SetJailedFilter(filt)
+}
+
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

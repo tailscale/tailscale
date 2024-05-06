@@ -78,6 +78,13 @@ type Engine interface {
 	// SetFilter updates the packet filter.
 	SetFilter(*filter.Filter)
 
+	// GetJailedFilter returns the current packet filter for jailed nodes,
+	// if any.
+	GetJailedFilter() *filter.Filter
+
+	// SetJailedFilter updates the packet filter for jailed nodes.
+	SetJailedFilter(*filter.Filter)
+
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
 	SetStatusCallback(StatusCallback)

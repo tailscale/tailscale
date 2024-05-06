@@ -129,6 +129,12 @@ func (e *watchdogEngine) GetFilter() *filter.Filter {
 func (e *watchdogEngine) SetFilter(filt *filter.Filter) {
 	e.watchdog("SetFilter", func() { e.wrap.SetFilter(filt) })
 }
+func (e *watchdogEngine) GetJailedFilter() *filter.Filter {
+	return e.wrap.GetJailedFilter()
+}
+func (e *watchdogEngine) SetJailedFilter(filt *filter.Filter) {
+	e.watchdog("SetJailedFilter", func() { e.wrap.SetJailedFilter(filt) })
+}
 func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
 	e.watchdog("SetStatusCallback", func() { e.wrap.SetStatusCallback(cb) })
 }

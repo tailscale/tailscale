@@ -153,6 +153,9 @@ type Wrapper struct {
 	filter atomic.Pointer[filter.Filter]
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
+	// jailedFilter is the packet filter for jailed nodes.
+	// Can be nil, which means drop all packets.
+	jailedFilter atomic.Pointer[filter.Filter]
 
 	// PreFilterPacketInboundFromWireGuard is the inbound filter function that runs before the main filter
 	// and therefore sees the packets that may be later dropped by it.
@@ -572,6 +575,11 @@ type peerConfig struct {
 	// masqueraded for that address family.
 	dstMasqAddr4 netip.Addr
 	dstMasqAddr6 netip.Addr
+
+	// jailed is whether this peer is "jailed" (i.e. is restricted from being
+	// able to initiate connections to this node). This is the case for shared
+	// nodes.
+	jailed bool
 }
 
 func (c *peerConfigTable) String() string {
@@ -597,7 +605,8 @@ func (c *peerConfig) String() string {
 	var b strings.Builder
 	b.WriteString("peerConfig{")
 	fmt.Fprintf(&b, "dstMasqAddr4: %v, ", c.dstMasqAddr4)
-	fmt.Fprintf(&b, "dstMasqAddr6: %v}", c.dstMasqAddr6)
+	fmt.Fprintf(&b, "dstMasqAddr6: %v, ", c.dstMasqAddr6)
+	fmt.Fprintf(&b, "jailed: %v}", c.jailed)
 
 	return b.String()
 }
@@ -735,10 +744,13 @@ func peerConfigTableFromWGConfig(wcfg *wgcfg.Config) *peerConfigTable {
 			continue
 		}
 
+		const peerIsJailed = false // TODO: implement jailed peers
+
 		// Use the same peer configuration for each address of the peer.
 		pc := &peerConfig{
 			dstMasqAddr4: addrToUse4,
 			dstMasqAddr6: addrToUse6,
+			jailed:       peerIsJailed,
 		}
 
 		// Insert an entry into our routing table for each allowed IP.
@@ -751,6 +763,28 @@ func peerConfigTableFromWGConfig(wcfg *wgcfg.Config) *peerConfigTable {
 		return nil
 	}
 	return ret
+}
+
+func (pc *peerConfigTable) inboundPacketIsJailed(p *packet.Parsed) bool {
+	if pc == nil {
+		return false
+	}
+	c, ok := pc.byIP.Get(p.Src.Addr())
+	if !ok {
+		return false
+	}
+	return c.jailed
+}
+
+func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
+	if pc == nil {
+		return false
+	}
+	c, ok := pc.byIP.Get(p.Dst.Addr())
+	if !ok {
+		return false
+	}
+	return c.jailed
 }
 
 // SetNetMap is called when a new NetworkMap is received.
@@ -812,7 +846,14 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		}
 	}
 
-	filt := t.filter.Load()
+	// If the outbound packet is to a jailed peer, use our jailed peer
+	// packet filter.
+	var filt *filter.Filter
+	if pc.outboundPacketIsJailed(p) {
+		filt = t.jailedFilter.Load()
+	} else {
+		filt = t.filter.Load()
+	}
 	if filt == nil {
 		return filter.Drop
 	}
@@ -993,7 +1034,12 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 		}
 	}
 
-	filt := t.filter.Load()
+	var filt *filter.Filter
+	if pc.inboundPacketIsJailed(p) {
+		filt = t.jailedFilter.Load()
+	} else {
+		filt = t.filter.Load()
+	}
 	if filt == nil {
 		return filter.Drop
 	}
@@ -1096,6 +1142,14 @@ func (t *Wrapper) GetFilter() *filter.Filter {
 
 func (t *Wrapper) SetFilter(filt *filter.Filter) {
 	t.filter.Store(filt)
+}
+
+func (t *Wrapper) GetJailedFilter() *filter.Filter {
+	return t.jailedFilter.Load()
+}
+
+func (t *Wrapper) SetJailedFilter(filt *filter.Filter) {
+	t.jailedFilter.Store(filt)
 }
 
 // InjectInboundPacketBuffer makes the Wrapper device behave as if a packet
