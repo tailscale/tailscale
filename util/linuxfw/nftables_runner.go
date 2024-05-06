@@ -514,6 +514,14 @@ type NetfilterRunner interface {
 	// DelSNATRule removes the rule added by AddSNATRule.
 	DelSNATRule() error
 
+	// AddStatefulRule adds a netfilter rule for stateful packet filtering
+	// using conntrack.
+	AddStatefulRule(tunname string) error
+
+	// DelStatefulRule removes a netfilter rule for stateful packet filtering
+	// using conntrack.
+	DelStatefulRule(tunname string) error
+
 	// HasIPV6 reports true if the system supports IPv6.
 	HasIPV6() bool
 
@@ -1745,6 +1753,194 @@ func (n *nftablesRunner) DelSNATRule() error {
 		return fmt.Errorf("flush del SNAT rule: %w", err)
 	}
 
+	return nil
+}
+
+func nativeUint32(v uint32) []byte {
+	b := make([]byte, 4)
+	binary.NativeEndian.PutUint32(b, v)
+	return b
+}
+
+func makeStatefulRuleExprs(tunname string) []expr.Any {
+	return []expr.Any{
+		// Check if the output interface is the Tailscale interface by
+		// first loding the OIFNAME into register 1 and comparing it
+		// against our tunname.
+		//
+		// 'cmp' implicitly breaks from a rule if a comparison fails,
+		// so if we continue past this rule we know that the packet is
+		// going to our TUN.
+		&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     []byte(tunname),
+		},
+
+		// Store the conntrack state in register 1
+		&expr.Ct{
+			Register: 1,
+			Key:      expr.CtKeySTATE,
+		},
+		// Mask the state in register 1 to "hide" the ESTABLISHED and
+		// RELATED bits (which are expected and fine); if there are any
+		// other bits, we want them to remain.
+		//
+		// This operation is, in the kernel:
+		//    dst[i] = (src[i] & mask[i]) ^ xor[i]
+		//
+		// So, we can mask by setting the inverse of the bits we want
+		// to remove; i.e. ESTABLISHED = 0b00000010, RELATED =
+		// 0b00000100, so, if we assume an 8-bit state (in reality,
+		// it's 32-bit), we can mask with 0b11111001 to clear those
+		// bits and keep everything else (e.g. the INVALID bit which is
+		// 0b00000001).
+		//
+		// TODO(andrew-d): for now, let's also allow
+		// CtStateBitUNTRACKED, which is a state for packets that are not
+		// tracked (marked so explicitly with an iptables rule using
+		// --notrack); we should figure out if we want to allow this or not.
+		&expr.Bitwise{
+			SourceRegister: 1,
+			DestRegister:   1,
+			Len:            4,
+			Mask: nativeUint32(^(0 |
+				expr.CtStateBitESTABLISHED |
+				expr.CtStateBitRELATED |
+				expr.CtStateBitUNTRACKED)),
+
+			// Xor is unused but must be specified
+			Xor: nativeUint32(0),
+		},
+		// Compare against the expected state (0, i.e. no bits set
+		// other than maybe ESTABLISHED and RELATED). We want this
+		// comparison to fail if there are no bits set, so that this
+		// rule's evaluation stops and we don't fall through to the
+		// "Drop" verdict.
+		//
+		// For example, if the state is ESTABLISHED (and we want to
+		// break from this rule/accept this packet):
+		//   state     = ESTABLISHED
+		//   register1 = 0b0 (since the bitwise operation cleared the ESTABLISHED bit)
+		//
+		//   compare register1 (0b0) != 0: false
+		//   -> comparison implicitly breaks
+		//   -> continue to the next rule
+		//
+		// For example, if the state is NEW (and we want to continue to
+		// the next expression and thus drop this packet):
+		//   state     = NEW
+		//   register1 = 0b1000
+		//
+		//   compare register1 (0b1000) != 0: true
+		//   -> comparison continues to next expr
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     []byte{0, 0, 0, 0},
+		},
+		// If we get here, we know that this packet is going to our TUN
+		// device, and has a conntrack state set other than ESTABLISHED
+		// or RELATED. We thus count and drop the packet.
+		&expr.Counter{},
+		&expr.Verdict{Kind: expr.VerdictDrop},
+	}
+
+	// TODO(andrew-d): iptables-nft writes a rule that dumps as:
+	//
+	//	match name conntrack rev 3
+	//
+	// I think this is using expr.Match against the following struct
+	// (xt_conntrack_mtinfo3):
+	//
+	//	https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter/xt_conntrack.h#L64-L77
+	//
+	// We could probably do something similar here, but I'm not sure if
+	// there's any advantage. Below is an example Match statement if we
+	// decide to do that, based on dumping the rule that iptables-nft
+	// generates:
+	//
+	//	_ = expr.Match{
+	//		Name: "conntrack",
+	//		Rev:  3,
+	//		Info: &xt.ConntrackMtinfo3{
+	//			ConntrackMtinfo2: xt.ConntrackMtinfo2{
+	//				ConntrackMtinfoBase: xt.ConntrackMtinfoBase{
+	//					MatchFlags:  xt.ConntrackState,
+	//					InvertFlags: xt.ConntrackState,
+	//				},
+	//				// Mask the state to remove ESTABLISHED and
+	//				// RELATED before comparing.
+	//				StateMask: expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED,
+	//			},
+	//		},
+	//	}
+}
+
+// AddStatefulRule adds a netfilter rule for stateful packet filtering using
+// conntrack.
+func (n *nftablesRunner) AddStatefulRule(tunname string) error {
+	conn := n.conn
+
+	exprs := makeStatefulRuleExprs(tunname)
+	for _, table := range n.getTables() {
+		chain, err := getChainFromTable(conn, table.Filter, chainNameForward)
+		if err != nil {
+			return fmt.Errorf("get forward chain: %w", err)
+		}
+
+		// First, find the 'accept' rule that we want to insert our rule before.
+		acceptRule := createAcceptOutgoingPacketRule(table.Filter, chain, tunname)
+		rule, err := findRule(conn, acceptRule)
+		if err != nil {
+			return fmt.Errorf("find accept rule: %w", err)
+		}
+
+		conn.InsertRule(&nftables.Rule{
+			Table: table.Filter,
+			Chain: chain,
+			Exprs: exprs,
+
+			// Specifying Position in an Insert operation means to
+			// insert this rule before the specified rule.
+			Position: rule.Handle,
+		})
+	}
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush add stateful rule: %w", err)
+	}
+	return nil
+}
+
+// DelStatefulRule removes the netfilter rule for stateful packet filtering
+// using conntrack.
+func (n *nftablesRunner) DelStatefulRule(tunname string) error {
+	conn := n.conn
+
+	exprs := makeStatefulRuleExprs(tunname)
+	for _, table := range n.getTables() {
+		chain, err := getChainFromTable(conn, table.Filter, chainNameForward)
+		if err != nil {
+			return fmt.Errorf("get forward chain: %w", err)
+		}
+		rule, err := findRule(conn, &nftables.Rule{
+			Table: table.Nat,
+			Chain: chain,
+			Exprs: exprs,
+		})
+		if err != nil {
+			return fmt.Errorf("find stateful rule: %w", err)
+		}
+
+		if rule != nil {
+			conn.DelRule(rule)
+		}
+	}
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush del stateful rule: %w", err)
+	}
 	return nil
 }
 

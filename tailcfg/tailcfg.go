@@ -133,7 +133,8 @@ type CapabilityVersion int
 //   - 90: 2024-04-03: Client understands PeerCapabilityTaildrive.
 //   - 91: 2024-04-24: Client understands PeerCapabilityTaildriveSharer.
 //   - 92: 2024-05-06: Client understands NodeAttrUserDialUseRoutes.
-const CurrentCapabilityVersion CapabilityVersion = 92
+//   - 93: 2024-05-06: added support for stateful firewalling.
+const CurrentCapabilityVersion CapabilityVersion = 93
 
 type StableID string
 

@@ -56,6 +56,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Egg",
 		"AdvertiseRoutes",
 		"NoSNAT",
+		"NoStatefulFiltering",
 		"NetfilterMode",
 		"OperatorUser",
 		"ProfileName",

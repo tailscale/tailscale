@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 )
@@ -57,6 +58,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	NoSNAT                 bool
+	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
 	ProfileName            string

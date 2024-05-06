@@ -38,17 +38,18 @@ const (
 )
 
 type linuxRouter struct {
-	closed           atomic.Bool
-	logf             func(fmt string, args ...any)
-	tunname          string
-	netMon           *netmon.Monitor
-	unregNetMon      func()
-	addrs            map[netip.Prefix]bool
-	routes           map[netip.Prefix]bool
-	localRoutes      map[netip.Prefix]bool
-	snatSubnetRoutes bool
-	netfilterMode    preftype.NetfilterMode
-	netfilterKind    string
+	closed            atomic.Bool
+	logf              func(fmt string, args ...any)
+	tunname           string
+	netMon            *netmon.Monitor
+	unregNetMon       func()
+	addrs             map[netip.Prefix]bool
+	routes            map[netip.Prefix]bool
+	localRoutes       map[netip.Prefix]bool
+	snatSubnetRoutes  bool
+	statefulFiltering bool
+	netfilterMode     preftype.NetfilterMode
+	netfilterKind     string
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -390,6 +391,7 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.addrs = newAddrs
 
+	// Ensure that the SNAT rule is added or removed as needed.
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
 		// state already correct, nothing to do.
@@ -403,6 +405,21 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		}
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
+
+	// As above, for stateful filtering
+	switch {
+	case cfg.StatefulFiltering == r.statefulFiltering:
+		// state already correct, nothing to do.
+	case cfg.StatefulFiltering:
+		if err := r.addStatefulRule(); err != nil {
+			errs = append(errs, err)
+		}
+	default:
+		if err := r.delStatefulRule(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	r.statefulFiltering = cfg.StatefulFiltering
 
 	// Issue 11405: enable IP forwarding on gokrazy.
 	advertisingRoutes := len(cfg.SubnetRoutes) > 0
@@ -1325,6 +1342,26 @@ func (r *linuxRouter) delSNATRule() error {
 		return err
 	}
 	return nil
+}
+
+// addStatefulRule adds a netfilter rule to perform stateful filtering from
+// subnets onto the tailnet.
+func (r *linuxRouter) addStatefulRule() error {
+	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+
+	return r.nfr.AddStatefulRule(r.tunname)
+}
+
+// delStatefulRule removes the netfilter rule to perform stateful filtering
+// from subnets onto the tailnet.
+func (r *linuxRouter) delStatefulRule() error {
+	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+
+	return r.nfr.DelStatefulRule(r.tunname)
 }
 
 // cidrDiff calls add and del as needed to make the set of prefixes in

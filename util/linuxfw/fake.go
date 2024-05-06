@@ -85,6 +85,15 @@ func (n *fakeIPTables) Delete(table, chain string, args ...string) error {
 	}
 }
 
+func (n *fakeIPTables) List(table, chain string) ([]string, error) {
+	k := table + "/" + chain
+	if rules, ok := n.n[k]; ok {
+		return rules, nil
+	} else {
+		return nil, fmt.Errorf("unknown table/chain %s", k)
+	}
+}
+
 func (n *fakeIPTables) ClearChain(table, chain string) error {
 	k := table + "/" + chain
 	if _, ok := n.n[k]; ok {

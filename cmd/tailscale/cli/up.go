@@ -121,6 +121,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	switch goos {
 	case "linux":
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
+		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", true, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, etc.)")
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
@@ -168,6 +169,7 @@ type upArgsT struct {
 	advertiseTags          string
 	advertiseConnector     bool
 	snat                   bool
+	statefulFiltering      bool
 	netfilterMode          string
 	authKeyOrFile          string // "secret" or "file:/path/to/secret"
 	hostname               string
@@ -290,6 +292,9 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
+
+		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
+		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)
 
 		switch upArgs.netfilterMode {
 		case "on":
@@ -711,6 +716,7 @@ func init() {
 	addPrefFlagMapping("netfilter-mode", "NetfilterMode")
 	addPrefFlagMapping("shields-up", "ShieldsUp")
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
+	addPrefFlagMapping("stateful-filtering", "NoStatefulFiltering")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
@@ -895,7 +901,7 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
 
 func flagAppliesToOS(flag, goos string) bool {
 	switch flag {
-	case "netfilter-mode", "snat-subnet-routes":
+	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering":
 		return goos == "linux"
 	case "unattended":
 		return goos == "windows"
@@ -970,6 +976,16 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(prefs.AppConnector.Advertise)
 		case "snat-subnet-routes":
 			set(!prefs.NoSNAT)
+		case "stateful-filtering":
+			// We only set the stateful-filtering flag to false if
+			// the pref (negated!) is explicitly set to true; unset
+			// or false is treated as enabled.
+			val, ok := prefs.NoStatefulFiltering.Get()
+			if ok && val {
+				set(false)
+			} else {
+				set(true)
+			}
 		case "netfilter-mode":
 			set(prefs.NetfilterMode.String())
 		case "unattended":
