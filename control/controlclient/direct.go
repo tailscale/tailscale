@@ -398,6 +398,9 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 }
 
 func (c *Direct) TryLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags) (url string, err error) {
+	if strings.Contains(c.serverURL, "controlplane.tailscale.com") && envknob.Bool("TS_PANIC_IF_HIT_MAIN_CONTROL") {
+		panic("[unexpected] controlclient: TryLogin called on " + c.serverURL)
+	}
 	c.logf("[v1] direct.TryLogin(token=%v, flags=%v)", t != nil, flags)
 	return c.doLoginOrRegen(ctx, loginOpt{Token: t, Flags: flags})
 }
