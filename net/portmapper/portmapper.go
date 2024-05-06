@@ -21,6 +21,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -31,6 +32,8 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 )
+
+var disablePortMapperEnv = envknob.RegisterBool("TS_DISABLE_PORTMAPPER")
 
 // DebugKnobs contains debug configuration that can be provided when creating a
 // Client. The zero value is valid for use.
@@ -55,6 +58,9 @@ type DebugKnobs struct {
 }
 
 func (k *DebugKnobs) disableAll() bool {
+	if disablePortMapperEnv() {
+		return true
+	}
 	if k.DisableAll != nil {
 		return k.DisableAll()
 	}
