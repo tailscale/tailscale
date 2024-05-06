@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
@@ -720,6 +722,121 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
+}
+
+// TestClientSideJailing tests that when one node is jailed for another, the
+// jailed node cannot initiate connections to the other node however the other
+// node can initiate connections to the jailed node.
+func TestClientSideJailing(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := newTestEnv(t)
+	registerNode := func() (*testNode, key.NodePublic) {
+		n := newTestNode(t, env)
+		n.StartDaemon()
+		n.AwaitListening()
+		n.MustUp()
+		n.AwaitRunning()
+		k := n.MustStatus().Self.PublicKey
+		return n, k
+	}
+	n1, k1 := registerNode()
+	n2, k2 := registerNode()
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+
+	lc1 := &tailscale.LocalClient{
+		Socket:        n1.sockFile,
+		UseSocketOnly: true,
+	}
+	lc2 := &tailscale.LocalClient{
+		Socket:        n2.sockFile,
+		UseSocketOnly: true,
+	}
+
+	ip1 := n1.AwaitIP4()
+	ip2 := n2.AwaitIP4()
+
+	tests := []struct {
+		name          string
+		n1JailedForN2 bool
+		n2JailedForN1 bool
+	}{
+		{
+			name:          "not_jailed",
+			n1JailedForN2: false,
+			n2JailedForN1: false,
+		},
+		{
+			name:          "uni_jailed",
+			n1JailedForN2: true,
+			n2JailedForN1: false,
+		},
+		{
+			name:          "bi_jailed", // useless config?
+			n1JailedForN2: true,
+			n2JailedForN1: true,
+		},
+	}
+
+	testDial := func(t *testing.T, lc *tailscale.LocalClient, ip netip.Addr, port uint16, shouldFail bool) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c, err := lc.DialTCP(ctx, ip.String(), port)
+		failed := err != nil
+		if failed != shouldFail {
+			t.Errorf("failed = %v; want %v", failed, shouldFail)
+		}
+		if c != nil {
+			c.Close()
+		}
+	}
+
+	b1, err := lc1.WatchIPNBus(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, err := lc2.WatchIPNBus(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPeerIsJailed := func(t *testing.T, b *tailscale.IPNBusWatcher, jailed bool) {
+		t.Helper()
+		for {
+			n, err := b.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.NetMap == nil {
+				continue
+			}
+			if len(n.NetMap.Peers) == 0 {
+				continue
+			}
+			if j := n.NetMap.Peers[0].IsJailed(); j == jailed {
+				break
+			}
+		}
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env.Control.SetJailed(k1, k2, tc.n2JailedForN1)
+			env.Control.SetJailed(k2, k1, tc.n1JailedForN2)
+
+			// Wait for the jailed status to propagate.
+			waitPeerIsJailed(t, b1, tc.n2JailedForN1)
+			waitPeerIsJailed(t, b2, tc.n1JailedForN2)
+
+			testDial(t, lc1, ip2, port, tc.n1JailedForN2)
+			testDial(t, lc2, ip1, port, tc.n2JailedForN1)
+		})
+	}
 }
 
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and

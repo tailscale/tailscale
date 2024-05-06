@@ -118,6 +118,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
+	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 

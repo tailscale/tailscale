@@ -195,6 +195,7 @@ func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
 }
 
 func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
+func (v NodeView) IsJailed() bool        { return v.ж.IsJailed }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
@@ -235,6 +236,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
+	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 

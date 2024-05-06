@@ -134,7 +134,8 @@ type CapabilityVersion int
 //   - 91: 2024-04-24: Client understands PeerCapabilityTaildriveSharer.
 //   - 92: 2024-05-06: Client understands NodeAttrUserDialUseRoutes.
 //   - 93: 2024-05-06: added support for stateful firewalling.
-const CurrentCapabilityVersion CapabilityVersion = 93
+//   - 94: 2024-05-06: Client understands Node.IsJailed.
+const CurrentCapabilityVersion CapabilityVersion = 94
 
 type StableID string
 
@@ -415,6 +416,11 @@ type Node struct {
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
 	// order to be reachable.
 	IsWireGuardOnly bool `json:",omitempty"`
+
+	// IsJailed indicates that this node is jailed and should not be allowed
+	// initiate connections, however outbound connections to it should still be
+	// allowed.
+	IsJailed bool `json:",omitempty"`
 
 	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
 	// node is marked IsWireGuardOnly and being used as an exit node.
@@ -2046,7 +2052,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Expired == n2.Expired &&
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
-		n.IsWireGuardOnly == n2.IsWireGuardOnly
+		n.IsWireGuardOnly == n2.IsWireGuardOnly &&
+		n.IsJailed == n2.IsJailed
 }
 
 func eqPtr[T comparable](a, b *T) bool {
