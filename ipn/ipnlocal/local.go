@@ -2252,7 +2252,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		if mask&ipn.NotifyInitialState != 0 {
 			ini.SessionID = sessionID
 			ini.State = ptr.To(b.state)
-			if b.state == ipn.NeedsLogin {
+			if b.state == ipn.NeedsLogin && b.authURLSticky != "" {
 				ini.BrowseToURL = ptr.To(b.authURLSticky)
 			}
 		}
