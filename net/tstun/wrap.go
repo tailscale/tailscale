@@ -739,18 +739,16 @@ func peerConfigTableFromWGConfig(wcfg *wgcfg.Config) *peerConfigTable {
 			}
 		}
 
-		if !addrToUse4.IsValid() && !addrToUse6.IsValid() {
+		if !addrToUse4.IsValid() && !addrToUse6.IsValid() && !p.IsJailed {
 			// NAT not required for this peer.
 			continue
 		}
-
-		const peerIsJailed = false // TODO: implement jailed peers
 
 		// Use the same peer configuration for each address of the peer.
 		pc := &peerConfig{
 			dstMasqAddr4: addrToUse4,
 			dstMasqAddr6: addrToUse6,
-			jailed:       peerIsJailed,
+			jailed:       p.IsJailed,
 		}
 
 		// Insert an entry into our routing table for each allowed IP.
