@@ -1262,6 +1262,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
 		"TS_ASSUME_NETWORK_UP_FOR_TEST=1", // don't pause control client in airplane mode (no wifi, etc)
 		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
+		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
 	)
 	if version.IsRace() {
 		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
