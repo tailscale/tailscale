@@ -357,6 +357,32 @@ func TestTwoNodes(t *testing.T) {
 	n2SocksAddrCh := n2.socks5AddrChan()
 	d2 := n2.StartDaemon()
 
+	// Drop some logs to disk on test failure.
+	//
+	// TODO(bradfitz): make all nodes for all tests do this? give each node a
+	// unique integer within the test? But for now only do this test because
+	// this is what we often saw flaking.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		n1.mu.Lock()
+		n2.mu.Lock()
+		defer n1.mu.Unlock()
+		defer n2.mu.Unlock()
+
+		rxNoDates := regexp.MustCompile(`(?m)^\d{4}.\d{2}.\d{2}.\d{2}:\d{2}:\d{2}`)
+		cleanLog := func(n *testNode) []byte {
+			b := n.tailscaledParser.allBuf.Bytes()
+			b = rxNoDates.ReplaceAll(b, nil)
+			return b
+		}
+
+		t.Logf("writing tailscaled logs to n1.log and n2.log")
+		os.WriteFile("n1.log", cleanLog(n1), 0666)
+		os.WriteFile("n2.log", cleanLog(n2), 0666)
+	})
+
 	n1Socks := n1.AwaitSocksAddr(n1SocksAddrCh)
 	n2Socks := n1.AwaitSocksAddr(n2SocksAddrCh)
 	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
@@ -1047,7 +1073,8 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 // Currently, the test is simplistic and user==node==machine.
 // That may grow complexity later to test more.
 type testNode struct {
-	env *testEnv
+	env              *testEnv
+	tailscaledParser *nodeOutputParser
 
 	dir        string // temp dir for sock & state
 	configFile string // or empty for none
@@ -1178,19 +1205,25 @@ func (n *testNode) AwaitSocksAddr(ch <-chan string) string {
 // per-line callbacks previously registered via
 // testNode.addLogLineHook.
 type nodeOutputParser struct {
-	buf bytes.Buffer
-	n   *testNode
+	allBuf      bytes.Buffer
+	pendLineBuf bytes.Buffer
+	n           *testNode
 }
 
 func (op *nodeOutputParser) Write(p []byte) (n int, err error) {
-	n, err = op.buf.Write(p)
-	op.parseLines()
+	tn := op.n
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	op.allBuf.Write(p)
+	n, err = op.pendLineBuf.Write(p)
+	op.parseLinesLocked()
 	return
 }
 
-func (op *nodeOutputParser) parseLines() {
+func (op *nodeOutputParser) parseLinesLocked() {
 	n := op.n
-	buf := op.buf.Bytes()
+	buf := op.pendLineBuf.Bytes()
 	for len(buf) > 0 {
 		nl := bytes.IndexByte(buf, '\n')
 		if nl == -1 {
@@ -1199,16 +1232,14 @@ func (op *nodeOutputParser) parseLines() {
 		line := buf[:nl+1]
 		buf = buf[nl+1:]
 
-		n.mu.Lock()
 		for _, f := range n.onLogLine {
 			f(line)
 		}
-		n.mu.Unlock()
 	}
 	if len(buf) == 0 {
-		op.buf.Reset()
+		op.pendLineBuf.Reset()
 	} else {
-		io.CopyN(io.Discard, &op.buf, int64(op.buf.Len()-len(buf)))
+		io.CopyN(io.Discard, &op.pendLineBuf, int64(op.pendLineBuf.Len()-len(buf)))
 	}
 }
 
@@ -1263,11 +1294,13 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_ASSUME_NETWORK_UP_FOR_TEST=1", // don't pause control client in airplane mode (no wifi, etc)
 		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
 		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
+		"TS_DEBUG_LOG_RATE=all",
 	)
 	if version.IsRace() {
 		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
 	}
-	cmd.Stderr = &nodeOutputParser{n: n}
+	n.tailscaledParser = &nodeOutputParser{n: n}
+	cmd.Stderr = n.tailscaledParser
 	if *verboseTailscaled {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
