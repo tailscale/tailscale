@@ -363,11 +363,17 @@ func TestTwoNodes(t *testing.T) {
 	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
 
 	n1.AwaitListening()
+	t.Logf("n1 is listening")
 	n2.AwaitListening()
+	t.Logf("n2 is listening")
 	n1.MustUp()
+	t.Logf("n1 is up")
 	n2.MustUp()
+	t.Logf("n2 is up")
 	n1.AwaitRunning()
+	t.Logf("n1 is running")
 	n2.AwaitRunning()
+	t.Logf("n2 is running")
 
 	if err := tstest.WaitFor(2*time.Second, func() error {
 		st := n1.MustStatus()
@@ -1072,11 +1078,16 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 
 	// Look for a data race. Once we see the start marker, start logging the rest.
 	var sawRace bool
+	var sawPanic bool
 	n.addLogLineHook(func(line []byte) {
-		if mem.Contains(mem.B(line), mem.S("WARNING: DATA RACE")) {
+		lineB := mem.B(line)
+		if mem.Contains(lineB, mem.S("WARNING: DATA RACE")) {
 			sawRace = true
 		}
-		if sawRace {
+		if mem.HasPrefix(lineB, mem.S("panic: ")) {
+			sawPanic = true
+		}
+		if sawRace || sawPanic {
 			t.Logf("%s", line)
 		}
 	})
@@ -1250,6 +1261,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_LOGS_DIR="+t.TempDir(),
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
 		"TS_ASSUME_NETWORK_UP_FOR_TEST=1", // don't pause control client in airplane mode (no wifi, etc)
+		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
 	)
 	if version.IsRace() {
 		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
@@ -1479,7 +1491,7 @@ func (tt *trafficTrap) Err() error {
 func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var got bytes.Buffer
 	r.Write(&got)
-	err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
+	err := fmt.Errorf("unexpected HTTP request via proxy: %s", got.Bytes())
 	mainError.Store(err)
 	if tt.Err() == nil {
 		// Best effort at remembering the first request.
