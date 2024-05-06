@@ -135,7 +135,8 @@ type CapabilityVersion int
 //   - 92: 2024-05-06: Client understands NodeAttrUserDialUseRoutes.
 //   - 93: 2024-05-06: added support for stateful firewalling.
 //   - 94: 2024-05-06: Client understands Node.IsJailed.
-const CurrentCapabilityVersion CapabilityVersion = 94
+//   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
+const CurrentCapabilityVersion CapabilityVersion = 95
 
 type StableID string
 
