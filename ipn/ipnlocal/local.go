@@ -4278,6 +4278,15 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	oldState := b.state
 	b.state = newState
 	prefs := b.pm.CurrentPrefs()
+
+	// Some temporary (2024-05-05) debugging code to help us catch
+	// https://github.com/tailscale/tailscale/issues/11962 in the act.
+	if prefs.WantRunning() &&
+		prefs.ControlURLOrDefault() == ipn.DefaultControlURL &&
+		envknob.Bool("TS_PANIC_IF_HIT_MAIN_CONTROL") {
+		panic("[unexpected] use of main control server in integration test")
+	}
+
 	netMap := b.netMap
 	activeLogin := b.activeLogin
 	authURL := b.authURL
