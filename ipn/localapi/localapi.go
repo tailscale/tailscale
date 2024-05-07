@@ -1323,6 +1323,10 @@ func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if o.UpdatePrefs != nil {
+		http.Error(w, "The UpdatePrefs parameter is not supported via localapi, please use the /prefs endpoint to update preferences before logging in", http.StatusBadRequest)
+		return
+	}
 	err := h.b.Start(o)
 	if err != nil {
 		// TODO(bradfitz): map error to a good HTTP error
