@@ -1150,7 +1150,15 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tails
 		if !isRunning {
 			ipnOptions := ipn.Options{AuthKey: opt.AuthKey}
 			if opt.ControlURL != "" {
-				ipnOptions.UpdatePrefs = &ipn.Prefs{ControlURL: opt.ControlURL}
+				_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+					Prefs: ipn.Prefs{
+						ControlURL: opt.ControlURL,
+					},
+					ControlURLSet: true,
+				})
+				if err != nil {
+					s.logf("edit prefs: %v", err)
+				}
 			}
 			if err := s.lc.Start(ctx, ipnOptions); err != nil {
 				s.logf("start: %v", err)
