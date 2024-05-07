@@ -369,7 +369,7 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 	defer mon.Close()
 
 	fake := NewFakeOS(t)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, 0, fake)
 	router.(*linuxRouter).nfr = fake.nfr
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
@@ -967,7 +967,7 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 	mon.Start()
 	lt.mon = mon
 
-	r, err := newUserspaceRouter(logf, lt.tun, mon, nil)
+	r, err := newUserspaceRouter(logf, lt.tun, mon, 0, nil)
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)
