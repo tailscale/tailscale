@@ -259,7 +259,7 @@ func TestStateSavedOnStart(t *testing.T) {
 	n1.MustDown()
 
 	// And change the hostname to something:
-	if err := n1.Tailscale("up", "--login-server="+n1.env.ControlServer.URL, "--hostname=foo").Run(); err != nil {
+	if err := n1.Tailscale("up", "--login-server="+n1.env.controlURL(), "--hostname=foo").Run(); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 
@@ -289,9 +289,9 @@ func TestOneNodeUpAuth(t *testing.T) {
 	st := n1.MustStatus()
 	t.Logf("Status: %s", st.BackendState)
 
-	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
+	t.Logf("Running up --login-server=%s ...", env.controlURL())
 
-	cmd := n1.Tailscale("up", "--login-server="+env.ControlServer.URL)
+	cmd := n1.Tailscale("up", "--login-server="+env.controlURL())
 	var authCountAtomic int32
 	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
 		if env.Control.CompleteAuth(urlStr) {
@@ -1069,7 +1069,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 				// Should not be changed even if sent "true" later.
 				sendAndCheckDefault(t, n, true, false)
 				// But can be changed explicitly by the user.
-				if out, err := n.Tailscale("set", "--auto-update").CombinedOutput(); err != nil {
+				if out, err := n.TailscaleForOutput("set", "--auto-update").CombinedOutput(); err != nil {
 					t.Fatalf("failed to enable auto-update on node: %v\noutput: %s", err, out)
 				}
 				sendAndCheckDefault(t, n, false, true)
@@ -1083,7 +1083,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 				// Should not be changed even if sent "false" later.
 				sendAndCheckDefault(t, n, false, true)
 				// But can be changed explicitly by the user.
-				if out, err := n.Tailscale("set", "--auto-update=false").CombinedOutput(); err != nil {
+				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
 				}
 				sendAndCheckDefault(t, n, true, false)
@@ -1093,7 +1093,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 			desc: "user-sets-first",
 			run: func(t *testing.T, n *testNode) {
 				// User sets auto-update first, before receiving defaults.
-				if out, err := n.Tailscale("set", "--auto-update=false").CombinedOutput(); err != nil {
+				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
 				}
 				// Defaults sent from control should be ignored.
@@ -1133,6 +1133,16 @@ type testEnv struct {
 
 	TrafficTrap       *trafficTrap
 	TrafficTrapServer *httptest.Server
+}
+
+// controlURL returns e.ControlServer.URL, panicking if it's the empty string,
+// which it should never be in tests.
+func (e *testEnv) controlURL() string {
+	s := e.ControlServer.URL
+	if s == "" {
+		panic("control server not set")
+	}
+	return s
 }
 
 type testEnvOpt interface {
@@ -1183,6 +1193,7 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 		e.TrafficTrapServer.Close()
 		e.ControlServer.Close()
 	})
+	t.Logf("control URL: %v", e.controlURL())
 	return e
 }
 
@@ -1445,7 +1456,7 @@ func (n *testNode) MustUp(extraArgs ...string) {
 	t.Helper()
 	args := []string{
 		"up",
-		"--login-server=" + n.env.ControlServer.URL,
+		"--login-server=" + n.env.controlURL(),
 		"--reset",
 	}
 	args = append(args, extraArgs...)
@@ -1583,6 +1594,13 @@ func (n *testNode) AwaitNeedsLogin() {
 	}); err != nil {
 		t.Fatalf("failure/timeout waiting for transition to NeedsLogin status: %v", err)
 	}
+}
+
+func (n *testNode) TailscaleForOutput(arg ...string) *exec.Cmd {
+	cmd := n.Tailscale(arg...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd
 }
 
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.

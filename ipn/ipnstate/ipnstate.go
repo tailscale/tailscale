@@ -41,6 +41,9 @@ type Status struct {
 	//  "Starting", "Running".
 	BackendState string
 
+	// HaveNodeKey is whether the current profile has a node key configured.
+	HaveNodeKey bool `json:",omitempty"`
+
 	AuthURL      string       // current URL provided by control to authorize client
 	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus

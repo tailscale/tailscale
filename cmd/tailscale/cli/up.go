@@ -410,6 +410,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	// printAuthURL reports whether we should print out the
 	// provided auth URL from an IPN notify.
 	printAuthURL := func(url string) bool {
+		if url == "" {
+			// Probably unnecessary but we used to have a bug where tailscaled
+			// could send an empty URL over the IPN bus. ~Harmless to keep.
+			return false
+		}
 		if upArgs.authKeyOrFile != "" {
 			// Issue 1755: when using an authkey, don't
 			// show an authURL that might still be pending
@@ -527,8 +532,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
-		if upArgs.forceReauth {
-			localClient.StartLoginInteractive(ctx)
+		if upArgs.forceReauth || !st.HaveNodeKey {
+			err := localClient.StartLoginInteractive(ctx)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -540,6 +548,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
+		var lastURLPrinted string
+
 		for {
 			n, err := watcher.Next()
 			if err != nil {
@@ -552,8 +562,6 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			}
 			if s := n.State; s != nil {
 				switch *s {
-				case ipn.NeedsLogin:
-					localClient.StartLoginInteractive(ctx)
 				case ipn.NeedsMachineAuth:
 					printed = true
 					if env.upArgs.json {
@@ -576,12 +584,17 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					cancelWatch()
 				}
 			}
-			if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
+			if url := n.BrowseToURL; url != nil {
+				authURL := *url
+				if !printAuthURL(authURL) || authURL == lastURLPrinted {
+					continue
+				}
 				printed = true
+				lastURLPrinted = authURL
 				if upArgs.json {
-					js := &upOutputJSON{AuthURL: *url, BackendState: st.BackendState}
+					js := &upOutputJSON{AuthURL: authURL, BackendState: st.BackendState}
 
-					q, err := qrcode.New(*url, qrcode.Medium)
+					q, err := qrcode.New(authURL, qrcode.Medium)
 					if err == nil {
 						png, err := q.PNG(128)
 						if err == nil {
@@ -596,9 +609,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 						outln(string(data))
 					}
 				} else {
-					fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+					fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", authURL)
 					if upArgs.qr {
-						q, err := qrcode.New(*url, qrcode.Medium)
+						q, err := qrcode.New(authURL, qrcode.Medium)
 						if err != nil {
 							log.Printf("QR code error: %v", err)
 						} else {

@@ -348,9 +348,14 @@ func (c *Auto) authRoutine() {
 			continue
 		}
 		if url != "" {
-			// goal.url ought to be empty here.
-			// However, not all control servers get this right,
-			// and logging about it here just generates noise.
+			// goal.url ought to be empty here. However, not all control servers
+			// get this right, and logging about it here just generates noise.
+			//
+			// TODO(bradfitz): I don't follow that comment. Our own testcontrol
+			// used by tstest/integration hits this path, in fact.
+			if c.direct.panicOnUse {
+				panic("tainted client")
+			}
 			c.mu.Lock()
 			c.urlToVisit = url
 			c.loginGoal = &LoginGoal{
@@ -615,6 +620,9 @@ func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	if c.closed {
 		return
 	}
+	if c.direct != nil && c.direct.panicOnUse {
+		panic("tainted client")
+	}
 	c.wantLoggedIn = true
 	c.loginGoal = &LoginGoal{
 		token: t,
@@ -632,6 +640,9 @@ func (c *Auto) Logout(ctx context.Context) error {
 	c.wantLoggedIn = false
 	c.loginGoal = nil
 	closed := c.closed
+	if c.direct != nil && c.direct.panicOnUse {
+		panic("tainted client")
+	}
 	c.mu.Unlock()
 
 	if closed {
