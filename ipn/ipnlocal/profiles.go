@@ -353,9 +353,13 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 	if err != nil {
 		return ipn.PrefsView{}, err
 	}
-	savedPrefs, err := ipn.PrefsFromBytes(bs)
-	if err != nil {
-		return ipn.PrefsView{}, fmt.Errorf("PrefsFromBytes: %v", err)
+	savedPrefs := ipn.NewPrefs()
+	// NewPrefs sets a default NoStatefulFiltering, but we want to actually see
+	// if the saved state had an empty value. The empty value gets migrated
+	// based on NoSNAT, while a default "false" does not.
+	savedPrefs.NoStatefulFiltering = ""
+	if err := ipn.PrefsFromBytes(bs, savedPrefs); err != nil {
+		return ipn.PrefsView{}, fmt.Errorf("parsing saved prefs: %v", err)
 	}
 	pm.logf("using backend prefs for %q: %v", key, savedPrefs.Pretty())
 
@@ -495,7 +499,6 @@ var defaultPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
 	prefs.LoggedOut = true
 	prefs.WantRunning = false
-	prefs.NoStatefulFiltering = "false"
 
 	return prefs.View()
 }()

@@ -662,11 +662,12 @@ func NewPrefs() *Prefs {
 		// later anyway.
 		ControlURL: "",
 
-		RouteAll:         true,
-		AllowSingleHosts: true,
-		CorpDNS:          true,
-		WantRunning:      false,
-		NetfilterMode:    preftype.NetfilterOn,
+		RouteAll:            true,
+		AllowSingleHosts:    true,
+		CorpDNS:             true,
+		WantRunning:         false,
+		NetfilterMode:       preftype.NetfilterOn,
+		NoStatefulFiltering: opt.NewBool(false),
 		AutoUpdate: AutoUpdatePrefs{
 			Check: true,
 			Apply: opt.Bool("unset"),
@@ -875,24 +876,21 @@ func (p *Prefs) ShouldWebClientBeRunning() bool {
 	return p.WantRunning && p.RunWebClient
 }
 
-// PrefsFromBytes deserializes Prefs from a JSON blob.
-func PrefsFromBytes(b []byte) (*Prefs, error) {
-	p := NewPrefs()
+// PrefsFromBytes deserializes Prefs from a JSON blob b into base. Values in
+// base are preserved, unless they are populated in the JSON blob.
+func PrefsFromBytes(b []byte, base *Prefs) error {
 	if len(b) == 0 {
-		return p, nil
+		return nil
 	}
 
-	if err := json.Unmarshal(b, p); err != nil {
-		return nil, err
-	}
-	return p, nil
+	return json.Unmarshal(b, base)
 }
 
 var jsonEscapedZero = []byte(`\u0000`)
 
-// LoadPrefs loads a legacy relaynode config file into Prefs
-// with sensible migration defaults set.
-func LoadPrefs(filename string) (*Prefs, error) {
+// LoadPrefsWindows loads a legacy relaynode config file into Prefs with
+// sensible migration defaults set. Windows-only.
+func LoadPrefsWindows(filename string) (*Prefs, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("LoadPrefs open: %w", err) // err includes path
@@ -905,8 +903,8 @@ func LoadPrefs(filename string) (*Prefs, error) {
 		// to log in again. (better than crashing)
 		return nil, os.ErrNotExist
 	}
-	p, err := PrefsFromBytes(data)
-	if err != nil {
+	p := NewPrefs()
+	if err := PrefsFromBytes(data, p); err != nil {
 		return nil, fmt.Errorf("LoadPrefs(%q) decode: %w", filename, err)
 	}
 	return p, nil
