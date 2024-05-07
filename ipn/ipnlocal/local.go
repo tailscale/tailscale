@@ -368,7 +368,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	if dialer.NetMon() == nil {
 		return nil, errors.New("dialer to NewLocalBackend must have a NetMon")
 	}
-	_ = sys.MagicSock.Get() // or panic
+	mConn := sys.MagicSock.Get()
 
 	goos := envknob.GOOS()
 	if loginFlags&controlclient.LocalBackendStartKeyOSNeutral != 0 {
@@ -428,6 +428,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		selfUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
 		lastSelfUpdateState: ipnstate.UpdateFinished,
 	}
+	mConn.SetNetInfoCallback(b.setNetInfo)
 
 	netMon := sys.NetMon.Get()
 	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker())
@@ -1815,8 +1816,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		cc.UpdateEndpoints(endpoints)
 	}
 	cc.SetTKAHead(tkaHead)
-
-	b.MagicConn().SetNetInfoCallback(b.setNetInfo)
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
