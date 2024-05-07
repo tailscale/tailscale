@@ -57,7 +57,7 @@ func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
 	}
 
 	prefsPath := filepath.Join(userLegacyPrefsDir, legacyPrefsFile+legacyPrefsExt)
-	prefs, err := ipn.LoadPrefs(prefsPath)
+	prefs, err := ipn.LoadPrefsWindows(prefsPath)
 	pm.dlogf("ipn.LoadPrefs(%q) = %v, %v", prefsPath, prefs, err)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", ipn.PrefsView{}, errAlreadyMigrated

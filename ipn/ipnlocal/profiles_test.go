@@ -681,8 +681,21 @@ func TestProfileBackfillStatefulFiltering(t *testing.T) {
 			// StatefulFiltering boolean.
 			pf := pm.CurrentPrefs()
 			if !pf.NoStatefulFiltering().EqualBool(tt.want) {
-				t.Fatalf("got NoStatefulFiltering=%v, want %v", pf.NoStatefulFiltering(), tt.want)
+				t.Fatalf("got NoStatefulFiltering=%q, want %v", pf.NoStatefulFiltering(), tt.want)
 			}
 		})
+	}
+}
+
+// TestDefaultPrefs tests that defaultPrefs is just NewPrefs with
+// LoggedOut=true (the Prefs we use before connecting to control). We shouldn't
+// be putting any defaulting there, and instead put all defaults in NewPrefs.
+func TestDefaultPrefs(t *testing.T) {
+	p1 := ipn.NewPrefs()
+	p1.LoggedOut = true
+	p1.WantRunning = false
+	p2 := defaultPrefs
+	if !p1.View().Equals(p2) {
+		t.Errorf("defaultPrefs is %s, want %s; defaultPrefs should only modify WantRunning and LoggedOut, all other defaults should be in ipn.NewPrefs.", p2.Pretty(), p1.Pretty())
 	}
 }
