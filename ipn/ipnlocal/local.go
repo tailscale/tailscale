@@ -790,6 +790,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 			s.ClientVersion = b.lastClientVersion
 		}
 		s.Health = b.health.AppendWarnings(s.Health)
+		s.HaveNodeKey = b.hasNodeKeyLocked()
 
 		// TODO(bradfitz): move this health check into a health.Warnable
 		// and remove from here.
@@ -4604,6 +4605,9 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	if b.cc == nil {
 		return nil
 	}
+
+	b.authURL = ""
+	b.authURLSticky = ""
 
 	// When we clear the control client, stop any outstanding netmap expiry
 	// timer; synthesizing a new netmap while we don't have a control
