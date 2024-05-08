@@ -35,6 +35,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
@@ -480,6 +481,15 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 		lb, err := getLocalBackend(ctx, logf, logID, sys)
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
+			if lb.Prefs().Valid() {
+				if err := lb.Start(ipn.Options{}); err != nil {
+					logf("LocalBackend.Start: %v", err)
+					lb.Shutdown()
+					lbErr.Store(err)
+					cancel()
+					return
+				}
+			}
 			srv.SetLocalBackend(lb)
 			close(wgEngineCreated)
 			return
