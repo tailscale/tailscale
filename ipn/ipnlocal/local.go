@@ -230,7 +230,8 @@ type LocalBackend struct {
 	ccGen          clientGen          // function for producing controlclient; lazily populated
 	sshServer      SSHServer          // or nil, initialized lazily.
 	appConnector   *appc.AppConnector // or nil, initialized when configured.
-	notify         func(ipn.Notify)
+	// notifyCancel cancels notifications to the current SetNotifyCallback.
+	notifyCancel   context.CancelFunc
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
 	machinePrivKey key.MachinePrivate
@@ -709,6 +710,9 @@ func (b *LocalBackend) Shutdown() {
 		b.e.InstallCaptureHook(nil)
 		b.debugSink.Close()
 		b.debugSink = nil
+	}
+	if b.notifyCancel != nil {
+		b.notifyCancel()
 	}
 	b.mu.Unlock()
 	b.webClientShutdown()
@@ -1557,10 +1561,26 @@ func endpointsEqual(x, y []tailcfg.Endpoint) bool {
 	return true
 }
 
+// SetNotifyCallback sets the function to call when the backend has something to
+// notify the frontend about. Only one callback can be set at a time, so calling
+// this function will replace the previous callback.
 func (b *LocalBackend) SetNotifyCallback(notify func(ipn.Notify)) {
+	ctx, cancel := context.WithCancel(b.ctx)
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.notify = notify
+	prevCancel := b.notifyCancel
+	b.notifyCancel = cancel
+	b.mu.Unlock()
+	if prevCancel != nil {
+		prevCancel()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go b.WatchNotifications(ctx, 0, wg.Done, func(n *ipn.Notify) bool {
+		notify(*n)
+		return true
+	})
+	wg.Wait()
 }
 
 // SetHTTPTestClient sets an alternate HTTP client to use with
@@ -1806,7 +1826,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		tkaHead = string(head)
 	}
 	confWantRunning := b.conf != nil && wantRunning
-	unlock.UnlockEarly()
 
 	if endpoints != nil {
 		cc.UpdateEndpoints(endpoints)
@@ -1815,16 +1834,23 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
-	b.send(ipn.Notify{BackendLogID: &blid})
-	b.send(ipn.Notify{Prefs: &prefs})
+	b.sendLocked(ipn.Notify{
+		BackendLogID: &blid,
+		Prefs:        &prefs,
+	})
 
-	if !loggedOut && (b.hasNodeKey() || confWantRunning) {
-		// Even if !WantRunning, we should verify our key, if there
-		// is one. If you want tailscaled to be completely idle,
-		// use logout instead.
+	if !loggedOut && (b.hasNodeKeyLocked() || confWantRunning) {
+		// If we know that we're either logged in or meant to be
+		// running, tell the controlclient that it should also assume
+		// that we need to be logged in.
+		//
+		// Without this, the state machine transitions to "NeedsLogin" implying
+		// that user interaction is required, which is not the case and can
+		// regress tsnet.Server restarts.
 		cc.Login(nil, controlclient.LoginDefault)
 	}
-	b.stateMachine()
+	b.stateMachineLockedOnEntry(unlock)
+
 	return nil
 }
 
@@ -2390,6 +2416,13 @@ func (b *LocalBackend) DebugPickNewDERP() error {
 //
 // b.mu must not be held.
 func (b *LocalBackend) send(n ipn.Notify) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sendLocked(n)
+}
+
+// sendLocked is like send, but assumes b.mu is already held.
+func (b *LocalBackend) sendLocked(n ipn.Notify) {
 	if n.Prefs != nil {
 		n.Prefs = ptr.To(stripKeysFromPrefs(*n.Prefs))
 	}
@@ -2397,8 +2430,6 @@ func (b *LocalBackend) send(n ipn.Notify) {
 		n.Version = version.Long()
 	}
 
-	b.mu.Lock()
-	notifyFunc := b.notify
 	apiSrv := b.peerAPIServer
 	if mayDeref(apiSrv).taildrop.HasFilesWaiting() {
 		n.FilesWaiting = &empty.Message{}
@@ -2411,12 +2442,6 @@ func (b *LocalBackend) send(n ipn.Notify) {
 			// Drop the notification if the channel is full.
 		}
 	}
-
-	b.mu.Unlock()
-
-	if notifyFunc != nil {
-		notifyFunc(n)
-	}
 }
 
 func (b *LocalBackend) sendFileNotify() {
@@ -2426,9 +2451,8 @@ func (b *LocalBackend) sendFileNotify() {
 	for _, wakeWaiter := range b.fileWaiters {
 		wakeWaiter()
 	}
-	notifyFunc := b.notify
 	apiSrv := b.peerAPIServer
-	if notifyFunc == nil || apiSrv == nil {
+	if apiSrv == nil {
 		b.mu.Unlock()
 		return
 	}
@@ -4376,14 +4400,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	}
 }
 
-// hasNodeKey reports whether a non-zero node key is present in the current
-// prefs.
-func (b *LocalBackend) hasNodeKey() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.hasNodeKeyLocked()
-}
-
 func (b *LocalBackend) hasNodeKeyLocked() bool {
 	// we can't use b.Prefs(), because it strips the keys, oops!
 	p := b.pm.CurrentPrefs()
@@ -4481,6 +4497,12 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 // Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
 	unlock := b.lockAndGetUnlock()
+	b.stateMachineLockedOnEntry(unlock)
+}
+
+// stateMachineLockedOnEntry is like stateMachine but requires b.mu be held to
+// call it, but it unlocks b.mu when done (via unlock, a once func).
+func (b *LocalBackend) stateMachineLockedOnEntry(unlock unlockOnce) {
 	b.enterStateLockedOnEntry(b.nextStateLocked(), unlock)
 }
 
