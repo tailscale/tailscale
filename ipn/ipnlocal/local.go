@@ -2486,7 +2486,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	// Deconfigure the local network data plane if:
 	// - seamless key renewal is not enabled;
 	// - key is expired (in which case tailnet connectivity is down anyway).
-	if !b.seamlessRenewalEnabled() || b.keyExpired {
+	if !b.seamlessRenewalEnabled() || expired {
 		b.blockEngineUpdates(true)
 		b.stopEngineAndWait()
 	}
