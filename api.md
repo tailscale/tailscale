@@ -38,7 +38,7 @@ In addition to the status code, errors may include additional information in the
 
 ```jsonc
 {
-  "message": "additional error information",
+  "message": "additional error information"
 }
 ```
 
@@ -218,12 +218,12 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
     // server for incoming traffic.
     "latency": {
       "Dallas": {
-        "latencyMs": 60.463043,
+        "latencyMs": 60.463043
       },
       "New York City": {
         "preferred": true,
-        "latencyMs": 31.323811,
-      },
+        "latencyMs": 31.323811
+      }
     },
 
     // clientSupports (JSON object) identifies features supported by the client.
@@ -252,8 +252,8 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
 
       // upnp (boolean) is 'true' if UPnP port-mapping service exists
       // on your router.
-      "upnp": false,
-    },
+      "upnp": false
+    }
   },
 
   // tags (array of strings) let you assign an identity to a device that
@@ -281,8 +281,8 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
   // will contain {"disabled": true}.
   // Learn more about posture identity at https://tailscale.com/kb/1326/device-identity
   "postureIdentity": {
-    "serialNumbers": ["CP74LFQJXM"],
-  },
+    "serialNumbers": ["CP74LFQJXM"]
+  }
 }
 ```
 
@@ -477,7 +477,7 @@ Returns the enabled and advertised subnet routes for a device.
 ```jsonc
 {
   "advertisedRoutes": ["10.0.0.0/16", "192.168.1.0/24"],
-  "enabledRoutes": [],
+  "enabledRoutes": []
 }
 ```
 
@@ -504,7 +504,7 @@ The new list of enabled subnet routes.
 
 ```jsonc
 {
-  "routes": ["10.0.0.0/16", "192.168.1.0/24"],
+  "routes": ["10.0.0.0/16", "192.168.1.0/24"]
 }
 ```
 
@@ -524,7 +524,7 @@ Returns the enabled and advertised subnet routes for a device.
 ```jsonc
 {
   "advertisedRoutes": ["10.0.0.0/16", "192.168.1.0/24"],
-  "enabledRoutes": ["10.0.0.0/16", "192.168.1.0/24"],
+  "enabledRoutes": ["10.0.0.0/16", "192.168.1.0/24"]
 }
 ```
 
@@ -553,7 +553,7 @@ Specify whether the device is authorized. False to deauthorize an authorized dev
 
 ```jsonc
 {
-  "authorized": true,
+  "authorized": true
 }
 ```
 
@@ -603,7 +603,7 @@ The new list of tags for the device.
 
 ```jsonc
 {
-  "tags": ["tag:foo", "tag:bar"],
+  "tags": ["tag:foo", "tag:bar"]
 }
 ```
 
@@ -624,7 +624,7 @@ If the tags supplied in the `POST` call do not exist in the tailnet policy file,
 
 ```jsonc
 {
-  "message": "requested tags [tag:madeup tag:wrongexample] are invalid or not permitted",
+  "message": "requested tags [tag:madeup tag:wrongexample] are invalid or not permitted"
 }
 ```
 
@@ -656,7 +656,7 @@ You can then call this method again with `"keyExpiryDisabled": false` to re-enab
 
 ```jsonc
 {
-  "keyExpiryDisabled": true,
+  "keyExpiryDisabled": true
 }
 ```
 
@@ -706,7 +706,7 @@ This endpoint can be used to replace the existing IPv4 address with a specific v
 
 ```jsonc
 {
-  "ipv4": "100.80.0.1",
+  "ipv4": "100.80.0.1"
 }
 ```
 
@@ -1121,18 +1121,18 @@ A successful response returns an HTTP status of '200' and the modified tailnet p
   ],
   // Declare static groups of users beyond those in the identity service.
   "groups": {
-    "group:example": ["user1@example.com", "user2@example.com"],
+    "group:example": ["user1@example.com", "user2@example.com"]
   },
   // Declare convenient hostname aliases to use in place of IP addresses.
   "hosts": {
-    "example-host-1": "100.100.100.100",
+    "example-host-1": "100.100.100.100"
   },
   // Access control lists.
   "acls": [
     // Match absolutely everything. Comment out this section if you want
     // to define specific ACL restrictions.
-    { "action": "accept", "users": ["*"], "ports": ["*:*"] },
-  ],
+    { "action": "accept", "users": ["*"], "ports": ["*:*"] }
+  ]
 }
 ```
 
@@ -1328,9 +1328,9 @@ Look at the response body to determine whether there was a problem within your A
     "data": [
       {
         "user": "user1@example.com",
-        "errors": ["address \"2.2.2.2:22\": want: Drop, got: Accept"],
-      },
-    ],
+        "errors": ["address \"2.2.2.2:22\": want: Drop, got: Accept"]
+      }
+    ]
   }
   ```
 
@@ -1344,10 +1344,10 @@ any groups that are used in the policy file that are not being synced from SCIM.
     {
       "user": "group:unknown@example.com",
       "warnings": [
-        "group is not syncing from SCIM and will be ignored by rules in the policy file",
-      ],
-    },
-  ],
+        "group is not syncing from SCIM and will be ignored by rules in the policy file"
+      ]
+    }
+  ]
 }
 ```
 
@@ -1504,8 +1504,8 @@ Returns a JSON object with the IDs of all active keys.
     { "id": "XXXX14CNTRL" },
     { "id": "XXXXZ3CNTRL" },
     { "id": "XXXX43CNTRL" },
-    { "id": "XXXXgj1CNTRL" },
-  ],
+    { "id": "XXXXgj1CNTRL" }
+  ]
 }
 ```
 
@@ -1600,11 +1600,11 @@ It holds the capabilities specified in the request and can no longer be retrieve
         "reusable": false,
         "ephemeral": false,
         "preauthorized": false,
-        "tags": ["tag:example"],
-      },
-    },
+        "tags": ["tag:example"]
+      }
+    }
   },
-  "description": "dev access",
+  "description": "dev access"
 }
 ```
 
@@ -1650,11 +1650,11 @@ The response is a JSON object with information about the key supplied.
         "reusable": false,
         "ephemeral": true,
         "preauthorized": false,
-        "tags": ["tag:bar", "tag:foo"],
-      },
-    },
+        "tags": ["tag:bar", "tag:foo"]
+      }
+    }
   },
-  "description": "dev access",
+  "description": "dev access"
 }
 ```
 
@@ -1666,7 +1666,7 @@ Response for a revoked (deleted) or expired key will have an `invalid` field set
   "created": "2022-05-05T18:55:44Z",
   "expires": "2022-08-03T18:55:44Z",
   "revoked": "2023-04-01T20:50:00Z",
-  "invalid": true,
+  "invalid": true
 }
 ```
 
@@ -1736,7 +1736,7 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
 
 ```jsonc
 {
-  "dns": ["8.8.8.8"],
+  "dns": ["8.8.8.8"]
 }
 ```
 
@@ -1764,7 +1764,7 @@ The new list of DNS nameservers in JSON.
 
 ```jsonc
 {
-  "dns": ["8.8.8.8"],
+  "dns": ["8.8.8.8"]
 }
 ```
 
@@ -1786,7 +1786,7 @@ The response is a JSON object containing the new list of nameservers and the sta
 ```jsonc
 {
   "dns": ["8.8.8.8"],
-  "magicDNS": true,
+  "magicDNS": true
 }
 ```
 
@@ -1806,7 +1806,7 @@ The response is a JSON object containing the new list of nameservers and the sta
 ```jsonc
 {
   "dns": [],
-  "magicDNS": false,
+  "magicDNS": false
 }
 ```
 
@@ -1837,7 +1837,7 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences" \
 
 ```jsonc
 {
-  "magicDNS": false,
+  "magicDNS": false
 }
 ```
 
@@ -1873,7 +1873,7 @@ The DNS preferences in JSON. Currently, MagicDNS is the only setting available:
 
 ```jsonc
 {
-  "magicDNS": true,
+  "magicDNS": true
 }
 ```
 
@@ -1892,7 +1892,7 @@ If there are no DNS servers, this returns an error message:
 
 ```jsonc
 {
-  "message": "need at least one nameserver to enable MagicDNS",
+  "message": "need at least one nameserver to enable MagicDNS"
 }
 ```
 
@@ -1900,7 +1900,7 @@ If there are DNS servers, this returns the MagicDNS status:
 
 ```jsonc
 {
-  "magicDNS": true,
+  "magicDNS": true
 }
 ```
 
@@ -1931,7 +1931,7 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths" \
 
 ```jsonc
 {
-  "searchPaths": ["user1.example.com"],
+  "searchPaths": ["user1.example.com"]
 }
 ```
 
@@ -1957,7 +1957,7 @@ Specify a list of search paths in a JSON object:
 
 ```jsonc
 {
-  "searchPaths": ["user1.example.com", "user2.example.com"],
+  "searchPaths": ["user1.example.com", "user2.example.com"]
 }
 ```
 
@@ -1976,7 +1976,7 @@ The response is a JSON object containing the new list of search paths.
 
 ```jsonc
 {
-  "searchPaths": ["user1.example.com", "user2.example.com"],
+  "searchPaths": ["user1.example.com", "user2.example.com"]
 }
 ```
 
@@ -2134,6 +2134,5 @@ curl -X PUT "https://api.tailscale.com/api/v2/tailnet/example.com/dns/split-dns"
 The response is a JSON object containing the updated map of split DNS settings.
 
 ```jsonc
-{
-}
+{}
 ```
