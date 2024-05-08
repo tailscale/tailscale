@@ -15,6 +15,7 @@ import (
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
@@ -98,7 +99,8 @@ func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 }
 
 func TestUserspaceEngineReconfig(t *testing.T) {
-	e, err := NewFakeUserspaceEngine(t.Logf, 0)
+	ht := new(health.Tracker)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,9 +166,10 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 
 	// Keep making a wgengine until we find an unused port
 	var ue *userspaceEngine
+	ht := new(health.Tracker)
 	for i := range 100 {
 		attempt := uint16(defaultPort + i)
-		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs)
+		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs, ht)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +248,8 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 
 	var knobs controlknobs.Knobs
 
-	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs)
+	ht := new(health.Tracker)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs, ht)
 	if err != nil {
 		t.Fatal(err)
 	}

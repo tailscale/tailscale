@@ -672,7 +672,10 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	}
 
 	sys := &tsd.System{}
-	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{SetSubsystem: sys.Set})
+	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
+		SetSubsystem:  sys.Set,
+		HealthTracker: sys.HealthTracker(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

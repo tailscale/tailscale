@@ -298,7 +298,7 @@ func TestStateMachine(t *testing.T) {
 	sys := new(tsd.System)
 	store := new(testStateStorage)
 	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
@@ -903,7 +903,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
 	sys := new(tsd.System)
 	sys.Set(new(mem.Store))
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}

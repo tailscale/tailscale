@@ -50,7 +50,7 @@ func TestLocalLogLines(t *testing.T) {
 	sys := new(tsd.System)
 	store := new(mem.Store)
 	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
 	if err != nil {
 		t.Fatal(err)
 	}
