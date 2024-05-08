@@ -97,7 +97,6 @@ type mockControl struct {
 	paused atomic.Bool
 
 	mu          sync.Mutex
-	machineKey  key.MachinePrivate
 	persist     *persist.Persist
 	calls       []string
 	authBlocked bool
@@ -133,12 +132,6 @@ func (cc *mockControl) assertShutdown(wasPaused bool) {
 func (cc *mockControl) populateKeys() (newKeys bool) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-
-	if cc.machineKey.IsZero() {
-		cc.logf("Copying machineKey.")
-		cc.machineKey, _ = cc.opts.GetMachinePrivateKey()
-		newKeys = true
-	}
 
 	if cc.persist == nil {
 		cc.persist = &persist.Persist{}
@@ -831,7 +824,7 @@ func TestStateMachine(t *testing.T) {
 	// The last test case is the most common one: restarting when both
 	// logged in and WantRunning.
 	t.Logf("\n\nStart5")
-	notifies.expect(2)
+	notifies.expect(1)
 	c.Assert(b.Start(ipn.Options{}), qt.IsNil)
 	{
 		// NOTE: cc.Shutdown() is correct here, since we didn't call
@@ -839,27 +832,27 @@ func TestStateMachine(t *testing.T) {
 		previousCC.assertShutdown(false)
 		cc.assertCalls("New", "Login")
 
-		nn := notifies.drain(2)
+		nn := notifies.drain(1)
 		cc.assertCalls()
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsTrue)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		c.Assert(b.State(), qt.Equals, ipn.NoState)
 	}
 
 	// Control server accepts our valid key from before.
 	t.Logf("\n\nLoginFinished5")
-	notifies.expect(2)
+	notifies.expect(1)
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
-		nn := notifies.drain(2)
+		nn := notifies.drain(1)
 		cc.assertCalls()
 		// NOTE: No LoginFinished message since no interactive
 		// login was needed.
-		c.Assert(nn[1].State, qt.IsNotNil)
-		c.Assert(ipn.Starting, qt.Equals, *nn[1].State)
+		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(ipn.Starting, qt.Equals, *nn[0].State)
 		// NOTE: No prefs change this time. WantRunning stays true.
 		// We were in Starting in the first place, so that doesn't
 		// change either.
