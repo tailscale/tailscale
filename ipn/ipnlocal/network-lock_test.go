@@ -13,7 +13,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	go4mem "go4.org/mem"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/control/controlclient"
@@ -30,6 +33,7 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/must"
+	"tailscale.com/util/set"
 )
 
 type observerFunc func(controlclient.Status)
@@ -563,18 +567,32 @@ func TestTKAFilterNetmap(t *testing.T) {
 	}
 	n4Sig.Signature[3] = 42 // mess up the signature
 	n4Sig.Signature[4] = 42 // mess up the signature
-	n5GoodSig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n5.Public()}, nlPriv)
+
+	n5nl := key.NewNLPrivate()
+	n5InitialSig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n5.Public(), RotationPubkey: n5nl.Public().Verifier()}, nlPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	resign := func(nl key.NLPrivate, currentSig tkatype.MarshaledSignature) (key.NodePrivate, tkatype.MarshaledSignature) {
+		nk := key.NewNode()
+		sig, err := tka.ResignNKS(nl, nk.Public(), currentSig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return nk, sig
+	}
+
+	n5Rotated, n5RotatedSig := resign(n5nl, n5InitialSig.Serialize())
+
 	nm := &netmap.NetworkMap{
 		Peers: nodeViews([]*tailcfg.Node{
 			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
-			{ID: 2, Key: n2.Public(), KeySignature: nil},                   // missing sig
-			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()}, // someone elses sig
-			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},     // messed-up signature
-			{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
+			{ID: 2, Key: n2.Public(), KeySignature: nil},                       // missing sig
+			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()},     // someone elses sig
+			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},         // messed-up signature
+			{ID: 50, Key: n5.Public(), KeySignature: n5InitialSig.Serialize()}, // rotated
+			{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},
 		}),
 	}
 
@@ -586,12 +604,39 @@ func TestTKAFilterNetmap(t *testing.T) {
 
 	want := nodeViews([]*tailcfg.Node{
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
-		{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
+		{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},
 	})
 	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
 		return x.Raw32() == y.Raw32()
 	})
-	if diff := cmp.Diff(nm.Peers, want, nodePubComparer); diff != "" {
+	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
+		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
+	}
+
+	// Create two more node signatures using the same wrapping key as n5.
+	// Since they have the same rotation chain, both will be filtered out.
+	n7, n7Sig := resign(n5nl, n5RotatedSig)
+	n8, n8Sig := resign(n5nl, n5RotatedSig)
+
+	nm = &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{
+			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
+			{ID: 2, Key: n2.Public(), KeySignature: nil},                       // missing sig
+			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()},     // someone elses sig
+			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},         // messed-up signature
+			{ID: 50, Key: n5.Public(), KeySignature: n5InitialSig.Serialize()}, // rotated
+			{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},      // rotated
+			{ID: 7, Key: n7.Public(), KeySignature: n7Sig},                     // same rotation chain as n8
+			{ID: 8, Key: n8.Public(), KeySignature: n8Sig},                     // same rotation chain as n7
+		}),
+	}
+
+	b.tkaFilterNetmapLocked(nm)
+
+	want = nodeViews([]*tailcfg.Node{
+		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
+	})
+	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
 		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
 	}
 }
@@ -1128,5 +1173,87 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	// in the fake control handler.
 	if err := b.NetworkLockSubmitRecoveryAUM(aum); err != nil {
 		t.Errorf("NetworkLockSubmitRecoveryAUM() failed: %v", err)
+	}
+}
+
+func TestRotationTracker(t *testing.T) {
+	newNK := func(idx byte) key.NodePublic {
+		// single-byte public key to make it human-readable in tests.
+		raw32 := [32]byte{idx}
+		return key.NodePublicFromRaw32(go4mem.B(raw32[:]))
+	}
+	n1, n2, n3, n4, n5 := newNK(1), newNK(2), newNK(3), newNK(4), newNK(5)
+
+	pk1, pk2, pk3 := []byte{1}, []byte{2}, []byte{3}
+	type addDetails struct {
+		np      key.NodePublic
+		details *tka.RotationDetails
+	}
+	tests := []struct {
+		name       string
+		addDetails []addDetails
+		want       set.Set[key.NodePublic]
+	}{
+		{
+			name: "empty",
+			want: nil,
+		},
+		{
+			name: "single_prev_key",
+			addDetails: []addDetails{
+				{np: n1, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n2}, WrappingPubkey: pk1}},
+			},
+			want: set.SetOf([]key.NodePublic{n2}),
+		},
+		{
+			name: "several_prev_keys",
+			addDetails: []addDetails{
+				{np: n1, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n2}, WrappingPubkey: pk1}},
+				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n4}, WrappingPubkey: pk2}},
+				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n3, n4}, WrappingPubkey: pk1}},
+			},
+			want: set.SetOf([]key.NodePublic{n2, n3, n4}),
+		},
+		{
+			name: "several_per_pubkey_latest_wins",
+			addDetails: []addDetails{
+				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1}, WrappingPubkey: pk3}},
+				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+				{np: n4, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2, n3}, WrappingPubkey: pk3}},
+				{np: n5, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n4}, WrappingPubkey: pk3}},
+			},
+			want: set.SetOf([]key.NodePublic{n1, n2, n3, n4}),
+		},
+		{
+			name: "several_per_pubkey_same_chain_length_all_rejected",
+			addDetails: []addDetails{
+				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1}, WrappingPubkey: pk3}},
+				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+				{np: n4, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+				{np: n5, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+			},
+			want: set.SetOf([]key.NodePublic{n1, n2, n3, n4, n5}),
+		},
+		{
+			name: "several_per_pubkey_longest_wins",
+			addDetails: []addDetails{
+				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1}, WrappingPubkey: pk3}},
+				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+				{np: n4, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+				{np: n5, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2, n3}, WrappingPubkey: pk3}},
+			},
+			want: set.SetOf([]key.NodePublic{n1, n2, n3, n4}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &rotationTracker{logf: t.Logf}
+			for _, ad := range tt.addDetails {
+				r.addRotationDetails(ad.np, ad.details)
+			}
+			if got := r.obsoleteKeys(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("rotationTracker.obsoleteKeys() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

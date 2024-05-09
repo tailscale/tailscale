@@ -5,6 +5,7 @@ package tka
 
 import (
 	"crypto/ed25519"
+	"reflect"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -296,5 +297,145 @@ func TestSigSerializeUnserialize(t *testing.T) {
 	}
 	if diff := cmp.Diff(sig, decoded); diff != "" {
 		t.Errorf("unmarshalled version differs (-want, +got):\n%s", diff)
+	}
+}
+
+func TestNodeKeySignatureRotationDetails(t *testing.T) {
+	// Trusted network lock key
+	pub, priv := testingKey25519(t, 1)
+	k := Key{Kind: Key25519, Public: pub, Votes: 2}
+
+	// 'credential' key (the one being delegated to)
+	cPub, cPriv := testingKey25519(t, 2)
+
+	n1, n2, n3 := key.NewNode(), key.NewNode(), key.NewNode()
+	n1pub, _ := n1.Public().MarshalBinary()
+	n2pub, _ := n2.Public().MarshalBinary()
+	n3pub, _ := n3.Public().MarshalBinary()
+
+	tests := []struct {
+		name    string
+		nodeKey key.NodePublic
+		sigFn   func() NodeKeySignature
+		want    *RotationDetails
+	}{
+		{
+			name:    "SigDirect",
+			nodeKey: n1.Public(),
+			sigFn: func() NodeKeySignature {
+				s := NodeKeySignature{
+					SigKind: SigDirect,
+					KeyID:   pub,
+					Pubkey:  n1pub,
+				}
+				sigHash := s.SigHash()
+				s.Signature = ed25519.Sign(priv, sigHash[:])
+				return s
+			},
+			want: nil,
+		},
+		{
+			name:    "SigWrappedCredential",
+			nodeKey: n1.Public(),
+			sigFn: func() NodeKeySignature {
+				nestedSig := NodeKeySignature{
+					SigKind:        SigCredential,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				}
+				sigHash := nestedSig.SigHash()
+				nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+
+				sig := NodeKeySignature{
+					SigKind: SigRotation,
+					Pubkey:  n1pub,
+					Nested:  &nestedSig,
+				}
+				sigHash = sig.SigHash()
+				sig.Signature = ed25519.Sign(cPriv, sigHash[:])
+				return sig
+			},
+			want: &RotationDetails{
+				WrappingPubkey: cPub,
+			},
+		},
+		{
+			name:    "SigRotation",
+			nodeKey: n2.Public(),
+			sigFn: func() NodeKeySignature {
+				nestedSig := NodeKeySignature{
+					SigKind:        SigDirect,
+					Pubkey:         n1pub,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				}
+				sigHash := nestedSig.SigHash()
+				nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+
+				sig := NodeKeySignature{
+					SigKind: SigRotation,
+					Pubkey:  n2pub,
+					Nested:  &nestedSig,
+				}
+				sigHash = sig.SigHash()
+				sig.Signature = ed25519.Sign(cPriv, sigHash[:])
+				return sig
+			},
+			want: &RotationDetails{
+				WrappingPubkey: cPub,
+				PrevNodeKeys:   []key.NodePublic{n1.Public()},
+			},
+		},
+		{
+			name:    "SigRotationNestedTwice",
+			nodeKey: n3.Public(),
+			sigFn: func() NodeKeySignature {
+				initialSig := NodeKeySignature{
+					SigKind:        SigDirect,
+					Pubkey:         n1pub,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				}
+				sigHash := initialSig.SigHash()
+				initialSig.Signature = ed25519.Sign(priv, sigHash[:])
+
+				prevRotation := NodeKeySignature{
+					SigKind: SigRotation,
+					Pubkey:  n2pub,
+					Nested:  &initialSig,
+				}
+				sigHash = prevRotation.SigHash()
+				prevRotation.Signature = ed25519.Sign(cPriv, sigHash[:])
+
+				sig := NodeKeySignature{
+					SigKind: SigRotation,
+					Pubkey:  n3pub,
+					Nested:  &prevRotation,
+				}
+				sigHash = sig.SigHash()
+				sig.Signature = ed25519.Sign(cPriv, sigHash[:])
+
+				return sig
+			},
+			want: &RotationDetails{
+				WrappingPubkey: cPub,
+				PrevNodeKeys:   []key.NodePublic{n2.Public(), n1.Public()},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sig := tt.sigFn()
+			if err := sig.verifySignature(tt.nodeKey, k); err != nil {
+				t.Fatalf("verifySignature(node) failed: %v", err)
+			}
+			got, err := sig.rotationDetails()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("rotationDetails() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
