@@ -199,6 +199,7 @@ change in the future.
 			debugCmd,
 			driveCmd,
 			idTokenCmd,
+			renewCmd,
 		},
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
