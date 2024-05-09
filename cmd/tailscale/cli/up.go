@@ -295,23 +295,40 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
 		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)
-
-		switch upArgs.netfilterMode {
-		case "on":
-			prefs.NetfilterMode = preftype.NetfilterOn
-		case "nodivert":
-			prefs.NetfilterMode = preftype.NetfilterNoDivert
-			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
-		case "off":
-			prefs.NetfilterMode = preftype.NetfilterOff
-			if defaultNetfilterMode() != "off" {
-				warnf("netfilter=off; configure iptables yourself.")
-			}
-		default:
-			return nil, fmt.Errorf("invalid value --netfilter-mode=%q", upArgs.netfilterMode)
+		v, warning, err := netfilterModeFromFlag(upArgs.netfilterMode)
+		if err != nil {
+			return nil, err
+		}
+		prefs.NetfilterMode = v
+		if warning != "" {
+			warnf(warning)
 		}
 	}
 	return prefs, nil
+}
+
+// netfilterModeFromFlag returns the preftype.NetfilterMode for the provided
+// flag value. It returns a warning if there is something the user should know
+// about the value.
+func netfilterModeFromFlag(v string) (_ preftype.NetfilterMode, warning string, _ error) {
+	switch v {
+	case "on", "nodivert", "off":
+	default:
+		return preftype.NetfilterOn, "", fmt.Errorf("invalid value --netfilter-mode=%q", v)
+	}
+	m, err := preftype.ParseNetfilterMode(v)
+	if err != nil {
+		return preftype.NetfilterOn, "", err
+	}
+	switch m {
+	case preftype.NetfilterNoDivert:
+		warning = "netfilter=nodivert; add iptables calls to ts-* chains manually."
+	case preftype.NetfilterOff:
+		if defaultNetfilterMode() != "off" {
+			warning = "netfilter=off; configure iptables yourself."
+		}
+	}
+	return m, warning, nil
 }
 
 // updatePrefs returns how to edit preferences based on the
