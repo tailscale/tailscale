@@ -115,4 +115,13 @@ func TestNameserverReconciler(t *testing.T) {
 		Data:     map[string]string{"records.json": string(bs)},
 	}
 	expectEqual(t, fc, wantCm, nil)
+
+	// Verify that if dnsconfig.spec.nameserver.image.{repo,tag} are unset,
+	// the nameserver image defaults to tailscale/k8s-nameserver:unstable.
+	mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
+		dnsCfg.Spec.Nameserver.Image = nil
+	})
+	expectReconciled(t, nr, "", "test")
+	wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:unstable"
+	expectEqual(t, fc, wantsDeploy, nil)
 }
