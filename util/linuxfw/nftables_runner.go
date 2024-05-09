@@ -1926,7 +1926,7 @@ func (n *nftablesRunner) DelStatefulRule(tunname string) error {
 			return fmt.Errorf("get forward chain: %w", err)
 		}
 		rule, err := findRule(conn, &nftables.Rule{
-			Table: table.Nat,
+			Table: table.Filter,
 			Chain: chain,
 			Exprs: exprs,
 		})
