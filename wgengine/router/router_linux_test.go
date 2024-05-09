@@ -22,6 +22,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/vishvananda/netlink"
 	"go4.org/netipx"
+	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstest"
@@ -369,7 +370,8 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 	defer mon.Close()
 
 	fake := NewFakeOS(t)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake)
+	ht := new(health.Tracker)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht)
 	router.(*linuxRouter).nfr = fake.nfr
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
