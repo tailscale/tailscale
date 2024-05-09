@@ -1773,7 +1773,7 @@ func makeStatefulRuleExprs(tunname string) []expr.Any {
 		// going to our TUN.
 		&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
 		&expr.Cmp{
-			Op:       expr.CmpOpNeq,
+			Op:       expr.CmpOpEq,
 			Register: 1,
 			Data:     []byte(tunname),
 		},
