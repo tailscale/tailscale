@@ -2177,7 +2177,7 @@ var _ conn.Bind = (*connBind)(nil)
 func (c *connBind) BatchSize() int {
 	// TODO(raggi): determine by properties rather than hardcoding platform behavior
 	switch runtime.GOOS {
-	case "linux":
+	case "linux", "android":
 		return conn.IdealBatchSize
 	default:
 		return 1
@@ -2682,7 +2682,7 @@ func tryUpgradeToBatchingUDPConn(pconn nettype.PacketConn, network string, batch
 	if network != "udp4" && network != "udp6" {
 		return pconn
 	}
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "android" {
 		return pconn
 	}
 	if strings.HasPrefix(hostinfo.GetOSVersion(), "2.") {
