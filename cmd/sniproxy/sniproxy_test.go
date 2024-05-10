@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http/httptest"
 	"net/netip"
@@ -99,8 +100,8 @@ func startNode(t *testing.T, ctx context.Context, controlURL, hostname string) (
 		Store:      new(mem.Store),
 		Ephemeral:  true,
 	}
-	if !*verboseNodes {
-		s.Logf = logger.Discard
+	if *verboseNodes {
+		s.Logf = log.Printf
 	}
 	t.Cleanup(func() { s.Close() })
 

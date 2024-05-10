@@ -28,7 +28,6 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/tsnet"
 	"tailscale.com/tsweb"
-	"tailscale.com/types/logger"
 )
 
 var (
@@ -58,8 +57,6 @@ func main() {
 	ts := &tsnet.Server{
 		Dir:      *tailscaleDir,
 		Hostname: *hostname,
-		// Make the stdout logs a clean audit log of connections.
-		Logf: logger.Discard,
 	}
 
 	if os.Getenv("TS_AUTHKEY") == "" {
