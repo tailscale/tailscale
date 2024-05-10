@@ -440,7 +440,8 @@ func (srv *server) newConn() (*conn, error) {
 	c := &conn{srv: srv}
 	now := srv.now()
 	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
-	fwdHandler := &ssh.ForwardedTCPHandler{}
+	fwdHandlerTCP := &ssh.ForwardedTCPHandler{}
+	fwdHandlerUnix := &ssh.ForwardedUnixHandler{}
 	c.Server = &ssh.Server{
 		Version:              "Tailscale",
 		ServerConfigCallback: c.ServerConfig,
@@ -452,6 +453,8 @@ func (srv *server) newConn() (*conn, error) {
 		Handler:                       c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,
 		ReversePortForwardingCallback: c.mayReversePortForwardTo,
+		LocalUnixForwardingCallback:   c.mayForwardLocalUnixTo,
+		ReverseUnixForwardingCallback: c.mayReverseUnixForwardTo,
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"sftp": c.handleSessionPostSSHAuth,
 		},
@@ -459,11 +462,14 @@ func (srv *server) newConn() (*conn, error) {
 		// only adds support for forwarding ports from the local machine.
 		// TODO(maisem/bradfitz): add remote port forwarding support.
 		ChannelHandlers: map[string]ssh.ChannelHandler{
-			"direct-tcpip": ssh.DirectTCPIPHandler,
+			"direct-tcpip":                   ssh.DirectTCPIPHandler,
+			"direct-streamlocal@openssh.com": ssh.DirectStreamLocalHandler,
 		},
 		RequestHandlers: map[string]ssh.RequestHandler{
-			"tcpip-forward":        fwdHandler.HandleSSHRequest,
-			"cancel-tcpip-forward": fwdHandler.HandleSSHRequest,
+			"tcpip-forward":                          fwdHandlerTCP.HandleSSHRequest,
+			"cancel-tcpip-forward":                   fwdHandlerTCP.HandleSSHRequest,
+			"streamlocal-forward@openssh.com":        fwdHandlerUnix.HandleSSHRequest,
+			"cancel-streamlocal-forward@openssh.com": fwdHandlerUnix.HandleSSHRequest,
 		},
 	}
 	ss := c.Server
@@ -512,6 +518,34 @@ func (c *conn) mayForwardLocalPortTo(ctx ssh.Context, destinationHost string, de
 		return true
 	}
 	return false
+}
+
+// mayReverseUnixForwardTo reports whether the ctx should be allowed to unix forward
+// to the specified host.
+func (c *conn) mayReverseUnixForwardTo(ctx ssh.Context, socketPath string) bool {
+	if sshDisableForwarding() {
+		return false
+	}
+	if c.finalAction != nil && c.finalAction.AllowRemoteUnixForwarding {
+		metricRemoteUnixForward.Add(1)
+		return true
+	}
+	// TODO(Xenfo): undo
+	return true
+}
+
+// mayForwardLocalUnixTo reports whether the ctx should be allowed to unix forward
+// to the specified host.
+func (c *conn) mayForwardLocalUnixTo(ctx ssh.Context, socketPath string) bool {
+	if sshDisableForwarding() {
+		return false
+	}
+	if c.finalAction != nil && c.finalAction.AllowLocalUnixForwarding {
+		metricLocalUnixForward.Add(1)
+		return true
+	}
+	// TODO(Xenfo): undo
+	return true
 }
 
 // havePubKeyPolicy reports whether any policy rule may provide access by means
@@ -1928,6 +1962,8 @@ var (
 	metricSFTP                = clientmetric.NewCounter("ssh_sftp_sessions")
 	metricLocalPortForward    = clientmetric.NewCounter("ssh_local_port_forward_requests")
 	metricRemotePortForward   = clientmetric.NewCounter("ssh_remote_port_forward_requests")
+	metricLocalUnixForward    = clientmetric.NewCounter("ssh_local_unix_forward_requests")
+	metricRemoteUnixForward   = clientmetric.NewCounter("ssh_remote_unix_forward_requests")
 )
 
 // userVisibleError is a wrapper around an error that implements

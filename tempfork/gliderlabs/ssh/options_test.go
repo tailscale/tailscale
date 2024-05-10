@@ -51,7 +51,7 @@ func TestPasswordAuth(t *testing.T) {
 
 func TestPasswordAuthBadPass(t *testing.T) {
 	t.Parallel()
-	l := newLocalListener()
+	l := newLocalTCPListener()
 	srv := &Server{Handler: func(s Session) {}}
 	srv.SetOption(PasswordAuth(func(ctx Context, password string) bool {
 		return false

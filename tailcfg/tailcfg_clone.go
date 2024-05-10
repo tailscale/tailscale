@@ -517,6 +517,8 @@ var _SSHActionCloneNeedsRegeneration = SSHAction(struct {
 	HoldAndDelegate           string
 	AllowLocalPortForwarding  bool
 	AllowRemotePortForwarding bool
+	AllowLocalUnixForwarding  bool
+	AllowRemoteUnixForwarding bool
 	Recorders                 []netip.AddrPort
 	OnRecordingFailure        *SSHRecorderFailureAction
 }{})

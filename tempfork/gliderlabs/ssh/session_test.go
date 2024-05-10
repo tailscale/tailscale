@@ -22,14 +22,25 @@ func (srv *Server) serveOnce(l net.Listener) error {
 		return e
 	}
 	srv.ChannelHandlers = map[string]ChannelHandler{
-		"session":      DefaultSessionHandler,
-		"direct-tcpip": DirectTCPIPHandler,
+		"session":                        DefaultSessionHandler,
+		"direct-tcpip":                   DirectTCPIPHandler,
+		"direct-streamlocal@openssh.com": DirectStreamLocalHandler,
 	}
+
+	forwardedTCPHandler := &ForwardedTCPHandler{}
+	forwardedUnixHandler := &ForwardedUnixHandler{}
+	srv.RequestHandlers = map[string]RequestHandler{
+		"tcpip-forward":                          forwardedTCPHandler.HandleSSHRequest,
+		"cancel-tcpip-forward":                   forwardedTCPHandler.HandleSSHRequest,
+		"streamlocal-forward@openssh.com":        forwardedUnixHandler.HandleSSHRequest,
+		"cancel-streamlocal-forward@openssh.com": forwardedUnixHandler.HandleSSHRequest,
+	}
+
 	srv.HandleConn(conn)
 	return nil
 }
 
-func newLocalListener() net.Listener {
+func newLocalTCPListener() net.Listener {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		if l, err = net.Listen("tcp6", "[::1]:0"); err != nil {
@@ -66,7 +77,7 @@ func newClientSession(t *testing.T, addr string, config *gossh.ClientConfig) (*g
 }
 
 func newTestSession(t *testing.T, srv *Server, cfg *gossh.ClientConfig) (*gossh.Session, *gossh.Client, func()) {
-	l := newLocalListener()
+	l := newLocalTCPListener()
 	go srv.serveOnce(l)
 	return newClientSession(t, l.Addr().String(), cfg)
 }

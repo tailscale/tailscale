@@ -136,7 +136,8 @@ type CapabilityVersion int
 //   - 93: 2024-05-06: added support for stateful firewalling.
 //   - 94: 2024-05-06: Client understands Node.IsJailed.
 //   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
-const CurrentCapabilityVersion CapabilityVersion = 95
+//   - 96: 2023-06-08: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
+const CurrentCapabilityVersion CapabilityVersion = 96
 
 type StableID string
 
@@ -2455,6 +2456,14 @@ type SSHAction struct {
 	// AllowRemotePortForwarding, if true, allows accepted connections
 	// to use remote port forwarding if requested.
 	AllowRemotePortForwarding bool `json:"allowRemotePortForwarding,omitempty"`
+
+	// AllowLocalUnixForwarding, if true, allows accepted connections
+	// to use local unix forwarding if requested.
+	AllowLocalUnixForwarding bool `json:"allowLocalUnixForwarding,omitempty"`
+
+	// AllowRemoteUnixForwarding, if true, allows accepted connections
+	// to use remote unix forwarding if requested.
+	AllowRemoteUnixForwarding bool `json:"allowRemoteUnixForwarding,omitempty"`
 
 	// Recorders defines the destinations of the SSH session recorders.
 	// The recording will be uploaded to http://addr:port/record.

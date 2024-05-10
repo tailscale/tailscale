@@ -31,7 +31,7 @@ func TestAddHostKey(t *testing.T) {
 }
 
 func TestServerShutdown(t *testing.T) {
-	l := newLocalListener()
+	l := newLocalTCPListener()
 	testBytes := []byte("Hello world\n")
 	s := &Server{
 		Handler: func(s Session) {
@@ -82,7 +82,7 @@ func TestServerShutdown(t *testing.T) {
 }
 
 func TestServerClose(t *testing.T) {
-	l := newLocalListener()
+	l := newLocalTCPListener()
 	s := &Server{
 		Handler: func(s Session) {
 			time.Sleep(5 * time.Second)

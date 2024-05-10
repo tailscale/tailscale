@@ -1190,6 +1190,8 @@ func (v SSHActionView) AllowAgentForwarding() bool             { return v.ж.All
 func (v SSHActionView) HoldAndDelegate() string                { return v.ж.HoldAndDelegate }
 func (v SSHActionView) AllowLocalPortForwarding() bool         { return v.ж.AllowLocalPortForwarding }
 func (v SSHActionView) AllowRemotePortForwarding() bool        { return v.ж.AllowRemotePortForwarding }
+func (v SSHActionView) AllowLocalUnixForwarding() bool         { return v.ж.AllowLocalUnixForwarding }
+func (v SSHActionView) AllowRemoteUnixForwarding() bool        { return v.ж.AllowRemoteUnixForwarding }
 func (v SSHActionView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
 func (v SSHActionView) OnRecordingFailure() *SSHRecorderFailureAction {
 	if v.ж.OnRecordingFailure == nil {
@@ -1209,6 +1211,8 @@ var _SSHActionViewNeedsRegeneration = SSHAction(struct {
 	HoldAndDelegate           string
 	AllowLocalPortForwarding  bool
 	AllowRemotePortForwarding bool
+	AllowLocalUnixForwarding  bool
+	AllowRemoteUnixForwarding bool
 	Recorders                 []netip.AddrPort
 	OnRecordingFailure        *SSHRecorderFailureAction
 }{})
