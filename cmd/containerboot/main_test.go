@@ -65,7 +65,7 @@ func TestContainerBoot(t *testing.T) {
 		"dev/net",
 		"proc/sys/net/ipv4",
 		"proc/sys/net/ipv6/conf/all",
-		"etc",
+		"etc/tailscaled",
 	}
 	for _, path := range dirs {
 		if err := os.MkdirAll(filepath.Join(d, path), 0700); err != nil {
@@ -80,7 +80,7 @@ func TestContainerBoot(t *testing.T) {
 		"dev/net/tun":                           []byte(""),
 		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
 		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
-		"etc/tailscaled":                        tailscaledConfBytes,
+		"etc/tailscaled/cap-95.hujson":          tailscaledConfBytes,
 	}
 	resetFiles := func() {
 		for path, content := range files {
@@ -638,14 +638,14 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
-			Name: "experimental tailscaled configfile",
+			Name: "experimental tailscaled config path",
 			Env: map[string]string{
-				"EXPERIMENTAL_TS_CONFIGFILE_PATH": filepath.Join(d, "etc/tailscaled"),
+				"TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR": filepath.Join(d, "etc/tailscaled/"),
 			},
 			Phases: []phase{
 				{
 					WantCmds: []string{
-						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled",
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --config=/etc/tailscaled/cap-95.hujson",
 					},
 				}, {
 					Notify: runningNotify,

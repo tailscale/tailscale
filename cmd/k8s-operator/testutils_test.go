@@ -67,6 +67,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
 			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
+			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 		},
 		SecurityContext: &corev1.SecurityContext{
 			Capabilities: &corev1.Capabilities{
@@ -89,12 +90,6 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: opts.secretName,
-					Items: []corev1.KeyToPath{
-						{
-							Key:  "tailscaled",
-							Path: "tailscaled",
-						},
-					},
 				},
 			},
 		},
@@ -144,9 +139,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 			Name:  "TS_SERVE_CONFIG",
 			Value: "/etc/tailscaled/serve-config",
 		})
-		volumes = append(volumes, corev1.Volume{
-			Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Path: "serve-config", Key: "serve-config"}}}},
-		})
+		volumes = append(volumes, corev1.Volume{Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}})
 		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"})
 	}
 	ss := &appsv1.StatefulSet{
@@ -229,6 +222,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "", FieldPath: "status.podIP"}, ResourceFieldRef: nil, ConfigMapKeyRef: nil, SecretKeyRef: nil}},
 			{Name: "TS_KUBE_SECRET", Value: opts.secretName},
 			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
+			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
 		},
 		ImagePullPolicy: "Always",
@@ -243,20 +237,12 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: opts.secretName,
-					Items: []corev1.KeyToPath{
-						{
-							Key:  "tailscaled",
-							Path: "tailscaled",
-						},
-					},
 				},
 			},
 		},
 		{Name: "serve-config",
 			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName,
-					Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}},
-		},
+				Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}},
 	}
 	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
@@ -388,7 +374,17 @@ func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 	if err != nil {
 		t.Fatalf("error marshalling tailscaled config")
 	}
+	if opts.tailnetTargetFQDN != "" || opts.tailnetTargetIP != "" {
+		conf.NoStatefulFiltering = "true"
+	} else {
+		conf.NoStatefulFiltering = "false"
+	}
+	bn, err := json.Marshal(conf)
+	if err != nil {
+		t.Fatalf("error marshalling tailscaled config")
+	}
 	mak.Set(&s.StringData, "tailscaled", string(b))
+	mak.Set(&s.StringData, "cap-95.hujson", string(bn))
 	labels := map[string]string{
 		"tailscale.com/managed":              "true",
 		"tailscale.com/parent-resource":      "test",
@@ -463,7 +459,7 @@ func mustUpdateStatus[T any, O ptrObject[T]](t *testing.T, client client.Client,
 // they are not present in the passed object and use the modify func to remove
 // them from the cluster object. If no such modifications are needed, you can
 // pass nil in place of the modify function.
-func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, modify func(O)) {
+func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, modifier func(O)) {
 	t.Helper()
 	got := O(new(T))
 	if err := client.Get(context.Background(), types.NamespacedName{
@@ -477,8 +473,8 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	// so just remove it from both got and want.
 	got.SetResourceVersion("")
 	want.SetResourceVersion("")
-	if modify != nil {
-		modify(got)
+	if modifier != nil {
+		modifier(got)
 	}
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected object (-got +want):\n%s", diff)
