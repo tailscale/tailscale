@@ -530,8 +530,7 @@ func (c *conn) mayReverseUnixForwardTo(ctx ssh.Context, socketPath string) bool 
 		metricRemoteUnixForward.Add(1)
 		return true
 	}
-	// TODO(Xenfo): undo
-	return true
+	return false
 }
 
 // mayForwardLocalUnixTo reports whether the ctx should be allowed to unix forward
@@ -544,8 +543,7 @@ func (c *conn) mayForwardLocalUnixTo(ctx ssh.Context, socketPath string) bool {
 		metricLocalUnixForward.Add(1)
 		return true
 	}
-	// TODO(Xenfo): undo
-	return true
+	return false
 }
 
 // havePubKeyPolicy reports whether any policy rule may provide access by means
