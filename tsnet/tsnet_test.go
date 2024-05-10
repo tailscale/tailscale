@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -214,8 +215,8 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 		Ephemeral:         true,
 		getCertForTesting: testCertRoot.getCert,
 	}
-	if !*verboseNodes {
-		s.Logf = logger.Discard
+	if *verboseNodes {
+		s.Logf = log.Printf
 	}
 	t.Cleanup(func() { s.Close() })
 
