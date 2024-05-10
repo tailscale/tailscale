@@ -329,7 +329,7 @@ func TestStateMachine(t *testing.T) {
 			(n.Prefs != nil && n.Prefs.Valid()) ||
 			n.BrowseToURL != nil ||
 			n.LoginFinished != nil {
-			logf("%v\n\n", n)
+			logf("%+v\n\n", n)
 			notifies.put(n)
 		} else {
 			logf("(ignored) %v\n\n", n)
@@ -406,7 +406,7 @@ func TestStateMachine(t *testing.T) {
 	// the user needs to visit a login URL.
 	t.Logf("\n\nLogin (url response)")
 
-	notifies.expect(2)
+	notifies.expect(3)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		ControlURLSet: true,
 		Prefs: ipn.Prefs{
@@ -421,11 +421,14 @@ func TestStateMachine(t *testing.T) {
 		// ...but backend eats that notification, because the user
 		// didn't explicitly request interactive login yet, and
 		// we're already in NeedsLogin state.
-		nn := notifies.drain(2)
+		nn := notifies.drain(3)
 
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
+		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		c.Assert(nn[2].BrowseToURL, qt.IsNotNil)
+		c.Assert(url1, qt.Equals, *nn[2].BrowseToURL)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -434,13 +437,10 @@ func TestStateMachine(t *testing.T) {
 	// ask control to do anything. Instead backend will emit an event
 	// indicating that the UI should browse to the given URL.
 	t.Logf("\n\nLogin (interactive)")
-	notifies.expect(1)
+	notifies.expect(0)
 	b.StartLoginInteractive(context.Background())
 	{
-		nn := notifies.drain(1)
 		cc.assertCalls()
-		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
-		c.Assert(url1, qt.Equals, *nn[0].BrowseToURL)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -453,9 +453,8 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(0)
 	b.StartLoginInteractive(context.Background())
 	{
-		notifies.drain(0)
 		// backend asks control for another login sequence
-		cc.assertCalls("Login")
+		cc.assertCalls()
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 

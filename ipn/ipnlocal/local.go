@@ -259,10 +259,8 @@ type LocalBackend struct {
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
 	keyExpired       bool
-	authURL          string    // cleared on Notify
-	authURLSticky    string    // not cleared on Notify
+	authURL          string    // non-empty if not Running
 	authURLTime      time.Time // when the authURL was received from the control server
-	interact         bool
 	egg              bool
 	prevIfState      *netmon.State
 	peerAPIServer    *peerAPIServer // or nil
@@ -785,7 +783,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		s.Version = version.Long()
 		s.TUN = !b.sys.IsNetstack()
 		s.BackendState = b.state.String()
-		s.AuthURL = b.authURLSticky
+		s.AuthURL = b.authURL
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
 		}
@@ -1139,7 +1137,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	prefsChanged := false
 	prefs := b.pm.CurrentPrefs().AsStruct()
 	netMap := b.netMap
-	interact := b.interact
 
 	if prefs.ControlURL == "" {
 		// Once we get a message from the control plane, set
@@ -1158,7 +1155,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 	if st.URL != "" {
 		b.authURL = st.URL
-		b.authURLSticky = st.URL
 		b.authURLTime = b.clock.Now()
 	}
 	if (wasBlocked || b.seamlessRenewalEnabled()) && st.LoginFinished() {
@@ -1276,9 +1272,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
-		if interact {
-			b.popBrowserAuthNow()
-		}
+		b.popBrowserAuthNow()
 	}
 	b.stateMachine()
 	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
@@ -2281,8 +2275,8 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		if mask&ipn.NotifyInitialState != 0 {
 			ini.SessionID = sessionID
 			ini.State = ptr.To(b.state)
-			if b.state == ipn.NeedsLogin && b.authURLSticky != "" {
-				ini.BrowseToURL = ptr.To(b.authURLSticky)
+			if b.state == ipn.NeedsLogin && b.authURL != "" {
+				ini.BrowseToURL = ptr.To(b.authURL)
 			}
 		}
 		if mask&ipn.NotifyInitialPrefs != 0 {
@@ -2336,11 +2330,27 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	// TODO(marwan-at-work): streaming background logs?
 	defer b.DeleteForegroundSession(sessionID)
 
+	var lastURLPop string // to dup suppress URL popups
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case n, ok := <-ch:
+			// URLs flow into Notify.BrowseToURL via two means:
+			//    1. From MapResponse.PopBrowserURL, which already says they're dup
+			//       suppressed if identical, and that's done by the controlclient,
+			//       so this added later adds nothing.
+			//
+			//    2. From the controlclient auth routes, on register. This makes sure
+			//       we don't tell clients (mac, windows, android) to pop the same URL
+			//       multiple times.
+			if n != nil && n.BrowseToURL != nil {
+				if v := *n.BrowseToURL; v == lastURLPop {
+					n.BrowseToURL = nil
+				} else {
+					lastURLPop = v
+				}
+			}
 			if !ok || !fn(n) {
 				return
 			}
@@ -2476,8 +2486,6 @@ func (b *LocalBackend) sendFileNotify() {
 func (b *LocalBackend) popBrowserAuthNow() {
 	b.mu.Lock()
 	url := b.authURL
-	b.interact = false
-	b.authURL = "" // but NOT clearing authURLSticky
 	expired := b.keyExpired
 	b.mu.Unlock()
 
@@ -2805,7 +2813,6 @@ func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
 	if b.cc == nil {
 		panic("LocalBackend.assertClient: b.cc == nil")
 	}
-	b.interact = true
 	url := b.authURL
 	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
 	cc := b.cc
@@ -4347,7 +4354,6 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	authURL := b.authURL
 	if newState == ipn.Running {
 		b.authURL = ""
-		b.authURLSticky = ""
 		b.authURLTime = time.Time{}
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
@@ -4607,7 +4613,6 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	}
 
 	b.authURL = ""
-	b.authURLSticky = ""
 
 	// When we clear the control client, stop any outstanding netmap expiry
 	// timer; synthesizing a new netmap while we don't have a control
@@ -4653,7 +4658,6 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	}
 	b.keyExpired = false
 	b.authURL = ""
-	b.authURLSticky = ""
 	b.authURLTime = time.Time{}
 	b.activeLogin = ""
 	b.resetDialPlan()
