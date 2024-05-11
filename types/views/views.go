@@ -387,8 +387,8 @@ func (m *Map[K, V]) UnmarshalJSON(b []byte) error {
 // AsMap returns a shallow-clone of the underlying map.
 // If V is a pointer type, it is the caller's responsibility to make sure
 // the values are immutable.
-func (m *Map[K, V]) AsMap() map[K]V {
-	if m == nil {
+func (m Map[K, V]) AsMap() map[K]V {
+	if m.ж == nil {
 		return nil
 	}
 	return maps.Clone(m.ж)
