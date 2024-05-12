@@ -84,10 +84,6 @@ func runSSH(ctx context.Context, args []string) error {
 		// of failing. But for now:
 		return fmt.Errorf("no system 'ssh' command found: %w", err)
 	}
-	tailscaleBin, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	knownHostsFile, err := writeKnownHosts(st)
 	if err != nil {
 		return err
@@ -116,7 +112,9 @@ func runSSH(ctx context.Context, args []string) error {
 
 		argv = append(argv,
 			"-o", fmt.Sprintf("ProxyCommand %q %s nc %%h %%p",
-				tailscaleBin,
+				// os.Executable() would return the real running binary but in case tailscale is built with the ts_include_cli tag,
+				// we need to return the started symlink instead
+				os.Args[0],
 				socketArg,
 			))
 	}
