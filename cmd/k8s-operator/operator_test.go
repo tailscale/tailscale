@@ -1182,7 +1182,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		confFileHash:    "705e5ffd0bd5326237efdf542c850a65a54101284d5daa30775420fcc64d89c1",
+		confFileHash:    "e09bededa0379920141cbd0b0dbdf9b8b66545877f9e8397423f5ce3e1ba439e",
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)
 
@@ -1192,7 +1192,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 		mak.Set(&svc.Annotations, AnnotationHostname, "another-test")
 	})
 	o.hostname = "another-test"
-	o.confFileHash = "1a087f887825d2b75d3673c7c2b0131f8ec1f0b1cb761d33e236dd28350dfe23"
+	o.confFileHash = "5d754cf55463135ee34aa9821f2fd8483b53eb0570c3740c84a086304f427684"
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)
 }

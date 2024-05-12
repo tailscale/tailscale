@@ -16,14 +16,12 @@ import (
 	"net/http"
 
 	"tailscale.com/tsnet"
-	"tailscale.com/types/logger"
 )
 
 func main() {
 	flag.Parse()
 	s := &tsnet.Server{
 		Dir:      "./funnel-demo-config",
-		Logf:     logger.Discard,
 		Hostname: "fun",
 	}
 	defer s.Close()

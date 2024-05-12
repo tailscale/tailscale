@@ -81,6 +81,16 @@ type Handler struct {
 	staticRoot string
 }
 
+var cacheInvalidatingMethods = map[string]bool{
+	"PUT":       true,
+	"POST":      true,
+	"COPY":      true,
+	"MKCOL":     true,
+	"MOVE":      true,
+	"PROPPATCH": true,
+	"DELETE":    true,
+}
+
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "PROPFIND" {
@@ -88,11 +98,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != "GET" {
-		// If the user is performing a modification (e.g. PUT, MKDIR, etc),
+	_, shouldInvalidate := cacheInvalidatingMethods[r.Method]
+	if shouldInvalidate {
+		// If the user is performing a modification (e.g. PUT, MKDIR, etc.),
 		// we need to invalidate the StatCache to make sure we're not knowingly
 		// showing stale stats.
-		// TODO(oxtoacart): maybe be more selective about invalidating cache
+		// TODO(oxtoacart): maybe only invalidate specific paths
 		h.StatCache.invalidate()
 	}
 

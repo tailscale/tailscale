@@ -40,7 +40,6 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/lazy"
-	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
@@ -95,8 +94,8 @@ func main() {
 		ts := &tsnet.Server{
 			Hostname: "idp",
 		}
-		if !*flagVerbose {
-			ts.Logf = logger.Discard
+		if *flagVerbose {
+			ts.Logf = log.Printf
 		}
 		st, err = ts.Up(ctx)
 		if err != nil {

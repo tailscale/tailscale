@@ -6424,7 +6424,7 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	lastSuggestedExitNode := b.lastSuggestedExitNode
 	b.mu.Unlock()
 	if lastReport == nil || netMap == nil {
-		last, err := suggestLastExitNode(lastSuggestedExitNode)
+		last, err := lastSuggestedExitNode.asAPIType()
 		if err != nil {
 			return response, ErrCannotSuggestExitNode
 		}
@@ -6434,7 +6434,7 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	r := rand.New(rand.NewSource(seed))
 	res, err := suggestExitNode(lastReport, netMap, r)
 	if err != nil {
-		last, err := suggestLastExitNode(lastSuggestedExitNode)
+		last, err := lastSuggestedExitNode.asAPIType()
 		if err != nil {
 			return response, ErrCannotSuggestExitNode
 		}
@@ -6447,12 +6447,13 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	return res, err
 }
 
-// suggestLastExitNode formats a response with the last suggested exit node's ID and name.
+// asAPIType formats a response with the last suggested exit node's ID and name.
+// Returns error if there is no id or name.
 // Used as a fallback before returning a nil response and error.
-func suggestLastExitNode(lastSuggestedExitNode lastSuggestedExitNode) (res apitype.ExitNodeSuggestionResponse, err error) {
-	if lastSuggestedExitNode.id != "" && lastSuggestedExitNode.name != "" {
-		res.ID = lastSuggestedExitNode.id
-		res.Name = lastSuggestedExitNode.name
+func (n lastSuggestedExitNode) asAPIType() (res apitype.ExitNodeSuggestionResponse, _ error) {
+	if n.id != "" && n.name != "" {
+		res.ID = n.id
+		res.Name = n.name
 		return res, nil
 	}
 	return res, ErrUnableToSuggestLastExitNode

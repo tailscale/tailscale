@@ -3438,7 +3438,7 @@ func TestMinLatencyDERPregion(t *testing.T) {
 	}
 }
 
-func TestSuggestLastExitNode(t *testing.T) {
+func TestLastSuggestedExitNodeAsAPIType(t *testing.T) {
 	tests := []struct {
 		name                      string
 		lastSuggestedExitNode     lastSuggestedExitNode
@@ -3460,7 +3460,7 @@ func TestSuggestLastExitNode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := suggestLastExitNode(tt.lastSuggestedExitNode)
+			got, err := tt.lastSuggestedExitNode.asAPIType()
 			if got != tt.wantRes || err != tt.wantErr {
 				t.Errorf("got %v error %v, want %v error %v", got, err, tt.wantRes, tt.wantErr)
 			}
@@ -3472,7 +3472,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 	tests := []struct {
 		name                      string
 		lastSuggestedExitNode     lastSuggestedExitNode
-		report                    netcheck.Report
+		report                    *netcheck.Report
 		netMap                    netmap.NetworkMap
 		wantID                    tailcfg.StableNodeID
 		wantName                  string
@@ -3482,7 +3482,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		{
 			name:                  "nil netmap, returns last suggested exit node",
 			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
-			report: netcheck.Report{
+			report: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 0,
 					2: -1,
@@ -3518,7 +3518,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		{
 			name:                  "found better derp node, last suggested exit node updates",
 			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
-			report: netcheck.Report{
+			report: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 10,
 					2: 10,
@@ -3574,7 +3574,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		{
 			name:                  "found better mullvad node, last suggested exit node updates",
 			lastSuggestedExitNode: lastSuggestedExitNode{name: "San Jose", id: "3"},
-			report: netcheck.Report{
+			report: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
@@ -3645,7 +3645,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		{
 			name:                  "ErrNoPreferredDERP, use last suggested exit node",
 			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
-			report: netcheck.Report{
+			report: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 10,
 					2: 10,
@@ -3701,7 +3701,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		{
 			name:                  "ErrNoPreferredDERP, use last suggested exit node",
 			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
-			report: netcheck.Report{
+			report: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 10,
 					2: 10,
@@ -3756,7 +3756,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "unable to use last suggested exit node",
-			report: netcheck.Report{
+			report: &netcheck.Report{
 				RegionLatency: map[int]time.Duration{
 					1: 10,
 					2: 10,
@@ -3772,7 +3772,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		lb := newTestLocalBackend(t)
 		lb.lastSuggestedExitNode = tt.lastSuggestedExitNode
 		lb.netMap = &tt.netMap
-		lb.sys.MagicSock.Get().SetLastNetcheckReport(context.Background(), tt.report)
+		lb.sys.MagicSock.Get().SetLastNetcheckReportForTest(context.Background(), tt.report)
 		got, err := lb.SuggestExitNode()
 		if got.ID != tt.wantID {
 			t.Errorf("ID=%v, want=%v", got.ID, tt.wantID)
