@@ -56,6 +56,9 @@ for file in $(find $1 \( -name '*.go' -or -name '*.tsx' -or -name '*.ts' -not -n
             # Generated kube deepcopy funcs file starts with a Go build tag + an empty line
             header="$(head -5 $file | tail -n+3 )"
         ;;
+        $1/derp/xdp/bpf_bpfe*.go)
+            # Generated eBPF management code
+        ;;
         *)
            header="$(head -2 $file)"
         ;;
