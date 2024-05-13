@@ -138,9 +138,9 @@ func initKubeClient(root string) {
 	if err != nil {
 		log.Fatalf("Error creating kube client: %v", err)
 	}
-	if root != "/" {
-		// If we are running in a test, we need to set the URL to the
-		// httptest server.
+	if (root != "/") || os.Getenv("TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV") == "true" {
+		// Derive the API server address from the environment variables
+		// Used to set http server in tests, or optionally enabled by flag
 		kc.SetURL(fmt.Sprintf("https://%s:%s", os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")))
 	}
 }
