@@ -2884,7 +2884,7 @@ func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	res, err := h.b.SuggestExitNode()
+	res, err := h.b.HandleSuggestExitNode()
 	if err != nil {
 		writeErrorJSON(w, err)
 		return

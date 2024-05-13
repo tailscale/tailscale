@@ -1855,7 +1855,9 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			pm.prefs = test.prefs.View()
 			b.netMap = test.nm
 			b.pm = pm
-			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm)
+			b.mu.Lock()
+			changed := b.setExitNodeIDLocked(b.pm.prefs.AsStruct(), test.nm)
+			b.mu.Unlock()
 			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
 
 			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
@@ -2710,7 +2712,7 @@ func (b *LocalBackend) SetPrefsForTest(newp *ipn.Prefs) {
 func TestSuggestExitNode(t *testing.T) {
 	tests := []struct {
 		name         string
-		lastReport   netcheck.Report
+		latencyInfo  latencyInfo
 		netMap       netmap.NetworkMap
 		wantID       tailcfg.StableNodeID
 		wantName     string
@@ -2719,13 +2721,13 @@ func TestSuggestExitNode(t *testing.T) {
 	}{
 		{
 			name: "2 exit nodes in same region",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 10 * time.Millisecond,
 					2: 20 * time.Millisecond,
 					3: 30 * time.Millisecond,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -2773,13 +2775,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "2 derp based exit nodes, different regions, no latency measurements",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -2827,13 +2829,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "2 derp based exit nodes, different regions, same latency",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 10,
 					2: 10,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -2881,13 +2883,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "mullvad nodes, no derp based exit nodes",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -2955,13 +2957,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "mullvad nodes close to each other, different priorities",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -3029,13 +3031,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "mullvad nodes, no preferred derp region exit nodes",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -3110,13 +3112,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "no mullvad nodes; no derp nodes",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -3136,8 +3138,8 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "no preferred derp region",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: -1,
 					3: 0,
@@ -3162,13 +3164,13 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name: "derp exit node and mullvad exit node both with no suggest exit node attribute",
-			lastReport: netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+			latencyInfo: latencyInfo{
+				regionLatency: map[int]time.Duration{
 					1: 0,
 					2: 0,
 					3: 0,
 				},
-				PreferredDERP: 1,
+				preferredDERP: 1,
 			},
 			netMap: netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
@@ -3217,7 +3219,7 @@ func TestSuggestExitNode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := rand.New(rand.NewSource(100))
-			got, err := suggestExitNode(&tt.lastReport, &tt.netMap, r)
+			got, err := suggestExitNode(&tt.latencyInfo, &tt.netMap, r, false, ipn.PrefsView{})
 			if got.Name != tt.wantName {
 				t.Errorf("name=%v, want %v", got.Name, tt.wantName)
 			}
@@ -3391,46 +3393,41 @@ func TestSuggestExitNodeLongLatDistance(t *testing.T) {
 
 func TestMinLatencyDERPregion(t *testing.T) {
 	tests := []struct {
-		name       string
-		regions    []int
-		report     *netcheck.Report
-		wantRegion int
+		name          string
+		regions       []int
+		regionLatency map[int]time.Duration
+		wantRegion    int
 	}{
 		{
 			name:       "regions, no latency values",
 			regions:    []int{1, 2, 3},
 			wantRegion: 0,
-			report:     &netcheck.Report{},
 		},
 		{
 			name:       "regions, different latency values",
 			regions:    []int{1, 2, 3},
 			wantRegion: 2,
-			report: &netcheck.Report{
-				RegionLatency: map[int]time.Duration{
-					1: 10 * time.Millisecond,
-					2: 5 * time.Millisecond,
-					3: 30 * time.Millisecond,
-				},
+			regionLatency: map[int]time.Duration{
+				1: 10 * time.Millisecond,
+				2: 5 * time.Millisecond,
+				3: 30 * time.Millisecond,
 			},
 		},
 		{
 			name:       "regions, same values",
 			regions:    []int{1, 2, 3},
 			wantRegion: 1,
-			report: &netcheck.Report{
-				RegionLatency: map[int]time.Duration{
-					1: 10 * time.Millisecond,
-					2: 10 * time.Millisecond,
-					3: 10 * time.Millisecond,
-				},
+			regionLatency: map[int]time.Duration{
+				1: 10 * time.Millisecond,
+				2: 10 * time.Millisecond,
+				3: 10 * time.Millisecond,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := minLatencyDERPRegion(tt.regions, tt.report)
+			got := minLatencyDERPRegion(tt.regions, tt.regionLatency)
 			if got != tt.wantRegion {
 				t.Errorf("got region %v want region %v", got, tt.wantRegion)
 			}
@@ -3468,11 +3465,60 @@ func TestLastSuggestedExitNodeAsAPIType(t *testing.T) {
 	}
 }
 
+func TestProcessNetInfo(t *testing.T) {
+	tests := []struct {
+		name      string
+		netinfo   *tailcfg.NetInfo
+		wantInfo  latencyInfo
+		wantError error
+	}{
+		{
+			name: "valid net info",
+			netinfo: &tailcfg.NetInfo{
+				PreferredDERP: 1,
+				DERPLatency: map[string]float64{
+					"1-v4": 1.0,
+					"1-v6": 2.0,
+				},
+			},
+			wantInfo: latencyInfo{
+				preferredDERP: 1,
+				regionLatency: map[int]time.Duration{
+					1: time.Duration(1 * float64(time.Second)),
+				},
+			},
+		},
+		{
+			name: "no preferred derp",
+			netinfo: &tailcfg.NetInfo{
+				PreferredDERP: 0,
+			},
+			wantError: ErrNoPreferredDERP,
+		},
+		{
+			name:      "nil netinfo",
+			wantError: ErrCannotSuggestExitNode,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := processNetInfo(tt.netinfo)
+			if !reflect.DeepEqual(got, tt.wantInfo) {
+				t.Errorf("got %v want %v", got, tt.wantInfo)
+			}
+			if err != tt.wantError {
+				t.Errorf("got error %v want error %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestLocalBackendSuggestExitNode(t *testing.T) {
 	tests := []struct {
 		name                      string
 		lastSuggestedExitNode     lastSuggestedExitNode
 		report                    *netcheck.Report
+		netInfo                   *tailcfg.NetInfo
 		netMap                    netmap.NetworkMap
 		wantID                    tailcfg.StableNodeID
 		wantName                  string
@@ -3766,6 +3812,78 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 			},
 			wantErr: ErrCannotSuggestExitNode,
 		},
+		{
+			name: "use netinfo instead of last report",
+			netInfo: &tailcfg.NetInfo{
+				PreferredDERP: 1,
+				DERPLatency: map[string]float64{
+					"1-v4": 10,
+					"2-v6": 10,
+					"3-v4": 5,
+				},
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       1,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:2",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "foo",
+						Name:     "foo",
+						DERP:     "127.3.3.40:3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+						}),
+					}).View(),
+				},
+			},
+			wantID:                    "foo",
+			wantName:                  "foo",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "foo", id: "foo"},
+		},
+		{
+			name:    "invalid netinfo returns error",
+			netInfo: &tailcfg.NetInfo{},
+			wantErr: ErrCannotSuggestExitNode,
+		},
 	}
 
 	for _, tt := range tests {
@@ -3773,7 +3891,9 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		lb.lastSuggestedExitNode = tt.lastSuggestedExitNode
 		lb.netMap = &tt.netMap
 		lb.sys.MagicSock.Get().SetLastNetcheckReportForTest(context.Background(), tt.report)
-		got, err := lb.SuggestExitNode()
+		lb.mu.Lock()
+		got, err := lb.suggestExitNodeLocked(false, tt.netInfo)
+		lb.mu.Unlock()
 		if got.ID != tt.wantID {
 			t.Errorf("ID=%v, want=%v", got.ID, tt.wantID)
 		}

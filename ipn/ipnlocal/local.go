@@ -59,7 +59,6 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -333,6 +332,9 @@ type LocalBackend struct {
 	// lastSuggestedExitNode stores the last suggested exit node ID and name.
 	// lastSuggestedExitNode updates whenever the suggestion changes.
 	lastSuggestedExitNode lastSuggestedExitNode
+	// refreshReportForExitNodeSuggestion indicates whether to update the netcheck report for an exit node suggestion.
+	// Value is set to true when a rebind happens.
+	refreshReportForExitNodeSuggestion bool
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -1167,7 +1169,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		prefs.WantRunning = true
 		prefs.LoggedOut = false
 	}
-	if setExitNodeID(prefs, st.NetMap) {
+	if b.setExitNodeIDLocked(prefs, st.NetMap) {
 		prefsChanged = true
 	}
 	if applySysPolicy(prefs) {
@@ -1379,6 +1381,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		nm.Peers = make([]tailcfg.NodeView, 0, len(b.peers))
 		for _, p := range b.peers {
 			nm.Peers = append(nm.Peers, p)
+			if !*p.Online() && p.StableID() == b.pm.CurrentPrefs().ExitNodeID() {
+				if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr == "auto" {
+					prefs := b.pm.CurrentPrefs().AsStruct()
+					b.setExitNodeIDLocked(prefs, nm)
+					if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{}); err != nil {
+						b.logf("UpdateNetmapDelta: unable to set auto exit node; err=%v", err)
+					}
+				}
+			}
 		}
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 			return cmp.Compare(a.ID(), b.ID())
@@ -1438,13 +1449,29 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 	return true
 }
 
-// setExitNodeID updates prefs to reference an exit node by ID, rather
+// setExitNodeIDLocked updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
-func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+// b.mu must be held.
+func (b *LocalBackend) setExitNodeIDLocked(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
 	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
-		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
-		changed := prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
-		prefs.ExitNodeID = exitNodeID
+		var changed bool
+		if exitNodeIDStr == "auto" {
+			if b.lastSuggestedExitNode.id != "" {
+				changed = prefs.ExitNodeID != b.lastSuggestedExitNode.id || prefs.ExitNodeIP.IsValid()
+				prefs.ExitNodeID = b.lastSuggestedExitNode.id
+			} else {
+				res, err := b.suggestExitNodeLocked(true, nil)
+				if err != nil {
+					b.logf("setExitNodeIDLocked: Unable to suggest exit node. Error=%v", err)
+				}
+				changed = prefs.ExitNodeID != res.ID || prefs.ExitNodeIP.IsValid()
+				prefs.ExitNodeID = res.ID
+			}
+		} else {
+			exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
+			changed = prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
+			prefs.ExitNodeID = exitNodeID
+		}
 		prefs.ExitNodeIP = netip.Addr{}
 		return changed
 	}
@@ -3278,10 +3305,11 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	if oldp.Valid() {
 		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
-	// setExitNodeID returns whether it updated b.prefs, but
+	// setExitNodeIDLocked returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
-	setExitNodeID(newp, netMap)
+	b.setExitNodeIDLocked(newp, netMap)
+	//}
 	// applySysPolicy does likewise so we can also ignore its return value.
 	applySysPolicy(newp)
 	// We do this to avoid holding the lock while doing everything else.
@@ -4760,12 +4788,19 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
+	refresh := b.refreshReportForExitNodeSuggestion
+	b.refreshReportForExitNodeSuggestion = false
 	b.mu.Unlock()
 
 	if cc == nil {
 		return
 	}
 	cc.SetNetInfo(ni)
+	if refresh {
+		if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr == "auto" {
+			b.suggestExitNodeLocked(true, ni)
+		}
+	}
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
@@ -6400,20 +6435,68 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
 var ErrUnableToSuggestLastExitNode = errors.New("unable to suggest last exit node")
 
-// SuggestExitNode computes a suggestion based on the current netmap and last netcheck report. If
+// latencyInfo is used to extra needed information from a netcheck report or NetInfo to make an exit node suggestion.
+type latencyInfo struct {
+	preferredDERP int
+	regionLatency map[int]time.Duration
+}
+
+// processNetInfo extracts the needed values from tailcfg.NetInfo to make an exit node suggestion.
+func processNetInfo(netInfo *tailcfg.NetInfo) (info latencyInfo, err error) {
+	if netInfo == nil {
+		return info, ErrCannotSuggestExitNode
+	}
+	if netInfo.PreferredDERP == 0 {
+		return info, ErrNoPreferredDERP
+	}
+	info.preferredDERP = netInfo.PreferredDERP
+	info.regionLatency = make(map[int]time.Duration)
+	for region, duration := range netInfo.DERPLatency {
+		parsed := strings.Split(region, "-")
+		r, _ := strconv.Atoi(parsed[0])
+		val, ok := info.regionLatency[r]
+		converted := time.Duration(duration * float64(time.Second))
+		if !ok {
+			info.regionLatency[r] = converted
+		} else {
+			if converted < val {
+				info.regionLatency[r] = converted
+			}
+		}
+	}
+	return info, nil
+}
+
+// suggestExitNodeIDLocked computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
 // eligible for consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
 //
 // Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
 // Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
 // without a DERP home, we look for geographic proximity to this device's DERP home.
-func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
-	b.mu.Lock()
-	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
+// b.mu must be held.
+func (b *LocalBackend) suggestExitNodeLocked(isAuto bool, netInfo *tailcfg.NetInfo) (response apitype.ExitNodeSuggestionResponse, err error) {
+	var latency latencyInfo
+	if netInfo != nil {
+		latency, err = processNetInfo(netInfo)
+		if err != nil {
+			return response, err
+		}
+	} else {
+		lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
+		if lastReport == nil {
+			last, err := b.lastSuggestedExitNode.asAPIType()
+			if err != nil {
+				return response, ErrCannotSuggestExitNode
+			}
+			return last, err
+		}
+		latency.preferredDERP = lastReport.PreferredDERP
+		latency.regionLatency = lastReport.RegionLatency
+	}
 	netMap := b.netMap
 	lastSuggestedExitNode := b.lastSuggestedExitNode
-	b.mu.Unlock()
-	if lastReport == nil || netMap == nil {
+	if netMap == nil {
 		last, err := lastSuggestedExitNode.asAPIType()
 		if err != nil {
 			return response, ErrCannotSuggestExitNode
@@ -6422,7 +6505,7 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	}
 	seed := time.Now().UnixNano()
 	r := rand.New(rand.NewSource(seed))
-	res, err := suggestExitNode(lastReport, netMap, r)
+	res, err := suggestExitNode(&latency, netMap, r, isAuto, b.pm.prefs)
 	if err != nil {
 		last, err := lastSuggestedExitNode.asAPIType()
 		if err != nil {
@@ -6430,9 +6513,14 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 		}
 		return last, err
 	}
-	b.mu.Lock()
 	b.lastSuggestedExitNode.id = res.ID
 	b.lastSuggestedExitNode.name = res.Name
+	return res, err
+}
+
+func (b *LocalBackend) HandleSuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
+	b.mu.Lock()
+	res, err := b.suggestExitNodeLocked(false, nil)
 	b.mu.Unlock()
 	return res, err
 }
@@ -6449,13 +6537,29 @@ func (n lastSuggestedExitNode) asAPIType() (res apitype.ExitNodeSuggestionRespon
 	return res, ErrUnableToSuggestLastExitNode
 }
 
-func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand.Rand) (res apitype.ExitNodeSuggestionResponse, err error) {
-	if report.PreferredDERP == 0 {
+func suggestExitNode(latencyInfo *latencyInfo, netMap *netmap.NetworkMap, r *rand.Rand, isAuto bool, prefs ipn.PrefsView) (res apitype.ExitNodeSuggestionResponse, err error) {
+	if latencyInfo.preferredDERP == 0 {
 		return res, ErrNoPreferredDERP
 	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
 	for _, peer := range netMap.Peers {
-		if peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
+		var isCandidate bool
+		if isAuto {
+			isCandidate = peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode) && peer.CapMap().Has(tailcfg.NodeAttrAutoExitNode)
+			if peer.StableID() == prefs.ExitNodeID() && isCandidate {
+				if hi := peer.Hostinfo(); hi.Valid() {
+					if loc := hi.Location(); loc != nil {
+						res.Location = loc.View()
+					}
+				}
+				res.ID = peer.StableID()
+				res.Name = peer.Name()
+				return res, nil
+			}
+		} else {
+			isCandidate = peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode)
+		}
+		if isCandidate && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
 			candidates = append(candidates, peer)
 		}
 	}
@@ -6475,7 +6579,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	}
 
 	candidatesByRegion := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
-	var preferredDERP *tailcfg.DERPRegion = netMap.DERPMap.Regions[report.PreferredDERP]
+	var preferredDERP *tailcfg.DERPRegion = netMap.DERPMap.Regions[latencyInfo.preferredDERP]
 	var minDistance float64 = math.MaxFloat64
 	type nodeDistance struct {
 		nv       tailcfg.NodeView
@@ -6522,7 +6626,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	// First, try to select an exit node that has the closest DERP home, based on lastReport's DERP latency.
 	// If there are no latency values, it returns an arbitrary region
 	if len(candidatesByRegion) > 0 {
-		minRegion := minLatencyDERPRegion(xmaps.Keys(candidatesByRegion), report)
+		minRegion := minLatencyDERPRegion(xmaps.Keys(candidatesByRegion), latencyInfo.regionLatency)
 		if minRegion == 0 {
 			minRegion = randomRegion(xmaps.Keys(candidatesByRegion), r)
 		}
@@ -6605,14 +6709,14 @@ func randomRegion(regions []int, r *rand.Rand) int {
 
 // minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
 // If there are no latency values, it returns 0.
-func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
+func minLatencyDERPRegion(regions []int, regionLatency map[int]time.Duration) int {
 	min := slices.MinFunc(regions, func(i, j int) int {
 		const largeDuration time.Duration = math.MaxInt64
-		iLatency, ok := report.RegionLatency[i]
+		iLatency, ok := regionLatency[i]
 		if !ok {
 			iLatency = largeDuration
 		}
-		jLatency, ok := report.RegionLatency[j]
+		jLatency, ok := regionLatency[j]
 		if !ok {
 			jLatency = largeDuration
 		}
@@ -6621,7 +6725,7 @@ func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
 		}
 		return cmp.Compare(i, j)
 	})
-	latency, ok := report.RegionLatency[min]
+	latency, ok := regionLatency[min]
 	if !ok || latency == 0 {
 		return 0
 	} else {
