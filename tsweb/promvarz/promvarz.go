@@ -14,6 +14,13 @@ import (
 	"tailscale.com/tsweb/varz"
 )
 
+// OmitPromethusMetrics, if set to true, makes Handler not include native
+// Prometheus metrics.
+//
+// This is useful in some specific cases where the built-in Prometheus
+// collectors have poor performance characteristics.
+var OmitPromethusMetrics bool
+
 // Handler returns Prometheus metrics exported by our expvar converter
 // and the official Prometheus client.
 func Handler(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +35,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 // gatherNativePrometheusMetrics writes metrics from the default
 // metric registry in text format.
 func gatherNativePrometheusMetrics(w http.ResponseWriter) error {
+	if OmitPromethusMetrics {
+		return nil
+	}
 	enc := expfmt.NewEncoder(w, expfmt.FmtText)
 	mfs, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
