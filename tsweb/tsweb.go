@@ -12,6 +12,7 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/vizerror"
 )
 
@@ -233,6 +235,8 @@ func (o *BucketedStatsOptions) bucketForRequest(r *http.Request) string {
 	return NormalizedPath(r.URL.Path)
 }
 
+// HandlerOptions are options used by [StdHandler], containing both [LogOptions]
+// used by [LogHandler] and [ErrorOptions] used by [ErrorHandler].
 type HandlerOptions struct {
 	QuietLoggingIfSuccessful bool // if set, do not log successfully handled HTTP requests (200 and 304 status codes)
 	Logf                     logger.Logf
@@ -262,6 +266,87 @@ type HandlerOptions struct {
 	// OnCompletion is called inline when ServeHTTP is finished and gets
 	// useful data that the implementor can use for metrics. Optional.
 	OnCompletion OnCompletionFunc
+}
+
+// LogOptions are the options used by [LogHandler].
+// These options are a subset of [HandlerOptions].
+type LogOptions struct {
+	// Logf is used to log HTTP requests and responses.
+	Logf logger.Logf
+	// Now is a function giving the current time. Defaults to [time.Now].
+	Now func() time.Time
+
+	// QuietLoggingIfSuccessful suppresses logging of handled HTTP requests
+	// where the request's response status code is 200 or 304.
+	QuietLoggingIfSuccessful bool
+
+	// StatusCodeCounters maintains counters of status code classes.
+	// The keys are "1xx", "2xx", "3xx", "4xx", and "5xx".
+	// If nil, no counting is done.
+	StatusCodeCounters *expvar.Map
+	// StatusCodeCountersFull maintains counters of status codes.
+	// The keys are HTTP numeric response codes e.g. 200, 404, ...
+	// If nil, no counting is done.
+	StatusCodeCountersFull *expvar.Map
+	// BucketedStats computes and exposes statistics for each bucket based on
+	// the contained parameters. If nil, no counting is done.
+	BucketedStats *BucketedStatsOptions
+
+	// OnStart is called inline before ServeHTTP is called. Optional.
+	OnStart OnStartFunc
+	// OnCompletion is called inline when ServeHTTP is finished and gets
+	// useful data that the implementor can use for metrics. Optional.
+	OnCompletion OnCompletionFunc
+}
+
+func (o HandlerOptions) logOptions() LogOptions {
+	return LogOptions{
+		QuietLoggingIfSuccessful: o.QuietLoggingIfSuccessful,
+		Logf:                     o.Logf,
+		Now:                      o.Now,
+		StatusCodeCounters:       o.StatusCodeCounters,
+		StatusCodeCountersFull:   o.StatusCodeCountersFull,
+		BucketedStats:            o.BucketedStats,
+		OnStart:                  o.OnStart,
+		OnCompletion:             o.OnCompletion,
+	}
+}
+
+func (opts LogOptions) withDefaults() LogOptions {
+	if opts.Logf == nil {
+		opts.Logf = logger.Discard
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return opts
+}
+
+// ErrorOptions are options used by [ErrorHandler].
+type ErrorOptions struct {
+	// Logf is used to record unexpected behaviours when returning HTTPError but
+	// different error codes have already been written to the client.
+	Logf logger.Logf
+	// OnError is called if the handler returned a HTTPError. This
+	// is intended to be used to present pretty error pages if
+	// the user agent is determined to be a browser.
+	OnError ErrorHandlerFunc
+}
+
+func (opts ErrorOptions) withDefaults() ErrorOptions {
+	if opts.Logf == nil {
+		opts.Logf = logger.Discard
+	}
+	if opts.OnError == nil {
+		opts.OnError = writeHTTPError
+	}
+	return opts
+}
+
+func (opts HandlerOptions) errorOptions() ErrorOptions {
+	return ErrorOptions{
+		OnError: opts.OnError,
+	}
 }
 
 // ErrorHandlerFunc is called to present a error response.
@@ -294,25 +379,47 @@ func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Reques
 
 // StdHandler converts a ReturnHandler into a standard http.Handler.
 // Handled requests are logged using opts.Logf, as are any errors.
-// Errors are handled as specified by the Handler interface.
+// Errors are handled as specified by the ReturnHandler interface.
+// Short-hand for LogHandler(ErrorHandler()).
 func StdHandler(h ReturnHandler, opts HandlerOptions) http.Handler {
-	if opts.Now == nil {
-		opts.Now = time.Now
-	}
-	if opts.Logf == nil {
-		opts.Logf = logger.Discard
-	}
-	return retHandler{h, opts}
+	return LogHandler(ErrorHandler(h, opts.errorOptions()), opts.logOptions())
 }
 
-// retHandler is an http.Handler that wraps a Handler and handles errors.
-type retHandler struct {
-	rh   ReturnHandler
-	opts HandlerOptions
+// LogHandler returns an http.Handler that logs to opts.Logf.
+// It logs both successful and failing requests.
+// The log line includes the first error returned to [Handler] within.
+// The outer-most LogHandler(LogHandler(...)) does all of the logging.
+// Inner LogHandler instance do nothing.
+func LogHandler(h http.Handler, opts LogOptions) http.Handler {
+	return logHandler{h, opts.withDefaults()}
 }
 
-// ServeHTTP implements the http.Handler interface.
-func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ErrorHandler converts a [ReturnHandler] into a standard [http.Handler].
+// Errors are handled as specified by the [ReturnHandler.ServeHTTPReturn] method.
+func ErrorHandler(h ReturnHandler, opts ErrorOptions) http.Handler {
+	return errorHandler{h, opts.withDefaults()}
+}
+
+// errCallback is added to logHandler's request context so that errorHandler can
+// pass errors back up the stack to logHandler.
+var errCallback = ctxkey.New[func(string)]("tailscale.com/tsweb.errCallback", nil)
+
+// logHandler is a http.Handler which logs the HTTP request.
+// It injects an errCallback for errorHandler to augment the log message with
+// a specific error.
+type logHandler struct {
+	h    http.Handler
+	opts LogOptions
+}
+
+func (h logHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// If there's already a logHandler up the chain, skip this one.
+	ctx := r.Context()
+	if errCallback.Has(ctx) {
+		h.h.ServeHTTP(w, r)
+		return
+	}
+
 	msg := AccessLogRecord{
 		Time:       h.opts.Now(),
 		RemoteAddr: r.RemoteAddr,
@@ -347,16 +454,25 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fn(r, msg)
 	}
 
+	// Let errorHandler tell us what error it wrote to the client.
+	r = r.WithContext(errCallback.WithValue(ctx, func(e string) {
+		if ctx.Err() == context.Canceled {
+			msg.Code = 499 // nginx convention: Client Closed Request
+			msg.Err = context.Canceled.Error()
+			return
+		}
+		if msg.Err != "" {
+			return
+		}
+		msg.Err = e
+	}))
+
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
 
-	// In case the handler panics, we want to recover and continue logging the
-	// error before raising the panic again for the server to handle.
-	var (
-		didPanic bool
-		panicRes any
-	)
+	// Invoke the handler that we're logging.
+	var recovered any
 	defer func() {
-		if didPanic {
+		if recovered != nil {
 			// TODO(icio): When the panic below is eventually caught by
 			// http.Server, it cancels the inlight request and the "500 Internal
 			// Server Error" response we wrote to the client below is never
@@ -364,113 +480,41 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			panic(panicRes)
+			panic(recovered)
 		}
 	}()
-	runWithPanicProtection := func() (err error) {
+	func() {
 		defer func() {
-			if r := recover(); r != nil {
-				didPanic = true
-				panicRes = r
-				if r == http.ErrAbortHandler {
-					err = http.ErrAbortHandler
-				} else {
-					// Even if r is an error, do not wrap it as an error here as
-					// that would allow things like panic(vizerror.New("foo")) which
-					// is really hard to define the behavior of.
-					var stack [10000]byte
-					n := runtime.Stack(stack[:], false)
-					err = fmt.Errorf("panic: %v\n\n%s", r, stack[:n])
-				}
-			}
+			recovered = recover()
 		}()
-		return h.rh.ServeHTTPReturn(lw, r)
-	}
-	err := runWithPanicProtection()
+		h.h.ServeHTTP(lw, r)
+	}()
 
-	var hErr HTTPError
-	var hErrOK bool
-	if errors.As(err, &hErr) {
-		hErrOK = true
-	} else if vizErr, ok := vizerror.As(err); ok {
-		hErrOK = true
-		hErr = HTTPError{Msg: vizErr.Error()}
-	}
-
-	if lw.code == 0 && err == nil && !lw.hijacked {
-		// If the handler didn't write and didn't send a header, that still means 200.
-		// (See https://play.golang.org/p/4P7nx_Tap7p)
-		lw.code = 200
-	}
-
-	msg.Seconds = h.opts.Now().Sub(msg.Time).Seconds()
-	msg.Code = lw.code
+	// Complete our access log from the loggingResponseWriter.
 	msg.Bytes = lw.bytes
-
+	msg.Seconds = h.opts.Now().Sub(msg.Time).Seconds()
 	switch {
 	case lw.hijacked:
 		// Connection no longer belongs to us, just log that we
 		// switched protocols away from HTTP.
-		if msg.Code == 0 {
-			msg.Code = http.StatusSwitchingProtocols
-		}
-	case err != nil && r.Context().Err() == context.Canceled:
-		msg.Code = 499 // nginx convention: Client Closed Request
-		msg.Err = context.Canceled.Error()
-	case hErrOK:
-		// Handler asked us to send an error. Do so, if we haven't
-		// already sent a response.
-		msg.Err = hErr.Msg
-		if hErr.Err != nil {
-			if msg.Err == "" {
-				msg.Err = hErr.Err.Error()
-			} else {
-				msg.Err = msg.Err + ": " + hErr.Err.Error()
-			}
-		}
-		if lw.code != 0 {
-			h.opts.Logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
-			break
-		}
-		msg.Code = hErr.Code
-		if msg.Code == 0 {
-			h.opts.Logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
-			msg.Code = http.StatusInternalServerError
-		}
-		if h.opts.OnError != nil {
-			h.opts.OnError(lw, r, hErr)
-		} else {
-			// Default headers set by http.Error.
-			lw.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			lw.Header().Set("X-Content-Type-Options", "nosniff")
-			for k, vs := range hErr.Header {
-				lw.Header()[k] = vs
-			}
-			lw.WriteHeader(msg.Code)
-			fmt.Fprintln(lw, hErr.Msg)
-			if msg.RequestID != "" {
-				fmt.Fprintln(lw, msg.RequestID)
-			}
-		}
-	case err != nil:
-		const internalServerError = "internal server error"
-		errorMessage := internalServerError
-		if msg.RequestID != "" {
-			errorMessage += "\n" + string(msg.RequestID)
-		}
-		// Handler returned a generic error. Serve an internal server
-		// error, if necessary.
-		msg.Err = err.Error()
-		if lw.code == 0 {
-			msg.Code = http.StatusInternalServerError
-			http.Error(lw, errorMessage, msg.Code)
-		}
+		msg.Code = http.StatusSwitchingProtocols
+	case lw.code == 0:
+		// If the handler didn't write and didn't send a header, that still means 200.
+		// (See https://play.golang.org/p/4P7nx_Tap7p)
+		msg.Code = 200
+	default:
+		msg.Code = lw.code
+	}
+
+	if !h.opts.QuietLoggingIfSuccessful || (msg.Code != http.StatusOK && msg.Code != http.StatusNotModified) {
+		h.opts.Logf("%s", msg)
 	}
 
 	if h.opts.OnCompletion != nil {
 		h.opts.OnCompletion(r, msg)
 	}
 
+	// Closing metrics.
 	if bs := h.opts.BucketedStats; bs != nil && bs.Finished != nil {
 		// Only increment metrics for buckets that result in good HTTP statuses
 		// or when we know the start was already counted.
@@ -487,15 +531,9 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			bs.Finished.Add(bucket, 1)
 		}
 	}
-
-	if !h.opts.QuietLoggingIfSuccessful || (msg.Code != http.StatusOK && msg.Code != http.StatusNotModified) {
-		h.opts.Logf("%s", msg)
-	}
-
 	if h.opts.StatusCodeCounters != nil {
 		h.opts.StatusCodeCounters.Add(responseCodeString(msg.Code/100), 1)
 	}
-
 	if h.opts.StatusCodeCountersFull != nil {
 		h.opts.StatusCodeCountersFull.Add(responseCodeString(msg.Code), 1)
 	}
@@ -577,6 +615,130 @@ func (l loggingResponseWriter) Flush() {
 		return
 	}
 	f.Flush()
+}
+
+// errorHandler is an http.Handler that wraps a ReturnHandler to render the
+// returned errors to the client and pass them back to any logHandlers.
+type errorHandler struct {
+	rh   ReturnHandler
+	opts ErrorOptions
+}
+
+// ServeHTTP implements the http.Handler interface.
+func (h errorHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logf := h.opts.Logf
+	if l := logger.LogfKey.Value(r.Context()); l != nil {
+		logf = l
+	}
+
+	// Keep track of whether a response gets written.
+	lw, ok := w.(*loggingResponseWriter)
+	if !ok {
+		lw = &loggingResponseWriter{
+			ResponseWriter: w,
+			logf:           logf,
+		}
+	}
+
+	// In case the handler panics, we want to recover and continue logging the
+	// error before raising the panic again for the server to handle.
+	var panicRes any
+	defer func() {
+		if panicRes != nil {
+			panic(panicRes)
+		}
+	}()
+	err := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				panicRes = r
+				if r == http.ErrAbortHandler {
+					err = http.ErrAbortHandler
+				} else {
+					// Even if r is an error, do not wrap it as an error here as
+					// that would allow things like panic(vizerror.New("foo"))
+					// which is really hard to define the behavior of.
+					var stack [10000]byte
+					n := runtime.Stack(stack[:], false)
+					err = fmt.Errorf("panic: %v\n\n%s", r, stack[:n])
+				}
+			}
+		}()
+		return h.rh.ServeHTTPReturn(lw, r)
+	}()
+	if err == nil {
+		return
+	}
+
+	// Extract a presentable, loggable error.
+	var hOK bool
+	var hErr HTTPError
+	if errors.As(err, &hErr) {
+		hOK = true
+		if hErr.Code == 0 {
+			logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
+			hErr.Code = http.StatusInternalServerError
+		}
+	} else if v, ok := vizerror.As(err); ok {
+		hErr = Error(http.StatusInternalServerError, v.Error(), nil)
+	} else {
+		// Omit the friendly message so HTTP logs show the bare error that was
+		// returned and we know it's not a HTTPError.
+		hErr = Error(http.StatusInternalServerError, "", err)
+	}
+
+	// Tell the logger what error we wrote back to the client.
+	if pb := errCallback.Value(r.Context()); pb != nil {
+		if hErr.Msg != "" && hErr.Err != nil {
+			pb(hErr.Msg + ": " + hErr.Err.Error())
+		} else if hErr.Err != nil {
+			pb(hErr.Err.Error())
+		} else if hErr.Msg != "" {
+			pb(hErr.Msg)
+		}
+	}
+
+	if lw.code != 0 {
+		if hOK {
+			logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
+		}
+		return
+	}
+
+	// Set a default error message from the status code. Do this after we pass
+	// the error back to the logger so that `return errors.New("oh")` logs as
+	// `"err": "oh"`, not `"err": "internal server error: oh"`.
+	if hErr.Msg == "" {
+		hErr.Msg = http.StatusText(hErr.Code)
+	}
+
+	h.opts.OnError(w, r, hErr)
+}
+
+// writeHTTPError is the default error response formatter.
+func writeHTTPError(w http.ResponseWriter, r *http.Request, hErr HTTPError) {
+	// Default headers set by http.Error.
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+
+	// Custom headers from the error.
+	for k, vs := range hErr.Header {
+		h[k] = vs
+	}
+
+	// Write the msg back to the user.
+	w.WriteHeader(hErr.Code)
+	fmt.Fprint(w, hErr.Msg)
+
+	// If it's a plaintext message, add line breaks and RequestID.
+	if strings.HasPrefix(h.Get("Content-Type"), "text/plain") {
+		io.WriteString(w, "\n")
+		if id := RequestIDFromContext(r.Context()); id != "" {
+			io.WriteString(w, id.String())
+			io.WriteString(w, "\n")
+		}
+	}
 }
 
 // HTTPError is an error with embedded HTTP response information.
