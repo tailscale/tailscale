@@ -104,12 +104,19 @@ func getTailscaleSubnetRouteMark() []byte {
 	return []byte{0x00, 0x04, 0x00, 0x00}
 }
 
+// checkIPv6ForTest can be set in tests.
+var checkIPv6ForTest func(logger.Logf) error
+
 // checkIPv6 checks whether the system appears to have a working IPv6
 // network stack. It returns an error explaining what looks wrong or
 // missing.  It does not check that IPv6 is currently functional or
 // that there's a global address, just that the system would support
 // IPv6 if it were on an IPv6 network.
 func CheckIPv6(logf logger.Logf) error {
+	if f := checkIPv6ForTest; f != nil {
+		return f(logf)
+	}
+
 	_, err := os.Stat("/proc/sys/net/ipv6")
 	if os.IsNotExist(err) {
 		return err
