@@ -20,6 +20,7 @@ import (
 	"github.com/mdlayher/netlink"
 	"github.com/vishvananda/netns"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 )
 
@@ -955,11 +956,11 @@ func TestPickFirewallModeFromInstalledRules(t *testing.T) {
 
 func newFakeNftablesRunnerWithConn(t *testing.T, conn *nftables.Conn, hasIPv6 bool) *nftablesRunner {
 	t.Helper()
-	CheckIPv6 = func(logger.Logf) error {
-		if hasIPv6 {
-			return nil
-		}
-		return errors.New("test: no IPv6")
+	if !hasIPv6 {
+		tstest.Replace(t, &checkIPv6ForTest, func(logger.Logf) error {
+			return errors.New("test: no IPv6")
+		})
+
 	}
 	return newNfTablesRunnerWithConn(t.Logf, conn)
 }
