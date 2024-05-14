@@ -915,8 +915,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
 
-		pc.snat(p)
-
 		if m := t.destIPActivity.Load(); m != nil {
 			if fn := m[p.Dst.Addr()]; fn != nil {
 				fn()
@@ -932,6 +930,10 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 				continue
 			}
 		}
+
+		// Make sure to do SNAT after filtering, so that any flow tracking in
+		// the filter sees the original source address. See #12133.
+		pc.snat(p)
 		n := copy(buffs[buffsPos][offset:], p.Buffer())
 		if n != len(data)-res.dataOffset {
 			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
