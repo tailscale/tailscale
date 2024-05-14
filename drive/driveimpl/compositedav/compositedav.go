@@ -93,7 +93,11 @@ var cacheInvalidatingMethods = map[string]bool{
 
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "PROPFIND" {
+	switch r.Method {
+	case "LOCK", "UNLOCK":
+		http.Error(w, "locking is not currently supported", http.StatusMethodNotAllowed)
+		return
+	case "PROPFIND":
 		h.handlePROPFIND(w, r)
 		return
 	}

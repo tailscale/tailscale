@@ -145,6 +145,40 @@ func TestSecretTokenAuth(t *testing.T) {
 	}
 }
 
+func TestLocking(t *testing.T) {
+	s := newSystem(t)
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
+		s.local.l.Addr(),
+		url.PathEscape(domain),
+		url.PathEscape(remote1),
+		url.PathEscape(share11),
+		url.PathEscape(file111))
+
+	for _, method := range []string{"LOCK", "UNLOCK"} {
+		req, err := http.NewRequest(method, u, strings.NewReader(lockBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("expected %s to fail with 405, but got status %d", method, resp.StatusCode)
+		}
+	}
+}
+
 type local struct {
 	l  net.Listener
 	fs *FileSystemForLocal
@@ -486,3 +520,9 @@ func (a *noopAuthenticator) Clone() gowebdav.Authenticator {
 func (a *noopAuthenticator) Close() error {
 	return nil
 }
+
+const lockBody = `<?xml version="1.0" encoding="utf-8" ?> 
+<D:lockinfo xmlns:D='DAV:'> 
+  <D:lockscope><D:exclusive/></D:lockscope> 
+  <D:locktype><D:write/></D:locktype>
+</D:lockinfo>`
