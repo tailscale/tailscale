@@ -53,7 +53,7 @@ var (
 	versionFlag = flag.Bool("version", false, "print version and exit")
 	addr        = flag.String("a", ":443", "server HTTP/HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces. Serves HTTPS if the port is 443 and/or -certmode is manual, otherwise HTTP.")
 	httpPort    = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable. The listener is bound to the same IP (if any) as specified in the -a flag.")
-	stunPort    = flag.Int("stun-port", 3478, "The UDP port on which to serve STUN. The listener is bound to the same IP (if any) as specified in the -a flag.")
+	stunPort    = flag.String("stun-port", ":3478", "The UDP address/port on which to serve STUN. If a bare port is provided (not \":port\"), the listener is bound to the same IP (if any) as specified in the -a flag.")
 	configPath  = flag.String("c", "", "config file path")
 	certMode    = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir     = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
@@ -160,8 +160,13 @@ func main() {
 	}
 
 	if *runSTUN {
+		stunListenHost, stunListenPort, err := net.SplitHostPort(*stunPort)
+		if err != nil {
+			stunListenHost = listenHost
+			stunListenPort = *stunPort
+		}
 		ss := stunserver.New(ctx)
-		go ss.ListenAndServe(net.JoinHostPort(listenHost, fmt.Sprint(*stunPort)))
+		go ss.ListenAndServe(net.JoinHostPort(stunListenHost, stunListenPort))
 	}
 
 	cfg := loadConfig()
