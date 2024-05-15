@@ -93,8 +93,15 @@ var cacheInvalidatingMethods = map[string]bool{
 
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "PROPFIND" {
-		h.handlePROPFIND(w, r)
+	pathComponents := shared.CleanAndSplit(r.URL.Path)
+	mpl := h.maxPathLength(r)
+
+	switch r.Method {
+	case "PROPFIND":
+		h.handlePROPFIND(w, r, pathComponents, mpl)
+		return
+	case "LOCK":
+		h.handleLOCK(w, r, pathComponents, mpl)
 		return
 	}
 
@@ -106,9 +113,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// TODO(oxtoacart): maybe only invalidate specific paths
 		h.StatCache.invalidate()
 	}
-
-	mpl := h.maxPathLength(r)
-	pathComponents := shared.CleanAndSplit(r.URL.Path)
 
 	if len(pathComponents) >= mpl {
 		h.delegate(mpl, pathComponents[mpl-1:], w, r)
@@ -141,6 +145,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 
 // delegate sends the request to the Child WebDAV server.
 func (h *Handler) delegate(mpl int, pathComponents []string, w http.ResponseWriter, r *http.Request) {
+	rewriteIfHeader(r, pathComponents, mpl)
+
 	dest := r.Header.Get("Destination")
 	if dest != "" {
 		// Rewrite destination header

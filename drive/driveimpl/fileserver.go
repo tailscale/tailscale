@@ -151,6 +151,9 @@ func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+	// WebDAV's locking code compares the lock resources with the request's
+	// host header, set this to empty to avoid mismatches.
+	r.Host = ""
 	h.ServeHTTP(w, r)
 }
 
