@@ -45,10 +45,15 @@ func main() {
 		siteID       = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
 		v4Prefixes   = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
 		verboseTSNet = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
+		printULA     = fs.Bool("print-ula", false, "print the ULA prefix and exit")
 	)
 	err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_APPC"))
 	if err != nil {
 		log.Fatal("ff.Parse")
+	}
+	if *printULA {
+		fmt.Println(ula(uint16(*siteID)))
+		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
