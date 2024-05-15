@@ -2274,6 +2274,10 @@ const (
 	// depending on the destination address and the configured routes. When present, it also makes
 	// the DNS forwarder use UserDial instead of SystemDial when dialing resolvers.
 	NodeAttrUserDialUseRoutes NodeCapability = "user-dial-routes"
+
+	// NodeAttrDNSFallbackToSystemResolver makes the DNS forwarder fall
+	// back to the system resolver if all configured DNS servers fail.
+	NodeAttrDNSFallbackToSystemResolver NodeCapability = "dns-fallback-to-system-resolver"
 )
 
 // SetDNSRequest is a request to add a DNS record.

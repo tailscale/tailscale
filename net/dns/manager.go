@@ -94,6 +94,11 @@ func (m *Manager) Set(cfg Config) error {
 		ocfg.WriteToBufioWriter(w)
 	}))
 
+	if cfg.AllowFallback && len(rcfg.Routes["."]) > 0 {
+		// TODO: this isn't exactly right
+		rcfg.FallbackResolvers = slices.Clone(rcfg.Routes["."])
+	}
+
 	if err := m.resolver.SetConfig(rcfg); err != nil {
 		return err
 	}

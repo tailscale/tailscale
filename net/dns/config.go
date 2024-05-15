@@ -44,6 +44,8 @@ type Config struct {
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool
+	// AllowFallback TODO
+	AllowFallback bool
 }
 
 func (c *Config) serviceIP() netip.Addr {

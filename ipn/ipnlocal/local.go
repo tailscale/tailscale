@@ -3627,7 +3627,14 @@ func (b *LocalBackend) authReconfig() {
 	disableSubnetsIfPAC := nm.HasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	userDialUseRoutes := nm.HasCap(tailcfg.NodeAttrUserDialUseRoutes)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
-	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
+	haveCaptivePortal := func() bool {
+		lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
+		if lastReport == nil {
+			return false
+		}
+		return lastReport.CaptivePortal.EqualBool(true)
+	}
+	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS(), haveCaptivePortal)
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
@@ -3725,18 +3732,31 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 	return false
 }
 
+var dnsAllowFallback = envknob.RegisterBool("TS_DNS_ALLOW_FALLBACK")
+
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
 // prefs, client OS version, and cloud hosting environment.
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, logf logger.Logf, versionOS string) *dns.Config {
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, logf logger.Logf, versionOS string, haveCaptivePortal func() bool) *dns.Config {
 	if nm == nil {
 		return nil
 	}
 	dcfg := &dns.Config{
 		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netip.Addr{},
+	}
+
+	// TODO(andrew-d): this isn't enough; we should probably healthcheck
+	// the resolver and decide based on that, instead of just using the
+	// netcheck 'captive portal' bool.
+	if dnsAllowFallback() {
+		logf("[v1] dnsConfigForNetmap: allowing system resolver fallback due to envknob")
+		dcfg.AllowFallback = true
+	} else if nm.HasCap(tailcfg.NodeAttrDNSFallbackToSystemResolver) && haveCaptivePortal() {
+		logf("[v1] dnsConfigForNetmap: allowing system resolver fallback due to nodeAttr and captive portal")
+		dcfg.AllowFallback = true
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.

@@ -64,6 +64,7 @@ type packet struct {
 // If the query is an exact match for an entry in LocalHosts, return that.
 // Else if the query suffix matches an entry in LocalDomains, return NXDOMAIN.
 // Else forward the query to the most specific matching entry in Routes.
+// Else if any FallbackResolvers are set, forward the query to them.
 // Else return SERVFAIL.
 type Config struct {
 	// Routes is a map of DNS name suffix to the resolvers to use for
@@ -76,6 +77,9 @@ type Config struct {
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
+	// FallbackResolvers is a list of resolvers to use if the resolver(s)
+	// in Routes do not respond. It can be empty.
+	FallbackResolvers []*dnstype.Resolver
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -191,10 +195,11 @@ type Resolver struct {
 	closed chan struct{}
 
 	// mu guards the following fields from being updated while used.
-	mu           sync.Mutex
-	localDomains []dnsname.FQDN
-	hostToIP     map[dnsname.FQDN][]netip.Addr
-	ipToHost     map[netip.Addr]dnsname.FQDN
+	mu                sync.Mutex
+	localDomains      []dnsname.FQDN
+	hostToIP          map[dnsname.FQDN][]netip.Addr
+	ipToHost          map[netip.Addr]dnsname.FQDN
+	fallbackResolvers []*dnstype.Resolver
 }
 
 type ForwardLinkSelector interface {
@@ -247,6 +252,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
+	r.fallbackResolvers = cfg.FallbackResolvers
 	return nil
 }
 
@@ -286,6 +292,13 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		defer cancel()
 		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses)
 		if err != nil {
+			// If we have any fallbacks, try them.
+			// TODO(andrew-d): don't use a new context?
+			if resp, err := r.resolveWithFallbacks(context.Background(), bs, family, from); err == nil {
+				r.logf("resolved with fallback resolver")
+				return resp, nil
+			}
+
 			select {
 			// Best effort: use any error response sent by forwardWithDestChan.
 			// This is present in some errors paths, such as when all upstream
@@ -300,6 +313,35 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	}
 
 	return out, err
+}
+
+func (r *Resolver) resolveWithFallbacks(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
+	r.mu.Lock()
+	fallbacks := r.fallbackResolvers
+	r.mu.Unlock()
+
+	r.logf("resolveWithFallbacks: have %d fallback resolvers", len(fallbacks))
+	if len(fallbacks) == 0 {
+		return nil, errNotOurName // any error is fine here
+	}
+
+	var resolvers []resolverAndDelay
+	for _, resolver := range fallbacks {
+		resolvers = append(resolvers, resolverAndDelay{
+			name: resolver,
+		})
+	}
+
+	responses := make(chan packet, 1)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second) // TODO?
+	defer close(responses)
+	defer cancel()
+
+	err := r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses, resolvers...)
+	if err == nil {
+		return (<-responses).bs, nil
+	}
+	return nil, errNotOurName // any error is fine here
 }
 
 // parseExitNodeQuery parses a DNS request packet.
