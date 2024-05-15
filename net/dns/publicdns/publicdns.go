@@ -125,8 +125,8 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 		return []netip.Addr{
 			controlDv4One,
 			controlDv4Two,
-			controlDv6Gen(nextDNSv6RangeA.Addr(), pathStr),
-			controlDv6Gen(nextDNSv6RangeB.Addr(), pathStr),
+			controlDv6Gen(controlDv6RangeA.Addr(), pathStr),
+			controlDv6Gen(controlDv6RangeB.Addr(), pathStr),
 		}
 	}
 	return nil
