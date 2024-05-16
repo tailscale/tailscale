@@ -115,6 +115,9 @@ type Report struct {
 	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
 	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
 
+	GlobalV4Counters map[string]int // keyed by IP:port, number of times observed
+	GlobalV6Counters map[string]int // keyed by [IP]:port, number of times observed
+
 	GlobalV4 string // ip:port of global IPv4
 	GlobalV6 string // [ip]:port of global IPv6
 
@@ -123,6 +126,44 @@ type Report struct {
 	CaptivePortal opt.Bool
 
 	// TODO: update Clone when adding new fields
+}
+
+// GetGlobalAddrs returns the v4 and v6 global addresses observed during the
+// netcheck, which includes the best latency endpoint first, followed by any
+// other endpoints that were observed repeatedly. It excludes singular endpoints
+// that are likely only the result of a hard NAT.
+func (r *Report) GetGlobalAddrs() ([]netip.AddrPort, []netip.AddrPort) {
+	var v4, v6 []netip.AddrPort
+	// Always add the best latency entries first.
+	if r.GlobalV4 != "" {
+		v4 = append(v4, netip.MustParseAddrPort(r.GlobalV4))
+	}
+	if r.GlobalV6 != "" {
+		v6 = append(v6, netip.MustParseAddrPort(r.GlobalV6))
+	}
+	// Add any other entries for which we have multiple observations.
+	// This covers a case of bad NATs that start to provide new mappings for new
+	// STUN sessions mid-expiration, even while a live mapping for the best
+	// latency endpoint still exists. This has been observed on some Palo Alto
+	// Networks firewalls, wherein new traffic to the old endpoint will not
+	// succeed, but new traffic to the newly discovered endpoints does succeed.
+	for k, count := range r.GlobalV4Counters {
+		if k == r.GlobalV4 {
+			continue
+		}
+		if count > 1 {
+			v4 = append(v4, netip.MustParseAddrPort(k))
+		}
+	}
+	for k, count := range r.GlobalV6Counters {
+		if k == r.GlobalV6 {
+			continue
+		}
+		if count > 1 {
+			v6 = append(v6, netip.MustParseAddrPort(k))
+		}
+	}
+	return v4, v6
 }
 
 // AnyPortMappingChecked reports whether any of UPnP, PMP, or PCP are non-empty.
@@ -675,11 +716,13 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort
 		updateLatency(ret.RegionV6Latency, node.RegionID, d)
 		ret.IPv6 = true
 		ret.GlobalV6 = ipPortStr
+		mak.Set(&ret.GlobalV6Counters, ipPortStr, ret.GlobalV6Counters[ipPortStr]+1)
 		// TODO: track MappingVariesByDestIP for IPv6
 		// too? Would be sad if so, but who knows.
 	case ipp.Addr().Is4():
 		updateLatency(ret.RegionV4Latency, node.RegionID, d)
 		ret.IPv4 = true
+		mak.Set(&ret.GlobalV4Counters, ipPortStr, ret.GlobalV4Counters[ipPortStr]+1)
 		if rs.gotEP4 == "" {
 			rs.gotEP4 = ipPortStr
 			ret.GlobalV4 = ipPortStr
