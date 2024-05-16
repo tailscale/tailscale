@@ -77,7 +77,7 @@ func Long() string {
 		if !bi.valid {
 			return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
 		}
-		return fmt.Sprintf("%s-dev%s-t%s%s", strings.TrimSpace(tailscaleroot.VersionDotTxt), bi.CommitDate, bi.commitAbbrev(), dirtyString())
+		return fmt.Sprintf("%s-dev%s-t%s%s", strings.TrimSpace(tailscaleroot.VersionDotTxt), bi.commitDate, bi.commitAbbrev(), dirtyString())
 	})
 }
 
@@ -97,58 +97,47 @@ func Short() string {
 		if !bi.valid {
 			return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
 		}
-		return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + bi.CommitDate
+		return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + bi.commitDate
 	})
 }
 
-// Info returns information about the version embedded in the binary.
-// If the version information is not present, the second return value is false.
-func Info() (EmbeddedInfo, bool) {
-	ei := getEmbeddedInfo()
-	if !ei.valid {
-		return EmbeddedInfo{}, false
-	}
-	return ei, true
-}
-
-// EmbeddedInfo contains information about the version embedded in the binary.
-type EmbeddedInfo struct {
+type embeddedInfo struct {
 	valid      bool
-	Commit     string
-	CommitDate string
-	Dirty      bool
+	commit     string
+	commitDate string
+	dirty      bool
 }
 
-func (i EmbeddedInfo) commitAbbrev() string {
-	if len(i.Commit) >= 9 {
-		return i.Commit[:9]
+func (i embeddedInfo) commitAbbrev() string {
+	if len(i.commit) >= 9 {
+		return i.commit[:9]
 	}
-	return i.Commit
+	return i.commit
 }
 
-var getEmbeddedInfo = lazy.SyncFunc(func() EmbeddedInfo {
+var getEmbeddedInfo = lazy.SyncFunc(func() embeddedInfo {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return EmbeddedInfo{}
+		return embeddedInfo{}
 	}
-	ret := EmbeddedInfo{valid: true}
+	ret := embeddedInfo{valid: true}
 	for _, s := range bi.Settings {
 		switch s.Key {
 		case "vcs.revision":
-			ret.Commit = s.Value
+			ret.commit = s.Value
 		case "vcs.time":
 			if len(s.Value) >= len("yyyy-mm-dd") {
-				ret.CommitDate = s.Value[:len("yyyy-mm-dd")]
-				ret.CommitDate = strings.ReplaceAll(ret.CommitDate, "-", "")
+				ret.commitDate = s.Value[:len("yyyy-mm-dd")]
+				ret.commitDate = strings.ReplaceAll(ret.commitDate, "-", "")
 			}
 		case "vcs.modified":
-			ret.Dirty = s.Value == "true"
+			ret.dirty = s.Value == "true"
 		}
 	}
-	if ret.Commit == "" || ret.CommitDate == "" {
+	if ret.commit == "" || ret.commitDate == "" {
 		// Build info is present in the binary, but has no useful data. Act as
 		// if it's missing.
-		return EmbeddedInfo{}
+		return embeddedInfo{}
 	}
 	return ret
 })
@@ -157,14 +146,14 @@ func gitCommit() string {
 	if gitCommitStamp != "" {
 		return gitCommitStamp
 	}
-	return getEmbeddedInfo().Commit
+	return getEmbeddedInfo().commit
 }
 
 func gitDirty() bool {
 	if gitDirtyStamp {
 		return true
 	}
-	return getEmbeddedInfo().Dirty
+	return getEmbeddedInfo().dirty
 }
 
 func dirtyString() string {
