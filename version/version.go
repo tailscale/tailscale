@@ -105,6 +105,7 @@ type embeddedInfo struct {
 	valid      bool
 	commit     string
 	commitDate string
+	commitTime string
 	dirty      bool
 }
 
@@ -126,6 +127,7 @@ var getEmbeddedInfo = lazy.SyncFunc(func() embeddedInfo {
 		case "vcs.revision":
 			ret.commit = s.Value
 		case "vcs.time":
+			ret.commitTime = s.Value
 			if len(s.Value) >= len("yyyy-mm-dd") {
 				ret.commitDate = s.Value[:len("yyyy-mm-dd")]
 				ret.commitDate = strings.ReplaceAll(ret.commitDate, "-", "")
