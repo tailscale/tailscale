@@ -127,13 +127,13 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 
 	printf("\nReport:\n")
 	printf("\t* UDP: %v\n", report.UDP)
-	if report.GlobalV4 != "" {
-		printf("\t* IPv4: yes, %v\n", report.GlobalV4)
+	if report.GlobalV4.IsValid() {
+		printf("\t* IPv4: yes, %s\n", report.GlobalV4)
 	} else {
 		printf("\t* IPv4: (no addr found)\n")
 	}
-	if report.GlobalV6 != "" {
-		printf("\t* IPv6: yes, %v\n", report.GlobalV6)
+	if report.GlobalV6.IsValid() {
+		printf("\t* IPv6: yes, %s\n", report.GlobalV6)
 	} else if report.IPv6 {
 		printf("\t* IPv6: (no addr found)\n")
 	} else if report.OSHasIPv6 {

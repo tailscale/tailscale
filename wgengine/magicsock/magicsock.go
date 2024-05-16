@@ -900,22 +900,23 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		c.setNetInfoHavePortMap()
 	}
 
-	if nr.GlobalV4 != "" {
-		addAddr(ipp(nr.GlobalV4), tailcfg.EndpointSTUN)
+	v4Addrs, v6Addrs := nr.GetGlobalAddrs()
+	for _, addr := range v4Addrs {
+		addAddr(addr, tailcfg.EndpointSTUN)
+	}
+	for _, addr := range v6Addrs {
+		addAddr(addr, tailcfg.EndpointSTUN)
+	}
 
+	if len(v4Addrs) >= 1 {
 		// If they're behind a hard NAT and are using a fixed
 		// port locally, assume they might've added a static
 		// port mapping on their router to the same explicit
 		// port that tailscaled is running with. Worst case
 		// it's an invalid candidate mapping.
 		if port := c.port.Load(); nr.MappingVariesByDestIP.EqualBool(true) && port != 0 {
-			if ip, _, err := net.SplitHostPort(nr.GlobalV4); err == nil {
-				addAddr(ipp(net.JoinHostPort(ip, strconv.Itoa(int(port)))), tailcfg.EndpointSTUN4LocalPort)
-			}
+			addAddr(netip.AddrPortFrom(v4Addrs[0].Addr(), uint16(port)), tailcfg.EndpointSTUN4LocalPort)
 		}
-	}
-	if nr.GlobalV6 != "" {
-		addAddr(ipp(nr.GlobalV6), tailcfg.EndpointSTUN)
 	}
 
 	// Update our set of endpoints by adding any endpoints that we
