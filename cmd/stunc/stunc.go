@@ -20,7 +20,7 @@ func main() {
 	}
 	host := os.Args[1]
 
-	uaddr, err := net.ResolveUDPAddr("udp", host+":3478")
+	uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, "3478"))
 	if err != nil {
 		log.Fatal(err)
 	}
