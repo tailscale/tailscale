@@ -47,6 +47,10 @@ func TestLRU(t *testing.T) {
 	if c.Contains(3) {
 		t.Errorf("contains 3; should not")
 	}
+	c.Clear()
+	if g, w := c.Len(), 0; g != w {
+		t.Errorf("Len = %d; want %d", g, w)
+	}
 }
 
 func TestLRUDeleteCorruption(t *testing.T) {
