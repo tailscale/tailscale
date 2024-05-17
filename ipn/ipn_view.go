@@ -67,7 +67,6 @@ func (v *PrefsView) UnmarshalJSON(b []byte) error {
 
 func (v PrefsView) ControlURL() string                          { return v.ж.ControlURL }
 func (v PrefsView) RouteAll() bool                              { return v.ж.RouteAll }
-func (v PrefsView) AllowSingleHosts() bool                      { return v.ж.AllowSingleHosts }
 func (v PrefsView) ExitNodeID() tailcfg.StableNodeID            { return v.ж.ExitNodeID }
 func (v PrefsView) ExitNodeIP() netip.Addr                      { return v.ж.ExitNodeIP }
 func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.InternalExitNodePrior }
@@ -98,13 +97,13 @@ func (v PrefsView) NetfilterKind() string                 { return v.ж.Netfilte
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
 	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
 }
-func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
+func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
+func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ControlURL             string
 	RouteAll               bool
-	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
 	InternalExitNodePrior  tailcfg.StableNodeID
@@ -131,6 +130,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})
 

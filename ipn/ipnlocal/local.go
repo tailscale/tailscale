@@ -3649,9 +3649,6 @@ func (b *LocalBackend) authReconfig() {
 	if prefs.RouteAll() {
 		flags |= netmap.AllowSubnetRoutes
 	}
-	if prefs.AllowSingleHosts() {
-		flags |= netmap.AllowSingleHosts
-	}
 	if hasPAC && disableSubnetsIfPAC {
 		if flags&netmap.AllowSubnetRoutes != 0 {
 			b.logf("authReconfig: have PAC; disabling subnet routes")
