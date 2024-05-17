@@ -208,6 +208,9 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
   - Get device posture attributes: [`GET /api/v2/device/{deviceID}/attributes`](#get-device-posture-attributes)
   - Set custom device posture attributes: [`POST /api/v2/device/{deviceID}/attributes/{attributeKey}`](#set-device-posture-attributes)
   - Delete custom device posture attributes: [`DELETE /api/v2/device/{deviceID}/attributes/{attributeKey}`](#delete-custom-device-posture-attributes)
+- [**Device invites**](#invites-to-a-device)
+  - List device invites: [`GET /api/v2/device/{deviceID}/device-invites`](#list-device-invites)
+  - Create device invites: [`POST /api/v2/device/{deviceID}/device-invites`](#create-device-invites)
 
 ### Subnet routes
 
@@ -793,3 +796,112 @@ curl -X DELETE "https://api.tailscale.com/api/v2/device/11055/attributes/custom:
 ### Response
 
 The response is 2xx on success. The response body is currently an empty JSON object.
+
+## Invites to a device
+
+The device sharing invite methods let you create and list [invites to share a device](https://tailscale.com/kb/1084/sharing).
+
+## List device invites
+
+```http
+GET /api/v2/device/{deviceID}/device-invites
+```
+
+List all share invites for a device.
+
+### Parameters
+
+#### `deviceID` (required in URL path)
+
+The ID of the device.
+
+### Request example
+
+```sh
+curl -X GET "https://api.tailscale.com/api/v2/device/11055/device-invites" \
+-u "tskey-api-xxxxx:"
+```
+
+### Response
+
+```jsonc
+[
+  {
+    "id": "12345",
+    "created": "2024-05-08T20:19:51.777861756Z",
+    "tailnetId": 59954,
+    "deviceId": 11055,
+    "sharerId": 22011,
+    "allowExitNode": true,
+    "email": "user@example.com",
+    "lastEmailSentAt": "2024-05-08T20:19:51.777861756Z",
+    "inviteUrl": "https://login.tailscale.com/admin/invite/<code>",
+    "accepted": false
+  },
+  {
+    "id": "12346",
+    "created": "2024-04-03T21:38:49.333829261Z",
+    "tailnetId": 59954,
+    "deviceId": 11055,
+    "sharerId": 22012,
+    "inviteUrl": "https://login.tailscale.com/admin/invite/<code>",
+    "accepted": true,
+    "acceptedBy": {
+      "id": 33223,
+      "loginName": "someone@example.com",
+      "profilePicUrl": ""
+    }
+  }
+]
+```
+
+## Create device invites
+
+```http
+POST /api/v2/device/{deviceID}/device-invites
+```
+
+Create new share invites for a device.
+
+### Parameters
+
+#### `deviceID` (required in URL path)
+
+The ID of the device.
+
+#### List of invite requests (required in `POST` body)
+
+Each invite request is an object with the following optional fields:
+
+- **`multiUse`:** (Optional) Specify whether the invite can be accepted more than once. When set to `true`, it results in an invite that can be accepted up to 1,000 times.
+- **`allowExitNode`:** (Optional) Specify whether the invited user can use the device as an exit node when it advertises as one.
+- **`email`:** (Optional) Specify the email to send the created invite. If not set, the endpoint generates and returns an invite URL (but doesn't send it out).
+
+### Request example
+
+```sh
+curl -X POST "https://api.tailscale.com/api/v2/device/11055/device-invites" \
+-u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
+--data-binary '[{"multiUse": true, "allowExitNode": true, "email":"user@example.com"}]'
+```
+
+### Response
+
+```jsonc
+[
+  {
+    "id": "12347",
+    "created": "2024-05-08T20:29:45.842358533Z",
+    "tailnetId": 59954,
+    "deviceId": 11055,
+    "sharerId": 22012,
+    "multiUse": true,
+    "allowExitNode": true,
+    "email": "user@example.com",
+    "lastEmailSentAt": "2024-05-08T20:29:45.842358533Z",
+    "inviteUrl": "https://login.tailscale.com/admin/invite/<code>",
+    "accepted": false
+  }
+]
+```
