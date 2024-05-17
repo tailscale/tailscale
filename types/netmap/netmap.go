@@ -388,6 +388,6 @@ func (nm *NetworkMap) JSON() string {
 type WGConfigFlags int
 
 const (
-	AllowSingleHosts WGConfigFlags = 1 << iota
+	_ WGConfigFlags = 1 << iota
 	AllowSubnetRoutes
 )

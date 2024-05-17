@@ -40,7 +40,6 @@ func (src *Prefs) Clone() *Prefs {
 var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ControlURL             string
 	RouteAll               bool
-	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
 	InternalExitNodePrior  tailcfg.StableNodeID
@@ -67,6 +66,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})
 
