@@ -108,11 +108,11 @@ type Report struct {
 	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
 	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
 
-	GlobalV4Counters map[netip.AddrPort]int // keyed by IP:port, number of times observed
-	GlobalV6Counters map[netip.AddrPort]int // keyed by [IP]:port, number of times observed
+	GlobalV4Counters map[netip.AddrPort]int // number of times the endpoint was observed
+	GlobalV6Counters map[netip.AddrPort]int // number of times the endpoint was observed
 
-	GlobalV4 netip.AddrPort // ip:port of global IPv4
-	GlobalV6 netip.AddrPort // [ip]:port of global IPv6
+	GlobalV4 netip.AddrPort
+	GlobalV6 netip.AddrPort
 
 	// CaptivePortal is set when we think there's a captive portal that is
 	// intercepting HTTP traffic.
@@ -125,8 +125,7 @@ type Report struct {
 // netcheck, which includes the best latency endpoint first, followed by any
 // other endpoints that were observed repeatedly. It excludes singular endpoints
 // that are likely only the result of a hard NAT.
-func (r *Report) GetGlobalAddrs() ([]netip.AddrPort, []netip.AddrPort) {
-	var v4, v6 []netip.AddrPort
+func (r *Report) GetGlobalAddrs() (v4, v6 []netip.AddrPort) {
 	// Always add the best latency entries first.
 	if r.GlobalV4.IsValid() {
 		v4 = append(v4, r.GlobalV4)
