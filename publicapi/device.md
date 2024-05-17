@@ -236,8 +236,6 @@ The API exposes two methods for dealing with subnet routes:
 - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#get-device-routes) to fetch lists of advertised and enabled routes for a device
 - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-device-routes) to set enabled routes for a device
 
-<a name="device-get"></a>
-
 ## Get device
 
 ```http
@@ -295,8 +293,6 @@ curl "https://api.tailscale.com/api/v2/device/12345?fields=all" \
 }
 ```
 
-<a href="device-delete"></a>
-
 ## Delete device
 
 ```http
@@ -336,8 +332,6 @@ HTTP/1.1 501 Not Implemented
 {"message":"cannot delete devices outside of your tailnet"}
 ```
 
-<a href="expire-device-key"></a>
-
 ## Expire a device's key
 
 ```http
@@ -371,8 +365,6 @@ HTTP/1.1 200 OK
 ```
 
 ## Routes
-
-<a href="device-routes-get">
 
 ## Get device routes
 
@@ -408,8 +400,6 @@ Returns the enabled and advertised subnet routes for a device.
   "enabledRoutes": []
 }
 ```
-
-<a href="device-routes-post"></a>
 
 ## Set device routes
 
@@ -458,8 +448,6 @@ Returns the enabled and advertised subnet routes for a device.
 
 ## Authorize
 
-<a href="#device-authorized-post"></a>
-
 ## Authorize device
 
 ```http
@@ -501,8 +489,6 @@ curl "https://api.tailscale.com/api/v2/device/11055/authorized" \
 The response is 2xx on success. The response body is currently an empty JSON object.
 
 ## Tags
-
-<a href="device-tags-post"></a>
 
 ## Update device tags
 
@@ -561,8 +547,6 @@ If the tags supplied in the `POST` call do not exist in the tailnet policy file,
 ```
 
 ## Keys
-
-<a href="device-key-post"></a>
 
 ## Update device key
 
