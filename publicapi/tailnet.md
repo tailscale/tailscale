@@ -64,8 +64,6 @@ The policy file is expressed using "[HuJSON](https://github.com/tailscale/hujson
 Most policy file API methods can also return regular JSON for compatibility with other tools.
 Learn more about [network access controls](https://tailscale.com/kb/1018/).
 
-<a href="tailnet-acl-get"></a>
-
 ## Get Policy File
 
 ```http
@@ -203,8 +201,6 @@ In addition, errors and warnings are returned.
 }
 ```
 
-<a href="tailnet-acl-post"></a>
-
 ## Update policy file
 
 ```http
@@ -325,8 +321,6 @@ A successful response returns an HTTP status of '200' and the modified tailnet p
 }
 ```
 
-<a href="tailnet-acl-preview-post"></a>
-
 ## Preview policy file rule matches
 
 ```http
@@ -417,8 +411,6 @@ The response also echoes the `type` and `previewFor` values supplied in the requ
   "previewFor: "user1@example.com"
 }
 ```
-
-<a href="tailnet-acl-validate-post"></a>
 
 ## Validate and test policy file
 
@@ -525,8 +517,6 @@ any groups that are used in the policy file that are not being synced from SCIM.
 ```
 
 ## Devices
-
-<a href="tailnet-devices"></a>
 
 ## List tailnet devices
 
@@ -643,8 +633,6 @@ The remaining three methods operate on auth keys and API access tokens.
 }
 ```
 
-<a href="tailnet-keys-get"></a>
-
 ## List tailnet keys
 
 ```http
@@ -683,8 +671,6 @@ Returns a JSON object with the IDs of all active keys.
   ]
 }
 ```
-
-<a href="tailnet-keys-post"></a>
 
 ## Create auth key
 
@@ -783,8 +769,6 @@ It holds the capabilities specified in the request and can no longer be retrieve
 }
 ```
 
-<a href="tailnet-keys-key-get"></a>
-
 ## Get key
 
 ```http
@@ -845,8 +829,6 @@ Response for a revoked (deleted) or expired key will have an `invalid` field set
 }
 ```
 
-<a href="tailnet-keys-key-delete"></a>
-
 ## Delete key
 
 ```http
@@ -876,8 +858,6 @@ curl -X DELETE 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k12345
 
 This returns status 200 upon success.
 
-<a href="tailnet-dns"></a>
-
 ## DNS
 
 The tailnet DNS methods are provided for fetching and modifying various DNS settings for a tailnet.
@@ -885,8 +865,6 @@ These include nameservers, DNS preferences, and search paths.
 Learn more about [DNS in Tailscale](https://tailscale.com/kb/1054/).
 
 ## Nameservers
-
-<a href="tailnet-dns-nameservers-get"></a>
 
 ## Get nameservers
 
@@ -916,8 +894,6 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
   "dns": ["8.8.8.8"]
 }
 ```
-
-<a href="tailnet-dns-nameservers-post"></a>
 
 ## Set nameservers
 
@@ -989,8 +965,6 @@ The response is a JSON object containing the new list of nameservers and the sta
 
 ## Preferences
 
-<a href="tailnet-dns-preferences-get"></a>
-
 ## Get DNS preferences
 
 ```http
@@ -1019,8 +993,6 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences" \
   "magicDNS": false
 }
 ```
-
-<a href="tailnet-dns-preferences-post"></a>
 
 ## Set DNS preferences
 
@@ -1085,8 +1057,6 @@ If there are DNS servers, this returns the MagicDNS status:
 
 ## Search Paths
 
-<a href="tailnet-dns-searchpaths-get"></a>
-
 ## Get search paths
 
 ```http
@@ -1115,8 +1085,6 @@ curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths" \
   "searchPaths": ["user1.example.com"]
 }
 ```
-
-<a href="tailnet-dns-searchpaths-post"></a>
 
 ## Set search paths
 
