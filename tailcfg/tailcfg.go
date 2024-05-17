@@ -1082,7 +1082,7 @@ type RegisterResponseAuth struct {
 
 	// At most one of Oauth2Token or AuthKey is set.
 
-	Oauth2Token *Oauth2Token `json:",omitempty"`
+	Oauth2Token *Oauth2Token `json:",omitempty"` // used by pre-1.66 Android only
 	AuthKey     string       `json:",omitempty"`
 }
 

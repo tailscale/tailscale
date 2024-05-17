@@ -1842,7 +1842,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// Without this, the state machine transitions to "NeedsLogin" implying
 		// that user interaction is required, which is not the case and can
 		// regress tsnet.Server restarts.
-		cc.Login(nil, controlclient.LoginDefault)
+		cc.Login(controlclient.LoginDefault)
 	}
 	b.stateMachineLockedOnEntry(unlock)
 
@@ -2825,7 +2825,7 @@ func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
 	if url != "" && timeSinceAuthURLCreated < ((7*24*time.Hour)-(1*time.Hour)) {
 		b.popBrowserAuthNow()
 	} else {
-		cc.Login(nil, b.loginFlags|controlclient.LoginInteractive)
+		cc.Login(b.loginFlags | controlclient.LoginInteractive)
 	}
 	return nil
 }
@@ -3339,7 +3339,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 
 	if !oldp.WantRunning() && newp.WantRunning {
 		b.logf("transitioning to running; doing Login...")
-		cc.Login(nil, controlclient.LoginDefault)
+		cc.Login(controlclient.LoginDefault)
 	}
 
 	if oldp.WantRunning() != newp.WantRunning {
