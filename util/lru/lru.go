@@ -68,6 +68,12 @@ func (c *Cache[K, V]) Set(key K, value V) {
 	}
 }
 
+// Clear removes all items from the cache.
+func (c *Cache[K, V]) Clear() {
+	c.head = nil
+	c.lookup = nil
+}
+
 // Get looks up a key's value from the cache, returning either
 // the value or the zero value if it not present.
 //
