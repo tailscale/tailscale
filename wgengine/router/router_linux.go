@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -49,8 +50,12 @@ type linuxRouter struct {
 	localRoutes       map[netip.Prefix]bool
 	snatSubnetRoutes  bool
 	statefulFiltering bool
-	netfilterMode     preftype.NetfilterMode
-	netfilterKind     string
+	// statefulFilteringAllowDNSFrom is a list of interfaces that are allowed
+	// to send DNS queries to 100.100.100.100. If empty, only loopback is
+	// allowed to send DNS queries when statefulFiltering is true.
+	statefulFilteringAllowDNSFrom []string
+	netfilterMode                 preftype.NetfilterMode
+	netfilterKind                 string
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -411,8 +416,19 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	// As above, for stateful filtering
 	switch {
 	case cfg.StatefulFiltering == r.statefulFiltering:
-		// state already correct, nothing to do.
+		if cfg.StatefulFiltering && !slices.Equal(r.statefulFilteringAllowDNSFrom, cfg.StatefulFilteringAllowDNSFrom) {
+			// Re-add the stateful filtering rule to update the list of exempt
+			// interfaces for DNS.
+			if err := r.delStatefulRule(); err != nil {
+				errs = append(errs, err)
+			}
+			r.statefulFilteringAllowDNSFrom = cfg.StatefulFilteringAllowDNSFrom
+			if err := r.addStatefulRule(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	case cfg.StatefulFiltering:
+		r.statefulFilteringAllowDNSFrom = cfg.StatefulFilteringAllowDNSFrom
 		if err := r.addStatefulRule(); err != nil {
 			errs = append(errs, err)
 		}
@@ -1401,7 +1417,7 @@ func (r *linuxRouter) addStatefulRule() error {
 		return nil
 	}
 
-	return r.nfr.AddStatefulRule(r.tunname)
+	return r.nfr.AddStatefulRule(r.tunname, r.statefulFilteringAllowDNSFrom)
 }
 
 // delStatefulRule removes the netfilter rule to perform stateful filtering
@@ -1411,7 +1427,7 @@ func (r *linuxRouter) delStatefulRule() error {
 		return nil
 	}
 
-	return r.nfr.DelStatefulRule(r.tunname)
+	return r.nfr.DelStatefulRule(r.tunname, r.statefulFilteringAllowDNSFrom)
 }
 
 // cidrDiff calls add and del as needed to make the set of prefixes in

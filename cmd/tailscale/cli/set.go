@@ -40,27 +40,28 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 }
 
 type setArgsT struct {
-	acceptRoutes           bool
-	acceptDNS              bool
-	exitNodeIP             string
-	exitNodeAllowLANAccess bool
-	shieldsUp              bool
-	runSSH                 bool
-	runWebClient           bool
-	hostname               string
-	advertiseRoutes        string
-	advertiseDefaultRoute  bool
-	advertiseConnector     bool
-	opUser                 string
-	acceptedRisks          string
-	profileName            string
-	forceDaemon            bool
-	updateCheck            bool
-	updateApply            bool
-	postureChecking        bool
-	snat                   bool
-	statefulFiltering      bool
-	netfilterMode          string
+	acceptRoutes                  bool
+	acceptDNS                     bool
+	exitNodeIP                    string
+	exitNodeAllowLANAccess        bool
+	shieldsUp                     bool
+	runSSH                        bool
+	runWebClient                  bool
+	hostname                      string
+	advertiseRoutes               string
+	advertiseDefaultRoute         bool
+	advertiseConnector            bool
+	opUser                        string
+	acceptedRisks                 string
+	profileName                   string
+	forceDaemon                   bool
+	updateCheck                   bool
+	updateApply                   bool
+	postureChecking               bool
+	snat                          bool
+	statefulFiltering             bool
+	statefulFilteringAllowDNSFrom []string
+	netfilterMode                 string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -104,6 +105,17 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	case "linux":
 		setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", true, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, etc.)")
+		setf.Func("stateful-filtering-allow-dns-from", "when stateful filtering is enabled, allow DNS queries from the provided comma-separated list of interfaces to reach the local Tailscale DNS server on 100.100.100.100", func(val string) error {
+			if val != "" {
+				setArgs.statefulFilteringAllowDNSFrom = strings.Split(val, ",")
+			} else {
+				// Empty slice is different from nil.
+				// Empty means "no interfaces allowed".
+				// Nil means "use default detection".
+				setArgs.statefulFilteringAllowDNSFrom = []string{}
+			}
+			return nil
+		})
 		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
@@ -151,8 +163,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
 			},
-			PostureChecking:     setArgs.postureChecking,
-			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
+			PostureChecking:               setArgs.postureChecking,
+			NoStatefulFiltering:           opt.NewBool(!setArgs.statefulFiltering),
+			StatefulFilteringAllowDNSFrom: setArgs.statefulFilteringAllowDNSFrom,
 		},
 	}
 

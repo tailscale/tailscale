@@ -32,8 +32,9 @@ type ConfigVAlpha struct {
 	AdvertiseRoutes []netip.Prefix `json:",omitempty"`
 	DisableSNAT     opt.Bool       `json:",omitempty"`
 
-	NetfilterMode       *string  `json:",omitempty"` // "on", "off", "nodivert"
-	NoStatefulFiltering opt.Bool `json:",omitempty"`
+	NetfilterMode                 *string  `json:",omitempty"` // "on", "off", "nodivert"
+	NoStatefulFiltering           opt.Bool `json:",omitempty"`
+	StatefulFilteringAllowDNSFrom []string `json:",omitempty"`
 
 	PostureChecking opt.Bool         `json:",omitempty"`
 	RunSSHServer    opt.Bool         `json:",omitempty"` // Tailscale SSH
@@ -103,6 +104,10 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.NoStatefulFiltering != "" {
 		mp.NoStatefulFiltering = c.NoStatefulFiltering
 		mp.NoStatefulFilteringSet = true
+	}
+	if len(c.StatefulFilteringAllowDNSFrom) != 0 {
+		mp.StatefulFilteringAllowDNSFrom = c.StatefulFilteringAllowDNSFrom
+		mp.StatefulFilteringAllowDNSFromSet = true
 	}
 
 	if c.NetfilterMode != nil {

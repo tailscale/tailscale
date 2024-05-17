@@ -122,6 +122,17 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	case "linux":
 		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		upf.BoolVar(&upArgs.statefulFiltering, "stateful-filtering", true, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, etc.)")
+		upf.Func("stateful-filtering-allow-dns-from", "when stateful filtering is enabled, allow DNS queries from the provided comma-separated list of interfaces to reach the local Tailscale DNS server on 100.100.100.100", func(val string) error {
+			if val != "" {
+				upArgs.statefulFilteringAllowDNSFrom = strings.Split(val, ",")
+			} else {
+				// Empty slice is different from nil.
+				// Empty means "no interfaces allowed".
+				// Nil means "use default detection".
+				upArgs.statefulFilteringAllowDNSFrom = []string{}
+			}
+			return nil
+		})
 		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
@@ -151,33 +162,34 @@ func defaultNetfilterMode() string {
 }
 
 type upArgsT struct {
-	qr                     bool
-	reset                  bool
-	server                 string
-	acceptRoutes           bool
-	acceptDNS              bool
-	singleRoutes           bool
-	exitNodeIP             string
-	exitNodeAllowLANAccess bool
-	shieldsUp              bool
-	runSSH                 bool
-	runWebClient           bool
-	forceReauth            bool
-	forceDaemon            bool
-	advertiseRoutes        string
-	advertiseDefaultRoute  bool
-	advertiseTags          string
-	advertiseConnector     bool
-	snat                   bool
-	statefulFiltering      bool
-	netfilterMode          string
-	authKeyOrFile          string // "secret" or "file:/path/to/secret"
-	hostname               string
-	opUser                 string
-	json                   bool
-	timeout                time.Duration
-	acceptedRisks          string
-	profileName            string
+	qr                            bool
+	reset                         bool
+	server                        string
+	acceptRoutes                  bool
+	acceptDNS                     bool
+	singleRoutes                  bool
+	exitNodeIP                    string
+	exitNodeAllowLANAccess        bool
+	shieldsUp                     bool
+	runSSH                        bool
+	runWebClient                  bool
+	forceReauth                   bool
+	forceDaemon                   bool
+	advertiseRoutes               string
+	advertiseDefaultRoute         bool
+	advertiseTags                 string
+	advertiseConnector            bool
+	snat                          bool
+	statefulFiltering             bool
+	statefulFilteringAllowDNSFrom []string
+	netfilterMode                 string
+	authKeyOrFile                 string // "secret" or "file:/path/to/secret"
+	hostname                      string
+	opUser                        string
+	json                          bool
+	timeout                       time.Duration
+	acceptedRisks                 string
+	profileName                   string
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -295,6 +307,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 		// Backfills for NoStatefulFiltering occur when loading a profile; just set it explicitly here.
 		prefs.NoStatefulFiltering.Set(!upArgs.statefulFiltering)
+		prefs.StatefulFilteringAllowDNSFrom = upArgs.statefulFilteringAllowDNSFrom
 		v, warning, err := netfilterModeFromFlag(upArgs.netfilterMode)
 		if err != nil {
 			return nil, err
@@ -747,6 +760,7 @@ func init() {
 	addPrefFlagMapping("shields-up", "ShieldsUp")
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
 	addPrefFlagMapping("stateful-filtering", "NoStatefulFiltering")
+	addPrefFlagMapping("stateful-filtering-allow-dns-from", "StatefulFilteringAllowDNSFrom")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
@@ -931,7 +945,7 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
 
 func flagAppliesToOS(flag, goos string) bool {
 	switch flag {
-	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering":
+	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering", "stateful-filtering-allow-dns-from":
 		return goos == "linux"
 	case "unattended":
 		return goos == "windows"
@@ -1016,6 +1030,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			} else {
 				set(true)
 			}
+		case "stateful-filtering-allow-dns-from":
+			set(strings.Join(prefs.StatefulFilteringAllowDNSFrom, ","))
 		case "netfilter-mode":
 			set(prefs.NetfilterMode.String())
 		case "unattended":

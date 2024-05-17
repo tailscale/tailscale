@@ -26,6 +26,7 @@ func (src *Prefs) Clone() *Prefs {
 	*dst = *src
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
+	dst.StatefulFilteringAllowDNSFrom = append(src.StatefulFilteringAllowDNSFrom[:0:0], src.StatefulFilteringAllowDNSFrom...)
 	if src.DriveShares != nil {
 		dst.DriveShares = make([]*drive.Share, len(src.DriveShares))
 		for i := range dst.DriveShares {
@@ -38,36 +39,37 @@ func (src *Prefs) Clone() *Prefs {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsCloneNeedsRegeneration = Prefs(struct {
-	ControlURL             string
-	RouteAll               bool
-	AllowSingleHosts       bool
-	ExitNodeID             tailcfg.StableNodeID
-	ExitNodeIP             netip.Addr
-	InternalExitNodePrior  tailcfg.StableNodeID
-	ExitNodeAllowLANAccess bool
-	CorpDNS                bool
-	RunSSH                 bool
-	RunWebClient           bool
-	WantRunning            bool
-	LoggedOut              bool
-	ShieldsUp              bool
-	AdvertiseTags          []string
-	Hostname               string
-	NotepadURLs            bool
-	ForceDaemon            bool
-	Egg                    bool
-	AdvertiseRoutes        []netip.Prefix
-	NoSNAT                 bool
-	NoStatefulFiltering    opt.Bool
-	NetfilterMode          preftype.NetfilterMode
-	OperatorUser           string
-	ProfileName            string
-	AutoUpdate             AutoUpdatePrefs
-	AppConnector           AppConnectorPrefs
-	PostureChecking        bool
-	NetfilterKind          string
-	DriveShares            []*drive.Share
-	Persist                *persist.Persist
+	ControlURL                    string
+	RouteAll                      bool
+	AllowSingleHosts              bool
+	ExitNodeID                    tailcfg.StableNodeID
+	ExitNodeIP                    netip.Addr
+	InternalExitNodePrior         tailcfg.StableNodeID
+	ExitNodeAllowLANAccess        bool
+	CorpDNS                       bool
+	RunSSH                        bool
+	RunWebClient                  bool
+	WantRunning                   bool
+	LoggedOut                     bool
+	ShieldsUp                     bool
+	AdvertiseTags                 []string
+	Hostname                      string
+	NotepadURLs                   bool
+	ForceDaemon                   bool
+	Egg                           bool
+	AdvertiseRoutes               []netip.Prefix
+	NoSNAT                        bool
+	NoStatefulFiltering           opt.Bool
+	StatefulFilteringAllowDNSFrom []string
+	NetfilterMode                 preftype.NetfilterMode
+	OperatorUser                  string
+	ProfileName                   string
+	AutoUpdate                    AutoUpdatePrefs
+	AppConnector                  AppConnectorPrefs
+	PostureChecking               bool
+	NetfilterKind                 string
+	DriveShares                   []*drive.Share
+	Persist                       *persist.Persist
 }{})
 
 // Clone makes a deep copy of ServeConfig.

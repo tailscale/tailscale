@@ -218,6 +218,17 @@ type Prefs struct {
 	// Linux-only.
 	NoStatefulFiltering opt.Bool `json:",omitempty"`
 
+	// StatefulFilteringAllowDNSFrom is a list of local interfaces to exempt
+	// from stateful filtering, specifically for DNS queries. Requests from
+	// local containers (e.g. Docker) get dropped by stateful filtering, unless
+	// the corresponding bridge interface is in this list.
+	//
+	// When nil, a set of known container runtimes is detected at startup and
+	// their interfaces are allowed.
+	// When non-nil but empty, no interfaces are allowed.
+	// When non-empty, only the specified set of interfaces are allowed.
+	StatefulFilteringAllowDNSFrom []string `json:",omitempty"`
+
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
 	NetfilterMode preftype.NetfilterMode
@@ -297,35 +308,36 @@ type AppConnectorPrefs struct {
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet             bool                `json:",omitempty"`
-	RouteAllSet               bool                `json:",omitempty"`
-	AllowSingleHostsSet       bool                `json:",omitempty"`
-	ExitNodeIDSet             bool                `json:",omitempty"`
-	ExitNodeIPSet             bool                `json:",omitempty"`
-	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
-	ExitNodeAllowLANAccessSet bool                `json:",omitempty"`
-	CorpDNSSet                bool                `json:",omitempty"`
-	RunSSHSet                 bool                `json:",omitempty"`
-	RunWebClientSet           bool                `json:",omitempty"`
-	WantRunningSet            bool                `json:",omitempty"`
-	LoggedOutSet              bool                `json:",omitempty"`
-	ShieldsUpSet              bool                `json:",omitempty"`
-	AdvertiseTagsSet          bool                `json:",omitempty"`
-	HostnameSet               bool                `json:",omitempty"`
-	NotepadURLsSet            bool                `json:",omitempty"`
-	ForceDaemonSet            bool                `json:",omitempty"`
-	EggSet                    bool                `json:",omitempty"`
-	AdvertiseRoutesSet        bool                `json:",omitempty"`
-	NoSNATSet                 bool                `json:",omitempty"`
-	NoStatefulFilteringSet    bool                `json:",omitempty"`
-	NetfilterModeSet          bool                `json:",omitempty"`
-	OperatorUserSet           bool                `json:",omitempty"`
-	ProfileNameSet            bool                `json:",omitempty"`
-	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
-	AppConnectorSet           bool                `json:",omitempty"`
-	PostureCheckingSet        bool                `json:",omitempty"`
-	NetfilterKindSet          bool                `json:",omitempty"`
-	DriveSharesSet            bool                `json:",omitempty"`
+	ControlURLSet                    bool                `json:",omitempty"`
+	RouteAllSet                      bool                `json:",omitempty"`
+	AllowSingleHostsSet              bool                `json:",omitempty"`
+	ExitNodeIDSet                    bool                `json:",omitempty"`
+	ExitNodeIPSet                    bool                `json:",omitempty"`
+	InternalExitNodePriorSet         bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
+	ExitNodeAllowLANAccessSet        bool                `json:",omitempty"`
+	CorpDNSSet                       bool                `json:",omitempty"`
+	RunSSHSet                        bool                `json:",omitempty"`
+	RunWebClientSet                  bool                `json:",omitempty"`
+	WantRunningSet                   bool                `json:",omitempty"`
+	LoggedOutSet                     bool                `json:",omitempty"`
+	ShieldsUpSet                     bool                `json:",omitempty"`
+	AdvertiseTagsSet                 bool                `json:",omitempty"`
+	HostnameSet                      bool                `json:",omitempty"`
+	NotepadURLsSet                   bool                `json:",omitempty"`
+	ForceDaemonSet                   bool                `json:",omitempty"`
+	EggSet                           bool                `json:",omitempty"`
+	AdvertiseRoutesSet               bool                `json:",omitempty"`
+	NoSNATSet                        bool                `json:",omitempty"`
+	NoStatefulFilteringSet           bool                `json:",omitempty"`
+	StatefulFilteringAllowDNSFromSet bool                `json:",omitempty"`
+	NetfilterModeSet                 bool                `json:",omitempty"`
+	OperatorUserSet                  bool                `json:",omitempty"`
+	ProfileNameSet                   bool                `json:",omitempty"`
+	AutoUpdateSet                    AutoUpdatePrefsMask `json:",omitempty"`
+	AppConnectorSet                  bool                `json:",omitempty"`
+	PostureCheckingSet               bool                `json:",omitempty"`
+	NetfilterKindSet                 bool                `json:",omitempty"`
+	DriveSharesSet                   bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -523,6 +535,9 @@ func (p *Prefs) pretty(goos string) string {
 		// StatefulFiltering=false).
 		bb, _ := p.NoStatefulFiltering.Get()
 		fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
+		if len(p.StatefulFilteringAllowDNSFrom) > 0 {
+			fmt.Fprintf(&sb, "allowDNSFrom=%s ", strings.Join(p.StatefulFilteringAllowDNSFrom, ","))
+		}
 	}
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
@@ -593,6 +608,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
+		slices.Equal(p.StatefulFilteringAllowDNSFrom, p2.StatefulFilteringAllowDNSFrom) &&
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&

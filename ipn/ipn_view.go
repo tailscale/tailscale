@@ -86,8 +86,11 @@ func (v PrefsView) Egg() bool                                   { return v.ж.Eg
 func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
-func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
-func (v PrefsView) NoStatefulFiltering() opt.Bool         { return v.ж.NoStatefulFiltering }
+func (v PrefsView) NoSNAT() bool                  { return v.ж.NoSNAT }
+func (v PrefsView) NoStatefulFiltering() opt.Bool { return v.ж.NoStatefulFiltering }
+func (v PrefsView) StatefulFilteringAllowDNSFrom() views.Slice[string] {
+	return views.SliceOf(v.ж.StatefulFilteringAllowDNSFrom)
+}
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() string                  { return v.ж.OperatorUser }
 func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
@@ -102,36 +105,37 @@ func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
-	ControlURL             string
-	RouteAll               bool
-	AllowSingleHosts       bool
-	ExitNodeID             tailcfg.StableNodeID
-	ExitNodeIP             netip.Addr
-	InternalExitNodePrior  tailcfg.StableNodeID
-	ExitNodeAllowLANAccess bool
-	CorpDNS                bool
-	RunSSH                 bool
-	RunWebClient           bool
-	WantRunning            bool
-	LoggedOut              bool
-	ShieldsUp              bool
-	AdvertiseTags          []string
-	Hostname               string
-	NotepadURLs            bool
-	ForceDaemon            bool
-	Egg                    bool
-	AdvertiseRoutes        []netip.Prefix
-	NoSNAT                 bool
-	NoStatefulFiltering    opt.Bool
-	NetfilterMode          preftype.NetfilterMode
-	OperatorUser           string
-	ProfileName            string
-	AutoUpdate             AutoUpdatePrefs
-	AppConnector           AppConnectorPrefs
-	PostureChecking        bool
-	NetfilterKind          string
-	DriveShares            []*drive.Share
-	Persist                *persist.Persist
+	ControlURL                    string
+	RouteAll                      bool
+	AllowSingleHosts              bool
+	ExitNodeID                    tailcfg.StableNodeID
+	ExitNodeIP                    netip.Addr
+	InternalExitNodePrior         tailcfg.StableNodeID
+	ExitNodeAllowLANAccess        bool
+	CorpDNS                       bool
+	RunSSH                        bool
+	RunWebClient                  bool
+	WantRunning                   bool
+	LoggedOut                     bool
+	ShieldsUp                     bool
+	AdvertiseTags                 []string
+	Hostname                      string
+	NotepadURLs                   bool
+	ForceDaemon                   bool
+	Egg                           bool
+	AdvertiseRoutes               []netip.Prefix
+	NoSNAT                        bool
+	NoStatefulFiltering           opt.Bool
+	StatefulFilteringAllowDNSFrom []string
+	NetfilterMode                 preftype.NetfilterMode
+	OperatorUser                  string
+	ProfileName                   string
+	AutoUpdate                    AutoUpdatePrefs
+	AppConnector                  AppConnectorPrefs
+	PostureChecking               bool
+	NetfilterKind                 string
+	DriveShares                   []*drive.Share
+	Persist                       *persist.Persist
 }{})
 
 // View returns a readonly view of ServeConfig.

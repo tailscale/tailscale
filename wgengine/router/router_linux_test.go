@@ -667,7 +667,7 @@ func (n *fakeIPTablesRunner) DelSNATRule() error {
 	return nil
 }
 
-func (n *fakeIPTablesRunner) AddStatefulRule(tunname string) error {
+func (n *fakeIPTablesRunner) AddStatefulRule(tunname string, allowDNSFrom []string) error {
 	newRule := fmt.Sprintf("-o %s -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP", tunname)
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		// Mimic the real runner and insert after the 'accept all' rule
@@ -680,16 +680,19 @@ func (n *fakeIPTablesRunner) AddStatefulRule(tunname string) error {
 		}
 
 		insertRuleAt(n, ipt, chain, pos, newRule)
+
+		// TODO(awly): insert allowDNSFrom rule
 	}
 	return nil
 }
 
-func (n *fakeIPTablesRunner) DelStatefulRule(tunname string) error {
+func (n *fakeIPTablesRunner) DelStatefulRule(tunname string, allowDNSFrom []string) error {
 	delRule := fmt.Sprintf("-o %s -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP", tunname)
 	for _, ipt := range []map[string][]string{n.ipt4, n.ipt6} {
 		if err := deleteRule(n, ipt, "filter/ts-forward", delRule); err != nil {
 			return err
 		}
+		// TODO(awly): delete allowDNSFrom rule
 	}
 	return nil
 }

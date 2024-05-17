@@ -4217,6 +4217,15 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		NetfilterKind:     netfilterKind,
 	}
 
+	if prefs.StatefulFilteringAllowDNSFrom().IsNil() {
+		var err error
+		rs.StatefulFilteringAllowDNSFrom, err = b.containerNetworkInterfaces()
+		if err != nil {
+			b.logf("warning: failed to detect container runtime network interfaces: %v; DNS queries inside containers may not work", err)
+		}
+	} else {
+		rs.StatefulFilteringAllowDNSFrom = prefs.StatefulFilteringAllowDNSFrom().AsSlice()
+	}
 	if distro.Get() == distro.Synology {
 		// Issue 1995: we don't use iptables on Synology.
 		rs.NetfilterMode = preftype.NetfilterOff
@@ -6656,4 +6665,18 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	const earthRadiusMeters = 6371000
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
+}
+
+func (b *LocalBackend) containerNetworkInterfaces() ([]string, error) {
+	allInterfaces := b.NetMon().InterfaceState().Interface
+	var interfaces []string
+	if _, ok := allInterfaces["docker0"]; ok {
+		interfaces = append(interfaces, "docker0")
+	}
+	// TODO(awly): detect other container runtimes:
+	// * podman
+	// * containerd
+	// * cri-o
+	// * runc
+	return interfaces, nil
 }

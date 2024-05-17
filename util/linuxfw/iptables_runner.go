@@ -536,9 +536,26 @@ func statefulRuleArgs(tunname string) []string {
 	return []string{"-o", tunname, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP"}
 }
 
+func allowTailscaleDNSArgs(tunname string, v6 bool, from []string) []string {
+	dst := tsaddr.TailscaleServiceIPString + "/32"
+	if v6 {
+		dst = tsaddr.TailscaleServiceIPv6String + "/128"
+	}
+	return []string{
+		"-o", tunname,
+		"-d", dst,
+		"-p", "udp",
+		"--dport", "53",
+		"-i", strings.Join(from, ","),
+		"-j", "ACCEPT",
+	}
+}
+
 // AddStatefulRule adds a netfilter rule for stateful packet filtering using
-// conntrack.
-func (i *iptablesRunner) AddStatefulRule(tunname string) error {
+// conntrack. allowDNSFrom is a list of interfaces (typically container bridge
+// interfaces) that are allowed to send DNS queries to 100.100.100.100. If
+// allowDNSFrom is empty, only the loopback interface can make DNS queries.
+func (i *iptablesRunner) AddStatefulRule(tunname string, allowDNSFrom []string) error {
 	// Drop packets that are destined for the tailscale interface if
 	// they're a new connection, per conntrack, to prevent hosts on the
 	// same subnet from being able to use this device as a way to forward
@@ -577,17 +594,30 @@ func (i *iptablesRunner) AddStatefulRule(tunname string) error {
 		if err := ipt.Insert("filter", "ts-forward", pos, args...); err != nil {
 			return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
 		}
+		// Insert interface allowlist for DNS before the stateful rule.
+		if len(allowDNSFrom) > 0 {
+			dnsArgs := allowTailscaleDNSArgs(tunname, ipt == i.ipt6, allowDNSFrom)
+			if err := ipt.Insert("filter", "ts-forward", pos, dnsArgs...); err != nil {
+				return fmt.Errorf("adding %v in filter/ts-forward: %w", dnsArgs, err)
+			}
+		}
 	}
 	return nil
 }
 
 // DelStatefulRule removes the netfilter rule for stateful packet filtering
 // using conntrack.
-func (i *iptablesRunner) DelStatefulRule(tunname string) error {
+func (i *iptablesRunner) DelStatefulRule(tunname string, allowDNSFrom []string) error {
 	args := statefulRuleArgs(tunname)
 	for _, ipt := range i.getTables() {
 		if err := ipt.Delete("filter", "ts-forward", args...); err != nil {
 			return fmt.Errorf("deleting %v in filter/ts-forward: %w", args, err)
+		}
+		if len(allowDNSFrom) > 0 {
+			dnsArgs := allowTailscaleDNSArgs(tunname, ipt == i.ipt6, allowDNSFrom)
+			if err := ipt.Delete("filter", "ts-forward", dnsArgs...); err != nil {
+				return fmt.Errorf("deleting %v in filter/ts-forward: %w", dnsArgs, err)
+			}
 		}
 	}
 	return nil

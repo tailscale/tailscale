@@ -515,12 +515,16 @@ type NetfilterRunner interface {
 	DelSNATRule() error
 
 	// AddStatefulRule adds a netfilter rule for stateful packet filtering
-	// using conntrack.
-	AddStatefulRule(tunname string) error
+	// using conntrack. allowDNSFrom is a list of interfaces (typically
+	// container bridge interfaces) that are allowed to send DNS queries to
+	// 100.100.100.100. If allowDNSFrom is empty, only the loopback interface
+	// can make DNS queries.
+	AddStatefulRule(tunname string, allowDNSFrom []string) error
 
 	// DelStatefulRule removes a netfilter rule for stateful packet filtering
-	// using conntrack.
-	DelStatefulRule(tunname string) error
+	// using conntrack. allowDNSFrom must match the same argument from
+	// AddStatefulRule.
+	DelStatefulRule(tunname string, allowDNSFrom []string) error
 
 	// HasIPV6 reports true if the system supports IPv6.
 	HasIPV6() bool
@@ -967,6 +971,7 @@ func (n *nftablesRunner) DelChains() error {
 		if err := deleteChainIfExists(n.conn, table.Filter, chainNameInput); err != nil {
 			return fmt.Errorf("delete chain: %w", err)
 		}
+		delSetIfExists(n.conn, table.Filter, setNameAllowDNSFrom)
 	}
 
 	if err := deleteChainIfExists(n.conn, n.nft4.Nat, chainNamePostrouting); err != nil {
@@ -1865,9 +1870,79 @@ func makeStatefulRuleExprs(tunname string) []expr.Any {
 	//	}
 }
 
+func makeAllowTailscaleDNSExprs(tunname string, ipv6 bool, allowDNSFrom *nftables.Set) []expr.Any {
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, 53)
+	var loadSrcIP, cmpSrcIP expr.Any
+	if ipv6 {
+		loadSrcIP = &expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       24,
+			Len:          16,
+		}
+		cmpSrcIP = &expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     tsaddr.TailscaleServiceIPv6().AsSlice(),
+		}
+	} else {
+		loadSrcIP = &expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       16,
+			Len:          4,
+		}
+		cmpSrcIP = &expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     tsaddr.TailscaleServiceIP().AsSlice(),
+		}
+	}
+	return []expr.Any{
+		// Check if the output interface is the Tailscale interface by
+		// first loding the OIFNAME into register 1 and comparing it
+		// against our tunname.
+		//
+		// 'cmp' implicitly breaks from a rule if a comparison fails,
+		// so if we continue past this rule we know that the packet is
+		// going to our TUN.
+		&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte(tunname),
+		},
+
+		// Check if the input interface is in the allowed set.
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Lookup{
+			SourceRegister: 1,
+			SetName:        allowDNSFrom.Name,
+			SetID:          allowDNSFrom.ID,
+		},
+
+		// Check that destination IP is quad-100.
+		loadSrcIP,
+		cmpSrcIP,
+		// Check that destination port is 53.
+		newLoadDportExpr(1),
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     portBytes,
+		},
+
+		&expr.Counter{},
+		&expr.Verdict{Kind: expr.VerdictAccept},
+	}
+}
+
+const setNameAllowDNSFrom = "ts-allow-dns-interfaces"
+
 // AddStatefulRule adds a netfilter rule for stateful packet filtering using
 // conntrack.
-func (n *nftablesRunner) AddStatefulRule(tunname string) error {
+func (n *nftablesRunner) AddStatefulRule(tunname string, allowDNSFrom []string) error {
 	conn := n.conn
 
 	exprs := makeStatefulRuleExprs(tunname)
@@ -1884,7 +1959,7 @@ func (n *nftablesRunner) AddStatefulRule(tunname string) error {
 			return fmt.Errorf("find accept rule: %w", err)
 		}
 
-		conn.InsertRule(&nftables.Rule{
+		rule = conn.InsertRule(&nftables.Rule{
 			Table: table.Filter,
 			Chain: chain,
 			Exprs: exprs,
@@ -1893,6 +1968,43 @@ func (n *nftablesRunner) AddStatefulRule(tunname string) error {
 			// insert this rule before the specified rule.
 			Position: rule.Handle,
 		})
+		if len(allowDNSFrom) > 0 {
+			// Flush early so we can lookup the new rule position below for
+			// allowDNSFrom rule.
+			if err := conn.Flush(); err != nil {
+				return fmt.Errorf("flush add stateful rule: %w", err)
+			}
+			// Create a set with all allowed interface name for use with
+			// expr.Lookup.
+			set := &nftables.Set{
+				Table:   table.Filter,
+				Name:    setNameAllowDNSFrom,
+				KeyType: nftables.TypeIFName,
+			}
+			elems := make([]nftables.SetElement, 0, len(allowDNSFrom))
+			for _, iface := range allowDNSFrom {
+				// IFName values are always 16-byte strings.
+				k := make([]byte, 16)
+				copy(k, iface)
+				elems = append(elems, nftables.SetElement{Key: k})
+			}
+
+			if err := conn.AddSet(set, elems); err != nil {
+				return fmt.Errorf("failed to add %q set: %w", set.Name, err)
+			}
+			dnsExprs := makeAllowTailscaleDNSExprs(tunname, table.Proto == nftables.TableFamilyIPv6, set)
+			rule, err = findRule(conn, rule)
+			if err != nil {
+				return fmt.Errorf("find stateful rule: %w", err)
+			}
+			conn.InsertRule(&nftables.Rule{
+				Table: table.Filter,
+				Chain: chain,
+				Exprs: dnsExprs,
+				// Insert before the stateful filtering rule above.
+				Position: rule.Handle,
+			})
+		}
 	}
 
 	if err := conn.Flush(); err != nil {
@@ -1903,7 +2015,7 @@ func (n *nftablesRunner) AddStatefulRule(tunname string) error {
 
 // DelStatefulRule removes the netfilter rule for stateful packet filtering
 // using conntrack.
-func (n *nftablesRunner) DelStatefulRule(tunname string) error {
+func (n *nftablesRunner) DelStatefulRule(tunname string, allowDNSFrom []string) error {
 	conn := n.conn
 
 	exprs := makeStatefulRuleExprs(tunname)
@@ -1924,11 +2036,41 @@ func (n *nftablesRunner) DelStatefulRule(tunname string) error {
 		if rule != nil {
 			conn.DelRule(rule)
 		}
+
+		if len(allowDNSFrom) > 0 {
+			set, err := conn.GetSetByName(table.Filter, setNameAllowDNSFrom)
+			if err != nil {
+				return fmt.Errorf("find %q set: %w", setNameAllowDNSFrom, err)
+			}
+			dnsExprs := makeAllowTailscaleDNSExprs(tunname, table.Proto == nftables.TableFamilyIPv6, set)
+
+			rule, err := findRule(conn, &nftables.Rule{
+				Table: table.Filter,
+				Chain: chain,
+				Exprs: dnsExprs,
+			})
+			if err != nil {
+				return fmt.Errorf("find allow DNS rule: %w", err)
+			}
+
+			if rule != nil {
+				conn.DelRule(rule)
+			}
+			conn.DelSet(set)
+		}
 	}
 	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("flush del stateful rule: %w", err)
 	}
 	return nil
+}
+
+func delSetIfExists(conn *nftables.Conn, table *nftables.Table, name string) {
+	set, err := conn.GetSetByName(table, name)
+	if err != nil {
+		return
+	}
+	conn.DelSet(set)
 }
 
 // cleanupChain removes a jump rule from hookChainName to tsChainName, and then
