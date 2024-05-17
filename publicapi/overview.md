@@ -68,6 +68,9 @@ The Tailscale API does not currently support pagination. All results are returne
   - Get device posture attributes: [`GET /api/v2/device/{deviceID}/attributes`](./device.md#get-device-posture-attributes)
   - Set custom device posture attributes: [`POST /api/v2/device/{deviceID}/attributes/{attributeKey}`](./device.md#set-device-posture-attributes)
   - Delete custom device posture attributes: [`DELETE /api/v2/device/{deviceID}/attributes/{attributeKey}`](./device.md#delete-custom-device-posture-attributes)
+- [**Device invites**](./device.md#invites-to-a-device)
+  - List device invites: [`GET /api/v2/device/{deviceID}/device-invites`](./device.md#list-device-invites)
+  - Create device invites: [`POST /api/v2/device/{deviceID}/device-invites`](./device.md#create-device-invites)
 
 **[Tailnet](./tailnet.md#tailnet)**
 
@@ -97,3 +100,19 @@ The Tailscale API does not currently support pagination. All results are returne
     - Get split DNS: [`GET /api/v2/tailnet/{tailnet}/dns/split-dns`](./tailnet.md#get-split-dns)
     - Update split DNS: [`PATCH /api/v2/tailnet/{tailnet}/dns/split-dns`](./tailnet.md#update-split-dns)
     - Set split DNS: [`PUT /api/v2/tailnet/{tailnet}/dns/split-dns`](./tailnet.md#set-split-dns)
+- [**User invites**](./tailnet.md#tailnet-user-invites)
+  - List user invites: [`GET /api/v2/tailnet/{tailnet}/user-invites`](./tailnet.md#list-user-invites)
+  - Create user invites: [`POST /api/v2/tailnet/{tailnet}/user-invites`](./tailnet.md#create-user-invites)
+
+**[User invites](./userinvites.md#user-invites)**
+
+- Get user invite: [`GET /api/v2/user-invites/{userInviteId}`](./userinvites.md#get-user-invite)
+- Delete user invite: [`DELETE /api/v2/user-invites/{userInviteId}`](./userinvites.md#delete-user-invite)
+- Resend user invite (by email): [`POST /api/v2/user-invites/{userInviteId}/resend`](#resend-user-invite)
+
+**[Device invites](./deviceinvites.md#device-invites)**
+
+- Get device invite: [`GET /api/v2/device-invites/{deviceInviteId}`](./deviceinvites.md#get-device-invite)
+- Delete device invite: [`DELETE /api/v2/device-invites/{deviceInviteId}`](./deviceinvites.md#delete-device-invite)
+- Resend device invite (by email): [`POST /api/v2/device-invites/{deviceInviteId}/resend`](./deviceinvites.md#resend-device-invite)
+- Accept device invite [`POST /api/v2/device-invites/-/accept`](#accept-device-invite)

@@ -52,6 +52,9 @@ When specifying a tailnet in the API, you can:
     - Get split DNS: [`GET /api/v2/tailnet/{tailnet}/dns/split-dns`](#get-split-dns)
     - Update split DNS: [`PATCH /api/v2/tailnet/{tailnet}/dns/split-dns`](#update-split-dns)
     - Set split DNS: [`PUT /api/v2/tailnet/{tailnet}/dns/split-dns`](#set-split-dns)
+- [**User invites**](#tailnet-user-invites)
+  - List user invites: [`GET /api/v2/tailnet/{tailnet}/user-invites`](#list-user-invites)
+  - Create user invites: [`POST /api/v2/tailnet/{tailnet}/user-invites`](#create-user-invites)
 
 ## Policy File
 
@@ -1315,4 +1318,104 @@ The response is a JSON object containing the updated map of split DNS settings.
 
 ```jsonc
 {}
+```
+
+## Tailnet user invites
+
+The tailnet user invite methods let you create and list [invites](https://tailscale.com/kb/1371/invite-users).
+
+## List user invites
+
+```http
+GET /api/v2/tailnet/{tailnet}/user-invites
+```
+
+List all user invites that haven't been accepted.
+
+### Parameters
+
+#### `tailnet` (required in URL path)
+
+The tailnet organization name.
+
+### Request example
+
+```sh
+curl -X GET "https://api.tailscale.com/api/v2/tailnet/example.com/user-invites" \
+-u "tskey-api-xxxxx:"
+```
+
+### Response
+
+```jsonc
+[
+  {
+    "id": "29214",
+    "role": "member",
+    "tailnetId": 12345,
+    "inviterId": 34567,
+    "email": "user@example.com",
+    "lastEmailSentAt": "2024-05-09T16:13:16.084568545Z",
+    "inviteUrl": "https://login.tailscale.com/uinv/<code>"
+  },
+  {
+    "id": "29215",
+    "role": "admin",
+    "tailnetId": 12345,
+    "inviterId": 34567,
+    "inviteUrl": "https://login.tailscale.com/uinv/<code>"
+  }
+]
+```
+
+## Create user invites
+
+```http
+POST /api/v2/tailnet/{tailnet}/user-invites
+```
+
+Create new user invites to join the tailnet.
+
+### Parameters
+
+#### `tailnet` (required in URL path)
+
+The tailnet organization name.
+
+#### List of invite requests (required in `POST` body)
+
+Each invite request is an object with the following optional fields:
+
+- **`role`:** (Optional) Specify a [user role](https://tailscale.com/kb/1138/user-roles) to assign the invited user. Defaults to the `"member"` role. Valid options are:
+  - `"member"`: Assign the Member role.
+  - `"admin"`: Assign the Admin role.
+  - `"it-admin"`: Assign the IT admin role.
+  - `"network-admin"`: Assign the Network admin role.
+  - `"billing-admin"`: Assign the Billing admin role.
+  - `"auditor"`: Assign the Auditor role.
+- **`email`:** (Optional) Specify the email to send the created invite. If not set, the endpoint generates and returns an invite URL (but doesn't send it out).
+
+### Request example
+
+```sh
+curl -X POST "https://api.tailscale.com/api/v2/tailnet/example.com/user-invites" \
+-u "tskey-api-xxxxx:" \
+-H "Content-Type: application/json" \
+--data-binary '[{"role": "admin", "email":"user@example.com"}]'
+```
+
+### Response
+
+```jsonc
+[
+  {
+    "id": "29214",
+    "role": "admin",
+    "tailnetId": 12345,
+    "inviterId": 34567,
+    "email": "user@example.com",
+    "lastEmailSentAt": "2024-05-09T16:23:26.91778771Z",
+    "inviteUrl": "https://login.tailscale.com/uinv/<code>"
+  }
+]
 ```
