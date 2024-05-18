@@ -933,6 +933,71 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 	}), nil
 }
 
+func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
+	ln, err := s.Listen(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	pc := &packetConn{ln: ln}
+	pc.connReady.L = &pc.mu
+	go pc.accept()
+	return pc, nil
+}
+
+type packetConn struct {
+	ln net.Listener
+
+	mu         sync.Mutex
+	packetConn net.PacketConn
+	connReady  sync.Cond
+}
+
+func (p *packetConn) accept() {
+	conn, err := p.ln.Accept()
+	if err != nil {
+		return
+	}
+	p.packetConn = conn.(net.PacketConn)
+	p.connReady.Broadcast()
+}
+
+func (p *packetConn) conn() net.PacketConn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for p.packetConn == nil {
+		p.connReady.Wait()
+	}
+	return p.packetConn
+}
+
+func (p *packetConn) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
+	return p.conn().ReadFrom(b)
+}
+
+func (p *packetConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
+	return p.conn().WriteTo(b, addr)
+}
+
+func (p *packetConn) Close() error {
+	return p.conn().Close()
+}
+
+func (p *packetConn) LocalAddr() net.Addr {
+	return p.ln.Addr()
+}
+
+func (p *packetConn) SetDeadline(t time.Time) error {
+	return p.conn().SetDeadline(t)
+}
+
+func (p *packetConn) SetReadDeadline(t time.Time) error {
+	return p.conn().SetReadDeadline(t)
+}
+
+func (p *packetConn) SetWriteDeadline(t time.Time) error {
+	return p.conn().SetWriteDeadline(t)
+}
+
 // RegisterFallbackTCPHandler registers a callback which will be called
 // to handle a TCP flow to this tsnet node, for which no listeners will handle.
 //
