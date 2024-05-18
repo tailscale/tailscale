@@ -142,6 +142,7 @@ func main() {
 		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
 		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
 		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
+		SsmArn:                                defaultEnv("TS_SSM_ARN", ""),
 		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
 		KubeSecret:                            defaultEnv("TS_KUBE_SECRET", "tailscale"),
 		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
@@ -707,6 +708,12 @@ func tailscaledArgs(cfg *settings) []string {
 			cfg.StateDir = "/tmp"
 		}
 		fallthrough
+	case cfg.SsmArn != "":
+		args = append(args, "--state="+cfg.SsmArn)
+		if cfg.StateDir == "" {
+			cfg.StateDir = "/tmp"
+		}
+		fallthrough
 	case cfg.StateDir != "":
 		args = append(args, "--statedir="+cfg.StateDir)
 	default:
@@ -1089,6 +1096,7 @@ type settings struct {
 	StateDir                 string
 	AcceptDNS                *bool
 	KubeSecret               string
+	SsmArn                   string
 	SOCKSProxyAddr           string
 	HTTPProxyAddr            string
 	Socket                   string

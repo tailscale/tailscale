@@ -652,6 +652,21 @@ func TestContainerBoot(t *testing.T) {
 				},
 			},
 		},
+		{
+			Name: "aws ssm parameter",
+			Env: map[string]string{
+				"TS_SSM_ARN": "arn:aws:ssm:us-west-2:123456789012:parameter/my-param",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=arn:aws:ssm:us-west-2:123456789012:parameter/my-param --statedir=/tmp --tun=userspace-networking",
+					},
+				}, {
+					Notify: runningNotify,
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
