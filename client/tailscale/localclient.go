@@ -778,6 +778,17 @@ func (lc *LocalClient) SetDNS(ctx context.Context, name, value string) error {
 //
 // The ctx is only used for the duration of the call, not the lifetime of the net.Conn.
 func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
+	return lc.UserDial(ctx, "tcp", host, port)
+}
+
+// UserDial connects to the host's port via Tailscale for the given network.
+//
+// The host may be a base DNS name (resolved from the netmap inside tailscaled),
+// a FQDN, or an IP address.
+//
+// The ctx is only used for the duration of the call, not the lifetime of the
+// net.Conn.
+func (lc *LocalClient) UserDial(ctx context.Context, network, host string, port uint16) (net.Conn, error) {
 	connCh := make(chan net.Conn, 1)
 	trace := httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -790,10 +801,11 @@ func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (n
 		return nil, err
 	}
 	req.Header = http.Header{
-		"Upgrade":    []string{"ts-dial"},
-		"Connection": []string{"upgrade"},
-		"Dial-Host":  []string{host},
-		"Dial-Port":  []string{fmt.Sprint(port)},
+		"Upgrade":      []string{"ts-dial"},
+		"Connection":   []string{"upgrade"},
+		"Dial-Host":    []string{host},
+		"Dial-Port":    []string{fmt.Sprint(port)},
+		"Dial-Network": []string{network},
 	}
 	res, err := lc.DoLocalRequest(req)
 	if err != nil {
