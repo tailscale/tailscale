@@ -1326,6 +1326,50 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	return
 }
 
+// ListenPacket listens for incoming packets for the given network and address.
+// Address must be of the form "ip:port" or "[ip]:port".
+//
+// As of 2024-05-18, only udp4 and udp6 are supported.
+func (ns *Impl) ListenPacket(network, address string) (net.PacketConn, error) {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("netstack: ParseAddrPort(%q): %v", address, err)
+	}
+
+	var networkProto tcpip.NetworkProtocolNumber
+	switch network {
+	case "udp":
+		return nil, fmt.Errorf("netstack: udp not supported; use udp4 or udp6")
+	case "udp4":
+		networkProto = ipv4.ProtocolNumber
+		if !ap.Addr().Is4() {
+			return nil, fmt.Errorf("netstack: udp4 requires an IPv4 address")
+		}
+	case "udp6":
+		networkProto = ipv6.ProtocolNumber
+		if !ap.Addr().Is6() {
+			return nil, fmt.Errorf("netstack: udp6 requires an IPv6 address")
+		}
+	default:
+		return nil, fmt.Errorf("netstack: unsupported network %q", network)
+	}
+	var wq waiter.Queue
+	ep, nserr := ns.ipstack.NewEndpoint(udp.ProtocolNumber, networkProto, &wq)
+	if nserr != nil {
+		return nil, fmt.Errorf("netstack: NewEndpoint: %v", nserr)
+	}
+	localAddress := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(ap.Addr().AsSlice()),
+		Port: ap.Port(),
+	}
+	if err := ep.Bind(localAddress); err != nil {
+		ep.Close()
+		return nil, fmt.Errorf("netstack: Bind(%v): %v", localAddress, err)
+	}
+	return gonet.NewUDPConn(&wq, ep), nil
+}
+
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	sess := r.ID()
 	if debugNetstack() {

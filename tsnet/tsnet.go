@@ -562,13 +562,24 @@ func (s *Server) start() (reterr error) {
 		return ok
 	}
 	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		// Note: don't just return ns.DialContextTCP or we'll
-		// return an interface containing a nil pointer.
+		// Note: don't just return ns.DialContextTCP or we'll return
+		// *gonet.TCPConn(nil) instead of a nil interface which trips up
+		// callers.
 		tcpConn, err := ns.DialContextTCP(ctx, dst)
 		if err != nil {
 			return nil, err
 		}
 		return tcpConn, nil
+	}
+	s.dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		// Note: don't just return ns.DialContextUDP or we'll return
+		// *gonet.UDPConn(nil) instead of a nil interface which trips up
+		// callers.
+		udpConn, err := ns.DialContextUDP(ctx, dst)
+		if err != nil {
+			return nil, err
+		}
+		return udpConn, nil
 	}
 
 	if s.Store == nil {
@@ -908,6 +919,34 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }
 
+// ListenPacket announces on the Tailscale network.
+//
+// The network must be "udp", "udp4" or "udp6". The addr must be of the form
+// "ip:port" (or "[ip]:port") where ip is a valid IPv4 or IPv6 address
+// corresponding to "udp4" or "udp6" respectively. IP must be specified.
+//
+// If s has not been started yet, it will be started.
+func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
+	ap, err := resolveListenAddr(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	if !ap.Addr().IsValid() {
+		return nil, fmt.Errorf("tsnet.ListenPacket(%q, %q): address must be a valid IP", network, addr)
+	}
+	if network == "udp" {
+		if ap.Addr().Is4() {
+			network = "udp4"
+		} else {
+			network = "udp6"
+		}
+	}
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+	return s.netstack.ListenPacket(network, ap.String())
+}
+
 // ListenTLS announces only on the Tailscale network.
 // It returns a TLS listener wrapping the tsnet listener.
 // It will start the server if it has not been started yet.
@@ -1070,50 +1109,65 @@ const (
 	listenOnBoth    = listenOn("listen-on-both")
 )
 
-func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, error) {
-	switch network {
-	case "", "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
-	default:
-		return nil, errors.New("unsupported network type")
-	}
+// resolveListenAddr resolves a network and address into a netip.AddrPort. The
+// returned netip.AddrPort.Addr will be the zero value if the address is empty.
+// The port must be a valid port number. The caller is responsible for checking
+// the network and address are valid.
+//
+// It resolves well-known port names and validates the address is a valid IP
+// literal for the network.
+func resolveListenAddr(network, addr string) (netip.AddrPort, error) {
+	var zero netip.AddrPort
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("tsnet: %w", err)
+		return zero, fmt.Errorf("tsnet: %w", err)
 	}
 	port, err := net.LookupPort(network, portStr)
 	if err != nil || port < 0 || port > math.MaxUint16 {
 		// LookupPort returns an error on out of range values so the bounds
 		// checks on port should be unnecessary, but harmless. If they do
 		// match, worst case this error message says "invalid port: <nil>".
-		return nil, fmt.Errorf("invalid port: %w", err)
+		return zero, fmt.Errorf("invalid port: %w", err)
 	}
-	var bindHostOrZero netip.Addr
-	if host != "" {
-		bindHostOrZero, err = netip.ParseAddr(host)
-		if err != nil {
-			return nil, fmt.Errorf("invalid Listen addr %q; host part must be empty or IP literal", host)
-		}
-		if strings.HasSuffix(network, "4") && !bindHostOrZero.Is4() {
-			return nil, fmt.Errorf("invalid non-IPv4 addr %v for network %q", host, network)
-		}
-		if strings.HasSuffix(network, "6") && !bindHostOrZero.Is6() {
-			return nil, fmt.Errorf("invalid non-IPv6 addr %v for network %q", host, network)
-		}
+	if host == "" {
+		return netip.AddrPortFrom(netip.Addr{}, uint16(port)), nil
 	}
 
+	bindHostOrZero, err := netip.ParseAddr(host)
+	if err != nil {
+		return zero, fmt.Errorf("invalid Listen addr %q; host part must be empty or IP literal", host)
+	}
+	if strings.HasSuffix(network, "4") && !bindHostOrZero.Is4() {
+		return zero, fmt.Errorf("invalid non-IPv4 addr %v for network %q", host, network)
+	}
+	if strings.HasSuffix(network, "6") && !bindHostOrZero.Is6() {
+		return zero, fmt.Errorf("invalid non-IPv6 addr %v for network %q", host, network)
+	}
+	return netip.AddrPortFrom(bindHostOrZero, uint16(port)), nil
+}
+
+func (s *Server) listen(network, addr string, lnOn listenOn) (*listener, error) {
+	switch network {
+	case "", "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
+	default:
+		return nil, errors.New("unsupported network type")
+	}
+	host, err := resolveListenAddr(network, addr)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
-
 	var keys []listenKey
 	switch lnOn {
 	case listenOnTailnet:
-		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), false})
+		keys = append(keys, listenKey{network, host.Addr(), host.Port(), false})
 	case listenOnFunnel:
-		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), true})
+		keys = append(keys, listenKey{network, host.Addr(), host.Port(), true})
 	case listenOnBoth:
-		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), false})
-		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), true})
+		keys = append(keys, listenKey{network, host.Addr(), host.Port(), false})
+		keys = append(keys, listenKey{network, host.Addr(), host.Port(), true})
 	}
 
 	ln := &listener{
