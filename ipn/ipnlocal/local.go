@@ -4186,18 +4186,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 	}
 
 	var doStatefulFiltering bool
-	if v, ok := prefs.NoStatefulFiltering().Get(); !ok {
-		// The stateful filtering preference isn't explicitly set; this is
-		// unexpected since we expect it to be set during the profile
-		// backfill, but to be safe let's enable stateful filtering
-		// absent further information.
-		doStatefulFiltering = true
-		b.logf("[unexpected] NoStatefulFiltering preference not set; enabling stateful filtering")
-	} else if v {
-		// The preferences explicitly say "no stateful filtering", so
-		// we don't do it.
-		doStatefulFiltering = false
-	} else {
+	if v, ok := prefs.NoStatefulFiltering().Get(); ok && !v {
 		// The preferences explicitly "do stateful filtering" is turned
 		// off, or to expand the double negative, to do stateful
 		// filtering. Do so.

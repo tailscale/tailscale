@@ -191,17 +191,16 @@ type Prefs struct {
 	// Linux-only.
 	NoSNAT bool
 
-	// NoStatefulFiltering specifies whether to apply stateful filtering
-	// when advertising routes in AdvertiseRoutes. The default is to apply
+	// NoStatefulFiltering specifies whether to apply stateful filtering when
+	// advertising routes in AdvertiseRoutes. The default is to not apply
 	// stateful filtering.
 	//
 	// To allow inbound connections from advertised routes, both NoSNAT and
 	// NoStatefulFiltering must be true.
 	//
-	// This is an opt.Bool because it was added after NoSNAT, but is backfilled
-	// based on the value of that parameter. We need to treat it as a tristate:
-	// true, false, or unset, and backfill based on that value. See
-	// ipn/ipnlocal for more details on the backfill.
+	// This is an opt.Bool because it was first added after NoSNAT, with a
+	// backfill based on the value of that parameter. The backfill has been
+	// removed since then, but the field remains an opt.Bool.
 	//
 	// Linux-only.
 	NoStatefulFiltering opt.Bool `json:",omitempty"`
@@ -666,7 +665,7 @@ func NewPrefs() *Prefs {
 		CorpDNS:             true,
 		WantRunning:         false,
 		NetfilterMode:       preftype.NetfilterOn,
-		NoStatefulFiltering: opt.NewBool(false),
+		NoStatefulFiltering: opt.NewBool(true),
 		AutoUpdate: AutoUpdatePrefs{
 			Check: true,
 			Apply: opt.Bool("unset"),
