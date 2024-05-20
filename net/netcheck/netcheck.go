@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math/rand"
 	"net"
 	"net/http"
@@ -115,14 +116,55 @@ type Report struct {
 	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
 	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
 
-	GlobalV4 string // ip:port of global IPv4
-	GlobalV6 string // [ip]:port of global IPv6
+	GlobalV4Counters map[netip.AddrPort]int // keyed by IP:port, number of times observed
+	GlobalV6Counters map[netip.AddrPort]int // keyed by [IP]:port, number of times observed
+
+	GlobalV4 netip.AddrPort // ip:port of global IPv4
+	GlobalV6 netip.AddrPort // [ip]:port of global IPv6
 
 	// CaptivePortal is set when we think there's a captive portal that is
 	// intercepting HTTP traffic.
 	CaptivePortal opt.Bool
 
 	// TODO: update Clone when adding new fields
+}
+
+// GetGlobalAddrs returns the v4 and v6 global addresses observed during the
+// netcheck, which includes the best latency endpoint first, followed by any
+// other endpoints that were observed repeatedly. It excludes singular endpoints
+// that are likely only the result of a hard NAT.
+func (r *Report) GetGlobalAddrs() ([]netip.AddrPort, []netip.AddrPort) {
+	var v4, v6 []netip.AddrPort
+	// Always add the best latency entries first.
+	if r.GlobalV4.IsValid() {
+		v4 = append(v4, r.GlobalV4)
+	}
+	if r.GlobalV6.IsValid() {
+		v6 = append(v6, r.GlobalV6)
+	}
+	// Add any other entries for which we have multiple observations.
+	// This covers a case of bad NATs that start to provide new mappings for new
+	// STUN sessions mid-expiration, even while a live mapping for the best
+	// latency endpoint still exists. This has been observed on some Palo Alto
+	// Networks firewalls, wherein new traffic to the old endpoint will not
+	// succeed, but new traffic to the newly discovered endpoints does succeed.
+	for ipp, count := range r.GlobalV4Counters {
+		if ipp == r.GlobalV4 {
+			continue
+		}
+		if count > 1 {
+			v4 = append(v4, ipp)
+		}
+	}
+	for ipp, count := range r.GlobalV6Counters {
+		if ipp == r.GlobalV6 {
+			continue
+		}
+		if count > 1 {
+			v6 = append(v6, ipp)
+		}
+	}
+	return v4, v6
 }
 
 // AnyPortMappingChecked reports whether any of UPnP, PMP, or PCP are non-empty.
@@ -138,6 +180,8 @@ func (r *Report) Clone() *Report {
 	r2.RegionLatency = cloneDurationMap(r2.RegionLatency)
 	r2.RegionV4Latency = cloneDurationMap(r2.RegionV4Latency)
 	r2.RegionV6Latency = cloneDurationMap(r2.RegionV6Latency)
+	r2.GlobalV4Counters = maps.Clone(r2.GlobalV4Counters)
+	r2.GlobalV6Counters = maps.Clone(r2.GlobalV6Counters)
 	return &r2
 }
 
@@ -533,7 +577,7 @@ type reportState struct {
 	sentHairCheck bool
 	report        *Report                            // to be returned by GetReport
 	inFlight      map[stun.TxID]func(netip.AddrPort) // called without c.mu held
-	gotEP4        string
+	gotEP4        netip.AddrPort
 	timers        []*time.Timer
 }
 
@@ -640,11 +684,6 @@ func (rs *reportState) stopTimers() {
 // is non-zero (for all but HTTPS replies), it's recorded as our UDP
 // IP:port.
 func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort, d time.Duration) {
-	var ipPortStr string
-	if ipp != (netip.AddrPort{}) {
-		ipPortStr = net.JoinHostPort(ipp.Addr().String(), fmt.Sprint(ipp.Port()))
-	}
-
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ret := rs.report
@@ -670,18 +709,20 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort
 	case ipp.Addr().Is6():
 		updateLatency(ret.RegionV6Latency, node.RegionID, d)
 		ret.IPv6 = true
-		ret.GlobalV6 = ipPortStr
+		ret.GlobalV6 = ipp
+		mak.Set(&ret.GlobalV6Counters, ipp, ret.GlobalV6Counters[ipp]+1)
 		// TODO: track MappingVariesByDestIP for IPv6
 		// too? Would be sad if so, but who knows.
 	case ipp.Addr().Is4():
 		updateLatency(ret.RegionV4Latency, node.RegionID, d)
 		ret.IPv4 = true
-		if rs.gotEP4 == "" {
-			rs.gotEP4 = ipPortStr
-			ret.GlobalV4 = ipPortStr
+		mak.Set(&ret.GlobalV4Counters, ipp, ret.GlobalV4Counters[ipp]+1)
+		if !rs.gotEP4.IsValid() {
+			rs.gotEP4 = ipp
+			ret.GlobalV4 = ipp
 			rs.startHairCheckLocked(ipp)
 		} else {
-			if rs.gotEP4 != ipPortStr {
+			if rs.gotEP4 != ipp {
 				ret.MappingVariesByDestIP.Set(true)
 			} else if ret.MappingVariesByDestIP == "" {
 				ret.MappingVariesByDestIP.Set(false)
@@ -1334,11 +1375,11 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 		} else {
 			fmt.Fprintf(w, " portmap=?")
 		}
-		if r.GlobalV4 != "" {
-			fmt.Fprintf(w, " v4a=%v", r.GlobalV4)
+		if r.GlobalV4.IsValid() {
+			fmt.Fprintf(w, " v4a=%s", r.GlobalV4)
 		}
-		if r.GlobalV6 != "" {
-			fmt.Fprintf(w, " v6a=%v", r.GlobalV6)
+		if r.GlobalV6.IsValid() {
+			fmt.Fprintf(w, " v6a=%s", r.GlobalV6)
 		}
 		if r.CaptivePortal != "" {
 			fmt.Fprintf(w, " captiveportal=%v", r.CaptivePortal)

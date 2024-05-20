@@ -776,7 +776,6 @@ func (c *sclient) run(ctx context.Context) error {
 	var grp errgroup.Group
 	sendCtx, cancelSender := context.WithCancel(ctx)
 	grp.Go(func() error { return c.sendLoop(sendCtx) })
-	grp.Go(func() error { return c.statsLoop(sendCtx) })
 	defer func() {
 		cancelSender()
 		if err := grp.Wait(); err != nil && !c.s.isClosed() {
@@ -787,6 +786,8 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 		}
 	}()
+
+	c.startStatsLoop(sendCtx)
 
 	for {
 		ft, fl, err := readFrameHeader(c.br)

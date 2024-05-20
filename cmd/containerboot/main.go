@@ -961,15 +961,22 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 		return err
 	}
 	var local netip.Addr
+	proxyHasIPv4Address := false
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
+		}
+		if pfx.Addr().Is4() {
+			proxyHasIPv4Address = true
 		}
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
 		}
 		local = pfx.Addr()
 		break
+	}
+	if proxyHasIPv4Address && dst.Is6() {
+		log.Printf("Warning: proxy backend ClusterIP is an IPv6 address and the proxy has a IPv4 tailnet address. You might need to disable IPv4 address allocation for the proxy for forwarding to work. See https://github.com/tailscale/tailscale/issues/12156")
 	}
 	if !local.IsValid() {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)

@@ -26,9 +26,8 @@ import (
 
 type LoginGoal struct {
 	_     structs.Incomparable
-	token *tailcfg.Oauth2Token // oauth token to use when logging in
-	flags LoginFlags           // flags to use when logging in
-	url   string               // auth url that needs to be visited
+	flags LoginFlags // flags to use when logging in
+	url   string     // auth url that needs to be visited
 }
 
 var _ Client = (*Auto)(nil)
@@ -338,7 +337,7 @@ func (c *Auto) authRoutine() {
 			url, err = c.direct.WaitLoginURL(ctx, goal.url)
 			f = "WaitLoginURL"
 		} else {
-			url, err = c.direct.TryLogin(ctx, goal.token, goal.flags)
+			url, err = c.direct.TryLogin(ctx, goal.flags)
 			f = "TryLogin"
 		}
 		if err != nil {
@@ -612,8 +611,8 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	})
 }
 
-func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
-	c.logf("client.Login(%v, %v)", t != nil, flags)
+func (c *Auto) Login(flags LoginFlags) {
+	c.logf("client.Login(%v)", flags)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -625,7 +624,6 @@ func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	}
 	c.wantLoggedIn = true
 	c.loginGoal = &LoginGoal{
-		token: t,
 		flags: flags,
 	}
 	c.cancelMapCtxLocked()

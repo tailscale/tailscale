@@ -104,7 +104,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
-	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, hidden+"install host routes to other Tailscale nodes")
+	upf.Var(notFalseVar{}, "host-routes", hidden+"install host routes to other Tailscale nodes (must be true as of Tailscale 1.67+)")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node")
 	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
@@ -143,6 +143,18 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	return upf
 }
 
+// notFalseVar is is a flag.Value that can only be "true", if set.
+type notFalseVar struct{}
+
+func (notFalseVar) IsBoolFlag() bool { return true }
+func (notFalseVar) Set(v string) error {
+	if v != "true" {
+		return fmt.Errorf("unsupported value; only 'true' is allowed")
+	}
+	return nil
+}
+func (notFalseVar) String() string { return "true" }
+
 func defaultNetfilterMode() string {
 	if distro.Get() == distro.Synology {
 		return "off"
@@ -156,7 +168,6 @@ type upArgsT struct {
 	server                 string
 	acceptRoutes           bool
 	acceptDNS              bool
-	singleRoutes           bool
 	exitNodeIP             string
 	exitNodeAllowLANAccess bool
 	shieldsUp              bool
@@ -278,7 +289,6 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 	prefs.ExitNodeAllowLANAccess = upArgs.exitNodeAllowLANAccess
 	prefs.CorpDNS = upArgs.acceptDNS
-	prefs.AllowSingleHosts = upArgs.singleRoutes
 	prefs.ShieldsUp = upArgs.shieldsUp
 	prefs.RunSSH = upArgs.runSSH
 	prefs.RunWebClient = upArgs.runWebClient
@@ -740,7 +750,6 @@ func init() {
 	addPrefFlagMapping("accept-dns", "CorpDNS")
 	addPrefFlagMapping("accept-routes", "RouteAll")
 	addPrefFlagMapping("advertise-tags", "AdvertiseTags")
-	addPrefFlagMapping("host-routes", "AllowSingleHosts")
 	addPrefFlagMapping("hostname", "Hostname")
 	addPrefFlagMapping("login-server", "ControlURL")
 	addPrefFlagMapping("netfilter-mode", "NetfilterMode")
@@ -779,7 +788,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "json", "timeout", "accept-risk":
+	case "auth-key", "force-reauth", "reset", "qr", "json", "timeout", "accept-risk", "host-routes":
 		return true
 	}
 	return false
@@ -975,8 +984,6 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(prefs.ControlURL)
 		case "accept-routes":
 			set(prefs.RouteAll)
-		case "host-routes":
-			set(prefs.AllowSingleHosts)
 		case "accept-dns":
 			set(prefs.CorpDNS)
 		case "shields-up":

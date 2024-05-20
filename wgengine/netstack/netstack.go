@@ -15,8 +15,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"sync"
@@ -55,7 +53,6 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -916,13 +913,7 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	return false
 }
 
-// setAmbientCapsRaw is non-nil on Linux for Synology, to run ping with
-// CAP_NET_RAW from tailscaled's binary.
-var setAmbientCapsRaw func(*exec.Cmd)
-
 var userPingSem = syncs.NewSemaphore(20) // 20 child ping processes at once
-
-var isSynology = runtime.GOOS == "linux" && distro.Get() == distro.Synology
 
 type userPingDirection int
 
@@ -944,6 +935,8 @@ const (
 // it bounds the number of pings going on at once. The idea is that
 // people only use ping occasionally to see if their internet's working
 // so this doesn't need to be great.
+// On Apple platforms, this function doesn't run the ping command. Instead,
+// it sends a non-privileged ping.
 //
 // The 'direction' parameter is used to determine where the response "pong"
 // packet should be written, if the ping succeeds. See the documentation on the
@@ -958,44 +951,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte, direction userPing
 	defer userPingSem.Release()
 
 	t0 := time.Now()
-	var err error
-	switch runtime.GOOS {
-	case "windows":
-		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
-	case "darwin", "freebsd":
-		// Note: 2000 ms is actually 1 second + 2,000
-		// milliseconds extra for 3 seconds total.
-		// See https://github.com/tailscale/tailscale/pull/3753 for details.
-		ping := "ping"
-		if dstIP.Is6() {
-			ping = "ping6"
-		}
-		err = exec.Command(ping, "-c", "1", "-W", "2000", dstIP.String()).Run()
-	case "openbsd":
-		ping := "ping"
-		if dstIP.Is6() {
-			ping = "ping6"
-		}
-		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
-	case "android":
-		ping := "/system/bin/ping"
-		if dstIP.Is6() {
-			ping = "/system/bin/ping6"
-		}
-		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
-	default:
-		ping := "ping"
-		if isSynology {
-			ping = "/bin/ping"
-		}
-		cmd := exec.Command(ping, "-c", "1", "-W", "3", dstIP.String())
-		if isSynology && os.Getuid() != 0 {
-			// On DSM7 we run as non-root and need to pass
-			// CAP_NET_RAW if our binary has it.
-			setAmbientCapsRaw(cmd)
-		}
-		err = cmd.Run()
-	}
+	err := ns.sendOutboundUserPing(dstIP, 3*time.Second)
 	d := time.Since(t0)
 	if err != nil {
 		if d < time.Second/2 {

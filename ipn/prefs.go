@@ -75,18 +75,6 @@ type Prefs struct {
 	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
-	// AllowSingleHosts specifies whether to install routes for each
-	// node IP on the tailscale network, in addition to a route for
-	// the whole network.
-	// This corresponds to the "tailscale up --host-routes" value,
-	// which defaults to true.
-	//
-	// TODO(danderson): why do we have this? It dumps a lot of stuff
-	// into the routing table, and a single network route _should_ be
-	// all that we need. But when I turn this off in my tailscaled,
-	// packets stop flowing. What's up with that?
-	AllowSingleHosts bool
-
 	// ExitNodeID and ExitNodeIP specify the node that should be used
 	// as an exit node for internet traffic. At most one of these
 	// should be non-zero.
@@ -252,6 +240,16 @@ type Prefs struct {
 	// by name.
 	DriveShares []*drive.Share
 
+	// AllowSingleHosts was a legacy field that was always true
+	// for the past 4.5 years. It controlled whether Tailscale
+	// peers got /32 or /127 routes for each other.
+	// As of 2024-05-17 we're starting to ignore it, but to let
+	// people still downgrade Tailscale versions and not break
+	// all peer-to-peer networking we still write it to disk (as JSON)
+	// so it can be loaded back by old versions.
+	// TODO(bradfitz): delete this in 2025 sometime. See #12058.
+	AllowSingleHosts marshalAsTrueInJSON
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -282,6 +280,13 @@ func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
 		ok1 == ok2
 }
 
+type marshalAsTrueInJSON struct{}
+
+var trueJSON = []byte("true")
+
+func (marshalAsTrueInJSON) MarshalJSON() ([]byte, error) { return trueJSON, nil }
+func (*marshalAsTrueInJSON) UnmarshalJSON([]byte) error  { return nil }
+
 // AppConnectorPrefs are the app connector settings for the node agent.
 type AppConnectorPrefs struct {
 	// Advertise specifies whether the app connector subsystem is advertising
@@ -299,7 +304,6 @@ type MaskedPrefs struct {
 
 	ControlURLSet             bool                `json:",omitempty"`
 	RouteAllSet               bool                `json:",omitempty"`
-	AllowSingleHostsSet       bool                `json:",omitempty"`
 	ExitNodeIDSet             bool                `json:",omitempty"`
 	ExitNodeIPSet             bool                `json:",omitempty"`
 	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
@@ -484,9 +488,6 @@ func (p *Prefs) pretty(goos string) string {
 	var sb strings.Builder
 	sb.WriteString("Prefs{")
 	fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
-	if !p.AllowSingleHosts {
-		sb.WriteString("mesh=false ")
-	}
 	fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
 	if p.RunSSH {
 		sb.WriteString("ssh=true ")
@@ -579,7 +580,6 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 
 	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
-		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
@@ -663,7 +663,6 @@ func NewPrefs() *Prefs {
 		ControlURL: "",
 
 		RouteAll:            true,
-		AllowSingleHosts:    true,
 		CorpDNS:             true,
 		WantRunning:         false,
 		NetfilterMode:       preftype.NetfilterOn,

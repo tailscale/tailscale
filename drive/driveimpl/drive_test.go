@@ -14,6 +14,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -30,12 +32,27 @@ import (
 const (
 	domain = `test$%domain.com`
 
-	remote1 = `rem ote$%1`
-	remote2 = `_rem ote$%2`
-	share11 = `sha re$%11`
-	share12 = `_sha re$%12`
-	file111 = `fi le$%111.txt`
+	remote1 = `rem ote$%<>1`
+	remote2 = `_rem ote$%<>2`
+	share11 = `sha re$%<>11`
+	share12 = `_sha re$%<>12`
 	file112 = `file112.txt`
+)
+
+var (
+	file111 = `fi le$%<>111.txt`
+)
+
+func init() {
+	if runtime.GOOS == "windows" {
+		// file with less than and greater than doesn't work on Windows
+		file111 = `fi le$%111.txt`
+	}
+}
+
+var (
+	lockRootRegex  = regexp.MustCompile(`<D:lockroot><D:href>/?([^<]*)/?</D:href>`)
+	lockTokenRegex = regexp.MustCompile(`<D:locktoken><D:href>([0-9]+)/?</D:href>`)
 )
 
 func init() {
@@ -142,6 +159,206 @@ func TestSecretTokenAuth(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected %d for incorrect secret token, but got %d", http.StatusForbidden, resp.StatusCode)
+	}
+}
+
+func TestLOCK(t *testing.T) {
+	s := newSystem(t)
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
+		s.local.l.Addr(),
+		url.PathEscape(domain),
+		url.PathEscape(remote1),
+		url.PathEscape(share11),
+		url.PathEscape(file111))
+
+	// First acquire a lock with a short timeout
+	req, err := http.NewRequest("LOCK", u, strings.NewReader(lockBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Depth", "infinity")
+	req.Header.Set("Timeout", "Second-1")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected LOCK to succeed, but got status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submatches := lockRootRegex.FindStringSubmatch(string(body))
+	if len(submatches) != 2 {
+		t.Fatal("failed to find lockroot")
+	}
+	want := shared.EscapeForXML(pathTo(remote1, share11, file111))
+	got := submatches[1]
+	if got != want {
+		t.Fatalf("want lockroot %q, got %q", want, got)
+	}
+
+	submatches = lockTokenRegex.FindStringSubmatch(string(body))
+	if len(submatches) != 2 {
+		t.Fatal("failed to find locktoken")
+	}
+	lockToken := submatches[1]
+	ifHeader := fmt.Sprintf("<%s> (<%s>)", u, lockToken)
+
+	// Then refresh the lock with a longer timeout
+	req, err = http.NewRequest("LOCK", u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Depth", "infinity")
+	req.Header.Set("Timeout", "Second-600")
+	req.Header.Set("If", ifHeader)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected LOCK refresh to succeed, but got status %d", resp.StatusCode)
+	}
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submatches = lockRootRegex.FindStringSubmatch(string(body))
+	if len(submatches) != 2 {
+		t.Fatal("failed to find lockroot after refresh")
+	}
+	want = shared.EscapeForXML(pathTo(remote1, share11, file111))
+	got = submatches[1]
+	if got != want {
+		t.Fatalf("want lockroot after refresh %q, got %q", want, got)
+	}
+
+	submatches = lockTokenRegex.FindStringSubmatch(string(body))
+	if len(submatches) != 2 {
+		t.Fatal("failed to find locktoken after refresh")
+	}
+	if submatches[1] != lockToken {
+		t.Fatalf("on refresh, lock token changed from %q to %q", lockToken, submatches[1])
+	}
+
+	// Then wait past the original timeout, then try to delete without the lock
+	// (should fail)
+	time.Sleep(1 * time.Second)
+	req, err = http.NewRequest("DELETE", u, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 423 {
+		t.Fatalf("deleting without lock token should fail with 423, but got %d", resp.StatusCode)
+	}
+
+	// Then delete with the lock (should succeed)
+	req, err = http.NewRequest("DELETE", u, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Set("If", ifHeader)
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("deleting with lock token should have succeeded with 204, but got %d", resp.StatusCode)
+	}
+}
+
+func TestUNLOCK(t *testing.T) {
+	s := newSystem(t)
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+	s.writeFile("writing file to read/write remote should succeed", remote1, share11, file111, "hello world", true)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
+		s.local.l.Addr(),
+		url.PathEscape(domain),
+		url.PathEscape(remote1),
+		url.PathEscape(share11),
+		url.PathEscape(file111))
+
+	// Acquire a lock
+	req, err := http.NewRequest("LOCK", u, strings.NewReader(lockBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Depth", "infinity")
+	req.Header.Set("Timeout", "Second-600")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected LOCK to succeed, but got status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submatches := lockTokenRegex.FindStringSubmatch(string(body))
+	if len(submatches) != 2 {
+		t.Fatal("failed to find locktoken")
+	}
+	lockToken := submatches[1]
+
+	// Release the lock
+	req, err = http.NewRequest("UNLOCK", u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Lock-Token", fmt.Sprintf("<%s>", lockToken))
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("expected UNLOCK to succeed with a 204, but got status %d", resp.StatusCode)
+	}
+
+	// Then delete without the lock (should succeed)
+	req, err = http.NewRequest("DELETE", u, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("deleting without lock should have succeeded with 204, but got %d", resp.StatusCode)
 	}
 }
 
@@ -486,3 +703,9 @@ func (a *noopAuthenticator) Clone() gowebdav.Authenticator {
 func (a *noopAuthenticator) Close() error {
 	return nil
 }
+
+const lockBody = `<?xml version="1.0" encoding="utf-8" ?> 
+<D:lockinfo xmlns:D='DAV:'> 
+  <D:lockscope><D:exclusive/></D:lockscope> 
+  <D:locktype><D:write/></D:locktype> 
+</D:lockinfo>`

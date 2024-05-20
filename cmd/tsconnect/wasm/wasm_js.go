@@ -298,11 +298,10 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 	go func() {
 		err := i.lb.Start(ipn.Options{
 			UpdatePrefs: &ipn.Prefs{
-				ControlURL:       i.controlURL,
-				RouteAll:         false,
-				AllowSingleHosts: true,
-				WantRunning:      true,
-				Hostname:         i.hostname,
+				ControlURL:  i.controlURL,
+				RouteAll:    false,
+				WantRunning: true,
+				Hostname:    i.hostname,
 			},
 			AuthKey: i.authKey,
 		})

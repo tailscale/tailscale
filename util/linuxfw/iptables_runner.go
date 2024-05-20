@@ -87,7 +87,7 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		}
 		supportsV6Filter = checkSupportsV6Filter(ipt6, logf)
 		supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
-		logf("v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
+		logf("netfilter running in iptables mode v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
 	}
 	return &iptablesRunner{
 		ipt4:              ipt4,

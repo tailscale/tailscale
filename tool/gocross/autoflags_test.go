@@ -285,6 +285,64 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			},
 		},
 		{
+			name: "darwin_arm64_to_darwin_arm64_empty_goos",
+			argv: []string{"gocross", "build", "./cmd/tailcontrol"},
+			env: map[string]string{
+				"GOOS": "",
+			},
+			goroot:       "/goroot",
+			nativeGOOS:   "darwin",
+			nativeGOARCH: "arm64",
+
+			envDiff: `CC=cc (was <nil>)
+CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
+CGO_ENABLED=1 (was <nil>)
+CGO_LDFLAGS= (was <nil>)
+GOARCH=arm64 (was <nil>)
+GOARM=5 (was <nil>)
+GOMIPS=softfloat (was <nil>)
+GOOS=darwin (was )
+GOROOT=/goroot (was <nil>)
+GOTOOLCHAIN=local (was <nil>)
+TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
+			wantArgv: []string{
+				"gocross", "build",
+				"-trimpath",
+				"-tags=tailscale_go,omitidna,omitpemdecrypt",
+				"-ldflags", "-X tailscale.com/version.longStamp=1.2.3-long -X tailscale.com/version.shortStamp=1.2.3 -X tailscale.com/version.gitCommitStamp=abcd -X tailscale.com/version.extraGitCommitStamp=defg",
+				"./cmd/tailcontrol",
+			},
+		},
+		{
+			name: "darwin_arm64_to_darwin_arm64_empty_goarch",
+			argv: []string{"gocross", "build", "./cmd/tailcontrol"},
+			env: map[string]string{
+				"GOARCH": "",
+			},
+			goroot:       "/goroot",
+			nativeGOOS:   "darwin",
+			nativeGOARCH: "arm64",
+
+			envDiff: `CC=cc (was <nil>)
+CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
+CGO_ENABLED=1 (was <nil>)
+CGO_LDFLAGS= (was <nil>)
+GOARCH=arm64 (was )
+GOARM=5 (was <nil>)
+GOMIPS=softfloat (was <nil>)
+GOOS=darwin (was <nil>)
+GOROOT=/goroot (was <nil>)
+GOTOOLCHAIN=local (was <nil>)
+TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
+			wantArgv: []string{
+				"gocross", "build",
+				"-trimpath",
+				"-tags=tailscale_go,omitidna,omitpemdecrypt",
+				"-ldflags", "-X tailscale.com/version.longStamp=1.2.3-long -X tailscale.com/version.shortStamp=1.2.3 -X tailscale.com/version.gitCommitStamp=abcd -X tailscale.com/version.extraGitCommitStamp=defg",
+				"./cmd/tailcontrol",
+			},
+		},
+		{
 			name: "darwin_arm64_to_darwin_amd64",
 			env: map[string]string{
 				"GOARCH": "amd64",

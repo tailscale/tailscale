@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -189,11 +190,49 @@ func TestBasic(t *testing.T) {
 	if _, ok := r.RegionLatency[1]; !ok {
 		t.Errorf("expected key 1 in DERPLatency; got %+v", r.RegionLatency)
 	}
-	if r.GlobalV4 == "" {
+	if !r.GlobalV4.IsValid() {
 		t.Error("expected GlobalV4 set")
 	}
 	if r.PreferredDERP != 1 {
 		t.Errorf("PreferredDERP = %v; want 1", r.PreferredDERP)
+	}
+	v4Addrs, _ := r.GetGlobalAddrs()
+	if len(v4Addrs) != 1 {
+		t.Error("expected one global IPv4 address")
+	}
+	if got, want := v4Addrs[0], r.GlobalV4; got != want {
+		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestMultiGlobalAddressMapping(t *testing.T) {
+	c := &Client{
+		Logf: t.Logf,
+	}
+
+	rs := &reportState{
+		c:             c,
+		start:         time.Now(),
+		report:        newReport(),
+		sentHairCheck: true, // prevent hair check start, not relevant here
+	}
+	derpNode := &tailcfg.DERPNode{}
+	port1 := netip.MustParseAddrPort("127.0.0.1:1234")
+	port2 := netip.MustParseAddrPort("127.0.0.1:2345")
+	port3 := netip.MustParseAddrPort("127.0.0.1:3456")
+	// First report for port1
+	rs.addNodeLatency(derpNode, port1, 10*time.Millisecond)
+	// Singular report for port2
+	rs.addNodeLatency(derpNode, port2, 11*time.Millisecond)
+	// Duplicate reports for port3
+	rs.addNodeLatency(derpNode, port3, 12*time.Millisecond)
+	rs.addNodeLatency(derpNode, port3, 13*time.Millisecond)
+
+	r := rs.report
+	v4Addrs, _ := r.GetGlobalAddrs()
+	wantV4Addrs := []netip.AddrPort{port1, port3}
+	if !slices.Equal(v4Addrs, wantV4Addrs) {
+		t.Errorf("got global addresses: %v, want %v", v4Addrs, wantV4Addrs)
 	}
 }
 
