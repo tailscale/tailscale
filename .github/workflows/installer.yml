@@ -3,7 +3,7 @@ name: test installer.sh
 on:
   push:
     branches:
-      - "main"
+      - "*"
     paths:
       - scripts/installer.sh
   pull_request:
