@@ -469,7 +469,7 @@ func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *Config) {
 		if _, found := ifstate.Interface["docker0"]; found {
 			r.health.SetWarnable(warnStatefulFilteringWithDocker, fmt.Errorf(""+
 				"Stateful filtering is enabled and Docker was detected; this may prevent Docker containers "+
-				"on this host from connecting to Tailscale nodes. "+
+				"on this host from resolving DNS and connecting to Tailscale nodes. "+
 				"See https://tailscale.com/s/stateful-docker",
 			))
 			return
