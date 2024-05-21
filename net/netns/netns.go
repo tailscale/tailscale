@@ -38,7 +38,7 @@ var bindToInterfaceByRoute atomic.Bool
 // route information to bind to a particular interface. It is the same as
 // setting the TS_BIND_TO_INTERFACE_BY_ROUTE.
 //
-// Currently, this only changes the behaviour on macOS.
+// Currently, this only changes the behaviour on macOS and Windows.
 func SetBindToInterfaceByRoute(v bool) {
 	bindToInterfaceByRoute.Store(v)
 }
