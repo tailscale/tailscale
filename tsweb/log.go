@@ -12,7 +12,7 @@ import (
 // AccessLogRecord is a record of one HTTP request served.
 type AccessLogRecord struct {
 	// Timestamp at which request processing started.
-	When time.Time `json:"when"`
+	Time time.Time `json:"time"`
 	// Time it took to finish processing the request. It does not
 	// include the entire lifetime of the underlying connection in
 	// cases like connection hijacking, only the lifetime of the HTTP
@@ -55,8 +55,8 @@ type AccessLogRecord struct {
 
 // String returns m as a JSON string.
 func (m AccessLogRecord) String() string {
-	if m.When.IsZero() {
-		m.When = time.Now()
+	if m.Time.IsZero() {
+		m.Time = time.Now()
 	}
 	var buf strings.Builder
 	json.NewEncoder(&buf).Encode(m)

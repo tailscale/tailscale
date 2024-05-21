@@ -87,7 +87,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -104,7 +104,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -121,7 +121,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -137,7 +137,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -153,7 +153,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -171,7 +171,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -190,7 +190,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -208,7 +208,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -227,7 +227,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -245,7 +245,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -264,7 +264,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -282,7 +282,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -301,7 +301,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -319,7 +319,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -338,7 +338,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -355,7 +355,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -373,7 +373,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -390,7 +390,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -412,7 +412,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:    startTime,
+				Time:    startTime,
 				Seconds: 1.0,
 
 				Proto:      "HTTP/1.1",
@@ -432,7 +432,7 @@ func TestStdHandler(t *testing.T) {
 				http.Error(w, e.Msg, 200)
 			},
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -455,7 +455,7 @@ func TestStdHandler(t *testing.T) {
 				http.Error(w, fmt.Sprintf("%s with request ID %s", e.Msg, requestID), 200)
 			},
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
