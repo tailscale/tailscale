@@ -538,7 +538,7 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 
-	u.Host = fmt.Sprintf("%s:%d", host, port)
+	u.Host = fmt.Sprintf("%s:%d", u.Hostname(), port)
 
 	return u.String(), nil
 }
