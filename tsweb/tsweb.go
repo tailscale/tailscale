@@ -299,7 +299,7 @@ type retHandler struct {
 // ServeHTTP implements the http.Handler interface.
 func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg := AccessLogRecord{
-		When:       h.opts.Now(),
+		Time:       h.opts.Now(),
 		RemoteAddr: r.RemoteAddr,
 		Proto:      r.Proto,
 		TLS:        r.TLS != nil,
@@ -371,7 +371,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		lw.code = 200
 	}
 
-	msg.Seconds = h.opts.Now().Sub(msg.When).Seconds()
+	msg.Seconds = h.opts.Now().Sub(msg.Time).Seconds()
 	msg.Code = lw.code
 	msg.Bytes = lw.bytes
 
