@@ -161,7 +161,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 	if violations := validateService(svc); len(violations) > 0 {
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid Service: %s", strings.Join(violations, ", "))
-		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVCICE", msg)
+		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
 		a.logger.Error(msg)
 		return nil
 	}
