@@ -21,6 +21,11 @@ operatorConfig:
   # Multiple tags are defined as array items and passed to the operator as a comma-separated string
   defaultTags:
     - "tag:k8s-operator"
+
+  # Set useDefaultSecrets to false if you want to use a secretProviderClass,
+  # or otherwise don't want the default secret to be used
+  useDefaultSecrets: true
+
   # Extra volumes to be mounted in the operator pod. This is useful for mounting
   # secrets from secretProviderClass resources.
   extraVolumes: []

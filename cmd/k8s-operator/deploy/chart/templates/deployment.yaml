@@ -35,7 +35,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
-      {{- if and .Values.oauth .Values.oauth.clientId }}
+      {{- if .Values.operatorConfig.useDefaultSecrets }}
         - name: oauth
           secret:
             secretName: operator-oauth
@@ -83,7 +83,7 @@ spec:
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
           volumeMounts:
-          {{- if and .Values.oauth .Values.oauth.clientId }}
+          {{- if .Values.operatorConfig.useDefaultSecrets }}
             - name: oauth
               mountPath: /oauth
               readOnly: true
