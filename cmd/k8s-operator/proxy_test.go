@@ -81,6 +81,20 @@ func TestImpersonationHeaders(t *testing.T) {
 			},
 		},
 		{
+			name:     "mix-of-caps",
+			emailish: "tagged-device",
+			tags:     []string{"tag:foo", "tag:bar"},
+			capMap: tailcfg.PeerCapMap{
+				tailcfg.PeerCapabilityKubernetes: {
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1"]},"recorder":["tag:foo"],"enforceRecorder":true}`),
+				},
+			},
+			wantHeaders: http.Header{
+				"Impersonate-Group": {"group1"},
+				"Impersonate-User":  {"node.ts.net"},
+			},
+		},
+		{
 			name:     "bad-cap",
 			emailish: "tagged-device",
 			tags:     []string{"tag:foo", "tag:bar"},
