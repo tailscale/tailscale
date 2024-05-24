@@ -14,6 +14,7 @@ func TestDeps(t *testing.T) {
 		GOOS:   "js",
 		GOARCH: "wasm",
 		BadDeps: map[string]string{
+			"testing":                     "do not use testing package in production code",
 			"runtime/pprof":               "bloat",
 			"golang.org/x/net/http2/h2c":  "bloat",
 			"net/http/pprof":              "bloat",
