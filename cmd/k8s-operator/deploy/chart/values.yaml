@@ -51,6 +51,10 @@ operatorConfig:
 # proxies created by the operator.
 # https://tailscale.com/kb/1236/kubernetes-operator/#cluster-ingress
 # https://tailscale.com/kb/1236/kubernetes-operator/#cluster-egress
+# Note that this section contains only a few global configuration options and
+# will not be updated with more configuration options in the future.
+# If you need more configuration options, take a look at ProxyClass:
+# https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource
 proxyConfig:
   image:
     repo: tailscale/tailscale
