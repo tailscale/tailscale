@@ -157,6 +157,7 @@ func (r *Resolver) ttl() time.Duration {
 }
 
 var debug = envknob.RegisterBool("TS_DEBUG_DNS_CACHE")
+var noDNSFallback = envknob.RegisterBool("TS_NO_DNS_FALLBACK")
 
 // debugLogging allows enabling debug logging at runtime, via
 // SetDebugLoggingEnabled.
@@ -290,7 +291,7 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 netip.Addr, allIPs []netip.Add
 			ips, err = resolver.LookupNetIP(ctx, "ip", host)
 		}
 	}
-	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
+	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil && !noDNSFallback() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err != nil {
@@ -437,6 +438,12 @@ func (d *dialer) shouldTryBootstrap(ctx context.Context, err error, dc *dialCall
 	// Can't try bootstrap DNS if we don't have a fallback function
 	if d.dnsCache.LookupIPFallback == nil {
 		d.dnsCache.dlogf("not using bootstrap DNS: no fallback")
+		return false
+	}
+	if noDNSFallback() {
+		if debug() {
+			log.Printf("dnscache: not using bootstrap DNS: disabled via TS_NO_DNS_FALLBACK")
+		}
 		return false
 	}
 
