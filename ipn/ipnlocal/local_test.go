@@ -1595,6 +1595,9 @@ type mockSyspolicyHandler struct {
 	// queried by the current test. If the policy is expected but unset, then
 	// use nil, otherwise use a string equal to the policy's desired value.
 	stringPolicies map[syspolicy.Key]*string
+	// stringArrayPolicies is the collection of policies that we expected to see
+	// queries by the current test, that return policy string arrays.
+	stringArrayPolicies map[syspolicy.Key][]string
 	// failUnknownPolicies is set if policies other than those in stringPolicies
 	// (uint64 or bool policies are not supported by mockSyspolicyHandler yet)
 	// should be considered a test failure if they are queried.
@@ -1631,6 +1634,12 @@ func (h *mockSyspolicyHandler) ReadBoolean(key string) (bool, error) {
 func (h *mockSyspolicyHandler) ReadStringArray(key string) ([]string, error) {
 	if h.failUnknownPolicies {
 		h.t.Errorf("ReadStringArray(%q) unexpectedly called", key)
+	}
+	if s, ok := h.stringArrayPolicies[syspolicy.Key(key)]; ok {
+		if s == nil {
+			return []string{}, syspolicy.ErrNoSuchKey
+		}
+		return s, nil
 	}
 	return nil, syspolicy.ErrNoSuchKey
 }
@@ -3474,6 +3483,7 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 		lastSuggestedExitNode     lastSuggestedExitNode
 		report                    *netcheck.Report
 		netMap                    netmap.NetworkMap
+		allowedSuggestedExitNodes []string
 		wantID                    tailcfg.StableNodeID
 		wantName                  string
 		wantErr                   error
@@ -3766,10 +3776,138 @@ func TestLocalBackendSuggestExitNode(t *testing.T) {
 			},
 			wantErr: ErrCannotSuggestExitNode,
 		},
+		{
+			name:                  "only pick from allowed suggested exit nodes",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			report: &netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 10,
+					3: 5,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+							tailcfg.NodeAttrAutoExitNode:    {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "foo",
+						Name:     "foo",
+						DERP:     "127.3.3.40:3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+							tailcfg.NodeAttrAutoExitNode:    {},
+						}),
+					}).View(),
+				},
+			},
+			allowedSuggestedExitNodes: []string{"test"},
+			wantID:                    "test",
+			wantName:                  "test",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+		},
+		{
+			name:                  "allowed suggested exit nodes not nil but length 0",
+			lastSuggestedExitNode: lastSuggestedExitNode{name: "test", id: "test"},
+			report: &netcheck.Report{
+				RegionLatency: map[int]time.Duration{
+					1: 10,
+					2: 10,
+					3: 5,
+				},
+				PreferredDERP: 1,
+			},
+			netMap: netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
+				DERPMap: &tailcfg.DERPMap{
+					Regions: map[int]*tailcfg.DERPRegion{
+						1: {},
+						2: {},
+						3: {},
+					},
+				},
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
+						ID:       2,
+						StableID: "test",
+						Name:     "test",
+						DERP:     "127.3.3.40:1",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+							tailcfg.NodeAttrAutoExitNode:    {},
+						}),
+					}).View(),
+					(&tailcfg.Node{
+						ID:       3,
+						StableID: "foo",
+						Name:     "foo",
+						DERP:     "127.3.3.40:3",
+						AllowedIPs: []netip.Prefix{
+							netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"),
+						},
+						CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+							tailcfg.NodeAttrSuggestExitNode: {},
+							tailcfg.NodeAttrAutoExitNode:    {},
+						}),
+					}).View(),
+				},
+			},
+			allowedSuggestedExitNodes: []string{},
+			wantID:                    "foo",
+			wantName:                  "foo",
+			wantLastSuggestedExitNode: lastSuggestedExitNode{name: "foo", id: "foo"},
+		},
 	}
 
 	for _, tt := range tests {
 		lb := newTestLocalBackend(t)
+		msh := &mockSyspolicyHandler{
+			t: t,
+			stringArrayPolicies: map[syspolicy.Key][]string{
+				syspolicy.AllowedSuggestedExitNodes: nil,
+			},
+		}
+		if len(tt.allowedSuggestedExitNodes) != 0 {
+			msh.stringArrayPolicies[syspolicy.AllowedSuggestedExitNodes] = tt.allowedSuggestedExitNodes
+		}
+		syspolicy.SetHandlerForTest(t, msh)
 		lb.lastSuggestedExitNode = tt.lastSuggestedExitNode
 		lb.netMap = &tt.netMap
 		lb.sys.MagicSock.Get().SetLastNetcheckReportForTest(context.Background(), tt.report)

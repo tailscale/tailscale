@@ -6453,8 +6453,17 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	if report.PreferredDERP == 0 {
 		return res, ErrNoPreferredDERP
 	}
+	var allowedCandidates set.Set[string]
+	if allowed, err := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil); err != nil {
+		return res, fmt.Errorf("unable to read %s policy: %w", syspolicy.AllowedSuggestedExitNodes, err)
+	} else if allowed != nil {
+		allowedCandidates = set.SetOf(allowed)
+	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
 	for _, peer := range netMap.Peers {
+		if allowedCandidates != nil && !allowedCandidates.Contains(string(peer.StableID())) {
+			continue
+		}
 		if peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
 			candidates = append(candidates, peer)
 		}
