@@ -6,7 +6,6 @@ package syspolicy
 import (
 	"errors"
 	"sync/atomic"
-	"testing"
 )
 
 var (
@@ -69,7 +68,14 @@ func RegisterHandler(h Handler) {
 	}
 }
 
-func SetHandlerForTest(tb testing.TB, h Handler) {
+// TB is a subset of testing.TB that we use to set up test helpers.
+// It's defined here to avoid pulling in the testing package.
+type TB interface {
+	Helper()
+	Cleanup(func())
+}
+
+func SetHandlerForTest(tb TB, h Handler) {
 	tb.Helper()
 	oldHandler := handler
 	handler = h

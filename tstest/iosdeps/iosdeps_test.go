@@ -14,6 +14,7 @@ func TestDeps(t *testing.T) {
 		GOOS:   "ios",
 		GOARCH: "arm64",
 		BadDeps: map[string]string{
+			"testing":       "do not use testing package in production code",
 			"text/template": "linker bloat (MethodByName)",
 			"html/template": "linker bloat (MethodByName)",
 		},

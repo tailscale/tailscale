@@ -4,7 +4,6 @@
 package ipnlocal
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/user"
 	"strconv"
@@ -13,14 +12,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/clientupdate"
-	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/util/must"
 )
@@ -601,89 +598,6 @@ func TestProfileManagementWindows(t *testing.T) {
 	checkProfiles(t)
 	if pm.CurrentUserID() != uid {
 		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), uid)
-	}
-}
-
-func TestProfileBackfillStatefulFiltering(t *testing.T) {
-	envknob.Setenv("TS_DEBUG_PROFILES", "true")
-
-	tests := []struct {
-		noSNAT     bool
-		noStateful opt.Bool
-		want       bool
-	}{
-		// Default: NoSNAT is false, NoStatefulFiltering is false, so
-		// we want it to stay false.
-		{false, "false", false},
-
-		// NoSNAT being set to true and NoStatefulFiltering being false
-		// should result in NoStatefulFiltering still being false,
-		// since it was explicitly set.
-		{true, "false", false},
-
-		// If NoSNAT is false, and NoStatefulFiltering is unset, we
-		// backfill it to 'false'.
-		{false, "", false},
-
-		// If NoSNAT is true, and NoStatefulFiltering is unset, we
-		// backfill to 'true' to not break users of NoSNAT.
-		//
-		// In other words: if the user is not using SNAT, they almost
-		// certainly also don't want to use stateful filtering.
-		{true, "", true},
-
-		// However, if the user specifies both NoSNAT and stateful
-		// filtering, don't change that.
-		{true, "true", true},
-		{false, "true", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("noSNAT=%v,noStateful=%q", tt.noSNAT, tt.noStateful), func(t *testing.T) {
-			prefs := ipn.NewPrefs()
-			prefs.Persist = &persist.Persist{
-				NodeID: tailcfg.StableNodeID("node1"),
-				UserProfile: tailcfg.UserProfile{
-					ID:        tailcfg.UserID(1),
-					LoginName: "user1@example.com",
-				},
-			}
-
-			prefs.NoSNAT = tt.noSNAT
-			prefs.NoStatefulFiltering = tt.noStateful
-
-			// Make enough of a state store to load the prefs.
-			const profileName = "profile1"
-			bn := must.Get(json.Marshal(map[string]any{
-				string(ipn.CurrentProfileStateKey): []byte(profileName),
-				string(ipn.KnownProfilesStateKey): must.Get(json.Marshal(map[ipn.ProfileID]*ipn.LoginProfile{
-					profileName: {
-						ID:  "profile1-id",
-						Key: profileName,
-					},
-				})),
-				profileName: prefs.ToBytes(),
-			}))
-
-			store := new(mem.Store)
-			err := store.LoadFromJSON([]byte(bn))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			ht := new(health.Tracker)
-			pm, err := newProfileManagerWithGOOS(store, t.Logf, ht, "linux")
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Get the current profile and verify that we backfilled our
-			// StatefulFiltering boolean.
-			pf := pm.CurrentPrefs()
-			if !pf.NoStatefulFiltering().EqualBool(tt.want) {
-				t.Fatalf("got NoStatefulFiltering=%q, want %v", pf.NoStatefulFiltering(), tt.want)
-			}
-		})
 	}
 }
 

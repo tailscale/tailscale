@@ -4,10 +4,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"testing"
@@ -38,7 +41,7 @@ func (b *bitbucketResponseWriter) Write(p []byte) (int, error) { return len(p), 
 
 func (b *bitbucketResponseWriter) WriteHeader(statusCode int) {}
 
-func getBootstrapDNS(t *testing.T, q string) dnsEntryMap {
+func getBootstrapDNS(t *testing.T, q string) map[string][]net.IP {
 	t.Helper()
 	req, _ := http.NewRequest("GET", "https://localhost/bootstrap-dns?q="+url.QueryEscape(q), nil)
 	w := httptest.NewRecorder()
@@ -48,11 +51,12 @@ func getBootstrapDNS(t *testing.T, q string) dnsEntryMap {
 	if res.StatusCode != 200 {
 		t.Fatalf("got status=%d; want %d", res.StatusCode, 200)
 	}
-	var ips dnsEntryMap
-	if err := json.NewDecoder(res.Body).Decode(&ips); err != nil {
-		t.Fatalf("error decoding response body: %v", err)
+	var m map[string][]net.IP
+	var buf bytes.Buffer
+	if err := json.NewDecoder(io.TeeReader(res.Body, &buf)).Decode(&m); err != nil {
+		t.Fatalf("error decoding response body %q: %v", buf.Bytes(), err)
 	}
-	return ips
+	return m
 }
 
 func TestUnpublishedDNS(t *testing.T) {
@@ -107,15 +111,21 @@ func resetMetrics() {
 // Verify that we don't count an empty list in the unpublishedDNSCache as a
 // cache hit in our metrics.
 func TestUnpublishedDNSEmptyList(t *testing.T) {
-	pub := dnsEntryMap{
-		"tailscale.com": {net.IPv4(10, 10, 10, 10)},
+	pub := &dnsEntryMap{
+		IPs: map[string][]net.IP{"tailscale.com": {net.IPv4(10, 10, 10, 10)}},
 	}
 	dnsCache.Store(pub)
 	dnsCacheBytes.Store([]byte(`{"tailscale.com":["10.10.10.10"]}`))
 
-	unpublishedDNSCache.Store(dnsEntryMap{
-		"log.tailscale.io":           {},
-		"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)},
+	unpublishedDNSCache.Store(&dnsEntryMap{
+		IPs: map[string][]net.IP{
+			"log.tailscale.io":           {},
+			"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)},
+		},
+		Percent: map[string]float64{
+			"log.tailscale.io":           1.0,
+			"controlplane.tailscale.com": 1.0,
+		},
 	})
 
 	t.Run("CacheMiss", func(t *testing.T) {
@@ -125,8 +135,8 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 			ips := getBootstrapDNS(t, q)
 
 			// Expected our public map to be returned on a cache miss
-			if !reflect.DeepEqual(ips, pub) {
-				t.Errorf("got ips=%+v; want %+v", ips, pub)
+			if !reflect.DeepEqual(ips, pub.IPs) {
+				t.Errorf("got ips=%+v; want %+v", ips, pub.IPs)
 			}
 			if v := unpublishedDNSHits.Value(); v != 0 {
 				t.Errorf("got hits=%d; want 0", v)
@@ -141,7 +151,7 @@ func TestUnpublishedDNSEmptyList(t *testing.T) {
 	t.Run("CacheHit", func(t *testing.T) {
 		resetMetrics()
 		ips := getBootstrapDNS(t, "controlplane.tailscale.com")
-		want := dnsEntryMap{"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)}}
+		want := map[string][]net.IP{"controlplane.tailscale.com": {net.IPv4(1, 2, 3, 4)}}
 		if !reflect.DeepEqual(ips, want) {
 			t.Errorf("got ips=%+v; want %+v", ips, want)
 		}
@@ -164,5 +174,56 @@ func TestLookupMetric(t *testing.T) {
 	// {"a.io": true, "b.io": true, "c.io": true, "d.io": true, "e.io": true}
 	if bootstrapLookupMap.Len() != 5 {
 		t.Errorf("bootstrapLookupMap.Len() want=5, got %v", bootstrapLookupMap.Len())
+	}
+}
+
+func TestRemoteAddrMatchesPercent(t *testing.T) {
+	tests := []struct {
+		remoteAddr string
+		percent    float64
+		want       bool
+	}{
+		// 0% and 100%.
+		{"10.0.0.1:1234", 0.0, false},
+		{"10.0.0.1:1234", 1.0, true},
+
+		// Invalid IP.
+		{"", 1.0, true},
+		{"", 0.0, false},
+		{"", 0.5, false},
+
+		// Small manual sample at 50%. The func uses a deterministic PRNG seed.
+		{"1.2.3.4:567", 0.5, true},
+		{"1.2.3.5:567", 0.5, true},
+		{"1.2.3.6:567", 0.5, false},
+		{"1.2.3.7:567", 0.5, true},
+		{"1.2.3.8:567", 0.5, false},
+		{"1.2.3.9:567", 0.5, true},
+		{"1.2.3.10:567", 0.5, true},
+	}
+	for _, tt := range tests {
+		got := remoteAddrMatchesPercent(tt.remoteAddr, tt.percent)
+		if got != tt.want {
+			t.Errorf("remoteAddrMatchesPercent(%q, %v) = %v; want %v", tt.remoteAddr, tt.percent, got, tt.want)
+		}
+	}
+
+	var match, all int
+	const wantPercent = 0.5
+	for a := range 256 {
+		for b := range 256 {
+			all++
+			if remoteAddrMatchesPercent(
+				netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, byte(a), byte(b)}), 12345).String(),
+				wantPercent) {
+				match++
+			}
+		}
+	}
+	gotPercent := float64(match) / float64(all)
+	const tolerance = 0.005
+	t.Logf("got percent %v (goal %v)", gotPercent, wantPercent)
+	if gotPercent < wantPercent-tolerance || gotPercent > wantPercent+tolerance {
+		t.Errorf("got %v; want %v ± %v", gotPercent, wantPercent, tolerance)
 	}
 }

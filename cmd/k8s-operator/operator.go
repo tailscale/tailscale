@@ -45,11 +45,11 @@ import (
 	"tailscale.com/version"
 )
 
-// Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
-//go:generate go run tailscale.com/cmd/k8s-operator/generate staticmanifests
-
 // Generate Connector and ProxyClass CustomResourceDefinition yamls from their Go types.
 //go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
+
+// Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
+//go:generate go run tailscale.com/cmd/k8s-operator/generate staticmanifests
 
 // Generate CRD docs from the yamls
 //go:generate go run fybrik.io/crdoc --resources=./deploy/crds --output=../../k8s-operator/api.md

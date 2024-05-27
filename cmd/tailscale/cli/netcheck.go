@@ -142,7 +142,6 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 		printf("\t* IPv6: no, unavailable in OS\n")
 	}
 	printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
-	printf("\t* HairPinning: %v\n", report.HairPinning)
 	printf("\t* PortMapping: %v\n", portMapping(report))
 	if report.CaptivePortal != "" {
 		printf("\t* CaptivePortal: %v\n", report.CaptivePortal)
