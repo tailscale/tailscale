@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
@@ -55,7 +56,9 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.BoolVar(&statusArgs.self, "self", true, "show status of local machine")
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
-		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
+		fs.BoolVar(&statusArgs.browser, "browser", true, "open a browser in web mode")
+		fs.BoolVar(&statusArgs.ids, "ids", false, "show all identifiers")
+		fs.BoolVar(&statusArgs.headers, "headers", true, "show column headers")
 		return fs
 	})(),
 }
@@ -68,6 +71,8 @@ var statusArgs struct {
 	active  bool   // in CLI mode, filter output to only peers with active sessions
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
+	headers bool   // in CLI mode, print an initial header row
+	ids     bool   // in CLI mode, show all node identifiers and addresses
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -150,14 +155,44 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 
 	var buf bytes.Buffer
-	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
+	tab := tabwriter.NewWriter(&buf, 4, 4, 1, ' ', 0)
+	f := func(format string, a ...any) { fmt.Fprintf(tab, format, a...) }
+	col := func(c string) { f("%s\t", c) }
+
+	if statusArgs.headers {
+		if statusArgs.ids {
+			col("IPv4")
+			col("IPv6")
+			col("PK")
+			col("ID")
+		} else {
+			col("IP")
+		}
+		col("NAME")
+		col("OWNER")
+		col("OS")
+		col("STATUS")
+		f("\n")
+	}
+
 	printPS := func(ps *ipnstate.PeerStatus) {
-		f("%-15s %-20s %-12s %-7s ",
-			firstIPString(ps.TailscaleIPs),
-			dnsOrQuoteHostname(st, ps),
-			ownerLogin(st, ps),
-			ps.OS,
-		)
+		if statusArgs.ids {
+			col(firstIPString(ps.TailscaleIPs))
+			if len(ps.TailscaleIPs) > 1 {
+				col(strings.Trim(fmt.Sprintf("%v", ps.TailscaleIPs[1:]), "[]"))
+			} else {
+				col("")
+			}
+			col(ps.PublicKey.ShortString())
+			col(string(ps.ID))
+		} else {
+			col(firstIPString(ps.TailscaleIPs))
+		}
+		col(dnsOrQuoteHostname(st, ps))
+		col(ownerLogin(st, ps))
+		col(ps.OS)
+
+		// Final, unaligned status column.
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 		var offline string
@@ -193,7 +228,7 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 		}
 		if anyTraffic {
-			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
+			f("; tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}
 		f("\n")
 	}
@@ -225,6 +260,9 @@ func runStatus(ctx context.Context, args []string) error {
 			}
 			printPS(ps)
 		}
+	}
+	if err := tab.Flush(); err != nil {
+		return err
 	}
 	Stdout.Write(buf.Bytes())
 	if locBasedExitNode {
