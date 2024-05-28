@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
@@ -125,6 +126,9 @@ type NetworkLockStatus struct {
 
 	// NodeKeySigned is true if our node is authorized by network-lock.
 	NodeKeySigned bool
+
+	// NodeKeySignature is the current signature of this node's key.
+	NodeKeySignature *tka.NodeKeySignature
 
 	// TrustedKeys describes the keys currently trusted to make changes
 	// to network-lock.

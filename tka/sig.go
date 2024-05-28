@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/hdevalence/ed25519consensus"
@@ -94,6 +95,41 @@ type NodeKeySignature struct {
 	// SigCredential signatures use this field to specify the public key
 	// they are certifying, following the usual semanticsfor WrappingPubkey.
 	WrappingPubkey []byte `cbor:"6,keyasint,omitempty"`
+}
+
+// String returns a human-readable representation of the NodeKeySignature,
+// making it easy to see nested signatures.
+func (s NodeKeySignature) String() string {
+	var b strings.Builder
+	var addToBuf func(NodeKeySignature, int)
+	addToBuf = func(sig NodeKeySignature, depth int) {
+		indent := strings.Repeat("  ", depth)
+		b.WriteString(indent + "SigKind: " + sig.SigKind.String() + "\n")
+		if len(sig.Pubkey) > 0 {
+			var pubKey string
+			var np key.NodePublic
+			if err := np.UnmarshalBinary(sig.Pubkey); err != nil {
+				pubKey = fmt.Sprintf("<error: %s>", err)
+			} else {
+				pubKey = np.ShortString()
+			}
+			b.WriteString(indent + "Pubkey: " + pubKey + "\n")
+		}
+		if len(sig.KeyID) > 0 {
+			keyID := key.NLPublicFromEd25519Unsafe(sig.KeyID).CLIString()
+			b.WriteString(indent + "KeyID: " + keyID + "\n")
+		}
+		if len(sig.WrappingPubkey) > 0 {
+			pubKey := key.NLPublicFromEd25519Unsafe(sig.WrappingPubkey).CLIString()
+			b.WriteString(indent + "WrappingPubkey: " + pubKey + "\n")
+		}
+		if sig.Nested != nil {
+			b.WriteString(indent + "Nested:\n")
+			addToBuf(*sig.Nested, depth+1)
+		}
+	}
+	addToBuf(s, 0)
+	return strings.TrimSpace(b.String())
 }
 
 // UnverifiedWrappingPublic returns the public key which must sign a
