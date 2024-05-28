@@ -682,14 +682,12 @@ type Service struct {
 	//        node's Tailscale IPv6 address.
 	//     * "peerapi-dns-proxy": the local peerapi service supports
 	//        being a DNS proxy (when the node is an exit
-	//        node). For this service, the Port number is really
-	//        the version number of the service.
+	//        node). For this service, the Port number must only be 1.
 	Proto ServiceProto
 
 	// Port is the port number.
 	//
-	// For Proto "peerapi-dns", it's the version number of the DNS proxy,
-	// currently 1.
+	// For Proto "peerapi-dns", it must be 1.
 	Port uint16
 
 	// Description is the textual description of the service,
