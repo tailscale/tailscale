@@ -329,15 +329,17 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
 	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
+
 	s.packetsDroppedReasonCounters = []*expvar.Int{
-		s.packetsDroppedReason.Get("unknown_dest"),
-		s.packetsDroppedReason.Get("unknown_dest_on_fwd"),
-		s.packetsDroppedReason.Get("gone_disconnected"),
-		s.packetsDroppedReason.Get("gone_not_here"),
-		s.packetsDroppedReason.Get("queue_head"),
-		s.packetsDroppedReason.Get("queue_tail"),
-		s.packetsDroppedReason.Get("write_error"),
+		dropReasonUnknownDest:      s.packetsDroppedReason.Get("unknown_dest"),
+		dropReasonUnknownDestOnFwd: s.packetsDroppedReason.Get("unknown_dest_on_fwd"),
+		dropReasonGoneDisconnected: s.packetsDroppedReason.Get("gone_disconnected"),
+		dropReasonQueueHead:        s.packetsDroppedReason.Get("queue_head"),
+		dropReasonQueueTail:        s.packetsDroppedReason.Get("queue_tail"),
+		dropReasonWriteError:       s.packetsDroppedReason.Get("write_error"),
+		dropReasonDupClient:        s.packetsDroppedReason.Get("dup_client"),
 	}
+
 	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
 	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
 	return s
