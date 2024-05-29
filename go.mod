@@ -14,6 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.11.64
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.33.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.44.7
+	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/creack/pty v1.1.21

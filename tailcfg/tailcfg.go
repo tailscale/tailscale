@@ -136,7 +136,8 @@ type CapabilityVersion int
 //   - 93: 2024-05-06: added support for stateful firewalling.
 //   - 94: 2024-05-06: Client understands Node.IsJailed.
 //   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
-const CurrentCapabilityVersion CapabilityVersion = 95
+//   - 96: 2024-05-29: Client understands NodeAttrSSHBehaviorV1
+const CurrentCapabilityVersion CapabilityVersion = 96
 
 type StableID string
 
@@ -2274,6 +2275,10 @@ const (
 	// depending on the destination address and the configured routes. When present, it also makes
 	// the DNS forwarder use UserDial instead of SystemDial when dialing resolvers.
 	NodeAttrUserDialUseRoutes NodeCapability = "user-dial-routes"
+
+	// NodeAttrSSHBehaviorV1 forces SSH to use the V1 behavior (no su, run SFTP in-process)
+	// Added 2024-05-29 in Tailscale version 1.68.
+	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
 )
 
 // SetDNSRequest is a request to add a DNS record.

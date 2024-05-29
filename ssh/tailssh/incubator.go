@@ -36,6 +36,7 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/hostinfo"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
@@ -43,18 +44,22 @@ import (
 
 func init() {
 	childproc.Add("ssh", beIncubator)
+	childproc.Add("sftp", beSFTP)
 }
 
 var ptyName = func(f *os.File) (string, error) {
 	return "", fmt.Errorf("unimplemented")
 }
 
-// maybeStartLoginSession starts a new login session for the specified UID.
-// On success, it may return a non-nil close func which must be closed to
+// maybeStartLoginSession informs the system that we are about to log someone
+// in. On success, it may return a non-nil close func which must be closed to
 // release the session.
+// We can only do this if we are running as root.
+// This is best effort to still allow running on machines where
+// we don't support starting sessions, e.g. darwin.
 // See maybeStartLoginSessionLinux.
-var maybeStartLoginSession = func(logf logger.Logf, ia incubatorArgs) (close func() error, err error) {
-	return nil, nil
+var maybeStartLoginSession = func(dlogf logger.Logf, ia incubatorArgs) (close func() error) {
+	return nil
 }
 
 // newIncubatorCommand returns a new exec.Cmd configured with
@@ -64,40 +69,39 @@ var maybeStartLoginSession = func(logf logger.Logf, ia incubatorArgs) (close fun
 // exec.CommandContext.
 //
 // The returned Cmd.Env is guaranteed to be nil; the caller populates it.
-func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
+func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err error) {
 	defer func() {
 		if cmd.Env != nil {
 			panic("internal error")
 		}
 	}()
-	var (
-		name    string
-		args    []string
-		isSFTP  bool
-		isShell bool
-	)
+
+	var isSFTP, isShell bool
 	switch ss.Subsystem() {
 	case "sftp":
 		isSFTP = true
 	case "":
-		name = ss.conn.localUser.LoginShell()
-		if rawCmd := ss.RawCommand(); rawCmd != "" {
-			args = append(args, "-c", rawCmd)
-		} else {
-			isShell = true
-			args = append(args, "-l") // login shell
-		}
+		isShell = ss.RawCommand() == ""
 	default:
 		panic(fmt.Sprintf("unexpected subsystem: %v", ss.Subsystem()))
 	}
 
 	if ss.conn.srv.tailscaledPath == "" {
-		// TODO(maisem): this doesn't work with sftp
-		return exec.CommandContext(ss.ctx, name, args...)
+		if isSFTP {
+			// SFTP relies on the embedded Go-based SFTP server in tailscaled,
+			// so without tailscaled, we can't serve SFTP.
+			return nil, errors.New("no tailscaled found on path, can't serve SFTP")
+		}
+
+		loginShell := ss.conn.localUser.LoginShell()
+		args := shellArgs(isShell, ss.RawCommand())
+		logf("directly running %s %q", loginShell, args)
+		return exec.CommandContext(ss.ctx, loginShell, args...), nil
 	}
+
 	lu := ss.conn.localUser
 	ci := ss.conn.info
-	gids := strings.Join(ss.conn.userGroupIDs, ",")
+	groups := strings.Join(ss.conn.userGroupIDs, ",")
 	remoteUser := ci.uprof.LoginName
 	if ci.node.IsTagged() {
 		remoteUser = strings.Join(ci.node.Tags().AsSlice(), ",")
@@ -106,9 +110,10 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	incubatorArgs := []string{
 		"be-child",
 		"ssh",
+		"--login-shell=" + lu.LoginShell(),
 		"--uid=" + lu.Uid,
 		"--gid=" + lu.Gid,
-		"--groups=" + gids,
+		"--groups=" + groups,
 		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.Addr().String(),
@@ -116,39 +121,31 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		"--tty-name=",     // updated in-place by startWithPTY
 	}
 
+	forceV1Behavior := ss.conn.srv.lb.NetMap().HasCap(tailcfg.NodeAttrSSHBehaviorV1)
+	if forceV1Behavior {
+		incubatorArgs = append(incubatorArgs, "--force-v1-behavior")
+	}
+
 	if debugTest.Load() {
 		incubatorArgs = append(incubatorArgs, "--debug-test")
 	}
 
-	if isSFTP {
-		incubatorArgs = append(incubatorArgs, "--sftp")
-	} else {
-		if isShell {
-			incubatorArgs = append(incubatorArgs, "--shell")
-		}
-		// Only the macOS version of the login command supports executing a
-		// command, all other versions only support launching a shell
-		// without taking any arguments.
-		shouldUseLoginCmd := isShell || runtime.GOOS == "darwin"
-		if hostinfo.IsSELinuxEnforcing() {
-			// If we're running on a SELinux-enabled system, the login
-			// command will be unable to set the correct context for the
-			// shell. Fall back to using the incubator to launch the shell.
-			// See http://github.com/tailscale/tailscale/issues/4908.
-			shouldUseLoginCmd = false
-		}
-		if shouldUseLoginCmd {
-			if lp, err := exec.LookPath("login"); err == nil {
-				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
-			}
-		}
-		incubatorArgs = append(incubatorArgs, "--cmd="+name)
-		if len(args) > 0 {
-			incubatorArgs = append(incubatorArgs, "--")
-			incubatorArgs = append(incubatorArgs, args...)
-		}
+	switch {
+	case isSFTP:
+		// Note that we include both the `--sftp` flag and a command to launch
+		// tailscaled as `be-child sftp`. If login or su is available, and
+		// we're not running with tailcfg.NodeAttrSSHBehaviorV1, this will
+		// result in serving SFTP within a login shell, with full PAM
+		// integration. Otherwise, we'll serve SFTP in the incubator process
+		// with no PAM integration.
+		incubatorArgs = append(incubatorArgs, "--sftp", fmt.Sprintf("--cmd=%s be-child sftp", ss.conn.srv.tailscaledPath))
+	case isShell:
+		incubatorArgs = append(incubatorArgs, "--shell")
+	default:
+		incubatorArgs = append(incubatorArgs, "--cmd="+ss.RawCommand())
 	}
-	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+
+	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), nil
 }
 
 var debugIncubator bool
@@ -170,51 +167,60 @@ func (stdRWC) Close() error {
 }
 
 type incubatorArgs struct {
-	uid          int
-	gid          int
-	groups       string
-	localUser    string
-	remoteUser   string
-	remoteIP     string
-	ttyName      string
-	hasTTY       bool
-	cmdName      string
-	isSFTP       bool
-	isShell      bool
-	loginCmdPath string
-	cmdArgs      []string
-	debugTest    bool
+	loginShell      string
+	uid             int
+	gid             int
+	gids            []int
+	localUser       string
+	remoteUser      string
+	remoteIP        string
+	ttyName         string
+	hasTTY          bool
+	cmd             string
+	isSFTP          bool
+	isShell         bool
+	forceV1Behavior bool
+	debugTest       bool
 }
 
-func parseIncubatorArgs(args []string) (a incubatorArgs) {
+func parseIncubatorArgs(args []string) (incubatorArgs, error) {
+	var ia incubatorArgs
+	var groups string
+
 	flags := flag.NewFlagSet("", flag.ExitOnError)
-	flags.IntVar(&a.uid, "uid", 0, "the uid of local-user")
-	flags.IntVar(&a.gid, "gid", 0, "the gid of local-user")
-	flags.StringVar(&a.groups, "groups", "", "comma-separated list of gids of local-user")
-	flags.StringVar(&a.localUser, "local-user", "", "the user to run as")
-	flags.StringVar(&a.remoteUser, "remote-user", "", "the remote user/tags")
-	flags.StringVar(&a.remoteIP, "remote-ip", "", "the remote Tailscale IP")
-	flags.StringVar(&a.ttyName, "tty-name", "", "the tty name (pts/3)")
-	flags.BoolVar(&a.hasTTY, "has-tty", false, "is the output attached to a tty")
-	flags.StringVar(&a.cmdName, "cmd", "", "the cmd to launch (ignored in sftp mode)")
-	flags.BoolVar(&a.isShell, "shell", false, "is launching a shell (with no cmds)")
-	flags.BoolVar(&a.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
-	flags.StringVar(&a.loginCmdPath, "login-cmd", "", "the path to `login` cmd")
-	flags.BoolVar(&a.debugTest, "debug-test", false, "should debug in test mode")
+	flags.StringVar(&ia.loginShell, "login-shell", "", "path to the user's preferred login shell")
+	flags.IntVar(&ia.uid, "uid", 0, "the uid of local-user")
+	flags.IntVar(&ia.gid, "gid", 0, "the gid of local-user")
+	flags.StringVar(&groups, "groups", "", "comma-separated list of gids of local-user")
+	flags.StringVar(&ia.localUser, "local-user", "", "the user to run as")
+	flags.StringVar(&ia.remoteUser, "remote-user", "", "the remote user/tags")
+	flags.StringVar(&ia.remoteIP, "remote-ip", "", "the remote Tailscale IP")
+	flags.StringVar(&ia.ttyName, "tty-name", "", "the tty name (pts/3)")
+	flags.BoolVar(&ia.hasTTY, "has-tty", false, "is the output attached to a tty")
+	flags.StringVar(&ia.cmd, "cmd", "", "the cmd to launch, including all arguments (ignored in sftp mode)")
+	flags.BoolVar(&ia.isShell, "shell", false, "is launching a shell (with no cmds)")
+	flags.BoolVar(&ia.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
+	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
+	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.Parse(args)
-	a.cmdArgs = flags.Args()
-	return a
+
+	for _, g := range strings.Split(groups, ",") {
+		gid, err := strconv.Atoi(g)
+		if err != nil {
+			return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)
+		}
+		ia.gids = append(ia.gids, gid)
+	}
+
+	return ia, nil
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
-// It is responsible for informing the system of a new login session for the user.
-// This is sometimes necessary for mounting home directories and decrypting file
-// systems.
+// It is responsible for informing the system of a new login session for the
+// user. This is sometimes necessary for mounting home directories and
+// decrypting file systems.
 //
-// Tailscaled launches the incubator as the same user as it was
-// launched as.  The incubator then registers a new session with the
-// OS, sets its UID and groups to the specified `--uid`, `--gid` and
-// `--groups` and then launches the requested `--cmd`.
+// Tailscaled launches the incubator as the same user as it was launched as.
 func beIncubator(args []string) error {
 	// To defend against issues like https://golang.org/issue/1435,
 	// defensively lock our current goroutine's thread to the current
@@ -226,22 +232,25 @@ func beIncubator(args []string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ia := parseIncubatorArgs(args)
+	ia, err := parseIncubatorArgs(args)
+	if err != nil {
+		return err
+	}
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
 	}
 
-	logf := logger.Discard
+	dlogf := logger.Discard
 	if debugIncubator {
 		// We don't own stdout or stderr, so the only place we can log is syslog.
 		if sl, err := syslog.New(syslog.LOG_INFO|syslog.LOG_DAEMON, "tailscaled-ssh"); err == nil {
-			logf = log.New(sl, "", 0).Printf
+			dlogf = log.New(sl, "", 0).Printf
 		}
 	} else if ia.debugTest {
-		// In testing, we don't always have syslog, log to a temp file
+		// In testing, we don't always have syslog, so log to a temp file.
 		if logFile, err := os.OpenFile("/tmp/tailscalessh.log", os.O_APPEND|os.O_WRONLY, 0666); err == nil {
 			lf := log.New(logFile, "", 0)
-			logf = func(msg string, args ...any) {
+			dlogf = func(msg string, args ...any) {
 				lf.Printf(msg, args...)
 				logFile.Sync()
 			}
@@ -249,72 +258,233 @@ func beIncubator(args []string) error {
 		}
 	}
 
-	euid := os.Geteuid()
-	runningAsRoot := euid == 0
-	if runningAsRoot && ia.loginCmdPath != "" {
-		// Check if we can exec into the login command instead of trying to
-		// incubate ourselves.
-		if la := ia.loginArgs(); la != nil {
-			return unix.Exec(ia.loginCmdPath, la, os.Environ())
-		}
+	if !shouldAttemptLoginShell(dlogf, ia) {
+		dlogf("not attempting login shell")
+		return handleInProcess(dlogf, ia)
 	}
 
-	// Inform the system that we are about to log someone in.
-	// We can only do this if we are running as root.
-	// This is best effort to still allow running on machines where
-	// we don't support starting sessions, e.g. darwin.
-	sessionCloser, err := maybeStartLoginSession(logf, ia)
-	if err == nil && sessionCloser != nil {
-		defer sessionCloser()
-	}
-
-	var groupIDs []int
-	for _, g := range strings.Split(ia.groups, ",") {
-		gid, err := strconv.ParseInt(g, 10, 32)
-		if err != nil {
-			return err
-		}
-		groupIDs = append(groupIDs, int(gid))
-	}
-
-	if err := dropPrivileges(logf, ia.uid, ia.gid, groupIDs); err != nil {
+	// First try the login command
+	if err := tryExecLogin(dlogf, ia); err != nil {
 		return err
 	}
 
-	if ia.isSFTP {
-		logf("handling sftp")
+	// If we got here, we weren't able to use login (because tryExecLogin
+	// returned without replacing the running process), maybe we can use
+	// su.
+	if handled, err := trySU(dlogf, ia); handled {
+		return err
+	} else {
+		dlogf("not attempting su")
+		return handleInProcess(dlogf, ia)
+	}
+}
 
-		server, err := sftp.NewServer(stdRWC{})
-		if err != nil {
-			return err
-		}
-		// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
-		// when sftp is patched to report clean termination.
-		if err := server.Serve(); err != nil && err != io.EOF {
-			return err
-		}
+func handleInProcess(dlogf logger.Logf, ia incubatorArgs) error {
+	if ia.isSFTP {
+		return handleSFTPInProcess(dlogf, ia)
+	}
+	return handleSSHInProcess(dlogf, ia)
+}
+
+func handleSFTPInProcess(dlogf logger.Logf, ia incubatorArgs) error {
+	dlogf("handling sftp")
+
+	sessionCloser := maybeStartLoginSession(dlogf, ia)
+	if sessionCloser != nil {
+		defer sessionCloser()
+	}
+
+	if err := dropPrivileges(dlogf, ia); err != nil {
+		return err
+	}
+
+	return serveSFTP()
+}
+
+// beSFTP serves SFTP in-process.
+func beSFTP(args []string) error {
+	return serveSFTP()
+}
+
+func serveSFTP() error {
+	server, err := sftp.NewServer(stdRWC{})
+	if err != nil {
+		return err
+	}
+	// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
+	// when sftp is patched to report clean termination.
+	if err := server.Serve(); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
+}
+
+// shouldAttemptLoginShell decides whether we should attempt to get a full
+// login shell with the login or su commands. We will attempt a login shell
+// if all of the following conditions are met.
+//
+// - We are running as root
+// - This is not an SELinuxEnforcing host
+//
+// The last condition exists because if we're running on a SELinux-enabled
+// system, neiher login nor su will be able to set the correct context for the
+// shell. So, we don't bother trying to run them and instead fall back to using
+// the incubator to launch the shell.
+// See http://github.com/tailscale/tailscale/issues/4908.
+func shouldAttemptLoginShell(dlogf logger.Logf, ia incubatorArgs) bool {
+	if ia.forceV1Behavior && ia.isSFTP {
+		// v1 behavior did not run SFTP within a login shell.
+		dlogf("Forcing v1 behavior, won't use login shell for SFTP")
+		return false
+	}
+
+	return runningAsRoot() && !hostinfo.IsSELinuxEnforcing()
+}
+
+func runningAsRoot() bool {
+	euid := os.Geteuid()
+	return euid == 0
+}
+
+// tryExecLogin attempts to handle the ssh session by creating a full login
+// shell using the login command. If it never tried, it returns nil. If it
+// failed to do so, it returns an error.
+//
+// Creating a login shell in this way allows us to register the remote IP of
+// the login session, trigger PAM authentication, and get the "remote" PAM
+// profile.
+//
+// However, login is subject to some limitations.
+//
+// 1. login cannot be used to execute commands except on macOS.
+// 2. On Linux and BSD, login requires a TTY to keep running.
+//
+// In these cases, tryExecLogin returns (false, nil) to indicate that processing
+// should fall through to other methods, such as using the su command.
+//
+// Note that this uses unix.Exec to replace the current process, so in cases
+// where we actually do run login, no subsequent Go code will execute.
+func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
+	// Only the macOS version of the login command supports executing a
+	// command, all other versions only support launching a shell without
+	// taking any arguments.
+	if !ia.isShell && runtime.GOOS != "darwin" {
+		dlogf("won't use login because we're not in a shell or on macOS")
 		return nil
 	}
 
-	cmd := exec.Command(ia.cmdName, ia.cmdArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-
-	if ia.hasTTY {
-		// If we were launched with a tty then we should
-		// mark that as the ctty of the child. However,
-		// as the ctty is being passed from the parent
-		// we set the child to foreground instead which
-		// also passes the ctty.
-		// However, we can not do this if never had a tty to
-		// begin with.
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Foreground: true,
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd":
+		if !ia.hasTTY {
+			dlogf("can't use login because of missing TTY")
+			// We can only use the login command if a shell was requested with
+			// a TTY. If there is no TTY, login exits immediately, which
+			// breaks things like mosh and VSCode.
+			return nil
 		}
 	}
-	err = cmd.Run()
+
+	loginCmdPath, err := exec.LookPath("login")
+	if err != nil {
+		dlogf("failed to get login args: %s", err)
+		return nil
+	}
+	loginArgs := ia.loginArgs(loginCmdPath)
+	dlogf("logging in with %s %+v", loginCmdPath, loginArgs)
+	// replace the running process
+	return unix.Exec(loginCmdPath, loginArgs, os.Environ())
+}
+
+// trySU attempts to start a login shell using su. If su is available and
+// supports the necessary arguments, this returns true, plus the result of
+// executing su. Otherwise, it returns (false, nil).
+//
+// Creating a login shell in this way allows us to trigger PAM authentication
+// and get the "login" PAM profile.
+//
+// Unlike login, su often does not require a TTY, so on Linux hosts that have
+// an su command which accepts the right flags, we'll use su instead of login
+// when no TTY is available.
+func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
+	if ia.forceV1Behavior {
+		// v1 behavior did not use su.
+		dlogf("Forcing v1 behavior, won't use su")
+		return false, nil
+	}
+
+	su := findSU(dlogf, ia)
+	if su == "" {
+		return false, nil
+	}
+
+	sessionCloser := maybeStartLoginSession(dlogf, ia)
+	if sessionCloser != nil {
+		defer sessionCloser()
+	}
+
+	loginArgs := []string{"-l", ia.localUser}
+	if ia.cmd != "" {
+		// Note - unlike the login command, su allows using both -l and -c.
+		loginArgs = append(loginArgs, "-c", ia.cmd)
+	}
+
+	dlogf("logging in with %s %q", su, loginArgs)
+	cmd := newCommand(ia.hasTTY, su, loginArgs)
+	return true, cmd.Run()
+}
+
+// findSU attempts to find an su command which supports the -l and -c flags.
+// This actually calls the su command, which can cause side effects like
+// triggering pam_mkhomedir. If a suitable su is not available, this returns
+// "".
+func findSU(dlogf logger.Logf, ia incubatorArgs) string {
+	// Currently, we only support falling back to su on Linux. This
+	// potentially could work on BSDs as well, but requires testing.
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+
+	// gokrazy doesn't include su. And, if someone installs a breakglass/
+	// debugging package on gokrazy, we don't want to use its su.
+	if distro.Get() == distro.Gokrazy {
+		return ""
+	}
+
+	su, err := exec.LookPath("su")
+	if err != nil {
+		dlogf("can't find su command: %v", err)
+		return ""
+	}
+
+	// First try to execute su -l <user> -c true to make sure su supports the
+	// necessary arguments.
+	err = exec.Command(su, "-l", ia.localUser, "-c", "true").Run()
+	if err != nil {
+		dlogf("su check failed: %s", err)
+		return ""
+	}
+
+	return su
+}
+
+// handleSSHInProcess is a last resort if we couldn't use login or su. It
+// registers a new session with the OS, sets its UID, GID and groups to the
+// specified values, and then launches the requested `--cmd` in the user's
+// login shell.
+func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
+	sessionCloser := maybeStartLoginSession(dlogf, ia)
+	if sessionCloser != nil {
+		defer sessionCloser()
+	}
+
+	if err := dropPrivileges(dlogf, ia); err != nil {
+		return err
+	}
+
+	args := shellArgs(ia.isShell, ia.cmd)
+	dlogf("running %s %q", ia.loginShell, args)
+	cmd := newCommand(ia.hasTTY, ia.loginShell, args)
+	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
 		code := ps.ExitCode()
@@ -328,6 +498,26 @@ func beIncubator(args []string) error {
 		os.Exit(code)
 	}
 	return err
+}
+
+func newCommand(hasTTY bool, cmdPath string, cmdArgs []string) *exec.Cmd {
+	cmd := exec.Command(cmdPath, cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	if hasTTY {
+		// If we were launched with a tty then we should mark that as the ctty
+		// of the child. However, as the ctty is being passed from the parent
+		// we set the child to foreground instead which also passes the ctty.
+		// However, we can not do this if never had a tty to begin with.
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Foreground: true,
+		}
+	}
+
+	return cmd
 }
 
 const (
@@ -344,19 +534,26 @@ const (
 	assertPrivilegesWereDroppedByAttemptingToUnDrop = false
 )
 
-// dropPrivileges contains all the logic for dropping privileges to a different
+// dropPrivileges calls doDropPrivileges with uid, gid, and gids from the given
+// incubatorArgs.
+func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
+	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids)
+}
+
+// doDropPrivileges contains all the logic for dropping privileges to a different
 // UID, GID, and set of supplementary groups. This function is
 // security-sensitive and ordering-dependent; please be very cautious if/when
 // refactoring.
 //
-// WARNING: if you change this function, you *MUST* run the TestDropPrivileges
+// WARNING: if you change this function, you *MUST* run the TestDoDropPrivileges
 // test in this package as root on at least Linux, FreeBSD and Darwin. This can
 // be done by running:
 //
-//	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDropPrivileges
-func dropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+//	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDoDropPrivileges
+func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+	dlogf("dropping privileges")
 	fatalf := func(format string, args ...any) {
-		logf("[unexpected] error dropping privileges: "+format, args...)
+		dlogf("[unexpected] error dropping privileges: "+format, args...)
 		os.Exit(1)
 	}
 
@@ -448,7 +645,11 @@ func dropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups 
 //
 // It sets ss.cmd, stdin, stdout, and stderr.
 func (ss *sshSession) launchProcess() error {
-	ss.cmd = ss.newIncubatorCommand()
+	var err error
+	ss.cmd, err = ss.newIncubatorCommand(ss.logf)
+	if err != nil {
+		return err
+	}
 
 	cmd := ss.cmd
 	homeDir := ss.conn.localUser.HomeDir
@@ -749,18 +950,11 @@ func fileExists(path string) bool {
 }
 
 // loginArgs returns the arguments to use to exec the login binary.
-// It returns nil if the login binary should not be used.
-// The login binary is only used:
-//   - on darwin, if the client is requesting a shell or a command.
-//   - on linux and BSD, if the client is requesting a shell with a TTY.
-func (ia *incubatorArgs) loginArgs() []string {
-	if ia.isSFTP {
-		return nil
-	}
+func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
 	switch runtime.GOOS {
 	case "darwin":
 		args := []string{
-			ia.loginCmdPath,
+			loginCmdPath,
 			"-f", // already authenticated
 
 			// login typically discards the previous environment, but we want to
@@ -773,37 +967,33 @@ func (ia *incubatorArgs) loginArgs() []string {
 		if !ia.hasTTY {
 			args[2] = "-pq" // -q is "quiet" which suppresses the login banner
 		}
-		if ia.cmdName != "" {
-			args = append(args, ia.cmdName)
-			args = append(args, ia.cmdArgs...)
+		if ia.cmd != "" {
+			args = append(args, ia.loginShell, "-c", ia.cmd)
 		}
+
 		return args
 	case "linux":
-		if !ia.isShell || !ia.hasTTY {
-			// We can only use login command if a shell was requested with a TTY. If
-			// there is no TTY, login exits immediately, which breaks things likes
-			// mosh and VSCode.
-			return nil
-		}
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
 			//
 			// Arch uses a different login binary that makes the -h flag set the PAM
 			// service to "remote". So if they don't have that configured, don't
 			// pass -h.
-			return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
+			return []string{loginCmdPath, "-f", ia.localUser, "-p"}
 		}
-		return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
+		return []string{loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
 	case "freebsd", "openbsd":
-		if !ia.isShell || !ia.hasTTY {
-			// We can only use login command if a shell was requested with a TTY. If
-			// there is no TTY, login exits immediately, which breaks things likes
-			// mosh and VSCode.
-			return nil
-		}
-		return []string{ia.loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
+		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
+}
+
+func shellArgs(isShell bool, cmd string) []string {
+	if isShell {
+		return []string{"-l"}
+	} else {
+		return []string{"-c", cmd}
+	}
 }
 
 func setGroups(groupIDs []int) error {
