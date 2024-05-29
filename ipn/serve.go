@@ -626,7 +626,7 @@ func (v ServeConfigView) HasAllowFunnel() bool {
 	}()
 }
 
-// FindFunnel reports whether target exists in in either the background AllowFunnel
+// FindFunnel reports whether target exists in either the background AllowFunnel
 // or any of the foreground configs.
 func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 	if v.AllowFunnel().Get(target) {

@@ -106,7 +106,7 @@ type Server struct {
 	// AuthKey, if non-empty, is the auth key to create the node
 	// and will be preferred over the TS_AUTHKEY environment
 	// variable. If the node is already created (from state
-	// previously stored in in Store), then this field is not
+	// previously stored in Store), then this field is not
 	// used.
 	AuthKey string
 
