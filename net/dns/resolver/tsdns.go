@@ -175,6 +175,25 @@ func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]*dnstype.Resolver) {
 	}
 }
 
+// RoutesRequireNoCustomResolvers returns true if this resolver.Config only contains routes
+// that do not specify a set of custom resolver(s), i.e. they can be resolved by the local
+// upstream DNS resolver.
+func (c *Config) RoutesRequireNoCustomResolvers() bool {
+	for route, resolvers := range c.Routes {
+		if route.WithoutTrailingDot() == "ts.net" {
+			// Ignore the "ts.net" route here. It always specifies the corp resolvers but
+			// its presence is not an issue, as ts.net will be a search domain.
+			continue
+		}
+		if len(resolvers) != 0 {
+			// Found a route with custom resolvers.
+			return false
+		}
+	}
+	// No routes other than ts.net have specified one or more resolvers.
+	return true
+}
+
 // Resolver is a DNS resolver for nodes on the Tailscale network,
 // associating them with domain names of the form <mynode>.<mydomain>.<root>.
 // If it is asked to resolve a domain that is not of that form,
