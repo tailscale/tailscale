@@ -40,12 +40,13 @@ func main() {
 	// Parse flags
 	fs := flag.NewFlagSet("appc", flag.ContinueOnError)
 	var (
-		debugPort    = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
-		hostname     = fs.String("hostname", "", "Hostname to register the service under")
-		siteID       = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
-		v4Prefixes   = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
-		verboseTSNet = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
-		printULA     = fs.Bool("print-ula", false, "print the ULA prefix and exit")
+		debugPort         = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
+		hostname          = fs.String("hostname", "", "Hostname to register the service under")
+		siteID            = fs.Uint("site-id", 1, "an integer site ID to use for the ULA prefix which allows for multiple proxies to act in a HA configuration")
+		v4Prefixes        = fs.String("v4-pfx", "100.64.1.0/24", "comma-separated list of IPv4 prefixes to advertise")
+		verboseTSNet      = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
+		printULA          = fs.Bool("print-ula", false, "print the ULA prefix and exit")
+		ignoreDstPrefixes = fs.String("ignore-destinations", "", "comma-separated list of IPv4 prefixes to ignore")
 	)
 	err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_APPC"))
 	if err != nil {
@@ -63,7 +64,7 @@ func main() {
 	} else if *siteID > 0xffff {
 		log.Fatalf("site-id must be in the range [0, 65535]")
 	}
-	run(ctx, *hostname, *debugPort, uint16(*siteID), *v4Prefixes, *verboseTSNet)
+	run(ctx, *hostname, *debugPort, uint16(*siteID), *v4Prefixes, *verboseTSNet, *ignoreDstPrefixes)
 }
 
 // v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
@@ -79,7 +80,7 @@ func ula(siteID uint16) netip.Prefix {
 	return netip.PrefixFrom(netip.AddrFrom16(as16), 64+16)
 }
 
-func run(ctx context.Context, hostname string, debugPort int, siteID uint16, v4PfxStr string, verboseTSNet bool) {
+func run(ctx context.Context, hostname string, debugPort int, siteID uint16, v4PfxStr string, verboseTSNet bool, ignoreDstPfxStr string) {
 	var ts tsnet.Server
 	defer ts.Close()
 	if verboseTSNet {
@@ -95,6 +96,19 @@ func run(ctx context.Context, hostname string, debugPort int, siteID uint16, v4P
 	if _, err := ts.Up(ctx); err != nil {
 		log.Fatalf("ts.Up: %v", err)
 	}
+
+	var ignoreDstTable *bart.Table[bool]
+	if ignoreDstPfxStr != "" {
+		for _, s := range strings.Split(ignoreDstPfxStr, ",") {
+			if s != "" {
+				if ignoreDstTable == nil {
+					ignoreDstTable = &bart.Table[bool]{}
+				}
+				ignoreDstTable.Insert(netip.MustParsePrefix(strings.TrimSpace(s)), true)
+			}
+		}
+	}
+
 	var v4Prefixes []netip.Prefix
 	for _, s := range strings.Split(v4PfxStr, ",") {
 		p := netip.MustParsePrefix(strings.TrimSpace(s))
@@ -109,10 +123,11 @@ func run(ctx context.Context, hostname string, debugPort int, siteID uint16, v4P
 	dnsAddr := v4Prefixes[0].Addr()
 
 	c := &connector{
-		v4Ranges: v4Prefixes,
-		dnsAddr:  dnsAddr,
-		v6ULA:    ula(siteID),
-		lc:       lc,
+		v4Ranges:   v4Prefixes,
+		dnsAddr:    dnsAddr,
+		v6ULA:      ula(siteID),
+		lc:         lc,
+		ignoreDsts: ignoreDstTable,
 	}
 	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
@@ -162,6 +177,8 @@ type connector struct {
 	dnsAddr netip.Addr
 
 	perPeerMap syncs.Map[tailcfg.NodeID, *perPeerState]
+
+	ignoreDsts *bart.Table[bool]
 }
 
 func (c *connector) serveDNS(ln net.Listener) {
@@ -173,6 +190,29 @@ func (c *connector) serveDNS(ln net.Listener) {
 		}
 		go c.handleDNS(conn.(nettype.ConnPacketConn))
 	}
+}
+
+func lookupDestinationIP(req *dnsmessage.Message) ([]netip.Addr, error) {
+	if len(req.Questions) == 0 {
+		return nil, nil
+	}
+	q := req.Questions[0]
+	switch q.Type {
+	case dnsmessage.TypeAAAA, dnsmessage.TypeA:
+		netIPs, err := net.LookupIP(q.Name.String())
+		if err != nil {
+			return nil, err
+		}
+		addrs := []netip.Addr{}
+		for _, ip := range netIPs {
+			a, ok := netip.AddrFromSlice(ip)
+			if ok {
+				addrs = append(addrs, a)
+			}
+		}
+		return addrs, nil
+	}
+	return nil, nil
 }
 
 // handleDNS handles a DNS request to the app connector.
@@ -190,6 +230,7 @@ func (c *connector) handleDNS(conn nettype.ConnPacketConn) {
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	remoteAddr := conn.RemoteAddr().(*net.UDPAddr).AddrPort()
 	who, err := c.lc.WhoIs(ctx, remoteAddr.String())
 	if err != nil {
@@ -212,6 +253,27 @@ func (c *connector) handleDNS(conn nettype.ConnPacketConn) {
 		return
 	}
 
+	// if there are destination ips that we don't want to route, we
+	// have to do a dns lookup here to find the destination ip.
+	if c.ignoreDsts != nil {
+		dstAddrs, err := lookupDestinationIP(&msg)
+		if err != nil {
+			log.Printf("HandleDNS: lookup destination failed: %v\n ", err)
+			return
+		}
+		if c.ignoreDestination(dstAddrs) {
+			bs, err := generateIgnoreDNSResponse(&msg, dstAddrs)
+			if err != nil {
+				log.Printf("HandleDNS: generate ignore response failed: %v\n", err)
+			}
+			_, err = conn.Write(bs)
+			if err != nil {
+				log.Printf("HandleDNS: write failed: %v\n", err)
+			}
+			return
+		}
+	}
+
 	resp, err := c.generateDNSResponse(&msg, who.Node.ID)
 	if err != nil {
 		log.Printf("HandleDNS: connector handling failed: %v\n", err)
@@ -227,12 +289,29 @@ func (c *connector) handleDNS(conn nettype.ConnPacketConn) {
 	}
 }
 
+// generateIgnoreDNSResponse generates a DNS response containing the original destination
+// IP addresses.
+func generateIgnoreDNSResponse(req *dnsmessage.Message, dstAddrs []netip.Addr) ([]byte, error) {
+	return dnsResponse(req, dstAddrs)
+}
+
 var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 
 // generateDNSResponse generates a DNS response for the given request. The from
 // argument is the NodeID of the node that sent the request.
 func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
 	pm, _ := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
+	var addrs []netip.Addr
+	if len(req.Questions) > 0 {
+		switch req.Questions[0].Type {
+		case dnsmessage.TypeAAAA, dnsmessage.TypeA:
+			addrs = pm.ipForDomain(req.Questions[0].Name.String())
+		}
+	}
+	return dnsResponse(req, addrs)
+}
+
+func dnsResponse(req *dnsmessage.Message, addrs []netip.Addr) ([]byte, error) {
 	b := dnsmessage.NewBuilder(nil,
 		dnsmessage.Header{
 			ID:            req.Header.ID,
@@ -257,7 +336,6 @@ func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.No
 	var err error
 	switch q.Type {
 	case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-		addrs := pm.ipForDomain(q.Name.String())
 		want6 := q.Type == dnsmessage.TypeAAAA
 		found := false
 		for _, ip := range addrs {
@@ -266,17 +344,20 @@ func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.No
 			}
 			found = true
 			if want6 {
-				err = b.AAAAResource(
+				if err := b.AAAAResource(
 					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 5},
 					dnsmessage.AAAAResource{AAAA: ip.As16()},
-				)
+				); err != nil {
+					return nil, err
+				}
 			} else {
-				err = b.AResource(
+				if err := b.AResource(
 					dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 5},
 					dnsmessage.AResource{A: ip.As4()},
-				)
+				); err != nil {
+					return nil, err
+				}
 			}
-			break
 		}
 		if !found {
 			err = errors.New("no address found")
@@ -328,6 +409,15 @@ func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Con
 	return func(conn net.Conn) {
 		proxyTCPConn(conn, domain)
 	}, true
+}
+
+func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
+	for _, a := range dstAddrs {
+		if _, ok := c.ignoreDsts.Get(a); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func proxyTCPConn(c net.Conn, dest string) {
