@@ -5,5 +5,5 @@ metadata:
 spec:
   nameserver:
     image:
-      repo: tailscale/k8s-nameserver
-      tag: unstable-v1.65
+      repo: gcr.io/csi-test-290908/nameserver
+      tag: v0.0.23proxycidr

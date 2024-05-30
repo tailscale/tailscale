@@ -28,6 +28,12 @@ spec:
         volumeMounts:
         - name: dnsrecords
           mountPath: /config
+        env:
+        - name: TS_AUTHKEY
+          valueFrom:   
+            secretKeyRef:
+              name: nameserver-key 
+              key: ts_auth_key
       restartPolicy: Always
       serviceAccount: nameserver
       serviceAccountName: nameserver

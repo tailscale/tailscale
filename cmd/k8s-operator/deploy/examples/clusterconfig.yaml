@@ -1,0 +1,8 @@
+# It would be nice if users didn't need to apply this separately, but not sure
+# how to integrate this into the chart (post-render hook?)
+apiVersion: tailscale.com/v1alpha1
+kind: ClusterConfig
+metadata:
+  name: proxies
+spec:
+  domain: "foo.bar." # must have the dot at the moment

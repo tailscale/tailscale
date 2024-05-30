@@ -26,6 +26,10 @@ spec:
           env:
             - name: TS_USERSPACE
               value: "false"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_IP
               valueFrom:
                 fieldRef:

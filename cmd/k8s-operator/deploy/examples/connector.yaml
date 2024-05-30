@@ -14,6 +14,5 @@ spec:
   hostname: ts-prod
   subnetRouter:
     advertiseRoutes:
-    - "10.40.0.0/14"
-    - "192.168.0.0/14"
-  exitNode: true
+    - "10.0.0.0/8"
+  exitNode: false

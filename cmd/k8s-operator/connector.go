@@ -159,11 +159,11 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // maybeProvisionConnector ensures that any new resources required for this
 // Connector instance are deployed to the cluster.
 func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) error {
-	hostname := cn.Name + "-connector"
-	if cn.Spec.Hostname != "" {
-		hostname = string(cn.Spec.Hostname)
-	}
-	crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
+	// hostname := cn.Name + "-connector"
+	// if cn.Spec.Hostname != "" {
+	// 	hostname = string(cn.Spec.Hostname)
+	// }
+	// crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
 
 	proxyClass := cn.Spec.ProxyClass
 	if proxyClass != "" {
@@ -175,33 +175,33 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		}
 	}
 
-	sts := &tailscaleSTSConfig{
-		ParentResourceName:  cn.Name,
-		ParentResourceUID:   string(cn.UID),
-		Hostname:            hostname,
-		ChildResourceLabels: crl,
-		Tags:                cn.Spec.Tags.Stringify(),
-		Connector: &connector{
-			isExitNode: cn.Spec.ExitNode,
-		},
-		ProxyClass: proxyClass,
-	}
+	// sts := &tailscaleSTSConfig{
+	// 	ParentResourceName:  cn.Name,
+	// 	ParentResourceUID:   string(cn.UID),
+	// 	Hostname:            hostname,
+	// 	ChildResourceLabels: crl,
+	// 	Tags:                cn.Spec.Tags.Stringify(),
+	// 	Connector: &connector{
+	// 		isExitNode: cn.Spec.ExitNode,
+	// 	},
+	// 	ProxyClass: proxyClass,
+	// }
 
-	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
-		sts.Connector.routes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
-	}
+	// if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
+	// 	sts.Connector.routes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
+	// }
 
-	a.mu.Lock()
-	if sts.Connector.isExitNode {
-		a.exitNodes.Add(cn.UID)
-	} else {
-		a.exitNodes.Remove(cn.UID)
-	}
-	if sts.Connector.routes != "" {
-		a.subnetRouters.Add(cn.GetUID())
-	} else {
-		a.subnetRouters.Remove(cn.GetUID())
-	}
+	// a.mu.Lock()
+	// if sts.Connector.isExitNode {
+	// 	a.exitNodes.Add(cn.UID)
+	// } else {
+	// 	a.exitNodes.Remove(cn.UID)
+	// }
+	// if sts.Connector.routes != "" {
+	// 	a.subnetRouters.Add(cn.GetUID())
+	// } else {
+	// 	a.subnetRouters.Remove(cn.GetUID())
+	// }
 	a.mu.Unlock()
 	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
 	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
@@ -210,8 +210,8 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	connectors.AddSlice(a.subnetRouters.Slice())
 	gaugeConnectorResources.Set(int64(connectors.Len()))
 
-	_, err := a.ssr.Provision(ctx, logger, sts)
-	return err
+	// _, err := a.ssr.Provision(ctx, logger, sts)
+	return nil
 }
 
 func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) (bool, error) {

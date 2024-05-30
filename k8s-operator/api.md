@@ -8,6 +8,8 @@ Packages:
 
 Resource Types:
 
+- [ClusterConfig](#clusterconfig)
+
 - [Connector](#connector)
 
 - [DNSConfig](#dnsconfig)
@@ -16,6 +18,154 @@ Resource Types:
 
 
 
+
+## ClusterConfig
+<sup><sup>[↩ Parent](#tailscalecomv1alpha1 )</sup></sup>
+
+
+
+
+
+
+
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+      <td><b>apiVersion</b></td>
+      <td>string</td>
+      <td>tailscale.com/v1alpha1</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b>kind</b></td>
+      <td>string</td>
+      <td>ClusterConfig</td>
+      <td>true</td>
+      </tr>
+      <tr>
+      <td><b><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.27/#objectmeta-v1-meta">metadata</a></b></td>
+      <td>object</td>
+      <td>Refer to the Kubernetes API documentation for the fields of the `metadata` field.</td>
+      <td>true</td>
+      </tr><tr>
+        <td><b><a href="#clusterconfigspec">spec</a></b></td>
+        <td>object</td>
+        <td>
+          More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b><a href="#clusterconfigstatus">status</a></b></td>
+        <td>object</td>
+        <td>
+          ClusterConfigStatus describes the status of the ClusterConfig. This is set and managed by the Tailscale operator.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ClusterConfig.spec
+<sup><sup>[↩ Parent](#clusterconfig)</sup></sup>
+
+
+
+More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>domain</b></td>
+        <td>string</td>
+        <td>
+          like 'foo.tailbd97a.ts.net' for services like 'my-svc.foo.tailbd97a.ts.net'. Or, should be just 'foo'?<br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### ClusterConfig.status
+<sup><sup>[↩ Parent](#clusterconfig)</sup></sup>
+
+
+
+ClusterConfigStatus describes the status of the ClusterConfig. This is set and managed by the Tailscale operator.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b><a href="#clusterconfigstatusproxynodesindex">proxyNodes</a></b></td>
+        <td>[]object</td>
+        <td>
+          <br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+
+
+### ClusterConfig.status.proxyNodes[index]
+<sup><sup>[↩ Parent](#clusterconfigstatus)</sup></sup>
+
+
+
+
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>magicDNSName</b></td>
+        <td>string</td>
+        <td>
+          <br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>serviceCIDR</b></td>
+        <td>string</td>
+        <td>
+          <br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>tailnetIPs</b></td>
+        <td>[]string</td>
+        <td>
+          <br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
 
 ## Connector
 <sup><sup>[↩ Parent](#tailscalecomv1alpha1 )</sup></sup>

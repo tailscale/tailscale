@@ -7,9 +7,13 @@ package kube
 
 import (
 	"fmt"
+	"net/netip"
 
+	"github.com/gaissmai/bart"
 	"tailscale.com/tailcfg"
 )
+
+// TODO: move all this to ./kube
 
 const (
 	Alpha1Version = "v1alpha1"
@@ -24,8 +28,17 @@ type Records struct {
 	// k8s-nameserver must verify that it knows how to parse a given
 	// version.
 	Version string `json:"version"`
+
+	// This will go- this will only contain ingress/egress destinations, not what
+	// service IPs this is assigned to.
+
 	// IP4 contains a mapping of DNS names to IPv4 address(es).
 	IP4 map[string][]string `json:"ip4"`
+	// TODO: probably don't need this here
+	AddrsToDomain *bart.Table[string] `json:"addrsToDomain"`
+	// Probably should not be a string so that don't need to parse twice
+	// TODO: remove from here
+	DNSAddr string `json:"dnsAddr"`
 }
 
 // TailscaledConfigFileNameForCap returns a tailscaled config file name in
@@ -46,4 +59,26 @@ func CapVerFromFileName(name string) (tailcfg.CapabilityVersion, error) {
 	var cap tailcfg.CapabilityVersion
 	_, err := fmt.Sscanf(name, "cap-%d.hujson", &cap)
 	return cap, err
+}
+
+type ProxyConfig struct {
+	// Maybe we don't need to put this one here- it's just convenient for
+	// the services reconciler to read it from here.
+	ServicesCIDRRange netip.Prefix       `json:"serviceCIDR,omitempty"`
+	Services          map[string]Service `json:"services,omitempty"`
+
+	// For lookup convenience
+	AddrsToDomain *bart.Table[string] `json:"addrsToDomain,omitempty"`
+}
+
+type Service struct {
+	FQDN         string       `json:"fqdn,omitempty"`
+	V4ServiceIPs []netip.Addr `json:"vService4ips"`
+	Ingress      *Ingress     `json:"ingress"`
+}
+
+type Ingress struct {
+	Type string `json:"type"` // tcp or http
+	// type?
+	V4Backends []netip.Addr `json:"v4Backends"`
 }

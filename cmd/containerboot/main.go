@@ -61,6 +61,8 @@
 //     and not `tailscale up` or `tailscale set`.
 //     The config file contents are currently read once on container start.
 //     NB: This env var is currently experimental and the logic will likely change!
+//   - TS_EXPERIMENTAL_SERVICES_CONFIG_PATH
+//     Path where config for Services served by this proxy can be found.
 //   - EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS: if set to true
 //     and if this containerboot instance is an L7 ingress proxy (created by
 //     the Kubernetes operator), set up rules to allow proxying cluster traffic,
@@ -113,9 +115,12 @@ import (
 	kubeutils "tailscale.com/k8s-operator"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/linuxfw"
+)
+
+const (
+	kubeletMountedConfigLn = "..data"
 )
 
 func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
@@ -133,6 +138,7 @@ func main() {
 		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
 		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
 		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
+		ServicesConfigPath:                    defaultEnv("TS_EXPERIMENTAL_SERVICES_CONFIG_PATH", ""),
 		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
 		ProxyTargetDNSName:                    defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
 		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
@@ -325,13 +331,13 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
+		wantProxy         = cfg.ServicesConfigPath != "" || cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
 
-		currentEgressIPs deephash.Sum
+		// currentEgressIPs deephash.Sum
 
 		addrs        []netip.Prefix
 		backendAddrs []net.IP
@@ -389,6 +395,11 @@ authLoop:
 
 	notifyChan := make(chan ipn.Notify)
 	errChan := make(chan error)
+	log.Printf("attempting to update service config...")
+	if err := updateServices(cfg, nfr); err != nil {
+		log.Printf("error updating services: %v", err)
+	}
+	log.Printf("ConfigMap update processed")
 	go func() {
 		for {
 			n, err := w.Next()
@@ -401,7 +412,53 @@ authLoop:
 		}
 	}()
 	var wg sync.WaitGroup
-
+	if cfg.ServicesConfigPath != "" {
+		// kubelet mounts configmap to a Pod using a series of symlinks, one of
+		// which is <mount-dir>/..data that Kubernetes recommends consumers to
+		// use if they need to monitor changes
+		// https://github.com/kubernetes/kubernetes/blob/v1.28.1/pkg/volume/util/atomic_writer.go#L39-L61
+		toWatch := filepath.Join(cfg.ServicesConfigPath, kubeletMountedConfigLn)
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			log.Fatalf("error creating a new watcher for the mounted ConfigMap: %v", err)
+		}
+		log.Printf("will be watching services cm")
+		go func() {
+			defer watcher.Close()
+			for {
+				log.Printf("waiting for ConfigMap updates..")
+				select {
+				case <-ctx.Done():
+					log.Print("context cancelled, exiting ConfigMap watcher")
+					return
+				case event, ok := <-watcher.Events:
+					log.Printf("ConfigMap update received: %s", event)
+					if !ok {
+						log.Fatal("watcher finished; exiting")
+					}
+					if event.Name == toWatch {
+						log.Printf("update is for an event to watch: %s", event)
+						if err := updateServices(cfg, nfr); err != nil {
+							log.Printf("error updating services: %v", err)
+						}
+						log.Printf("ConfigMap update processed")
+					} else {
+						log.Printf("update is not for an event to watch: %s", event)
+					}
+				case err, ok := <-watcher.Errors:
+					if err != nil {
+						log.Fatalf("[unexpected] error watching configuration: %v", err)
+					}
+					if !ok {
+						log.Fatalf("[unexpected] errors watcher exited")
+					}
+				}
+			}
+		}()
+		if err = watcher.Add(cfg.ServicesConfigPath); err != nil {
+			log.Fatalf("failed setting up a watcher for the mounted ConfigMap: %v", err)
+		}
+	}
 runLoop:
 	for {
 		select {
@@ -423,111 +480,111 @@ runLoop:
 				// whereupon we'll go through initial auth again.
 				log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 			}
-			if n.NetMap != nil {
-				addrs = n.NetMap.SelfNode.Addresses().AsSlice()
-				newCurrentIPs := deephash.Hash(&addrs)
-				ipsHaveChanged := newCurrentIPs != currentIPs
+			// if n.NetMap != nil {
+			// 	addrs = n.NetMap.SelfNode.Addresses().AsSlice()
+			// 	newCurrentIPs := deephash.Hash(&addrs)
+			// 	ipsHaveChanged := newCurrentIPs != currentIPs
 
-				if cfg.TailnetTargetFQDN != "" {
-					var (
-						egressAddrs          []netip.Prefix
-						newCurentEgressIPs   deephash.Sum
-						egressIPsHaveChanged bool
-						node                 tailcfg.NodeView
-						nodeFound            bool
-					)
-					for _, n := range n.NetMap.Peers {
-						if strings.EqualFold(n.Name(), cfg.TailnetTargetFQDN) {
-							node = n
-							nodeFound = true
-							break
-						}
-					}
-					if !nodeFound {
-						log.Printf("Tailscale node %q not found; it either does not exist, or not reachable because of ACLs", cfg.TailnetTargetFQDN)
-						break
-					}
-					egressAddrs = node.Addresses().AsSlice()
-					newCurentEgressIPs = deephash.Hash(&egressAddrs)
-					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
-					if egressIPsHaveChanged && len(egressAddrs) != 0 {
-						for _, egressAddr := range egressAddrs {
-							ea := egressAddr.Addr()
-							// TODO (irbekrm): make it work for IPv6 too.
-							if ea.Is6() {
-								log.Println("Not installing egress forwarding rules for IPv6 as this is currently not supported")
-								continue
-							}
-							log.Printf("Installing forwarding rules for destination %v", ea.String())
-							if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
-								log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
-							}
-						}
-					}
-					currentEgressIPs = newCurentEgressIPs
-				}
-				if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
-					log.Printf("Installing proxy rules")
-					if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
-						log.Fatalf("installing ingress proxy rules: %v", err)
-					}
-				}
-				if cfg.ProxyTargetDNSName != "" && len(addrs) != 0 && ipsHaveChanged {
-					newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
-					if err != nil {
-						log.Printf("[unexpected] error resolving DNS name %s: %v", cfg.ProxyTargetDNSName, err)
-						resetTimer(true)
-						continue
-					}
-					backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
-						return slices.ContainsFunc(newBackendAddrs, func(ip net.IP) bool { return ip.Equal(ip1) })
-					}))
-					if backendsHaveChanged {
-						log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
-						if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
-							log.Fatalf("error installing ingress proxy rules: %v", err)
-						}
-					}
-					resetTimer(false)
-					backendAddrs = newBackendAddrs
-				}
-				if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) != 0 {
-					cd := n.NetMap.DNS.CertDomains[0]
-					prev := certDomain.Swap(ptr.To(cd))
-					if prev == nil || *prev != cd {
-						select {
-						case certDomainChanged <- true:
-						default:
-						}
-					}
-				}
-				if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
-					log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
-					if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
-						log.Fatalf("installing egress proxy rules: %v", err)
-					}
-				}
-				// If this is a L7 cluster ingress proxy (set up
-				// by Kubernetes operator) and proxying of
-				// cluster traffic to the ingress target is
-				// enabled, set up proxy rule each time the
-				// tailnet IPs of this node change (including
-				// the first time they become available).
-				if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) != 0 {
-					log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
-					if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
-						log.Fatalf("installing rules to forward traffic to node's tailnet IP: %v", err)
-					}
-				}
-				currentIPs = newCurrentIPs
+			// 	if cfg.TailnetTargetFQDN != "" {
+			// 		var (
+			// 			egressAddrs          []netip.Prefix
+			// 			newCurentEgressIPs   deephash.Sum
+			// 			egressIPsHaveChanged bool
+			// 			node                 tailcfg.NodeView
+			// 			nodeFound            bool
+			// 		)
+			// 		for _, n := range n.NetMap.Peers {
+			// 			if strings.EqualFold(n.Name(), cfg.TailnetTargetFQDN) {
+			// 				node = n
+			// 				nodeFound = true
+			// 				break
+			// 			}
+			// 		}
+			// 		if !nodeFound {
+			// 			log.Printf("Tailscale node %q not found; it either does not exist, or not reachable because of ACLs", cfg.TailnetTargetFQDN)
+			// 			break
+			// 		}
+			// 		egressAddrs = node.Addresses().AsSlice()
+			// 		newCurentEgressIPs = deephash.Hash(&egressAddrs)
+			// 		egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
+			// 		if egressIPsHaveChanged && len(egressAddrs) != 0 {
+			// 			for _, egressAddr := range egressAddrs {
+			// 				ea := egressAddr.Addr()
+			// 				// TODO (irbekrm): make it work for IPv6 too.
+			// 				if ea.Is6() {
+			// 					log.Println("Not installing egress forwarding rules for IPv6 as this is currently not supported")
+			// 					continue
+			// 				}
+			// 				log.Printf("Installing forwarding rules for destination %v", ea.String())
+			// 				if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
+			// 					log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+			// 				}
+			// 			}
+			// 		}
+			// 		currentEgressIPs = newCurentEgressIPs
+			// 	}
+			// 	if cfg.ProxyTargetIP != "" && len(addrs) != 0 && ipsHaveChanged {
+			// 		log.Printf("Installing proxy rules")
+			// 		if err := installIngressForwardingRule(ctx, cfg.ProxyTargetIP, addrs, nfr); err != nil {
+			// 			log.Fatalf("installing ingress proxy rules: %v", err)
+			// 		}
+			// 	}
+			// 	if cfg.ProxyTargetDNSName != "" && len(addrs) != 0 && ipsHaveChanged {
+			// 		newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
+			// 		if err != nil {
+			// 			log.Printf("[unexpected] error resolving DNS name %s: %v", cfg.ProxyTargetDNSName, err)
+			// 			resetTimer(true)
+			// 			continue
+			// 		}
+			// 		backendsHaveChanged := !(slices.EqualFunc(backendAddrs, newBackendAddrs, func(ip1 net.IP, ip2 net.IP) bool {
+			// 			return slices.ContainsFunc(newBackendAddrs, func(ip net.IP) bool { return ip.Equal(ip1) })
+			// 		}))
+			// 		if backendsHaveChanged {
+			// 			log.Printf("installing ingress proxy rules for backends %v", newBackendAddrs)
+			// 			if err := installIngressForwardingRuleForDNSTarget(ctx, newBackendAddrs, addrs, nfr); err != nil {
+			// 				log.Fatalf("error installing ingress proxy rules: %v", err)
+			// 			}
+			// 		}
+			// 		resetTimer(false)
+			// 		backendAddrs = newBackendAddrs
+			// 	}
+			// 	if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) != 0 {
+			// 		cd := n.NetMap.DNS.CertDomains[0]
+			// 		prev := certDomain.Swap(ptr.To(cd))
+			// 		if prev == nil || *prev != cd {
+			// 			select {
+			// 			case certDomainChanged <- true:
+			// 			default:
+			// 			}
+			// 		}
+			// 	}
+			// 	if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) != 0 {
+			// 		log.Printf("Installing forwarding rules for destination %v", cfg.TailnetTargetIP)
+			// 		if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
+			// 			log.Fatalf("installing egress proxy rules: %v", err)
+			// 		}
+			// 	}
+			// 	// If this is a L7 cluster ingress proxy (set up
+			// 	// by Kubernetes operator) and proxying of
+			// 	// cluster traffic to the ingress target is
+			// 	// enabled, set up proxy rule each time the
+			// 	// tailnet IPs of this node change (including
+			// 	// the first time they become available).
+			// 	if cfg.AllowProxyingClusterTrafficViaIngress && cfg.ServeConfigPath != "" && ipsHaveChanged && len(addrs) != 0 {
+			// 		log.Printf("installing rules to forward traffic for %s to node's tailnet IP", cfg.PodIP)
+			// 		if err := installTSForwardingRuleForDestination(ctx, cfg.PodIP, addrs, nfr); err != nil {
+			// 			log.Fatalf("installing rules to forward traffic to node's tailnet IP: %v", err)
+			// 		}
+			// 	}
+			// 	currentIPs = newCurrentIPs
 
-				deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
-				if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
-					if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
-						log.Fatalf("storing device ID in kube secret: %v", err)
-					}
-				}
-			}
+			// 	deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
+			// 	if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
+			// 		if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+			// 			log.Fatalf("storing device ID in kube secret: %v", err)
+			// 		}
+			// 	}
+			// }
 			if !startupTasksDone {
 				if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
 					// This log message is used in tests to detect when all
@@ -695,6 +752,48 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 	}
 
 	return tsClient, cmd.Process, nil
+}
+
+func updateServices(cfg *settings, nfr linuxfw.NetfilterRunner) error {
+	if cfg.ServicesConfigPath == "" {
+		log.Print("no services config path set")
+		return nil
+	}
+	b, err := os.ReadFile(path.Join(cfg.ServicesConfigPath, "proxyConfig"))
+	if err != nil {
+		log.Printf("error reading in services config at path %s: %v", cfg.ServicesConfigPath, err)
+		return nil
+	}
+	proxyCfg := &kubeutils.ProxyConfig{}
+	if err := json.Unmarshal(b, proxyCfg); err != nil {
+		log.Printf("error unmarshalling proxy config: %v", err)
+		return nil
+	}
+	if len(proxyCfg.Services) == 0 {
+		log.Printf("No Services defined")
+		return nil
+	}
+
+	for name, svcFg := range proxyCfg.Services {
+		log.Printf("configuring Service for %s", name)
+		if svcFg.Ingress == nil || len(svcFg.Ingress.V4Backends) != 1 {
+			// This prototype only suppports ingress with one backend address
+			log.Printf("[unexpected] service is not ingress with a single backend address")
+			return nil
+		}
+		if len(svcFg.V4ServiceIPs) != 1 {
+			// This prototype only suppports ingress with one backend address
+			log.Printf("[unexpected] a single service IP expected, got %v", svcFg.V4ServiceIPs)
+			return nil
+		}
+		if err := nfr.AddDNATRule(svcFg.V4ServiceIPs[0], svcFg.Ingress.V4Backends[0]); err != nil {
+			return fmt.Errorf("installing ingress proxy rules: %w", err)
+		}
+		if err := nfr.ClampMSSToPMTU("tailscale0", svcFg.V4ServiceIPs[0]); err != nil {
+			return fmt.Errorf("installing ingress proxy rules: %w", err)
+		}
+	}
+	return nil
 }
 
 // tailscaledArgs uses cfg to construct the argv for tailscaled.
@@ -1075,6 +1174,7 @@ type settings struct {
 	// node FQDN.
 	TailnetTargetFQDN        string
 	ServeConfigPath          string
+	ServicesConfigPath       string
 	DaemonExtraArgs          string
 	ExtraArgs                string
 	InKubernetes             bool

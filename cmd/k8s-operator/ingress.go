@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -248,32 +247,32 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
-	var tags []string
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
-	}
-	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if tlsHost != "" {
-		hostname, _, _ = strings.Cut(tlsHost, ".")
-	}
+	// var tags []string
+	// if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	// 	tags = strings.Split(tstr, ",")
+	// }
+	// hostname := ing.Namespace + "-" + ing.Name + "-ingress"
+	// if tlsHost != "" {
+	// 	hostname, _, _ = strings.Cut(tlsHost, ".")
+	// }
 
-	sts := &tailscaleSTSConfig{
-		Hostname:            hostname,
-		ParentResourceName:  ing.Name,
-		ParentResourceUID:   string(ing.UID),
-		ServeConfig:         sc,
-		Tags:                tags,
-		ChildResourceLabels: crl,
-		ProxyClass:          proxyClass,
-	}
+	// sts := &tailscaleSTSConfig{
+	// 	Hostname:            hostname,
+	// 	ParentResourceName:  ing.Name,
+	// 	ParentResourceUID:   string(ing.UID),
+	// 	ServeConfig:         sc,
+	// 	Tags:                tags,
+	// 	ChildResourceLabels: crl,
+	// 	ProxyClass:          proxyClass,
+	// }
 
-	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
-		sts.ForwardClusterTrafficViaL7IngressProxy = true
-	}
+	// if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
+	// 	sts.ForwardClusterTrafficViaL7IngressProxy = true
+	// }
 
-	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
-		return fmt.Errorf("failed to provision: %w", err)
-	}
+	// if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
+	// 	return fmt.Errorf("failed to provision: %w", err)
+	// }
 
 	_, tsHost, _, err := a.ssr.DeviceInfo(ctx, crl)
 	if err != nil {

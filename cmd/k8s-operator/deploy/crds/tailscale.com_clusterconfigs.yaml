@@ -1,0 +1,66 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.13.0
+  name: clusterconfigs.tailscale.com
+spec:
+  group: tailscale.com
+  names:
+    kind: ClusterConfig
+    listKind: ClusterConfigList
+    plural: clusterconfigs
+    singular: clusterconfig
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+              type: string
+            kind:
+              description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: 'More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
+              type: object
+              required:
+                - domain
+              properties:
+                domain:
+                  description: like 'foo.tailbd97a.ts.net' for services like 'my-svc.foo.tailbd97a.ts.net'. Or, should be just 'foo'?
+                  type: string
+            status:
+              description: ClusterConfigStatus describes the status of the ClusterConfig. This is set and managed by the Tailscale operator.
+              type: object
+              required:
+                - proxyNodes
+              properties:
+                proxyNodes:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - magicDNSName
+                      - serviceCIDR
+                      - tailnetIPs
+                    properties:
+                      magicDNSName:
+                        type: string
+                      serviceCIDR:
+                        type: string
+                      tailnetIPs:
+                        type: array
+                        items:
+                          type: string
+      served: true
+      storage: true
+      subresources:
+        status: {}
