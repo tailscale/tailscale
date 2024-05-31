@@ -885,11 +885,26 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 			// Issue 6811. Ignore on Synology.
 			continue
 		}
+		if flagName == "stateful-filtering" && valCur == true && valNew == false && env.goos == "linux" {
+			// See https://github.com/tailscale/tailscale/issues/12307
+			// Stateful filtering was on by default in tailscale 1.66.0-1.66.3, then off in 1.66.4.
+			// This broke Tailscale installations in containerized
+			// environments that use the default containerboot
+			// configuration that configures tailscale using
+			// 'tailscale up' command, which requires that all
+			// previously set flags are explicitly provided on
+			// subsequent restarts.
+			continue
+		}
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
 	if len(missing) == 0 {
 		return nil
 	}
+
+	// Some previously provided flags are missing. This run of 'tailscale
+	// up' will error out.
+
 	sort.Strings(missing)
 
 	// Compute the stringification of the explicitly provided args in flagSet
