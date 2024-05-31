@@ -18,11 +18,12 @@ func _() {
 	_ = x[dropReasonQueueTail-4]
 	_ = x[dropReasonWriteError-5]
 	_ = x[dropReasonDupClient-6]
+	_ = x[numDropReasons-7]
 }
 
-const _dropReason_name = "UnknownDestUnknownDestOnFwdGoneDisconnectedQueueHeadQueueTailWriteErrorDupClient"
+const _dropReason_name = "UnknownDestUnknownDestOnFwdGoneDisconnectedQueueHeadQueueTailWriteErrorDupClientnumDropReasons"
 
-var _dropReason_index = [...]uint8{0, 11, 27, 43, 52, 61, 71, 80}
+var _dropReason_index = [...]uint8{0, 11, 27, 43, 52, 61, 71, 80, 94}
 
 func (i dropReason) String() string {
 	if i < 0 || i >= dropReason(len(_dropReason_index)-1) {

@@ -330,19 +330,33 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
 	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
 
-	s.packetsDroppedReasonCounters = []*expvar.Int{
-		dropReasonUnknownDest:      s.packetsDroppedReason.Get("unknown_dest"),
-		dropReasonUnknownDestOnFwd: s.packetsDroppedReason.Get("unknown_dest_on_fwd"),
-		dropReasonGoneDisconnected: s.packetsDroppedReason.Get("gone_disconnected"),
-		dropReasonQueueHead:        s.packetsDroppedReason.Get("queue_head"),
-		dropReasonQueueTail:        s.packetsDroppedReason.Get("queue_tail"),
-		dropReasonWriteError:       s.packetsDroppedReason.Get("write_error"),
-		dropReasonDupClient:        s.packetsDroppedReason.Get("dup_client"),
-	}
+	s.packetsDroppedReasonCounters = s.genPacketsDroppedReasonCounters()
 
 	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
 	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
 	return s
+}
+
+func (s *Server) genPacketsDroppedReasonCounters() []*expvar.Int {
+	getMetric := s.packetsDroppedReason.Get
+	ret := []*expvar.Int{
+		dropReasonUnknownDest:      getMetric("unknown_dest"),
+		dropReasonUnknownDestOnFwd: getMetric("unknown_dest_on_fwd"),
+		dropReasonGoneDisconnected: getMetric("gone_disconnected"),
+		dropReasonQueueHead:        getMetric("queue_head"),
+		dropReasonQueueTail:        getMetric("queue_tail"),
+		dropReasonWriteError:       getMetric("write_error"),
+		dropReasonDupClient:        getMetric("dup_client"),
+	}
+	if len(ret) != int(numDropReasons) {
+		panic("dropReason metrics out of sync")
+	}
+	for i := range numDropReasons {
+		if ret[i] == nil {
+			panic("dropReason metrics out of sync")
+		}
+	}
+	return ret
 }
 
 // SetMesh sets the pre-shared key that regional DERP servers used to mesh
@@ -1049,6 +1063,7 @@ const (
 	dropReasonQueueTail                          // destination queue is full, dropped packet at queue tail
 	dropReasonWriteError                         // OS write() failed
 	dropReasonDupClient                          // the public key is connected 2+ times (active/active, fighting)
+	numDropReasons                               // unused; keep last
 )
 
 func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, reason dropReason) {
