@@ -865,3 +865,27 @@ func TestDeps(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestCheckTag(t *testing.T) {
+	tests := []struct {
+		name string
+		tag  string
+		want bool
+	}{
+		{"empty", "", false},
+		{"good", "tag:foo", true},
+		{"bad", "tag:", false},
+		{"no_leading_num", "tag:1foo", false},
+		{"no_punctuation", "tag:foa@bar", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckTag(tt.tag)
+			if err == nil && !tt.want {
+				t.Errorf("got nil; want error")
+			} else if err != nil && tt.want {
+				t.Errorf("got %v; want nil", err)
+			}
+		})
+	}
+}
