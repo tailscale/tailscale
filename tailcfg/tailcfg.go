@@ -609,10 +609,11 @@ func isAlpha(b byte) bool {
 //
 // We might relax these rules later.
 func CheckTag(tag string) error {
-	if !strings.HasPrefix(tag, "tag:") {
+	var ok bool
+	tag, ok = strings.CutPrefix(tag, "tag:")
+	if !ok {
 		return errors.New("tags must start with 'tag:'")
 	}
-	tag = tag[4:]
 	if tag == "" {
 		return errors.New("tag names must not be empty")
 	}
