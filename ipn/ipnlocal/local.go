@@ -154,12 +154,6 @@ type watchSession struct {
 	sessionID string
 }
 
-// lastSuggestedExitNode stores the last suggested exit node ID and name in local backend.
-type lastSuggestedExitNode struct {
-	id   tailcfg.StableNodeID
-	name string
-}
-
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -340,9 +334,9 @@ type LocalBackend struct {
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
 
-	// lastSuggestedExitNode stores the last suggested exit node ID and name.
-	// lastSuggestedExitNode updates whenever the suggestion changes.
-	lastSuggestedExitNode lastSuggestedExitNode
+	// lastSuggestedExitNode stores the last suggested exit node suggestion to
+	// avoid unnecessary churn between multiple equally-good options.
+	lastSuggestedExitNode tailcfg.StableNodeID
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -6047,8 +6041,8 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry(unlock unlockOnce) err
 	}
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
-	b.lastSuggestedExitNode = lastSuggestedExitNode{} // Reset last suggested exit node.
-	b.enterStateLockedOnEntry(ipn.NoState, unlock)    // Reset state; releases b.mu
+	b.lastSuggestedExitNode = ""
+	b.enterStateLockedOnEntry(ipn.NoState, unlock) // Reset state; releases b.mu
 	b.health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
@@ -6425,7 +6419,6 @@ func mayDeref[T any](p *T) (v T) {
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
-var ErrUnableToSuggestLastExitNode = errors.New("unable to suggest last exit node")
 
 // SuggestExitNode computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
@@ -6438,27 +6431,15 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	b.mu.Lock()
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	netMap := b.netMap
-	lastSuggestedExitNode := b.lastSuggestedExitNode
+	prevSuggestion := b.lastSuggestedExitNode
 	b.mu.Unlock()
-	if lastReport == nil || netMap == nil {
-		last, err := lastSuggestedExitNode.asAPIType()
-		if err != nil {
-			return response, ErrCannotSuggestExitNode
-		}
-		return last, err
-	}
 
-	res, err := suggestExitNode(lastReport, netMap, randomRegion, randomNode, getAllowedSuggestions())
+	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, getAllowedSuggestions())
 	if err != nil {
-		last, err := lastSuggestedExitNode.asAPIType()
-		if err != nil {
-			return response, ErrCannotSuggestExitNode
-		}
-		return last, err
+		return res, err
 	}
 	b.mu.Lock()
-	b.lastSuggestedExitNode.id = res.ID
-	b.lastSuggestedExitNode.name = res.Name
+	b.lastSuggestedExitNode = res.ID
 	b.mu.Unlock()
 	return res, err
 }
@@ -6467,20 +6448,10 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 // The value is returned, not the slice index.
 type selectRegionFunc func(views.Slice[int]) int
 
-// selectNodeFunc returns a node from the slice of candidate nodes.
-type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView]) tailcfg.NodeView
-
-// asAPIType formats a response with the last suggested exit node's ID and name.
-// Returns error if there is no id or name.
-// Used as a fallback before returning a nil response and error.
-func (n lastSuggestedExitNode) asAPIType() (res apitype.ExitNodeSuggestionResponse, _ error) {
-	if n.id != "" && n.name != "" {
-		res.ID = n.id
-		res.Name = n.name
-		return res, nil
-	}
-	return res, ErrUnableToSuggestLastExitNode
-}
+// selectNodeFunc returns a node from the slice of candidate nodes. The last
+// selected node is provided for when that information is needed to make a better
+// choice.
+type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView], last tailcfg.StableNodeID) tailcfg.NodeView
 
 var getAllowedSuggestions = lazy.SyncFunc(fillAllowedSuggestions)
 
@@ -6500,7 +6471,7 @@ func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 	return s
 }
 
-func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	if report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
 	}
@@ -6587,7 +6558,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, selectR
 		if !ok {
 			return res, errors.New("no candidates in expected region: this is a bug")
 		}
-		chosen := selectNode(views.SliceOf(regionCandidates))
+		chosen := selectNode(views.SliceOf(regionCandidates), prevSuggestion)
 		res.ID = chosen.StableID()
 		res.Name = chosen.Name()
 		if hi := chosen.Hostinfo(); hi.Valid() {
@@ -6614,7 +6585,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, selectR
 		}
 	}
 	bestCandidates := pickWeighted(pickFrom)
-	chosen := selectNode(views.SliceOf(bestCandidates))
+	chosen := selectNode(views.SliceOf(bestCandidates), prevSuggestion)
 	if !chosen.Valid() {
 		return res, errors.New("chosen candidate invalid: this is a bug")
 	}
@@ -6655,8 +6626,18 @@ func randomRegion(regions views.Slice[int]) int {
 	return regions.At(rand.IntN(regions.Len()))
 }
 
-// randomNode is a selectNodeFunc that returns a uniformly random node.
-func randomNode(nodes views.Slice[tailcfg.NodeView]) tailcfg.NodeView {
+// randomNode is a selectNodeFunc that will return the node matching prefer if
+// present, otherwise a uniformly random node will be selected.
+func randomNode(nodes views.Slice[tailcfg.NodeView], prefer tailcfg.StableNodeID) tailcfg.NodeView {
+	if !prefer.IsZero() {
+		for i := range nodes.Len() {
+			nv := nodes.At(i)
+			if nv.StableID() == prefer {
+				return nv
+			}
+		}
+	}
+
 	return nodes.At(rand.IntN(nodes.Len()))
 }
 
