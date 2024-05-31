@@ -29,5 +29,6 @@ spec:
     - name: TS_ROUTES
       value: "{{TS_ROUTES}}"
     securityContext:
-      runAsUser: 1000
-      runAsGroup: 1000
+      capabilities:
+        add:
+        - NET_ADMIN
