@@ -17,7 +17,7 @@ import (
 
 // Config describes a config file.
 type Config struct {
-	Path    string // disk path of HuJSON
+	Path    string // disk path of HuJSON, or VMUserDataPath
 	Raw     []byte // raw bytes from disk, in HuJSON form
 	Std     []byte // standardized JSON form
 	Version string // "alpha0" for now
@@ -35,13 +35,22 @@ func (c *Config) WantRunning() bool {
 	return c != nil && !c.Parsed.Enabled.EqualBool(false)
 }
 
+// VMUserDataPath is a sentinel value for Load to use to get the data
+// from the VM's metadata service's user-data field.
+const VMUserDataPath = "vm:user-data"
+
 // Load reads and parses the config file at the provided path on disk.
 func Load(path string) (*Config, error) {
 	var c Config
 	c.Path = path
-
 	var err error
-	c.Raw, err = os.ReadFile(path)
+
+	switch path {
+	case VMUserDataPath:
+		c.Raw, err = readVMUserData()
+	default:
+		c.Raw, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return nil, err
 	}

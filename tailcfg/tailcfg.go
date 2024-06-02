@@ -136,8 +136,9 @@ type CapabilityVersion int
 //   - 93: 2024-05-06: added support for stateful firewalling.
 //   - 94: 2024-05-06: Client understands Node.IsJailed.
 //   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
-//   - 96: 2023-06-08: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
-const CurrentCapabilityVersion CapabilityVersion = 96
+//   - 96: 2024-05-29: Client understands NodeAttrSSHBehaviorV1
+//   - 97: 2024-06-02: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
+const CurrentCapabilityVersion CapabilityVersion = 97
 
 type StableID string
 
@@ -609,10 +610,11 @@ func isAlpha(b byte) bool {
 //
 // We might relax these rules later.
 func CheckTag(tag string) error {
-	if !strings.HasPrefix(tag, "tag:") {
+	var ok bool
+	tag, ok = strings.CutPrefix(tag, "tag:")
+	if !ok {
 		return errors.New("tags must start with 'tag:'")
 	}
-	tag = tag[4:]
 	if tag == "" {
 		return errors.New("tag names must not be empty")
 	}
@@ -2275,6 +2277,10 @@ const (
 	// depending on the destination address and the configured routes. When present, it also makes
 	// the DNS forwarder use UserDial instead of SystemDial when dialing resolvers.
 	NodeAttrUserDialUseRoutes NodeCapability = "user-dial-routes"
+
+	// NodeAttrSSHBehaviorV1 forces SSH to use the V1 behavior (no su, run SFTP in-process)
+	// Added 2024-05-29 in Tailscale version 1.68.
+	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
 )
 
 // SetDNSRequest is a request to add a DNS record.

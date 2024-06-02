@@ -262,6 +262,18 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// config is empty, then we need to fallback to SplitDNS mode.
 		ocfg.MatchDomains = cfg.matchDomains()
 	} else {
+		// On iOS only (for now), check if all route names point to resources inside the tailnet.
+		// If so, we can set those names as MatchDomains to enable a split DNS configuration
+		// which will help preserve battery life.
+		// Because on iOS MatchDomains must equal SearchDomains, we cannot do this when
+		// we have any Routes outside the tailnet. Otherwise when app connectors are enabled,
+		// a query for 'work-laptop' might lead to search domain expansion, resolving
+		// as 'work-laptop.aws.com' for example.
+		if runtime.GOOS == "ios" && rcfg.RoutesRequireNoCustomResolvers() {
+			for r := range rcfg.Routes {
+				ocfg.MatchDomains = append(ocfg.MatchDomains, r)
+			}
+		}
 		var defaultRoutes []*dnstype.Resolver
 		for _, ip := range baseCfg.Nameservers {
 			defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})

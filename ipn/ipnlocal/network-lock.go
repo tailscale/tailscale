@@ -423,8 +423,12 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	copy(head[:], h[:])
 
 	var selfAuthorized bool
+	nodeKeySignature := &tka.NodeKeySignature{}
 	if b.netMap != nil {
 		selfAuthorized = b.tka.authority.NodeKeyAuthorized(b.netMap.SelfNode.Key(), b.netMap.SelfNode.KeySignature().AsSlice()) == nil
+		if err := nodeKeySignature.Unserialize(b.netMap.SelfNode.KeySignature().AsSlice()); err != nil {
+			b.logf("failed to decode self node key signature: %v", err)
+		}
 	}
 
 	keys := b.tka.authority.Keys()
@@ -445,14 +449,15 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	stateID1, _ := b.tka.authority.StateIDs()
 
 	return &ipnstate.NetworkLockStatus{
-		Enabled:       true,
-		Head:          &head,
-		PublicKey:     nlPriv.Public(),
-		NodeKey:       nodeKey,
-		NodeKeySigned: selfAuthorized,
-		TrustedKeys:   outKeys,
-		FilteredPeers: filtered,
-		StateID:       stateID1,
+		Enabled:          true,
+		Head:             &head,
+		PublicKey:        nlPriv.Public(),
+		NodeKey:          nodeKey,
+		NodeKeySigned:    selfAuthorized,
+		NodeKeySignature: nodeKeySignature,
+		TrustedKeys:      outKeys,
+		FilteredPeers:    filtered,
+		StateID:          stateID1,
 	}
 }
 

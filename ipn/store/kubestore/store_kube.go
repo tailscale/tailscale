@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,10 @@ func New(_ logger.Logf, secretName string) (*Store, error) {
 	c, err := kube.New()
 	if err != nil {
 		return nil, err
+	}
+	if os.Getenv("TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV") == "true" {
+		// Derive the API server address from the environment variables
+		c.SetURL(fmt.Sprintf("https://%s:%s", os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")))
 	}
 	canPatch, _, err := c.CheckSecretPermissions(context.Background(), secretName)
 	if err != nil {

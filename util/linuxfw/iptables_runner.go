@@ -20,6 +20,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/multierr"
+	"tailscale.com/version/distro"
 )
 
 // isNotExistError needs to be overridden in tests that rely on distinguishing
@@ -653,6 +654,11 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 // IPTablesCleanUp removes all Tailscale added iptables rules.
 // Any errors that occur are logged to the provided logf.
 func IPTablesCleanUp(logf logger.Logf) {
+	if distro.Get() == distro.Gokrazy {
+		// Gokrazy uses nftables and doesn't have the "iptables" command.
+		// Avoid log spam on cleanup. (#12277)
+		return
+	}
 	err := clearRules(iptables.ProtocolIPv4, logf)
 	if err != nil {
 		logf("linuxfw: clear iptables: %v", err)

@@ -478,17 +478,44 @@ func findCmdTailscale() (string, error) {
 }
 
 func tailscaleUpdateCmd(cmdTS string) *exec.Cmd {
+	defaultCmd := exec.Command(cmdTS, "update", "--yes")
 	if runtime.GOOS != "linux" {
-		return exec.Command(cmdTS, "update", "--yes")
+		return defaultCmd
 	}
 	if _, err := exec.LookPath("systemd-run"); err != nil {
-		return exec.Command(cmdTS, "update", "--yes")
+		return defaultCmd
 	}
+
 	// When systemd-run is available, use it to run the update command. This
 	// creates a new temporary unit separate from the tailscaled unit. When
 	// tailscaled is restarted during the update, systemd won't kill this
 	// temporary update unit, which could cause unexpected breakage.
-	return exec.Command("systemd-run", "--wait", "--pipe", "--collect", cmdTS, "update", "--yes")
+	//
+	// We want to use the --wait flag for systemd-run, to block the update
+	// command until completion and collect output. But this flag was added in
+	// systemd 232, so we need to check the version first.
+	//
+	// The output will look like:
+	//
+	//   systemd 255 (255.7-1-arch)
+	//   +PAM +AUDIT ... other feature flags ...
+	systemdVerOut, err := exec.Command("systemd-run", "--version").Output()
+	if err != nil {
+		return defaultCmd
+	}
+	parts := strings.Fields(string(systemdVerOut))
+	if len(parts) < 2 || parts[0] != "systemd" {
+		return defaultCmd
+	}
+	systemdVer, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return defaultCmd
+	}
+	if systemdVer < 232 {
+		return exec.Command("systemd-run", "--pipe", "--collect", cmdTS, "update", "--yes")
+	} else {
+		return exec.Command("systemd-run", "--wait", "--pipe", "--collect", cmdTS, "update", "--yes")
+	}
 }
 
 func regularFileExists(path string) bool {
