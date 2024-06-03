@@ -6420,9 +6420,8 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 		}
 		return last, err
 	}
-	seed := time.Now().UnixNano()
-	r := rand.New(rand.NewSource(seed))
-	res, err := suggestExitNode(lastReport, netMap, r)
+
+	res, err := suggestExitNode(lastReport, netMap, randomRegion, randomNode)
 	if err != nil {
 		last, err := lastSuggestedExitNode.asAPIType()
 		if err != nil {
@@ -6437,6 +6436,13 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 	return res, err
 }
 
+// selectRegionFunc returns a DERP region from the slice of candidate regions.
+// The value is returned, not the slice index.
+type selectRegionFunc func(views.Slice[int]) int
+
+// selectNodeFunc returns a node from the slice of candidate nodes.
+type selectNodeFunc func(nodes views.Slice[tailcfg.NodeView]) tailcfg.NodeView
+
 // asAPIType formats a response with the last suggested exit node's ID and name.
 // Returns error if there is no id or name.
 // Used as a fallback before returning a nil response and error.
@@ -6449,8 +6455,8 @@ func (n lastSuggestedExitNode) asAPIType() (res apitype.ExitNodeSuggestionRespon
 	return res, ErrUnableToSuggestLastExitNode
 }
 
-func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand.Rand) (res apitype.ExitNodeSuggestionResponse, err error) {
-	if report.PreferredDERP == 0 {
+func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, selectRegion selectRegionFunc, selectNode selectNodeFunc) (res apitype.ExitNodeSuggestionResponse, err error) {
+	if report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
 	}
 	var allowedCandidates set.Set[string]
@@ -6461,6 +6467,9 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
 	for _, peer := range netMap.Peers {
+		if !peer.Valid() {
+			continue
+		}
 		if allowedCandidates != nil && !allowedCandidates.Contains(string(peer.StableID())) {
 			continue
 		}
@@ -6484,7 +6493,10 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	}
 
 	candidatesByRegion := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
-	var preferredDERP *tailcfg.DERPRegion = netMap.DERPMap.Regions[report.PreferredDERP]
+	preferredDERP, ok := netMap.DERPMap.Regions[report.PreferredDERP]
+	if !ok {
+		return res, ErrNoPreferredDERP
+	}
 	var minDistance float64 = math.MaxFloat64
 	type nodeDistance struct {
 		nv       tailcfg.NodeView
@@ -6492,9 +6504,6 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	}
 	distances := make([]nodeDistance, 0, len(candidates))
 	for _, c := range candidates {
-		if !c.Valid() {
-			continue
-		}
 		if c.DERP() != "" {
 			ipp, err := netip.ParseAddrPort(c.DERP())
 			if err != nil {
@@ -6533,13 +6542,13 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	if len(candidatesByRegion) > 0 {
 		minRegion := minLatencyDERPRegion(xmaps.Keys(candidatesByRegion), report)
 		if minRegion == 0 {
-			minRegion = randomRegion(xmaps.Keys(candidatesByRegion), r)
+			minRegion = selectRegion(views.SliceOf(xmaps.Keys(candidatesByRegion)))
 		}
 		regionCandidates, ok := candidatesByRegion[minRegion]
 		if !ok {
 			return res, errors.New("no candidates in expected region: this is a bug")
 		}
-		chosen := randomNode(regionCandidates, r)
+		chosen := selectNode(views.SliceOf(regionCandidates))
 		res.ID = chosen.StableID()
 		res.Name = chosen.Name()
 		if hi := chosen.Hostinfo(); hi.Valid() {
@@ -6565,7 +6574,8 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 			pickFrom = append(pickFrom, candidate.nv)
 		}
 	}
-	chosen := pickWeighted(pickFrom)
+	bestCandidates := pickWeighted(pickFrom)
+	chosen := selectNode(views.SliceOf(bestCandidates))
 	if !chosen.Valid() {
 		return res, errors.New("chosen candidate invalid: this is a bug")
 	}
@@ -6580,36 +6590,35 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 }
 
 // pickWeighted chooses the node with highest priority given a list of mullvad nodes.
-func pickWeighted(candidates []tailcfg.NodeView) tailcfg.NodeView {
+func pickWeighted(candidates []tailcfg.NodeView) []tailcfg.NodeView {
 	maxWeight := 0
-	var best tailcfg.NodeView
+	best := make([]tailcfg.NodeView, 0, 1)
 	for _, c := range candidates {
 		hi := c.Hostinfo()
 		if !hi.Valid() {
 			continue
 		}
 		loc := hi.Location()
-		if loc == nil || loc.Priority <= maxWeight {
+		if loc == nil || loc.Priority < maxWeight {
 			continue
 		}
+		if maxWeight != loc.Priority {
+			best = best[:0]
+		}
 		maxWeight = loc.Priority
-		best = c
+		best = append(best, c)
 	}
 	return best
 }
 
-// randomNode chooses a node randomly given a list of nodes and a *rand.Rand.
-func randomNode(nodes []tailcfg.NodeView, r *rand.Rand) tailcfg.NodeView {
-	return nodes[r.Intn(len(nodes))]
+// randomRegion is a selectRegionFunc that selects a uniformly random region.
+func randomRegion(regions views.Slice[int]) int {
+	return regions.At(rand.Intn(regions.Len()))
 }
 
-// randomRegion chooses a region randomly given a list of ints and a *rand.Rand
-func randomRegion(regions []int, r *rand.Rand) int {
-	if testenv.InTest() {
-		regions = slices.Clone(regions)
-		slices.Sort(regions)
-	}
-	return regions[r.Intn(len(regions))]
+// randomNode is a selectNodeFunc that returns a uniformly random node.
+func randomNode(nodes views.Slice[tailcfg.NodeView]) tailcfg.NodeView {
+	return nodes.At(rand.Intn(nodes.Len()))
 }
 
 // minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
