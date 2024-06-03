@@ -15,6 +15,7 @@ import (
 
 	"github.com/mdlayher/socket"
 	"golang.org/x/sys/unix"
+	"tailscale.com/net/stun"
 )
 
 const (
@@ -55,10 +56,10 @@ func parseTimestampFromCmsgs(oob []byte) (time.Time, error) {
 	return time.Time{}, errors.New("failed to parse timestamp from cmsgs")
 }
 
-func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (resp []byte, rtt time.Duration, err error) {
+func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Duration, err error) {
 	sconn, ok := conn.(*socket.Conn)
 	if !ok {
-		return nil, 0, fmt.Errorf("conn of unexpected type: %T", conn)
+		return 0, fmt.Errorf("conn of unexpected type: %T", conn)
 	}
 
 	var to unix.Sockaddr
@@ -75,9 +76,12 @@ func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (re
 		copy(to.(*unix.SockaddrInet6).Addr[:], dst.IP)
 	}
 
+	txID := stun.NewTxID()
+	req := stun.Request(txID)
+
 	err = sconn.Sendto(context.Background(), req, 0, to)
 	if err != nil {
-		return nil, 0, fmt.Errorf("sendto error: %v", err) // don't wrap
+		return 0, fmt.Errorf("sendto error: %v", err) // don't wrap
 	}
 
 	txCtx, txCancel := context.WithTimeout(context.Background(), time.Second*2)
@@ -90,7 +94,7 @@ func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (re
 	for {
 		n, oobn, _, _, err := sconn.Recvmsg(txCtx, buf, oob, unix.MSG_ERRQUEUE)
 		if err != nil {
-			return nil, 0, fmt.Errorf("recvmsg (MSG_ERRQUEUE) error: %v", err) // don't wrap
+			return 0, fmt.Errorf("recvmsg (MSG_ERRQUEUE) error: %v", err) // don't wrap
 		}
 
 		buf = buf[:n]
@@ -101,24 +105,37 @@ func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (re
 		}
 		txAt, err = parseTimestampFromCmsgs(oob[:oobn])
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to get tx timestamp: %v", err) // don't wrap
+			return 0, fmt.Errorf("failed to get tx timestamp: %v", err) // don't wrap
 		}
 		break
 	}
 
 	rxCtx, rxCancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer rxCancel()
-	n, oobn, _, _, err := sconn.Recvmsg(rxCtx, buf, oob, 0)
-	if err != nil {
-		return nil, 0, fmt.Errorf("recvmsg error: %w", err) // wrap for timeout-related error unwrapping
+
+	for {
+		n, oobn, _, _, err := sconn.Recvmsg(rxCtx, buf, oob, 0)
+		if err != nil {
+			return 0, fmt.Errorf("recvmsg error: %w", err) // wrap for timeout-related error unwrapping
+		}
+
+		gotTxID, _, err := stun.ParseResponse(buf[:n])
+		if err != nil || gotTxID != txID {
+			// Spin until we find the txID we sent. We may end up reading
+			// extremely late arriving responses from previous intervals. As
+			// such, we can't be certain if we're parsing the "current"
+			// response, so spin for parse errors too.
+			continue
+		}
+
+		rxAt, err := parseTimestampFromCmsgs(oob[:oobn])
+		if err != nil {
+			return 0, fmt.Errorf("failed to get rx timestamp: %v", err) // don't wrap
+		}
+
+		return rxAt.Sub(txAt), nil
 	}
 
-	rxAt, err := parseTimestampFromCmsgs(oob[:oobn])
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get rx timestamp: %v", err) // don't wrap
-	}
-
-	return buf[:n], rxAt.Sub(txAt), nil
 }
 
 func supportsKernelTS() bool {

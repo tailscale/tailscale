@@ -16,8 +16,8 @@ func getConnKernelTimestamp() (io.ReadWriteCloser, error) {
 	return nil, errors.New("unimplemented")
 }
 
-func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (resp []byte, rtt time.Duration, err error) {
-	return nil, 0, errors.New("unimplemented")
+func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Duration, err error) {
+	return 0, errors.New("unimplemented")
 }
 
 func supportsKernelTS() bool {
