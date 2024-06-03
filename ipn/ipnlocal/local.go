@@ -80,6 +80,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -6445,7 +6446,7 @@ func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionRes
 		return last, err
 	}
 
-	res, err := suggestExitNode(lastReport, netMap, randomRegion, randomNode)
+	res, err := suggestExitNode(lastReport, netMap, randomRegion, randomNode, getAllowedSuggestions())
 	if err != nil {
 		last, err := lastSuggestedExitNode.asAPIType()
 		if err != nil {
@@ -6479,22 +6480,34 @@ func (n lastSuggestedExitNode) asAPIType() (res apitype.ExitNodeSuggestionRespon
 	return res, ErrUnableToSuggestLastExitNode
 }
 
-func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, selectRegion selectRegionFunc, selectNode selectNodeFunc) (res apitype.ExitNodeSuggestionResponse, err error) {
+var getAllowedSuggestions = lazy.SyncFunc(fillAllowedSuggestions)
+
+func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
+	nodes, err := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil)
+	if err != nil {
+		log.Printf("fillAllowedSuggestions: unable to look up %q policy: %v", syspolicy.AllowedSuggestedExitNodes, err)
+		return nil
+	}
+	if nodes == nil {
+		return nil
+	}
+	s := make(set.Set[tailcfg.StableNodeID], len(nodes))
+	for _, n := range nodes {
+		s.Add(tailcfg.StableNodeID(n))
+	}
+	return s
+}
+
+func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	if report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
-	}
-	var allowedCandidates set.Set[string]
-	if allowed, err := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil); err != nil {
-		return res, fmt.Errorf("unable to read %s policy: %w", syspolicy.AllowedSuggestedExitNodes, err)
-	} else if allowed != nil {
-		allowedCandidates = set.SetOf(allowed)
 	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
 	for _, peer := range netMap.Peers {
 		if !peer.Valid() {
 			continue
 		}
-		if allowedCandidates != nil && !allowedCandidates.Contains(string(peer.StableID())) {
+		if allowList != nil && !allowList.Contains(peer.StableID()) {
 			continue
 		}
 		if peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
