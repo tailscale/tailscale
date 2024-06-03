@@ -6456,7 +6456,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, r *rand
 	var allowedCandidates set.Set[string]
 	if allowed, err := syspolicy.GetStringArray(syspolicy.AllowedSuggestedExitNodes, nil); err != nil {
 		return res, fmt.Errorf("unable to read %s policy: %w", syspolicy.AllowedSuggestedExitNodes, err)
-	} else if allowed != nil {
+	} else if allowed != nil && len(allowed) > 0 {
 		allowedCandidates = set.SetOf(allowed)
 	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
