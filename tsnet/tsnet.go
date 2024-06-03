@@ -1146,7 +1146,7 @@ func resolveListenAddr(network, addr string) (netip.AddrPort, error) {
 	return netip.AddrPortFrom(bindHostOrZero, uint16(port)), nil
 }
 
-func (s *Server) listen(network, addr string, lnOn listenOn) (*listener, error) {
+func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, error) {
 	switch network {
 	case "", "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
 	default:
