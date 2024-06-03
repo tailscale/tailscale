@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -2775,6 +2774,54 @@ func withSuggest() peerOptFunc {
 	}
 }
 
+func deterministicRegionForTest(t testing.TB, want views.Slice[int], use int) selectRegionFunc {
+	t.Helper()
+
+	if !views.SliceContains(want, use) {
+		t.Errorf("invalid test: use %v is not in want %v", use, want)
+	}
+
+	return func(got views.Slice[int]) int {
+		if !views.SliceEqualAnyOrder(got, want) {
+			t.Errorf("candidate regions = %v, want %v", got, want)
+		}
+		return use
+	}
+}
+
+func deterministicNodeForTest(t testing.TB, want views.Slice[tailcfg.StableNodeID], use tailcfg.StableNodeID) selectNodeFunc {
+	t.Helper()
+
+	if !views.SliceContains(want, use) {
+		t.Errorf("invalid test: use %v is not in want %v", use, want)
+	}
+
+	return func(got views.Slice[tailcfg.NodeView]) tailcfg.NodeView {
+		var ret tailcfg.NodeView
+
+		gotIDs := make([]tailcfg.StableNodeID, got.Len())
+		for i := range got.Len() {
+			nv := got.At(i)
+			if !nv.Valid() {
+				t.Fatalf("invalid node at index %v", i)
+			}
+
+			gotIDs[i] = nv.StableID()
+			if nv.StableID() == use {
+				ret = nv
+			}
+		}
+		if !views.SliceEqualAnyOrder(views.SliceOf(gotIDs), want) {
+			t.Errorf("candidate nodes = %v, want %v", gotIDs, want)
+		}
+		if !ret.Valid() {
+			t.Fatalf("did not find matching node in %v, want %v", gotIDs, use)
+		}
+
+		return ret
+	}
+}
+
 func TestSuggestExitNode(t *testing.T) {
 	defaultDERPMap := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
@@ -2911,13 +2958,17 @@ func TestSuggestExitNode(t *testing.T) {
 
 	tests := []struct {
 		name string
-		seed int64
 
 		lastReport     *netcheck.Report
 		netMap         *netmap.NetworkMap
 		lastSuggestion tailcfg.StableNodeID
 
 		allowPolicy []string
+
+		wantRegions []int
+		useRegion   int
+
+		wantNodes []tailcfg.StableNodeID
 
 		wantID       tailcfg.StableNodeID
 		wantName     string
@@ -2936,15 +2987,21 @@ func TestSuggestExitNode(t *testing.T) {
 					peer2DERP1,
 				},
 			},
+			wantNodes: []tailcfg.StableNodeID{
+				"stable1",
+				"stable2",
+			},
 			wantName: "peer1",
 			wantID:   "stable1",
 		},
 		{
-			name:       "2 exit nodes different regions unknown latency",
-			lastReport: noLatency1Report,
-			netMap:     defaultNetmap,
-			wantName:   "peer2",
-			wantID:     "stable2",
+			name:        "2 exit nodes different regions unknown latency",
+			lastReport:  noLatency1Report,
+			netMap:      defaultNetmap,
+			wantRegions: []int{1, 3}, // the only regions with peers
+			useRegion:   1,
+			wantName:    "peer2",
+			wantID:      "stable2",
 		},
 		{
 			name: "2 derp based exit nodes, different regions, equal latency",
@@ -2964,8 +3021,10 @@ func TestSuggestExitNode(t *testing.T) {
 					peer3,
 				},
 			},
-			wantName: "peer1",
-			wantID:   "stable1",
+			wantRegions: []int{1, 2},
+			useRegion:   1,
+			wantName:    "peer1",
+			wantID:      "stable1",
 		},
 		{
 			name:         "mullvad nodes, no derp based exit nodes",
@@ -3003,6 +3062,7 @@ func TestSuggestExitNode(t *testing.T) {
 					fortWorthPeer8LowPriority,
 				},
 			},
+			wantNodes:    []tailcfg.StableNodeID{"stable5", "stable8"},
 			wantID:       "stable5",
 			wantLocation: dallas.View(),
 			wantName:     "Dallas",
@@ -3019,8 +3079,9 @@ func TestSuggestExitNode(t *testing.T) {
 					peer4DERP3,
 				},
 			},
-			wantID:   "stable4",
-			wantName: "peer4",
+			useRegion: 3,
+			wantID:    "stable4",
+			wantName:  "peer4",
 		},
 		{
 			name:       "no peers",
@@ -3053,7 +3114,6 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name:       "prefer last node",
-			seed:       1,
 			lastReport: preferred1Report,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
@@ -3064,8 +3124,12 @@ func TestSuggestExitNode(t *testing.T) {
 				},
 			},
 			lastSuggestion: "stable2",
-			wantName:       "peer2",
-			wantID:         "stable2",
+			wantNodes: []tailcfg.StableNodeID{
+				"stable1",
+				"stable2",
+			},
+			wantName: "peer2",
+			wantID:   "stable2",
 		},
 		{
 			name:           "found better derp node",
@@ -3088,6 +3152,7 @@ func TestSuggestExitNode(t *testing.T) {
 					fortWorthPeer8LowPriority,
 				},
 			},
+			wantNodes:    []tailcfg.StableNodeID{"stable5", "stable8"},
 			wantID:       "stable5",
 			wantName:     "Dallas",
 			wantLocation: dallas.View(),
@@ -3105,15 +3170,16 @@ func TestSuggestExitNode(t *testing.T) {
 					fortWorthPeer7,
 				},
 			},
+			wantNodes:    []tailcfg.StableNodeID{"stable7"},
 			wantID:       "stable7",
 			wantName:     "Fort Worth",
 			wantLocation: fortWorth.View(),
 		},
 		{
 			name:       "large netmap",
-			seed:       1,
 			lastReport: preferred1Report,
 			netMap:     largeNetmap,
+			wantNodes:  []tailcfg.StableNodeID{"stable1", "stable2"},
 			wantID:     "stable2",
 			wantName:   "peer2",
 		},
@@ -3125,10 +3191,10 @@ func TestSuggestExitNode(t *testing.T) {
 		},
 		{
 			name:        "only derp suggestions",
-			seed:        1,
 			lastReport:  preferred1Report,
 			netMap:      largeNetmap,
 			allowPolicy: []string{"stable1", "stable2", "stable3"},
+			wantNodes:   []tailcfg.StableNodeID{"stable1", "stable2"},
 			wantID:      "stable2",
 			wantName:    "peer2",
 		},
@@ -3172,8 +3238,19 @@ func TestSuggestExitNode(t *testing.T) {
 			}
 			syspolicy.SetHandlerForTest(t, &mh)
 
-			r := rand.New(rand.NewSource(tt.seed))
-			got, err := suggestExitNode(tt.lastReport, tt.netMap, r)
+			wantRegions := tt.wantRegions
+			if wantRegions == nil {
+				wantRegions = []int{tt.useRegion}
+			}
+			selectRegion := deterministicRegionForTest(t, views.SliceOf(wantRegions), tt.useRegion)
+
+			wantNodes := tt.wantNodes
+			if wantNodes == nil {
+				wantNodes = []tailcfg.StableNodeID{tt.wantID}
+			}
+			selectNode := deterministicNodeForTest(t, views.SliceOf(wantNodes), tt.wantID)
+
+			got, err := suggestExitNode(tt.lastReport, tt.netMap, selectRegion, selectNode)
 			if got.Name != tt.wantName {
 				t.Errorf("name=%v, want %v", got.Name, tt.wantName)
 			}
@@ -3204,7 +3281,7 @@ func TestSuggestExitNodePickWeighted(t *testing.T) {
 	tests := []struct {
 		name       string
 		candidates []tailcfg.NodeView
-		wantID     tailcfg.StableNodeID
+		wantIDs    []tailcfg.StableNodeID
 	}{
 		{
 			name: "different priorities",
@@ -3212,7 +3289,7 @@ func TestSuggestExitNodePickWeighted(t *testing.T) {
 				makePeer(2, withExitRoutes(), withLocation(location20.View())),
 				makePeer(3, withExitRoutes(), withLocation(location10.View())),
 			},
-			wantID: "stable2",
+			wantIDs: []tailcfg.StableNodeID{"stable2"},
 		},
 		{
 			name: "same priorities",
@@ -3220,31 +3297,34 @@ func TestSuggestExitNodePickWeighted(t *testing.T) {
 				makePeer(2, withExitRoutes(), withLocation(location10.View())),
 				makePeer(3, withExitRoutes(), withLocation(location10.View())),
 			},
-			wantID: "stable2",
+			wantIDs: []tailcfg.StableNodeID{"stable2", "stable3"},
 		},
 		{
 			name:       "<1 candidates",
 			candidates: []tailcfg.NodeView{},
-			wantID:     "<invalid>",
 		},
 		{
 			name: "1 candidate",
 			candidates: []tailcfg.NodeView{
 				makePeer(2, withExitRoutes(), withLocation(location20.View())),
 			},
-			wantID: "stable2",
+			wantIDs: []tailcfg.StableNodeID{"stable2"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := pickWeighted(tt.candidates)
-			gotID := tailcfg.StableNodeID("<invalid>")
-			if got.Valid() {
-				gotID = got.StableID()
+			gotIDs := make([]tailcfg.StableNodeID, 0, len(got))
+			for _, n := range got {
+				if !n.Valid() {
+					gotIDs = append(gotIDs, "<invalid>")
+					continue
+				}
+				gotIDs = append(gotIDs, n.StableID())
 			}
-			if gotID != tt.wantID {
-				t.Errorf("node IDs = %v, want %v", gotID, tt.wantID)
+			if !views.SliceEqualAnyOrder(views.SliceOf(gotIDs), views.SliceOf(tt.wantIDs)) {
+				t.Errorf("node IDs = %v, want %v", gotIDs, tt.wantIDs)
 			}
 		})
 	}
