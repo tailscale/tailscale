@@ -82,7 +82,7 @@ func (o *OSConfig) WriteToBufioWriter(w *bufio.Writer) {
 		fmt.Fprintf(w, "SearchDomains:%v ", o.SearchDomains)
 	}
 	if len(o.MatchDomains) > 0 {
-		w.WriteString("SearchDomains:[")
+		w.WriteString("MatchDomains:[")
 		sp := ""
 		var numARPA int
 		for _, s := range o.MatchDomains {
