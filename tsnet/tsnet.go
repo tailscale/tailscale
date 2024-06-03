@@ -916,7 +916,11 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 // such as those routed inbound via subnet routes, explicitly specify
 // the listening address or use RegisterFallbackTCPHandler.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
-	return s.listen(network, addr, listenOnTailnet)
+	lst, err := s.listen(network, addr, listenOnTailnet)
+	if err != nil {
+		return nil, err
+	}
+	return lst, nil
 }
 
 // ListenPacket announces on the Tailscale network.
