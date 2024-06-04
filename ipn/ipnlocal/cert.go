@@ -191,7 +191,7 @@ func (b *LocalBackend) domainRenewalTimeByARI(cs certStore, pair *TLSCertKeyPair
 		}
 		blocks = append(blocks, block)
 	}
-	if len(blocks) < 2 {
+	if len(blocks) < 1 {
 		return time.Time{}, fmt.Errorf("could not parse certificate chain from certStore, got %d PEM block(s)", len(blocks))
 	}
 	ac, err := acmeClient(cs)
@@ -200,7 +200,7 @@ func (b *LocalBackend) domainRenewalTimeByARI(cs certStore, pair *TLSCertKeyPair
 	}
 	ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
 	defer cancel()
-	ri, err := ac.FetchRenewalInfo(ctx, blocks[0].Bytes, blocks[1].Bytes)
+	ri, err := ac.FetchRenewalInfo(ctx, blocks[0].Bytes)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to fetch renewal info from ACME server: %w", err)
 	}
