@@ -52,10 +52,11 @@ type Manager struct {
 
 	resolver *resolver.Resolver
 	os       OSConfigurator
+	goos     string // if empty, gets set to runtime.GOOS
 }
 
 // NewManagers created a new manager from the given config.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs, goos string) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")
 	}
@@ -63,11 +64,15 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		panic("Dialer has nil NetMon")
 	}
 	logf = logger.WithPrefix(logf, "dns: ")
+	if goos == "" {
+		goos = runtime.GOOS
+	}
 	m := &Manager{
 		logf:     logf,
 		resolver: resolver.New(logf, linkSel, dialer, knobs),
 		os:       oscfg,
 		health:   health,
+		goos:     goos,
 	}
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
@@ -166,7 +171,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
-	if runtime.GOOS == "windows" {
+	if m.goos == "windows" {
 		ocfg.Hosts = compileHostEntries(cfg)
 	}
 
@@ -219,8 +224,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	//
 	// This bool is used in a couple of places below to implement this
 	// workaround.
-	isWindows := runtime.GOOS == "windows"
-	if len(cfg.singleResolverSet()) > 0 && m.os.SupportsSplitDNS() && !isWindows {
+	isWindows := m.goos == "windows"
+	isApple := (m.goos == "darwin" || m.goos == "ios")
+	if len(cfg.singleResolverSet()) > 0 && m.os.SupportsSplitDNS() && !isWindows && !isApple {
 		// Split DNS configuration requested, where all split domains
 		// go to the same resolvers. We can let the OS do it.
 		ocfg.Nameservers = toIPsOnly(cfg.singleResolverSet())
@@ -240,8 +246,6 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// selectively answer ExtraRecords, and ignore other DNS traffic. As a
 	// workaround, we read the existing default resolver configuration and use
 	// that as the forwarder for all DNS traffic that quad-100 doesn't handle.
-	const isApple = runtime.GOOS == "darwin" || runtime.GOOS == "ios"
-
 	if isApple || !m.os.SupportsSplitDNS() {
 		// If the OS can't do native split-dns, read out the underlying
 		// resolver config and blend it into our config.
@@ -257,9 +261,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		}
 	}
 
-	if baseCfg == nil || isApple && len(baseCfg.Nameservers) == 0 {
-		// If there was no base config, or if we're on Apple and the base
-		// config is empty, then we need to fallback to SplitDNS mode.
+	if baseCfg == nil {
+		// If there was no base config, then we need to fallback to SplitDNS mode.
 		ocfg.MatchDomains = cfg.matchDomains()
 	} else {
 		// On iOS only (for now), check if all route names point to resources inside the tailnet.
@@ -269,7 +272,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// we have any Routes outside the tailnet. Otherwise when app connectors are enabled,
 		// a query for 'work-laptop' might lead to search domain expansion, resolving
 		// as 'work-laptop.aws.com' for example.
-		if runtime.GOOS == "ios" && rcfg.RoutesRequireNoCustomResolvers() {
+		if m.goos == "ios" && rcfg.RoutesRequireNoCustomResolvers() {
 			for r := range rcfg.Routes {
 				ocfg.MatchDomains = append(ocfg.MatchDomains, r)
 			}
@@ -476,7 +479,7 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
 	}
 	d := &tsdial.Dialer{Logf: logf}
 	d.SetNetMon(netMon)
-	dns := NewManager(logf, oscfg, nil, d, nil, nil)
+	dns := NewManager(logf, oscfg, nil, d, nil, nil, runtime.GOOS)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}
