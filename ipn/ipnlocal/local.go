@@ -4,6 +4,7 @@
 package ipnlocal
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -20,6 +21,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -291,6 +293,13 @@ type LocalBackend struct {
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
 	// to use, unless overridden locally.
 	capForcedNetfilter string
+	// offlineAutoUpdateCancel stops offline auto-updates when called. It
+	// should be used via stopOfflineAutoUpdate and
+	// maybeStartOfflineAutoUpdate. It is nil when offline auto-updates are
+	// note running.
+	//
+	//lint:ignore U1000 only used in Linux and Windows builds in autoupdate.go
+	offlineAutoUpdateCancel func()
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
@@ -3327,6 +3336,14 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 		b.logf("failed to save new controlclient state: %v", err)
 	}
 
+	if newp.AutoUpdate.Apply.EqualBool(true) {
+		if b.state != ipn.Running {
+			b.maybeStartOfflineAutoUpdate(newp.View())
+		}
+	} else {
+		b.stopOfflineAutoUpdate()
+	}
+
 	unlock.UnlockEarly()
 
 	if oldp.ShieldsUp() != newp.ShieldsUp || hostInfoChanged {
@@ -4346,6 +4363,12 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 		b.closePeerAPIListenersLocked()
 	}
 	b.pauseOrResumeControlClientLocked()
+
+	if newState == ipn.Running {
+		b.stopOfflineAutoUpdate()
+	} else {
+		b.maybeStartOfflineAutoUpdate(prefs)
+	}
 
 	unlock.UnlockEarly()
 
@@ -6660,4 +6683,56 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	const earthRadiusMeters = 6371000
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
+}
+
+// startAutoUpdate triggers an auto-update attempt. The actual update happens
+// asynchronously. If another update is in progress, an error is returned.
+func (b *LocalBackend) startAutoUpdate(logPrefix string) (retErr error) {
+	// Check if update was already started, and mark as started.
+	if !b.trySetC2NUpdateStarted() {
+		return errors.New("update already started")
+	}
+	defer func() {
+		// Clear the started flag if something failed.
+		if retErr != nil {
+			b.setC2NUpdateStarted(false)
+		}
+	}()
+
+	cmdTS, err := findCmdTailscale()
+	if err != nil {
+		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
+	}
+	var ver struct {
+		Long string `json:"long"`
+	}
+	out, err := exec.Command(cmdTS, "version", "--json").Output()
+	if err != nil {
+		return fmt.Errorf("failed to find cmd/tailscale binary: %w", err)
+	}
+	if err := json.Unmarshal(out, &ver); err != nil {
+		return fmt.Errorf("invalid JSON from cmd/tailscale version --json: %w", err)
+	}
+	if ver.Long != version.Long() {
+		return fmt.Errorf("cmd/tailscale version %q does not match tailscaled version %q", ver.Long, version.Long())
+	}
+
+	cmd := tailscaleUpdateCmd(cmdTS)
+	buf := new(bytes.Buffer)
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+	b.logf("%s: running %q", logPrefix, strings.Join(cmd.Args, " "))
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start cmd/tailscale update: %w", err)
+	}
+
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			b.logf("%s: update command failed: %v, output: %s", logPrefix, err, buf)
+		} else {
+			b.logf("%s: update attempt complete", logPrefix)
+		}
+		b.setC2NUpdateStarted(false)
+	}()
+	return nil
 }

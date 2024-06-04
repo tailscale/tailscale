@@ -4,7 +4,6 @@
 package ipnlocal
 
 import (
-	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -307,60 +306,11 @@ func handleC2NUpdatePost(b *LocalBackend, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check if update was already started, and mark as started.
-	if !b.trySetC2NUpdateStarted() {
-		res.Err = "update already started"
-		return
-	}
-	defer func() {
-		// Clear the started flag if something failed.
-		if res.Err != "" {
-			b.setC2NUpdateStarted(false)
-		}
-	}()
-
-	cmdTS, err := findCmdTailscale()
-	if err != nil {
-		res.Err = fmt.Sprintf("failed to find cmd/tailscale binary: %v", err)
-		return
-	}
-	var ver struct {
-		Long string `json:"long"`
-	}
-	out, err := exec.Command(cmdTS, "version", "--json").Output()
-	if err != nil {
-		res.Err = fmt.Sprintf("failed to find cmd/tailscale binary: %v", err)
-		return
-	}
-	if err := json.Unmarshal(out, &ver); err != nil {
-		res.Err = "invalid JSON from cmd/tailscale version --json"
-		return
-	}
-	if ver.Long != version.Long() {
-		res.Err = "cmd/tailscale version mismatch"
-		return
-	}
-
-	cmd := tailscaleUpdateCmd(cmdTS)
-	buf := new(bytes.Buffer)
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-	b.logf("c2n: running %q", strings.Join(cmd.Args, " "))
-	if err := cmd.Start(); err != nil {
-		res.Err = fmt.Sprintf("failed to start cmd/tailscale update: %v", err)
+	if err := b.startAutoUpdate("c2n"); err != nil {
+		res.Err = err.Error()
 		return
 	}
 	res.Started = true
-
-	// Run update asynchronously and respond that it started.
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			b.logf("c2n: update command failed: %v, output: %s", err, buf)
-		} else {
-			b.logf("c2n: update complete")
-		}
-		b.setC2NUpdateStarted(false)
-	}()
 }
 
 func handleC2NPostureIdentityGet(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
