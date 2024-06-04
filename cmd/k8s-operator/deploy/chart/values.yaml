@@ -23,7 +23,7 @@ operatorConfig:
     - "tag:k8s-operator"
 
   image:
-    repo: tailscale/k8s-operator
+    repository: tailscale/k8s-operator
     # Digest will be prioritized over tag. If neither are set appVersion will be
     # used.
     tag: ""
@@ -57,7 +57,7 @@ operatorConfig:
 # https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource
 proxyConfig:
   image:
-    repo: tailscale/tailscale
+    repository: tailscale/tailscale
     # Digest will be prioritized over tag. If neither are set appVersion will be
     # used.
     tag: ""
