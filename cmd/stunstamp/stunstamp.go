@@ -94,27 +94,36 @@ type result struct {
 	rtt             *time.Duration // nil signifies failure, e.g. timeout
 }
 
-func measureRTT(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (resp []byte, rtt time.Duration, err error) {
+func measureRTT(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Duration, err error) {
 	uconn, ok := conn.(*net.UDPConn)
 	if !ok {
-		return nil, 0, fmt.Errorf("unexpected conn type: %T", conn)
+		return 0, fmt.Errorf("unexpected conn type: %T", conn)
 	}
 	err = uconn.SetReadDeadline(time.Now().Add(time.Second * 2))
 	if err != nil {
-		return nil, 0, fmt.Errorf("error setting read deadline: %w", err)
+		return 0, fmt.Errorf("error setting read deadline: %w", err)
 	}
+	txID := stun.NewTxID()
+	req := stun.Request(txID)
 	txAt := time.Now()
 	_, err = uconn.WriteToUDP(req, dst)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error writing to udp socket: %w", err)
+		return 0, fmt.Errorf("error writing to udp socket: %w", err)
 	}
 	b := make([]byte, 1460)
-	n, err := uconn.Read(b)
-	rxAt := time.Now()
-	if err != nil {
-		return nil, 0, fmt.Errorf("error reading from udp socket: %w", err)
+	for {
+		n, err := uconn.Read(b)
+		rxAt := time.Now()
+		if err != nil {
+			return 0, fmt.Errorf("error reading from udp socket: %w", err)
+		}
+		gotTxID, _, err := stun.ParseResponse(b[:n])
+		if err != nil || gotTxID != txID {
+			continue
+		}
+		return rxAt.Sub(txAt), nil
 	}
-	return b[:n], rxAt.Sub(txAt), nil
+
 }
 
 func isTemporaryOrTimeoutErr(err error) bool {
@@ -134,7 +143,7 @@ type nodeMeta struct {
 	addr       netip.Addr
 }
 
-type measureFn func(conn io.ReadWriteCloser, dst *net.UDPAddr, req []byte) (resp []byte, rtt time.Duration, err error)
+type measureFn func(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Duration, err error)
 
 func probe(meta nodeMeta, conn io.ReadWriteCloser, fn measureFn) (*time.Duration, error) {
 	ua := &net.UDPAddr{
@@ -142,24 +151,13 @@ func probe(meta nodeMeta, conn io.ReadWriteCloser, fn measureFn) (*time.Duration
 		Port: 3478,
 	}
 
-	var (
-		resp []byte
-		rtt  time.Duration
-	)
-	txID := stun.NewTxID()
-	req := stun.Request(txID)
 	time.Sleep(time.Millisecond * time.Duration(rand.Intn(200))) // jitter across tx
-	resp, rtt, err := fn(conn, ua, req)
+	rtt, err := fn(conn, ua)
 	if err != nil {
 		if isTemporaryOrTimeoutErr(err) {
 			log.Printf("temp error measuring RTT to %s(%s): %v", meta.hostname, meta.addr, err)
 			return nil, nil
 		}
-	}
-	_, _, err = stun.ParseResponse(resp)
-	if err != nil {
-		log.Printf("invalid stun response from %s: %v", meta.hostname, err)
-		return nil, nil
 	}
 	return &rtt, nil
 }
