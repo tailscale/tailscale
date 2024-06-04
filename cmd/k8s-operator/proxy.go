@@ -207,8 +207,11 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLo
 }
 
 const (
-	capabilityName    = "tailscale.com/cap/kubernetes"
-	oldCapabilityName = "https://" + capabilityName
+	// oldCapabilityName is a legacy form of
+	// tailfcg.PeerCapabilityKubernetes capability. The only capability rule
+	// that is respected for this form is group impersonation - for
+	// backwards compatibility reasons.
+	oldCapabilityName = "https://" + tailcfg.PeerCapabilityKubernetes
 )
 
 type capRule struct {
@@ -229,7 +232,7 @@ type impersonateRule struct {
 func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 	log = log.With("remote", r.RemoteAddr)
 	who := whoIsKey.Value(r.Context())
-	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if len(rules) == 0 && err == nil {
 		// Try the old capability name for backwards compatibility.
 		rules, err = tailcfg.UnmarshalCapJSON[capRule](who.CapMap, oldCapabilityName)
