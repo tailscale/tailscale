@@ -730,6 +730,7 @@ func (b *LocalBackend) Shutdown() {
 	if b.peerAPIServer != nil {
 		b.peerAPIServer.taildrop.Shutdown()
 	}
+	b.stopOfflineAutoUpdate()
 
 	b.unregisterNetMon()
 	b.unregisterHealthWatch()
