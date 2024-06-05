@@ -373,7 +373,9 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 		t0 := time.Now()
 		m.logf("running ipconfig /registerdns ...")
 		cmd := exec.Command("ipconfig", "/registerdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: windows.DETACHED_PROCESS,
+		}
 		err := cmd.Run()
 		d := time.Since(t0).Round(time.Millisecond)
 		if err != nil {
@@ -385,7 +387,9 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 		t0 = time.Now()
 		m.logf("running ipconfig /flushdns ...")
 		cmd = exec.Command("ipconfig", "/flushdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: windows.DETACHED_PROCESS,
+		}
 		err = cmd.Run()
 		d = time.Since(t0).Round(time.Millisecond)
 		if err != nil {

@@ -6,10 +6,17 @@ package dns
 import (
 	"fmt"
 	"os/exec"
+	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 func flushCaches() error {
-	out, err := exec.Command("ipconfig", "/flushdns").CombinedOutput()
+	cmd := exec.Command("ipconfig", "/flushdns")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.DETACHED_PROCESS,
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v (output: %s)", err, out)
 	}
