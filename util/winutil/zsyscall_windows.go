@@ -8,6 +8,7 @@ import (
 
 	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 var _ unsafe.Pointer
@@ -42,6 +43,7 @@ var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
 	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	modrstrtmgr = windows.NewLazySystemDLL("rstrtmgr.dll")
+	moduserenv  = windows.NewLazySystemDLL("userenv.dll")
 
 	procQueryServiceConfig2W          = modadvapi32.NewProc("QueryServiceConfig2W")
 	procGetApplicationRestartSettings = modkernel32.NewProc("GetApplicationRestartSettings")
@@ -51,6 +53,8 @@ var (
 	procRmJoinSession                 = modrstrtmgr.NewProc("RmJoinSession")
 	procRmRegisterResources           = modrstrtmgr.NewProc("RmRegisterResources")
 	procRmStartSession                = modrstrtmgr.NewProc("RmStartSession")
+	procLoadUserProfileW              = moduserenv.NewProc("LoadUserProfileW")
+	procUnloadUserProfile             = moduserenv.NewProc("UnloadUserProfile")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
@@ -109,6 +113,22 @@ func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret 
 	r0, _, _ := syscall.Syscall(procRmStartSession.Addr(), 3, uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func loadUserProfile(token windows.Token, profileInfo *_PROFILEINFO) (err error) {
+	r1, _, e1 := syscall.Syscall(procLoadUserProfileW.Addr(), 2, uintptr(token), uintptr(unsafe.Pointer(profileInfo)), 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func unloadUserProfile(token windows.Token, profile registry.Key) (err error) {
+	r1, _, e1 := syscall.Syscall(procUnloadUserProfile.Addr(), 2, uintptr(token), uintptr(profile), 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
 	}
 	return
 }
