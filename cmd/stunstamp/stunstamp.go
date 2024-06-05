@@ -15,7 +15,7 @@ import (
 	"io"
 	"log"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -151,7 +151,7 @@ func probe(meta nodeMeta, conn io.ReadWriteCloser, fn measureFn) (*time.Duration
 		Port: 3478,
 	}
 
-	time.Sleep(time.Millisecond * time.Duration(rand.Intn(200))) // jitter across tx
+	time.Sleep(rand.N(200 * time.Millisecond)) // jitter across tx
 	rtt, err := fn(conn, ua)
 	if err != nil {
 		if isTemporaryOrTimeoutErr(err) {

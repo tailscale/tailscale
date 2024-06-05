@@ -14,7 +14,7 @@ import (
 	"io"
 	"log"
 	"maps"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -774,7 +774,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		go panic(fmt.Sprintf("bad map request: %v", err))
 	}
 
-	jitter := time.Duration(rand.Intn(8000)) * time.Millisecond
+	jitter := rand.N(8 * time.Second)
 	keepAlive := 50*time.Second + jitter
 
 	node := s.Node(req.NodeKey)

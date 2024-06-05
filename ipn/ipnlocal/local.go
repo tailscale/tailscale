@@ -15,7 +15,7 @@ import (
 	"log"
 	"maps"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -6650,12 +6650,12 @@ func pickWeighted(candidates []tailcfg.NodeView) []tailcfg.NodeView {
 
 // randomRegion is a selectRegionFunc that selects a uniformly random region.
 func randomRegion(regions views.Slice[int]) int {
-	return regions.At(rand.Intn(regions.Len()))
+	return regions.At(rand.IntN(regions.Len()))
 }
 
 // randomNode is a selectNodeFunc that returns a uniformly random node.
 func randomNode(nodes views.Slice[tailcfg.NodeView]) tailcfg.NodeView {
-	return nodes.At(rand.Intn(nodes.Len()))
+	return nodes.At(rand.IntN(nodes.Len()))
 }
 
 // minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
