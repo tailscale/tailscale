@@ -1375,6 +1375,12 @@ const (
 	// PeerCapabilityTaildriveSharer indicates that a peer has the ability to
 	// share folders with us.
 	PeerCapabilityTaildriveSharer PeerCapability = "tailscale.com/cap/drive-sharer"
+
+	// PeerCapabilityKubernetes grants a peer Kubernetes-specific
+	// capabilities, such as the ability to impersonate specific Tailscale
+	// user groups as Kubernetes user groups. This capability is read by
+	// peers that are Tailscale Kubernetes operator instances.
+	PeerCapabilityKubernetes PeerCapability = "tailscale.com/cap/kubernetes"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for

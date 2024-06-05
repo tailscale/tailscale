@@ -558,7 +558,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	var nodeKeySignature tkatype.MarshaledSignature
 	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
-		if nodeKeySignature, err = resignNKS(persist.NetworkLockKey, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
+		if nodeKeySignature, err = tka.ResignNKS(persist.NetworkLockKey, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
 			c.logf("Failed re-signing node-key signature: %v", err)
 		}
 	} else if isWrapped {
@@ -727,45 +727,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, "", nil, ctx.Err()
 	}
 	return false, resp.AuthURL, nil, nil
-}
-
-// resignNKS re-signs a node-key signature for a new node-key.
-//
-// This only matters on network-locked tailnets, because node-key signatures are
-// how other nodes know that a node-key is authentic. When the node-key is
-// rotated then the existing signature becomes invalid, so this function is
-// responsible for generating a new wrapping signature to certify the new node-key.
-//
-// The signature itself is a SigRotation signature, which embeds the old signature
-// and certifies the new node-key as a replacement for the old by signing the new
-// signature with RotationPubkey (which is the node's own network-lock key).
-func resignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.MarshaledSignature) (tkatype.MarshaledSignature, error) {
-	var oldSig tka.NodeKeySignature
-	if err := oldSig.Unserialize(oldNKS); err != nil {
-		return nil, fmt.Errorf("decoding NKS: %w", err)
-	}
-
-	nk, err := nodeKey.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("marshalling node-key: %w", err)
-	}
-
-	if bytes.Equal(nk, oldSig.Pubkey) {
-		// The old signature is valid for the node-key we are using, so just
-		// use it verbatim.
-		return oldNKS, nil
-	}
-
-	newSig := tka.NodeKeySignature{
-		SigKind: tka.SigRotation,
-		Pubkey:  nk,
-		Nested:  &oldSig,
-	}
-	if newSig.Signature, err = priv.SignNKS(newSig.SigHash()); err != nil {
-		return nil, fmt.Errorf("signing NKS: %w", err)
-	}
-
-	return newSig.Serialize(), nil
 }
 
 // newEndpoints acquires c.mu and sets the local port and endpoints and reports

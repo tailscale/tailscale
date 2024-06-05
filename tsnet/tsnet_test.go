@@ -745,3 +745,73 @@ func TestCapturePcap(t *testing.T) {
 		t.Errorf("s2 pcap file size = %d, want > pcapHeaderSize(%d)", got, pcapHeaderSize)
 	}
 }
+
+func TestUDPConn(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ping success: %#+v", res)
+
+	pc := must.Get(s1.ListenPacket("udp", fmt.Sprintf("%s:8081", s1ip)))
+	defer pc.Close()
+
+	// Dial to s1 from s2
+	w, err := s2.Dial(ctx, "udp", fmt.Sprintf("%s:8081", s1ip))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Send a packet from s2 to s1
+	want := "hello"
+	if _, err := io.WriteString(w, want); err != nil {
+		t.Fatal(err)
+	}
+
+	// Receive the packet on s1
+	got := make([]byte, 1024)
+	n, from, err := pc.ReadFrom(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = got[:n]
+	t.Logf("got: %q", got)
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if from.(*net.UDPAddr).AddrPort().Addr() != s2ip {
+		t.Errorf("got from %v, want %v", from, s2ip)
+	}
+
+	// Write a response back to s2
+	if _, err := pc.WriteTo([]byte("world"), from); err != nil {
+		t.Fatal(err)
+	}
+
+	// Receive the response on s2
+	got = make([]byte, 1024)
+	n, err = w.Read(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = got[:n]
+	t.Logf("got: %q", got)
+	if string(got) != "world" {
+		t.Errorf("got %q, want world", got)
+	}
+}
