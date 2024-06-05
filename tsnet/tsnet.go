@@ -959,6 +959,9 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !st.CurrentTailnet.MagicDNSEnabled {
+		return nil, errors.New("tsnet: you must enable MagicDNS in the DNS page of the admin panel to proceed. See https://tailscale.com/s/https")
+	}
 	if len(st.CertDomains) == 0 {
 		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed. See https://tailscale.com/s/https")
 	}
