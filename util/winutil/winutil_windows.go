@@ -7,14 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os/exec"
 	"os/user"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 	"unsafe"
 
+	"golang.org/x/exp/constraints"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -642,4 +645,142 @@ func LogonSessionID(token windows.Token) (logonSessionID windows.LUID, err error
 	}
 
 	return origin.originatingLogonSession, nil
+}
+
+// BufUnit is a type constraint for buffers passed into AllocateContiguousBuffer.
+type BufUnit interface {
+	byte | uint16
+}
+
+// AllocateContiguousBuffer allocates memory to satisfy the Windows idiom where
+// some structs contain pointers that are expected to refer to memory within the
+// same buffer containing the struct itself. T is the type that contains
+// the pointers. values must contain the actual data that is to be copied
+// into the buffer after T. AllocateContiguousBuffer returns a pointer to the
+// struct, the total length of the buffer in bytes, and a slice containing
+// each value within the buffer. The caller may use slcs to populate any
+// pointers in t as needed. Each element of slcs corresponds to the element of
+// values in the same position.
+//
+// It is the responsibility of the caller to ensure that any values expected
+// to contain null-terminated strings are in fact null-terminated!
+//
+// AllocateContiguousBuffer panics if no values are passed in, as there are
+// better alternatives for allocating a struct in that case.
+func AllocateContiguousBuffer[T any, BU BufUnit](values ...[]BU) (t *T, tLenBytes uint32, slcs [][]BU) {
+	if len(values) == 0 {
+		panic("len(values) must be > 0")
+	}
+
+	// Get the sizes of T and BU, then compute a preferred alignment for T.
+	tT := reflect.TypeFor[T]()
+	szT := tT.Size()
+	szBU := int(unsafe.Sizeof(BU(0)))
+	alignment := max(tT.Align(), szBU)
+
+	// Our buffers for values will start at the next szBU boundary.
+	tLenBytes = alignUp(uint32(szT), szBU)
+	firstValueOffset := tLenBytes
+
+	// Accumulate the length of each value into tLenBytes
+	for _, v := range values {
+		tLenBytes += uint32(len(v) * szBU)
+	}
+
+	// Now that we know the final length, align up to our preferred boundary.
+	tLenBytes = alignUp(tLenBytes, alignment)
+
+	// Allocate the buffer. We choose a type for the slice that is appropriate
+	// for the desired alignment. Note that we do not have a strict requirement
+	// that T contain pointer fields; we could just be appending more data
+	// within the same buffer.
+	bufLen := tLenBytes / uint32(alignment)
+	var pt unsafe.Pointer
+	switch alignment {
+	case 1:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]byte, bufLen)))
+	case 2:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]uint16, bufLen)))
+	case 4:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]uint32, bufLen)))
+	case 8:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]uint64, bufLen)))
+	default:
+		panic(fmt.Sprintf("bad alignment %d", alignment))
+	}
+
+	t = (*T)(pt)
+	slcs = make([][]BU, 0, len(values))
+
+	// Use the limits of the buffer area after t to construct a slice representing the remaining buffer.
+	firstValuePtr := unsafe.Pointer(uintptr(pt) + uintptr(firstValueOffset))
+	buf := unsafe.Slice((*BU)(firstValuePtr), (tLenBytes-firstValueOffset)/uint32(szBU))
+
+	// Copy each value into the buffer and record a slice describing each value's limits into slcs.
+	var index int
+	for _, v := range values {
+		if len(v) == 0 {
+			// We allow zero-length values; we simply append a nil slice.
+			slcs = append(slcs, nil)
+			continue
+		}
+		valueSlice := buf[index : index+len(v)]
+		copy(valueSlice, v)
+		slcs = append(slcs, valueSlice)
+		index += len(v)
+	}
+
+	return t, tLenBytes, slcs
+}
+
+// alignment must be a power of 2
+func alignUp[V constraints.Integer](v V, alignment int) V {
+	return v + ((-v) & (V(alignment) - 1))
+}
+
+// NTStr is a type constraint requiring the type to be either a
+// windows.NTString or a windows.NTUnicodeString.
+type NTStr interface {
+	windows.NTString | windows.NTUnicodeString
+}
+
+// SetNTString sets the value of nts in-place to point to the string contained
+// within buf. A nul terminator is optional in buf.
+func SetNTString[NTS NTStr, BU BufUnit](nts *NTS, buf []BU) {
+	isEmpty := len(buf) == 0
+	codeUnitSize := uint16(unsafe.Sizeof(BU(0)))
+	lenBytes := len(buf) * int(codeUnitSize)
+	if lenBytes > math.MaxUint16 {
+		panic("buffer length must fit into uint16")
+	}
+	lenBytes16 := uint16(lenBytes)
+
+	switch p := any(nts).(type) {
+	case *windows.NTString:
+		if isEmpty {
+			*p = windows.NTString{}
+			break
+		}
+		p.Buffer = unsafe.SliceData(any(buf).([]byte))
+		p.MaximumLength = lenBytes16
+		p.Length = lenBytes16
+		// account for nul terminator when present
+		if buf[len(buf)-1] == 0 {
+			p.Length -= codeUnitSize
+		}
+	case *windows.NTUnicodeString:
+		if isEmpty {
+			*p = windows.NTUnicodeString{}
+			break
+		}
+		p.Buffer = unsafe.SliceData(any(buf).([]uint16))
+		p.MaximumLength = lenBytes16
+		p.Length = lenBytes16
+		// account for nul terminator when present
+		if buf[len(buf)-1] == 0 {
+			p.Length -= codeUnitSize
+		}
+	default:
+		panic("unknown type")
+	}
 }
