@@ -233,7 +233,9 @@ func (ft *firewallTweaker) runFirewall(args ...string) (time.Duration, error) {
 	t0 := time.Now()
 	args = append([]string{"advfirewall", "firewall"}, args...)
 	cmd := exec.Command(ft.getNetshPath(), args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.DETACHED_PROCESS,
+	}
 	b, err := cmd.CombinedOutput()
 	if err != nil {
 		err = fmt.Errorf("%w: %v", err, string(b))
@@ -356,6 +358,9 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 			return err
 		}
 		proc := exec.Command(exe, "/firewall", ft.tunGUID.String())
+		proc.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: windows.DETACHED_PROCESS,
+		}
 		in, err := proc.StdinPipe()
 		if err != nil {
 			return err
