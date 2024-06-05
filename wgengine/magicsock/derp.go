@@ -136,6 +136,7 @@ func (c *Conn) pickDERPFallback() int {
 		return pickDERPFallbackForTests()
 	}
 
+	// TODO: use math/rand/v2 here.
 	h := fnv.New64()
 	fmt.Fprintf(h, "%p/%d", c, processStartUnixNano) // arbitrary
 	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]

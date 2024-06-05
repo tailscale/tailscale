@@ -14,7 +14,7 @@ import (
 	"io"
 	"log"
 	"maps"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -1010,7 +1010,7 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 		if len(rids) == 0 {
 			return false, nil
 		}
-		preferredDERP = rids[rand.Intn(len(rids))]
+		preferredDERP = rids[rand.IntN(len(rids))]
 	}
 
 	node := dm.Regions[preferredDERP].Nodes[0]

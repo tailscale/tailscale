@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	insecurerand "math/rand"
+	randv2 "math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -212,7 +212,7 @@ func (b *LocalBackend) domainRenewalTimeByARI(cs certStore, pair *TLSCertKeyPair
 	// passed. Time is randomized per recommendation in
 	// https://datatracker.ietf.org/doc/draft-ietf-acme-ari/
 	start, end := ri.SuggestedWindow.Start, ri.SuggestedWindow.End
-	renewTime := start.Add(time.Duration(insecurerand.Int63n(int64(end.Sub(start)))))
+	renewTime := start.Add(randv2.N(end.Sub(start)))
 	return renewTime, nil
 }
 

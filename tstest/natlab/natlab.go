@@ -14,7 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
@@ -566,7 +566,7 @@ func (m *Machine) pickEphemPort() (port uint16, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for tries := 0; tries < 500; tries++ {
-		port := uint16(rand.Intn(32<<10) + 32<<10)
+		port := uint16(rand.IntN(32<<10) + 32<<10)
 		if !m.portInUseLocked(port) {
 			return port, nil
 		}

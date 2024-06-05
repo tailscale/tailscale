@@ -22,7 +22,7 @@ import (
 	"log"
 	"math"
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -1514,7 +1514,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		}
 	}()
 
-	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
+	jitter := rand.N(5 * time.Second)
 	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 

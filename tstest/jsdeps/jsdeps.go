@@ -14,7 +14,7 @@ import (
 	_ "encoding/json"
 	_ "fmt"
 	_ "log"
-	_ "math/rand"
+	_ "math/rand/v2"
 	_ "net"
 	_ "strings"
 	_ "time"
