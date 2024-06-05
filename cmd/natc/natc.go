@@ -55,6 +55,7 @@ func main() {
 		verboseTSNet    = fs.Bool("verbose-tsnet", false, "enable verbose logging in tsnet")
 		printULA        = fs.Bool("print-ula", false, "print the ULA prefix and exit")
 		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
+		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -103,6 +104,12 @@ func main() {
 	dnsAddr := v4Prefixes[0].Addr()
 	ts := &tsnet.Server{
 		Hostname: *hostname,
+	}
+	if *wgPort != 0 {
+		if *wgPort >= 1<<16 {
+			log.Fatalf("wg-port must be in the range [0, 65535]")
+		}
+		ts.Port = uint16(*wgPort)
 	}
 	defer ts.Close()
 	if *verboseTSNet {
