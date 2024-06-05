@@ -529,7 +529,6 @@ func (src *SSHPrincipal) Clone() *SSHPrincipal {
 	}
 	dst := new(SSHPrincipal)
 	*dst = *src
-	dst.PubKeys = append(src.PubKeys[:0:0], src.PubKeys...)
 	return dst
 }
 
@@ -539,7 +538,6 @@ var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
 	NodeIP    string
 	UserLogin string
 	Any       bool
-	PubKeys   []string
 }{})
 
 // Clone makes a deep copy of ControlDialPlan.
