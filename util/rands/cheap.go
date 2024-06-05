@@ -23,6 +23,14 @@ func Shuffle[T any](seed uint64, data []T) {
 	}
 }
 
+// IntN is like rand.IntN, but it is seeded on the stack and does not allocate
+// or lock any RNG state.
+func IntN(seed uint64, n int) int {
+	var pcg randv2.PCG
+	pcg.Seed(seed, seed)
+	return int(uint64n(&pcg, uint64(n)))
+}
+
 // Perm is like rand.Perm, but it is seeded on the stack and does not allocate
 // or lock any RNG state.
 func Perm(seed uint64, n int) []int {
