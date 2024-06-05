@@ -156,6 +156,13 @@ type ConnectorStatus struct {
 	// IsExitNode is set to true if the Connector acts as an exit node.
 	// +optional
 	IsExitNode bool `json:"isExitNode"`
+	// TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
+	// assigned to the Connector node(s).
+	// +optional
+	TailnetIPs []string `json:"tailnetIPs,omitempty"`
+	// Hostname is the fully qualified domain name of the Connector node(s).
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
 }
 
 // ConnectorCondition contains condition information for a Connector.
