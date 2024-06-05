@@ -32,8 +32,7 @@ import (
 	"github.com/bramvdbogaerde/go-scp"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/sftp"
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
-	"golang.org/x/crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -152,10 +151,10 @@ func TestIntegrationSSH(t *testing.T) {
 				s := testSession(t, test.forceV1Behavior)
 
 				if shell {
-					err := s.RequestPty("xterm", 40, 80, ssh.TerminalModes{
-						ssh.ECHO:          1,
-						ssh.TTY_OP_ISPEED: 14400,
-						ssh.TTY_OP_OSPEED: 14400,
+					err := s.RequestPty("xterm", 40, 80, gossh.TerminalModes{
+						gossh.ECHO:          1,
+						gossh.TTY_OP_ISPEED: 14400,
+						gossh.TTY_OP_OSPEED: 14400,
 					})
 					if err != nil {
 						t.Fatalf("unable to request PTY: %s", err)
@@ -317,7 +316,7 @@ func fallbackToSUAvailable() bool {
 }
 
 type session struct {
-	*ssh.Session
+	*gossh.Session
 
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
@@ -374,7 +373,7 @@ readLoop:
 	return string(_got)
 }
 
-func testClient(t *testing.T, forceV1Behavior bool) *ssh.Client {
+func testClient(t *testing.T, forceV1Behavior bool) *gossh.Client {
 	t.Helper()
 
 	username := "testuser"
@@ -398,8 +397,8 @@ func testClient(t *testing.T, forceV1Behavior bool) *ssh.Client {
 		}
 	}()
 
-	cl, err := ssh.Dial("tcp", l.Addr().String(), &ssh.ClientConfig{
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	cl, err := gossh.Dial("tcp", l.Addr().String(), &gossh.ClientConfig{
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -414,7 +413,7 @@ func testSession(t *testing.T, forceV1Behavior bool) *session {
 	return testSessionFor(t, cl)
 }
 
-func testSessionFor(t *testing.T, cl *ssh.Client) *session {
+func testSessionFor(t *testing.T, cl *gossh.Client) *session {
 	s, err := cl.NewSession()
 	if err != nil {
 		log.Fatal(err)

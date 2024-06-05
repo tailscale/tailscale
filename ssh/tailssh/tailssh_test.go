@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	gossh "github.com/tailscale/golang-x-crypto/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
@@ -693,25 +693,6 @@ func TestSSHAuthFlow(t *testing.T) {
 					"accept": acceptRule.Action,
 				},
 			},
-			wantBanners: []string{"Welcome to Tailscale SSH!"},
-		},
-		{
-			name: "multi-check",
-			state: &localState{
-				sshEnabled: true,
-				matchingRule: newSSHRule(&tailcfg.SSHAction{
-					Message:         "First",
-					HoldAndDelegate: "https://unused/ssh-action/check1",
-				}),
-				serverActions: map[string]*tailcfg.SSHAction{
-					"check1": {
-						Message:         "url-here",
-						HoldAndDelegate: "https://unused/ssh-action/check2",
-					},
-					"check2": acceptRule.Action,
-				},
-			},
-			wantBanners: []string{"First", "url-here", "Welcome to Tailscale SSH!"},
 		},
 		{
 			name: "check-reject",
@@ -737,6 +718,16 @@ func TestSSHAuthFlow(t *testing.T) {
 			},
 			usesPassword: true,
 			wantBanners:  []string{"Welcome to Tailscale SSH!"},
+		},
+		{
+			name:    "force-password-auth-reject",
+			sshUser: "alice+password",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: rejectRule,
+			},
+			wantBanners: []string{"Go Away!"},
+			authErr:     true,
 		},
 	}
 	s := &server{
