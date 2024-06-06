@@ -16,6 +16,11 @@ func TestSyncValue(t *testing.T) {
 		if got != 42 {
 			t.Fatalf("got %v; want 42", got)
 		}
+		if p, ok := lt.Peek(); !ok {
+			t.Fatalf("Peek failed")
+		} else if p != 42 {
+			t.Fatalf("Peek got %v; want 42", p)
+		}
 	}))
 	if n != 0 {
 		t.Errorf("allocs = %v; want 0", n)
@@ -45,6 +50,12 @@ func TestSyncValueErr(t *testing.T) {
 		if got != 0 || err != wantErr {
 			t.Fatalf("got %v, %v; want 0, %v", got, err, wantErr)
 		}
+
+		if p, ok := lt.Peek(); !ok {
+			t.Fatalf("Peek failed")
+		} else if got != 0 {
+			t.Fatalf("Peek got %v; want 0", p)
+		}
 	}))
 	if n != 0 {
 		t.Errorf("allocs = %v; want 0", n)
@@ -58,6 +69,11 @@ func TestSyncValueSet(t *testing.T) {
 	}
 	if lt.Set(43) {
 		t.Fatalf("Set succeeded after first Set")
+	}
+	if p, ok := lt.Peek(); !ok {
+		t.Fatalf("Peek failed")
+	} else if p != 42 {
+		t.Fatalf("Peek got %v; want 42", p)
 	}
 	n := int(testing.AllocsPerRun(1000, func() {
 		got := lt.Get(fortyTwo)

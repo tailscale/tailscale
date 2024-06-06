@@ -4,7 +4,10 @@
 // Package lazy provides types for lazily initialized values.
 package lazy
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // SyncValue is a lazily computed value.
 //
@@ -15,9 +18,10 @@ import "sync"
 //
 // SyncValue is safe for concurrent use.
 type SyncValue[T any] struct {
-	once sync.Once
-	v    T
-	err  error
+	once   sync.Once
+	filled atomic.Bool
+	v      T
+	err    error
 }
 
 // Set attempts to set z's value to val, and reports whether it succeeded.
@@ -26,6 +30,7 @@ func (z *SyncValue[T]) Set(val T) bool {
 	var wasSet bool
 	z.once.Do(func() {
 		z.v = val
+		z.filled.Store(true)
 		wasSet = true
 	})
 	return wasSet
@@ -41,15 +46,34 @@ func (z *SyncValue[T]) MustSet(val T) {
 // Get returns z's value, calling fill to compute it if necessary.
 // f is called at most once.
 func (z *SyncValue[T]) Get(fill func() T) T {
-	z.once.Do(func() { z.v = fill() })
+	z.once.Do(func() {
+		z.v = fill()
+		z.filled.Store(true)
+	})
 	return z.v
 }
 
 // GetErr returns z's value, calling fill to compute it if necessary.
 // f is called at most once, and z remembers both of fill's outputs.
 func (z *SyncValue[T]) GetErr(fill func() (T, error)) (T, error) {
-	z.once.Do(func() { z.v, z.err = fill() })
+	z.once.Do(func() {
+		z.v, z.err = fill()
+		z.filled.Store(true)
+	})
 	return z.v, z.err
+}
+
+// Peek returns z's value and a boolean indicating whether the value has been
+// set. If a value has not been set, the zero value of T is returned.
+//
+// This function is safe to call concurrently with Get/GetErr/Set, but it's
+// undefined whether a value set by a concurrent call will be visible to Peek.
+func (z *SyncValue[T]) Peek() (T, bool) {
+	if z.filled.Load() {
+		return z.v, true
+	}
+	var zero T
+	return zero, false
 }
 
 // SyncFunc wraps a function to make it lazy.
