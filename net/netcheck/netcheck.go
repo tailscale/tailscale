@@ -345,7 +345,7 @@ func (p probeProto) String() string {
 	case probeIPv4:
 		return "v4"
 	case probeIPv6:
-		return "v4"
+		return "v6"
 	case probeHTTPS:
 		return "https"
 	}
