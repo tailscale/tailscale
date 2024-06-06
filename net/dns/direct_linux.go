@@ -6,7 +6,6 @@ package dns
 import (
 	"bytes"
 	"context"
-	"errors"
 
 	"github.com/illarion/gonotify"
 	"tailscale.com/health"
@@ -58,7 +57,12 @@ func (m *directManager) runFileWatcher() {
 	}
 }
 
-var warnTrample = health.NewWarnable()
+var resolvTrampleWarnable = health.Register(&health.Warnable{
+	Code:     "resolv-conf-overwritten",
+	Severity: health.SeverityMedium,
+	Title:    "Linux DNS configuration issue",
+	Text:     health.StaticMessage("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"),
+})
 
 // checkForFileTrample checks whether /etc/resolv.conf has been trampled
 // by another program on the system. (e.g. a DHCP client)
@@ -78,7 +82,7 @@ func (m *directManager) checkForFileTrample() {
 		return
 	}
 	if bytes.Equal(cur, want) {
-		m.health.SetWarnable(warnTrample, nil)
+		m.health.SetHealthy(resolvTrampleWarnable)
 		if lastWarn != nil {
 			m.mu.Lock()
 			m.lastWarnContents = nil
@@ -101,7 +105,7 @@ func (m *directManager) checkForFileTrample() {
 		show = show[:1024]
 	}
 	m.logf("trample: resolv.conf changed from what we expected. did some other program interfere? current contents: %q", show)
-	m.health.SetWarnable(warnTrample, errors.New("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"))
+	m.health.SetUnhealthy(resolvTrampleWarnable, nil)
 }
 
 func (m *directManager) closeInotifyOnDone(ctx context.Context, in *gonotify.Inotify) {

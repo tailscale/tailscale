@@ -4,19 +4,23 @@
 package health
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
 	var tr Tracker
 
 	for i := range 10 {
-		w := NewWarnable(WithMapDebugFlag(fmt.Sprint(i)))
+		w := Register(&Warnable{
+			Code:         WarnableCode(fmt.Sprintf("warnable-code-%d", i)),
+			MapDebugFlag: fmt.Sprint(i),
+		})
+		defer unregister(w)
 		if i%2 == 0 {
-			tr.SetWarnable(w, errors.New("boom"))
+			tr.SetUnhealthy(w, Args{"test-arg": fmt.Sprint(i)})
 		}
 	}
 
@@ -48,4 +52,127 @@ func TestNilMethodsDontCrash(t *testing.T) {
 		}
 		rv.Method(i).Call(args)
 	}
+}
+
+func TestSetUnhealthyWithDuplicateThenHealthyAgain(t *testing.T) {
+	ht := Tracker{}
+	if len(ht.Strings()) != 0 {
+		t.Fatalf("before first insertion, len(newTracker.Strings) = %d; want = 0", len(ht.Strings()))
+	}
+
+	ht.SetUnhealthy(testWarnable, Args{ArgError: "Hello world 1"})
+	want := []string{"Hello world 1"}
+	if !reflect.DeepEqual(ht.Strings(), want) {
+		t.Fatalf("after calling SetUnhealthy, newTracker.Strings() = %v; want = %v", ht.Strings(), want)
+	}
+
+	// Adding a second warning state with the same WarningCode overwrites the existing warning state,
+	// the count shouldn't have changed.
+	ht.SetUnhealthy(testWarnable, Args{ArgError: "Hello world 2"})
+	want = []string{"Hello world 2"}
+	if !reflect.DeepEqual(ht.Strings(), want) {
+		t.Fatalf("after insertion of same WarningCode, newTracker.Strings() = %v; want = %v", ht.Strings(), want)
+	}
+
+	ht.SetHealthy(testWarnable)
+	want = []string{}
+	if !reflect.DeepEqual(ht.Strings(), want) {
+		t.Fatalf("after setting the healthy, newTracker.Strings() = %v; want = %v", ht.Strings(), want)
+	}
+}
+
+func TestRemoveAllWarnings(t *testing.T) {
+	ht := Tracker{}
+	if len(ht.Strings()) != 0 {
+		t.Fatalf("before first insertion, len(newTracker.Strings) = %d; want = 0", len(ht.Strings()))
+	}
+
+	ht.SetUnhealthy(testWarnable, Args{"Text": "Hello world 1"})
+	if len(ht.Strings()) != 1 {
+		t.Fatalf("after first insertion, len(newTracker.Strings) = %d; want = %d", len(ht.Strings()), 1)
+	}
+
+	ht.SetHealthy(testWarnable)
+	if len(ht.Strings()) != 0 {
+		t.Fatalf("after RemoveAll, len(newTracker.Strings) = %d; want = 0", len(ht.Strings()))
+	}
+}
+
+// TestWatcher tests that a registered watcher function gets called with the correct
+// Warnable and non-nil/nil UnhealthyState upon setting a Warnable to unhealthy/healthy.
+func TestWatcher(t *testing.T) {
+	ht := Tracker{}
+	wantText := "Hello world"
+	becameUnhealthy := make(chan struct{})
+	becameHealthy := make(chan struct{})
+
+	watcherFunc := func(w *Warnable, us *UnhealthyState) {
+		if w != testWarnable {
+			t.Fatalf("watcherFunc was called, but with an unexpected Warnable: %v, want: %v", w, testWarnable)
+		}
+
+		if us != nil {
+			if us.Text != wantText {
+				t.Fatalf("unexpected us.Text: %s, want: %s", us.Text, wantText)
+			}
+			if us.Args[ArgError] != wantText {
+				t.Fatalf("unexpected us.Args[ArgError]: %s, want: %s", us.Args[ArgError], wantText)
+			}
+			becameUnhealthy <- struct{}{}
+		} else {
+			becameHealthy <- struct{}{}
+		}
+	}
+
+	unregisterFunc := ht.RegisterWatcher(watcherFunc)
+	if len(ht.watchers) != 1 {
+		t.Fatalf("after RegisterWatcher, len(newTracker.watchers) = %d; want = 1", len(ht.watchers))
+	}
+	ht.SetUnhealthy(testWarnable, Args{ArgError: wantText})
+
+	select {
+	case <-becameUnhealthy:
+		// Test passed because the watcher got notified of an unhealthy state
+	case <-becameHealthy:
+		// Test failed because the watcher got of a healthy state instead of an unhealthy one
+		t.Fatalf("watcherFunc was called with a healthy state")
+	case <-time.After(1 * time.Second):
+		t.Fatalf("watcherFunc didn't get called upon calling SetUnhealthy")
+	}
+
+	ht.SetHealthy(testWarnable)
+
+	select {
+	case <-becameUnhealthy:
+		// Test failed because the watcher got of an unhealthy state instead of a healthy one
+		t.Fatalf("watcherFunc was called with an unhealthy state")
+	case <-becameHealthy:
+		// Test passed because the watcher got notified of a healthy state
+	case <-time.After(1 * time.Second):
+		t.Fatalf("watcherFunc didn't get called upon calling SetUnhealthy")
+	}
+
+	unregisterFunc()
+	if len(ht.watchers) != 0 {
+		t.Fatalf("after unregisterFunc, len(newTracker.watchers) = %d; want = 0", len(ht.watchers))
+	}
+}
+
+func TestRegisterWarnablePanicsWithDuplicate(t *testing.T) {
+	w := &Warnable{
+		Code: "test-warnable-1",
+	}
+
+	Register(w)
+	defer unregister(w)
+	if registeredWarnables[w.Code] != w {
+		t.Fatalf("after Register, registeredWarnables[%s] = %v; want = %v", w.Code, registeredWarnables[w.Code], w)
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("Registering the same Warnable twice didn't panic")
+		}
+	}()
+	Register(w)
 }

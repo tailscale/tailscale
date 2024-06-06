@@ -14,17 +14,18 @@ import (
 	"sort"
 	"time"
 
-	ole "github.com/go-ole/go-ole"
-	"github.com/tailscale/wireguard-go/tun"
-	"go4.org/netipx"
-	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/winnet"
+
+	ole "github.com/go-ole/go-ole"
+	"github.com/tailscale/wireguard-go/tun"
+	"go4.org/netipx"
+	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 // monitorDefaultRoutes subscribes to route change events and updates
@@ -235,9 +236,17 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 	return nil, fmt.Errorf("interfaceFromLUID: interface with LUID %v not found", luid)
 }
 
-var networkCategoryWarning = health.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
+var networkCategoryWarnable = health.Register(&health.Warnable{
+	Code:     "set-network-category-failed",
+	Severity: health.SeverityMedium,
+	Title:    "Windows network configuration failed",
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("Failed to set the network category to private on the Tailscale adapter. This may prevent Tailscale from working correctly. Error: %s", args[health.ArgError])
+	},
+	MapDebugFlag: "warn-network-category-unhealthy",
+})
 
-func configureInterface(cfg *Config, tun *tun.NativeTun, health *health.Tracker) (retErr error) {
+func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (retErr error) {
 	var mtu = tstun.DefaultTUNMTU()
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,
@@ -268,10 +277,10 @@ func configureInterface(cfg *Config, tun *tun.NativeTun, health *health.Tracker)
 		for i := range tries {
 			found, err := setPrivateNetwork(luid)
 			if err != nil {
-				health.SetWarnable(networkCategoryWarning, fmt.Errorf("set-network-category: %w", err))
+				ht.SetUnhealthy(networkCategoryWarnable, health.Args{health.ArgError: err.Error()})
 				log.Printf("setPrivateNetwork(try=%d): %v", i, err)
 			} else {
-				health.SetWarnable(networkCategoryWarning, nil)
+				ht.SetHealthy(networkCategoryWarnable)
 				if found {
 					if i > 0 {
 						log.Printf("setPrivateNetwork(try=%d): success", i)

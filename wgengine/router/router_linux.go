@@ -445,12 +445,17 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	return multierr.New(errs...)
 }
 
-var warnStatefulFilteringWithDocker = health.NewWarnable()
+var dockerStatefulFilteringWarnable = health.Register(&health.Warnable{
+	Code:     "docker-stateful-filtering",
+	Title:    "Docker with stateful filtering",
+	Severity: health.SeverityMedium,
+	Text:     health.StaticMessage("Stateful filtering is enabled and Docker was detected; this may prevent Docker containers on this host from resolving DNS and connecting to Tailscale nodes. See https://tailscale.com/s/stateful-docker"),
+})
 
 func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *Config) {
 	// If stateful filtering is disabled, clear the warning.
 	if !r.statefulFiltering {
-		r.health.SetWarnable(warnStatefulFilteringWithDocker, nil)
+		r.health.SetHealthy(dockerStatefulFilteringWarnable)
 		return
 	}
 
@@ -479,17 +484,13 @@ func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *Config) {
 		// socket/daemon/etc.
 		ifstate := r.netMon.InterfaceState()
 		if _, found := ifstate.Interface["docker0"]; found {
-			r.health.SetWarnable(warnStatefulFilteringWithDocker, fmt.Errorf(""+
-				"Stateful filtering is enabled and Docker was detected; this may prevent Docker containers "+
-				"on this host from resolving DNS and connecting to Tailscale nodes. "+
-				"See https://tailscale.com/s/stateful-docker",
-			))
+			r.health.SetUnhealthy(dockerStatefulFilteringWarnable, nil)
 			return
 		}
 	}
 
 	// If we get here, then we have no warnings; clear anything existing.
-	r.health.SetWarnable(warnStatefulFilteringWithDocker, nil)
+	r.health.SetHealthy(dockerStatefulFilteringWarnable)
 }
 
 // UpdateMagicsockPort implements the Router interface.
