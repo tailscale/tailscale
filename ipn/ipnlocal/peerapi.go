@@ -187,7 +187,7 @@ func (pln *peerAPIListener) serve() {
 
 func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 	logf := pln.lb.logf
-	peerNode, peerUser, ok := pln.lb.WhoIs(src)
+	peerNode, peerUser, ok := pln.lb.WhoIs("tcp", src)
 	if !ok {
 		logf("peerapi: unknown peer %v", src)
 		c.Close()
