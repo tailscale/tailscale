@@ -100,7 +100,7 @@ func TestTailscaleIngress(t *testing.T) {
 	}
 	opts.serveConfig = serveConfig
 
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
 	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 
@@ -231,7 +231,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	}
 	opts.serveConfig = serveConfig
 
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "ingress"), nil)
 	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeHashAnnotation)
 

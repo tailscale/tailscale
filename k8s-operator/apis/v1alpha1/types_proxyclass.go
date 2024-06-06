@@ -62,6 +62,20 @@ type ProxyClassSpec struct {
 	// recommend that you use those for debugging purposes.
 	// +optional
 	Metrics *Metrics `json:"metrics,omitempty"`
+	// TailscaleConfig contains options to configure the tailscale-specific
+	// parameters of proxies.
+	// +optional
+	TailscaleConfig *TailscaleConfig `json:"tailscale,omitempty"`
+}
+
+type TailscaleConfig struct {
+	// AcceptRoutes can be set to true to make the proxy instance accept
+	// routes advertized by other nodes on the tailnet, such as subnet
+	// routes.
+	// This is equivalent of passing --accept-routes flag to a tailscale Linux client.
+	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines
+	// Defaults to false.
+	AcceptRoutes bool `json:"acceptRoutes,omitempty"`
 }
 
 type StatefulSet struct {
