@@ -39,6 +39,7 @@ type apiResult struct {
 	Addr       string `json:"addr"`
 	Source     int    `json:"source"` // timestampSourceUserspace (0) or timestampSourceKernel (1)
 	StableConn bool   `json:"stableConn"`
+	DstPort    int    `json:"dstPort"`
 	RttNS      *int   `json:"rttNS"`
 }
 
@@ -94,7 +95,7 @@ func (a *api) query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sb := sq.Select("at_unix", "region_id", "hostname", "af", "address", "timestamp_source", "stable_conn", "rtt_ns").From("rtt")
+	sb := sq.Select("at_unix", "region_id", "hostname", "af", "address", "timestamp_source", "stable_conn", "dst_port", "rtt_ns").From("rtt")
 	sb = sb.Where(sq.And{
 		sq.GtOrEq{"at_unix": from.Unix()},
 		sq.LtOrEq{"at_unix": to.Unix()},
@@ -115,7 +116,7 @@ func (a *api) query(w http.ResponseWriter, r *http.Request) {
 		result := apiResult{
 			RttNS: &rtt,
 		}
-		err = rows.Scan(&result.At, &result.RegionID, &result.Hostname, &result.Af, &result.Addr, &result.Source, &result.StableConn, &result.RttNS)
+		err = rows.Scan(&result.At, &result.RegionID, &result.Hostname, &result.Af, &result.Addr, &result.Source, &result.StableConn, &result.DstPort, &result.RttNS)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

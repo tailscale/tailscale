@@ -66,12 +66,12 @@ func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Durat
 	to4 := dst.IP.To4()
 	if to4 != nil {
 		to = &unix.SockaddrInet4{
-			Port: 3478,
+			Port: dst.Port,
 		}
 		copy(to.(*unix.SockaddrInet4).Addr[:], to4)
 	} else {
 		to = &unix.SockaddrInet6{
-			Port: 3478,
+			Port: dst.Port,
 		}
 		copy(to.(*unix.SockaddrInet6).Addr[:], dst.IP)
 	}
