@@ -995,8 +995,15 @@ func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tai
 
 // WhoIs reports the node and user who owns the node with the given IP:port.
 // If the IP address is a Tailscale IP, the provided port may be 0.
+//
+// The 'proto' is used when looking up the IP:port in our proxy mapper; it
+// tracks which local IP:ports correspond to connections proxied by tailscaled,
+// and since tailscaled proxies both TCP and UDP, the 'proto' is needed to look
+// up the correct IP:port based on the connection's protocol. If not provided,
+// the lookup will be done for TCP and then UDP, in that order.
+//
 // If ok == true, n and u are valid.
-func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	var zero tailcfg.NodeView
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1005,7 +1012,20 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.
 	if !ok {
 		var ip netip.Addr
 		if ipp.Port() != 0 {
-			ip, ok = b.sys.ProxyMapper().WhoIsIPPort(ipp)
+			var protos []string
+			if proto != "" {
+				protos = []string{proto}
+			} else {
+				// If the user didn't specify a protocol, try all of them
+				protos = []string{"tcp", "udp"}
+			}
+
+			for _, tryproto := range protos {
+				ip, ok = b.sys.ProxyMapper().WhoIsIPPort(tryproto, ipp)
+				if ok {
+					break
+				}
+			}
 		}
 		if !ok {
 			return zero, u, false
@@ -5044,7 +5064,7 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 		dt.b.mu.Lock()
 		selfNodeKey := dt.b.netMap.SelfNode.Key().ShortString()
 		dt.b.mu.Unlock()
-		n, _, ok := dt.b.WhoIs(netip.MustParseAddrPort(req.URL.Host))
+		n, _, ok := dt.b.WhoIs("tcp", netip.MustParseAddrPort(req.URL.Host))
 		shareNodeKey := "unknown"
 		if ok {
 			shareNodeKey = string(n.Key().ShortString())

@@ -1057,7 +1057,7 @@ func TestWhoIs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.q, func(t *testing.T) {
-			nv, up, ok := b.WhoIs(netip.MustParseAddrPort(tt.q))
+			nv, up, ok := b.WhoIs("", netip.MustParseAddrPort(tt.q))
 			var got tailcfg.NodeID
 			if ok {
 				got = nv.ID()

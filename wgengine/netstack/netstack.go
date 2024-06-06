@@ -1328,8 +1328,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	ns.pm.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
-	defer ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
+	ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP)
+	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(server, client)
@@ -1533,7 +1533,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
-		ns.pm.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
+		ns.pm.RegisterIPPortIdentity("udp", backendLocalIPPort, clientAddr.Addr())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1549,7 +1549,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	}
 	timer := time.AfterFunc(idleTimeout, func() {
 		if isLocal {
-			ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
+			ns.pm.UnregisterIPPortIdentity("udp", backendLocalIPPort)
 		}
 		ns.logf("netstack: UDP session between %s and %s timed out", backendListenAddr, backendRemoteAddr)
 		cancel()

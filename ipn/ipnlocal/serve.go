@@ -710,7 +710,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	if !ok {
 		return
 	}
-	node, user, ok := b.WhoIs(c.SrcAddr)
+	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
 	if !ok {
 		return // traffic from outside of Tailnet (funneled)
 	}
