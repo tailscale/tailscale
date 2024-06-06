@@ -75,7 +75,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
@@ -216,7 +216,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		hostname:          "default-test",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
@@ -240,7 +240,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		},
 	}
 	expectEqual(t, fc, want, nil)
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 
@@ -326,7 +326,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		hostname:        "default-test",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
@@ -350,7 +350,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		},
 	}
 	expectEqual(t, fc, want, nil)
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 
@@ -433,7 +433,7 @@ func TestAnnotations(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
@@ -541,7 +541,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 
@@ -672,7 +672,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 
@@ -813,7 +813,7 @@ func TestCustomHostname(t *testing.T) {
 		clusterTargetIP: "10.20.30.40",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, o), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
@@ -935,10 +935,14 @@ func TestProxyClassForService(t *testing.T) {
 	// Setup
 	pc := &tsapi.ProxyClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
-		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
-			Labels:      map[string]string{"foo": "bar"},
-			Annotations: map[string]string{"bar.io/foo": "some-val"},
-			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
+		Spec: tsapi.ProxyClassSpec{
+			TailscaleConfig: &tsapi.TailscaleConfig{
+				AcceptRoutes: true,
+			},
+			StatefulSet: &tsapi.StatefulSet{
+				Labels:      map[string]string{"foo": "bar"},
+				Annotations: map[string]string{"bar.io/foo": "some-val"},
+				Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -989,7 +993,7 @@ func TestProxyClassForService(t *testing.T) {
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
@@ -1001,6 +1005,7 @@ func TestProxyClassForService(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 
 	// 3. ProxyClass is set to Ready, the Service gets reconciled by the
 	// services-reconciler and the customization from the ProxyClass is
@@ -1016,6 +1021,7 @@ func TestProxyClassForService(t *testing.T) {
 	opts.proxyClass = pc.Name
 	expectReconciled(t, sr, "default", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), removeAuthKeyIfExistsModifier(t))
 
 	// 4. tailscale.com/proxy-class label is removed from the Service, the
 	// configuration from the ProxyClass is removed from the cluster
@@ -1477,7 +1483,7 @@ func Test_externalNameService(t *testing.T) {
 		clusterTargetDNS: "foo.com",
 	}
 
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
