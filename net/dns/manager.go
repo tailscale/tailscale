@@ -52,6 +52,7 @@ type Manager struct {
 
 	resolver *resolver.Resolver
 	os       OSConfigurator
+	knobs    *controlknobs.Knobs
 	goos     string // if empty, gets set to runtime.GOOS
 }
 
@@ -67,11 +68,13 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 	if goos == "" {
 		goos = runtime.GOOS
 	}
+
 	m := &Manager{
 		logf:     logf,
 		resolver: resolver.New(logf, linkSel, dialer, knobs),
 		os:       oscfg,
 		health:   health,
+		knobs:    knobs,
 		goos:     goos,
 	}
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
@@ -273,8 +276,12 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// a query for 'work-laptop' might lead to search domain expansion, resolving
 		// as 'work-laptop.aws.com' for example.
 		if m.goos == "ios" && rcfg.RoutesRequireNoCustomResolvers() {
-			for r := range rcfg.Routes {
-				ocfg.MatchDomains = append(ocfg.MatchDomains, r)
+			if !m.disableSplitDNSOptimization() {
+				for r := range rcfg.Routes {
+					ocfg.MatchDomains = append(ocfg.MatchDomains, r)
+				}
+			} else {
+				m.logf("iOS split DNS is disabled by nodeattr")
 			}
 		}
 		var defaultRoutes []*dnstype.Resolver
@@ -286,6 +293,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 
 	return rcfg, ocfg, nil
+}
+
+func (m *Manager) disableSplitDNSOptimization() bool {
+	return m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
 }
 
 // toIPsOnly returns only the IP portion of dnstype.Resolver.

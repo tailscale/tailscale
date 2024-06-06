@@ -2286,6 +2286,17 @@ const (
 	// NodeAttrSSHBehaviorV1 forces SSH to use the V1 behavior (no su, run SFTP in-process)
 	// Added 2024-05-29 in Tailscale version 1.68.
 	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
+
+	// NodeAttrDisableSplitDNSWhenNoCustomResolvers indicates that the node's
+	// DNS manager should not adopt a split DNS configuration even though the
+	// Config of the resolver only contains routes that do not specify custom
+	// resolver(s), hence all DNS queries can be safely sent to the upstream
+	// DNS resolver and the node's DNS forwarder doesn't need to handle all
+	// DNS traffic.
+	// This is for now (2024-06-06) an iOS-specific battery life optimization,
+	// and this node attribute allows us to disable the optimization remotely
+	// if needed.
+	NodeAttrDisableSplitDNSWhenNoCustomResolvers NodeCapability = "disable-split-dns-when-no-custom-resolvers"
 )
 
 // SetDNSRequest is a request to add a DNS record.
