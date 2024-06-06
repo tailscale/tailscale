@@ -182,7 +182,7 @@ ConnectorStatus describes the status of the Connector. This is set and managed b
         <td><b>hostname</b></td>
         <td>string</td>
         <td>
-          Hostname is the fully qualified domain name of the Connector node(s).<br/>
+          Hostname is the fully qualified domain name of the Connector node(s). If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the node.<br/>
         </td>
         <td>false</td>
       </tr><tr>

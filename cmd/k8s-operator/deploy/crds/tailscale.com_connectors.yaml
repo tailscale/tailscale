@@ -118,7 +118,7 @@ spec:
                     - type
                   x-kubernetes-list-type: map
                 hostname:
-                  description: Hostname is the fully qualified domain name of the Connector node(s).
+                  description: Hostname is the fully qualified domain name of the Connector node(s). If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the node.
                   type: string
                 isExitNode:
                   description: IsExitNode is set to true if the Connector acts as an exit node.

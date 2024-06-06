@@ -161,6 +161,8 @@ type ConnectorStatus struct {
 	// +optional
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
 	// Hostname is the fully qualified domain name of the Connector node(s).
+	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
+	// node.
 	// +optional
 	Hostname string `json:"hostname,omitempty"`
 }
