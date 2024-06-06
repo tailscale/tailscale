@@ -30,6 +30,7 @@ import (
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -2296,6 +2297,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 	tests := []struct {
 		before, after  opt.Bool
+		container      opt.Bool
 		tailnetDefault bool
 	}{
 		{
@@ -2328,10 +2330,30 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 			tailnetDefault: false,
 			after:          opt.NewBool(true),
 		},
+		{
+			before:         opt.Bool(""),
+			container:      opt.NewBool(true),
+			tailnetDefault: true,
+			after:          opt.Bool(""),
+		},
+		{
+			before:         opt.NewBool(false),
+			container:      opt.NewBool(true),
+			tailnetDefault: true,
+			after:          opt.NewBool(false),
+		},
+		{
+			before:         opt.NewBool(true),
+			container:      opt.NewBool(true),
+			tailnetDefault: false,
+			after:          opt.NewBool(true),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("before=%s,after=%s", tt.before, tt.after), func(t *testing.T) {
 			b := newTestBackend(t)
+			b.hostinfo = hostinfo.New()
+			b.hostinfo.Container = tt.container
 			p := ipn.NewPrefs()
 			p.AutoUpdate.Apply = tt.before
 			if err := b.pm.setPrefsLocked(p.View()); err != nil {

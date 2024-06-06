@@ -2575,6 +2575,12 @@ func (b *LocalBackend) onTailnetDefaultAutoUpdate(au bool) {
 		// user. Tailnet default should not affect us, even if it changes.
 		return
 	}
+	if au && b.hostinfo != nil && b.hostinfo.Container.EqualBool(true) {
+		// This is a containerized node, which is usually meant to be
+		// immutable. Do not enable auto-updates if the tailnet does. But users
+		// can still manually enable auto-updates on this node.
+		return
+	}
 	b.logf("using tailnet default auto-update setting: %v", au)
 	prefsClone := prefs.AsStruct()
 	prefsClone.AutoUpdate.Apply = opt.NewBool(au)
