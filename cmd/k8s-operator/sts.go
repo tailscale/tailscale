@@ -29,7 +29,6 @@ import (
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
-	kubeutils "tailscale.com/k8s-operator"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/net/netutil"
@@ -346,7 +345,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	latest := tailcfg.CapabilityVersion(-1)
 	var latestConfig ipn.ConfigVAlpha
 	for key, val := range configs {
-		fn := kubeutils.TailscaledConfigFileNameForCap(key)
+		fn := tsoperator.TailscaledConfigFileNameForCap(key)
 		b, err := json.Marshal(val)
 		if err != nil {
 			return "", "", nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
@@ -776,7 +775,7 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 			if len(data) == 0 {
 				continue
 			}
-			v, err := kubeutils.CapVerFromFileName(k)
+			v, err := tsoperator.CapVerFromFileName(k)
 			if err != nil {
 				continue
 			}

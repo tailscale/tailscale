@@ -404,10 +404,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	envknob.LogCurrent(logf)
-	if dialer == nil {
-		dialer = &tsdial.Dialer{Logf: logf}
-	}
-
 	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
