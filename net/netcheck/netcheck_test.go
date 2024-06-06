@@ -624,18 +624,6 @@ func (p probe) String() string {
 	return fmt.Sprintf("%s-%s%s%s", p.node, p.proto, delay, wait)
 }
 
-func (p probeProto) String() string {
-	switch p {
-	case probeIPv4:
-		return "v4"
-	case probeIPv6:
-		return "v4"
-	case probeHTTPS:
-		return "https"
-	}
-	return "?"
-}
-
 func TestLogConciseReport(t *testing.T) {
 	dm := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
