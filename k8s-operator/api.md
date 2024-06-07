@@ -2450,7 +2450,7 @@ Configuration for the proxy container running tailscale.
         <td><b>image</b></td>
         <td>string</td>
         <td>
-          Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Image name provided here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var to the operator deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
+          Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Specifying image name here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var in the operator Deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2877,7 +2877,7 @@ Configuration for the proxy init container that enables forwarding.
         <td><b>image</b></td>
         <td>string</td>
         <td>
-          Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Image name provided here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var to the operator deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
+          Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Specifying image name here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var in the operator Deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
         </td>
         <td>false</td>
       </tr><tr>

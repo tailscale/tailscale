@@ -162,10 +162,10 @@ type Container struct {
 	Env []Env `json:"env,omitempty"`
 	// Container image name. By default images are pulled from
 	// docker.io/tailscale/tailscale, but the official images are also
-	// available at ghcr.io/tailscale/tailscale. Image name provided here
+	// available at ghcr.io/tailscale/tailscale. Specifying image name here
 	// will override any proxy image values specified via the Kubernetes
-	// operator's Helm chart values or PROXY_IMAGE env var to the operator
-	// deployment.
+	// operator's Helm chart values or PROXY_IMAGE env var in the operator
+	// Deployment.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
 	// +optional
 	Image string `json:"image,omitempty"`

@@ -116,15 +116,14 @@ func (a *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.
 					// Same validation as used by kubelet https://github.com/kubernetes/kubernetes/blob/release-1.30/pkg/kubelet/images/image_manager.go#L212
 					if _, err := dockerref.ParseNormalizedNamed(tc.Image); err != nil {
 						violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleContainer", "image"), tc.Image, err.Error()))
-
 					}
 				}
 			}
-			if tc := pod.TailscaleContainer; tc != nil {
+			if tc := pod.TailscaleInitContainer; tc != nil {
 				if tc.Image != "" {
 					// Same validation as used by kubelet https://github.com/kubernetes/kubernetes/blob/release-1.30/pkg/kubelet/images/image_manager.go#L212
 					if _, err := dockerref.ParseNormalizedNamed(tc.Image); err != nil {
-						violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulset", "pod", "tailscaleInitContainer", "image"), tc.Image, err.Error()))
+						violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "image"), tc.Image, err.Error()))
 					}
 				}
 			}

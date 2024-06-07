@@ -97,15 +97,35 @@ func TestProxyClass(t *testing.T) {
 		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Image = pc.Spec.StatefulSet.Pod.TailscaleContainer.Image
 	})
 	expectReconciled(t, pcr, "", "test")
-	msg = `ProxyClass is not valid: [spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase, spec.statefulset.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase]`
+	msg = `ProxyClass is not valid: spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
 	expectEqual(t, fc, pc, nil)
-	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: [spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase, spec.statefulset.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase]`
+	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: spec.statefulSet.pod.tailscaleContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
 	expectEvents(t, fr, []string{expectedEvent})
 
-	// 4. An valid ProxyClass but with a Tailscale env vars set results in warning events.
+	// 4. A ProxyClass resource with invalid init container image reference gets it status updated to Invalid with an error message.
+	pc.Spec.StatefulSet.Labels = nil
+	pc.Spec.StatefulSet.Pod.TailscaleContainer.Image = ""
+	pc.Spec.StatefulSet.Pod.TailscaleInitContainer = &tsapi.Container{
+		Image: "FOO bar",
+	}
 	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
-		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Image = "" // unset invalid image from the previous test
+		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Image = pc.Spec.StatefulSet.Pod.TailscaleContainer.Image
+		proxyClass.Spec.StatefulSet.Pod.TailscaleInitContainer = &tsapi.Container{
+			Image: pc.Spec.StatefulSet.Pod.TailscaleInitContainer.Image,
+		}
+	})
+	expectReconciled(t, pcr, "", "test")
+	msg = `ProxyClass is not valid: spec.statefulSet.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
+	tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, 0, cl, zl.Sugar())
+	expectEqual(t, fc, pc, nil)
+	expectedEvent = `Warning ProxyClassInvalid ProxyClass is not valid: spec.statefulSet.pod.tailscaleInitContainer.image: Invalid value: "FOO bar": invalid reference format: repository name (library/FOO bar) must be lowercase`
+	expectEvents(t, fr, []string{expectedEvent})
+
+	// 5. An valid ProxyClass but with a Tailscale env vars set results in warning events.
+	pc.Spec.StatefulSet.Pod.TailscaleInitContainer.Image = "" // unset previous test
+	mustUpdate(t, fc, "", "test", func(proxyClass *tsapi.ProxyClass) {
+		proxyClass.Spec.StatefulSet.Pod.TailscaleInitContainer.Image = pc.Spec.StatefulSet.Pod.TailscaleInitContainer.Image
 		proxyClass.Spec.StatefulSet.Pod.TailscaleContainer.Env = []tsapi.Env{{Name: "TS_USERSPACE", Value: "true"}, {Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH"}, {Name: "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS"}}
 	})
 	expectedEvents := []string{"Warning CustomTSEnvVar ProxyClass overrides the default value for TS_USERSPACE env var for tailscale container. Running with custom values for Tailscale env vars is not recommended and might break in the future.",
