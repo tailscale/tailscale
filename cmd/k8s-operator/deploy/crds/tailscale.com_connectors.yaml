@@ -117,12 +117,20 @@ spec:
                   x-kubernetes-list-map-keys:
                     - type
                   x-kubernetes-list-type: map
+                hostname:
+                  description: Hostname is the fully qualified domain name of the Connector node. If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the node.
+                  type: string
                 isExitNode:
                   description: IsExitNode is set to true if the Connector acts as an exit node.
                   type: boolean
                 subnetRoutes:
                   description: SubnetRoutes are the routes currently exposed to tailnet via this Connector instance.
                   type: string
+                tailnetIPs:
+                  description: TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6) assigned to the Connector node.
+                  type: array
+                  items:
+                    type: string
       served: true
       storage: true
       subresources:
