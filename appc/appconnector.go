@@ -35,7 +35,7 @@ type rateLogger struct {
 	periodStart time.Time
 	periodCount int64
 	now         func() time.Time
-	callback    func(int64, time.Time)
+	callback    func(int64, time.Time, int64)
 }
 
 func (rl *rateLogger) currentIntervalStart(now time.Time) time.Time {
@@ -43,12 +43,12 @@ func (rl *rateLogger) currentIntervalStart(now time.Time) time.Time {
 	return now.Add(-(time.Duration(millisSince)) * time.Millisecond)
 }
 
-func (rl *rateLogger) update() {
+func (rl *rateLogger) update(numRoutes int64) {
 	now := rl.now()
 	periodEnd := rl.periodStart.Add(rl.interval)
 	if periodEnd.Before(now) {
 		if rl.periodCount != 0 {
-			rl.callback(rl.periodCount, rl.periodStart)
+			rl.callback(rl.periodCount, rl.periodStart, numRoutes)
 		}
 		rl.periodCount = 0
 		rl.periodStart = rl.currentIntervalStart(now)
@@ -56,7 +56,7 @@ func (rl *rateLogger) update() {
 	rl.periodCount++
 }
 
-func newRateLogger(now func() time.Time, interval time.Duration, callback func(int64, time.Time)) *rateLogger {
+func newRateLogger(now func() time.Time, interval time.Duration, callback func(int64, time.Time, int64)) *rateLogger {
 	nowTime := now()
 	return &rateLogger{
 		callback:    callback,
@@ -139,11 +139,11 @@ func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, routeInf
 		ac.wildcards = routeInfo.Wildcards
 		ac.controlRoutes = routeInfo.Control
 	}
-	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time) {
-		ac.logf("routeInfo write rate: %d in minute starting at %v", c, s)
+	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time, l int64) {
+		ac.logf("routeInfo write rate: %d in minute starting at %v (%d routes)", c, s, l)
 	})
-	ac.writeRateDay = newRateLogger(time.Now, 24*time.Hour, func(c int64, s time.Time) {
-		ac.logf("routeInfo write rate: %d in 24 hours starting at %v", c, s)
+	ac.writeRateDay = newRateLogger(time.Now, 24*time.Hour, func(c int64, s time.Time, l int64) {
+		ac.logf("routeInfo write rate: %d in 24 hours starting at %v (%d routes)", c, s, l)
 	})
 	return ac
 }
@@ -159,8 +159,15 @@ func (e *AppConnector) storeRoutesLocked() error {
 	if !e.ShouldStoreRoutes() {
 		return nil
 	}
-	e.writeRateMinute.update()
-	e.writeRateDay.update()
+
+	// log write rate and write size
+	numRoutes := int64(len(e.controlRoutes))
+	for _, rs := range e.domains {
+		numRoutes += int64(len(rs))
+	}
+	e.writeRateMinute.update(numRoutes)
+	e.writeRateDay.update(numRoutes)
+
 	return e.storeRoutesFunc(&RouteInfo{
 		Control:   e.controlRoutes,
 		Domains:   e.domains,
