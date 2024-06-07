@@ -328,7 +328,7 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 	}
 }
 
-func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
+func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Secret {
 	t.Helper()
 	s := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
@@ -354,6 +354,16 @@ func expectedSecret(t *testing.T, opts configOpts) *corev1.Secret {
 		Locked:       "false",
 		AuthKey:      ptr.To("secret-authkey"),
 		AcceptRoutes: "false",
+	}
+	if opts.proxyClass != "" {
+		t.Logf("applying configuration from ProxyClass %s", opts.proxyClass)
+		proxyClass := new(tsapi.ProxyClass)
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: opts.proxyClass}, proxyClass); err != nil {
+			t.Fatalf("error getting ProxyClass: %v", err)
+		}
+		if proxyClass.Spec.TailscaleConfig != nil && proxyClass.Spec.TailscaleConfig.AcceptRoutes {
+			conf.AcceptRoutes = "true"
+		}
 	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {
@@ -455,10 +465,10 @@ func mustUpdateStatus[T any, O ptrObject[T]](t *testing.T, client client.Client,
 
 // expectEqual accepts a Kubernetes object and a Kubernetes client. It tests
 // whether an object with equivalent contents can be retrieved by the passed
-// client. If you want to NOT test some object fields for equality, ensure that
-// they are not present in the passed object and use the modify func to remove
-// them from the cluster object. If no such modifications are needed, you can
-// pass nil in place of the modify function.
+// client. If you want to NOT test some object fields for equality, use the
+// modify func to ensure that they are removed from the cluster object and the
+// object passed as 'want'. If no such modifications are needed, you can pass
+// nil in place of the modify function.
 func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, modifier func(O)) {
 	t.Helper()
 	got := O(new(T))
@@ -474,6 +484,7 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	got.SetResourceVersion("")
 	want.SetResourceVersion("")
 	if modifier != nil {
+		modifier(want)
 		modifier(got)
 	}
 	if diff := cmp.Diff(got, want); diff != "" {
@@ -607,4 +618,34 @@ func (c *fakeTSClient) Deleted() []string {
 // change to the configfile contents).
 func removeHashAnnotation(sts *appsv1.StatefulSet) {
 	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
+}
+
+func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
+	return func(secret *corev1.Secret) {
+		t.Helper()
+		if len(secret.StringData["tailscaled"]) != 0 {
+			conf := &ipn.ConfigVAlpha{}
+			if err := json.Unmarshal([]byte(secret.StringData["tailscaled"]), conf); err != nil {
+				t.Fatalf("error unmarshalling 'tailscaled' contents: %v", err)
+			}
+			conf.AuthKey = nil
+			b, err := json.Marshal(conf)
+			if err != nil {
+				t.Fatalf("error marshalling updated 'tailscaled' config: %v", err)
+			}
+			mak.Set(&secret.StringData, "tailscaled", string(b))
+		}
+		if len(secret.StringData["cap-95.hujson"]) != 0 {
+			conf := &ipn.ConfigVAlpha{}
+			if err := json.Unmarshal([]byte(secret.StringData["cap-95.hujson"]), conf); err != nil {
+				t.Fatalf("error umarshalling 'cap-95.hujson' contents: %v", err)
+			}
+			conf.AuthKey = nil
+			b, err := json.Marshal(conf)
+			if err != nil {
+				t.Fatalf("error marshalling 'cap-95.huson' contents: %v", err)
+			}
+			mak.Set(&secret.StringData, "cap-95.hujson", string(b))
+		}
+	}
 }

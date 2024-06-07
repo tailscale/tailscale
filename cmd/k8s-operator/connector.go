@@ -184,7 +184,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		Connector: &connector{
 			isExitNode: cn.Spec.ExitNode,
 		},
-		ProxyClass: proxyClass,
+		ProxyClassName: proxyClass,
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {

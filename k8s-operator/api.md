@@ -627,6 +627,13 @@ Specification of the desired state of the ProxyClass resource. https://git.k8s.i
           Configuration parameters for the proxy's StatefulSet. Tailscale Kubernetes operator deploys a StatefulSet for each of the user configured proxies (Tailscale Ingress, Tailscale Service, Connector).<br/>
         </td>
         <td>false</td>
+      </tr><tr>
+        <td><b><a href="#proxyclassspectailscale">tailscale</a></b></td>
+        <td>object</td>
+        <td>
+          TailscaleConfig contains options to configure the tailscale-specific parameters of proxies.<br/>
+        </td>
+        <td>false</td>
       </tr></tbody>
 </table>
 
@@ -3342,6 +3349,33 @@ The pod this Toleration is attached to tolerates any taint that matches the trip
         <td>string</td>
         <td>
           Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty, otherwise just a regular string.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### ProxyClass.spec.tailscale
+<sup><sup>[↩ Parent](#proxyclassspec)</sup></sup>
+
+
+
+TailscaleConfig contains options to configure the tailscale-specific parameters of proxies.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>acceptRoutes</b></td>
+        <td>boolean</td>
+        <td>
+          AcceptRoutes can be set to true to make the proxy instance accept routes advertized by other nodes on the tailnet, such as subnet routes. This is equivalent of passing --accept-routes flag to a tailscale Linux client. https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines Defaults to false.<br/>
         </td>
         <td>false</td>
       </tr></tbody>

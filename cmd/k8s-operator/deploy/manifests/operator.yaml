@@ -1300,6 +1300,13 @@ spec:
                                                 type: array
                                         type: object
                                 type: object
+                            tailscale:
+                                description: TailscaleConfig contains options to configure the tailscale-specific parameters of proxies.
+                                properties:
+                                    acceptRoutes:
+                                        description: AcceptRoutes can be set to true to make the proxy instance accept routes advertized by other nodes on the tailnet, such as subnet routes. This is equivalent of passing --accept-routes flag to a tailscale Linux client. https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines Defaults to false.
+                                        type: boolean
+                                type: object
                         type: object
                     status:
                         description: Status of the ProxyClass. This is set and managed automatically. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status

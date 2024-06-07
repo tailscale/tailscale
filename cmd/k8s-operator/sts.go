@@ -124,7 +124,9 @@ type tailscaleSTSConfig struct {
 	// what this StatefulSet should be created for.
 	Connector *connector
 
-	ProxyClass string
+	ProxyClassName string // name of ProxyClass if one needs to be applied to the proxy
+
+	ProxyClass *tsapi.ProxyClass // ProxyClass that needs to be applied to the proxy (if there is one)
 }
 
 type connector struct {
@@ -169,6 +171,18 @@ func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
+
+	proxyClass := new(tsapi.ProxyClass)
+	if sts.ProxyClassName != "" {
+		if err := a.Get(ctx, types.NamespacedName{Name: sts.ProxyClassName}, proxyClass); err != nil {
+			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+		if !tsoperator.ProxyClassIsReady(proxyClass) {
+			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting..")
+			return nil, nil
+		}
+	}
+	sts.ProxyClass = proxyClass
 
 	secretName, tsConfigHash, configs, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
 	if err != nil {
@@ -464,16 +478,6 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	}
 	pod := &ss.Spec.Template
 	container := &pod.Spec.Containers[0]
-	proxyClass := new(tsapi.ProxyClass)
-	if sts.ProxyClass != "" {
-		if err := a.Get(ctx, types.NamespacedName{Name: sts.ProxyClass}, proxyClass); err != nil {
-			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
-		}
-		if !tsoperator.ProxyClassIsReady(proxyClass) {
-			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting..")
-			return nil, nil
-		}
-	}
 	container.Image = a.proxyImage
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
@@ -588,9 +592,9 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		})
 	}
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
-	if sts.ProxyClass != "" {
-		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClass)
-		ss = applyProxyClassToStatefulSet(proxyClass, ss, sts, logger)
+	if sts.ProxyClassName != "" {
+		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClassName)
+		ss = applyProxyClassToStatefulSet(sts.ProxyClass, ss, sts, logger)
 	}
 	updateSS := func(s *appsv1.StatefulSet) {
 		s.Spec = ss.Spec
@@ -770,6 +774,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		}
 		conf.AdvertiseRoutes = routes
 	}
+	if shouldAcceptRoutes(stsC.ProxyClass) {
+		conf.AcceptRoutes = "true"
+	}
+
 	if newAuthkey != "" {
 		conf.AuthKey = &newAuthkey
 	} else if oldSecret != nil {
@@ -806,6 +814,10 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	conf.NoStatefulFiltering.Clear()
 	capVerConfigs[94] = *conf
 	return capVerConfigs, nil
+}
+
+func shouldAcceptRoutes(pc *tsapi.ProxyClass) bool {
+	return pc != nil && pc.Spec.TailscaleConfig != nil && pc.Spec.TailscaleConfig.AcceptRoutes
 }
 
 // ptrObject is a type constraint for pointer types that implement

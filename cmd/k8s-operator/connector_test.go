@@ -75,7 +75,7 @@ func TestConnector(t *testing.T) {
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Connector status should get updated with the IP/hostname info when available.
@@ -170,7 +170,7 @@ func TestConnector(t *testing.T) {
 		subnetRoutes: "10.40.0.0/14",
 		hostname:     "test-connector",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Add an exit node.
@@ -255,7 +255,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// 2. Update Connector to specify a ProxyClass. ProxyClass is not yet
