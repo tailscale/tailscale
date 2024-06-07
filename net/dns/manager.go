@@ -296,6 +296,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 }
 
 func (m *Manager) disableSplitDNSOptimization() bool {
+	if m.knobs == nil {
+		return false
+	}
 	return m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
 }
 
