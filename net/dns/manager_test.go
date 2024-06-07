@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/control/controlknobs"
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -858,7 +860,8 @@ func TestManager(t *testing.T) {
 			if goos == "" {
 				goos = "linux"
 			}
-			m := NewManager(t.Logf, &f, nil, tsdial.NewDialer(netmon.NewStatic()), nil, nil, goos)
+			knobs := &controlknobs.Knobs{}
+			m := NewManager(t.Logf, &f, new(health.Tracker), tsdial.NewDialer(netmon.NewStatic()), nil, knobs, goos)
 			m.resolver.TestOnlySetHook(f.SetResolver)
 
 			if err := m.Set(test.in); err != nil {
