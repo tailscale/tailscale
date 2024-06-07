@@ -157,10 +157,10 @@ type ConnectorStatus struct {
 	// +optional
 	IsExitNode bool `json:"isExitNode"`
 	// TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
-	// assigned to the Connector node(s).
+	// assigned to the Connector node.
 	// +optional
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
-	// Hostname is the fully qualified domain name of the Connector node(s).
+	// Hostname is the fully qualified domain name of the Connector node.
 	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
 	// node.
 	// +optional

@@ -182,7 +182,7 @@ ConnectorStatus describes the status of the Connector. This is set and managed b
         <td><b>hostname</b></td>
         <td>string</td>
         <td>
-          Hostname is the fully qualified domain name of the Connector node(s). If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the node.<br/>
+          Hostname is the fully qualified domain name of the Connector node. If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the node.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -203,7 +203,7 @@ ConnectorStatus describes the status of the Connector. This is set and managed b
         <td><b>tailnetIPs</b></td>
         <td>[]string</td>
         <td>
-          TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6) assigned to the Connector node(s).<br/>
+          TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6) assigned to the Connector node.<br/>
         </td>
         <td>false</td>
       </tr></tbody>

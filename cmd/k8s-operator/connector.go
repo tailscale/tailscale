@@ -225,9 +225,6 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		// No hostname yet. Wait for the connector pod to auth.
 		cn.Status.TailnetIPs = nil
 		cn.Status.Hostname = ""
-		if err := a.Status().Update(ctx, cn); err != nil {
-			return fmt.Errorf("failed to update connector status: %w", err)
-		}
 		return nil
 	}
 
