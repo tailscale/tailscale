@@ -283,7 +283,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+DNSConfig can be deployed to cluster to make a subset of Tailscale MagicDNS names resolvable by cluster workloads. Use this if: A) you need to refer to tailnet services, exposed to cluster via Tailscale Kubernetes operator egress proxies by the MagicDNS names of those tailnet services (usually because the services run over HTTPS) B) you have exposed a cluster workload to the tailnet using Tailscale Ingress and you also want to refer to the workload from within the cluster over the Ingress's MagicDNS name (usually because you have some callback component that needs to use the same URL as that used by a non-cluster client on tailnet). When a DNSConfig is applied to a cluster, Tailscale Kubernetes operator will deploy a nameserver for ts.net DNS names and automatically populate it with records for any Tailscale egress or Ingress proxies deployed to that cluster. Currently you must manually update your cluster DNS configuration to add the IP address of the deployed nameserver as a ts.net stub nameserver. Instructions for how to do it: https://kubernetes.io/docs/tasks/administer-cluster/dns-custom-nameservers/#configuration-of-stub-domain-and-upstream-nameserver-using-coredns (for CoreDNS), https://cloud.google.com/kubernetes-engine/docs/how-to/kube-dns (for kube-dns). Tailscale Kubernetes operator will write the address of a Service fronting the nameserver to dsnconfig.status.nameserver.ip. DNSConfig is a singleton - you must not create more than one. NB: if you want cluster workloads to be able to refer to Tailscale Ingress using its MagicDNS name, you must also annotate the Ingress resource with tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation to ensure that the proxy created for the Ingress listens on its Pod IP address. NB: Clusters where Pods get assigned IPv6 addresses only are currently not supported.
 
 <table>
     <thead>
@@ -315,14 +315,14 @@ ConnectorCondition contains condition information for a Connector.
         <td><b><a href="#dnsconfigspec">spec</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Spec describes the desired DNS configuration. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status<br/>
         </td>
         <td>true</td>
       </tr><tr>
         <td><b><a href="#dnsconfigstatus">status</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Status describes the status of the DNSConfig. This is set and managed by the Tailscale operator.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -334,7 +334,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+Spec describes the desired DNS configuration. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 
 <table>
     <thead>
@@ -349,7 +349,7 @@ ConnectorCondition contains condition information for a Connector.
         <td><b><a href="#dnsconfigspecnameserver">nameserver</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Configuration for a nameserver that can resolve ts.net DNS names associated with in-cluster proxies for Tailscale egress Services and Tailscale Ingresses. The operator will always deploy this nameserver when a DNSConfig is applied.<br/>
         </td>
         <td>true</td>
       </tr></tbody>
@@ -361,7 +361,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+Configuration for a nameserver that can resolve ts.net DNS names associated with in-cluster proxies for Tailscale egress Services and Tailscale Ingresses. The operator will always deploy this nameserver when a DNSConfig is applied.
 
 <table>
     <thead>
@@ -376,7 +376,7 @@ ConnectorCondition contains condition information for a Connector.
         <td><b><a href="#dnsconfigspecnameserverimage">image</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Nameserver image.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -388,7 +388,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+Nameserver image.
 
 <table>
     <thead>
@@ -403,14 +403,14 @@ ConnectorCondition contains condition information for a Connector.
         <td><b>repo</b></td>
         <td>string</td>
         <td>
-          <br/>
+          Repo defaults to tailscale/k8s-nameserver.<br/>
         </td>
         <td>false</td>
       </tr><tr>
         <td><b>tag</b></td>
         <td>string</td>
         <td>
-          <br/>
+          Tag defaults to operator's own tag.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -422,7 +422,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+Status describes the status of the DNSConfig. This is set and managed by the Tailscale operator.
 
 <table>
     <thead>
@@ -444,7 +444,7 @@ ConnectorCondition contains condition information for a Connector.
         <td><b><a href="#dnsconfigstatusnameserver">nameserver</a></b></td>
         <td>object</td>
         <td>
-          <br/>
+          Nameserver describes the status of nameserver cluster resources.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -522,7 +522,7 @@ ConnectorCondition contains condition information for a Connector.
 
 
 
-
+Nameserver describes the status of nameserver cluster resources.
 
 <table>
     <thead>
@@ -537,7 +537,7 @@ ConnectorCondition contains condition information for a Connector.
         <td><b>ip</b></td>
         <td>string</td>
         <td>
-          <br/>
+          IP is the ClusterIP of the Service fronting the deployed ts.net nameserver. Currently you must manually update your cluster DNS config to add this address as a stub nameserver for ts.net for cluster workloads to be able to resolve MagicDNS names associated with egress or Ingress proxies. The IP address will change if you delete and recreate the DNSConfig.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
