@@ -526,7 +526,7 @@ func TestRoutesWithout(t *testing.T) {
 func TestRateLogger(t *testing.T) {
 	clock := tstest.Clock{}
 	wasCalled := false
-	rl := newRateLogger(func() time.Time { return clock.Now() }, 1*time.Second, func(count int64, _ time.Time) {
+	rl := newRateLogger(func() time.Time { return clock.Now() }, 1*time.Second, func(count int64, _ time.Time, _ int64) {
 		if count != 3 {
 			t.Fatalf("count for prev period: got %d, want 3", count)
 		}
@@ -535,20 +535,20 @@ func TestRateLogger(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		clock.Advance(1 * time.Millisecond)
-		rl.update()
+		rl.update(0)
 		if wasCalled {
 			t.Fatalf("wasCalled: got true, want false")
 		}
 	}
 
 	clock.Advance(1 * time.Second)
-	rl.update()
+	rl.update(0)
 	if !wasCalled {
 		t.Fatalf("wasCalled: got false, want true")
 	}
 
 	wasCalled = false
-	rl = newRateLogger(func() time.Time { return clock.Now() }, 1*time.Hour, func(count int64, _ time.Time) {
+	rl = newRateLogger(func() time.Time { return clock.Now() }, 1*time.Hour, func(count int64, _ time.Time, _ int64) {
 		if count != 3 {
 			t.Fatalf("count for prev period: got %d, want 3", count)
 		}
@@ -557,14 +557,14 @@ func TestRateLogger(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		clock.Advance(1 * time.Minute)
-		rl.update()
+		rl.update(0)
 		if wasCalled {
 			t.Fatalf("wasCalled: got true, want false")
 		}
 	}
 
 	clock.Advance(1 * time.Hour)
-	rl.update()
+	rl.update(0)
 	if !wasCalled {
 		t.Fatalf("wasCalled: got false, want true")
 	}
