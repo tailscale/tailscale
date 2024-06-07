@@ -2447,6 +2447,22 @@ Configuration for the proxy container running tailscale.
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b>image</b></td>
+        <td>string</td>
+        <td>
+          Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Specifying image name here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var in the operator Deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>imagePullPolicy</b></td>
+        <td>enum</td>
+        <td>
+          Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
+          <br/>
+            <i>Enum</i>: Always, Never, IfNotPresent<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#proxyclassspecstatefulsetpodtailscalecontainerresources">resources</a></b></td>
         <td>object</td>
         <td>
@@ -2855,6 +2871,22 @@ Configuration for the proxy init container that enables forwarding.
         <td>[]object</td>
         <td>
           List of environment variables to set in the container. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables Note that environment variables provided here will take precedence over Tailscale-specific environment variables set by the operator, however running proxies with custom values for Tailscale environment variables (i.e TS_USERSPACE) is not recommended and might break in the future.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>image</b></td>
+        <td>string</td>
+        <td>
+          Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Specifying image name here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var in the operator Deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>imagePullPolicy</b></td>
+        <td>enum</td>
+        <td>
+          Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image<br/>
+          <br/>
+            <i>Enum</i>: Always, Never, IfNotPresent<br/>
         </td>
         <td>false</td>
       </tr><tr>

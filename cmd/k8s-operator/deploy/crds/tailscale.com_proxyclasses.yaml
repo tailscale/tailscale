@@ -721,6 +721,16 @@ spec:
                                   value:
                                     description: 'Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to "".'
                                     type: string
+                            image:
+                              description: Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Specifying image name here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var in the operator Deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                            imagePullPolicy:
+                              description: Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                              enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
                             resources:
                               description: Container resource requirements. By default Tailscale Kubernetes operator does not apply any resource requirements. The amount of resources required wil depend on the amount of resources the operator needs to parse, usage patterns and cluster size. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
                               type: object
@@ -864,6 +874,16 @@ spec:
                                   value:
                                     description: 'Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to "".'
                                     type: string
+                            image:
+                              description: Container image name. By default images are pulled from docker.io/tailscale/tailscale, but the official images are also available at ghcr.io/tailscale/tailscale. Specifying image name here will override any proxy image values specified via the Kubernetes operator's Helm chart values or PROXY_IMAGE env var in the operator Deployment. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                            imagePullPolicy:
+                              description: Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+                              type: string
+                              enum:
+                                - Always
+                                - Never
+                                - IfNotPresent
                             resources:
                               description: Container resource requirements. By default Tailscale Kubernetes operator does not apply any resource requirements. The amount of resources required wil depend on the amount of resources the operator needs to parse, usage patterns and cluster size. https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
                               type: object

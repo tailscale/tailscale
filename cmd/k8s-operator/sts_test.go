@@ -81,7 +81,9 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 							Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
 							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
 						},
-						Env: []tsapi.Env{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}},
+						Env:             []tsapi.Env{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}},
+						ImagePullPolicy: "IfNotPresent",
+						Image:           "ghcr.io/my-repo/tailscale:v0.01testsomething",
 					},
 					TailscaleInitContainer: &tsapi.Container{
 						SecurityContext: &corev1.SecurityContext{
@@ -92,7 +94,9 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 							Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
 							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
 						},
-						Env: []tsapi.Env{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}},
+						Env:             []tsapi.Env{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}},
+						ImagePullPolicy: "IfNotPresent",
+						Image:           "ghcr.io/my-repo/tailscale:v0.01testsomething",
 					},
 				},
 			},
@@ -135,10 +139,12 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	env := []corev1.EnvVar{{Name: "TS_HOSTNAME", Value: "nginx"}}
 	userspaceProxySS.Labels = labels
 	userspaceProxySS.Annotations = annots
+	userspaceProxySS.Spec.Template.Spec.Containers[0].Image = "tailscale/tailscale:v0.0.1"
 	userspaceProxySS.Spec.Template.Spec.Containers[0].Env = env
 	nonUserspaceProxySS.ObjectMeta.Labels = labels
 	nonUserspaceProxySS.ObjectMeta.Annotations = annots
 	nonUserspaceProxySS.Spec.Template.Spec.Containers[0].Env = env
+	nonUserspaceProxySS.Spec.Template.Spec.InitContainers[0].Image = "tailscale/tailscale:v0.0.1"
 
 	// 1. Test that a ProxyClass with all fields set gets correctly applied
 	// to a Statefulset built from non-userspace proxy template.
@@ -159,6 +165,10 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.InitContainers[0].Resources = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleInitContainer.Resources
 	wantSS.Spec.Template.Spec.InitContainers[0].Env = append(wantSS.Spec.Template.Spec.InitContainers[0].Env, []corev1.EnvVar{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}}...)
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, []corev1.EnvVar{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}}...)
+	wantSS.Spec.Template.Spec.Containers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
+	wantSS.Spec.Template.Spec.Containers[0].ImagePullPolicy = "IfNotPresent"
+	wantSS.Spec.Template.Spec.InitContainers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
+	wantSS.Spec.Template.Spec.InitContainers[0].ImagePullPolicy = "IfNotPresent"
 
 	gotSS := applyProxyClassToStatefulSet(proxyClassAllOpts, nonUserspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
@@ -194,9 +204,11 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.Containers[0].SecurityContext = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.SecurityContext
 	wantSS.Spec.Template.Spec.Containers[0].Resources = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.Resources
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, []corev1.EnvVar{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}}...)
+	wantSS.Spec.Template.Spec.Containers[0].ImagePullPolicy = "IfNotPresent"
+	wantSS.Spec.Template.Spec.Containers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	gotSS = applyProxyClassToStatefulSet(proxyClassAllOpts, userspaceProxySS.DeepCopy(), new(tailscaleSTSConfig), zl.Sugar())
 	if diff := cmp.Diff(gotSS, wantSS); diff != "" {
-		t.Fatalf("Unexpected result applying ProxyClass with custom labels and annotations to a StatefulSet for a userspace proxy (-got +want):\n%s", diff)
+		t.Fatalf("Unexpected result applying ProxyClass with all options to a StatefulSet for a userspace proxy (-got +want):\n%s", diff)
 	}
 
 	// 4. Test that a ProxyClass with custom labels and annotations gets correctly applied

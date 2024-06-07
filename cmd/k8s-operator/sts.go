@@ -690,6 +690,12 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 			// in the env var list overrides an earlier one.
 			base.Env = append(base.Env, corev1.EnvVar{Name: string(e.Name), Value: e.Value})
 		}
+		if overlay.Image != "" {
+			base.Image = overlay.Image
+		}
+		if overlay.ImagePullPolicy != "" {
+			base.ImagePullPolicy = overlay.ImagePullPolicy
+		}
 		return base
 	}
 	for i, c := range ss.Spec.Template.Spec.Containers {

@@ -24,6 +24,7 @@ require (
 	github.com/dave/patsy v0.0.0-20210517141501-957256f50cba
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
+	github.com/distribution/reference v0.6.0
 	github.com/djherbis/times v1.6.0
 	github.com/dsnet/try v0.0.3
 	github.com/evanw/esbuild v0.19.11
