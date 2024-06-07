@@ -52,11 +52,13 @@ type Manager struct {
 
 	resolver *resolver.Resolver
 	os       OSConfigurator
-	knobs    *controlknobs.Knobs
-	goos     string // if empty, gets set to runtime.GOOS
+	knobs    *controlknobs.Knobs // or nil
+	goos     string              // if empty, gets set to runtime.GOOS
 }
 
 // NewManagers created a new manager from the given config.
+//
+// knobs may be nil.
 func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs, goos string) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")
@@ -296,7 +298,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 }
 
 func (m *Manager) disableSplitDNSOptimization() bool {
-	return m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
+	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
 }
 
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
