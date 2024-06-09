@@ -119,6 +119,7 @@ var handler = map[string]localAPIHandler{
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"set-gui-visible":             (*Handler).serveSetGUIVisible,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
+	"set-udp-gro-forwarding":      (*Handler).serveSetUDPGROForwarding,
 	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
@@ -1172,6 +1173,23 @@ func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Requ
 	}
 	var warning string
 	if err := h.b.CheckUDPGROForwarding(); err != nil {
+		warning = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warning string
+	}{
+		Warning: warning,
+	})
+}
+
+func (h *Handler) serveSetUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "UDP GRO forwarding set access denied", http.StatusForbidden)
+		return
+	}
+	var warning string
+	if err := h.b.SetUDPGROForwarding(); err != nil {
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
