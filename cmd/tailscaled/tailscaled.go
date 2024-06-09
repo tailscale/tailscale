@@ -100,6 +100,13 @@ func defaultTunName() string {
 // The PORT environment variable is chosen to match what the Linux systemd
 // unit uses, to make documentation more consistent.
 func defaultPort() uint16 {
+	if endpointAddress := envknob.String("ENDPOINT_ADDRESS"); endpointAddress != "" {
+		parts := strings.Split(endpointAddress, ":")
+		if port, err := strconv.ParseUint(parts[1], 10, 16); err == nil {
+			return uint16(port)
+		}
+	}
+
 	if s := envknob.String("PORT"); s != "" {
 		if p, err := strconv.ParseUint(s, 10, 16); err == nil {
 			return uint16(p)
@@ -118,7 +125,7 @@ var args struct {
 	tunname string
 
 	cleanUp        bool
-	confFile       string // empty, file path, or "vm:user-data"
+	confFile       string
 	debug          string
 	port           uint16
 	statepath      string
@@ -169,7 +176,7 @@ func main() {
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
-	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
+	flag.StringVar(&args.confFile, "config", "", "path to config file")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -548,24 +555,13 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			return ok
 		}
 		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextTCP or we'll return
-			// *gonet.TCPConn(nil) instead of a nil interface which trips up
-			// callers.
+			// Note: don't just return ns.DialContextTCP or we'll
+			// return an interface containing a nil pointer.
 			tcpConn, err := ns.DialContextTCP(ctx, dst)
 			if err != nil {
 				return nil, err
 			}
 			return tcpConn, nil
-		}
-		dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextUDP or we'll return
-			// *gonet.UDPConn(nil) instead of a nil interface which trips up
-			// callers.
-			udpConn, err := ns.DialContextUDP(ctx, dst)
-			if err != nil {
-				return nil, err
-			}
-			return udpConn, nil
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {

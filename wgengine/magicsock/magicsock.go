@@ -589,6 +589,24 @@ func (c *Conn) updateEndpoints(why string) {
 		return
 	}
 
+	// Validate the ENDPOINT_ADDRESS and add it to the endpoints
+	// otherwise ignore it
+	func() {
+		if endpointAddress := envknob.String("ENDPOINT_ADDRESS"); endpointAddress != "" {
+
+			address, err := netip.ParseAddrPort(endpointAddress)
+			if err != nil {
+				c.logf("ENDPOINT_ADDRESS '%s' is not a valid IP address", strings.Split(endpointAddress,":")[0])
+				return
+			}
+
+			endpoints = append(endpoints, tailcfg.Endpoint{
+				Addr: address, //netip.MustParseAddrPort(s),
+				Type: 1,
+			})
+		}
+	}()
+
 	if c.setEndpoints(endpoints) {
 		c.logEndpointChange(endpoints)
 		c.epFunc(endpoints)
