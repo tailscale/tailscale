@@ -79,7 +79,7 @@ func TestNameserver(t *testing.T) {
 				}},
 		},
 		{
-			name: "AAAA record query",
+			name: "AAAA record query, A record exists",
 			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
 				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeAAAA}},
@@ -88,26 +88,28 @@ func TestNameserver(t *testing.T) {
 			wantResp: &dns.Msg{
 				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeAAAA}},
 				MsgHdr: dns.MsgHdr{
-					Id:       1,
-					Rcode:    dns.RcodeNotImplemented,
-					Response: true,
-					Opcode:   dns.OpcodeQuery,
+					Id:            1,
+					Rcode:         dns.RcodeSuccess,
+					Response:      true,
+					Opcode:        dns.OpcodeQuery,
+					Authoritative: true,
 				}},
 		},
 		{
-			name: "AAAA record query",
+			name: "AAAA record query, A record does not exist",
 			ip4:  map[dnsname.FQDN][]net.IP{dnsname.FQDN("foo.bar.com."): {{1, 2, 3, 4}}},
 			query: &dns.Msg{
-				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeAAAA}},
+				Question: []dns.Question{{Name: "baz.bar.com", Qtype: dns.TypeAAAA}},
 				MsgHdr:   dns.MsgHdr{Id: 1},
 			},
 			wantResp: &dns.Msg{
-				Question: []dns.Question{{Name: "foo.bar.com", Qtype: dns.TypeAAAA}},
+				Question: []dns.Question{{Name: "baz.bar.com", Qtype: dns.TypeAAAA}},
 				MsgHdr: dns.MsgHdr{
-					Id:       1,
-					Rcode:    dns.RcodeNotImplemented,
-					Response: true,
-					Opcode:   dns.OpcodeQuery,
+					Id:            1,
+					Rcode:         dns.RcodeNameError,
+					Response:      true,
+					Opcode:        dns.OpcodeQuery,
+					Authoritative: true,
 				}},
 		},
 		{
