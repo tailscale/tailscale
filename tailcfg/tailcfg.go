@@ -258,6 +258,15 @@ func (m *RawMessage) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalCapJSON returns a capability rule in RawMessage string format.
+func MarshalCapJSON[T any](capRule T) (RawMessage, error) {
+	bs, err := json.Marshal(capRule)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling capability rule: %w", err)
+	}
+	return RawMessage(string(bs)), nil
+}
+
 type Node struct {
 	ID       NodeID
 	StableID StableNodeID
