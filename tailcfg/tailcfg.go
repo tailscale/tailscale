@@ -137,7 +137,8 @@ type CapabilityVersion int
 //   - 94: 2024-05-06: Client understands Node.IsJailed.
 //   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
 //   - 96: 2024-05-29: Client understands NodeAttrSSHBehaviorV1
-const CurrentCapabilityVersion CapabilityVersion = 96
+//   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
+const CurrentCapabilityVersion CapabilityVersion = 97
 
 type StableID string
 
