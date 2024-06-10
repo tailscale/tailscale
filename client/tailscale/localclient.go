@@ -699,6 +699,27 @@ func (lc *LocalClient) CheckUDPGROForwarding(ctx context.Context) error {
 	return nil
 }
 
+// SetUDPGROForwarding enables UDP GRO forwarding for the main interface of this
+// node. This can be done to improve performance of tailnet nodes acting as exit
+// nodes or subnet routers.
+// See https://tailscale.com/kb/1320/performance-best-practices#linux-optimizations-for-subnet-routers-and-exit-nodes
+func (lc *LocalClient) SetUDPGROForwarding(ctx context.Context) error {
+	body, err := lc.get200(ctx, "/localapi/v0/set-udp-gro-forwarding")
+	if err != nil {
+		return err
+	}
+	var jres struct {
+		Warning string
+	}
+	if err := json.Unmarshal(body, &jres); err != nil {
+		return fmt.Errorf("invalid JSON from set-udp-gro-forwarding: %w", err)
+	}
+	if jres.Warning != "" {
+		return errors.New(jres.Warning)
+	}
+	return nil
+}
+
 // CheckPrefs validates the provided preferences, without making any changes.
 //
 // The CLI uses this before a Start call to fail fast if the preferences won't

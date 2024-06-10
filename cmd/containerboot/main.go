@@ -61,6 +61,11 @@
 //     and not `tailscale up` or `tailscale set`.
 //     The config file contents are currently read once on container start.
 //     NB: This env var is currently experimental and the logic will likely change!
+//     TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS: set to true to
+//     autoconfigure the default network interface for optimal performance for
+//     Tailscale subnet router/exit node.
+//     https://tailscale.com/kb/1320/performance-best-practices#linux-optimizations-for-subnet-routers-and-exit-nodes
+//     NB: This env var is currently experimental and the logic will likely change!
 //   - EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS: if set to true
 //     and if this containerboot instance is an L7 ingress proxy (created by
 //     the Kubernetes operator), set up rules to allow proxying cluster traffic,
@@ -152,6 +157,7 @@ func main() {
 		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
 		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
 		PodIP:                                 defaultEnv("POD_IP", ""),
+		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -198,6 +204,12 @@ func main() {
 		}
 	}
 	defer killTailscaled()
+
+	if cfg.EnableForwardingOptimizations {
+		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
+			log.Printf("[unexpected] error enabling UDP GRO forwarding: %v", err)
+		}
+	}
 
 	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
 	if err != nil {
@@ -1080,22 +1092,23 @@ type settings struct {
 	// TailnetTargetFQDN is an MagicDNS name to which all incoming
 	// non-Tailscale traffic should be proxied. This must be a full Tailnet
 	// node FQDN.
-	TailnetTargetFQDN        string
-	ServeConfigPath          string
-	DaemonExtraArgs          string
-	ExtraArgs                string
-	InKubernetes             bool
-	UserspaceMode            bool
-	StateDir                 string
-	AcceptDNS                *bool
-	KubeSecret               string
-	SOCKSProxyAddr           string
-	HTTPProxyAddr            string
-	Socket                   string
-	AuthOnce                 bool
-	Root                     string
-	KubernetesCanPatch       bool
-	TailscaledConfigFilePath string
+	TailnetTargetFQDN             string
+	ServeConfigPath               string
+	DaemonExtraArgs               string
+	ExtraArgs                     string
+	InKubernetes                  bool
+	UserspaceMode                 bool
+	StateDir                      string
+	AcceptDNS                     *bool
+	KubeSecret                    string
+	SOCKSProxyAddr                string
+	HTTPProxyAddr                 string
+	Socket                        string
+	AuthOnce                      bool
+	Root                          string
+	KubernetesCanPatch            bool
+	TailscaledConfigFilePath      string
+	EnableForwardingOptimizations bool
 	// If set to true and, if this containerboot instance is a Kubernetes
 	// ingress proxy, set up rules to forward incoming cluster traffic to be
 	// forwarded to the ingress target in cluster.
@@ -1148,6 +1161,9 @@ func (s *settings) validate() error {
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.PodIP == "" {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is set but POD_IP is not set")
+	}
+	if s.EnableForwardingOptimizations && s.UserspaceMode {
+		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
 	return nil
 }

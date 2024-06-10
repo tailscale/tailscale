@@ -5537,6 +5537,38 @@ func (b *LocalBackend) CheckUDPGROForwarding() error {
 	return warn
 }
 
+// SetUDPGROForwarding enables UDP GRO forwarding for the default network
+// interface of this machine. It can be done to improve performance for nodes
+// acting as Tailscale subnet routers or exit nodes. Currently (9/5/2024) this
+// functionality is considered experimental and only safe to use via explicit
+// user opt-in for ephemeral devices, such as containers.
+// https://tailscale.com/kb/1320/performance-best-practices#linux-optimizations-for-subnet-routers-and-exit-nodes
+func (b *LocalBackend) SetUDPGROForwarding() error {
+	if b.sys.IsNetstackRouter() {
+		return errors.New("UDP GRO forwarding cannot be enabled in userspace mode")
+	}
+	tunSys, ok := b.sys.Tun.GetOK()
+	if !ok {
+		return errors.New("[unexpected] unable to retrieve tun device configuration")
+	}
+	tunInterface, err := tunSys.Name()
+	if err != nil {
+		return errors.New("[unexpected] unable to determine name of the tun device")
+	}
+	netmonSys, ok := b.sys.NetMon.GetOK()
+	if !ok {
+		return errors.New("[unexpected] unable to retrieve tailscale netmon configuration")
+	}
+	state := netmonSys.InterfaceState()
+	if state == nil {
+		return errors.New("[unexpected] unable to retrieve machine's network interface state")
+	}
+	if err := netkernelconf.SetUDPGROForwarding(tunInterface, state.DefaultRouteInterface); err != nil {
+		return fmt.Errorf("error enabling UDP GRO forwarding: %w", err)
+	}
+	return nil
+}
+
 // DERPMap returns the current DERPMap in use, or nil if not connected.
 func (b *LocalBackend) DERPMap() *tailcfg.DERPMap {
 	b.mu.Lock()
