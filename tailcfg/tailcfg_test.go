@@ -858,11 +858,13 @@ func TestMarshalToRawMessageAndBack(t *testing.T) {
 	type inner struct {
 		Groups []string `json:"groups,omitempty"`
 	}
+	testip := netip.MustParseAddrPort("1.2.3.4:80")
 	type testRule struct {
-		Ports    []int  `json:"ports,omitempty"`
-		ToggleOn bool   `json:"toggleOn,omitempty"`
-		Name     string `json:"name,omitempty"`
-		Groups   inner  `json:"groups,omitempty"`
+		Ports    []int            `json:"ports,omitempty"`
+		ToggleOn bool             `json:"toggleOn,omitempty"`
+		Name     string           `json:"name,omitempty"`
+		Groups   inner            `json:"groups,omitempty"`
+		Addrs    []netip.AddrPort `json:"addrs"`
 	}
 	tests := []struct {
 		name    string
@@ -881,7 +883,7 @@ func TestMarshalToRawMessageAndBack(t *testing.T) {
 		},
 		{
 			name:    "all values",
-			val:     testRule{Ports: []int{80, 443}, Name: "foo", ToggleOn: true, Groups: inner{Groups: []string{"foo", "bar"}}},
+			val:     testRule{Ports: []int{80, 443}, Name: "foo", ToggleOn: true, Groups: inner{Groups: []string{"foo", "bar"}}, Addrs: []netip.AddrPort{testip}},
 			capType: PeerCapability("foo"),
 		},
 	}

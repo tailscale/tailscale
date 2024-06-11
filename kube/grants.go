@@ -6,21 +6,30 @@
 // Further, the API should not be considered stable.
 package kube
 
+import "net/netip"
+
 // KubernetesCapRule is a rule provided via PeerCapabilityKubernetes capability.
 type KubernetesCapRule struct {
 	// Impersonate is a list of rules that specify how to impersonate the caller
 	// when proxying to the Kubernetes API.
 	Impersonate *ImpersonateRule `json:"impersonate,omitempty"`
-	// Recorders defines a tag that should resolve to a tsrecorder
-	// instance(s). If set, any `kubectl exec` session from a client
-	// matching `src` of this grant to an API server proxy matching `dst` of
-	// this grant will be recorded and the recording will be sent to the
-	// tsrecorder.
-	// This list must not contain more than one tag.
-	// The field name matches the `Recorder` field with equal semantics for Tailscale SSH
-	// session recorder.
+	// Recorders defines a tag of a tsrecorder instance(s) that a recording
+	// of a 'kubectl exec' session, matching `src` of this grant, to an API
+	// server proxy, matching `dst` of this grant, should be sent to.
+	// This list must not contain more than one tag. The field
+	// name matches the `Recorder` field with equal semantics for Tailscale
+	// SSH session recorder. This field is set by users in ACL grants and is
+	// then parsed by control, which resolves the tags and populates `RecorderAddrs``.
 	// https://tailscale.com/kb/1246/tailscale-ssh-session-recording#turn-on-session-recording-in-acls
 	Recorders []string `json:"recorder,omitempty"`
+	// RecorderAddrs is a list of addresses that should be addresses of one
+	// or more tsrecorder instance(s). If set, any `kubectl exec` session
+	// from a client matching `src` of this grant to an API server proxy
+	// matching `dst` of this grant will be recorded and the recording will
+	// be sent to the tsrecorder. This field does not exist in the user
+	// provided ACL grants - it is populated by control, which obtains the
+	// addresses by resolving the tags provided via `Recorders` field.
+	RecorderAddrs []netip.AddrPort `json:"recoderAddrs,omitempty"`
 	// EnforceRecorder defines whether a kubectl exec session from a client
 	// matching `src` to an API server proxy matching `dst` should fail
 	// closed if it cannot be recorded (i.e if no recoder can be reached).
