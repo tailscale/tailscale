@@ -8,12 +8,16 @@ import (
 	"os"
 
 	"go4.org/mem"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
 
-func NewOSConfigurator(logf logger.Logf, health *health.Tracker, ifName string) (OSConfigurator, error) {
+// NewOSConfigurator creates a new OS configurator.
+//
+// The health tracker and the knobs may be nil and are ignored on this platform.
+func NewOSConfigurator(logf logger.Logf, _ *health.Tracker, _ *controlknobs.Knobs, ifName string) (OSConfigurator, error) {
 	return &darwinConfigurator{logf: logf, ifName: ifName}, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
@@ -31,7 +32,10 @@ func (kv kv) String() string {
 
 var publishOnce sync.Once
 
-func NewOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName string) (ret OSConfigurator, err error) {
+// NewOSConfigurator created a new OS configurator.
+//
+// The health tracker may be nil; the knobs may be nil and are ignored on this platform.
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, _ *controlknobs.Knobs, interfaceName string) (ret OSConfigurator, err error) {
 	env := newOSConfigEnv{
 		fs:                directFS{},
 		dbusPing:          dbusPing,

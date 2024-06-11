@@ -698,7 +698,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			// configuration being unavailable (from the noop
 			// manager). More in Issue 4017.
 			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), "") // empty interface name
+			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.ControlKnobs(), "") // empty interface name
 			if err != nil {
 				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 			}
@@ -726,7 +726,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), devName)
+		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.ControlKnobs(), devName)
 		if err != nil {
 			dev.Close()
 			r.Close()
