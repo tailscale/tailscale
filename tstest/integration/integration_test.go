@@ -1497,7 +1497,7 @@ func (n *testNode) Ping(otherNode *testNode) error {
 func (n *testNode) AwaitListening() {
 	t := n.env.t
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
-		c, err := safesocket.Connect(n.sockFile)
+		c, err := safesocket.ConnectContext(context.Background(), n.sockFile)
 		if err == nil {
 			c.Close()
 		}

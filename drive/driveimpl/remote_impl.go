@@ -167,7 +167,7 @@ func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child
 			return fmt.Sprintf("http://%s/%s/%s", hex.EncodeToString([]byte(share.Name)), secretToken, url.PathEscape(share.Name)), nil
 		},
 		Transport: &http.Transport{
-			Dial: func(_, shareAddr string) (net.Conn, error) {
+			DialContext: func(ctx context.Context, _, shareAddr string) (net.Conn, error) {
 				shareNameHex, _, err := net.SplitHostPort(shareAddr)
 				if err != nil {
 					return nil, fmt.Errorf("unable to parse share address %v: %w", shareAddr, err)
@@ -188,10 +188,11 @@ func (s *FileSystemForRemote) buildChild(share *drive.Share) *compositedav.Child
 				_, err = netip.ParseAddrPort(addr)
 				if err == nil {
 					// this is a regular network address, dial normally
-					return net.Dial("tcp", addr)
+					var std net.Dialer
+					return std.DialContext(ctx, "tcp", addr)
 				}
 				// assume this is a safesocket address
-				return safesocket.Connect(addr)
+				return safesocket.ConnectContext(ctx, addr)
 			},
 		},
 	}
