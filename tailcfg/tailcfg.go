@@ -139,7 +139,8 @@ type CapabilityVersion int
 //   - 96: 2024-05-29: Client understands NodeAttrSSHBehaviorV1
 //   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
-const CurrentCapabilityVersion CapabilityVersion = 98
+//   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
+const CurrentCapabilityVersion CapabilityVersion = 99
 
 type StableID string
 
@@ -2306,6 +2307,15 @@ const (
 	// and this node attribute allows us to disable the optimization remotely
 	// if needed.
 	NodeAttrDisableSplitDNSWhenNoCustomResolvers NodeCapability = "disable-split-dns-when-no-custom-resolvers"
+
+	// NodeAttrDisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
+	// create a default (catch-all) Windows NRPT rule when "Override local DNS" is enabled.
+	// Without this rule, Windows 8.1 and newer devices issue parallel DNS requests to DNS servers
+	// associated with all network adapters, even when "Override local DNS" is enabled and/or
+	// a Mullvad exit node is being used, resulting in DNS leaks.
+	// We began creating this rule on 2024-06-14, and this node attribute
+	// allows us to disable the new behavior remotely if needed.
+	NodeAttrDisableLocalDNSOverrideViaNRPT NodeCapability = "disable-local-dns-override-via-nrpt"
 )
 
 // SetDNSRequest is a request to add a DNS record.

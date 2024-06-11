@@ -485,7 +485,7 @@ func (m *Manager) FlushCaches() error {
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
 func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
-	oscfg, err := NewOSConfigurator(logf, nil, interfaceName)
+	oscfg, err := NewOSConfigurator(logf, nil, nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
 		return
