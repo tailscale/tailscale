@@ -4,6 +4,7 @@
 package safesocket
 
 import (
+	"context"
 	"net"
 
 	"github.com/akutz/memconn"
@@ -15,6 +16,6 @@ func listen(path string) (net.Listener, error) {
 	return memconn.Listen("memu", memName)
 }
 
-func connect(_ string) (net.Conn, error) {
-	return memconn.Dial("memu", memName)
+func connect(ctx context.Context, _ string) (net.Conn, error) {
+	return memconn.DialContext(ctx, "memu", memName)
 }

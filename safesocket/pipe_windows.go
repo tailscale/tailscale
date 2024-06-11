@@ -16,9 +16,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func connect(path string) (net.Conn, error) {
-	dl := time.Now().Add(20 * time.Second)
-	ctx, cancel := context.WithDeadline(context.Background(), dl)
+func connect(ctx context.Context, path string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	// We use the identification impersonation level so that tailscaled may
 	// obtain information about our token for access control purposes.

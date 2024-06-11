@@ -6,6 +6,7 @@
 package safesocket
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -85,7 +86,7 @@ func (fc plan9FileConn) SetWriteDeadline(t time.Time) error {
 	return syscall.EPLAN9
 }
 
-func connect(path string) (net.Conn, error) {
+func connect(_ context.Context, path string) (net.Conn, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0666)
 	if err != nil {
 		return nil, err
