@@ -67,12 +67,12 @@ func TestProxyClass(t *testing.T) {
 
 	// 1. A valid ProxyClass resource gets its status updated to Ready.
 	expectReconciled(t, pcr, "", "test")
-	pc.Status.Conditions = append(pc.Status.Conditions, tsapi.ConnectorCondition{
-		Type:               tsapi.ProxyClassready,
+	pc.Status.Conditions = append(pc.Status.Conditions, metav1.Condition{
+		Type:               string(tsapi.ProxyClassready),
 		Status:             metav1.ConditionTrue,
 		Reason:             reasonProxyClassValid,
 		Message:            reasonProxyClassValid,
-		LastTransitionTime: &metav1.Time{Time: cl.Now().Truncate(time.Second)},
+		LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
 
 	expectEqual(t, fc, pc, nil)

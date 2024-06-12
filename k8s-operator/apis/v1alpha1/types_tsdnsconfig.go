@@ -96,7 +96,7 @@ type DNSConfigStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	// +optional
-	Conditions []ConnectorCondition `json:"conditions"`
+	Conditions []metav1.Condition `json:"conditions"`
 	// Nameserver describes the status of nameserver cluster resources.
 	// +optional
 	Nameserver *NameserverStatus `json:"nameserver"`
@@ -115,4 +115,4 @@ type NameserverStatus struct {
 
 // NameserverReady is set to True if the nameserver has been successfully
 // deployed to cluster.
-const NameserverReady ConnectorConditionType = `NameserverReady`
+const NameserverReady ConditionType = `NameserverReady`

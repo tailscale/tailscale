@@ -232,5 +232,5 @@ type ProxyClassStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	// +optional
-	Conditions []ConnectorCondition `json:"conditions,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

@@ -248,9 +248,9 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// created proxy resources.
 	mustUpdateStatus(t, fc, "", "custom-metadata", func(pc *tsapi.ProxyClass) {
 		pc.Status = tsapi.ProxyClassStatus{
-			Conditions: []tsapi.ConnectorCondition{{
+			Conditions: []metav1.Condition{{
 				Status:             metav1.ConditionTrue,
-				Type:               tsapi.ProxyClassready,
+				Type:               string(tsapi.ProxyClassready),
 				ObservedGeneration: pc.Generation,
 			}}}
 	})
