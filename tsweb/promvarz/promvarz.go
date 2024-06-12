@@ -28,7 +28,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 // gatherNativePrometheusMetrics writes metrics from the default
 // metric registry in text format.
 func gatherNativePrometheusMetrics(w http.ResponseWriter) error {
-	enc := expfmt.NewEncoder(w, expfmt.FmtText)
+	enc := expfmt.NewEncoder(w, expfmt.NewFormat(expfmt.TypeTextPlain))
 	mfs, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
 		return fmt.Errorf("could not gather metrics from DefaultGatherer: %w", err)
