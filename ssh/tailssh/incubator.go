@@ -121,6 +121,13 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		"--tty-name=",     // updated in-place by startWithPTY
 	}
 
+	// We have to check the below outside of the incubator process, because it
+	// relies on the "getenforce" command being on the PATH, which it is not
+	// when in the incubator.
+	if runtime.GOOS == "linux" && hostinfo.IsSELinuxEnforcing() {
+		incubatorArgs = append(incubatorArgs, "--is-selinux-enforcing")
+	}
+
 	forceV1Behavior := ss.conn.srv.lb.NetMap().HasCap(tailcfg.NodeAttrSSHBehaviorV1)
 	if forceV1Behavior {
 		incubatorArgs = append(incubatorArgs, "--force-v1-behavior")
@@ -167,20 +174,21 @@ func (stdRWC) Close() error {
 }
 
 type incubatorArgs struct {
-	loginShell      string
-	uid             int
-	gid             int
-	gids            []int
-	localUser       string
-	remoteUser      string
-	remoteIP        string
-	ttyName         string
-	hasTTY          bool
-	cmd             string
-	isSFTP          bool
-	isShell         bool
-	forceV1Behavior bool
-	debugTest       bool
+	loginShell         string
+	uid                int
+	gid                int
+	gids               []int
+	localUser          string
+	remoteUser         string
+	remoteIP           string
+	ttyName            string
+	hasTTY             bool
+	cmd                string
+	isSFTP             bool
+	isShell            bool
+	forceV1Behavior    bool
+	debugTest          bool
+	isSELinuxEnforcing bool
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -202,6 +210,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
+	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
 	flags.Parse(args)
 
 	for _, g := range strings.Split(groups, ",") {
@@ -338,7 +347,7 @@ func shouldAttemptLoginShell(dlogf logger.Logf, ia incubatorArgs) bool {
 		return false
 	}
 
-	return runningAsRoot() && !hostinfo.IsSELinuxEnforcing()
+	return runningAsRoot() && !ia.isSELinuxEnforcing
 }
 
 func runningAsRoot() bool {
