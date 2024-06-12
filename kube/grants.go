@@ -29,10 +29,10 @@ type KubernetesCapRule struct {
 	// be sent to the tsrecorder. This field does not exist in the user
 	// provided ACL grants - it is populated by control, which obtains the
 	// addresses by resolving the tags provided via `Recorders` field.
-	RecorderAddrs []netip.AddrPort `json:"recoderAddrs,omitempty"`
+	RecorderAddrs []netip.AddrPort `json:"recorderAddrs,omitempty"`
 	// EnforceRecorder defines whether a kubectl exec session from a client
 	// matching `src` to an API server proxy matching `dst` should fail
-	// closed if it cannot be recorded (i.e if no recoder can be reached).
+	// closed if it cannot be recorded (i.e if no recorder can be reached).
 	// Default is to fail open.
 	// The field name matches `EnforceRecorder` field with equal semantics for Tailscale SSH
 	// session recorder.
