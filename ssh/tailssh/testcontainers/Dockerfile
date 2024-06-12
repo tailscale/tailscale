@@ -31,9 +31,22 @@ RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegra
 RUN echo "Then run tests as non-root user testuser and make sure tests still pass."
 RUN chown testuser:groupone /tmp/tailscalessh.log
 RUN TAILSCALED_PATH=`pwd`tailscaled su -m testuser -c "./tailssh.test -test.v -test.run TestIntegration TestDoDropPrivileges"
+RUN chown root:root /tmp/tailscalessh.log
+
+RUN echo "Then run tests in a system that's pretending to be SELinux in enforcing mode"
+RUN mv /usr/bin/login /tmp/login_orig
+# Use nonsense for /usr/bin/login so that it fails.
+# It's not the same failure mode as in SELinux, but failure is good enough for test.
+RUN echo "adsfasdfasdf" > /usr/bin/login
+RUN chmod 755 /usr/bin/login
+# Simulate getenforce command
+RUN printf "#!/bin/bash\necho 'Enforcing'" > /usr/bin/getenforce
+RUN chmod 755 /usr/bin/getenforce
+RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegration
+RUN mv /tmp/login_orig /usr/bin/login
+RUN rm /usr/bin/getenforce
 
 RUN echo "Then remove the login command and make sure tests still pass."
-RUN chown root:root /tmp/tailscalessh.log
 RUN rm `which login`
 RUN rm -Rf /home/testuser
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSFTP
