@@ -246,7 +246,10 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
 	}
 
-	ourNodeKey := prefs.Persist().PublicNodeKey()
+	ourNodeKey, ok := prefs.Persist().PublicNodeKeyOK()
+	if !ok {
+		return errors.New("tkaSyncIfNeeded: no node key in prefs")
+	}
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
