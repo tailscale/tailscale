@@ -831,9 +831,18 @@ func (ns *Impl) inject() {
 				// Only send to the host if this 4via6 route is
 				// something this node handles.
 				if ns.lb != nil && ns.lb.ShouldHandleViaIP(srcIP) {
-					sendToHost = true
+					dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
+					// Also, only forward to the host if
+					// the packet is destined for a local
+					// IP; otherwise, we'd send traffic
+					// that's intended for another peer
+					// from the local 4via6 address to the
+					// host instead of outbound to
+					// WireGuard. See:
+					// https://github.com/tailscale/tailscale/issues/12448
+					sendToHost = ns.isLocalIP(dstIP)
 					if debugNetstack() {
-						ns.logf("netstack: sending 4via6 packet to host: %v", srcIP)
+						ns.logf("netstack: sending 4via6 packet to host: src=%v dst=%v", srcIP, dstIP)
 					}
 				}
 			}
