@@ -52,7 +52,7 @@ import (
 )
 
 var (
-	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
+	verboseTailscaled = flag.Bool("verbose-tailscaled", true, "verbose tailscaled logging")
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 )
 
