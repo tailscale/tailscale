@@ -808,47 +808,7 @@ func (ns *Impl) inject() {
 		// However, some uses of netstack (presently, magic DNS)
 		// send traffic destined for the local device, hence must
 		// be injected 'inbound'.
-		sendToHost := false
-
-		// Determine if the packet is from a service IP, in which case it
-		// needs to go back into the machines network (inbound) instead of
-		// out.
-		// TODO(tom): Figure out if its safe to modify packet.Parsed to fill in
-		//            the IP src/dest even if its missing the rest of the pkt.
-		//            That way we dont have to do this twitchy-af byte-yeeting.
-		hdr := pkt.Network()
-		switch v := hdr.(type) {
-		case header.IPv4:
-			srcIP := netip.AddrFrom4(v.SourceAddress().As4())
-			if serviceIP == srcIP {
-				sendToHost = true
-			}
-		case header.IPv6:
-			srcIP := netip.AddrFrom16(v.SourceAddress().As16())
-			if srcIP == serviceIPv6 {
-				sendToHost = true
-			} else if viaRange.Contains(srcIP) {
-				// Only send to the host if this 4via6 route is
-				// something this node handles.
-				if ns.lb != nil && ns.lb.ShouldHandleViaIP(srcIP) {
-					dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
-					// Also, only forward to the host if
-					// the packet is destined for a local
-					// IP; otherwise, we'd send traffic
-					// that's intended for another peer
-					// from the local 4via6 address to the
-					// host instead of outbound to
-					// WireGuard. See:
-					// https://github.com/tailscale/tailscale/issues/12448
-					sendToHost = ns.isLocalIP(dstIP)
-					if debugNetstack() {
-						ns.logf("netstack: sending 4via6 packet to host: src=%v dst=%v", srcIP, dstIP)
-					}
-				}
-			}
-		default:
-			// unknown; don't forward to host
-		}
+		sendToHost := ns.shouldSendToHost(pkt)
 
 		// pkt has a non-zero refcount, so injection methods takes
 		// ownership of one count and will decrement on completion.
@@ -864,6 +824,57 @@ func (ns *Impl) inject() {
 			}
 		}
 	}
+}
+
+// shouldSendToHost determines if the provided packet should be sent to the
+// host (i.e the current machine running Tailscale), in which case it will
+// return true. It will return false if the packet should be sent outbound, for
+// transit via WireGuard to another Tailscale node.
+func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
+	// Determine if the packet is from a service IP (100.100.100.100 or the
+	// IPv6 variant), in which case it needs to go back into the machine's
+	// network (inbound) instead of out.
+	hdr := pkt.Network()
+	switch v := hdr.(type) {
+	case header.IPv4:
+		srcIP := netip.AddrFrom4(v.SourceAddress().As4())
+		if serviceIP == srcIP {
+			return true
+		}
+
+	case header.IPv6:
+		srcIP := netip.AddrFrom16(v.SourceAddress().As16())
+		if srcIP == serviceIPv6 {
+			return true
+		}
+
+		if viaRange.Contains(srcIP) {
+			// Only send to the host if this 4via6 route is
+			// something this node handles.
+			if ns.lb != nil && ns.lb.ShouldHandleViaIP(srcIP) {
+				dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
+				// Also, only forward to the host if the packet
+				// is destined for a local IP; otherwise, we'd
+				// send traffic that's intended for another
+				// peer from the local 4via6 address to the
+				// host instead of outbound to WireGuard. See:
+				//     https://github.com/tailscale/tailscale/issues/12448
+				if ns.isLocalIP(dstIP) {
+					return true
+				}
+				if debugNetstack() {
+					ns.logf("netstack: sending 4via6 packet to host: src=%v dst=%v", srcIP, dstIP)
+				}
+			}
+		}
+	default:
+		// unknown; don't forward to host
+		if debugNetstack() {
+			ns.logf("netstack: unexpected packet in shouldSendToHost: %T", v)
+		}
+	}
+
+	return false
 }
 
 // isLocalIP reports whether ip is a Tailscale IP assigned to this
