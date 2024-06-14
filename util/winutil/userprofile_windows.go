@@ -80,7 +80,7 @@ func LoadUserProfile(token windows.Token, u *user.User) (up *UserProfile, err er
 
 	var roamingProfilePath *uint16
 	if winenv.IsDomainJoined() {
-		roamingProfilePath, err = getRoamingProfilePath(nil, computerName, userName)
+		roamingProfilePath, err = getRoamingProfilePath(nil, token, computerName, userName)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +134,7 @@ func (up *UserProfile) Close() error {
 	return nil
 }
 
-func getRoamingProfilePath(logf logger.Logf, computerName, userName *uint16) (path *uint16, err error) {
+func getRoamingProfilePath(logf logger.Logf, token windows.Token, computerName, userName *uint16) (path *uint16, err error) {
 	// logf is for debugging/testing.
 	if logf == nil {
 		logf = logger.Discard
@@ -152,19 +152,18 @@ func getRoamingProfilePath(logf logger.Logf, computerName, userName *uint16) (pa
 	if profilePath == nil {
 		return nil, nil
 	}
-
-	var sz int
-	for ptr := unsafe.Pointer(profilePath); *(*uint16)(ptr) != 0; sz++ {
-		ptr = unsafe.Pointer(uintptr(ptr) + unsafe.Sizeof(*profilePath))
-	}
-
-	if sz == 0 {
+	if *profilePath == 0 {
+		// Empty string
 		return nil, nil
 	}
 
-	buf := unsafe.Slice(profilePath, sz+1)
-	cp := append([]uint16{}, buf...)
-	return unsafe.SliceData(cp), nil
+	var expanded [windows.MAX_PATH + 1]uint16
+	if err := expandEnvironmentStringsForUser(token, profilePath, &expanded[0], uint32(len(expanded))); err != nil {
+		return nil, err
+	}
+
+	// This buffer is only used briefly, so we don't bother copying it into a shorter slice.
+	return &expanded[0], nil
 }
 
 func getComputerAndUserName(token windows.Token, u *user.User) (computerName *uint16, userName *uint16, err error) {
