@@ -45,16 +45,17 @@ var (
 	modrstrtmgr = windows.NewLazySystemDLL("rstrtmgr.dll")
 	moduserenv  = windows.NewLazySystemDLL("userenv.dll")
 
-	procQueryServiceConfig2W          = modadvapi32.NewProc("QueryServiceConfig2W")
-	procGetApplicationRestartSettings = modkernel32.NewProc("GetApplicationRestartSettings")
-	procRegisterApplicationRestart    = modkernel32.NewProc("RegisterApplicationRestart")
-	procRmEndSession                  = modrstrtmgr.NewProc("RmEndSession")
-	procRmGetList                     = modrstrtmgr.NewProc("RmGetList")
-	procRmJoinSession                 = modrstrtmgr.NewProc("RmJoinSession")
-	procRmRegisterResources           = modrstrtmgr.NewProc("RmRegisterResources")
-	procRmStartSession                = modrstrtmgr.NewProc("RmStartSession")
-	procLoadUserProfileW              = moduserenv.NewProc("LoadUserProfileW")
-	procUnloadUserProfile             = moduserenv.NewProc("UnloadUserProfile")
+	procQueryServiceConfig2W             = modadvapi32.NewProc("QueryServiceConfig2W")
+	procGetApplicationRestartSettings    = modkernel32.NewProc("GetApplicationRestartSettings")
+	procRegisterApplicationRestart       = modkernel32.NewProc("RegisterApplicationRestart")
+	procRmEndSession                     = modrstrtmgr.NewProc("RmEndSession")
+	procRmGetList                        = modrstrtmgr.NewProc("RmGetList")
+	procRmJoinSession                    = modrstrtmgr.NewProc("RmJoinSession")
+	procRmRegisterResources              = modrstrtmgr.NewProc("RmRegisterResources")
+	procRmStartSession                   = modrstrtmgr.NewProc("RmStartSession")
+	procExpandEnvironmentStringsForUserW = moduserenv.NewProc("ExpandEnvironmentStringsForUserW")
+	procLoadUserProfileW                 = moduserenv.NewProc("LoadUserProfileW")
+	procUnloadUserProfile                = moduserenv.NewProc("UnloadUserProfile")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
@@ -113,6 +114,14 @@ func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret 
 	r0, _, _ := syscall.Syscall(procRmStartSession.Addr(), 3, uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func expandEnvironmentStringsForUser(token windows.Token, src *uint16, dst *uint16, dstLen uint32) (err error) {
+	r1, _, e1 := syscall.Syscall6(procExpandEnvironmentStringsForUserW.Addr(), 4, uintptr(token), uintptr(unsafe.Pointer(src)), uintptr(unsafe.Pointer(dst)), uintptr(dstLen), 0, 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
 	}
 	return
 }
