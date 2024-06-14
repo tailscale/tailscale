@@ -31,6 +31,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/slicesx"
@@ -99,26 +100,46 @@ func TestSetPushDeviceToken(t *testing.T) {
 }
 
 type whoIsBackend struct {
-	whoIs    func(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
-	peerCaps map[netip.Addr]tailcfg.PeerCapMap
+	whoIs        func(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	whoIsNodeKey func(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	peerCaps     map[netip.Addr]tailcfg.PeerCapMap
 }
 
 func (b whoIsBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	return b.whoIs(ipp)
 }
 
+func (b whoIsBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+	return b.whoIsNodeKey(k)
+}
+
 func (b whoIsBackend) PeerCaps(ip netip.Addr) tailcfg.PeerCapMap {
 	return b.peerCaps[ip]
 }
 
-// Tests that the WhoIs handler accepts either IPs or IP:ports.
+// Tests that the WhoIs handler accepts IPs, IP:ports, or nodekeys.
 //
 // From https://github.com/tailscale/tailscale/pull/9714 (a PR that is effectively a bug report)
-func TestWhoIsJustIP(t *testing.T) {
+//
+// And https://github.com/tailscale/tailscale/issues/12465
+func TestWhoIsArgTypes(t *testing.T) {
 	h := &Handler{
 		PermitRead: true,
 	}
-	for _, input := range []string{"100.101.102.103", "127.0.0.1:123"} {
+
+	match := func() (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+		return (&tailcfg.Node{
+				ID: 123,
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.101.102.103/32"),
+				},
+			}).View(),
+			tailcfg.UserProfile{ID: 456, DisplayName: "foo"},
+			true
+	}
+
+	const keyStr = "nodekey:5c8f86d5fc70d924e55f02446165a5dae8f822994ad26bcf4b08fd841f9bf261"
+	for _, input := range []string{"100.101.102.103", "127.0.0.1:123", keyStr} {
 		rec := httptest.NewRecorder()
 		t.Run(input, func(t *testing.T) {
 			b := whoIsBackend{
@@ -129,14 +150,14 @@ func TestWhoIsJustIP(t *testing.T) {
 							t.Fatalf("backend called with %v; want %v", ipp, want)
 						}
 					}
-					return (&tailcfg.Node{
-							ID: 123,
-							Addresses: []netip.Prefix{
-								netip.MustParsePrefix("100.101.102.103/32"),
-							},
-						}).View(),
-						tailcfg.UserProfile{ID: 456, DisplayName: "foo"},
-						true
+					return match()
+				},
+				whoIsNodeKey: func(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+					if k.String() != keyStr {
+						t.Fatalf("backend called with %v; want %v", k, keyStr)
+					}
+					return match()
+
 				},
 				peerCaps: map[netip.Addr]tailcfg.PeerCapMap{
 					netip.MustParseAddr("100.101.102.103"): map[tailcfg.PeerCapability][]tailcfg.RawMessage{
@@ -146,9 +167,12 @@ func TestWhoIsJustIP(t *testing.T) {
 			}
 			h.serveWhoIsWithBackend(rec, httptest.NewRequest("GET", "/v0/whois?addr="+url.QueryEscape(input), nil), b)
 
+			if rec.Code != 200 {
+				t.Fatalf("response code %d", rec.Code)
+			}
 			var res apitype.WhoIsResponse
 			if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
-				t.Fatal(err)
+				t.Fatalf("parsing response %#q: %v", rec.Body.Bytes(), err)
 			}
 			if got, want := res.Node.ID, tailcfg.NodeID(123); got != want {
 				t.Errorf("res.Node.ID=%v, want %v", got, want)

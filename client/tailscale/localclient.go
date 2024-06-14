@@ -253,9 +253,14 @@ func (lc *LocalClient) sendWithHeaders(
 	}
 	if res.StatusCode != wantStatus {
 		err = fmt.Errorf("%v: %s", res.Status, bytes.TrimSpace(slurp))
-		return nil, nil, bestError(err, slurp)
+		return nil, nil, httpStatusError{bestError(err, slurp), res.StatusCode}
 	}
 	return slurp, res.Header, nil
+}
+
+type httpStatusError struct {
+	error
+	HTTPStatus int
 }
 
 func (lc *LocalClient) get200(ctx context.Context, path string) ([]byte, error) {
@@ -278,9 +283,31 @@ func decodeJSON[T any](b []byte) (ret T, err error) {
 }
 
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
+//
+// If not found, the error is ErrPeerNotFound.
 func (lc *LocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
+		return nil, err
+	}
+	return decodeJSON[*apitype.WhoIsResponse](body)
+}
+
+// ErrPeerNotFound is returned by WhoIs and WhoIsNodeKey when a peer is not found.
+var ErrPeerNotFound = errors.New("peer not found")
+
+// WhoIsNodeKey returns the owner of the given wireguard public key.
+//
+// If not found, the error is ErrPeerNotFound.
+func (lc *LocalClient) WhoIsNodeKey(ctx context.Context, key key.NodePublic) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(key.String()))
+	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
 		return nil, err
 	}
 	return decodeJSON[*apitype.WhoIsResponse](body)

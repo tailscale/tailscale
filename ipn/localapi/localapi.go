@@ -448,6 +448,7 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 // by the localapi WhoIs method.
 type localBackendWhoIsMethods interface {
 	WhoIs(netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	WhoIsNodeKey(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	PeerCaps(netip.Addr) tailcfg.PeerCapMap
 }
 
@@ -456,9 +457,21 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "whois access denied", http.StatusForbidden)
 		return
 	}
+	var (
+		n  tailcfg.NodeView
+		u  tailcfg.UserProfile
+		ok bool
+	)
 	var ipp netip.AddrPort
 	if v := r.FormValue("addr"); v != "" {
-		if ip, err := netip.ParseAddr(v); err == nil {
+		if strings.HasPrefix(v, "nodekey:") {
+			var k key.NodePublic
+			if err := k.UnmarshalText([]byte(v)); err != nil {
+				http.Error(w, "invalid nodekey in 'addr' parameter", http.StatusBadRequest)
+				return
+			}
+			n, u, ok = b.WhoIsNodeKey(k)
+		} else if ip, err := netip.ParseAddr(v); err == nil {
 			ipp = netip.AddrPortFrom(ip, 0)
 		} else {
 			var err error
@@ -468,11 +481,13 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 		}
+		if ipp.IsValid() {
+			n, u, ok = b.WhoIs(ipp)
+		}
 	} else {
 		http.Error(w, "missing 'addr' parameter", http.StatusBadRequest)
 		return
 	}
-	n, u, ok := b.WhoIs(ipp)
 	if !ok {
 		http.Error(w, "no match for IP:port", http.StatusNotFound)
 		return

@@ -966,6 +966,26 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	}
 }
 
+// WhoIsNodeKey returns the peer info of given public key, if it exists.
+func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// TODO(bradfitz): add nodeByKey like nodeByAddr instead of walking peers.
+	if b.netMap == nil {
+		return n, u, false
+	}
+	if self := b.netMap.SelfNode; self.Valid() && self.Key() == k {
+		return self, b.netMap.UserProfiles[self.User()], true
+	}
+	for _, n := range b.peers {
+		if n.Key() == k {
+			u, ok = b.netMap.UserProfiles[n.User()]
+			return n, u, ok
+		}
+	}
+	return n, u, false
+}
+
 // WhoIs reports the node and user who owns the node with the given IP:port.
 // If the IP address is a Tailscale IP, the provided port may be 0.
 // If ok == true, n and u are valid.
