@@ -138,7 +138,8 @@ type CapabilityVersion int
 //   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
 //   - 96: 2024-05-29: Client understands NodeAttrSSHBehaviorV1
 //   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
-const CurrentCapabilityVersion CapabilityVersion = 97
+//   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
+const CurrentCapabilityVersion CapabilityVersion = 98
 
 type StableID string
 
