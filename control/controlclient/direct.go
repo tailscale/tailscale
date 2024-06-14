@@ -1581,9 +1581,9 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 }
 
 // ReportHealthChange reports to the control plane a change to this node's
-// health.
-func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
-	if sys == health.SysOverall {
+// health. w must be non-nil. us can be nil to indicate a healthy state for w.
+func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyState) {
+	if w == health.NetworkStatusWarnable || w == health.IPNStateWarnable || w == health.LoginStateWarnable {
 		// We don't report these. These include things like the network is down
 		// (in which case we can't report anyway) or the user wanted things
 		// stopped, as opposed to the more unexpected failure types in the other
@@ -1602,12 +1602,13 @@ func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
 	if c.panicOnUse {
 		panic("tainted client")
 	}
+	// TODO(angott): at some point, update `Subsys` in the request to be `Warnable`
 	req := &tailcfg.HealthChangeRequest{
-		Subsys:  string(sys),
+		Subsys:  string(w.Code),
 		NodeKey: nodeKey,
 	}
-	if sysErr != nil {
-		req.Error = sysErr.Error()
+	if us != nil {
+		req.Error = us.Text
 	}
 
 	// Best effort, no logging:

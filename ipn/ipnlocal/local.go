@@ -666,12 +666,18 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	}
 }
 
-func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
-	if err == nil {
-		b.logf("health(%q): ok", sys)
+func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthyState) {
+	if us == nil {
+		b.logf("health(warnable=%s): ok", w.Code)
 	} else {
-		b.logf("health(%q): error: %v", sys, err)
+		b.logf("health(warnable=%s): error: %s", w.Code, us.Text)
 	}
+
+	// Whenever health changes, send the current health state to the frontend.
+	state := b.health.CurrentState()
+	b.send(ipn.Notify{
+		Health: state,
+	})
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -788,7 +794,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
 			s.ClientVersion = b.lastClientVersion
 		}
-		s.Health = b.health.AppendWarnings(s.Health)
+		s.Health = b.health.Strings()
 		s.HaveNodeKey = b.hasNodeKeyLocked()
 
 		// TODO(bradfitz): move this health check into a health.Warnable
@@ -1870,7 +1876,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
-var warnInvalidUnsignedNodes = health.NewWarnable()
+// invalidPacketFilterWarnable is a Warnable to warn the user that the control server sent an invalid packet filter.
+var invalidPacketFilterWarnable = health.Register(&health.Warnable{
+	Code:     "invalid-packet-filter",
+	Title:    "Invalid packet filter",
+	Severity: health.SeverityHigh,
+	Text:     health.StaticMessage("The coordination server sent an invalid packet filter permitting traffic to unlocked nodes; rejecting all packets for safety"),
+})
 
 // updateFilterLocked updates the packet filter in wgengine based on the
 // given netMap and user preferences.
@@ -1902,11 +1914,10 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		packetFilter = netMap.PacketFilter
 
 		if packetFilterPermitsUnlockedNodes(b.peers, packetFilter) {
-			err := errors.New("server sent invalid packet filter permitting traffic to unlocked nodes; rejecting all packets for safety")
-			b.health.SetWarnable(warnInvalidUnsignedNodes, err)
+			b.health.SetUnhealthy(invalidPacketFilterWarnable, nil)
 			packetFilter = nil
 		} else {
-			b.health.SetWarnable(warnInvalidUnsignedNodes, nil)
+			b.health.SetHealthy(invalidPacketFilterWarnable)
 		}
 	}
 	if prefs.Valid() {
@@ -2308,6 +2319,9 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		}
 		if mask&ipn.NotifyInitialDriveShares != 0 && b.driveSharingEnabledLocked() {
 			ini.DriveShares = b.pm.prefs.DriveShares()
+		}
+		if mask&ipn.NotifyInitialHealthState != 0 {
+			ini.Health = b.HealthTracker().CurrentState()
 		}
 	}
 
@@ -3120,20 +3134,31 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
 }
 
-var warnExitNodeUsage = health.NewWarnable(health.WithConnectivityImpact())
+var exitNodeMisconfigurationWarnable = health.Register(&health.Warnable{
+	Code:     "exit-node-misconfiguration",
+	Title:    "Exit node misconfiguration",
+	Severity: health.SeverityMedium,
+	Text: func(args health.Args) string {
+		return "Exit node misconfiguration: " + args[health.ArgError]
+	},
+})
 
 // updateExitNodeUsageWarning updates a warnable meant to notify users of
 // configuration issues that could break exit node usage.
-func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, health *health.Tracker) {
-	var result error
+func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, healthTracker *health.Tracker) {
+	var msg string
 	if p.ExitNodeIP().IsValid() || p.ExitNodeID() != "" {
 		warn, _ := netutil.CheckReversePathFiltering(state)
 		const comment = "please set rp_filter=2 instead of rp_filter=1; see https://github.com/tailscale/tailscale/issues/3310"
 		if len(warn) > 0 {
-			result = fmt.Errorf("%s: %v, %s", healthmsg.WarnExitNodeUsage, warn, comment)
+			msg = fmt.Sprintf("%s: %v, %s", healthmsg.WarnExitNodeUsage, warn, comment)
 		}
 	}
-	health.SetWarnable(warnExitNodeUsage, result)
+	if len(msg) > 0 {
+		healthTracker.SetUnhealthy(exitNodeMisconfigurationWarnable, health.Args{health.ArgError: msg})
+	} else {
+		healthTracker.SetHealthy(exitNodeMisconfigurationWarnable)
+	}
 }
 
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
@@ -5841,13 +5866,18 @@ func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	return b.sshServer, nil
 }
 
-var warnSSHSELinux = health.NewWarnable()
+var warnSSHSELinuxWarnable = health.Register(&health.Warnable{
+	Code:     "ssh-unavailable-selinux-enabled",
+	Title:    "Tailscale SSH and SELinux",
+	Severity: health.SeverityLow,
+	Text:     health.StaticMessage("SELinux is enabled; Tailscale SSH may not work. See https://tailscale.com/s/ssh-selinux"),
+})
 
 func (b *LocalBackend) updateSELinuxHealthWarning() {
 	if hostinfo.IsSELinuxEnforcing() {
-		b.health.SetWarnable(warnSSHSELinux, errors.New("SELinux is enabled; Tailscale SSH may not work. See https://tailscale.com/s/ssh-selinux"))
+		b.health.SetUnhealthy(warnSSHSELinuxWarnable, nil)
 	} else {
-		b.health.SetWarnable(warnSSHSELinux, nil)
+		b.health.SetHealthy(warnSSHSELinuxWarnable)
 	}
 }
 
