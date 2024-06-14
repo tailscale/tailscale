@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 
 	"tailscale.com/net/stun"
 )
@@ -15,12 +16,20 @@ import (
 func main() {
 	log.SetFlags(0)
 
-	if len(os.Args) != 2 {
-		log.Fatalf("usage: %s <hostname>", os.Args[0])
+	if len(os.Args) < 2 || len(os.Args) > 3 {
+		log.Fatalf("usage: %s <hostname> [port]", os.Args[0])
 	}
 	host := os.Args[1]
+	port := "3478"
+	if len(os.Args) == 3 {
+		port = os.Args[2]
+	}
+	_, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		log.Fatalf("invalid port: %v", err)
+	}
 
-	uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, "3478"))
+	uaddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
 	if err != nil {
 		log.Fatal(err)
 	}
