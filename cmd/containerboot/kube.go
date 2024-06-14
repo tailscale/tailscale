@@ -22,18 +22,6 @@ import (
 // storeDeviceID writes deviceID to 'device_id' data field of the named
 // Kubernetes Secret.
 func storeDeviceID(ctx context.Context, secretName string, deviceID tailcfg.StableNodeID) error {
-	// First check if the Secret exists at all. Even if running on
-	// kubernetes, we don't necessarily store state in a Secret.
-	if _, err := kc.GetSecret(ctx, secretName); err != nil {
-		if s, ok := err.(*kube.Status); ok {
-			if s.Code >= 400 && s.Code <= 499 {
-				// Assume the Secret doesn't exist, or we don't
-				// have permissions to access it.
-				return nil
-			}
-		}
-		return err
-	}
 	s := &kube.Secret{
 		Data: map[string][]byte{
 			"device_id": []byte(deviceID),
@@ -45,18 +33,6 @@ func storeDeviceID(ctx context.Context, secretName string, deviceID tailcfg.Stab
 // storeDeviceEndpoints writes device's tailnet IPs and MagicDNS name to fields
 // 'device_ips', 'device_fqdn' of the named Kubernetes Secret.
 func storeDeviceEndpoints(ctx context.Context, secretName string, fqdn string, addresses []netip.Prefix) error {
-	// First check if the Secret exists at all. Even if running on
-	// kubernetes, we do not necessarily store state in a Secret.
-	if _, err := kc.GetSecret(ctx, secretName); err != nil {
-		if s, ok := err.(*kube.Status); ok {
-			if s.Code >= 400 && s.Code <= 499 {
-				// Assume the Secret doesn't exist, or we don't have
-				// permission to access it.
-				return nil
-			}
-		}
-		return err
-	}
 	var ips []string
 	for _, addr := range addresses {
 		ips = append(ips, addr.Addr().String())

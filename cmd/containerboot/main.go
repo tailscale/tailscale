@@ -354,7 +354,7 @@ authLoop:
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
 	var nfr linuxfw.NetfilterRunner
-	if isTCPProxy(cfg) {
+	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
 		if err != nil {
 			log.Fatalf("error creating new netfilter runner: %v", err)
@@ -575,7 +575,7 @@ runLoop:
 				// For all other containerboot instances, if we
 				// just get to this point the startup tasks can
 				// be considered done.
-				if !isTCPProxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
+				if !isL3Proxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
 					// This log message is used in tests to detect when all
 					// post-auth configuration is done.
 					log.Println("Startup complete, waiting for shutdown signal")
@@ -1321,10 +1321,10 @@ func isOneStepConfig(cfg *settings) bool {
 	return cfg.TailscaledConfigFilePath != ""
 }
 
-// isTCPProxy returns true if the Tailscale node needs to be configured to act
-// as a TCP proxy, proxying to an endpoint provided via one of the config env
+// isL3Proxy returns true if the Tailscale node needs to be configured to act
+// as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
-func isTCPProxy(cfg *settings) bool {
+func isL3Proxy(cfg *settings) bool {
 	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
 }
 
