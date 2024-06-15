@@ -123,6 +123,7 @@ const (
 )
 
 var subsystemsWarnables = map[Subsystem]*Warnable{}
+var subsystemsWarnablesLock sync.Mutex = sync.Mutex{}
 
 const legacyErrorArgKey = "LegacyError"
 
@@ -130,6 +131,9 @@ const legacyErrorArgKey = "LegacyError"
 // *temporarily* while we migrate the old health infrastructure based on
 // Subsystems to the new Warnables architecture.
 func (s Subsystem) Warnable() *Warnable {
+	subsystemsWarnablesLock.Lock()
+	defer subsystemsWarnablesLock.Unlock()
+
 	if w, ok := subsystemsWarnables[s]; ok {
 		return w
 	} else {
