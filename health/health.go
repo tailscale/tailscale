@@ -124,15 +124,8 @@ const (
 
 var subsystemsWarnables = map[Subsystem]*Warnable{}
 
-const legacyErrorArgKey = "LegacyError"
-
-// Warnable() returns a Warnable representing a legacy Subsystem. This is used
-// *temporarily* while we migrate the old health infrastructure based on
-// Subsystems to the new Warnables architecture.
-func (s Subsystem) Warnable() *Warnable {
-	if w, ok := subsystemsWarnables[s]; ok {
-		return w
-	} else {
+func init() {
+	for _, s := range []Subsystem{SysRouter, SysDNS, SysDNSOS, SysDNSManager, SysTKA} {
 		w := Register(&Warnable{
 			Code:     WarnableCode(s),
 			Severity: SeverityMedium,
@@ -141,8 +134,20 @@ func (s Subsystem) Warnable() *Warnable {
 			},
 		})
 		subsystemsWarnables[s] = w
-		return w
 	}
+}
+
+const legacyErrorArgKey = "LegacyError"
+
+// Warnable returns a Warnable representing a legacy Subsystem. This is used
+// temporarily (2024-06-14) while we migrate the old health infrastructure based
+// on Subsystems to the new Warnables architecture.
+func (s Subsystem) Warnable() *Warnable {
+	w, ok := subsystemsWarnables[s]
+	if !ok {
+		panic(fmt.Sprintf("health: no Warnable for Subsystem %q", s))
+	}
+	return w
 }
 
 var registeredWarnables = map[WarnableCode]*Warnable{}
