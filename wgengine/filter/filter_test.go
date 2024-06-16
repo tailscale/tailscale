@@ -5,8 +5,11 @@ package filter
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +25,7 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 // testAllowedProto is an IP protocol number we treat as allowed for
@@ -819,6 +823,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 
 			compareIP := cmp.Comparer(func(a, b netip.Addr) bool { return a == b })
 			compareIPPrefix := cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })
+
 			if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
 				t.Errorf("wrong (-got+want)\n%s", diff)
 			}
@@ -952,5 +957,51 @@ func TestPeerCaps(t *testing.T) {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+var (
+	filterMatchFile = flag.String("filter-match-file", "", "JSON file of []filter.Match to benchmark")
+)
+
+func BenchmarkFilterMatchFile(b *testing.B) {
+	if *filterMatchFile == "" {
+		b.Skip("no --filter-match-file specified; skipping")
+	}
+	benchmarkFile(b, *filterMatchFile)
+}
+
+func BenchmarkFilterMatch(b *testing.B) {
+	b.Run("file1", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json")
+	})
+}
+
+func benchmarkFile(b *testing.B, file string) {
+	var matches []Match
+	bts, err := os.ReadFile(file)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := json.Unmarshal(bts, &matches); err != nil {
+		b.Fatal(err)
+	}
+
+	var localNets netipx.IPSetBuilder
+	localNets.AddPrefix(netip.MustParsePrefix("100.96.14.120/32"))
+	localNets.AddPrefix(netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:6260:e78/32"))
+
+	var logIPs netipx.IPSetBuilder
+	logIPs.AddPrefix(tsaddr.CGNATRange())
+	logIPs.AddPrefix(tsaddr.TailscaleULARange())
+
+	f := New(matches, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, logger.Discard)
+	pkt := parsed(ipproto.TCP, "1.2.3.4", "5.6.7.8", 33123, 443)
+
+	for range b.N {
+		got := f.RunIn(&pkt, 0)
+		if got != Drop {
+			b.Fatalf("got %v; want Drop", got)
+		}
 	}
 }
