@@ -440,10 +440,11 @@ func TestLoggingPrivacy(t *testing.T) {
 	}
 
 	f := newFilter(logf)
-	f.logIPs = tsaddr.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
+	f.logIPs4 = tsaddr.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
 		tsaddr.CGNATRange(),
 		tsaddr.TailscaleULARange(),
 	}))
+	f.logIPs6 = f.logIPs4
 
 	var (
 		ts4       = netip.AddrPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
