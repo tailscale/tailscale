@@ -34,10 +34,11 @@ func (src *Match) Clone() *Match {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MatchCloneNeedsRegeneration = Match(struct {
-	IPProto []ipproto.Proto
-	Srcs    []netip.Prefix
-	Dsts    []NetPortRange
-	Caps    []CapMatch
+	IPProto      []ipproto.Proto
+	Srcs         []netip.Prefix
+	SrcsContains func(netip.Addr) bool
+	Dsts         []NetPortRange
+	Caps         []CapMatch
 }{})
 
 // Clone makes a deep copy of CapMatch.
