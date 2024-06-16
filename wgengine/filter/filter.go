@@ -16,10 +16,12 @@ import (
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 )
 
@@ -30,12 +32,12 @@ type Filter struct {
 	// this node. All packets coming in over tailscale must have a
 	// destination within local, regardless of the policy filter
 	// below.
-	local *netipx.IPSet
+	local func(netip.Addr) bool
 
 	// logIPs is the set of IPs that are allowed to appear in flow
 	// logs. If a packet is to or from an IP not in logIPs, it will
 	// never be logged.
-	logIPs *netipx.IPSet
+	logIPs func(netip.Addr) bool
 
 	// matches4 and matches6 are lists of match->action rules
 	// applied to all packets arriving over tailscale
@@ -172,7 +174,7 @@ func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStat
 // by matches. If shareStateWith is non-nil, the returned filter
 // shares state with the previous one, to enable changing rules at
 // runtime without breaking existing stateful flows.
-func New(matches []Match, localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+func New(matches []Match, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -181,14 +183,22 @@ func New(matches []Match, localNets *netipx.IPSet, logIPs *netipx.IPSet, shareSt
 			lru: &flowtrack.Cache[struct{}]{MaxEntries: lruMax},
 		}
 	}
+
+	containsFunc := func(s *netipx.IPSet) func(netip.Addr) bool {
+		if s == nil {
+			return tsaddr.FalseContainsIPFunc()
+		}
+		return tsaddr.NewContainsIPFunc(views.SliceOf(s.Prefixes()))
+	}
+
 	f := &Filter{
 		logf:     logf,
 		matches4: matchesFamily(matches, netip.Addr.Is4),
 		matches6: matchesFamily(matches, netip.Addr.Is6),
 		cap4:     capMatchesFunc(matches, netip.Addr.Is4),
 		cap6:     capMatchesFunc(matches, netip.Addr.Is6),
-		local:    localNets,
-		logIPs:   logIPs,
+		local:    containsFunc(localNets),
+		logIPs:   containsFunc(logIPs),
 		state:    state,
 	}
 	return f
@@ -206,12 +216,14 @@ func matchesFamily(ms matches, keep func(netip.Addr) bool) matches {
 				retm.Srcs = append(retm.Srcs, src)
 			}
 		}
+
 		for _, dst := range m.Dsts {
 			if keep(dst.Net.Addr()) {
 				retm.Dsts = append(retm.Dsts, dst)
 			}
 		}
 		if len(retm.Srcs) > 0 && len(retm.Dsts) > 0 {
+			retm.SrcsContains = tsaddr.NewContainsIPFunc(views.SliceOf(retm.Srcs))
 			ret = append(ret, retm)
 		}
 	}
@@ -233,6 +245,7 @@ func capMatchesFunc(ms matches, keep func(netip.Addr) bool) matches {
 			}
 		}
 		if len(retm.Srcs) > 0 {
+			retm.SrcsContains = tsaddr.NewContainsIPFunc(views.SliceOf(retm.Srcs))
 			ret = append(ret, retm)
 		}
 	}
@@ -268,7 +281,7 @@ func init() {
 }
 
 func (f *Filter) logRateLimit(runflags RunFlags, q *packet.Parsed, dir direction, r Response, why string) {
-	if !f.loggingAllowed(q) {
+	if runflags == 0 || !f.loggingAllowed(q) {
 		return
 	}
 
@@ -345,7 +358,7 @@ func (f *Filter) CapsWithValues(srcIP, dstIP netip.Addr) tailcfg.PeerCapMap {
 	}
 	var out tailcfg.PeerCapMap
 	for _, m := range mm {
-		if !ipInList(srcIP, m.Srcs) {
+		if !m.SrcsContains(srcIP) {
 			continue
 		}
 		for _, cm := range m.Caps {
@@ -418,7 +431,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local.Contains(q.Dst.Addr()) {
+	if !f.local(q.Dst.Addr()) {
 		return Drop, "destination not allowed"
 	}
 
@@ -478,7 +491,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
 	// prevent that.
-	if !f.local.Contains(q.Dst.Addr()) {
+	if !f.local(q.Dst.Addr()) {
 		return Drop, "destination not allowed"
 	}
 
@@ -604,7 +617,7 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 
 // loggingAllowed reports whether p can appear in logs at all.
 func (f *Filter) loggingAllowed(p *packet.Parsed) bool {
-	return f.logIPs.Contains(p.Src.Addr()) && f.logIPs.Contains(p.Dst.Addr())
+	return f.logIPs(p.Src.Addr()) && f.logIPs(p.Dst.Addr())
 }
 
 // omitDropLogging reports whether packet p, which has already been

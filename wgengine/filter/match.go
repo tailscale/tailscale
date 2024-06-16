@@ -66,10 +66,11 @@ type CapMatch struct {
 // Match matches packets from any IP address in Srcs to any ip:port in
 // Dsts.
 type Match struct {
-	IPProto []ipproto.Proto // required set (no default value at this layer)
-	Srcs    []netip.Prefix
-	Dsts    []NetPortRange // optional, if Srcs match
-	Caps    []CapMatch     // optional, if Srcs match
+	IPProto      []ipproto.Proto // required set (no default value at this layer)
+	Srcs         []netip.Prefix
+	SrcsContains func(netip.Addr) bool `json:"-"` // report whether Addr is in Srcs
+	Dsts         []NetPortRange        // optional, if Srcs match
+	Caps         []CapMatch            // optional, if Srcs match
 }
 
 func (m Match) String() string {
@@ -104,7 +105,7 @@ func (ms matches) match(q *packet.Parsed) bool {
 		if !slices.Contains(m.IPProto, q.IPProto) {
 			continue
 		}
-		if !ipInList(q.Src.Addr(), m.Srcs) {
+		if !m.SrcsContains(q.Src.Addr()) {
 			continue
 		}
 		for _, dst := range m.Dsts {
@@ -122,7 +123,7 @@ func (ms matches) match(q *packet.Parsed) bool {
 
 func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !ipInList(q.Src.Addr(), m.Srcs) {
+		if !m.SrcsContains(q.Src.Addr()) {
 			continue
 		}
 		for _, dst := range m.Dsts {
@@ -142,7 +143,7 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 		if !slices.Contains(m.IPProto, q.IPProto) {
 			continue
 		}
-		if !ipInList(q.Src.Addr(), m.Srcs) {
+		if !m.SrcsContains(q.Src.Addr()) {
 			continue
 		}
 		for _, dst := range m.Dsts {
@@ -152,15 +153,6 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 			if dst.Net.Contains(q.Dst.Addr()) {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func ipInList(ip netip.Addr, netlist []netip.Prefix) bool {
-	for _, net := range netlist {
-		if net.Contains(ip) {
-			return true
 		}
 	}
 	return false

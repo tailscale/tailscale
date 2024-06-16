@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/net/packet"
@@ -25,6 +26,7 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 )
 
@@ -40,9 +42,10 @@ func m(srcs []netip.Prefix, dsts []NetPortRange, protos ...ipproto.Proto) Match 
 		protos = defaultProtos
 	}
 	return Match{
-		IPProto: protos,
-		Srcs:    srcs,
-		Dsts:    dsts,
+		IPProto:      protos,
+		Srcs:         srcs,
+		SrcsContains: tsaddr.NewContainsIPFunc(views.SliceOf(srcs)),
+		Dsts:         dsts,
 	}
 }
 
@@ -436,11 +439,11 @@ func TestLoggingPrivacy(t *testing.T) {
 		logged = true
 	}
 
-	var logB netipx.IPSetBuilder
-	logB.AddPrefix(netip.MustParsePrefix("100.64.0.0/10"))
-	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
-	f.logIPs, _ = logB.IPSet()
+	f.logIPs = tsaddr.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
+		tsaddr.CGNATRange(),
+		tsaddr.TailscaleULARange(),
+	}))
 
 	var (
 		ts4       = netip.AddrPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
@@ -820,11 +823,12 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			compareIP := cmp.Comparer(func(a, b netip.Addr) bool { return a == b })
-			compareIPPrefix := cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })
-
-			if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
+			cmpOpts := []cmp.Option{
+				cmp.Comparer(func(a, b netip.Addr) bool { return a == b }),
+				cmp.Comparer(func(a, b netip.Prefix) bool { return a == b }),
+				cmpopts.IgnoreFields(Match{}, ".SrcsContains"),
+			}
+			if diff := cmp.Diff(got, tt.want, cmpOpts...); diff != "" {
 				t.Errorf("wrong (-got+want)\n%s", diff)
 			}
 		})
