@@ -972,16 +972,30 @@ func BenchmarkFilterMatchFile(b *testing.B) {
 	if *filterMatchFile == "" {
 		b.Skip("no --filter-match-file specified; skipping")
 	}
-	benchmarkFile(b, *filterMatchFile)
+	benchmarkFile(b, *filterMatchFile, benchOpt{v4: true, validLocalDst: true})
 }
 
 func BenchmarkFilterMatch(b *testing.B) {
-	b.Run("file1", func(b *testing.B) {
-		benchmarkFile(b, "testdata/matches-1.json")
+	b.Run("not-local-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: true, validLocalDst: false})
+	})
+	b.Run("not-local-v6", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: false})
+	})
+	b.Run("no-match-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: true, validLocalDst: true})
+	})
+	b.Run("no-match-v6", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: true})
 	})
 }
 
-func benchmarkFile(b *testing.B, file string) {
+type benchOpt struct {
+	v4            bool
+	validLocalDst bool
+}
+
+func benchmarkFile(b *testing.B, file string, opt benchOpt) {
 	var matches []Match
 	bts, err := os.ReadFile(file)
 	if err != nil {
@@ -992,15 +1006,32 @@ func benchmarkFile(b *testing.B, file string) {
 	}
 
 	var localNets netipx.IPSetBuilder
-	localNets.AddPrefix(netip.MustParsePrefix("100.96.14.120/32"))
-	localNets.AddPrefix(netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:6260:e78/32"))
+	pfx := []netip.Prefix{
+		netip.MustParsePrefix("100.96.14.120/32"),
+		netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:6260:e78/32"),
+	}
+	for _, p := range pfx {
+		localNets.AddPrefix(p)
+	}
 
 	var logIPs netipx.IPSetBuilder
 	logIPs.AddPrefix(tsaddr.CGNATRange())
 	logIPs.AddPrefix(tsaddr.TailscaleULARange())
 
 	f := New(matches, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, logger.Discard)
-	pkt := parsed(ipproto.TCP, "1.2.3.4", "5.6.7.8", 33123, 443)
+	var srcIP string
+	var dstIP netip.Addr
+	if opt.v4 {
+		srcIP = "1.2.3.4"
+		dstIP = pfx[0].Addr()
+	} else {
+		srcIP = "2012::3456"
+		dstIP = pfx[1].Addr()
+	}
+	if !opt.validLocalDst {
+		dstIP = dstIP.Next() // to make it not in localNets
+	}
+	pkt := parsed(ipproto.TCP, srcIP, dstIP.String(), 33123, 443)
 
 	for range b.N {
 		got := f.RunIn(&pkt, 0)
