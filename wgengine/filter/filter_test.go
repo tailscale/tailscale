@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -999,6 +1000,15 @@ func BenchmarkFilterMatch(b *testing.B) {
 			wantAccept:    true,
 		})
 	})
+	b.Run("udp-existing-flow-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			udp:           true,
+			udpOpen:       true,
+			wantAccept:    true,
+		})
+	})
 	b.Run("tcp-not-syn-v4-no-logs", func(b *testing.B) {
 		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
 			v4:            true,
@@ -1016,6 +1026,7 @@ type benchOpt struct {
 	tcpNotSYN     bool
 	noLogs        bool
 	wantAccept    bool
+	udp, udpOpen  bool
 }
 
 func benchmarkFile(b *testing.B, file string, opt benchOpt) {
@@ -1042,21 +1053,36 @@ func benchmarkFile(b *testing.B, file string, opt benchOpt) {
 	logIPs.AddPrefix(tsaddr.TailscaleULARange())
 
 	f := New(matches, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, logger.Discard)
-	var srcIP string
-	var dstIP netip.Addr
+	var srcIP, dstIP netip.Addr
 	if opt.v4 {
-		srcIP = "1.2.3.4"
+		srcIP = netip.MustParseAddr("1.2.3.4")
 		dstIP = pfx[0].Addr()
 	} else {
-		srcIP = "2012::3456"
+		srcIP = netip.MustParseAddr("2012::3456")
 		dstIP = pfx[1].Addr()
 	}
 	if !opt.validLocalDst {
 		dstIP = dstIP.Next() // to make it not in localNets
 	}
-	pkt := parsed(ipproto.TCP, srcIP, dstIP.String(), 33123, 443)
+	proto := ipproto.TCP
+	if opt.udp {
+		proto = ipproto.UDP
+	}
+	const sport = 33123
+	const dport = 443
+	pkt := parsed(proto, srcIP.String(), dstIP.String(), sport, dport)
 	if opt.tcpNotSYN {
 		pkt.TCPFlags = packet.TCPPsh // anything that's not SYN
+	}
+	if opt.udpOpen {
+		tuple := flowtrack.Tuple{
+			Proto: proto,
+			Src:   netip.AddrPortFrom(srcIP, sport),
+			Dst:   netip.AddrPortFrom(dstIP, dport),
+		}
+		f.state.mu.Lock()
+		f.state.lru.Add(tuple, struct{}{})
+		f.state.mu.Unlock()
 	}
 
 	want := Drop
