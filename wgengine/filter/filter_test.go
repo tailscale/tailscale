@@ -988,11 +988,31 @@ func BenchmarkFilterMatch(b *testing.B) {
 	b.Run("no-match-v6", func(b *testing.B) {
 		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: true})
 	})
+	b.Run("tcp-not-syn-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			tcpNotSYN:     true,
+			wantAccept:    true,
+		})
+	})
+	b.Run("tcp-not-syn-v4-no-logs", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			tcpNotSYN:     true,
+			wantAccept:    true,
+			noLogs:        true,
+		})
+	})
 }
 
 type benchOpt struct {
 	v4            bool
 	validLocalDst bool
+	tcpNotSYN     bool
+	noLogs        bool
+	wantAccept    bool
 }
 
 func benchmarkFile(b *testing.B, file string, opt benchOpt) {
@@ -1032,11 +1052,23 @@ func benchmarkFile(b *testing.B, file string, opt benchOpt) {
 		dstIP = dstIP.Next() // to make it not in localNets
 	}
 	pkt := parsed(ipproto.TCP, srcIP, dstIP.String(), 33123, 443)
+	if opt.tcpNotSYN {
+		pkt.TCPFlags = packet.TCPPsh // anything that's not SYN
+	}
+
+	want := Drop
+	if opt.wantAccept {
+		want = Accept
+	}
+	runFlags := LogDrops | LogAccepts
+	if opt.noLogs {
+		runFlags = 0
+	}
 
 	for range b.N {
-		got := f.RunIn(&pkt, 0)
-		if got != Drop {
-			b.Fatalf("got %v; want Drop", got)
+		got := f.RunIn(&pkt, runFlags)
+		if got != want {
+			b.Fatalf("got %v; want %v", got, want)
 		}
 	}
 }
