@@ -14,9 +14,9 @@ import (
 	"go4.org/netipx"
 	"tailscale.com/envknob"
 	"tailscale.com/net/flowtrack"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
@@ -24,6 +24,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/wgengine/filter/filtertype"
 )
 
 // Filter is a stateful packet filter.
@@ -110,6 +111,13 @@ const (
 	HexdumpAccepts                      // print packet hexdump when logging accepts
 )
 
+type (
+	Match        = filtertype.Match
+	NetPortRange = filtertype.NetPortRange
+	PortRange    = filtertype.PortRange
+	CapMatch     = filtertype.CapMatch
+)
+
 // NewAllowAllForTest returns a packet filter that accepts
 // everything. Use in tests only, as it permits some kinds of spoofing
 // attacks to reach the OS network stack.
@@ -192,23 +200,23 @@ func New(matches []Match, localNets, logIPs *netipx.IPSet, shareStateWith *Filte
 		matches6: matchesFamily(matches, netip.Addr.Is6),
 		cap4:     capMatchesFunc(matches, netip.Addr.Is4),
 		cap6:     capMatchesFunc(matches, netip.Addr.Is6),
-		local4:   tsaddr.FalseContainsIPFunc(),
-		local6:   tsaddr.FalseContainsIPFunc(),
-		logIPs4:  tsaddr.FalseContainsIPFunc(),
-		logIPs6:  tsaddr.FalseContainsIPFunc(),
+		local4:   ipset.FalseContainsIPFunc(),
+		local6:   ipset.FalseContainsIPFunc(),
+		logIPs4:  ipset.FalseContainsIPFunc(),
+		logIPs6:  ipset.FalseContainsIPFunc(),
 		state:    state,
 	}
 	if localNets != nil {
 		p := localNets.Prefixes()
 		p4, p6 := slicesx.Partition(p, func(p netip.Prefix) bool { return p.Addr().Is4() })
-		f.local4 = tsaddr.NewContainsIPFunc(views.SliceOf(p4))
-		f.local6 = tsaddr.NewContainsIPFunc(views.SliceOf(p6))
+		f.local4 = ipset.NewContainsIPFunc(views.SliceOf(p4))
+		f.local6 = ipset.NewContainsIPFunc(views.SliceOf(p6))
 	}
 	if logIPs != nil {
 		p := logIPs.Prefixes()
 		p4, p6 := slicesx.Partition(p, func(p netip.Prefix) bool { return p.Addr().Is4() })
-		f.logIPs4 = tsaddr.NewContainsIPFunc(views.SliceOf(p4))
-		f.logIPs6 = tsaddr.NewContainsIPFunc(views.SliceOf(p6))
+		f.logIPs4 = ipset.NewContainsIPFunc(views.SliceOf(p4))
+		f.logIPs6 = ipset.NewContainsIPFunc(views.SliceOf(p6))
 	}
 
 	return f
@@ -233,7 +241,7 @@ func matchesFamily(ms matches, keep func(netip.Addr) bool) matches {
 			}
 		}
 		if len(retm.Srcs) > 0 && len(retm.Dsts) > 0 {
-			retm.SrcsContains = tsaddr.NewContainsIPFunc(views.SliceOf(retm.Srcs))
+			retm.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(retm.Srcs))
 			ret = append(ret, retm)
 		}
 	}
@@ -255,7 +263,7 @@ func capMatchesFunc(ms matches, keep func(netip.Addr) bool) matches {
 			}
 		}
 		if len(retm.Srcs) > 0 {
-			retm.SrcsContains = tsaddr.NewContainsIPFunc(views.SliceOf(retm.Srcs))
+			retm.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(retm.Srcs))
 			ret = append(ret, retm)
 		}
 	}

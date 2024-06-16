@@ -18,7 +18,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
 	"tailscale.com/util/set"
-	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/filter/filtertype"
 )
 
 // NetworkMap is the current state of the world.
@@ -40,7 +40,7 @@ type NetworkMap struct {
 	Peers []tailcfg.NodeView // sorted by Node.ID
 	DNS   tailcfg.DNSConfig
 
-	PacketFilter      []filter.Match
+	PacketFilter      []filtertype.Match
 	PacketFilterRules views.Slice[tailcfg.FilterRule]
 	SSHPolicy         *tailcfg.SSHPolicy // or nil, if not enabled/allowed
 
