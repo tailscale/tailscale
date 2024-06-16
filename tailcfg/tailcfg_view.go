@@ -168,10 +168,8 @@ func (v NodeView) Online() *bool {
 func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
 func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
 
-func (v NodeView) CapMap() views.MapFn[NodeCapability, []RawMessage, views.Slice[RawMessage]] {
-	return views.MapFnOf(v.ж.CapMap, func(t []RawMessage) views.Slice[RawMessage] {
-		return views.SliceOf(t)
-	})
+func (v NodeView) CapMap() views.MapSlice[NodeCapability, RawMessage] {
+	return views.MapSliceOf(v.ж.CapMap)
 }
 func (v NodeView) UnsignedPeerAPIOnly() bool    { return v.ж.UnsignedPeerAPIOnly }
 func (v NodeView) ComputedName() string         { return v.ж.ComputedName }
