@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -28,6 +29,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/must"
+	"tailscale.com/wgengine/filter/filtertype"
 )
 
 // testAllowedProto is an IP protocol number we treat as allowed for
@@ -44,7 +46,7 @@ func m(srcs []netip.Prefix, dsts []NetPortRange, protos ...ipproto.Proto) Match 
 	return Match{
 		IPProto:      protos,
 		Srcs:         srcs,
-		SrcsContains: tsaddr.NewContainsIPFunc(views.SliceOf(srcs)),
+		SrcsContains: ipset.NewContainsIPFunc(views.SliceOf(srcs)),
 		Dsts:         dsts,
 	}
 }
@@ -440,7 +442,7 @@ func TestLoggingPrivacy(t *testing.T) {
 	}
 
 	f := newFilter(logf)
-	f.logIPs4 = tsaddr.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
+	f.logIPs4 = ipset.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
 		tsaddr.CGNATRange(),
 		tsaddr.TailscaleULARange(),
 	}))
@@ -702,7 +704,7 @@ func nets(nets ...string) (ret []netip.Prefix) {
 
 func ports(s string) PortRange {
 	if s == "*" {
-		return allPorts
+		return filtertype.AllPorts
 	}
 
 	var fs, ls string

@@ -61,6 +61,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
@@ -2761,13 +2762,13 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.setExposeRemoteWebClientAtomicBoolLocked(p)
 
 	if !p.Valid() {
-		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
+		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
-		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(views.SliceOf(filtered)))
+		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
