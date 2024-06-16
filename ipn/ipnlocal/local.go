@@ -6565,7 +6565,7 @@ func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSug
 		if allowList != nil && !allowList.Contains(peer.StableID()) {
 			continue
 		}
-		if peer.CapMap().Has(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
+		if peer.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode) && tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
 			candidates = append(candidates, peer)
 		}
 	}
