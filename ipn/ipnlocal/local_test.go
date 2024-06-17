@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
@@ -1647,16 +1648,17 @@ func (h *mockSyspolicyHandler) ReadStringArray(key string) ([]string, error) {
 func TestSetExitNodeIDPolicy(t *testing.T) {
 	pfx := netip.MustParsePrefix
 	tests := []struct {
-		name           string
-		exitNodeIPKey  bool
-		exitNodeIDKey  bool
-		exitNodeID     string
-		exitNodeIP     string
-		prefs          *ipn.Prefs
-		exitNodeIPWant string
-		exitNodeIDWant string
-		prefsChanged   bool
-		nm             *netmap.NetworkMap
+		name                  string
+		exitNodeIPKey         bool
+		exitNodeIDKey         bool
+		exitNodeID            string
+		exitNodeIP            string
+		prefs                 *ipn.Prefs
+		exitNodeIPWant        string
+		exitNodeIDWant        string
+		prefsChanged          bool
+		nm                    *netmap.NetworkMap
+		lastSuggestedExitNode tailcfg.StableNodeID
 	}{
 		{
 			name:           "ExitNodeID key is set",
@@ -1835,6 +1837,21 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:                  "ExitNodeID key is set to auto and last suggested exit node is populated",
+			exitNodeIDKey:         true,
+			exitNodeID:            "auto:any",
+			lastSuggestedExitNode: "123",
+			exitNodeIDWant:        "123",
+			prefsChanged:          true,
+		},
+		{
+			name:           "ExitNodeID key is set to auto and last suggested exit node is not populated",
+			exitNodeIDKey:  true,
+			exitNodeID:     "auto:any",
+			prefsChanged:   true,
+			exitNodeIDWant: "auto:any",
+		},
 	}
 
 	for _, test := range tests {
@@ -1864,7 +1881,8 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 			pm.prefs = test.prefs.View()
 			b.netMap = test.nm
 			b.pm = pm
-			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm)
+			b.lastSuggestedExitNode = test.lastSuggestedExitNode
+			changed := setExitNodeID(b.pm.prefs.AsStruct(), test.nm, tailcfg.StableNodeID(test.lastSuggestedExitNode))
 			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
 
 			if got := b.pm.prefs.ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
@@ -1882,6 +1900,222 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 		})
+	}
+}
+
+func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
+	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes())
+	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes())
+	derpMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t1",
+						RegionID: 1,
+					},
+				},
+			},
+			2: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t2",
+						RegionID: 2,
+					},
+				},
+			},
+		},
+	}
+	report := &netcheck.Report{
+		RegionLatency: map[int]time.Duration{
+			1: 10 * time.Millisecond,
+			2: 5 * time.Millisecond,
+			3: 30 * time.Millisecond,
+		},
+		PreferredDERP: 2,
+	}
+	tests := []struct {
+		name                      string
+		lastSuggestedExitNode     tailcfg.StableNodeID
+		netmap                    *netmap.NetworkMap
+		muts                      []*tailcfg.PeerChange
+		exitNodeIDWant            tailcfg.StableNodeID
+		updateNetmapDeltaResponse bool
+		report                    *netcheck.Report
+	}{
+		{
+			name:                  "selected auto exit node goes offline",
+			lastSuggestedExitNode: peer1.StableID(),
+			netmap: &netmap.NetworkMap{
+				Peers: []tailcfg.NodeView{
+					peer1,
+					peer2,
+				},
+				DERPMap: derpMap,
+			},
+			muts: []*tailcfg.PeerChange{
+				{
+					NodeID: 1,
+					Online: ptr.To(false),
+				},
+				{
+					NodeID: 2,
+					Online: ptr.To(true),
+				},
+			},
+			exitNodeIDWant:            peer2.StableID(),
+			updateNetmapDeltaResponse: false,
+			report:                    report,
+		},
+		{
+			name:                  "other exit node goes offline doesn't change selected auto exit node that's still online",
+			lastSuggestedExitNode: peer2.StableID(),
+			netmap: &netmap.NetworkMap{
+				Peers: []tailcfg.NodeView{
+					peer1,
+					peer2,
+				},
+				DERPMap: derpMap,
+			},
+			muts: []*tailcfg.PeerChange{
+				{
+					NodeID: 1,
+					Online: ptr.To(false),
+				},
+				{
+					NodeID: 2,
+					Online: ptr.To(true),
+				},
+			},
+			exitNodeIDWant:            peer2.StableID(),
+			updateNetmapDeltaResponse: true,
+			report:                    report,
+		},
+	}
+	msh := &mockSyspolicyHandler{
+		t: t,
+		stringPolicies: map[syspolicy.Key]*string{
+			syspolicy.ExitNodeID: ptr.To("auto:any"),
+		},
+	}
+	syspolicy.SetHandlerForTest(t, msh)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			b.netMap = tt.netmap
+			b.updatePeersFromNetmapLocked(b.netMap)
+			b.lastSuggestedExitNode = tt.lastSuggestedExitNode
+			b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, tt.report)
+			b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+			someTime := time.Unix(123, 0)
+			muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+				PeersChangedPatch: tt.muts,
+			}, someTime)
+			if !ok {
+				t.Fatal("netmap.MutationsFromMapResponse failed")
+			}
+			if b.pm.prefs.ExitNodeID() != tt.lastSuggestedExitNode {
+				t.Fatalf("did not set exit node ID to last suggested exit node despite auto policy")
+			}
+
+			got := b.UpdateNetmapDelta(muts)
+			if got != tt.updateNetmapDeltaResponse {
+				t.Fatalf("got %v expected %v from UpdateNetmapDelta", got, tt.updateNetmapDeltaResponse)
+			}
+			if b.pm.prefs.ExitNodeID() != tt.exitNodeIDWant {
+				t.Fatalf("did not get expected exit node id after UpdateNetmapDelta")
+			}
+		})
+	}
+}
+
+func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
+	b := newTestLocalBackend(t)
+	hi := hostinfo.New()
+	ni := tailcfg.NetInfo{LinkType: "wired"}
+	hi.NetInfo = &ni
+	b.hostinfo = hi
+	k := key.NewMachine()
+	var cc *mockControl
+	opts := controlclient.Options{
+		ServerURL: "https://example.com",
+		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
+			return k, nil
+		},
+		Dialer: tsdial.NewDialer(netmon.NewStatic()),
+		Logf:   b.logf,
+	}
+	cc = newClient(t, opts)
+	b.cc = cc
+	msh := &mockSyspolicyHandler{
+		t: t,
+		stringPolicies: map[syspolicy.Key]*string{
+			syspolicy.ExitNodeID: ptr.To("auto:any"),
+		},
+	}
+	syspolicy.SetHandlerForTest(t, msh)
+	peer1 := makePeer(1, withCap(26), withDERP(3), withSuggest(), withExitRoutes())
+	peer2 := makePeer(2, withCap(26), withDERP(2), withSuggest(), withExitRoutes())
+	selfNode := tailcfg.Node{
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.1.1/32"),
+			netip.MustParsePrefix("fe70::1/128"),
+		},
+		DERP: "127.3.3.40:2",
+	}
+	defaultDERPMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t1",
+						RegionID: 1,
+					},
+				},
+			},
+			2: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t2",
+						RegionID: 2,
+					},
+				},
+			},
+			3: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t3",
+						RegionID: 3,
+					},
+				},
+			},
+		},
+	}
+	b.netMap = &netmap.NetworkMap{
+		SelfNode: selfNode.View(),
+		Peers: []tailcfg.NodeView{
+			peer1,
+			peer2,
+		},
+		DERPMap: defaultDERPMap,
+	}
+	b.lastSuggestedExitNode = peer1.StableID()
+	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+	if eid := b.Prefs().ExitNodeID(); eid != peer1.StableID() {
+		t.Errorf("got initial exit node %v, want %v", eid, peer1.StableID())
+	}
+	b.refreshAutoExitNode = true
+	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, &netcheck.Report{
+		RegionLatency: map[int]time.Duration{
+			1: 10 * time.Millisecond,
+			2: 5 * time.Millisecond,
+			3: 30 * time.Millisecond,
+		},
+		PreferredDERP: 2,
+	})
+	b.setNetInfo(&ni)
+	if eid := b.Prefs().ExitNodeID(); eid != peer2.StableID() {
+		t.Errorf("got final exit node %v, want %v", eid, peer2.StableID())
 	}
 }
 
@@ -2796,6 +3030,12 @@ func withSuggest() peerOptFunc {
 	}
 }
 
+func withCap(version tailcfg.CapabilityVersion) peerOptFunc {
+	return func(n *tailcfg.Node) {
+		n.Cap = version
+	}
+}
+
 func deterministicRegionForTest(t testing.TB, want views.Slice[int], use int) selectRegionFunc {
 	t.Helper()
 
@@ -3468,6 +3708,55 @@ func TestMinLatencyDERPregion(t *testing.T) {
 			got := minLatencyDERPRegion(tt.regions, tt.report)
 			if got != tt.wantRegion {
 				t.Errorf("got region %v want region %v", got, tt.wantRegion)
+			}
+		})
+	}
+}
+
+func TestShouldAutoExitNode(t *testing.T) {
+	tests := []struct {
+		name                  string
+		exitNodeIDPolicyValue string
+		expectedBool          bool
+	}{
+		{
+			name:                  "auto:any",
+			exitNodeIDPolicyValue: "auto:any",
+			expectedBool:          true,
+		},
+		{
+			name:                  "no auto prefix",
+			exitNodeIDPolicyValue: "foo",
+			expectedBool:          false,
+		},
+		{
+			name:                  "auto prefix but empty suffix",
+			exitNodeIDPolicyValue: "auto:",
+			expectedBool:          false,
+		},
+		{
+			name:                  "auto prefix no colon",
+			exitNodeIDPolicyValue: "auto",
+			expectedBool:          false,
+		},
+		{
+			name:                  "auto prefix invalid suffix",
+			exitNodeIDPolicyValue: "auto:foo",
+			expectedBool:          false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msh := &mockSyspolicyHandler{
+				t: t,
+				stringPolicies: map[syspolicy.Key]*string{
+					syspolicy.ExitNodeID: ptr.To(tt.exitNodeIDPolicyValue),
+				},
+			}
+			syspolicy.SetHandlerForTest(t, msh)
+			got := shouldAutoExitNode()
+			if got != tt.expectedBool {
+				t.Fatalf("expected %v got %v for %v policy value", tt.expectedBool, got, tt.exitNodeIDPolicyValue)
 			}
 		})
 	}
