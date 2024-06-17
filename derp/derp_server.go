@@ -1955,10 +1955,35 @@ func (s *Server) ConsistencyCheck() error {
 			s.curClients.Value(),
 			len(s.clients)))
 	}
+
+	if s.verifyClientsLocalTailscaled {
+		if err := s.checkVerifyClientsLocalTailscaled(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}
 	return errors.New(strings.Join(errs, ", "))
+}
+
+// checkVerifyClientsLocalTailscaled checks that a verifyClients call can be made successfully for the derper hosts own node key.
+func (s *Server) checkVerifyClientsLocalTailscaled() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	status, err := localClient.StatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("localClient.Status: %w", err)
+	}
+	info := &clientInfo{
+		IsProber: true,
+	}
+	clientIP := netip.IPv6Loopback()
+	if err := s.verifyClient(ctx, status.Self.PublicKey, info, clientIP); err != nil {
+		return fmt.Errorf("verifyClient for self nodekey: %w", err)
+	}
+	return nil
 }
 
 const minTimeBetweenLogs = 2 * time.Second
