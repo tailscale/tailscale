@@ -176,3 +176,38 @@ func TestRegisterWarnablePanicsWithDuplicate(t *testing.T) {
 	}()
 	Register(w)
 }
+
+// TestCheckDependsOnAppearsInUnhealthyState asserts that the DependsOn field in the UnhealthyState
+// is populated with the WarnableCode(s) of the Warnable(s) that a warning depends on.
+func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
+	ht := Tracker{}
+	w1 := Register(&Warnable{
+		Code:      "w1",
+		Text:      StaticMessage("W1 Text"),
+		DependsOn: []*Warnable{},
+	})
+	defer unregister(w1)
+	w2 := Register(&Warnable{
+		Code:      "w2",
+		Text:      StaticMessage("W2 Text"),
+		DependsOn: []*Warnable{w1},
+	})
+	defer unregister(w2)
+
+	ht.SetUnhealthy(w1, Args{ArgError: "w1 is unhealthy"})
+	us1, ok := ht.CurrentState().Warnings[w1.Code]
+	if !ok {
+		t.Fatalf("Expected an UnhealthyState for w1, got nothing")
+	}
+	if len(us1.DependsOn) != 0 {
+		t.Fatalf("Expected no DependsOn in the unhealthy state, got: %v", us1.DependsOn)
+	}
+	ht.SetUnhealthy(w2, Args{ArgError: "w2 is also unhealthy now"})
+	us2, ok := ht.CurrentState().Warnings[w2.Code]
+	if !ok {
+		t.Fatalf("Expected an UnhealthyState for w2, got nothing")
+	}
+	if !reflect.DeepEqual(us2.DependsOn, []WarnableCode{w1.Code}) {
+		t.Fatalf("Expected DependsOn = [w1.Code] in the unhealthy state, got: %v", us2.DependsOn)
+	}
+}

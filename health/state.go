@@ -27,8 +27,9 @@ type UnhealthyState struct {
 	Severity     Severity
 	Title        string
 	Text         string
-	BrokenSince  *time.Time `json:",omitempty"`
-	Args         Args       `json:",omitempty"`
+	BrokenSince  *time.Time     `json:",omitempty"`
+	Args         Args           `json:",omitempty"`
+	DependsOn    []WarnableCode `json:",omitempty"`
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -40,6 +41,11 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 		text = w.Text(Args{})
 	}
 
+	dependsOnWarnableCodes := make([]WarnableCode, len(w.DependsOn))
+	for i, d := range w.DependsOn {
+		dependsOnWarnableCodes[i] = d.Code
+	}
+
 	return &UnhealthyState{
 		WarnableCode: w.Code,
 		Severity:     w.Severity,
@@ -47,6 +53,7 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 		Text:         text,
 		BrokenSince:  &ws.BrokenSince,
 		Args:         ws.Args,
+		DependsOn:    dependsOnWarnableCodes,
 	}
 }
 
