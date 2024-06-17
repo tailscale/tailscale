@@ -14,13 +14,11 @@ import (
 	"io"
 	"log"
 	"maps"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,6 +26,7 @@ import (
 	"github.com/tcnksm/go-httpstat"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
+	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -847,11 +846,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 
 		tmr := time.AfterFunc(c.captivePortalDelay(), func() {
 			defer close(ch)
-			found, err := c.checkCaptivePortal(ctx, dm, preferredDERP)
-			if err != nil {
-				c.logf("[v1] checkCaptivePortal: %v", err)
-				return
-			}
+			d := captivedetection.NewDetector(c.logf)
+			found := d.Detect(ctx, c.NetMon, dm, preferredDERP)
 			rs.report.CaptivePortal.Set(found)
 		})
 
@@ -986,75 +982,6 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	c.logConciseReport(report, dm)
 
 	return report
-}
-
-var noRedirectClient = &http.Client{
-	// No redirects allowed
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
-
-	// Remaining fields are the same as the default client.
-	Transport: http.DefaultClient.Transport,
-	Jar:       http.DefaultClient.Jar,
-	Timeout:   http.DefaultClient.Timeout,
-}
-
-// checkCaptivePortal reports whether or not we think the system is behind a
-// captive portal, detected by making a request to a URL that we know should
-// return a "204 No Content" response and checking if that's what we get.
-//
-// The boolean return is whether we think we have a captive portal.
-func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, preferredDERP int) (bool, error) {
-	defer noRedirectClient.CloseIdleConnections()
-
-	// If we have a preferred DERP region with more than one node, try
-	// that; otherwise, pick a random one not marked as "Avoid".
-	if preferredDERP == 0 || dm.Regions[preferredDERP] == nil ||
-		(preferredDERP != 0 && len(dm.Regions[preferredDERP].Nodes) == 0) {
-		rids := make([]int, 0, len(dm.Regions))
-		for id, reg := range dm.Regions {
-			if reg == nil || reg.Avoid || len(reg.Nodes) == 0 {
-				continue
-			}
-			rids = append(rids, id)
-		}
-		if len(rids) == 0 {
-			return false, nil
-		}
-		preferredDERP = rids[rand.IntN(len(rids))]
-	}
-
-	node := dm.Regions[preferredDERP].Nodes[0]
-
-	if strings.HasSuffix(node.HostName, tailcfg.DotInvalid) {
-		// Don't try to connect to invalid hostnames. This occurred in tests:
-		// https://github.com/tailscale/tailscale/issues/6207
-		// TODO(bradfitz,andrew-d): how to actually handle this nicely?
-		return false, nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+node.HostName+"/generate_204", nil)
-	if err != nil {
-		return false, err
-	}
-
-	// Note: the set of valid characters in a challenge and the total
-	// length is limited; see isChallengeChar in cmd/derper for more
-	// details.
-	chal := "ts_" + node.HostName
-	req.Header.Set("X-Tailscale-Challenge", chal)
-	r, err := noRedirectClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer r.Body.Close()
-
-	expectedResponse := "response " + chal
-	validResponse := r.Header.Get("X-Tailscale-Response") == expectedResponse
-
-	c.logf("[v2] checkCaptivePortal url=%q status_code=%d valid_response=%v", req.URL.String(), r.StatusCode, validResponse)
-	return r.StatusCode != 204 || !validResponse, nil
 }
 
 // runHTTPOnlyChecks is the netcheck done by environments that can

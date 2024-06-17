@@ -99,6 +99,10 @@ type Knobs struct {
 	// DisableCryptorouting indicates that the node should not use the
 	// magicsock crypto routing feature.
 	DisableCryptorouting atomic.Bool
+
+	// DisableCaptivePortalDetection is whether the node should not perform captive portal detection
+	// automatically when the network state changes.
+	DisableCaptivePortalDetection atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -127,6 +131,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableSplitDNSWhenNoCustomResolvers = has(tailcfg.NodeAttrDisableSplitDNSWhenNoCustomResolvers)
 		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
 		disableCryptorouting                 = has(tailcfg.NodeAttrDisableMagicSockCryptoRouting)
+		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -153,6 +158,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableSplitDNSWhenNoCustomResolvers.Store(disableSplitDNSWhenNoCustomResolvers)
 	k.DisableLocalDNSOverrideViaNRPT.Store(disableLocalDNSOverrideViaNRPT)
 	k.DisableCryptorouting.Store(disableCryptorouting)
+	k.DisableCaptivePortalDetection.Store(disableCaptivePortalDetection)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -180,5 +186,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"DisableSplitDNSWhenNoCustomResolvers": k.DisableSplitDNSWhenNoCustomResolvers.Load(),
 		"DisableLocalDNSOverrideViaNRPT":       k.DisableLocalDNSOverrideViaNRPT.Load(),
 		"DisableCryptorouting":                 k.DisableCryptorouting.Load(),
+		"DisableCaptivePortalDetection":        k.DisableCaptivePortalDetection.Load(),
 	}
 }

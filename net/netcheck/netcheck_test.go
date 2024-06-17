@@ -15,14 +15,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
 	"tailscale.com/tstest/nettest"
 )
 
@@ -775,54 +773,6 @@ func TestSortRegions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v; want %v", got, want)
-	}
-}
-
-func TestNoCaptivePortalWhenUDP(t *testing.T) {
-	nettest.SkipIfNoNetwork(t) // empirically. not sure why.
-
-	// Override noRedirectClient to handle the /generate_204 endpoint
-	var generate204Called atomic.Bool
-	tr := RoundTripFunc(func(req *http.Request) *http.Response {
-		if !strings.HasSuffix(req.URL.String(), "/generate_204") {
-			panic("bad URL: " + req.URL.String())
-		}
-		generate204Called.Store(true)
-		return &http.Response{
-			StatusCode: http.StatusNoContent,
-			Header:     make(http.Header),
-		}
-	})
-
-	tstest.Replace(t, &noRedirectClient.Transport, http.RoundTripper(tr))
-
-	stunAddr, cleanup := stuntest.Serve(t)
-	defer cleanup()
-
-	c := newTestClient(t)
-	c.testEnoughRegions = 1
-	// Set the delay long enough that we have time to cancel it
-	// when our STUN probe succeeds.
-	c.testCaptivePortalDelay = 10 * time.Second
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
-		t.Fatal(err)
-	}
-
-	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Should not have called our captive portal function.
-	if generate204Called.Load() {
-		t.Errorf("captive portal check called; expected no call")
-	}
-	if r.CaptivePortal != "" {
-		t.Errorf("got CaptivePortal=%q, want empty", r.CaptivePortal)
 	}
 }
 
