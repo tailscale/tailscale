@@ -6,6 +6,7 @@
 package safesocket
 
 import (
+	"context"
 	"errors"
 	"net"
 	"runtime"
@@ -52,16 +53,25 @@ func tailscaledStillStarting() bool {
 	return tailscaledProcExists()
 }
 
-// Connect connects to tailscaled using a unix socket or named pipe.
-func Connect(path string) (net.Conn, error) {
+// ConnectContext connects to tailscaled using a unix socket or named pipe.
+func ConnectContext(ctx context.Context, path string) (net.Conn, error) {
 	for {
-		c, err := connect(path)
+		c, err := connect(ctx, path)
 		if err != nil && tailscaledStillStarting() {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			time.Sleep(250 * time.Millisecond)
 			continue
 		}
 		return c, err
 	}
+}
+
+// Connect connects to tailscaled using a unix socket or named pipe.
+// Deprecated: use ConnectContext instead.
+func Connect(path string) (net.Conn, error) {
+	return ConnectContext(context.Background(), path)
 }
 
 // Listen returns a listener either on Unix socket path (on Unix), or

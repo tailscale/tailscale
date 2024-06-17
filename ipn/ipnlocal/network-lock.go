@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"tailscale.com/health/healthmsg"
@@ -27,10 +28,12 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 // TODO(tom): RPC retry/backoff was broken and has been removed. Fix?
@@ -66,6 +69,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 		return // TKA not enabled.
 	}
 
+	tracker := rotationTracker{logf: b.logf}
 	var toDelete map[int]bool // peer index => true
 	for i, p := range nm.Peers {
 		if p.UnsignedPeerAPIOnly() {
@@ -76,21 +80,32 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
 			mak.Set(&toDelete, i, true)
 		} else {
-			if err := b.tka.authority.NodeKeyAuthorized(p.Key(), p.KeySignature().AsSlice()); err != nil {
+			details, err := b.tka.authority.NodeKeyAuthorizedWithDetails(p.Key(), p.KeySignature().AsSlice())
+			if err != nil {
 				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID(), p.StableID(), err)
 				mak.Set(&toDelete, i, true)
+				continue
+			}
+			if details != nil {
+				// Rotation details are returned when the node key is signed by a valid SigRotation signature.
+				tracker.addRotationDetails(p.Key(), details)
 			}
 		}
 	}
 
+	obsoleteByRotation := tracker.obsoleteKeys()
+
 	// nm.Peers is ordered, so deletion must be order-preserving.
-	if len(toDelete) > 0 {
+	if len(toDelete) > 0 || len(obsoleteByRotation) > 0 {
 		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
-		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete))
+		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete)+len(obsoleteByRotation))
 		for i, p := range nm.Peers {
-			if !toDelete[i] {
+			if !toDelete[i] && !obsoleteByRotation.Contains(p.Key()) {
 				peers = append(peers, p)
 			} else {
+				if obsoleteByRotation.Contains(p.Key()) {
+					b.logf("Network lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
+				}
 				// Record information about the node we filtered out.
 				fp := ipnstate.TKAFilteredPeer{
 					Name:         p.Name(),
@@ -120,6 +135,84 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	} else {
 		b.health.SetTKAHealth(nil)
 	}
+}
+
+// rotationTracker determines the set of node keys that are made obsolete by key
+// rotation.
+//   - for each SigRotation signature, all previous node keys referenced by the
+//     nested signatures are marked as obsolete.
+//   - if there are multiple SigRotation signatures tracing back to the same
+//     wrapping pubkey (e.g. if a node is cloned with all its keys), we keep
+//     just one of them, marking the others as obsolete.
+type rotationTracker struct {
+	// obsolete is the set of node keys that are obsolete due to key rotation.
+	// users of rotationTracker should use the obsoleteKeys method for complete results.
+	obsolete set.Set[key.NodePublic]
+
+	// byWrappingKey keeps track of rotation details per wrapping pubkey.
+	byWrappingKey map[string][]sigRotationDetails
+
+	logf logger.Logf
+}
+
+// sigRotationDetails holds information about a node key signed by a SigRotation.
+type sigRotationDetails struct {
+	np          key.NodePublic
+	numPrevKeys int
+}
+
+// addRotationDetails records the rotation signature details for a node key.
+func (r *rotationTracker) addRotationDetails(np key.NodePublic, d *tka.RotationDetails) {
+	r.obsolete.Make()
+	r.obsolete.AddSlice(d.PrevNodeKeys)
+	rd := sigRotationDetails{
+		np:          np,
+		numPrevKeys: len(d.PrevNodeKeys),
+	}
+	if r.byWrappingKey == nil {
+		r.byWrappingKey = make(map[string][]sigRotationDetails)
+	}
+	wp := string(d.WrappingPubkey)
+	r.byWrappingKey[wp] = append(r.byWrappingKey[wp], rd)
+}
+
+// obsoleteKeys returns the set of node keys that are obsolete due to key rotation.
+func (r *rotationTracker) obsoleteKeys() set.Set[key.NodePublic] {
+	for _, v := range r.byWrappingKey {
+		// If there are multiple rotation signatures with the same wrapping
+		// pubkey, we need to decide which one is the "latest", and keep it.
+		// The signature with the largest number of previous keys is likely to
+		// be the latest, unless it has been marked as obsolete (rotated out) by
+		// another signature (which might happen in the future if we start
+		// compacting long rotated signature chains).
+		slices.SortStableFunc(v, func(a, b sigRotationDetails) int {
+			// Group all obsolete keys after non-obsolete keys.
+			if ao, bo := r.obsolete.Contains(a.np), r.obsolete.Contains(b.np); ao != bo {
+				if ao {
+					return 1
+				}
+				return -1
+			}
+			// Sort by decreasing number of previous keys.
+			return b.numPrevKeys - a.numPrevKeys
+		})
+		// If there are several signatures with the same number of previous
+		// keys, we cannot determine which one is the latest, so all of them are
+		// rejected for safety.
+		if len(v) >= 2 && v[0].numPrevKeys == v[1].numPrevKeys {
+			r.logf("at least two nodes (%s and %s) have equally valid rotation signatures with the same wrapping pubkey, rejecting", v[0].np, v[1].np)
+			for _, rd := range v {
+				r.obsolete.Add(rd.np)
+			}
+		} else {
+			// The first key in v is the one with the longest chain of previous
+			// keys, so it must be the newest one. Mark all older keys as obsolete.
+			for _, rd := range v[1:] {
+				r.obsolete.Add(rd.np)
+			}
+		}
+	}
+	return r.obsolete
 }
 
 // tkaSyncIfNeeded examines TKA info reported from the control plane,

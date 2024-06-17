@@ -14,7 +14,7 @@ import (
 	"io"
 	"log"
 	"maps"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -339,6 +339,18 @@ const (
 	probeIPv6                    // STUN IPv6
 	probeHTTPS                   // HTTPS
 )
+
+func (p probeProto) String() string {
+	switch p {
+	case probeIPv4:
+		return "v4"
+	case probeIPv6:
+		return "v6"
+	case probeHTTPS:
+		return "https"
+	}
+	return "?"
+}
 
 type probe struct {
 	// delay is when the probe is started, relative to the time
@@ -1010,7 +1022,7 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 		if len(rids) == 0 {
 			return false, nil
 		}
-		preferredDERP = rids[rand.Intn(len(rids))]
+		preferredDERP = rids[rand.IntN(len(rids))]
 	}
 
 	node := dm.Regions[preferredDERP].Nodes[0]
@@ -1229,7 +1241,7 @@ func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion
 	// TODO(andrew-d): this is a bit ugly
 	nodeAddr := c.nodeAddr(ctx, node, probeIPv4)
 	if !nodeAddr.IsValid() {
-		return 0, false, fmt.Errorf("no address for node %v", node.Name)
+		return 0, false, fmt.Errorf("no address for node %v (v4-for-icmp)", node.Name)
 	}
 	addr := &net.IPAddr{
 		IP:   net.IP(nodeAddr.Addr().AsSlice()),
@@ -1481,7 +1493,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 
 	addr := c.nodeAddr(ctx, node, probe.proto)
 	if !addr.IsValid() {
-		c.logf("netcheck.runProbe: named node %q has no address", probe.node)
+		c.logf("netcheck.runProbe: named node %q has no %v address", probe.node, probe.proto)
 		return
 	}
 
@@ -1607,11 +1619,14 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 	c.mu.Unlock()
 
 	probeIsV4 := proto == probeIPv4
-	addrs, _ := lookupIPAddr(ctx, n.HostName)
+	addrs, err := lookupIPAddr(ctx, n.HostName)
 	for _, a := range addrs {
 		if (a.Is4() && probeIsV4) || (a.Is6() && !probeIsV4) {
 			return netip.AddrPortFrom(a, uint16(port))
 		}
+	}
+	if err != nil {
+		c.logf("netcheck: DNS lookup error for %q (node %q region %v): %v", n.HostName, n.Name, n.RegionID, err)
 	}
 	return
 }

@@ -10,3 +10,9 @@ package netkernelconf
 func CheckUDPGROForwarding(tunInterface, defaultRouteInterface string) (warn, err error) {
 	return nil, nil
 }
+
+// SetUDPGROForwarding is unimplemented for non-Linux platforms. Refer to the
+// docstring in _linux.go.
+func SetUDPGROForwarding(tunInterface, defaultRouteInterface string) error {
+	return nil
+}

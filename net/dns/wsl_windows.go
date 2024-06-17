@@ -228,8 +228,8 @@ func wslRun(cmd *exec.Cmd) (err error) {
 	}
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Token:      syscall.Token(token),
-		HideWindow: true,
+		CreationFlags: windows.CREATE_NO_WINDOW,
+		Token:         syscall.Token(token),
 	}
 	return cmd.Run()
 }

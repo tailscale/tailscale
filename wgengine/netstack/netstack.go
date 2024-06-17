@@ -39,6 +39,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/metrics"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -330,7 +331,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		driveForLocal:         driveForLocal,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
-	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
+	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
@@ -568,10 +569,10 @@ var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	var selfNode tailcfg.NodeView
 	if nm != nil {
-		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.GetAddresses()))
+		ns.atomicIsLocalIPFunc.Store(ipset.NewContainsIPFunc(nm.GetAddresses()))
 		selfNode = nm.SelfNode
 	} else {
-		ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
+		ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	}
 
 	oldPfx := make(map[netip.Prefix]bool)
@@ -808,38 +809,7 @@ func (ns *Impl) inject() {
 		// However, some uses of netstack (presently, magic DNS)
 		// send traffic destined for the local device, hence must
 		// be injected 'inbound'.
-		sendToHost := false
-
-		// Determine if the packet is from a service IP, in which case it
-		// needs to go back into the machines network (inbound) instead of
-		// out.
-		// TODO(tom): Figure out if its safe to modify packet.Parsed to fill in
-		//            the IP src/dest even if its missing the rest of the pkt.
-		//            That way we dont have to do this twitchy-af byte-yeeting.
-		hdr := pkt.Network()
-		switch v := hdr.(type) {
-		case header.IPv4:
-			srcIP := netip.AddrFrom4(v.SourceAddress().As4())
-			if serviceIP == srcIP {
-				sendToHost = true
-			}
-		case header.IPv6:
-			srcIP := netip.AddrFrom16(v.SourceAddress().As16())
-			if srcIP == serviceIPv6 {
-				sendToHost = true
-			} else if viaRange.Contains(srcIP) {
-				// Only send to the host if this 4via6 route is
-				// something this node handles.
-				if ns.lb != nil && ns.lb.ShouldHandleViaIP(srcIP) {
-					sendToHost = true
-					if debugNetstack() {
-						ns.logf("netstack: sending 4via6 packet to host: %v", srcIP)
-					}
-				}
-			}
-		default:
-			// unknown; don't forward to host
-		}
+		sendToHost := ns.shouldSendToHost(pkt)
 
 		// pkt has a non-zero refcount, so injection methods takes
 		// ownership of one count and will decrement on completion.
@@ -855,6 +825,57 @@ func (ns *Impl) inject() {
 			}
 		}
 	}
+}
+
+// shouldSendToHost determines if the provided packet should be sent to the
+// host (i.e the current machine running Tailscale), in which case it will
+// return true. It will return false if the packet should be sent outbound, for
+// transit via WireGuard to another Tailscale node.
+func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
+	// Determine if the packet is from a service IP (100.100.100.100 or the
+	// IPv6 variant), in which case it needs to go back into the machine's
+	// network (inbound) instead of out.
+	hdr := pkt.Network()
+	switch v := hdr.(type) {
+	case header.IPv4:
+		srcIP := netip.AddrFrom4(v.SourceAddress().As4())
+		if serviceIP == srcIP {
+			return true
+		}
+
+	case header.IPv6:
+		srcIP := netip.AddrFrom16(v.SourceAddress().As16())
+		if srcIP == serviceIPv6 {
+			return true
+		}
+
+		if viaRange.Contains(srcIP) {
+			// Only send to the host if this 4via6 route is
+			// something this node handles.
+			if ns.lb != nil && ns.lb.ShouldHandleViaIP(srcIP) {
+				dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
+				// Also, only forward to the host if the packet
+				// is destined for a local IP; otherwise, we'd
+				// send traffic that's intended for another
+				// peer from the local 4via6 address to the
+				// host instead of outbound to WireGuard. See:
+				//     https://github.com/tailscale/tailscale/issues/12448
+				if ns.isLocalIP(dstIP) {
+					return true
+				}
+				if debugNetstack() {
+					ns.logf("netstack: sending 4via6 packet to host: src=%v dst=%v", srcIP, dstIP)
+				}
+			}
+		}
+	default:
+		// unknown; don't forward to host
+		if debugNetstack() {
+			ns.logf("netstack: unexpected packet in shouldSendToHost: %T", v)
+		}
+	}
+
+	return false
 }
 
 // isLocalIP reports whether ip is a Tailscale IP assigned to this
@@ -1324,6 +1345,50 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}
 	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
 	return
+}
+
+// ListenPacket listens for incoming packets for the given network and address.
+// Address must be of the form "ip:port" or "[ip]:port".
+//
+// As of 2024-05-18, only udp4 and udp6 are supported.
+func (ns *Impl) ListenPacket(network, address string) (net.PacketConn, error) {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("netstack: ParseAddrPort(%q): %v", address, err)
+	}
+
+	var networkProto tcpip.NetworkProtocolNumber
+	switch network {
+	case "udp":
+		return nil, fmt.Errorf("netstack: udp not supported; use udp4 or udp6")
+	case "udp4":
+		networkProto = ipv4.ProtocolNumber
+		if !ap.Addr().Is4() {
+			return nil, fmt.Errorf("netstack: udp4 requires an IPv4 address")
+		}
+	case "udp6":
+		networkProto = ipv6.ProtocolNumber
+		if !ap.Addr().Is6() {
+			return nil, fmt.Errorf("netstack: udp6 requires an IPv6 address")
+		}
+	default:
+		return nil, fmt.Errorf("netstack: unsupported network %q", network)
+	}
+	var wq waiter.Queue
+	ep, nserr := ns.ipstack.NewEndpoint(udp.ProtocolNumber, networkProto, &wq)
+	if nserr != nil {
+		return nil, fmt.Errorf("netstack: NewEndpoint: %v", nserr)
+	}
+	localAddress := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(ap.Addr().AsSlice()),
+		Port: ap.Port(),
+	}
+	if err := ep.Bind(localAddress); err != nil {
+		ep.Close()
+		return nil, fmt.Errorf("netstack: Bind(%v): %v", localAddress, err)
+	}
+	return gonet.NewUDPConn(&wq, ep), nil
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {

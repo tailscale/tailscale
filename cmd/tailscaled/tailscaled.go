@@ -548,13 +548,24 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			return ok
 		}
 		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-			// Note: don't just return ns.DialContextTCP or we'll
-			// return an interface containing a nil pointer.
+			// Note: don't just return ns.DialContextTCP or we'll return
+			// *gonet.TCPConn(nil) instead of a nil interface which trips up
+			// callers.
 			tcpConn, err := ns.DialContextTCP(ctx, dst)
 			if err != nil {
 				return nil, err
 			}
 			return tcpConn, nil
+		}
+		dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+			// Note: don't just return ns.DialContextUDP or we'll return
+			// *gonet.UDPConn(nil) instead of a nil interface which trips up
+			// callers.
+			udpConn, err := ns.DialContextUDP(ctx, dst)
+			if err != nil {
+				return nil, err
+			}
+			return udpConn, nil
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
@@ -687,7 +698,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			// configuration being unavailable (from the noop
 			// manager). More in Issue 4017.
 			// TODO(bradfitz): add a Synology-specific DNS manager.
-			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), "") // empty interface name
+			conf.DNS, err = dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.ControlKnobs(), "") // empty interface name
 			if err != nil {
 				return false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 			}
@@ -715,7 +726,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, fmt.Errorf("creating router: %w", err)
 		}
 
-		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), devName)
+		d, err := dns.NewOSConfigurator(logf, sys.HealthTracker(), sys.ControlKnobs(), devName)
 		if err != nil {
 			dev.Close()
 			r.Close()

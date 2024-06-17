@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	derpMapURL   = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://)")
+	derpMapURL   = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://) or 'local' to use the local tailscaled's DERP map")
 	versionFlag  = flag.Bool("version", false, "print version and exit")
 	listen       = flag.String("listen", ":8030", "HTTP listen address")
 	probeOnce    = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")

@@ -254,10 +254,18 @@ type HandlerOptions struct {
 	// is intended to be used to present pretty error pages if
 	// the user agent is determined to be a browser.
 	OnError ErrorHandlerFunc
+
+	// OnCompletion is called when ServeHTTP is finished and gets
+	// useful data that the implementor can use for metrics.
+	OnCompletion OnCompletionFunc
 }
 
 // ErrorHandlerFunc is called to present a error response.
 type ErrorHandlerFunc func(http.ResponseWriter, *http.Request, HTTPError)
+
+// OnCompletionFunc is called when ServeHTTP is finished and gets
+// useful data that the implementor can use for metrics.
+type OnCompletionFunc func(*http.Request, AccessLogRecord)
 
 // ReturnHandlerFunc is an adapter to allow the use of ordinary
 // functions as ReturnHandlers. If f is a function with the
@@ -433,6 +441,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			msg.Code = http.StatusInternalServerError
 			http.Error(lw, errorMessage, msg.Code)
 		}
+	}
+
+	if h.opts.OnCompletion != nil {
+		h.opts.OnCompletion(r, msg)
 	}
 
 	if bs := h.opts.BucketedStats; bs != nil && bs.Finished != nil {

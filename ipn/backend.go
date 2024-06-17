@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tailscale.com/drive"
+	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -70,6 +71,8 @@ const (
 	NotifyNoPrivateKeys        // if set, private keys that would normally be sent in updates are zeroed out
 	NotifyInitialDriveShares   // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
 	NotifyInitialOutgoingFiles // if set, the first Notify message (sent immediately) will contain the current Taildrop OutgoingFiles
+
+	NotifyInitialHealthState // if set, the first Notify message (sent immediately) will contain the current health.State of the client
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -138,6 +141,11 @@ type Notify struct {
 	// empty value means that there are no shares.
 	DriveShares views.SliceView[*drive.Share, drive.ShareView]
 
+	// Health is the last-known health state of the backend. When this field is
+	// non-nil, a change in health verified, and the API client should surface
+	// any changes to the user in the UI.
+	Health *health.State `json:",omitempty"`
+
 	// type is mirrored in xcode/Shared/IPN.swift
 }
 
@@ -176,6 +184,9 @@ func (n Notify) String() string {
 	}
 	if n.LocalTCPPort != nil {
 		fmt.Fprintf(&sb, "tcpport=%v ", n.LocalTCPPort)
+	}
+	if n.Health != nil {
+		sb.WriteString("Health{...} ")
 	}
 	s := sb.String()
 	return s[0:len(s)-1] + "}"

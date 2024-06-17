@@ -264,7 +264,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		ServeConfig:         sc,
 		Tags:                tags,
 		ChildResourceLabels: crl,
-		ProxyClass:          proxyClass,
+		ProxyClassName:      proxyClass,
 	}
 
 	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {

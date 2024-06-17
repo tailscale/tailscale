@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -881,6 +882,24 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		if len(resolvers) == 0 {
 			metricDNSFwdErrorNoUpstream.Add(1)
 			f.logf("no upstream resolvers set, returning SERVFAIL")
+
+			if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+				// On apple, having no upstream resolvers here is the result a race condition where
+				// we've tried a reconfig after a major link change but the system has not yet set
+				// the resolvers for the new link.  We use SystemConfiguration to query nameservers, and
+				// the timing of when that will give us the "right" answer is non-deterministic.
+				//
+				// This will typically happen on sleep-wake cycles with a Wifi interface where
+				// it takes some random amount of time (after telling us that the interface exists)
+				// for the system to configure the dns servers.
+				//
+				// Repolling the network monitor  here is a bit odd, but if we're
+				// seeing DNS queries, it's likely that the network is now fully configured, and it's
+				// an ideal time to to requery for the nameservers.
+				f.logf("injecting network monitor event to attempt to refresh the resolvers")
+				f.netMon.InjectEvent()
+			}
+
 			res, err := servfailResponse(query)
 			if err != nil {
 				f.logf("building servfail response: %v", err)

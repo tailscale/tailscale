@@ -29,7 +29,6 @@ import (
 
 	"github.com/google/uuid"
 	"tailscale.com/clientupdate/distsign"
-	"tailscale.com/hostinfo"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 	"tailscale.com/util/winutil"
@@ -38,10 +37,17 @@ import (
 )
 
 const (
-	CurrentTrack  = ""
 	StableTrack   = "stable"
 	UnstableTrack = "unstable"
 )
+
+var CurrentTrack = func() string {
+	if version.IsUnstableBuild() {
+		return UnstableTrack
+	} else {
+		return StableTrack
+	}
+}()
 
 func versionToTrack(v string) (string, error) {
 	_, rest, ok := strings.Cut(v, ".")
@@ -107,7 +113,7 @@ func (args Arguments) validate() error {
 		return fmt.Errorf("only one of Version(%q) or Track(%q) can be set", args.Version, args.Track)
 	}
 	switch args.Track {
-	case StableTrack, UnstableTrack, CurrentTrack:
+	case StableTrack, UnstableTrack, "":
 		// All valid values.
 	default:
 		return fmt.Errorf("unsupported track %q", args.Track)
@@ -120,11 +126,17 @@ type Updater struct {
 	// Update is a platform-specific method that updates the installation. May be
 	// nil (not all platforms support updates from within Tailscale).
 	Update func() error
+
+	// currentVersion is the short form of the current client version as
+	// returned by version.Short(), typically "x.y.z". Used for tests to
+	// override the actual current version.
+	currentVersion string
 }
 
 func NewUpdater(args Arguments) (*Updater, error) {
 	up := Updater{
-		Arguments: args,
+		Arguments:      args,
+		currentVersion: version.Short(),
 	}
 	if up.Stdout == nil {
 		up.Stdout = os.Stdout
@@ -140,18 +152,15 @@ func NewUpdater(args Arguments) (*Updater, error) {
 	if args.ForAutoUpdate && !canAutoUpdate {
 		return nil, errors.ErrUnsupported
 	}
-	if up.Track == CurrentTrack {
-		switch {
-		case up.Version != "":
+	if up.Track == "" {
+		if up.Version != "" {
 			var err error
 			up.Track, err = versionToTrack(args.Version)
 			if err != nil {
 				return nil, err
 			}
-		case version.IsUnstableBuild():
-			up.Track = UnstableTrack
-		default:
-			up.Track = StableTrack
+		} else {
+			up.Track = CurrentTrack
 		}
 	}
 	if up.Arguments.PkgsAddr == "" {
@@ -163,10 +172,9 @@ func NewUpdater(args Arguments) (*Updater, error) {
 type updateFunction func() error
 
 func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
-	canAutoUpdate = !hostinfo.New().Container.EqualBool(true) // EqualBool(false) would return false if the value is not set.
 	switch runtime.GOOS {
 	case "windows":
-		return up.updateWindows, canAutoUpdate
+		return up.updateWindows, true
 	case "linux":
 		switch distro.Get() {
 		case distro.NixOS:
@@ -180,20 +188,20 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			// auto-update mechanism.
 			return up.updateSynology, false
 		case distro.Debian: // includes Ubuntu
-			return up.updateDebLike, canAutoUpdate
+			return up.updateDebLike, true
 		case distro.Arch:
 			if up.archPackageInstalled() {
 				// Arch update func just prints a message about how to update,
 				// it doesn't support auto-updates.
 				return up.updateArchLike, false
 			}
-			return up.updateLinuxBinary, canAutoUpdate
+			return up.updateLinuxBinary, true
 		case distro.Alpine:
-			return up.updateAlpineLike, canAutoUpdate
+			return up.updateAlpineLike, true
 		case distro.Unraid:
-			return up.updateUnraid, canAutoUpdate
+			return up.updateUnraid, true
 		case distro.QNAP:
-			return up.updateQNAP, canAutoUpdate
+			return up.updateQNAP, true
 		}
 		switch {
 		case haveExecutable("pacman"):
@@ -202,21 +210,21 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 				// it doesn't support auto-updates.
 				return up.updateArchLike, false
 			}
-			return up.updateLinuxBinary, canAutoUpdate
+			return up.updateLinuxBinary, true
 		case haveExecutable("apt-get"): // TODO(awly): add support for "apt"
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
-			return up.updateDebLike, canAutoUpdate
+			return up.updateDebLike, true
 		case haveExecutable("dnf"):
-			return up.updateFedoraLike("dnf"), canAutoUpdate
+			return up.updateFedoraLike("dnf"), true
 		case haveExecutable("yum"):
-			return up.updateFedoraLike("yum"), canAutoUpdate
+			return up.updateFedoraLike("yum"), true
 		case haveExecutable("apk"):
-			return up.updateAlpineLike, canAutoUpdate
+			return up.updateAlpineLike, true
 		}
 		// If nothing matched, fall back to tarball updates.
 		if up.Update == nil {
-			return up.updateLinuxBinary, canAutoUpdate
+			return up.updateLinuxBinary, true
 		}
 	case "darwin":
 		switch {
@@ -232,7 +240,7 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			return nil, false
 		}
 	case "freebsd":
-		return up.updateFreeBSD, canAutoUpdate
+		return up.updateFreeBSD, true
 	}
 	return nil, false
 }
@@ -261,13 +269,16 @@ func Update(args Arguments) error {
 }
 
 func (up *Updater) confirm(ver string) bool {
-	switch cmpver.Compare(version.Short(), ver) {
-	case 0:
-		up.Logf("already running %v version %v; no update needed", up.Track, ver)
-		return false
-	case 1:
-		up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.Track, version.Short(), ver)
-		return false
+	// Only check version when we're not switching tracks.
+	if up.Track == "" || up.Track == CurrentTrack {
+		switch c := cmpver.Compare(up.currentVersion, ver); {
+		case c == 0:
+			up.Logf("already running %v version %v; no update needed", up.Track, ver)
+			return false
+		case c > 0:
+			up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", up.Track, up.currentVersion, ver)
+			return false
+		}
 	}
 	if up.Confirm != nil {
 		return up.Confirm(ver)
@@ -683,7 +694,7 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 			return "", fmt.Errorf("malformed info line: %q", line)
 		}
 		ver := parts[1]
-		if cmpver.Compare(ver, maxVer) == 1 {
+		if cmpver.Compare(ver, maxVer) > 0 {
 			maxVer = ver
 		}
 	}
@@ -882,7 +893,7 @@ func (up *Updater) installMSI(msi string) error {
 			break
 		}
 		up.Logf("Install attempt failed: %v", err)
-		uninstallVersion := version.Short()
+		uninstallVersion := up.currentVersion
 		if v := os.Getenv("TS_DEBUG_UNINSTALL_VERSION"); v != "" {
 			uninstallVersion = v
 		}
@@ -1333,12 +1344,8 @@ func requestedTailscaleVersion(ver, track string) (string, error) {
 // LatestTailscaleVersion returns the latest released version for the given
 // track from pkgs.tailscale.com.
 func LatestTailscaleVersion(track string) (string, error) {
-	if track == CurrentTrack {
-		if version.IsUnstableBuild() {
-			track = UnstableTrack
-		} else {
-			track = StableTrack
-		}
+	if track == "" {
+		track = CurrentTrack
 	}
 
 	latest, err := latestPackages(track)

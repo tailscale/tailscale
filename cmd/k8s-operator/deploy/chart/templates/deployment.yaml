@@ -49,7 +49,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- $operatorTag:= printf ":%s" ( .Values.operatorConfig.image.tag | default .Chart.AppVersion )}}
-          image: {{ .Values.operatorConfig.image.repo }}{{- if .Values.operatorConfig.image.digest -}}{{ printf "@%s" .Values.operatorConfig.image.digest}}{{- else -}}{{ printf "%s" $operatorTag }}{{- end }}
+          image: {{ coalesce .Values.operatorConfig.image.repo .Values.operatorConfig.image.repository }}{{- if .Values.operatorConfig.image.digest -}}{{ printf "@%s" .Values.operatorConfig.image.digest}}{{- else -}}{{ printf "%s" $operatorTag }}{{- end }}
           imagePullPolicy: {{ .Values.operatorConfig.image.pullPolicy }}
           env:
             - name: OPERATOR_INITIAL_TAGS
@@ -70,7 +70,7 @@ spec:
               value: /oauth/client_secret
             {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
             - name: PROXY_IMAGE
-              value: {{ .Values.proxyConfig.image.repo }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
+              value: {{ coalesce .Values.proxyConfig.image.repo .Values.proxyConfig.image.repository }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}
             - name: PROXY_TAGS
               value: {{ .Values.proxyConfig.defaultTags }}
             - name: APISERVER_PROXY

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -39,6 +40,7 @@ type Device struct {
 	// It's currently just 1 element, the 100.x.y.z Tailscale IP.
 	Addresses []string `json:"addresses"`
 	DeviceID  string   `json:"id"`
+	NodeID    string   `json:"nodeId"`
 	User      string   `json:"user"`
 	Name      string   `json:"name"`
 	Hostname  string   `json:"hostname"`
@@ -213,6 +215,9 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) (err error) 
 	if err != nil {
 		return err
 	}
+
+	log.Printf("RESP: %di, path: %s", resp.StatusCode, path)
+
 	// If status code was not successful, return the error.
 	// TODO: Change the check for the StatusCode to include other 2XX success codes.
 	if resp.StatusCode != http.StatusOK {

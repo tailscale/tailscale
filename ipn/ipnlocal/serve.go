@@ -307,7 +307,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	if prevConfig.Valid() {
 		has := func(string) bool { return false }
 		if b.serveConfig.Valid() {
-			has = b.serveConfig.Foreground().Has
+			has = b.serveConfig.Foreground().Contains
 		}
 		prevConfig.Foreground().Range(func(k string, v ipn.ServeConfigView) (cont bool) {
 			if !has(k) {
@@ -338,7 +338,7 @@ func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
 func (b *LocalBackend) DeleteForegroundSession(sessionID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.serveConfig.Valid() || !b.serveConfig.Foreground().Has(sessionID) {
+	if !b.serveConfig.Valid() || !b.serveConfig.Foreground().Contains(sessionID) {
 		return nil
 	}
 	sc := b.serveConfig.AsStruct()

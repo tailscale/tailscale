@@ -104,6 +104,8 @@ func TestDeps(t *testing.T) {
 			"gvisor.dev/gvisor/pkg/cpuid":        "https://github.com/tailscale/tailscale/issues/9756",
 			"gvisor.dev/gvisor/pkg/tcpip":        "https://github.com/tailscale/tailscale/issues/9756",
 			"gvisor.dev/gvisor/pkg/tcpip/header": "https://github.com/tailscale/tailscale/issues/9756",
+			"tailscale.com/net/packet":           "not needed in derper",
+			"github.com/gaissmai/bart":           "not needed in derper",
 		},
 	}.Check(t)
 }

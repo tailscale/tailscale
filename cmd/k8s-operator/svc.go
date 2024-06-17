@@ -204,7 +204,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Hostname:            hostname,
 		Tags:                tags,
 		ChildResourceLabels: crl,
-		ProxyClass:          proxyClass,
+		ProxyClassName:      proxyClass,
 	}
 
 	a.mu.Lock()
@@ -296,7 +296,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 func validateService(svc *corev1.Service) []string {
 	violations := make([]string, 0)
 	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
-		violations = append(violations, "only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN)
+		violations = append(violations, fmt.Sprintf("only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN))
 	}
 	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
 		if !isMagicDNSName(fqdn) {

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
@@ -35,7 +36,7 @@ import (
 // based on the current DERPMap.
 type derpProber struct {
 	p            *Prober
-	derpMapURL   string
+	derpMapURL   string // or "local"
 	udpInterval  time.Duration
 	meshInterval time.Duration
 	tlsInterval  time.Duration
@@ -97,6 +98,9 @@ func WithTLSProbing(interval time.Duration) DERPOpt {
 }
 
 // DERP creates a new derpProber.
+//
+// If derpMapURL is "local", the DERPMap is fetched via
+// the local machine's tailscaled.
 func DERP(p *Prober, derpMapURL string, opts ...DERPOpt) (*derpProber, error) {
 	d := &derpProber{
 		p:          p,
@@ -268,31 +272,42 @@ func (d *derpProber) getNodePair(n1, n2 string) (ret1, ret2 *tailcfg.DERPNode, _
 	return ret1, ret2, nil
 }
 
+var tsLocalClient tailscale.LocalClient
+
 // updateMap refreshes the locally-cached DERP map.
 func (d *derpProber) updateMap(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", d.derpMapURL, nil)
-	if err != nil {
-		return nil
-	}
-	res, err := httpOrFileClient.Do(req)
-	if err != nil {
-		d.Lock()
-		defer d.Unlock()
-		if d.lastDERPMap != nil && time.Since(d.lastDERPMapAt) < 10*time.Minute {
-			log.Printf("Error while fetching DERP map, using cached one: %s", err)
-			// Assume that control is restarting and use
-			// the same one for a bit.
+	var dm *tailcfg.DERPMap
+	if d.derpMapURL == "local" {
+		var err error
+		dm, err = tsLocalClient.CurrentDERPMap(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		req, err := http.NewRequestWithContext(ctx, "GET", d.derpMapURL, nil)
+		if err != nil {
 			return nil
 		}
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return fmt.Errorf("fetching %s: %s", d.derpMapURL, res.Status)
-	}
-	dm := new(tailcfg.DERPMap)
-	if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
-		return fmt.Errorf("decoding %s JSON: %v", d.derpMapURL, err)
+		res, err := httpOrFileClient.Do(req)
+		if err != nil {
+			d.Lock()
+			defer d.Unlock()
+			if d.lastDERPMap != nil && time.Since(d.lastDERPMapAt) < 10*time.Minute {
+				log.Printf("Error while fetching DERP map, using cached one: %s", err)
+				// Assume that control is restarting and use
+				// the same one for a bit.
+				return nil
+			}
+			return err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return fmt.Errorf("fetching %s: %s", d.derpMapURL, res.Status)
+		}
+		dm = new(tailcfg.DERPMap)
+		if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+			return fmt.Errorf("decoding %s JSON: %v", d.derpMapURL, err)
+		}
 	}
 
 	d.Lock()

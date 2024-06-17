@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
@@ -94,12 +96,12 @@ func getMemStats() (ms runtime.MemStats) {
 	return
 }
 
-func makeNetstack(t *testing.T, config func(*Impl)) *Impl {
+func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	tunDev := tstun.NewFake()
 	sys := &tsd.System{}
 	sys.Set(new(mem.Store))
 	dialer := new(tsdial.Dialer)
-	logf := tstest.WhileTestRunningLogger(t)
+	logf := tstest.WhileTestRunningLogger(tb)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Tun:           tunDev,
 		Dialer:        dialer,
@@ -107,20 +109,20 @@ func makeNetstack(t *testing.T, config func(*Impl)) *Impl {
 		HealthTracker: sys.HealthTracker(),
 	})
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close() })
+	tb.Cleanup(func() { eng.Close() })
 	sys.Set(eng)
 
 	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	t.Cleanup(func() { ns.Close() })
+	tb.Cleanup(func() { ns.Close() })
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
-		t.Fatalf("NewLocalBackend: %v", err)
+		tb.Fatalf("NewLocalBackend: %v", err)
 	}
 
 	ns.atomicIsLocalIPFunc.Store(func(netip.Addr) bool { return true })
@@ -128,7 +130,7 @@ func makeNetstack(t *testing.T, config func(*Impl)) *Impl {
 		config(ns)
 	}
 	if err := ns.Start(lb); err != nil {
-		t.Fatalf("Start: %v", err)
+		tb.Fatalf("Start: %v", err)
 	}
 	return ns
 }
@@ -796,4 +798,217 @@ func TestHandleLocalPackets(t *testing.T) {
 			t.Errorf("got filter outcome %v, want filter.Accept", resp)
 		}
 	})
+}
+
+func TestShouldSendToHost(t *testing.T) {
+	var (
+		selfIP4 = netip.MustParseAddr("100.64.1.2")
+		selfIP6 = netip.MustParseAddr("fd7a:115c:a1e0::123")
+	)
+
+	makeTestNetstack := func(tb testing.TB) *Impl {
+		impl := makeNetstack(tb, func(impl *Impl) {
+			impl.ProcessSubnets = false
+			impl.ProcessLocalIPs = false
+			impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
+				return addr == selfIP4 || addr == selfIP6
+			})
+		})
+
+		prefs := ipn.NewPrefs()
+		prefs.AdvertiseRoutes = []netip.Prefix{
+			// $ tailscale debug via 7 10.1.1.0/24
+			// fd7a:115c:a1e0:b1a:0:7:a01:100/120
+			netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:100/120"),
+		}
+		_, err := impl.lb.EditPrefs(&ipn.MaskedPrefs{
+			Prefs:              *prefs,
+			AdvertiseRoutesSet: true,
+		})
+		if err != nil {
+			tb.Fatalf("EditPrefs: %v", err)
+		}
+		return impl
+	}
+
+	testCases := []struct {
+		name     string
+		src, dst netip.AddrPort
+		want     bool
+	}{
+		// Reply from service IP to localhost should be sent to host,
+		// not over WireGuard.
+		{
+			name: "from_service_ip_to_localhost",
+			src:  netip.AddrPortFrom(serviceIP, 53),
+			dst:  netip.MustParseAddrPort("127.0.0.1:9999"),
+			want: true,
+		},
+		{
+			name: "from_service_ip_to_localhost_v6",
+			src:  netip.AddrPortFrom(serviceIPv6, 53),
+			dst:  netip.MustParseAddrPort("[::1]:9999"),
+			want: true,
+		},
+		// A reply from the local IP to a remote host isn't sent to the
+		// host, but rather over WireGuard.
+		{
+			name: "local_ip_to_remote",
+			src:  netip.AddrPortFrom(selfIP4, 12345),
+			dst:  netip.MustParseAddrPort("100.64.99.88:7777"),
+			want: false,
+		},
+		{
+			name: "local_ip_to_remote_v6",
+			src:  netip.AddrPortFrom(selfIP6, 12345),
+			dst:  netip.MustParseAddrPort("[fd7a:115:a1e0::99]:7777"),
+			want: false,
+		},
+		// A reply from a 4via6 address to a remote host isn't sent to
+		// the local host, but rather over WireGuard. See:
+		//     https://github.com/tailscale/tailscale/issues/12448
+		{
+			name: "4via6_to_remote",
+
+			// $ tailscale debug via 7 10.1.1.99/24
+			// fd7a:115c:a1e0:b1a:0:7:a01:163/120
+			src:  netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:163]:12345"),
+			dst:  netip.MustParseAddrPort("[fd7a:115:a1e0::99]:7777"),
+			want: false,
+		},
+		// However, a reply from a 4via6 address to the local Tailscale
+		// IP for this host *is* sent to the local host. See:
+		//     https://github.com/tailscale/tailscale/issues/11304
+		{
+			name: "4via6_to_local",
+
+			// $ tailscale debug via 7 10.1.1.99/24
+			// fd7a:115c:a1e0:b1a:0:7:a01:163/120
+			src:  netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:163]:12345"),
+			dst:  netip.AddrPortFrom(selfIP6, 7777),
+			want: true,
+		},
+		// Traffic from a 4via6 address that we're not handling to
+		// either the local Tailscale IP or a remote host is sent
+		// outbound.
+		//
+		// In most cases, we won't see this type of traffic in the
+		// shouldSendToHost function, but let's confirm.
+		{
+			name: "other_4via6_to_local",
+
+			// $ tailscale debug via 4444 10.1.1.88/24
+			// fd7a:115c:a1e0:b1a:0:7:a01:163/120
+			src:  netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:115c:a01:158]:12345"),
+			dst:  netip.AddrPortFrom(selfIP6, 7777),
+			want: false,
+		},
+		{
+			name: "other_4via6_to_remote",
+
+			// $ tailscale debug via 4444 10.1.1.88/24
+			// fd7a:115c:a1e0:b1a:0:7:a01:163/120
+			src:  netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:115c:a01:158]:12345"),
+			dst:  netip.MustParseAddrPort("[fd7a:115:a1e0::99]:7777"),
+			want: false,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			var pkt *stack.PacketBuffer
+			if tt.src.Addr().Is4() {
+				pkt = makeUDP4PacketBuffer(tt.src, tt.dst)
+			} else {
+				pkt = makeUDP6PacketBuffer(tt.src, tt.dst)
+			}
+
+			ns := makeTestNetstack(t)
+			if got := ns.shouldSendToHost(pkt); got != tt.want {
+				t.Errorf("shouldSendToHost returned %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func makeUDP4PacketBuffer(src, dst netip.AddrPort) *stack.PacketBuffer {
+	if !src.Addr().Is4() || !dst.Addr().Is4() {
+		panic("src and dst must be IPv4")
+	}
+
+	data := []byte("hello world\n")
+
+	packetLen := header.IPv4MinimumSize + header.UDPMinimumSize
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		ReserveHeaderBytes: packetLen,
+		Payload:            buffer.MakeWithData(data),
+	})
+
+	// Initialize the UDP header.
+	udp := header.UDP(pkt.TransportHeader().Push(header.UDPMinimumSize))
+	pkt.TransportProtocolNumber = header.UDPProtocolNumber
+
+	length := uint16(pkt.Size())
+	udp.Encode(&header.UDPFields{
+		SrcPort: src.Port(),
+		DstPort: dst.Port(),
+		Length:  length,
+	})
+
+	// Add IP header
+	ipHdr := header.IPv4(pkt.NetworkHeader().Push(header.IPv4MinimumSize))
+	pkt.NetworkProtocolNumber = header.IPv4ProtocolNumber
+	ipHdr.Encode(&header.IPv4Fields{
+		TotalLength: uint16(packetLen),
+		Protocol:    uint8(header.UDPProtocolNumber),
+		SrcAddr:     tcpip.AddrFrom4(src.Addr().As4()),
+		DstAddr:     tcpip.AddrFrom4(dst.Addr().As4()),
+		Checksum:    0,
+	})
+
+	return pkt
+}
+
+func makeUDP6PacketBuffer(src, dst netip.AddrPort) *stack.PacketBuffer {
+	if !src.Addr().Is6() || !dst.Addr().Is6() {
+		panic("src and dst must be IPv6")
+	}
+	data := []byte("hello world\n")
+
+	packetLen := header.IPv6MinimumSize + header.UDPMinimumSize
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		ReserveHeaderBytes: packetLen,
+		Payload:            buffer.MakeWithData(data),
+	})
+
+	srcAddr := tcpip.AddrFrom16(src.Addr().As16())
+	dstAddr := tcpip.AddrFrom16(dst.Addr().As16())
+
+	// Add IP header
+	ipHdr := header.IPv6(pkt.NetworkHeader().Push(header.IPv6MinimumSize))
+	pkt.NetworkProtocolNumber = header.IPv6ProtocolNumber
+	ipHdr.Encode(&header.IPv6Fields{
+		SrcAddr:           srcAddr,
+		DstAddr:           dstAddr,
+		PayloadLength:     uint16(header.UDPMinimumSize + len(data)),
+		TransportProtocol: header.UDPProtocolNumber,
+		HopLimit:          64,
+	})
+
+	// Initialize the UDP header.
+	udp := header.UDP(pkt.TransportHeader().Push(header.UDPMinimumSize))
+	pkt.TransportProtocolNumber = header.UDPProtocolNumber
+
+	length := uint16(pkt.Size())
+	udp.Encode(&header.UDPFields{
+		SrcPort: src.Port(),
+		DstPort: dst.Port(),
+		Length:  length,
+	})
+
+	// Calculate the UDP pseudo-header checksum.
+	xsum := header.PseudoHeaderChecksum(header.UDPProtocolNumber, srcAddr, dstAddr, uint16(len(udp)))
+	udp.SetChecksum(^udp.CalculateChecksum(xsum))
+
+	return pkt
 }

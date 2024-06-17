@@ -283,3 +283,19 @@ func TestResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestAttrOrderForXdpDERP(t *testing.T) {
+	// package derp/xdp assumes attribute order. This test ensures we don't
+	// drift and break that assumption.
+	txID := stun.NewTxID()
+	req := stun.Request(txID)
+	if len(req) < 20+12 {
+		t.Fatal("too short")
+	}
+	if !bytes.Equal(req[20:22], []byte{0x80, 0x22}) {
+		t.Fatal("the first attr is not of type software")
+	}
+	if !bytes.Equal(req[24:32], []byte("tailnode")) {
+		t.Fatal("unexpected software attr value")
+	}
+}

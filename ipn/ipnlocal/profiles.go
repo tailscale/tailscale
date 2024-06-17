@@ -5,10 +5,10 @@ package ipnlocal
 
 import (
 	"cmp"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"runtime"
 	"slices"
 	"strings"

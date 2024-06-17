@@ -137,8 +137,11 @@ type CapabilityVersion int
 //   - 94: 2024-05-06: Client understands Node.IsJailed.
 //   - 95: 2024-05-06: Client uses NodeAttrUserDialUseRoutes to change DNS dialing behavior.
 //   - 96: 2024-05-29: Client understands NodeAttrSSHBehaviorV1
-//   - 97: 2024-06-02: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
-const CurrentCapabilityVersion CapabilityVersion = 97
+//   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
+//   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
+//   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
+//   - 100: 2024-06-17: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
+const CurrentCapabilityVersion CapabilityVersion = 100
 
 type StableID string
 
@@ -257,6 +260,15 @@ func (m *RawMessage) UnmarshalJSON(data []byte) error {
 	}
 	*m = RawMessage(data)
 	return nil
+}
+
+// MarshalCapJSON returns a capability rule in RawMessage string format.
+func MarshalCapJSON[T any](capRule T) (RawMessage, error) {
+	bs, err := json.Marshal(capRule)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling capability rule: %w", err)
+	}
+	return RawMessage(string(bs)), nil
 }
 
 type Node struct {
@@ -673,14 +685,12 @@ type Service struct {
 	//        node's Tailscale IPv6 address.
 	//     * "peerapi-dns-proxy": the local peerapi service supports
 	//        being a DNS proxy (when the node is an exit
-	//        node). For this service, the Port number is really
-	//        the version number of the service.
+	//        node). For this service, the Port number must only be 1.
 	Proto ServiceProto
 
 	// Port is the port number.
 	//
-	// For Proto "peerapi-dns", it's the version number of the DNS proxy,
-	// currently 1.
+	// For Proto "peerapi-dns", it must be 1.
 	Port uint16
 
 	// Description is the textual description of the service,
@@ -1376,6 +1386,12 @@ const (
 	// PeerCapabilityTaildriveSharer indicates that a peer has the ability to
 	// share folders with us.
 	PeerCapabilityTaildriveSharer PeerCapability = "tailscale.com/cap/drive-sharer"
+
+	// PeerCapabilityKubernetes grants a peer Kubernetes-specific
+	// capabilities, such as the ability to impersonate specific Tailscale
+	// user groups as Kubernetes user groups. This capability is read by
+	// peers that are Tailscale Kubernetes operator instances.
+	PeerCapabilityKubernetes PeerCapability = "tailscale.com/cap/kubernetes"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
@@ -2281,6 +2297,26 @@ const (
 	// NodeAttrSSHBehaviorV1 forces SSH to use the V1 behavior (no su, run SFTP in-process)
 	// Added 2024-05-29 in Tailscale version 1.68.
 	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
+
+	// NodeAttrDisableSplitDNSWhenNoCustomResolvers indicates that the node's
+	// DNS manager should not adopt a split DNS configuration even though the
+	// Config of the resolver only contains routes that do not specify custom
+	// resolver(s), hence all DNS queries can be safely sent to the upstream
+	// DNS resolver and the node's DNS forwarder doesn't need to handle all
+	// DNS traffic.
+	// This is for now (2024-06-06) an iOS-specific battery life optimization,
+	// and this node attribute allows us to disable the optimization remotely
+	// if needed.
+	NodeAttrDisableSplitDNSWhenNoCustomResolvers NodeCapability = "disable-split-dns-when-no-custom-resolvers"
+
+	// NodeAttrDisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
+	// create a default (catch-all) Windows NRPT rule when "Override local DNS" is enabled.
+	// Without this rule, Windows 8.1 and newer devices issue parallel DNS requests to DNS servers
+	// associated with all network adapters, even when "Override local DNS" is enabled and/or
+	// a Mullvad exit node is being used, resulting in DNS leaks.
+	// We began creating this rule on 2024-06-14, and this node attribute
+	// allows us to disable the new behavior remotely if needed.
+	NodeAttrDisableLocalDNSOverrideViaNRPT NodeCapability = "disable-local-dns-override-via-nrpt"
 )
 
 // SetDNSRequest is a request to add a DNS record.

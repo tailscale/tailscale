@@ -9,9 +9,11 @@ import (
 	"strings"
 
 	"go4.org/netipx"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/views"
 )
 
 var defaultProtos = []ipproto.Proto{
@@ -61,6 +63,7 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 			}
 			m.Srcs = append(m.Srcs, nets...)
 		}
+		m.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(m.Srcs))
 
 		for _, d := range r.DstPorts {
 			nets, err := parseIPSet(d.IP, d.Bits)

@@ -22,7 +22,7 @@ import (
 	"log"
 	"math"
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -1151,20 +1151,19 @@ func (c *sclient) requestMeshUpdate() {
 	}
 }
 
+var localClient tailscale.LocalClient
+
 // verifyClient checks whether the client is allowed to connect to the derper,
 // depending on how & whether the server's been configured to verify.
 func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo, clientIP netip.Addr) error {
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
-		status, err := tailscale.Status(ctx)
+		_, err := localClient.WhoIsNodeKey(ctx, clientKey)
+		if err == tailscale.ErrPeerNotFound {
+			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
+		}
 		if err != nil {
-			return fmt.Errorf("failed to query local tailscaled status: %w", err)
-		}
-		if clientKey == status.Self.PublicKey {
-			return nil
-		}
-		if _, exists := status.Peer[clientKey]; !exists {
-			return fmt.Errorf("client %v not in set of peers", clientKey)
+			return fmt.Errorf("failed to query local tailscaled status for %v: %w", clientKey, err)
 		}
 	}
 
@@ -1514,7 +1513,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		}
 	}()
 
-	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
+	jitter := rand.N(5 * time.Second)
 	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 

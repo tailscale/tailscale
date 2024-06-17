@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"reflect"
 	"time"
@@ -73,7 +73,7 @@ func (r *ReloadOpts[T]) intervalWithJitter() time.Duration {
 		return tt
 	}
 
-	jitter := time.Duration(rand.Intn(int(r.IntervalJitter)))
+	jitter := rand.N(r.IntervalJitter)
 	return tt + jitter
 }
 

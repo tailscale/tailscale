@@ -16,7 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -604,7 +604,7 @@ func filterSlice[T any](a []T, f func(T) bool) []T {
 func generateHostname() string {
 	tails := words.Tails()
 	scales := words.Scales()
-	if rand.Int()%2 == 0 {
+	if rand.IntN(2) == 0 {
 		// JavaScript
 		tails = filterSlice(tails, func(s string) bool { return strings.HasPrefix(s, "j") })
 		scales = filterSlice(scales, func(s string) bool { return strings.HasPrefix(s, "s") })
@@ -614,8 +614,8 @@ func generateHostname() string {
 		scales = filterSlice(scales, func(s string) bool { return strings.HasPrefix(s, "a") })
 	}
 
-	tail := tails[rand.Intn(len(tails))]
-	scale := scales[rand.Intn(len(scales))]
+	tail := tails[rand.IntN(len(tails))]
+	scale := scales[rand.IntN(len(scales))]
 	return fmt.Sprintf("%s-%s", tail, scale)
 }
 

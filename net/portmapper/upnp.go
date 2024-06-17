@@ -15,7 +15,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -165,7 +165,7 @@ func addAnyPortMapping(
 	// number in [0, 65535 - 1024] and then adding 1024 to it, shifting the
 	// range to [1024, 65535].
 	if externalPort < 1024 {
-		externalPort = uint16(rand.Intn(65535-1024) + 1024)
+		externalPort = uint16(rand.N(65535-1024) + 1024)
 	}
 
 	// First off, try using AddAnyPortMapping; if there's a conflict, the

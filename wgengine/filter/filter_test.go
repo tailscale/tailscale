@@ -5,16 +5,22 @@ package filter
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/net/flowtrack"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -22,6 +28,9 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
+	"tailscale.com/util/must"
+	"tailscale.com/wgengine/filter/filtertype"
 )
 
 // testAllowedProto is an IP protocol number we treat as allowed for
@@ -36,9 +45,10 @@ func m(srcs []netip.Prefix, dsts []NetPortRange, protos ...ipproto.Proto) Match 
 		protos = defaultProtos
 	}
 	return Match{
-		IPProto: protos,
-		Srcs:    srcs,
-		Dsts:    dsts,
+		IPProto:      protos,
+		Srcs:         srcs,
+		SrcsContains: ipset.NewContainsIPFunc(views.SliceOf(srcs)),
+		Dsts:         dsts,
 	}
 }
 
@@ -432,11 +442,12 @@ func TestLoggingPrivacy(t *testing.T) {
 		logged = true
 	}
 
-	var logB netipx.IPSetBuilder
-	logB.AddPrefix(netip.MustParsePrefix("100.64.0.0/10"))
-	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
-	f.logIPs, _ = logB.IPSet()
+	f.logIPs4 = ipset.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
+		tsaddr.CGNATRange(),
+		tsaddr.TailscaleULARange(),
+	}))
+	f.logIPs6 = f.logIPs4
 
 	var (
 		ts4       = netip.AddrPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
@@ -694,7 +705,7 @@ func nets(nets ...string) (ret []netip.Prefix) {
 
 func ports(s string) PortRange {
 	if s == "*" {
-		return allPorts
+		return filtertype.AllPorts
 	}
 
 	var fs, ls string
@@ -816,10 +827,12 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			compareIP := cmp.Comparer(func(a, b netip.Addr) bool { return a == b })
-			compareIPPrefix := cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })
-			if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
+			cmpOpts := []cmp.Option{
+				cmp.Comparer(func(a, b netip.Addr) bool { return a == b }),
+				cmp.Comparer(func(a, b netip.Prefix) bool { return a == b }),
+				cmpopts.IgnoreFields(Match{}, ".SrcsContains"),
+			}
+			if diff := cmp.Diff(got, tt.want, cmpOpts...); diff != "" {
 				t.Errorf("wrong (-got+want)\n%s", diff)
 			}
 		})
@@ -952,5 +965,139 @@ func TestPeerCaps(t *testing.T) {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+var (
+	filterMatchFile = flag.String("filter-match-file", "", "JSON file of []filter.Match to benchmark")
+)
+
+func BenchmarkFilterMatchFile(b *testing.B) {
+	if *filterMatchFile == "" {
+		b.Skip("no --filter-match-file specified; skipping")
+	}
+	benchmarkFile(b, *filterMatchFile, benchOpt{v4: true, validLocalDst: true})
+}
+
+func BenchmarkFilterMatch(b *testing.B) {
+	b.Run("not-local-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: true, validLocalDst: false})
+	})
+	b.Run("not-local-v6", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: false})
+	})
+	b.Run("no-match-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: true, validLocalDst: true})
+	})
+	b.Run("no-match-v6", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: true})
+	})
+	b.Run("tcp-not-syn-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			tcpNotSYN:     true,
+			wantAccept:    true,
+		})
+	})
+	b.Run("udp-existing-flow-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			udp:           true,
+			udpOpen:       true,
+			wantAccept:    true,
+		})
+	})
+	b.Run("tcp-not-syn-v4-no-logs", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			tcpNotSYN:     true,
+			wantAccept:    true,
+			noLogs:        true,
+		})
+	})
+}
+
+type benchOpt struct {
+	v4            bool
+	validLocalDst bool
+	tcpNotSYN     bool
+	noLogs        bool
+	wantAccept    bool
+	udp, udpOpen  bool
+}
+
+func benchmarkFile(b *testing.B, file string, opt benchOpt) {
+	var matches []Match
+	bts, err := os.ReadFile(file)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := json.Unmarshal(bts, &matches); err != nil {
+		b.Fatal(err)
+	}
+
+	var localNets netipx.IPSetBuilder
+	pfx := []netip.Prefix{
+		netip.MustParsePrefix("100.96.14.120/32"),
+		netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:6260:e78/128"),
+	}
+	for _, p := range pfx {
+		localNets.AddPrefix(p)
+	}
+
+	var logIPs netipx.IPSetBuilder
+	logIPs.AddPrefix(tsaddr.CGNATRange())
+	logIPs.AddPrefix(tsaddr.TailscaleULARange())
+
+	f := New(matches, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, logger.Discard)
+	var srcIP, dstIP netip.Addr
+	if opt.v4 {
+		srcIP = netip.MustParseAddr("1.2.3.4")
+		dstIP = pfx[0].Addr()
+	} else {
+		srcIP = netip.MustParseAddr("2012::3456")
+		dstIP = pfx[1].Addr()
+	}
+	if !opt.validLocalDst {
+		dstIP = dstIP.Next() // to make it not in localNets
+	}
+	proto := ipproto.TCP
+	if opt.udp {
+		proto = ipproto.UDP
+	}
+	const sport = 33123
+	const dport = 443
+	pkt := parsed(proto, srcIP.String(), dstIP.String(), sport, dport)
+	if opt.tcpNotSYN {
+		pkt.TCPFlags = packet.TCPPsh // anything that's not SYN
+	}
+	if opt.udpOpen {
+		tuple := flowtrack.Tuple{
+			Proto: proto,
+			Src:   netip.AddrPortFrom(srcIP, sport),
+			Dst:   netip.AddrPortFrom(dstIP, dport),
+		}
+		f.state.mu.Lock()
+		f.state.lru.Add(tuple, struct{}{})
+		f.state.mu.Unlock()
+	}
+
+	want := Drop
+	if opt.wantAccept {
+		want = Accept
+	}
+	runFlags := LogDrops | LogAccepts
+	if opt.noLogs {
+		runFlags = 0
+	}
+
+	for range b.N {
+		got := f.RunIn(&pkt, runFlags)
+		if got != want {
+			b.Fatalf("got %v; want %v", got, want)
+		}
 	}
 }

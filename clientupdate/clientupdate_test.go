@@ -846,3 +846,107 @@ func TestParseUnraidPluginVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestConfirm(t *testing.T) {
+	curTrack := CurrentTrack
+	defer func() { CurrentTrack = curTrack }()
+
+	tests := []struct {
+		desc      string
+		fromTrack string
+		toTrack   string
+		fromVer   string
+		toVer     string
+		confirm   func(string) bool
+		want      bool
+	}{
+		{
+			desc:      "on latest stable",
+			fromTrack: StableTrack,
+			toTrack:   StableTrack,
+			fromVer:   "1.66.0",
+			toVer:     "1.66.0",
+			want:      false,
+		},
+		{
+			desc:      "stable upgrade",
+			fromTrack: StableTrack,
+			toTrack:   StableTrack,
+			fromVer:   "1.66.0",
+			toVer:     "1.68.0",
+			want:      true,
+		},
+		{
+			desc:      "unstable upgrade",
+			fromTrack: UnstableTrack,
+			toTrack:   UnstableTrack,
+			fromVer:   "1.67.1",
+			toVer:     "1.67.2",
+			want:      true,
+		},
+		{
+			desc:      "from stable to unstable",
+			fromTrack: StableTrack,
+			toTrack:   UnstableTrack,
+			fromVer:   "1.66.0",
+			toVer:     "1.67.1",
+			want:      true,
+		},
+		{
+			desc:      "from unstable to stable",
+			fromTrack: UnstableTrack,
+			toTrack:   StableTrack,
+			fromVer:   "1.67.1",
+			toVer:     "1.66.0",
+			want:      true,
+		},
+		{
+			desc:      "confirm callback rejects",
+			fromTrack: StableTrack,
+			toTrack:   StableTrack,
+			fromVer:   "1.66.0",
+			toVer:     "1.66.1",
+			confirm: func(string) bool {
+				return false
+			},
+			want: false,
+		},
+		{
+			desc:      "confirm callback allows",
+			fromTrack: StableTrack,
+			toTrack:   StableTrack,
+			fromVer:   "1.66.0",
+			toVer:     "1.66.1",
+			confirm: func(string) bool {
+				return true
+			},
+			want: true,
+		},
+		{
+			desc:      "downgrade",
+			fromTrack: StableTrack,
+			toTrack:   StableTrack,
+			fromVer:   "1.66.1",
+			toVer:     "1.66.0",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			CurrentTrack = tt.fromTrack
+			up := Updater{
+				currentVersion: tt.fromVer,
+				Arguments: Arguments{
+					Track:   tt.toTrack,
+					Confirm: tt.confirm,
+					Logf:    t.Logf,
+				},
+			}
+
+			if got := up.confirm(tt.toVer); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

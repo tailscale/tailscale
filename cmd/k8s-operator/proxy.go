@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	tskube "tailscale.com/kube"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
@@ -207,21 +208,13 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLo
 }
 
 const (
-	capabilityName    = "tailscale.com/cap/kubernetes"
-	oldCapabilityName = "https://" + capabilityName
+	// oldCapabilityName is a legacy form of
+	// tailfcg.PeerCapabilityKubernetes capability. The only capability rule
+	// that is respected for this form is group impersonation - for
+	// backwards compatibility reasons.
+	// TODO (irbekrm): determine if anyone uses this and remove if possible.
+	oldCapabilityName = "https://" + tailcfg.PeerCapabilityKubernetes
 )
-
-type capRule struct {
-	// Impersonate is a list of rules that specify how to impersonate the caller
-	// when proxying to the Kubernetes API.
-	Impersonate *impersonateRule `json:"impersonate,omitempty"`
-}
-
-// TODO(maisem): move this to some well-known location so that it can be shared
-// with control.
-type impersonateRule struct {
-	Groups []string `json:"groups,omitempty"`
-}
 
 // addImpersonationHeaders adds the appropriate headers to r to impersonate the
 // caller when proxying to the Kubernetes API. It uses the WhoIsResponse stashed
@@ -229,10 +222,10 @@ type impersonateRule struct {
 func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 	log = log.With("remote", r.RemoteAddr)
 	who := whoIsKey.Value(r.Context())
-	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)
+	rules, err := tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if len(rules) == 0 && err == nil {
 		// Try the old capability name for backwards compatibility.
-		rules, err = tailcfg.UnmarshalCapJSON[capRule](who.CapMap, oldCapabilityName)
+		rules, err = tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, oldCapabilityName)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal capability: %v", err)

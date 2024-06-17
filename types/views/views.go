@@ -329,13 +329,88 @@ func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
 	return true
 }
 
-// MapOf returns a view over m. It is the caller's responsibility to make sure K
-// and V is immutable, if this is being used to provide a read-only view over m.
-func MapOf[K comparable, V comparable](m map[K]V) Map[K, V] {
-	return Map[K, V]{m}
+// MapSlice is a view over a map whose values are slices.
+type MapSlice[K comparable, V any] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж map[K][]V
 }
 
-// Map is a view over a map whose values are immutable.
+// MapSliceOf returns a MapSlice for the provided map. It is the caller's
+// responsibility to make sure V is immutable.
+func MapSliceOf[K comparable, V any](m map[K][]V) MapSlice[K, V] {
+	return MapSlice[K, V]{m}
+}
+
+// Contains reports whether k has an entry in the map.
+func (m MapSlice[K, V]) Contains(k K) bool {
+	_, ok := m.ж[k]
+	return ok
+}
+
+// IsNil reports whether the underlying map is nil.
+func (m MapSlice[K, V]) IsNil() bool {
+	return m.ж == nil
+}
+
+// Len returns the number of elements in the map.
+func (m MapSlice[K, V]) Len() int { return len(m.ж) }
+
+// Get returns the element with key k.
+func (m MapSlice[K, V]) Get(k K) Slice[V] {
+	return SliceOf(m.ж[k])
+}
+
+// GetOk returns the element with key k and a bool representing whether the key
+// is in map.
+func (m MapSlice[K, V]) GetOk(k K) (Slice[V], bool) {
+	v, ok := m.ж[k]
+	return SliceOf(v), ok
+}
+
+// MarshalJSON implements json.Marshaler.
+func (m MapSlice[K, V]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.ж)
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+// It should only be called on an uninitialized Map.
+func (m *MapSlice[K, V]) UnmarshalJSON(b []byte) error {
+	if m.ж != nil {
+		return errors.New("already initialized")
+	}
+	return json.Unmarshal(b, &m.ж)
+}
+
+// Range calls f for every k,v pair in the underlying map.
+// It stops iteration immediately if f returns false.
+func (m MapSlice[K, V]) Range(f MapRangeFn[K, Slice[V]]) {
+	for k, v := range m.ж {
+		if !f(k, SliceOf(v)) {
+			return
+		}
+	}
+}
+
+// AsMap returns a shallow-clone of the underlying map.
+//
+// If V is a pointer type, it is the caller's responsibility to make sure the
+// values are immutable. The map and slices are cloned, but the values are not.
+func (m MapSlice[K, V]) AsMap() map[K][]V {
+	if m.ж == nil {
+		return nil
+	}
+	out := maps.Clone(m.ж)
+	for k, v := range out {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
+// Map provides a read-only view of a map. It is the caller's responsibility to
+// make sure V is immutable.
 type Map[K comparable, V any] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
@@ -344,8 +419,20 @@ type Map[K comparable, V any] struct {
 	ж map[K]V
 }
 
+// MapOf returns a view over m. It is the caller's responsibility to make sure V
+// is immutable.
+func MapOf[K comparable, V any](m map[K]V) Map[K, V] {
+	return Map[K, V]{m}
+}
+
 // Has reports whether k has an entry in the map.
+// Deprecated: use Contains instead.
 func (m Map[K, V]) Has(k K) bool {
+	return m.Contains(k)
+}
+
+// Contains reports whether k has an entry in the map.
+func (m Map[K, V]) Contains(k K) bool {
 	_, ok := m.ж[k]
 	return ok
 }
@@ -428,7 +515,13 @@ type MapFn[K comparable, T any, V any] struct {
 }
 
 // Has reports whether k has an entry in the map.
+// Deprecated: use Contains instead.
 func (m MapFn[K, T, V]) Has(k K) bool {
+	return m.Contains(k)
+}
+
+// Contains reports whether k has an entry in the map.
+func (m MapFn[K, T, V]) Contains(k K) bool {
 	_, ok := m.ж[k]
 	return ok
 }

@@ -7,8 +7,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"hash/fnv"
-	"math/rand"
 	"net"
 	"net/netip"
 	"reflect"
@@ -16,6 +14,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"tailscale.com/derp"
@@ -31,6 +30,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/rands"
 	"tailscale.com/util/sysresources"
 	"tailscale.com/util/testenv"
 )
@@ -94,7 +94,6 @@ type activeDerp struct {
 }
 
 var (
-	processStartUnixNano     = time.Now().UnixNano()
 	pickDERPFallbackForTests func() int
 )
 
@@ -136,9 +135,7 @@ func (c *Conn) pickDERPFallback() int {
 		return pickDERPFallbackForTests()
 	}
 
-	h := fnv.New64()
-	fmt.Fprintf(h, "%p/%d", c, processStartUnixNano) // arbitrary
-	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]
+	return ids[rands.IntN(uint64(uintptr(unsafe.Pointer(c))), len(ids))]
 }
 
 // This allows existing tests to pass, but allows us to still test the
