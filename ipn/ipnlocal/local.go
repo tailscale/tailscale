@@ -60,6 +60,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -344,6 +345,11 @@ type LocalBackend struct {
 
 	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
 	refreshAutoExitNode bool
+
+	// captiveDetectionTimer is a timer acting as debouncer to trigger captive portal detection
+	// upon a lack of Internet connectivity, avoiding spurious detection attempts.
+	// It is always nil unless a captive portal detection attempt is pending.
+	captiveDetectionTimer *time.Timer
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -669,6 +675,10 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
 }
 
+// captivePortalDetectionInterval is the duration to wait in an unhealthy state with connectivity broken
+// before running captive portal detection.
+const captivePortalDetectionInterval = 2 * time.Second
+
 // linkChange is our network monitor callback, called whenever the network changes.
 func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	b.mu.Lock()
@@ -719,6 +729,30 @@ func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthySt
 	b.send(ipn.Notify{
 		Health: state,
 	})
+
+	isConnectivityImpacted := false
+	for _, w := range state.Warnings {
+		if w.ImpactsConnectivity {
+			isConnectivityImpacted = true
+			break
+		}
+	}
+
+	if isConnectivityImpacted {
+		b.logf("health: connectivity impacted; triggering captive portal detection in %v", captivePortalDetectionInterval)
+		b.mu.Lock()
+		if b.captiveDetectionTimer != nil {
+			b.captiveDetectionTimer.Reset(captivePortalDetectionInterval)
+		} else {
+			b.captiveDetectionTimer = time.AfterFunc(captivePortalDetectionInterval, func() {
+				b.mu.Lock()
+				b.captiveDetectionTimer = nil
+				b.mu.Unlock()
+				b.performCaptiveDetection()
+			})
+		}
+		b.mu.Unlock()
+	}
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -2094,6 +2128,52 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 
 	if b.sshServer != nil {
 		go b.sshServer.OnPolicyChange()
+	}
+}
+
+// captivePortalWarnable is a Warnable which is set to an unhealthy state when a captive portal is detected.
+var captivePortalWarnable = health.Register(&health.Warnable{
+	Code:  "captive-portal-detected",
+	Title: "Captive portal detected",
+	// High severity, because captive portals block all traffic and require user intervention.
+	Severity:            health.SeverityHigh,
+	Text:                health.StaticMessage("This network requires you to log in using your web browser."),
+	ImpactsConnectivity: true,
+})
+
+// performCaptiveDetection checks if captive portal detection is enabled via controlknob. If so, it runs
+// the detection and updates the Warnable accordingly.
+func (b *LocalBackend) performCaptiveDetection() {
+	captiveDetectionDisabledByControlKnob := b.ControlKnobs().DisableCaptivePortalDetection.Load()
+	if captiveDetectionDisabledByControlKnob {
+		b.logf("performCaptiveDetection: disabled by controlknob")
+		return
+	}
+
+	// Only perform detection if ipn.State is Running.
+	if b.State() != ipn.Running {
+		b.logf("performCaptiveDetection: ignored because not running")
+		return
+	}
+
+	d := captivedetection.NewDetector(b.logf)
+	var dm *tailcfg.DERPMap
+	b.mu.Lock()
+	if b.netMap != nil {
+		dm = b.netMap.DERPMap
+	}
+	preferredDERP := 0
+	if b.hostinfo != nil {
+		if b.hostinfo.NetInfo != nil {
+			preferredDERP = b.hostinfo.NetInfo.PreferredDERP
+		}
+	}
+	b.mu.Unlock()
+	found := d.Detect(b.ctx, b.NetMon(), dm, preferredDERP)
+	if found {
+		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
+	} else {
+		b.health.SetHealthy(captivePortalWarnable)
 	}
 }
 
@@ -4493,6 +4573,10 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
+		if b.captiveDetectionTimer != nil {
+			b.captiveDetectionTimer.Stop()
+			b.captiveDetectionTimer = nil
+		}
 	}
 	b.pauseOrResumeControlClientLocked()
 
