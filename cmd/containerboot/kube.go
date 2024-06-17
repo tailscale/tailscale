@@ -19,22 +19,20 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-// storeDeviceInfo writes deviceID into the "device_id" data field of the kube
-// secret secretName.
-func storeDeviceInfo(ctx context.Context, secretName string, deviceID tailcfg.StableNodeID, fqdn string, addresses []netip.Prefix) error {
-	// First check if the secret exists at all. Even if running on
-	// kubernetes, we do not necessarily store state in a k8s secret.
-	if _, err := kc.GetSecret(ctx, secretName); err != nil {
-		if s, ok := err.(*kube.Status); ok {
-			if s.Code >= 400 && s.Code <= 499 {
-				// Assume the secret doesn't exist, or we don't have
-				// permission to access it.
-				return nil
-			}
-		}
-		return err
+// storeDeviceID writes deviceID to 'device_id' data field of the named
+// Kubernetes Secret.
+func storeDeviceID(ctx context.Context, secretName string, deviceID tailcfg.StableNodeID) error {
+	s := &kube.Secret{
+		Data: map[string][]byte{
+			"device_id": []byte(deviceID),
+		},
 	}
+	return kc.StrategicMergePatchSecret(ctx, secretName, s, "tailscale-container")
+}
 
+// storeDeviceEndpoints writes device's tailnet IPs and MagicDNS name to fields
+// 'device_ips', 'device_fqdn' of the named Kubernetes Secret.
+func storeDeviceEndpoints(ctx context.Context, secretName string, fqdn string, addresses []netip.Prefix) error {
 	var ips []string
 	for _, addr := range addresses {
 		ips = append(ips, addr.Addr().String())
@@ -44,14 +42,13 @@ func storeDeviceInfo(ctx context.Context, secretName string, deviceID tailcfg.St
 		return err
 	}
 
-	m := &kube.Secret{
+	s := &kube.Secret{
 		Data: map[string][]byte{
-			"device_id":   []byte(deviceID),
 			"device_fqdn": []byte(fqdn),
 			"device_ips":  deviceIPs,
 		},
 	}
-	return kc.StrategicMergePatchSecret(ctx, secretName, m, "tailscale-container")
+	return kc.StrategicMergePatchSecret(ctx, secretName, s, "tailscale-container")
 }
 
 // deleteAuthKey deletes the 'authkey' field of the given kube

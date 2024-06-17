@@ -406,8 +406,10 @@ func sanitizeConfigBytes(c ipn.ConfigVAlpha) string {
 	return string(sanitizedBytes)
 }
 
-// DeviceInfo returns the device ID and hostname for the Tailscale device
-// associated with the given labels.
+// DeviceInfo returns the device ID, hostname and IPs for the Tailscale device
+// that acts as an operator proxy. It retrieves info from a Kubernetes Secret
+// labeled with the provided labels.
+// Either of device ID, hostname and IPs can be empty string if not found in the Secret.
 func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string) (id tailcfg.StableNodeID, hostname string, ips []string, err error) {
 	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, a.operatorNamespace, childLabels)
 	if err != nil {
@@ -424,7 +426,12 @@ func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map
 	// to remove it.
 	hostname = strings.TrimSuffix(string(sec.Data["device_fqdn"]), ".")
 	if hostname == "" {
-		return "", "", nil, nil
+		// Device ID gets stored and retrieved in a different flow than
+		// FQDN and IPs. A device that acts as Kubernetes operator
+		// proxy, but whose route setup has failed might have an device
+		// ID, but no FQDN/IPs. If so, return the ID, to allow the
+		// operator to clean up such devices.
+		return id, "", nil, nil
 	}
 	if rawDeviceIPs, ok := sec.Data["device_ips"]; ok {
 		if err := json.Unmarshal(rawDeviceIPs, &ips); err != nil {

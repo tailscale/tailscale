@@ -321,7 +321,7 @@ authLoop:
 		}
 	}
 
-	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && isTwoStepConfigAuthOnce(cfg) {
+	if hasKubeStateStore(cfg) && isTwoStepConfigAuthOnce(cfg) {
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
@@ -337,11 +337,10 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
-		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
-		startupTasksDone  = false
-		currentIPs        deephash.Sum // tailscale IPs assigned to device
-		currentDeviceInfo deephash.Sum // device ID and fqdn
+		startupTasksDone       = false
+		currentIPs             deephash.Sum // tailscale IPs assigned to device
+		currentDeviceID        deephash.Sum // device ID
+		currentDeviceEndpoints deephash.Sum // device FQDN and IPs
 
 		currentEgressIPs deephash.Sum
 
@@ -355,7 +354,7 @@ authLoop:
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
 	var nfr linuxfw.NetfilterRunner
-	if wantProxy {
+	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
 		if err != nil {
 			log.Fatalf("error creating new netfilter runner: %v", err)
@@ -440,6 +439,20 @@ runLoop:
 				newCurrentIPs := deephash.Hash(&addrs)
 				ipsHaveChanged := newCurrentIPs != currentIPs
 
+				// Store device ID in a Kubernetes Secret before
+				// setting up any routing rules. This ensures
+				// that, for containerboot instances that are
+				// Kubernetes operator proxies, the operator is
+				// able to retrieve the device ID from the
+				// Kubernetes Secret to clean up tailnet nodes
+				// for proxies whose route setup continuously
+				// fails.
+				deviceID := n.NetMap.SelfNode.StableID()
+				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
+					if err := storeDeviceID(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID()); err != nil {
+						log.Fatalf("storing device ID in Kubernetes Secret: %v", err)
+					}
+				}
 				if cfg.TailnetTargetFQDN != "" {
 					var (
 						egressAddrs          []netip.Prefix
@@ -533,15 +546,36 @@ runLoop:
 				}
 				currentIPs = newCurrentIPs
 
-				deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
-				if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
-					if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
-						log.Fatalf("storing device ID in kube secret: %v", err)
+				// Only store device FQDN and IP addresses to
+				// Kubernetes Secret when any required proxy
+				// route setup has succeeded. IPs and FQDN are
+				// read from the Secret by the Tailscale
+				// Kubernetes operator and, for some proxy
+				// types, such as Tailscale Ingress, advertized
+				// on the Ingress status. Writing them to the
+				// Secret only after the proxy routing has been
+				// set up ensures that the operator does not
+				// advertize endpoints of broken proxies.
+				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
+				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
+				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
+					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
 				}
 			}
 			if !startupTasksDone {
-				if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
+				// For containerboot instances that act as TCP
+				// proxies (proxying traffic to an endpoint
+				// passed via one of the env vars that
+				// containerbot reads) and store state in a
+				// Kubernetes Secret, we consider startup tasks
+				// done at the point when device info has been
+				// successfully stored to state Secret.
+				// For all other containerboot instances, if we
+				// just get to this point the startup tasks can
+				// be considered done.
+				if !isL3Proxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
 					// This log message is used in tests to detect when all
 					// post-auth configuration is done.
 					log.Println("Startup complete, waiting for shutdown signal")
@@ -1285,6 +1319,19 @@ func isTwoStepConfigAlwaysAuth(cfg *settings) bool {
 // configured in a single step by running 'tailscaled <config opts>'
 func isOneStepConfig(cfg *settings) bool {
 	return cfg.TailscaledConfigFilePath != ""
+}
+
+// isL3Proxy returns true if the Tailscale node needs to be configured to act
+// as an L3 proxy, proxying to an endpoint provided via one of the config env
+// vars.
+func isL3Proxy(cfg *settings) bool {
+	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
+}
+
+// hasKubeStateStore returns true if the state must be stored in a Kubernetes
+// Secret.
+func hasKubeStateStore(cfg *settings) bool {
+	return cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != ""
 }
 
 // tailscaledConfigFilePath returns the path to the tailscaled config file that
