@@ -57,7 +57,7 @@ type TailscaleRejectedHeader struct {
 const rejectFlagBitMaybeBroken = 0x1
 
 func (rh TailscaleRejectedHeader) Flow() flowtrack.Tuple {
-	return flowtrack.Tuple{Proto: rh.Proto, Src: rh.Src, Dst: rh.Dst}
+	return flowtrack.MakeTuple(rh.Proto, rh.Src, rh.Dst)
 }
 
 func (rh TailscaleRejectedHeader) String() string {
