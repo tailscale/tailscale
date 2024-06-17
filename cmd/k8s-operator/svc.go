@@ -88,7 +88,7 @@ func childResourceLabels(name, ns, typ string) map[string]string {
 	}
 }
 
-func (a *ServiceReconciler) tailscaleService(svc *corev1.Service) bool {
+func (a *ServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
 	targetIP := tailnetTargetAnnotation(svc)
 	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
 	return a.shouldExpose(svc) || targetIP != "" || targetFQDN != ""
@@ -109,7 +109,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
 
-	if !svc.DeletionTimestamp.IsZero() || !a.tailscaleService(svc) {
+	if !svc.DeletionTimestamp.IsZero() || !a.isTailscaleService(svc) {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
@@ -139,7 +139,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 
-		if !a.tailscaleService(svc) {
+		if !a.isTailscaleService(svc) {
 			tsoperator.RemoveServiceCondition(svc, tsapi.ProxyReady)
 		}
 		return nil
@@ -170,7 +170,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 	gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 
-	if !a.tailscaleService(svc) {
+	if !a.isTailscaleService(svc) {
 		tsoperator.RemoveServiceCondition(svc, tsapi.ProxyReady)
 	}
 	return nil
@@ -351,9 +351,12 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
-	if h, ok := svc.Annotations[AnnotationHostname]; ok {
-		if err := dnsname.ValidLabel(h); err != nil {
-			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q: %s", h, err))
+	svcName := nameForService(svc)
+	if err := dnsname.ValidLabel(svcName); err != nil {
+		if _, ok := svc.Annotations[AnnotationHostname]; ok {
+			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname specified %q: %s", svcName, err))
+		} else {
+			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
 		}
 	}
 	return violations
