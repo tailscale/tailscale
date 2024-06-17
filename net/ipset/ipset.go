@@ -70,19 +70,22 @@ func NewContainsIPFunc(addrs views.Slice[netip.Prefix]) func(ip netip.Addr) bool
 	// If any addr is a prefix with more than a single IP, then do either a
 	// linear scan or a bart table, depending on the number of addrs.
 	if addrs.ContainsFunc(func(p netip.Prefix) bool { return !p.IsSingleIP() }) {
-		if addrs.Len() > 6 {
-			pathForTest("bart")
-			// Built a bart table.
-			t := &bart.Table[struct{}]{}
-			for i := range addrs.Len() {
-				t.Insert(addrs.At(i), struct{}{})
-			}
-			return bartLookup(t)
-		} else {
-			pathForTest("linear-contains")
+		if addrs.Len() == 1 {
+			pathForTest("one-prefix")
+			return addrs.At(0).Contains
+		}
+		if addrs.Len() <= 6 {
 			// Small enough to do a linear search.
+			pathForTest("linear-contains")
 			return prefixContainsLoop(addrs.AsSlice())
 		}
+		pathForTest("bart")
+		// Built a bart table.
+		t := &bart.Table[struct{}]{}
+		for i := range addrs.Len() {
+			t.Insert(addrs.At(i), struct{}{})
+		}
+		return bartLookup(t)
 	}
 	// Fast paths for 1 and 2 IPs:
 	if addrs.Len() == 1 {
