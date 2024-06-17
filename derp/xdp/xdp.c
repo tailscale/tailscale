@@ -244,7 +244,7 @@ static __always_inline int handle_packet(struct xdp_md *ctx, struct packet_conte
 	struct ipv6hdr *ip6;
 	struct udphdr *udp;
 
-	int validate_udp_csum;
+	int validate_udp_csum = 0;
 	if (eth->h_proto == bpf_htons(ETH_P_IP)) {
 		pctx->af = COUNTER_KEY_AF_IPV4;
 		ip = (void *)(eth + 1);
