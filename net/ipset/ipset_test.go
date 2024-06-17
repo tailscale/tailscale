@@ -41,7 +41,7 @@ var newContainsIPFuncTests = []struct {
 	{
 		name:    "cidr-list-1",
 		pfx:     pp("10.0.0.0/8"),
-		want:    "linear-contains",
+		want:    "one-prefix",
 		wantIn:  aa("10.0.0.1", "10.2.3.4"),
 		wantOut: aa("8.8.8.8"),
 	},
