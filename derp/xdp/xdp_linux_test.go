@@ -426,6 +426,18 @@ func TestXDP(t *testing.T) {
 		},
 	})
 
+	ipv4STUNBindingReqUDPZeroCsumTx := getIPv4STUNBindingReq(&ipv4Mutations{
+		udpHeaderFn: func(udpH header.UDP) {
+			udpH.SetChecksum(0)
+		},
+	})
+
+	ipv6STUNBindingReqUDPZeroCsumPass := getIPv6STUNBindingReq(&ipv6Mutations{
+		udpHeaderFn: func(udpH header.UDP) {
+			udpH.SetChecksum(0)
+		},
+	})
+
 	cases := []struct {
 		name          string
 		packetIn      []byte
@@ -863,6 +875,42 @@ func TestXDP(t *testing.T) {
 					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_BYTES_PASS_TOTAL),
 					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_UNEXPECTED_FIRST_STUN_ATTR),
 				}: uint64(len(ipv6STUNBindingReqSTUNFirstAttrPass)),
+			},
+		},
+		{
+			name:          "ipv4 UDP zero csum TX",
+			packetIn:      ipv4STUNBindingReqUDPZeroCsumTx,
+			wantCode:      xdpActionTX,
+			wantPacketOut: getIPv4STUNBindingResp(),
+			wantMetrics: map[bpfCountersKey]uint64{
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV4),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_PACKETS_TX_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_UNSPECIFIED),
+				}: 1,
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV4),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_BYTES_TX_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_UNSPECIFIED),
+				}: uint64(len(getIPv4STUNBindingResp())),
+			},
+		},
+		{
+			name:          "ipv6 UDP zero csum PASS",
+			packetIn:      ipv6STUNBindingReqUDPZeroCsumPass,
+			wantCode:      xdpActionPass,
+			wantPacketOut: ipv6STUNBindingReqUDPZeroCsumPass,
+			wantMetrics: map[bpfCountersKey]uint64{
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV6),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_PACKETS_PASS_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_INVALID_UDP_CSUM),
+				}: 1,
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV6),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_BYTES_PASS_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_INVALID_UDP_CSUM),
+				}: uint64(len(ipv6STUNBindingReqUDPZeroCsumPass)),
 			},
 		},
 	}
