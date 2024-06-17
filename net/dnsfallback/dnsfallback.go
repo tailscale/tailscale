@@ -23,6 +23,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -430,3 +431,67 @@ var (
 	metricRecursiveMismatches = clientmetric.NewCounter("dnsfallback_recursive_mismatches")
 	metricRecursiveErrors     = clientmetric.NewCounter("dnsfallback_recursive_errors")
 )
+
+// GetDERPHostnames returns the hostnames of DERP servers in the given region.
+// If the region is not found, it returns an empty slice.
+func GetDERPHostnames(regionID int) []string {
+	hs := []string{}
+	dm := getDERPMap()
+	for _, dr := range dm.Regions {
+		if dr.RegionID == regionID {
+			for _, n := range dr.Nodes {
+				if strings.HasSuffix(n.HostName, tailcfg.DotInvalid) {
+					// Don't try to connect to invalid hostnames. This occurred in tests:
+					// https://github.com/tailscale/tailscale/issues/6207
+					continue
+				}
+				hs = append(hs, n.HostName)
+			}
+		}
+	}
+	return hs
+}
+
+// GetDERPIPv4s returns the IPv4 addresses of DERP servers in the given region.
+// If the region is not found, it returns an empty slice.
+func GetDERPIPv4s(regionID int) []string {
+	ips := []string{}
+	dm := getDERPMap()
+	for _, dr := range dm.Regions {
+		if dr.RegionID == regionID {
+			for _, n := range dr.Nodes {
+				ips = append(ips, n.IPv4)
+			}
+		}
+	}
+	return ips
+}
+
+// GetAllDERPHostnames returns the hostnames of all known DERP servers.
+func GetAllDERPHostnames() []string {
+	dm := getDERPMap()
+	urls := []string{}
+	for _, dr := range dm.Regions {
+		for _, n := range dr.Nodes {
+			if strings.HasSuffix(n.HostName, tailcfg.DotInvalid) {
+				// Don't try to connect to invalid hostnames. This occurred in tests:
+				// https://github.com/tailscale/tailscale/issues/6207
+				continue
+			}
+			urls = append(urls, n.HostName)
+		}
+	}
+	return urls
+}
+
+// GetAllDERPIPv4s returns the IPv4 addresses of all known DERP servers.
+func GetAllDERPIPv4s() []string {
+	dm := getDERPMap()
+	ips := []string{}
+	for _, dr := range dm.Regions {
+		for _, n := range dr.Nodes {
+			ips = append(ips, n.IPv4)
+		}
+	}
+	return ips
+}

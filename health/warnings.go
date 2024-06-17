@@ -88,7 +88,7 @@ var notInMapPollWarnable = Register(&Warnable{
 	Code:      "not-in-map-poll",
 	Title:     "Cannot connect to control server",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code, "captive-portal-detected"},
 	Text:      StaticMessage("Cannot connect to the control server (not in map poll). Check your Internet connection."),
 })
 
@@ -97,7 +97,7 @@ var noDERPHomeWarnable = Register(&Warnable{
 	Code:      "no-derp-home",
 	Title:     "No home relay server",
 	Severity:  SeverityHigh,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code},
 	Text:      StaticMessage("Tailscale could not connect to any relay server. Check your Internet connection."),
 })
 
@@ -106,7 +106,7 @@ var noDERPConnectionWarnable = Register(&Warnable{
 	Code:      "no-derp-connection",
 	Title:     "Relay server unavailable",
 	Severity:  SeverityHigh,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code, "captive-portal-detected"},
 	Text: func(args Args) string {
 		if n := args[ArgDERPRegionName]; n != "" {
 			return fmt.Sprintf("Tailscale could not connect to the '%s' relay server. Your Internet connection might be down, or the server might be temporarily unavailable.", n)
@@ -121,7 +121,7 @@ var derpTimeoutWarnable = Register(&Warnable{
 	Code:      "derp-timed-out",
 	Title:     "Relay server timed out",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code},
 	Text: func(args Args) string {
 		if n := args[ArgDERPRegionName]; n != "" {
 			return fmt.Sprintf("Tailscale hasn't heard from the '%s' relay server in %v. The server might be temporarily unavailable, or your Internet connection might be down.", n, args[ArgDuration])
@@ -136,7 +136,7 @@ var derpRegionErrorWarnable = Register(&Warnable{
 	Code:      "derp-region-error",
 	Title:     "Relay server error",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code},
 	Text: func(args Args) string {
 		return fmt.Sprintf("The relay server #%v is reporting an issue: %v", args[ArgDERPRegionID], args[ArgError])
 	},
@@ -147,7 +147,7 @@ var noUDP4BindWarnable = Register(&Warnable{
 	Code:                "no-udp4-bind",
 	Title:               "Incoming connections may fail",
 	Severity:            SeverityHigh,
-	DependsOn:           []*Warnable{NetworkStatusWarnable},
+	DependsOn:           []WarnableCode{NetworkStatusWarnable.Code},
 	Text:                StaticMessage("Tailscale couldn't listen for incoming UDP connections."),
 	ImpactsConnectivity: true,
 })
@@ -157,7 +157,7 @@ var mapResponseTimeoutWarnable = Register(&Warnable{
 	Code:      "mapresponse-timeout",
 	Title:     "Network map response timeout",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code},
 	Text: func(args Args) string {
 		return fmt.Sprintf("Tailscale hasn't received a network map from the coordination server in %s.", args[ArgDuration])
 	},
@@ -168,7 +168,7 @@ var tlsConnectionFailedWarnable = Register(&Warnable{
 	Code:      "tls-connection-failed",
 	Title:     "Encrypted connection failed",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []WarnableCode{NetworkStatusWarnable.Code},
 	Text: func(args Args) string {
 		return fmt.Sprintf("Tailscale could not establish an encrypted connection with '%q': %v", args[ArgServerName], args[ArgError])
 	},

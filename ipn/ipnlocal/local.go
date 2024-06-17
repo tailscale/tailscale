@@ -57,6 +57,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -657,6 +658,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	// need updating to tweak default routes.
 	b.updateFilterLocked(b.netMap, b.pm.CurrentPrefs())
 	updateExitNodeUsageWarning(b.pm.CurrentPrefs(), delta.New, b.health)
+	go b.performCaptiveDetection()
 
 	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
 		want := b.netMap.GetAddresses().Len()
@@ -2029,6 +2031,28 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 
 	if b.sshServer != nil {
 		go b.sshServer.OnPolicyChange()
+	}
+}
+
+// captivePortalWarnable is a Warnable which is set to an unhealthy state when a captive portal is detected.
+var captivePortalWarnable = health.Register(&health.Warnable{
+	Code:                "captive-portal-detected",
+	Title:               "Captive portal detected",
+	Severity:            health.SeverityHigh, // High severity because it blocks all traffic
+	Text:                health.StaticMessage("This Wi-Fi network requires you to sign in manually."),
+	ImpactsConnectivity: true,
+})
+
+func (b *LocalBackend) performCaptiveDetection() {
+	found, err := captivedetection.DetectCaptivePortal(context.Background(), 0, b.logf)
+	if err != nil {
+		b.logf("performCaptiveDetection failed: %v", err)
+		return
+	}
+	if found {
+		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
+	} else {
+		b.health.SetHealthy(captivePortalWarnable)
 	}
 }
 

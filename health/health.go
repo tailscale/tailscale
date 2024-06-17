@@ -206,7 +206,7 @@ type Warnable struct {
 	// DependsOn is a set of Warnables that this Warnable depends, on and need to be healthy
 	// before this Warnable can also be healthy again. The GUI can use this information to ignore
 	// this Warnable if one of its dependencies is unhealthy.
-	DependsOn []*Warnable
+	DependsOn []WarnableCode
 
 	// MapDebugFlag is a MapRequest.DebugFlag that is sent to control when this Warnable is unhealthy
 	//

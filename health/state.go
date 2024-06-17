@@ -43,7 +43,7 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 
 	dependsOnWarnableCodes := make([]WarnableCode, len(w.DependsOn), len(w.DependsOn)+1)
 	for i, d := range w.DependsOn {
-		dependsOnWarnableCodes[i] = d.Code
+		dependsOnWarnableCodes[i] = d
 	}
 
 	if w != warmingUpWarnable {
