@@ -1071,11 +1071,10 @@ func benchmarkFile(b *testing.B, file string, opt benchOpt) {
 		pkt.TCPFlags = packet.TCPPsh // anything that's not SYN
 	}
 	if opt.udpOpen {
-		tuple := flowtrack.Tuple{
-			Proto: proto,
-			Src:   netip.AddrPortFrom(srcIP, sport),
-			Dst:   netip.AddrPortFrom(dstIP, dport),
-		}
+		tuple := flowtrack.MakeTuple(proto,
+			netip.AddrPortFrom(srcIP, sport),
+			netip.AddrPortFrom(dstIP, dport),
+		)
 		f.state.mu.Lock()
 		f.state.lru.Add(tuple, struct{}{})
 		f.state.mu.Unlock()

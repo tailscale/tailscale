@@ -482,7 +482,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 			return Accept, "tcp ok"
 		}
 	case ipproto.UDP, ipproto.SCTP:
-		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
+		t := flowtrack.MakeTuple(q.IPProto, q.Src, q.Dst)
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
@@ -542,7 +542,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 			return Accept, "tcp ok"
 		}
 	case ipproto.UDP, ipproto.SCTP:
-		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
+		t := flowtrack.MakeTuple(q.IPProto, q.Src, q.Dst)
 
 		f.state.mu.Lock()
 		_, ok := f.state.lru.Get(t)
@@ -569,10 +569,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 	switch q.IPProto {
 	case ipproto.UDP, ipproto.SCTP:
-		tuple := flowtrack.Tuple{
-			Proto: q.IPProto,
-			Src:   q.Dst, Dst: q.Src, // src/dst reversed
-		}
+		tuple := flowtrack.MakeTuple(q.IPProto, q.Dst, q.Src) // src/dst reversed
 		f.state.mu.Lock()
 		f.state.lru.Add(tuple, struct{}{})
 		f.state.mu.Unlock()
