@@ -1316,6 +1316,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		// Update our cached DERP map
 		dnsfallback.UpdateCache(st.NetMap.DERPMap, b.logf)
 
+		// Update the DERP map in the health package, which uses it for health notifications
+		b.health.SetDERPMap(st.NetMap.DERPMap)
+
 		b.send(ipn.Notify{NetMap: st.NetMap})
 	}
 	if st.URL != "" {

@@ -103,11 +103,15 @@ var noDERPHomeWarnable = Register(&Warnable{
 // noDERPConnectionWarnable is a Warnable that warns the user that Tailscale couldn't connect to a specific DERP server.
 var noDERPConnectionWarnable = Register(&Warnable{
 	Code:      "no-derp-connection",
-	Title:     "No relay server connection",
+	Title:     "Relay server unavailable",
 	Severity:  SeverityHigh,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
 	Text: func(args Args) string {
-		return fmt.Sprintf("Tailscale could not connect to the relay server '%s'. The server might be temporarily unavailable, or your Internet connection might be down.", args[ArgRegionID])
+		if n := args[ArgDERPRegionName]; n != "" {
+			return fmt.Sprintf("Tailscale could not connect to the '%s' relay server. Your Internet connection might be down, or the server might be temporarily unavailable.", n)
+		} else {
+			return fmt.Sprintf("Tailscale could not connect to the relay server with ID '%s'. Your Internet connection might be down, or the server might be temporarily unavailable.", args[ArgDERPRegionID])
+		}
 	},
 })
 
@@ -118,7 +122,11 @@ var derpTimeoutWarnable = Register(&Warnable{
 	Severity:  SeverityMedium,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
 	Text: func(args Args) string {
-		return fmt.Sprintf("Tailscale hasn't heard from the home relay server (region %v) in %v. The server might be temporarily unavailable, or your Internet connection might be down.", args[ArgRegionID], args[ArgDuration])
+		if n := args[ArgDERPRegionName]; n != "" {
+			return fmt.Sprintf("Tailscale hasn't heard from the '%s' relay server in %v. The server might be temporarily unavailable, or your Internet connection might be down.", n, args[ArgDuration])
+		} else {
+			return fmt.Sprintf("Tailscale hasn't heard from the home relay server (region ID '%v') in %v. The server might be temporarily unavailable, or your Internet connection might be down.", args[ArgDERPRegionID], args[ArgDuration])
+		}
 	},
 })
 
@@ -129,7 +137,7 @@ var derpRegionErrorWarnable = Register(&Warnable{
 	Severity:  SeverityMedium,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
 	Text: func(args Args) string {
-		return fmt.Sprintf("The relay server #%v is reporting an issue: %v", args[ArgRegionID], args[ArgError])
+		return fmt.Sprintf("The relay server #%v is reporting an issue: %v", args[ArgDERPRegionID], args[ArgError])
 	},
 })
 

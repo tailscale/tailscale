@@ -22,8 +22,13 @@ const (
 	// ArgMagicsockFunctionName provides a Warnable with the name of the Magicsock function that caused the unhealthy state.
 	ArgMagicsockFunctionName Arg = "magicsock-function-name"
 
-	// ArgRegionID provides a Warnable with the ID of a DERP server involved in the unhealthy state.
-	ArgRegionID Arg = "region-id"
+	// ArgDERPRegionID provides a Warnable with the ID of a DERP server involved in the unhealthy state.
+	ArgDERPRegionID Arg = "derp-region-id"
+
+	// ArgDERPRegionName provides a Warnable with the name of a DERP server involved in the unhealthy state.
+	// It is used to show a more friendly message like "the Seattle relay server failed to connect" versus
+	// "relay server 10 failed to connect".
+	ArgDERPRegionName Arg = "derp-region-name"
 
 	// ArgServerName provides a Warnable with the hostname of a server involved in the unhealthy state.
 	ArgServerName Arg = "server-name"
