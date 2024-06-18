@@ -278,6 +278,7 @@ func runReconcilers(opts reconcilerOpts) {
 			isDefaultLoadBalancer: opts.proxyActAsDefaultLoadBalancer,
 			recorder:              eventRecorder,
 			tsNamespace:           opts.tailscaleNamespace,
+			clock:                 tstime.DefaultClock{},
 		})
 	if err != nil {
 		startlog.Fatalf("could not create service reconciler: %v", err)

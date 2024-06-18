@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -15,7 +16,9 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,13 +26,20 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
 )
 
 const (
 	resolvConfPath       = "/etc/resolv.conf"
 	defaultClusterDomain = "cluster.local"
+
+	reasonProxyCreated = "ProxyCreated"
+	reasonProxyInvalid = "ProxyInvalid"
+	reasonProxyFailed  = "ProxyFailed"
+	reasonProxyPending = "ProxyPending"
 )
 
 type ServiceReconciler struct {
@@ -50,6 +60,8 @@ type ServiceReconciler struct {
 	recorder record.EventRecorder
 
 	tsNamespace string
+
+	clock tstime.Clock
 }
 
 var (
@@ -76,6 +88,12 @@ func childResourceLabels(name, ns, typ string) map[string]string {
 	}
 }
 
+func (a *ServiceReconciler) isTailscaleService(svc *corev1.Service) bool {
+	targetIP := tailnetTargetAnnotation(svc)
+	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
+	return a.shouldExpose(svc) || targetIP != "" || targetFQDN != ""
+}
+
 func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
 	logger := a.logger.With("service-ns", req.Namespace, "service-name", req.Name)
 	logger.Debugf("starting reconcile")
@@ -90,9 +108,8 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
-	targetIP := tailnetTargetAnnotation(svc)
-	targetFQDN := svc.Annotations[AnnotationTailnetTargetFQDN]
-	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" && targetFQDN == "" {
+
+	if !svc.DeletionTimestamp.IsZero() || !a.isTailscaleService(svc) {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
@@ -104,7 +121,14 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 //
 // This function is responsible for removing the finalizer from the service,
 // once all associated resources are gone.
-func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
+	oldSvcStatus := svc.Status.DeepCopy()
+	defer func() {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+			// An error encountered here should get returned by the Reconcile function.
+			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
+		}
+	}()
 	ix := slices.Index(svc.Finalizers, FinalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
@@ -114,6 +138,10 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		a.managedEgressProxies.Remove(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
+
+		if !a.isTailscaleService(svc) {
+			tsoperator.RemoveServiceCondition(svc, tsapi.ProxyReady)
+		}
 		return nil
 	}
 
@@ -133,7 +161,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	// exactly once at the very end of cleanup, because the final step of
 	// cleanup removes the tailscale finalizer, which will make all future
 	// reconciles exit early.
-	logger.Infof("unexposed service from tailnet")
+	logger.Infof("unexposed Service from tailnet")
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -141,6 +169,10 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	a.managedEgressProxies.Remove(svc.UID)
 	gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 	gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
+
+	if !a.isTailscaleService(svc) {
+		tsoperator.RemoveServiceCondition(svc, tsapi.ProxyReady)
+	}
 	return nil
 }
 
@@ -149,7 +181,15 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 //
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
-func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (err error) {
+	oldSvcStatus := svc.Status.DeepCopy()
+	defer func() {
+		if !apiequality.Semantic.DeepEqual(oldSvcStatus, svc.Status) {
+			// An error encountered here should get returned by the Reconcile function.
+			err = errors.Join(err, a.Client.Status().Update(ctx, svc))
+		}
+	}()
+
 	// Run for proxy config related validations here as opposed to running
 	// them earlier. This is to prevent cleanup being blocked on a
 	// misconfigured proxy param.
@@ -157,28 +197,29 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid config: %v", err)
 		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDCONFIG", msg)
 		a.logger.Error(msg)
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
 		return nil
 	}
 	if violations := validateService(svc); len(violations) > 0 {
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid Service: %s", strings.Join(violations, ", "))
 		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
 		a.logger.Error(msg)
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
 		return nil
 	}
 
 	proxyClass := proxyClassForObject(svc)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
-			return fmt.Errorf("error verifying ProxyClass for Service: %w", err)
+			errMsg := fmt.Errorf("error verifying ProxyClass for Service: %w", err)
+			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+			return errMsg
 		} else if !ready {
-			logger.Infof("ProxyClass %s specified for the Service, but is not (yet) Ready, waiting..", proxyClass)
+			msg := fmt.Sprintf("ProxyClass %s specified for the Service, but is not (yet) Ready, waiting..", proxyClass)
+			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
+			logger.Info(msg)
 			return nil
 		}
-	}
-
-	hostname, err := nameForService(svc)
-	if err != nil {
-		return err
 	}
 
 	if !slices.Contains(svc.Finalizers, FinalizerName) {
@@ -189,7 +230,9 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		logger.Infof("exposing service over tailscale")
 		svc.Finalizers = append(svc.Finalizers, FinalizerName)
 		if err := a.Update(ctx, svc); err != nil {
-			return fmt.Errorf("failed to add finalizer: %w", err)
+			errMsg := fmt.Errorf("failed to add finalizer: %w", err)
+			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+			return errMsg
 		}
 	}
 	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
@@ -201,7 +244,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	sts := &tailscaleSTSConfig{
 		ParentResourceName:  svc.Name,
 		ParentResourceUID:   string(svc.UID),
-		Hostname:            hostname,
+		Hostname:            nameForService(svc),
 		Tags:                tags,
 		ChildResourceLabels: crl,
 		ProxyClassName:      proxyClass,
@@ -233,10 +276,12 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 
 	var hsvc *corev1.Service
 	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
-		return fmt.Errorf("failed to provision: %w", err)
+		errMsg := fmt.Errorf("failed to provision: %w", err)
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+		return errMsg
 	}
 
-	if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" {
+	if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" { // if an egress proxy
 		clusterDomain := retrieveClusterDomain(a.tsNamespace, logger)
 		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc." + clusterDomain
 		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
@@ -244,14 +289,18 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			svc.Spec.Selector = nil
 			svc.Spec.Type = corev1.ServiceTypeExternalName
 			if err := a.Update(ctx, svc); err != nil {
-				return fmt.Errorf("failed to update service: %w", err)
+				errMsg := fmt.Errorf("failed to update service: %w", err)
+				tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+				return errMsg
 			}
 		}
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 		return nil
 	}
 
 	if !isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) {
 		logger.Debugf("service is not a LoadBalancer, so not updating ingress")
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 		return nil
 	}
 
@@ -260,22 +309,23 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
 	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for proxy pod to finish auth")
+		msg := "no Tailscale hostname known yet, waiting for proxy pod to finish auth"
+		logger.Debug(msg)
 		// No hostname yet. Wait for the proxy pod to auth.
 		svc.Status.LoadBalancer.Ingress = nil
-		if err := a.Status().Update(ctx, svc); err != nil {
-			return fmt.Errorf("failed to update service status: %w", err)
-		}
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
 		return nil
 	}
 
-	logger.Debugf("setting ingress to %q, %s", tsHost, strings.Join(tsIPs, ", "))
+	logger.Debugf("setting Service LoadBalancer status to %q, %s", tsHost, strings.Join(tsIPs, ", "))
 	ingress := []corev1.LoadBalancerIngress{
 		{Hostname: tsHost},
 	}
 	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
 	if err != nil {
-		return fmt.Errorf("failed to parse cluster IP: %w", err)
+		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
+		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
+		return fmt.Errorf(msg)
 	}
 	for _, ip := range tsIPs {
 		addr, err := netip.ParseAddr(ip)
@@ -287,9 +337,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 	svc.Status.LoadBalancer.Ingress = ingress
-	if err := a.Status().Update(ctx, svc); err != nil {
-		return fmt.Errorf("failed to update service status: %w", err)
-	}
+	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 	return nil
 }
 
@@ -301,6 +349,14 @@ func validateService(svc *corev1.Service) []string {
 	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
 		if !isMagicDNSName(fqdn) {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
+		}
+	}
+	svcName := nameForService(svc)
+	if err := dnsname.ValidLabel(svcName); err != nil {
+		if _, ok := svc.Annotations[AnnotationHostname]; ok {
+			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname specified %q: %s", svcName, err))
+		} else {
+			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
 		}
 	}
 	return violations
@@ -334,7 +390,7 @@ func hasExposeAnnotation(svc *corev1.Service) bool {
 	return svc != nil && svc.Annotations[AnnotationExpose] == "true"
 }
 
-// hasTailnetTargetAnnotation returns the value of tailscale.com/tailnet-ip
+// tailnetTargetAnnotation returns the value of tailscale.com/tailnet-ip
 // annotation or of the deprecated tailscale.com/ts-tailnet-target-ip
 // annotation. If neither is set, it returns an empty string. If both are set,
 // it returns the value of the new annotation.

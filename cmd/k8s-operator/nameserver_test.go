@@ -81,12 +81,12 @@ func TestNameserverReconciler(t *testing.T) {
 		IP: "1.2.3.4",
 	}
 	dnsCfg.Finalizers = []string{FinalizerName}
-	dnsCfg.Status.Conditions = append(dnsCfg.Status.Conditions, tsapi.ConnectorCondition{
-		Type:               tsapi.NameserverReady,
+	dnsCfg.Status.Conditions = append(dnsCfg.Status.Conditions, metav1.Condition{
+		Type:               string(tsapi.NameserverReady),
 		Status:             metav1.ConditionTrue,
 		Reason:             reasonNameserverCreated,
 		Message:            reasonNameserverCreated,
-		LastTransitionTime: &metav1.Time{Time: cl.Now().Truncate(time.Second)},
+		LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
 	expectEqual(t, fc, dnsCfg, nil)
 

@@ -33,11 +33,8 @@ import (
 
 const (
 	reasonConnectorCreationFailed = "ConnectorCreationFailed"
-
-	reasonConnectorCreated           = "ConnectorCreated"
-	reasonConnectorCleanupFailed     = "ConnectorCleanupFailed"
-	reasonConnectorCleanupInProgress = "ConnectorCleanupInProgress"
-	reasonConnectorInvalid           = "ConnectorInvalid"
+	reasonConnectorCreated        = "ConnectorCreated"
+	reasonConnectorInvalid        = "ConnectorInvalid"
 
 	messageConnectorCreationFailed = "Failed creating Connector: %v"
 	messageConnectorInvalid        = "Connector is invalid: %v"
@@ -108,7 +105,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	}
 
 	oldCnStatus := cn.Status.DeepCopy()
-	setStatus := func(cn *tsapi.Connector, _ tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+	setStatus := func(cn *tsapi.Connector, _ tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, status, reason, message, cn.Generation, a.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, cn.Status) {
 			// An error encountered here should get returned by the Reconcile function.

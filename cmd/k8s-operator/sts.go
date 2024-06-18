@@ -35,7 +35,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
 
@@ -947,14 +946,11 @@ func defaultEnv(envName, defVal string) string {
 	return v
 }
 
-func nameForService(svc *corev1.Service) (string, error) {
+func nameForService(svc *corev1.Service) string {
 	if h, ok := svc.Annotations[AnnotationHostname]; ok {
-		if err := dnsname.ValidLabel(h); err != nil {
-			return "", fmt.Errorf("invalid Tailscale hostname %q: %w", h, err)
-		}
-		return h, nil
+		return h
 	}
-	return svc.Namespace + "-" + svc.Name, nil
+	return svc.Namespace + "-" + svc.Name
 }
 
 func isValidFirewallMode(m string) bool {
