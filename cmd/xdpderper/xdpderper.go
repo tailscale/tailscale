@@ -5,6 +5,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -57,7 +58,26 @@ func main() {
 	log.Println("XDP STUN server started")
 
 	mux := http.NewServeMux()
-	tsweb.Debugger(mux)
+	debug := tsweb.Debugger(mux)
+	debug.KVFunc("Drop STUN", func() any {
+		return server.GetDropSTUN()
+	})
+	debug.Handle("drop-stun-on", "Drop STUN packets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := server.SetDropSTUN(true)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+		} else {
+			io.WriteString(w, "STUN packets are now being dropped.")
+		}
+	}))
+	debug.Handle("drop-stun-off", "Handle STUN packets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := server.SetDropSTUN(false)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+		} else {
+			io.WriteString(w, "STUN packets are now being handled.")
+		}
+	}))
 	errCh := make(chan error, 1)
 	go func() {
 		err := http.ListenAndServe(*flagHTTP, mux)

@@ -26,3 +26,11 @@ func (s *STUNServer) Close() error {
 func (s *STUNServer) Describe(descCh chan<- *prometheus.Desc) {}
 
 func (s *STUNServer) Collect(metricCh chan<- prometheus.Metric) {}
+
+func (s *STUNServer) SetDropSTUN(v bool) error {
+	return errors.New("unimplemented on this GOOS")
+}
+
+func (s *STUNServer) GetDropSTUN() bool {
+	return true
+}
