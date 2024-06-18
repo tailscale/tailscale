@@ -33,6 +33,9 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 	var erracc error
 
 	for _, r := range pf {
+		if len(r.SrcBits) > 0 {
+			return nil, fmt.Errorf("unexpected SrcBits; control plane should not send this to this client version")
+		}
 		// Profiling determined that this function was spending a lot
 		// of time in runtime.growslice. As such, we attempt to
 		// pre-allocate some slices. Multipliers were chosen arbitrarily.
@@ -54,12 +57,8 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 			m.IPProto = views.SliceOf(filtered)
 		}
 
-		for i, s := range r.SrcIPs {
-			var bits *int
-			if len(r.SrcBits) > i {
-				bits = &r.SrcBits[i]
-			}
-			nets, err := parseIPSet(s, bits)
+		for _, s := range r.SrcIPs {
+			nets, err := parseIPSet(s)
 			if err != nil && erracc == nil {
 				erracc = err
 				continue
@@ -69,7 +68,10 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 		m.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(m.Srcs))
 
 		for _, d := range r.DstPorts {
-			nets, err := parseIPSet(d.IP, d.Bits)
+			if d.Bits != nil {
+				return nil, fmt.Errorf("unexpected DstBits; control plane should not send this to this client version")
+			}
+			nets, err := parseIPSet(d.IP)
 			if err != nil && erracc == nil {
 				erracc = err
 				continue
@@ -119,14 +121,11 @@ var (
 //   - a CIDR (e.g. "192.168.0.0/16")
 //   - a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
 //
-// bits, if non-nil, is the legacy SrcBits CIDR length to make a IP
-// address (without a slash) treated as a CIDR of *bits length.
-//
 // TODO(bradfitz): make this return an IPSet and plumb that all
 // around, and ultimately use a new version of IPSet.ContainsFunc like
 // Contains16Func that works in [16]byte address, so we we can match
 // at runtime without allocating?
-func parseIPSet(arg string, bits *int) ([]netip.Prefix, error) {
+func parseIPSet(arg string) ([]netip.Prefix, error) {
 	if arg == "*" {
 		// User explicitly requested wildcard.
 		return []netip.Prefix{
@@ -155,7 +154,7 @@ func parseIPSet(arg string, bits *int) ([]netip.Prefix, error) {
 			return nil, err
 		}
 		r := netipx.IPRangeFrom(ip1, ip2)
-		if !r.Valid() {
+		if !r.IsValid() {
 			return nil, fmt.Errorf("invalid IP range %q", arg)
 		}
 		return r.Prefixes(), nil
@@ -164,12 +163,5 @@ func parseIPSet(arg string, bits *int) ([]netip.Prefix, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid IP address %q", arg)
 	}
-	bits8 := uint8(ip.BitLen())
-	if bits != nil {
-		if *bits < 0 || *bits > int(bits8) {
-			return nil, fmt.Errorf("invalid CIDR size %d for IP %q", *bits, arg)
-		}
-		bits8 = uint8(*bits)
-	}
-	return []netip.Prefix{netip.PrefixFrom(ip, int(bits8))}, nil
+	return []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}, nil
 }
