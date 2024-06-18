@@ -42,6 +42,10 @@ type Filter struct {
 	logIPs4 func(netip.Addr) bool
 	logIPs6 func(netip.Addr) bool
 
+	// srcIPHasCap optionally specifies a function that reports
+	// whether a given source IP address has a given capability.
+	srcIPHasCap CapTestFunc
+
 	// matches4 and matches6 are lists of match->action rules
 	// applied to all packets arriving over tailscale
 	// tunnels. Matches are checked in order, and processing stops
@@ -157,12 +161,12 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 	sb.AddPrefix(any4)
 	sb.AddPrefix(any6)
 	ipSet, _ := sb.IPSet()
-	return New(ms, ipSet, ipSet, nil, logf)
+	return New(ms, nil, ipSet, ipSet, nil, logf)
 }
 
 // NewAllowNone returns a packet filter that rejects everything.
 func NewAllowNone(logf logger.Logf, logIPs *netipx.IPSet) *Filter {
-	return New(nil, &netipx.IPSet{}, logIPs, nil, logf)
+	return New(nil, nil, &netipx.IPSet{}, logIPs, nil, logf)
 }
 
 // NewShieldsUpFilter returns a packet filter that rejects incoming connections.
@@ -174,17 +178,20 @@ func NewShieldsUpFilter(localNets *netipx.IPSet, logIPs *netipx.IPSet, shareStat
 	if shareStateWith != nil && !shareStateWith.shieldsUp {
 		shareStateWith = nil
 	}
-	f := New(nil, localNets, logIPs, shareStateWith, logf)
+	f := New(nil, nil, localNets, logIPs, shareStateWith, logf)
 	f.shieldsUp = true
 	return f
 }
 
-// New creates a new packet filter. The filter enforces that incoming
-// packets must be destined to an IP in localNets, and must be allowed
-// by matches. If shareStateWith is non-nil, the returned filter
-// shares state with the previous one, to enable changing rules at
-// runtime without breaking existing stateful flows.
-func New(matches []Match, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
+// New creates a new packet filter. The filter enforces that incoming packets
+// must be destined to an IP in localNets, and must be allowed by matches.
+// The optional capTest func is used to evaluate a Match that uses capabilities.
+// If nil, such matches will always fail.
+//
+// If shareStateWith is non-nil, the returned filter shares state with the
+// previous one, to enable changing rules at runtime without breaking existing
+// stateful flows.
+func New(matches []Match, capTest CapTestFunc, localNets, logIPs *netipx.IPSet, shareStateWith *Filter, logf logger.Logf) *Filter {
 	var state *filterState
 	if shareStateWith != nil {
 		state = shareStateWith.state
@@ -229,6 +236,7 @@ func matchesFamily(ms matches, keep func(netip.Addr) bool) matches {
 	for _, m := range ms {
 		var retm Match
 		retm.IPProto = m.IPProto
+		retm.SrcCaps = m.SrcCaps
 		for _, src := range m.Srcs {
 			if keep(src.Addr()) {
 				retm.Srcs = append(retm.Srcs, src)
@@ -240,7 +248,7 @@ func matchesFamily(ms matches, keep func(netip.Addr) bool) matches {
 				retm.Dsts = append(retm.Dsts, dst)
 			}
 		}
-		if len(retm.Srcs) > 0 && len(retm.Dsts) > 0 {
+		if (len(retm.Srcs) > 0 || len(retm.SrcCaps) > 0) && len(retm.Dsts) > 0 {
 			retm.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(retm.Srcs))
 			ret = append(ret, retm)
 		}
@@ -462,7 +470,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 			//  related to an existing ICMP-Echo, TCP, or UDP
 			//  session.
 			return Accept, "icmp response ok"
-		} else if f.matches4.matchIPsOnly(q) {
+		} else if f.matches4.matchIPsOnly(q, f.srcIPHasCap) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
@@ -478,7 +486,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
-		if f.matches4.match(q) {
+		if f.matches4.match(q, f.srcIPHasCap) {
 			return Accept, "tcp ok"
 		}
 	case ipproto.UDP, ipproto.SCTP:
@@ -491,7 +499,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if ok {
 			return Accept, "cached"
 		}
-		if f.matches4.match(q) {
+		if f.matches4.match(q, f.srcIPHasCap) {
 			return Accept, "ok"
 		}
 	case ipproto.TSMP:
@@ -522,7 +530,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 			//  related to an existing ICMP-Echo, TCP, or UDP
 			//  session.
 			return Accept, "icmp response ok"
-		} else if f.matches6.matchIPsOnly(q) {
+		} else if f.matches6.matchIPsOnly(q, f.srcIPHasCap) {
 			// If any port is open to an IP, allow ICMP to it.
 			return Accept, "icmp ok"
 		}
@@ -538,7 +546,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if q.IPProto == ipproto.TCP && !q.IsTCPSyn() {
 			return Accept, "tcp non-syn"
 		}
-		if f.matches6.match(q) {
+		if f.matches6.match(q, f.srcIPHasCap) {
 			return Accept, "tcp ok"
 		}
 	case ipproto.UDP, ipproto.SCTP:
@@ -551,7 +559,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if ok {
 			return Accept, "cached"
 		}
-		if f.matches6.match(q) {
+		if f.matches6.match(q, f.srcIPHasCap) {
 			return Accept, "ok"
 		}
 	case ipproto.TSMP:

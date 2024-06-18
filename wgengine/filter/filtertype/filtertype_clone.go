@@ -23,6 +23,7 @@ func (src *Match) Clone() *Match {
 	*dst = *src
 	dst.IPProto = src.IPProto
 	dst.Srcs = append(src.Srcs[:0:0], src.Srcs...)
+	dst.SrcCaps = append(src.SrcCaps[:0:0], src.SrcCaps...)
 	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
 	if src.Caps != nil {
 		dst.Caps = make([]CapMatch, len(src.Caps))
@@ -38,6 +39,7 @@ var _MatchCloneNeedsRegeneration = Match(struct {
 	IPProto      views.Slice[ipproto.Proto]
 	Srcs         []netip.Prefix
 	SrcsContains func(netip.Addr) bool
+	SrcCaps      []tailcfg.NodeCapability
 	Dsts         []NetPortRange
 	Caps         []CapMatch
 }{})

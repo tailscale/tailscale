@@ -250,9 +250,9 @@ type LocalBackend struct {
 	// delta node mutations as they come in (with mu held). The map values can
 	// be given out to callers, but the map itself must not escape the LocalBackend.
 	peers            map[tailcfg.NodeID]tailcfg.NodeView
-	nodeByAddr       map[netip.Addr]tailcfg.NodeID
-	nmExpiryTimer    tstime.TimerController // for updating netMap on node expiry; can be nil
-	activeLogin      string                 // last logged LoginName from netMap
+	nodeByAddr       map[netip.Addr]tailcfg.NodeID // by Node.Addresses only (not subnet routes)
+	nmExpiryTimer    tstime.TimerController        // for updating netMap on node expiry; can be nil
+	activeLogin      string                        // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
@@ -2021,7 +2021,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		b.setFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
 	} else {
 		b.logf("[v1] netmap packet filter: %v filters", len(packetFilter))
-		b.setFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
+		b.setFilter(filter.New(packetFilter, b.srcIPHasCapForFilter, localNets, logNets, oldFilter, b.logf))
 	}
 	// The filter for a jailed node is the exact same as a ShieldsUp filter.
 	oldJailedFilter := b.e.GetJailedFilter()
@@ -6838,4 +6838,29 @@ func (b *LocalBackend) startAutoUpdate(logPrefix string) (retErr error) {
 		b.setC2NUpdateStarted(false)
 	}()
 	return nil
+}
+
+// srcIPHasCapForFilter is called by the packet filter when evaluating firewall
+// rules that require a source IP to have a certain node capability.
+//
+// TODO(bradfitz): optimize this later if/when it matters.
+func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCapability) bool {
+	if cap == "" {
+		// Shouldn't happen, but just in case.
+		// But the empty cap also shouldn't be found in Node.CapMap.
+		return false
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	nodeID, ok := b.nodeByAddr[srcIP]
+	if !ok {
+		return false
+	}
+	n, ok := b.peers[nodeID]
+	if !ok {
+		return false
+	}
+	return n.HasCap(cap)
 }

@@ -66,11 +66,28 @@ type CapMatch struct {
 // Match matches packets from any IP address in Srcs to any ip:port in
 // Dsts.
 type Match struct {
-	IPProto      views.Slice[ipproto.Proto] // required set (no default value at this layer)
-	Srcs         []netip.Prefix
+	// IPProto is the set of IP protocol numbers for which this match applies.
+	// It is required. There is no default value at this layer.
+	// If empty, it doesn't match.
+	IPProto views.Slice[ipproto.Proto]
+
+	// Srcs is the set of source IP prefixes for which this match applies. A
+	// Match can match by either its source IP address being in Srcs (which
+	// SrcsContains tests) or if the source IP is of a known peer self address
+	// that contains a NodeCapability listed in SrcCaps.
+	Srcs []netip.Prefix
+	// SrcsContains is an optimized function that reports whether Addr is in
+	// Srcs, using the best search method for the size and shape of Srcs.
 	SrcsContains func(netip.Addr) bool `json:"-"` // report whether Addr is in Srcs
-	Dsts         []NetPortRange        // optional, if Srcs match
-	Caps         []CapMatch            // optional, if Srcs match
+
+	// SrcCaps is an alternative way to match packets. If the peer's source IP
+	// has one of these capabilities, it's also permitted. The peers are only
+	// looked up by their self address (Node.Addresses) and not by subnet routes
+	// they advertise.
+	SrcCaps []tailcfg.NodeCapability
+
+	Dsts []NetPortRange // optional, if source matches
+	Caps []CapMatch     // optional, if source match
 }
 
 func (m Match) String() string {

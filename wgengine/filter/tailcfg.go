@@ -58,12 +58,15 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 		}
 
 		for _, s := range r.SrcIPs {
-			nets, err := parseIPSet(s)
+			nets, cap, err := parseIPSet(s)
 			if err != nil && erracc == nil {
 				erracc = err
 				continue
 			}
 			m.Srcs = append(m.Srcs, nets...)
+			if cap != "" {
+				m.SrcCaps = append(m.SrcCaps, cap)
+			}
 		}
 		m.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(m.Srcs))
 
@@ -71,9 +74,13 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 			if d.Bits != nil {
 				return nil, fmt.Errorf("unexpected DstBits; control plane should not send this to this client version")
 			}
-			nets, err := parseIPSet(d.IP)
+			nets, cap, err := parseIPSet(d.IP)
 			if err != nil && erracc == nil {
 				erracc = err
+				continue
+			}
+			if cap != "" {
+				erracc = fmt.Errorf("unexpected capability %q in DstPorts", cap)
 				continue
 			}
 			for _, net := range nets {
@@ -120,48 +127,52 @@ var (
 //   - the string "*" to match everything (both IPv4 & IPv6)
 //   - a CIDR (e.g. "192.168.0.0/16")
 //   - a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
+//   - "cap:<peer-node-capability>" to match a peer node capability
 //
 // TODO(bradfitz): make this return an IPSet and plumb that all
 // around, and ultimately use a new version of IPSet.ContainsFunc like
 // Contains16Func that works in [16]byte address, so we we can match
 // at runtime without allocating?
-func parseIPSet(arg string) ([]netip.Prefix, error) {
+func parseIPSet(arg string) (prefixes []netip.Prefix, peerCap tailcfg.NodeCapability, err error) {
 	if arg == "*" {
 		// User explicitly requested wildcard.
 		return []netip.Prefix{
 			netip.PrefixFrom(zeroIP4, 0),
 			netip.PrefixFrom(zeroIP6, 0),
-		}, nil
+		}, "", nil
+	}
+	if cap, ok := strings.CutPrefix(arg, "cap:"); ok {
+		return nil, tailcfg.NodeCapability(cap), nil
 	}
 	if strings.Contains(arg, "/") {
 		pfx, err := netip.ParsePrefix(arg)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if pfx != pfx.Masked() {
-			return nil, fmt.Errorf("%v contains non-network bits set", pfx)
+			return nil, "", fmt.Errorf("%v contains non-network bits set", pfx)
 		}
-		return []netip.Prefix{pfx}, nil
+		return []netip.Prefix{pfx}, "", nil
 	}
 	if strings.Count(arg, "-") == 1 {
 		ip1s, ip2s, _ := strings.Cut(arg, "-")
 		ip1, err := netip.ParseAddr(ip1s)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		ip2, err := netip.ParseAddr(ip2s)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		r := netipx.IPRangeFrom(ip1, ip2)
 		if !r.IsValid() {
-			return nil, fmt.Errorf("invalid IP range %q", arg)
+			return nil, "", fmt.Errorf("invalid IP range %q", arg)
 		}
-		return r.Prefixes(), nil
+		return r.Prefixes(), "", nil
 	}
 	ip, err := netip.ParseAddr(arg)
 	if err != nil {
-		return nil, fmt.Errorf("invalid IP address %q", arg)
+		return nil, "", fmt.Errorf("invalid IP address %q", arg)
 	}
-	return []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}, nil
+	return []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}, "", nil
 }

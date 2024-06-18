@@ -140,7 +140,8 @@ type CapabilityVersion int
 //   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
-const CurrentCapabilityVersion CapabilityVersion = 99
+//   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
+const CurrentCapabilityVersion CapabilityVersion = 100
 
 type StableID string
 
@@ -1480,6 +1481,7 @@ type FilterRule struct {
 	//     * the string "*" to match everything (both IPv4 & IPv6)
 	//     * a CIDR (e.g. "192.168.0.0/16")
 	//     * a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
+	//     * a string "cap:<capability>" with NodeCapMap cap name
 	SrcIPs []string
 
 	// SrcBits is deprecated; it was the old way to specify a CIDR
