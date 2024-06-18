@@ -81,10 +81,6 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	// Should have an error about invalid config.
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
@@ -197,10 +193,6 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	// Note that the Tailscale-specific condition status should be gone now.
 	want = &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
@@ -274,10 +266,6 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -389,10 +377,6 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -501,10 +485,6 @@ func TestAnnotations(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -540,10 +520,6 @@ func TestAnnotations(t *testing.T) {
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 	want = &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
@@ -627,10 +603,6 @@ func TestAnnotationIntoLB(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -664,10 +636,6 @@ func TestAnnotationIntoLB(t *testing.T) {
 	// ... but the service should have a LoadBalancer status.
 
 	want = &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -764,10 +732,6 @@ func TestLBIntoAnnotation(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -816,10 +780,6 @@ func TestLBIntoAnnotation(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 
 	want = &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -898,10 +858,6 @@ func TestCustomHostname(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 	want := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Namespace:  "default",
@@ -938,10 +894,6 @@ func TestCustomHostname(t *testing.T) {
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 	want = &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
