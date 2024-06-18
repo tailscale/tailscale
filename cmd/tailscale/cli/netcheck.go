@@ -78,9 +78,13 @@ func runNetcheck(ctx context.Context, args []string) error {
 		log.Printf("No DERP map from tailscaled; using default.")
 	}
 	if err != nil || noRegions {
-		hc := &http.Client{Transport: tlsdial.NewTransport()}
+		hc := &http.Client{
+			Transport: tlsdial.NewTransport(),
+			Timeout:   10 * time.Second,
+		}
 		dm, err = prodDERPMap(ctx, hc)
 		if err != nil {
+			log.Println("Failed to fetch a DERP map, so netcheck cannot continue. Check your Internet connection.")
 			return err
 		}
 	}
@@ -209,6 +213,7 @@ func portMapping(r *netcheck.Report) string {
 }
 
 func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, error) {
+	log.Printf("attempting to fetch a DERPMap from %s", ipn.DefaultControlURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create prodDERPMap request: %w", err)
