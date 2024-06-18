@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/views"
 )
 
 //go:generate go run tailscale.com/cmd/cloner --type=Match,CapMatch
@@ -65,7 +66,7 @@ type CapMatch struct {
 // Match matches packets from any IP address in Srcs to any ip:port in
 // Dsts.
 type Match struct {
-	IPProto      []ipproto.Proto // required set (no default value at this layer)
+	IPProto      views.Slice[ipproto.Proto] // required set (no default value at this layer)
 	Srcs         []netip.Prefix
 	SrcsContains func(netip.Addr) bool `json:"-"` // report whether Addr is in Srcs
 	Dsts         []NetPortRange        // optional, if Srcs match

@@ -126,7 +126,7 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 	any6 := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
 	ms := []Match{
 		{
-			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4},
+			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4}),
 			Srcs:    []netip.Prefix{any4},
 			Dsts: []NetPortRange{
 				{
@@ -139,7 +139,7 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 			},
 		},
 		{
-			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv6},
+			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv6}),
 			Srcs:    []netip.Prefix{any6},
 			Dsts: []NetPortRange{
 				{

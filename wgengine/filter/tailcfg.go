@@ -23,6 +23,8 @@ var defaultProtos = []ipproto.Proto{
 	ipproto.ICMPv6,
 }
 
+var defaultProtosView = views.SliceOf(defaultProtos)
+
 // MatchesFromFilterRules converts tailcfg FilterRules into Matches.
 // If an error is returned, the Matches result is still valid,
 // containing the rules that were successfully converted.
@@ -41,14 +43,15 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 		}
 
 		if len(r.IPProto) == 0 {
-			m.IPProto = append([]ipproto.Proto(nil), defaultProtos...)
+			m.IPProto = defaultProtosView
 		} else {
-			m.IPProto = make([]ipproto.Proto, 0, len(r.IPProto))
+			filtered := make([]ipproto.Proto, 0, len(r.IPProto))
 			for _, n := range r.IPProto {
 				if n >= 0 && n <= 0xff {
-					m.IPProto = append(m.IPProto, ipproto.Proto(n))
+					filtered = append(filtered, ipproto.Proto(n))
 				}
 			}
+			m.IPProto = views.SliceOf(filtered)
 		}
 
 		for i, s := range r.SrcIPs {

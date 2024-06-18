@@ -27,6 +27,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/hashx"
@@ -353,7 +354,7 @@ func getVal() *tailscaleTypes {
 			},
 		},
 		filter.Match{
-			IPProto: []ipproto.Proto{1, 2, 3},
+			IPProto: views.SliceOf([]ipproto.Proto{1, 2, 3}),
 		},
 	}
 }

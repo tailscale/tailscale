@@ -45,7 +45,7 @@ func m(srcs []netip.Prefix, dsts []NetPortRange, protos ...ipproto.Proto) Match 
 		protos = defaultProtos
 	}
 	return Match{
-		IPProto:      protos,
+		IPProto:      views.SliceOf(protos),
 		Srcs:         srcs,
 		SrcsContains: ipset.NewContainsIPFunc(views.SliceOf(srcs)),
 		Dsts:         dsts,
@@ -767,12 +767,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			},
 			want: []Match{
 				{
-					IPProto: []ipproto.Proto{
-						ipproto.TCP,
-						ipproto.UDP,
-						ipproto.ICMPv4,
-						ipproto.ICMPv6,
-					},
+					IPProto: defaultProtosView,
 					Dsts: []NetPortRange{
 						{
 							Net:   netip.MustParsePrefix("0.0.0.0/0"),
@@ -804,9 +799,9 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			},
 			want: []Match{
 				{
-					IPProto: []ipproto.Proto{
+					IPProto: views.SliceOf([]ipproto.Proto{
 						ipproto.TCP,
-					},
+					}),
 					Dsts: []NetPortRange{
 						{
 							Net:   netip.MustParsePrefix("1.2.0.0/16"),
@@ -830,6 +825,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			cmpOpts := []cmp.Option{
 				cmp.Comparer(func(a, b netip.Addr) bool { return a == b }),
 				cmp.Comparer(func(a, b netip.Prefix) bool { return a == b }),
+				cmp.Comparer(func(a, b views.Slice[ipproto.Proto]) bool { return views.SliceEqual(a, b) }),
 				cmpopts.IgnoreFields(Match{}, ".SrcsContains"),
 			}
 			if diff := cmp.Diff(got, tt.want, cmpOpts...); diff != "" {

@@ -36,6 +36,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
@@ -156,10 +157,10 @@ func netports(netPorts ...string) (ret []filter.NetPortRange) {
 }
 
 func setfilter(logf logger.Logf, tun *Wrapper) {
-	protos := []ipproto.Proto{
+	protos := views.SliceOf([]ipproto.Proto{
 		ipproto.TCP,
 		ipproto.UDP,
-	}
+	})
 	matches := []filter.Match{
 		{IPProto: protos, Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
 		{IPProto: protos, Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},

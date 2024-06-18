@@ -4,9 +4,8 @@
 package filter
 
 import (
-	"slices"
-
 	"tailscale.com/net/packet"
+	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter/filtertype"
 )
 
@@ -14,7 +13,7 @@ type matches []filtertype.Match
 
 func (ms matches) match(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !slices.Contains(m.IPProto, q.IPProto) {
+		if !views.SliceContains(m.IPProto, q.IPProto) {
 			continue
 		}
 		if !m.SrcsContains(q.Src.Addr()) {
@@ -52,7 +51,7 @@ func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 // ignored, as long as the match is for the entire uint16 port range.
 func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !slices.Contains(m.IPProto, q.IPProto) {
+		if !views.SliceContains(m.IPProto, q.IPProto) {
 			continue
 		}
 		if !m.SrcsContains(q.Src.Addr()) {
