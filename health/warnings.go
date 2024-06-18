@@ -84,20 +84,22 @@ var LoginStateWarnable = Register(&Warnable{
 
 // notInMapPollWarnable is a Warnable that warns the user that they cannot connect to the control server.
 var notInMapPollWarnable = Register(&Warnable{
-	Code:      "not-in-map-poll",
-	Title:     "Cannot connect to control server",
-	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
-	Text:      StaticMessage("Cannot connect to the control server (not in map poll). Check your Internet connection."),
+	Code:                 "not-in-map-poll",
+	Title:                "Cannot connect to control server",
+	Severity:             SeverityMedium,
+	DependsOn:            []*Warnable{NetworkStatusWarnable},
+	Text:                 StaticMessage("Cannot connect to the control server (not in map poll). Check your Internet connection."),
+	IgnoredDuringStartup: true,
 })
 
 // noDERPHomeWarnable is a Warnable that warns the user that Tailscale doesn't have a home DERP.
 var noDERPHomeWarnable = Register(&Warnable{
-	Code:      "no-derp-home",
-	Title:     "No home relay server",
-	Severity:  SeverityHigh,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
-	Text:      StaticMessage("Tailscale could not connect to any relay server. Check your Internet connection."),
+	Code:                 "no-derp-home",
+	Title:                "No home relay server",
+	Severity:             SeverityHigh,
+	DependsOn:            []*Warnable{NetworkStatusWarnable},
+	Text:                 StaticMessage("Tailscale could not connect to any relay server. Check your Internet connection."),
+	IgnoredDuringStartup: true,
 })
 
 // noDERPConnectionWarnable is a Warnable that warns the user that Tailscale couldn't connect to a specific DERP server.
@@ -109,6 +111,7 @@ var noDERPConnectionWarnable = Register(&Warnable{
 	Text: func(args Args) string {
 		return fmt.Sprintf("Tailscale could not connect to the relay server '%s'. The server might be temporarily unavailable, or your Internet connection might be down.", args[ArgRegionID])
 	},
+	IgnoredDuringStartup: true,
 })
 
 // derpTimeoutWarnable is a Warnable that warns the user that Tailscale hasn't heard from the home DERP region for a while.
@@ -120,6 +123,7 @@ var derpTimeoutWarnable = Register(&Warnable{
 	Text: func(args Args) string {
 		return fmt.Sprintf("Tailscale hasn't heard from the home relay server (region %v) in %v. The server might be temporarily unavailable, or your Internet connection might be down.", args[ArgRegionID], args[ArgDuration])
 	},
+	IgnoredDuringStartup: true,
 })
 
 // derpRegionErrorWarnable is a Warnable that warns the user that a DERP region is reporting an issue.
@@ -131,6 +135,7 @@ var derpRegionErrorWarnable = Register(&Warnable{
 	Text: func(args Args) string {
 		return fmt.Sprintf("The relay server #%v is reporting an issue: %v", args[ArgRegionID], args[ArgError])
 	},
+	IgnoredDuringStartup: true,
 })
 
 // noUDP4BindWarnable is a Warnable that warns the user that Tailscale couldn't listen for incoming UDP connections.

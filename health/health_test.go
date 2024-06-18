@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"tailscale.com/version"
 )
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
@@ -175,4 +177,35 @@ func TestRegisterWarnablePanicsWithDuplicate(t *testing.T) {
 		}
 	}()
 	Register(w)
+}
+
+func TestIgnoresSetUnhealthyDuringStartup(t *testing.T) {
+	testWarnable.IgnoredDuringStartup = true
+	ht := Tracker{}
+	ht.SetIPNState("Starting", true)
+
+	var want []WarnableCode
+	if version.IsUnstableBuild() {
+		want = []WarnableCode{unstableWarnable.Code}
+	} else {
+		want = []WarnableCode{}
+	}
+
+	if len(ht.CurrentState().Warnings) != len(want) {
+		t.Fatalf("after SetIPNState, len(newTracker.CurrentState().Warnings) = %d; want = %d", len(ht.CurrentState().Warnings), len(want))
+	}
+
+	ht.SetUnhealthy(testWarnable, Args{ArgError: "Hello world 1"})
+	if len(ht.CurrentState().Warnings) != len(want) {
+		t.Fatalf("after SetUnhealthy, len(newTracker.CurrentState().Warnings) = %d; want = %d", len(ht.CurrentState().Warnings), len(want))
+	}
+
+	// advance time by 6 seconds to pretend the startup period ended
+	ht.ipnWantRunningSetTime = time.Now().Add(-time.Second * 6)
+	ht.SetUnhealthy(testWarnable, Args{ArgError: "Hello world 1"})
+	if len(ht.CurrentState().Warnings) != len(want)+1 {
+		t.Fatalf("after SetUnhealthy, len(newTracker.CurrentState().Warnings) = %d; want = %d", len(ht.CurrentState().Warnings), len(want))
+	}
+
+	testWarnable.IgnoredDuringStartup = false
 }

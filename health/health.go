@@ -91,7 +91,8 @@ type Tracker struct {
 	lastMapRequestHeard     time.Time // time we got a 200 from control for a MapRequest
 	ipnState                string
 	ipnWantRunning          bool
-	anyInterfaceUp          opt.Bool // empty means unknown (assume true)
+	ipnWantRunningSetTime   time.Time // when ipnWantRunning was set to true for the first time in this process
+	anyInterfaceUp          opt.Bool  // empty means unknown (assume true)
 	udp4Unbound             bool
 	controlHealth           []string
 	lastLoginErr            error
@@ -213,6 +214,11 @@ type Warnable struct {
 	// If true, this warnable is related to configuration of networking stack
 	// on the machine that impacts connectivity.
 	ImpactsConnectivity bool
+
+	// If true, any attempt to set this Warnable to an unhealthy state will be ignored during the
+	// first 10 seconds after the user has set ipnWantRunning to true for the first time in the
+	// program lifetime.
+	IgnoredDuringStartup bool
 }
 
 // StaticMessage returns a function that always returns the input string, to be used in
@@ -294,6 +300,10 @@ func (t *Tracker) SetUnhealthy(w *Warnable, args Args) {
 
 func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 	if w == nil {
+		return
+	}
+
+	if w.IgnoredDuringStartup && t.isStartingUpLocked() {
 		return
 	}
 
@@ -681,7 +691,17 @@ func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 	defer t.mu.Unlock()
 	t.ipnState = state
 	t.ipnWantRunning = wantRunning
+	if wantRunning && t.ipnWantRunningSetTime.IsZero() {
+		t.ipnWantRunningSetTime = time.Now()
+	}
 	t.selfCheckLocked()
+}
+
+// isStartingUp reports whether the client is still starting up, that is, the user hasn't set
+// ipnWantRunning to true for the first time in the program lifetime yet, or has done so in
+// the last 5 seconds.
+func (t *Tracker) isStartingUpLocked() bool {
+	return time.Since(t.ipnWantRunningSetTime) < 5*time.Second
 }
 
 // SetAnyInterfaceUp sets whether any network interface is up.
