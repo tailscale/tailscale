@@ -440,11 +440,50 @@ func TestXDP(t *testing.T) {
 
 	cases := []struct {
 		name          string
+		dropSTUN      bool
 		packetIn      []byte
 		wantCode      xdpAction
 		wantPacketOut []byte
 		wantMetrics   map[bpfCountersKey]uint64
 	}{
+		{
+			name:          "ipv4 STUN Binding Request Drop STUN",
+			dropSTUN:      true,
+			packetIn:      ipv4STUNBindingReqTX,
+			wantCode:      xdpActionDrop,
+			wantPacketOut: ipv4STUNBindingReqTX,
+			wantMetrics: map[bpfCountersKey]uint64{
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV4),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_PACKETS_DROP_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_DROP_STUN),
+				}: 1,
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV4),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_BYTES_DROP_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_DROP_STUN),
+				}: uint64(len(ipv4STUNBindingReqTX)),
+			},
+		},
+		{
+			name:          "ipv6 STUN Binding Request Drop STUN",
+			dropSTUN:      true,
+			packetIn:      ipv6STUNBindingReqTX,
+			wantCode:      xdpActionDrop,
+			wantPacketOut: ipv6STUNBindingReqTX,
+			wantMetrics: map[bpfCountersKey]uint64{
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV6),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_PACKETS_DROP_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_DROP_STUN),
+				}: 1,
+				{
+					Af:      uint8(bpfCounterKeyAfCOUNTER_KEY_AF_IPV6),
+					Pba:     uint8(bpfCounterKeyPacketsBytesActionCOUNTER_KEY_BYTES_DROP_TOTAL),
+					ProgEnd: uint8(bpfCounterKeyProgEndCOUNTER_KEY_END_DROP_STUN),
+				}: uint64(len(ipv6STUNBindingReqTX)),
+			},
+		},
 		{
 			name:          "ipv4 STUN Binding Request TX",
 			packetIn:      ipv4STUNBindingReqTX,
@@ -962,6 +1001,10 @@ func TestXDP(t *testing.T) {
 			opts := ebpf.RunOptions{
 				Data:    c.packetIn,
 				DataOut: make([]byte, 1514),
+			}
+			err = server.SetDropSTUN(c.dropSTUN)
+			if err != nil {
+				t.Fatalf("error setting drop STUN: %v", err)
 			}
 			got, err := server.objs.XdpProgFunc.Run(&opts)
 			if err != nil {
