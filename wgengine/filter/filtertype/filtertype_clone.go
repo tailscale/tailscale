@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/views"
 )
 
 // Clone makes a deep copy of Match.
@@ -20,7 +21,7 @@ func (src *Match) Clone() *Match {
 	}
 	dst := new(Match)
 	*dst = *src
-	dst.IPProto = append(src.IPProto[:0:0], src.IPProto...)
+	dst.IPProto = src.IPProto
 	dst.Srcs = append(src.Srcs[:0:0], src.Srcs...)
 	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
 	if src.Caps != nil {
@@ -34,7 +35,7 @@ func (src *Match) Clone() *Match {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MatchCloneNeedsRegeneration = Match(struct {
-	IPProto      []ipproto.Proto
+	IPProto      views.Slice[ipproto.Proto]
 	Srcs         []netip.Prefix
 	SrcsContains func(netip.Addr) bool
 	Dsts         []NetPortRange
