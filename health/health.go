@@ -685,6 +685,18 @@ func (t *Tracker) SetDERPMap(dm *tailcfg.DERPMap) {
 	t.selfCheckLocked()
 }
 
+// derpRegionNameLocked returns the name of the DERP region with the given ID
+// or the empty string if unknown.
+func (t *Tracker) derpRegionNameLocked(regID int) string {
+	if t.derpMap == nil {
+		return ""
+	}
+	if r, ok := t.derpMap.Regions[regID]; ok {
+		return r.RegionName
+	}
+	return ""
+}
+
 // state is an ipn.State.String() value: "Running", "Stopped", "NeedsLogin", etc.
 func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 	if t.nil() {
@@ -928,13 +940,13 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		} else if !t.derpRegionConnected[rid] {
 			t.setUnhealthyLocked(noDERPConnectionWarnable, Args{
 				ArgDERPRegionID:   fmt.Sprint(rid),
-				ArgDERPRegionName: t.derpMap.Regions[rid].RegionName,
+				ArgDERPRegionName: t.derpRegionNameLocked(rid),
 			})
 			return
 		} else if d := now.Sub(t.derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
 			t.setUnhealthyLocked(derpTimeoutWarnable, Args{
 				ArgDERPRegionID:   fmt.Sprint(rid),
-				ArgDERPRegionName: t.derpMap.Regions[rid].RegionName,
+				ArgDERPRegionName: t.derpRegionNameLocked(rid),
 				ArgDuration:       d.String(),
 			})
 			return
