@@ -1,3 +1,11 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+// Package noiseconn contains an internal-only wrapper around controlbase.Conn
+// that properly handles the early payload sent by the server before the HTTP/2
+// session begins.
+//
+// See the documentation on the Conn type for more details.
 package noiseconn
 
 import (
@@ -16,9 +24,11 @@ import (
 )
 
 // Conn is a wrapper around controlbase.Conn.
-// It allows attaching an ID to a connection to allow
-// cleaning up references in the pool when the connection
-// is closed.
+//
+// It allows attaching an ID to a connection to allow cleaning up references in
+// the pool when the connection is closed, properly handles an optional "early
+// payload" that's sent prior to beginning the HTTP/2 session, and provides a
+// way to return a connection to a pool when the connection is closed.
 type Conn struct {
 	*controlbase.Conn
 	id      int
@@ -59,9 +69,13 @@ func (c *Conn) RoundTrip(r *http.Request) (*http.Response, error) {
 	return c.h2cc.RoundTrip(r)
 }
 
-// getEarlyPayload waits for the early noise payload to arrive.
+// GetEarlyPayload waits for the early Noise payload to arrive.
 // It may return (nil, nil) if the server begins HTTP/2 without one.
-func (c *Conn) getEarlyPayload(ctx context.Context) (*tailcfg.EarlyNoise, error) {
+//
+// It is safe to call this multiple times; all callers will block until the
+// early Noise payload is ready (if any) and will return the same result for
+// the lifetime of the Conn.
+func (c *Conn) GetEarlyPayload(ctx context.Context) (*tailcfg.EarlyNoise, error) {
 	select {
 	case <-c.earlyPayloadReady:
 		return c.earlyPayload, c.earlyPayloadErr
@@ -71,29 +85,38 @@ func (c *Conn) getEarlyPayload(ctx context.Context) (*tailcfg.EarlyNoise, error)
 }
 
 // ReserveNewRequest will reserve a new concurrent request on the connection.
-// It returns a non-nil http.RoundTripper if the reservation was successful,
-// and any early Noise payload if present. If a reservation was not successful,
-// it will return nil with no error.
-func (c *Conn) ReserveNewRequest(ctx context.Context) (http.RoundTripper, *tailcfg.EarlyNoise, error) {
-	earlyPayloadMaybeNil, err := c.getEarlyPayload(ctx)
+//
+// It returns whether the reservation was successful, and any early Noise
+// payload if present. If a reservation was not successful, it will return
+// false and nil for the early payload.
+func (c *Conn) ReserveNewRequest(ctx context.Context) (bool, *tailcfg.EarlyNoise, error) {
+	earlyPayloadMaybeNil, err := c.GetEarlyPayload(ctx)
 	if err != nil {
-		return nil, nil, err
+		return false, nil, err
 	}
 	if c.h2cc.ReserveNewRequest() {
-		return c, earlyPayloadMaybeNil, nil
+		return true, earlyPayloadMaybeNil, nil
 	}
-	return nil, nil, nil
+	return false, nil, nil
+}
+
+// CanTakeNewRequest reports whether the underlying HTTP/2 connection can take
+// a new request, meaning it has not been closed or received or sent a GOAWAY.
+func (c *Conn) CanTakeNewRequest() bool {
+	return c.h2cc.CanTakeNewRequest()
 }
 
 // The first 9 bytes from the server to client over Noise are either an HTTP/2
 // settings frame (a normal HTTP/2 setup) or, as we added later, an "early payload"
-// header that's also 9 bytes long: 5 bytes (earlyPayloadMagic) followed by 4 bytes
+// header that's also 9 bytes long: 5 bytes (EarlyPayloadMagic) followed by 4 bytes
 // of length. Then that many bytes of JSON-encoded tailcfg.EarlyNoise.
 // The early payload is optional. Some servers may not send it.
 const (
-	hdrLen            = 9 // http2 frame header size; also size of our early payload size header
-	earlyPayloadMagic = "\xff\xff\xffTS"
+	hdrLen = 9 // http2 frame header size; also size of our early payload size header
 )
+
+// EarlyPayloadMagic is the 5-byte magic prefix that indicates an early payload.
+const EarlyPayloadMagic = "\xff\xff\xffTS"
 
 // returnErrReader is an io.Reader that always returns an error.
 type returnErrReader struct {
@@ -129,13 +152,13 @@ func (c *Conn) readHeader() {
 		setErr(err)
 		return
 	}
-	if string(hdr[:len(earlyPayloadMagic)]) != earlyPayloadMagic {
+	if string(hdr[:len(EarlyPayloadMagic)]) != EarlyPayloadMagic {
 		// No early payload. We have to return the 9 bytes read we already
 		// consumed.
 		c.reader = io.MultiReader(bytes.NewReader(hdr[:]), c.Conn)
 		return
 	}
-	epLen := binary.BigEndian.Uint32(hdr[len(earlyPayloadMagic):])
+	epLen := binary.BigEndian.Uint32(hdr[len(EarlyPayloadMagic):])
 	if epLen > 10<<20 {
 		setErr(errors.New("invalid early payload length"))
 		return
@@ -161,10 +184,4 @@ func (c *Conn) Close() error {
 		c.onClose(c.id)
 	}
 	return nil
-}
-
-// CanTakeNewRequest reports whether the connection can take a new request,
-// meaning it has not been closed or received or sent a GOAWAY.
-func (c *Conn) CanTakeNewRequest() bool {
-	return c.h2cc.CanTakeNewRequest()
 }
