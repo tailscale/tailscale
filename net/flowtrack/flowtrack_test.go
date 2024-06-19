@@ -100,10 +100,15 @@ func BenchmarkMapKeys(b *testing.B) {
 	})
 }
 
-func TestJSON(t *testing.T) {
+func TestStringJSON(t *testing.T) {
 	v := MakeTuple(123,
 		netip.MustParseAddrPort("1.2.3.4:5"),
 		netip.MustParseAddrPort("6.7.8.9:10"))
+
+	if got, want := v.String(), "(IPProto-123 1.2.3.4:5 => 6.7.8.9:10)"; got != want {
+		t.Errorf("String = %q; want %q", got, want)
+	}
+
 	got, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
