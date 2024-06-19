@@ -834,6 +834,33 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
+
+	// Make a /whois request to the server to verify that we can actually
+	// communicate over the newly-established connection.
+	whoisURL := "http://" + ts2021Args.host + "/machine/whois"
+	req, err = http.NewRequestWithContext(ctx, "GET", whoisURL, nil)
+	if err != nil {
+		return err
+	}
+
+	// Use a fake http.Transport that just "dials" by returning the above
+	// conn.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ForceAttemptHTTP2 = true
+	tr.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return conn, nil
+	}
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("RoundTrip whois request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading whois response: %w", err)
+	}
+
+	log.Printf("whois response: %q", body)
 	return nil
 }
 
