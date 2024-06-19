@@ -407,7 +407,7 @@ func isLoopback(a net.Addr) bool {
 
 var macOSScreenTime = health.Register(&health.Warnable{
 	Code:  "macos-screen-time",
-	Title: "Screen Time Content Restriction",
+	Title: "Tailscale blocked by Screen Time",
 	Text: func(args health.Args) string {
 		return "macOS Screen Time seems to be blocking Tailscale's network access. Try disabling Screen Time or allowing Tailscale in its Content & Privacy Restrictions."
 	},
