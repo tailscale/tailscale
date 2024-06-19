@@ -725,7 +725,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 
 	clientAP, _ := netip.ParseAddrPort(remoteAddr)
 	if err := s.verifyClient(ctx, clientKey, clientInfo, clientAP.Addr()); err != nil {
-		return fmt.Errorf("client %x rejected: %v", clientKey, err)
+		return fmt.Errorf("client %v rejected: %v", clientKey, err)
 	}
 
 	// At this point we trust the client so we don't time out.
@@ -939,7 +939,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 
 	srcKey, dstKey, contents, err := s.recvForwardPacket(c.br, fl)
 	if err != nil {
-		return fmt.Errorf("client %x: recvForwardPacket: %v", c.key, err)
+		return fmt.Errorf("client %v: recvForwardPacket: %v", c.key, err)
 	}
 	s.packetsForwardedIn.Add(1)
 
@@ -994,7 +994,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
 	if err != nil {
-		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
+		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
 
 	var fwd PacketForwarder
