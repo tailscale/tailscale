@@ -56,7 +56,9 @@ func (t Tuple) SrcPort() uint16 { return t.srcPort }
 func (t Tuple) DstPort() uint16 { return t.dstPort }
 
 func (t Tuple) String() string {
-	return fmt.Sprintf("(%v %v => %v)", t.proto, t.src, t.dst)
+	return fmt.Sprintf("(%v %v => %v)", t.proto,
+		netip.AddrPortFrom(t.SrcAddr(), t.srcPort),
+		netip.AddrPortFrom(t.DstAddr(), t.dstPort))
 }
 
 func (t Tuple) MarshalJSON() ([]byte, error) {
