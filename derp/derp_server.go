@@ -751,7 +751,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		discoSendQueue: make(chan pkt, perClientSendQueueDepth),
 		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan peerGoneMsg),
-		canMesh:        clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
+		canMesh:        s.isMeshPeer(clientInfo),
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
 
@@ -1153,9 +1153,22 @@ func (c *sclient) requestMeshUpdate() {
 
 var localClient tailscale.LocalClient
 
+// isMeshPeer reports whether the client is a trusted mesh peer
+// node in the DERP region.
+func (s *Server) isMeshPeer(info *clientInfo) bool {
+	return info != nil && info.MeshKey != "" && info.MeshKey == s.meshKey
+}
+
 // verifyClient checks whether the client is allowed to connect to the derper,
 // depending on how & whether the server's been configured to verify.
 func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo, clientIP netip.Addr) error {
+	if s.isMeshPeer(info) {
+		// Trusted mesh peer. No need to verify further. In fact, verifying
+		// further wouldn't work: it's not part of the tailnet so tailscaled and
+		// likely the admission control URL wouldn't know about it.
+		return nil
+	}
+
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
 		_, err := localClient.WhoIsNodeKey(ctx, clientKey)
