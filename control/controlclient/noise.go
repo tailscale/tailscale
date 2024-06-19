@@ -174,12 +174,12 @@ func (nc *NoiseClient) GetSingleUseRoundTripper(ctx context.Context) (http.Round
 		if err != nil {
 			return nil, nil, err
 		}
-		rt, earlyPayloadMaybeNil, err := conn.ReserveNewRequest(ctx)
+		ok, earlyPayloadMaybeNil, err := conn.ReserveNewRequest(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		if rt != nil {
-			return rt, earlyPayloadMaybeNil, nil
+		if ok {
+			return conn, earlyPayloadMaybeNil, nil
 		}
 	}
 	return nil, nil, errors.New("[unexpected] failed to reserve a request on a connection")
