@@ -312,7 +312,7 @@ func (f *Filter) logRateLimit(runflags RunFlags, q *packet.Parsed, dir direction
 		verdict = "Drop"
 		runflags &= HexdumpDrops
 	} else if r == Accept && (runflags&LogAccepts) != 0 && acceptBucket.Allow() {
-		verdict = "Accept"
+		verdict = "[v1] Accept"
 		runflags &= HexdumpAccepts
 	}
 
