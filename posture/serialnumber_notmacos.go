@@ -13,6 +13,7 @@ import (
 
 	"github.com/digitalocean/go-smbios/smbios"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/syspolicy"
 )
 
 // getByteFromSmbiosStructure retrieves a 8-bit unsigned integer at the given specOffset.
@@ -71,7 +72,31 @@ func init() {
 	numOfTables = len(validTables)
 }
 
-func GetSerialNumbers(logf logger.Logf) ([]string, error) {
+func GetSerialNumbers(logf logger.Logf) (serials []string, err error) {
+	defer func() {
+		// Append an additional serial number if configured via the
+		// DeviceSerialNumber GP/MDM policy. This can be used as a workaround
+		// when the serial number is not available from SMBIOS, or hasn't been
+		// properly set by the OEM and has a bogus value like "System Serial Number",
+		// "To Be Filled By O.E.M.", "Unknown", or similar.
+		serial, policyErr := syspolicy.GetString("DeviceSerialNumber", "")
+		if policyErr != nil {
+			// Non-fatal, so we'll just return whatever we read from SMBIOS.
+			logf("failed to read DeviceSerialNumber from syspolicy: %v", policyErr)
+		} else if serial != "" {
+			serials = append(serials, serial)
+			if err != nil {
+				// Log the original error before we discard it.
+				logf("%v", err)
+				err = nil
+			}
+		}
+
+		if err == nil {
+			logf("got serial numbers %v", serials)
+		}
+	}()
+
 	// Find SMBIOS data in operating system-specific location.
 	rc, _, err := smbios.Stream()
 	if err != nil {
@@ -86,7 +111,7 @@ func GetSerialNumbers(logf logger.Logf) ([]string, error) {
 		return nil, fmt.Errorf("failed to decode dmi/smbios structures: %w", err)
 	}
 
-	serials := make([]string, 0, numOfTables)
+	serials = make([]string, 0, numOfTables)
 
 	for _, s := range ss {
 		switch s.Header.Type {
@@ -98,8 +123,6 @@ func GetSerialNumbers(logf logger.Logf) ([]string, error) {
 			}
 		}
 	}
-
-	logf("got serial numbers %v", serials)
 
 	return serials, nil
 }

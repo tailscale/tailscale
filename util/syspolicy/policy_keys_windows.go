@@ -28,6 +28,7 @@ var stringKeys = []Key{
 	ManagedByOrganizationName,
 	ManagedByCaption,
 	ManagedByURL,
+	DeviceSerialNumber,
 }
 
 var boolKeys = []Key{
