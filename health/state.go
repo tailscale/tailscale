@@ -41,9 +41,16 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 		text = w.Text(Args{})
 	}
 
-	dependsOnWarnableCodes := make([]WarnableCode, len(w.DependsOn))
+	dependsOnWarnableCodes := make([]WarnableCode, len(w.DependsOn), len(w.DependsOn)+1)
 	for i, d := range w.DependsOn {
 		dependsOnWarnableCodes[i] = d.Code
+	}
+
+	if w != warmingUpWarnable {
+		// Here we tell the frontend that all Warnables depend on warmingUpWarnable. GUIs will silence all warnings until all
+		// their dependencies are healthy. This is a special case to prevent the GUI from showing a bunch of warnings when
+		// the backend is still warming up.
+		dependsOnWarnableCodes = append(dependsOnWarnableCodes, warmingUpWarnable.Code)
 	}
 
 	return &UnhealthyState{

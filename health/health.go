@@ -92,7 +92,8 @@ type Tracker struct {
 	lastMapRequestHeard     time.Time        // time we got a 200 from control for a MapRequest
 	ipnState                string
 	ipnWantRunning          bool
-	anyInterfaceUp          opt.Bool // empty means unknown (assume true)
+	ipnWantRunningLastTrue  time.Time // when ipnWantRunning last changed false -> true
+	anyInterfaceUp          opt.Bool  // empty means unknown (assume true)
 	udp4Unbound             bool
 	controlHealth           []string
 	lastLoginErr            error
@@ -705,7 +706,29 @@ func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.ipnState = state
+	prevWantRunning := t.ipnWantRunning
 	t.ipnWantRunning = wantRunning
+
+	if state == "Running" {
+		// Any time we are told the backend is Running (control+DERP are connected), the Warnable
+		// should be set to healthy, no matter if 5 seconds have passed or not.
+		t.setHealthyLocked(warmingUpWarnable)
+	} else if wantRunning && !prevWantRunning && t.ipnWantRunningLastTrue.IsZero() {
+		// The first time we see wantRunning=true and it used to be false, it means the user requested
+		// the backend to start. We store this timestamp and use it to silence some warnings that are
+		// expected during startup.
+		t.ipnWantRunningLastTrue = time.Now()
+		t.setUnhealthyLocked(warmingUpWarnable, nil)
+		time.AfterFunc(warmingUpWarnableDuration, func() {
+			t.mu.Lock()
+			t.updateWarmingUpWarnableLocked()
+			t.mu.Unlock()
+		})
+	} else if !wantRunning {
+		// Reset the timer when the user decides to stop the backend.
+		t.ipnWantRunningLastTrue = time.Time{}
+	}
+
 	t.selfCheckLocked()
 }
 
@@ -858,6 +881,8 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 // updateBuiltinWarnablesLocked performs a number of checks on the state of the backend,
 // and adds/removes Warnings from the Tracker as needed.
 func (t *Tracker) updateBuiltinWarnablesLocked() {
+	t.updateWarmingUpWarnableLocked()
+
 	if t.checkForUpdates {
 		if cv := t.latestVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
 			if cv.UrgentSecurityUpdate {
@@ -1034,6 +1059,14 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		})
 	} else {
 		t.setHealthyLocked(testWarnable)
+	}
+}
+
+// updateWarmingUpWarnableLocked ensures the warmingUpWarnable is healthy if wantRunning has been set to true
+// for more than warmingUpWarnableDuration.
+func (t *Tracker) updateWarmingUpWarnableLocked() {
+	if !t.ipnWantRunningLastTrue.IsZero() && time.Now().After(t.ipnWantRunningLastTrue.Add(warmingUpWarnableDuration)) {
+		t.setHealthyLocked(warmingUpWarnable)
 	}
 }
 
