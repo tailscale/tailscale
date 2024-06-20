@@ -473,8 +473,9 @@ func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
 }
 
 var macOSScreenTime = health.Register(&health.Warnable{
-	Code:  "macos-screen-time-controlclient",
-	Title: "Tailscale blocked by Screen Time",
+	Code:     "macos-screen-time-controlclient",
+	Severity: health.SeverityHigh,
+	Title:    "Tailscale blocked by Screen Time",
 	Text: func(args health.Args) string {
 		return "macOS Screen Time seems to be blocking Tailscale. Try disabling Screen Time in System Settings > Screen Time > Content & Privacy > Access to Web Content."
 	},
