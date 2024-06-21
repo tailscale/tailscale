@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
@@ -122,6 +123,7 @@ func (m *Manager) Set(cfg Config) error {
 // The returned list is sorted by the first hostname in each entry.
 func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 	didLabel := make(map[string]bool, len(cfg.Hosts))
+	hostsMap := make(map[netip.Addr]*HostEntry, len(cfg.Hosts))
 	for _, sd := range cfg.SearchDomains {
 		for h, ips := range cfg.Hosts {
 			if !sd.Contains(h) || h.NumLabels() != (sd.NumLabels()+1) {
@@ -136,15 +138,23 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 				if cfg.OnlyIPv6 && ip.Is4() {
 					continue
 				}
-				hosts = append(hosts, &HostEntry{
-					Addr:  ip,
-					Hosts: ipHosts,
-				})
+				if e := hostsMap[ip]; e != nil {
+					e.Hosts = append(e.Hosts, ipHosts...)
+				} else {
+					hostsMap[ip] = &HostEntry{
+						Addr:  ip,
+						Hosts: ipHosts,
+					}
+				}
 				// Only add IPv4 or IPv6 per host, like we do in the resolver.
 				break
 			}
 		}
 	}
+	if len(hostsMap) == 0 {
+		return nil
+	}
+	hosts = xmaps.Values(hostsMap)
 	slices.SortFunc(hosts, func(a, b *HostEntry) int {
 		if len(a.Hosts) == 0 && len(b.Hosts) == 0 {
 			return 0
