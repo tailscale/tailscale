@@ -87,8 +87,7 @@ func TestCompileHostEntries(t *testing.T) {
 				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"a.foo.ts.net.", "a"}},
 				{Addr: netip.MustParseAddr("1.1.1.2"), Hosts: []string{"b.foo.ts.net.", "b"}},
 				{Addr: netip.MustParseAddr("1.1.1.3"), Hosts: []string{"c.foo.ts.net.", "c"}},
-				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.beta.tailscale.net."}},
-				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d"}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d", "d.foo.beta.tailscale.net."}},
 				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.beta.tailscale.net.", "e"}},
 			},
 		},
@@ -103,8 +102,7 @@ func TestCompileHostEntries(t *testing.T) {
 				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
 			},
 			want: []*HostEntry{
-				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.beta.tailscale.net."}},
-				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.ts.net.", "e"}},
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.ts.net.", "e", "e.foo.beta.tailscale.net."}},
 			},
 		},
 		{
@@ -120,8 +118,7 @@ func TestCompileHostEntries(t *testing.T) {
 				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
 			},
 			want: []*HostEntry{
-				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.beta.tailscale.net."}},
-				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d"}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d", "d.foo.beta.tailscale.net."}},
 			},
 		},
 		{
@@ -139,8 +136,7 @@ func TestCompileHostEntries(t *testing.T) {
 			want: []*HostEntry{
 				{Addr: netip.MustParseAddr("1.1.1.2"), Hosts: []string{"h1.foo.beta.tailscale.net."}},
 				{Addr: netip.MustParseAddr("1.1.1.3"), Hosts: []string{"h1.foo.ts.net.", "h1"}},
-				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.beta.tailscale.net."}},
-				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.ts.net.", "h2"}},
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.ts.net.", "h2", "h2.foo.beta.tailscale.net."}},
 			},
 		},
 	}
