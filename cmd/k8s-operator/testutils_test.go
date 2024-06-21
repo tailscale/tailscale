@@ -319,7 +319,8 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 			Selector: map[string]string{
 				"app": "1234-UID",
 			},
-			ClusterIP: "None",
+			ClusterIP:      "None",
+			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
 }
