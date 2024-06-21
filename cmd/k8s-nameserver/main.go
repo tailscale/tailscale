@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !plan9
+//go:build linux
 
 // k8s-nameserver is a simple nameserver implementation meant to be used with
 // k8s-operator to allow to resolve magicDNS names associated with tailnet
