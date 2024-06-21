@@ -229,8 +229,6 @@ func (c *Client) Download(ctx context.Context, srcPath, dstPath string) error {
 	c.logf("Downloading %q", sigURL)
 	sig, err := fetch(sigURL, signatureSizeLimit)
 	if err != nil {
-		// Best-effort clean up of downloaded package.
-		os.Remove(dstPathUnverified)
 		return err
 	}
 	msg := binary.LittleEndian.AppendUint64(hash, uint64(len))
@@ -326,6 +324,8 @@ func fetch(url string, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
 
+var onResponseForTest = func(*http.Response) {}
+
 // download writes the response body of url into a local file at dst, up to
 // limit bytes. On success, the returned value is a BLAKE2s hash of the file.
 func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]byte, int64, error) {
@@ -349,31 +349,61 @@ func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]
 		return nil, 0, fmt.Errorf("HEAD %q: unexpected Content-Length %v", url, res.ContentLength)
 	}
 	c.logf("Download size: %v", res.ContentLength)
+	h := NewPackageHash()
 
 	dlReq := must.Get(http.NewRequestWithContext(ctx, httpm.GET, url, nil))
+
+	var skip int64
+	if fi, err := os.Stat(dst); err == nil {
+		if fi.Size() == res.ContentLength {
+			// Assume it got corrupted previously and the earlier attempt failed
+			// the checksum. Delete it and start over.
+			if err := os.Remove(dst); err != nil {
+				return nil, 0, fmt.Errorf("error deleting previous assumed-bad download: %w", err)
+			}
+		} else if fi.Size() > 0 && fi.Size() < res.ContentLength {
+			c.logf("Existing file size: %v", fi.Size())
+			skip = fi.Size()
+			dlReq.Header.Add("Range", fmt.Sprintf("bytes=%d-", skip))
+		}
+	}
+
 	dlRes, err := hc.Do(dlReq)
 	if err != nil {
 		return nil, 0, err
 	}
+	onResponseForTest(dlRes)
 	defer dlRes.Body.Close()
-	// TODO(bradfitz): resume from existing partial file on disk
-	if dlRes.StatusCode != http.StatusOK {
+
+	var of *os.File
+	wantResponseLength := res.ContentLength
+	switch dlRes.StatusCode {
+	case http.StatusOK:
+		if skip > 0 {
+			os.Remove(dst) // best effort; the Create will fail anyway if this would
+		}
+		of, err = os.Create(dst)
+	case http.StatusPartialContent:
+		wantResponseLength = res.ContentLength - skip
+		of, err = os.OpenFile(dst, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
+		if err == nil {
+			// Re-hash the previously downloaded chunk.
+			_, err = io.Copy(h, io.NewSectionReader(of, 0, skip))
+		}
+	default:
 		return nil, 0, fmt.Errorf("GET %q: %v", url, dlRes.Status)
 	}
-
-	of, err := os.Create(dst)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer of.Close()
-	pw := &progressWriter{total: res.ContentLength, logf: c.logf}
-	h := NewPackageHash()
+	pw := &progressWriter{total: res.ContentLength, done: skip, logf: c.logf}
 	n, err := io.Copy(io.MultiWriter(of, h, pw), io.LimitReader(dlRes.Body, limit))
 	if err != nil {
 		return nil, n, err
 	}
-	if n != res.ContentLength {
-		return nil, n, fmt.Errorf("GET %q: downloaded %v, want %v", url, n, res.ContentLength)
+	if n != wantResponseLength {
+		return nil, n, fmt.Errorf("GET %q: downloaded %v, want %v", url, n, wantResponseLength)
 	}
 	if err := dlRes.Body.Close(); err != nil {
 		return nil, n, err
