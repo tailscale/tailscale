@@ -172,10 +172,7 @@ The response is 2xx on success. The response body is an empty JSON object.
 POST /api/v2/device-invites/-/accept
 ```
 
-Resend the specified device invite by email. This can only be used if the specified invite was originally created with an email specified.
-See [creating device invites for a device](#create-device-invites).
-
-Note that invite resends are rate limited to once per minute.
+Accept an invite using the invite code or URL.
 
 ### Parameters
 
@@ -189,7 +186,7 @@ The URL of the invite (in the form "https://login.tailscale.com/admin/invite/{co
 curl -X POST "https://api.tailscale.com/api/v2/device-invites/-/accept" \
   -u "tskey-api-xxxxx:" \
   -H "Content-Type: application/json" \
-  --data-binary '[{"invite": "https://login.tailscale.com/admin/invite/xxxxxx"}]'
+  --data-binary '{"invite": "https://login.tailscale.com/admin/invite/xxxxxx"}'
 ```
 
 ### Response
