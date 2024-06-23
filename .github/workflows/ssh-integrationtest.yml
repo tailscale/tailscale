@@ -1,0 +1,23 @@
+# Run the ssh integration tests with `make sshintegrationtest`.
+# These tests can also be running locally.
+name: "ssh-integrationtest"
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "ssh/**"
+      - "tempfork/gliderlabs/ssh/**"
+      - ".github/workflows/ssh-integrationtest"
+jobs:
+  ssh-integrationtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Run SSH integration tests
+        run: |
+          make sshintegrationtest

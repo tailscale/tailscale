@@ -28,10 +28,12 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/http/httpproxy"
+	"golang.org/x/net/http2"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
+	"tailscale.com/internal/noiseconn"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
@@ -801,7 +803,10 @@ func runTS2021(ctx context.Context, args []string) error {
 		log.Printf("Dial(%q, %q) ...", network, address)
 		c, err := dialer.DialContext(ctx, network, address)
 		if err != nil {
-			log.Printf("Dial(%q, %q) = %v", network, address, err)
+			// skip logging context cancellation errors
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("Dial(%q, %q) = %v", network, address, err)
+			}
 		} else {
 			log.Printf("Dial(%q, %q) = %v / %v", network, address, c.LocalAddr(), c.RemoteAddr())
 		}
@@ -834,6 +839,52 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
+
+	h2Transport, err := http2.ConfigureTransports(&http.Transport{
+		IdleConnTimeout: time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("http2.ConfigureTransports: %w", err)
+	}
+
+	// Now, create a Noise conn over the existing conn.
+	nc, err := noiseconn.New(conn.Conn, h2Transport, 0, nil)
+	if err != nil {
+		return fmt.Errorf("noiseconn.New: %w", err)
+	}
+	defer nc.Close()
+
+	// Reserve a RoundTrip for the whoami request.
+	ok, _, err := nc.ReserveNewRequest(ctx)
+	if err != nil {
+		return fmt.Errorf("ReserveNewRequest: %w", err)
+	}
+	if !ok {
+		return errors.New("ReserveNewRequest failed")
+	}
+
+	// Make a /whoami request to the server to verify that we can actually
+	// communicate over the newly-established connection.
+	whoamiURL := "http://" + ts2021Args.host + "/machine/whoami"
+	req, err = http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := nc.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("RoundTrip whoami request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("whoami request returned status %v", resp.Status)
+	} else {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("reading whoami response: %w", err)
+		}
+		log.Printf("whoami response: %q", body)
+	}
 	return nil
 }
 

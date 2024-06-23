@@ -447,7 +447,7 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 // localBackendWhoIsMethods is the subset of ipn.LocalBackend as needed
 // by the localapi WhoIs method.
 type localBackendWhoIsMethods interface {
-	WhoIs(netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	WhoIs(string, netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	WhoIsNodeKey(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	PeerCaps(netip.Addr) tailcfg.PeerCapMap
 }
@@ -482,7 +482,7 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		if ipp.IsValid() {
-			n, u, ok = b.WhoIs(ipp)
+			n, u, ok = b.WhoIs(r.FormValue("proto"), ipp)
 		}
 	} else {
 		http.Error(w, "missing 'addr' parameter", http.StatusBadRequest)

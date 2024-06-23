@@ -400,8 +400,12 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	}
 	loginArgs := ia.loginArgs(loginCmdPath)
 	dlogf("logging in with %s %+v", loginCmdPath, loginArgs)
-	// replace the running process
-	return unix.Exec(loginCmdPath, loginArgs, os.Environ())
+
+	// If Exec works, the Go code will not proceed past this:
+	err = unix.Exec(loginCmdPath, loginArgs, os.Environ())
+
+	// If we made it here, Exec failed.
+	return err
 }
 
 // trySU attempts to start a login shell using su. If su is available and
@@ -438,8 +442,12 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	}
 
 	dlogf("logging in with %s %q", su, loginArgs)
-	cmd := newCommand(ia.hasTTY, su, loginArgs)
-	return true, cmd.Run()
+
+	// If Exec works, the Go code will not proceed past this:
+	err = unix.Exec(su, loginArgs, os.Environ())
+
+	// If we made it here, Exec failed.
+	return true, err
 }
 
 // findSU attempts to find an su command which supports the -l and -c flags.

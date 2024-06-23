@@ -101,7 +101,7 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	oldCnStatus := dnsCfg.Status.DeepCopy()
-	setStatus := func(dnsCfg *tsapi.DNSConfig, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+	setStatus := func(dnsCfg *tsapi.DNSConfig, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, a.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, dnsCfg.Status) {
 			// An error encountered here should get returned by the Reconcile function.

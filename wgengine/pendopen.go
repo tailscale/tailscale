@@ -78,7 +78,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 
 	// Either a SYN or a RST came back. Remove it in either case.
 
-	f := flowtrack.Tuple{Proto: pp.IPProto, Dst: pp.Src, Src: pp.Dst} // src/dst reversed
+	f := flowtrack.MakeTuple(pp.IPProto, pp.Dst, pp.Src) // src/dst reversed
 	removed := e.removeFlow(f)
 	if removed && pp.TCPFlags&packet.TCPRst != 0 {
 		e.logf("open-conn-track: flow TCP %v got RST by peer", f)
@@ -96,14 +96,14 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		return
 	}
 
-	flow := flowtrack.Tuple{Proto: pp.IPProto, Src: pp.Src, Dst: pp.Dst}
+	flow := flowtrack.MakeTuple(pp.IPProto, pp.Src, pp.Dst)
 
 	// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
 	// Don't start timers tracking those. They won't succeed anyway. Avoids log spam
 	// like:
 	//    open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
-	if runtime.GOOS == "ios" && flow.Dst.Port() == 443 && !tsaddr.IsTailscaleIP(flow.Dst.Addr()) {
-		if _, ok := e.PeerForIP(flow.Dst.Addr()); !ok {
+	if runtime.GOOS == "ios" && flow.DstPort() == 443 && !tsaddr.IsTailscaleIP(flow.DstAddr()) {
+		if _, ok := e.PeerForIP(flow.DstAddr()); !ok {
 			return
 		}
 	}
@@ -140,7 +140,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	}
 
 	// Diagnose why it might've timed out.
-	pip, ok := e.PeerForIP(flow.Dst.Addr())
+	pip, ok := e.PeerForIP(flow.DstAddr())
 	if !ok {
 		e.logf("open-conn-track: timeout opening %v; no associated peer node", flow)
 		return
@@ -162,7 +162,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
 		for i := range n.AllowedIPs().Len() {
 			r := n.AllowedIPs().At(i)
-			if r.Bits() != 0 && r.Contains(flow.Dst.Addr()) {
+			if r.Bits() != 0 && r.Contains(flow.DstAddr()) {
 				onlyZeroRoute = false
 				break
 			}

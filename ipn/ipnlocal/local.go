@@ -250,9 +250,9 @@ type LocalBackend struct {
 	// delta node mutations as they come in (with mu held). The map values can
 	// be given out to callers, but the map itself must not escape the LocalBackend.
 	peers            map[tailcfg.NodeID]tailcfg.NodeView
-	nodeByAddr       map[netip.Addr]tailcfg.NodeID
-	nmExpiryTimer    tstime.TimerController // for updating netMap on node expiry; can be nil
-	activeLogin      string                 // last logged LoginName from netMap
+	nodeByAddr       map[netip.Addr]tailcfg.NodeID // by Node.Addresses only (not subnet routes)
+	nmExpiryTimer    tstime.TimerController        // for updating netMap on node expiry; can be nil
+	activeLogin      string                        // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
 	endpoints        []tailcfg.Endpoint
 	blocked          bool
@@ -995,8 +995,15 @@ func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tai
 
 // WhoIs reports the node and user who owns the node with the given IP:port.
 // If the IP address is a Tailscale IP, the provided port may be 0.
+//
+// The 'proto' is used when looking up the IP:port in our proxy mapper; it
+// tracks which local IP:ports correspond to connections proxied by tailscaled,
+// and since tailscaled proxies both TCP and UDP, the 'proto' is needed to look
+// up the correct IP:port based on the connection's protocol. If not provided,
+// the lookup will be done for TCP and then UDP, in that order.
+//
 // If ok == true, n and u are valid.
-func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	var zero tailcfg.NodeView
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1005,7 +1012,20 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.
 	if !ok {
 		var ip netip.Addr
 		if ipp.Port() != 0 {
-			ip, ok = b.sys.ProxyMapper().WhoIsIPPort(ipp)
+			var protos []string
+			if proto != "" {
+				protos = []string{proto}
+			} else {
+				// If the user didn't specify a protocol, try all of them
+				protos = []string{"tcp", "udp"}
+			}
+
+			for _, tryproto := range protos {
+				ip, ok = b.sys.ProxyMapper().WhoIsIPPort(tryproto, ipp)
+				if ok {
+					break
+				}
+			}
 		}
 		if !ok {
 			return zero, u, false
@@ -1295,6 +1315,9 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 		// Update our cached DERP map
 		dnsfallback.UpdateCache(st.NetMap.DERPMap, b.logf)
+
+		// Update the DERP map in the health package, which uses it for health notifications
+		b.health.SetDERPMap(st.NetMap.DERPMap)
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
 	}
@@ -1998,7 +2021,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		b.setFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
 	} else {
 		b.logf("[v1] netmap packet filter: %v filters", len(packetFilter))
-		b.setFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
+		b.setFilter(filter.New(packetFilter, b.srcIPHasCapForFilter, localNets, logNets, oldFilter, b.logf))
 	}
 	// The filter for a jailed node is the exact same as a ShieldsUp filter.
 	oldJailedFilter := b.e.GetJailedFilter()
@@ -5044,7 +5067,7 @@ func (dt *driveTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 		dt.b.mu.Lock()
 		selfNodeKey := dt.b.netMap.SelfNode.Key().ShortString()
 		dt.b.mu.Unlock()
-		n, _, ok := dt.b.WhoIs(netip.MustParseAddrPort(req.URL.Host))
+		n, _, ok := dt.b.WhoIs("tcp", netip.MustParseAddrPort(req.URL.Host))
 		shareNodeKey := "unknown"
 		if ok {
 			shareNodeKey = string(n.Key().ShortString())
@@ -6815,4 +6838,29 @@ func (b *LocalBackend) startAutoUpdate(logPrefix string) (retErr error) {
 		b.setC2NUpdateStarted(false)
 	}()
 	return nil
+}
+
+// srcIPHasCapForFilter is called by the packet filter when evaluating firewall
+// rules that require a source IP to have a certain node capability.
+//
+// TODO(bradfitz): optimize this later if/when it matters.
+func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCapability) bool {
+	if cap == "" {
+		// Shouldn't happen, but just in case.
+		// But the empty cap also shouldn't be found in Node.CapMap.
+		return false
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	nodeID, ok := b.nodeByAddr[srcIP]
+	if !ok {
+		return false
+	}
+	n, ok := b.peers[nodeID]
+	if !ok {
+		return false
+	}
+	return n.HasCap(cap)
 }

@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/internal/noiseconn"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -93,20 +94,19 @@ func (tt noiseClientTest) run(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-c.earlyPayloadReady:
-		gotNonNil := c.earlyPayload != nil
-		if gotNonNil != tt.sendEarlyPayload {
-			t.Errorf("sendEarlyPayload = %v but got earlyPayload = %T", tt.sendEarlyPayload, c.earlyPayload)
-		}
-		if c.earlyPayload != nil {
-			if c.earlyPayload.NodeKeyChallenge != chalPrivate.Public() {
-				t.Errorf("earlyPayload.NodeKeyChallenge = %v; want %v", c.earlyPayload.NodeKeyChallenge, chalPrivate.Public())
-			}
-		}
-
-	case <-ctx.Done():
+	payload, err := c.GetEarlyPayload(ctx)
+	if err != nil {
 		t.Fatal("timed out waiting for didReadHeaderCh")
+	}
+
+	gotNonNil := payload != nil
+	if gotNonNil != tt.sendEarlyPayload {
+		t.Errorf("sendEarlyPayload = %v but got earlyPayload = %T", tt.sendEarlyPayload, payload)
+	}
+	if payload != nil {
+		if payload.NodeKeyChallenge != chalPrivate.Public() {
+			t.Errorf("earlyPayload.NodeKeyChallenge = %v; want %v", payload.NodeKeyChallenge, chalPrivate.Public())
+		}
 	}
 
 	checkRes := func(t *testing.T, res *http.Response) {
@@ -184,7 +184,7 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// https://httpwg.org/specs/rfc7540.html#rfc.section.4.1 (Especially not
 		// an HTTP/2 settings frame, which isn't of type 'T')
 		var notH2Frame [5]byte
-		copy(notH2Frame[:], earlyPayloadMagic)
+		copy(notH2Frame[:], noiseconn.EarlyPayloadMagic)
 		var lenBuf [4]byte
 		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(earlyJSON)))
 		// These writes are all buffered by caller, so fine to do them

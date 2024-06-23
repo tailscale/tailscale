@@ -12,7 +12,10 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type bpfConfig struct{ DstPort uint16 }
+type bpfConfig struct {
+	DstPort  uint16
+	DropStun uint16
+}
 
 type bpfCounterKeyAf uint32
 
@@ -46,7 +49,8 @@ const (
 	bpfCounterKeyProgEndCOUNTER_KEY_END_INVALID_IP_CSUM            bpfCounterKeyProgEnd = 3
 	bpfCounterKeyProgEndCOUNTER_KEY_END_NOT_STUN_PORT              bpfCounterKeyProgEnd = 4
 	bpfCounterKeyProgEndCOUNTER_KEY_END_INVALID_SW_ATTR_VAL        bpfCounterKeyProgEnd = 5
-	bpfCounterKeyProgEndCOUNTER_KEY_END_LEN                        bpfCounterKeyProgEnd = 6
+	bpfCounterKeyProgEndCOUNTER_KEY_END_DROP_STUN                  bpfCounterKeyProgEnd = 6
+	bpfCounterKeyProgEndCOUNTER_KEY_END_LEN                        bpfCounterKeyProgEnd = 7
 )
 
 type bpfCountersKey struct {

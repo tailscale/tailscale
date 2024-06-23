@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -25,6 +26,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -62,6 +64,7 @@ import (
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
 	httpc                      *http.Client // HTTP client used to talk to tailcontrol
+	interceptedDial            *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
 	dialer                     *tsdial.Dialer
 	dnsCache                   *dnscache.Resolver
 	controlKnobs               *controlknobs.Knobs // always non-nil
@@ -258,23 +261,28 @@ func NewDirect(opts Options) (*Direct, error) {
 		// etc set).
 		httpc = http.DefaultClient
 	}
+	var interceptedDial *atomic.Bool
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
-		tr.DialContext = dnscache.Dialer(opts.Dialer.SystemDial, dnsCache)
-		tr.DialTLSContext = dnscache.TLSDialer(opts.Dialer.SystemDial, dnsCache, tr.TLSClientConfig)
+		var dialFunc dialFunc
+		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
+		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
+		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
 		// Disable implicit gzip compression; the various
 		// handlers (register, map, set-dns, etc) do their own
 		// zstd compression per naclbox.
 		tr.DisableCompression = true
+
 		httpc = &http.Client{Transport: tr}
 	}
 
 	c := &Direct{
 		httpc:                      httpc,
+		interceptedDial:            interceptedDial,
 		controlKnobs:               opts.ControlKnobs,
 		getMachinePrivKey:          opts.GetMachinePrivateKey,
 		serverURL:                  opts.ServerURL,
@@ -464,6 +472,16 @@ func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
 	return hi
 }
 
+var macOSScreenTime = health.Register(&health.Warnable{
+	Code:     "macos-screen-time-controlclient",
+	Severity: health.SeverityHigh,
+	Title:    "Tailscale blocked by Screen Time",
+	Text: func(args health.Args) string {
+		return "macOS Screen Time seems to be blocking Tailscale. Try disabling Screen Time in System Settings > Screen Time > Content & Privacy > Access to Web Content."
+	},
+	ImpactsConnectivity: true,
+})
+
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	if c.panicOnUse {
 		panic("tainted client")
@@ -505,6 +523,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
 	if serverKey.IsZero() {
 		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
+		if err != nil && c.interceptedDial != nil && c.interceptedDial.Load() {
+			c.health.SetUnhealthy(macOSScreenTime, nil)
+		} else {
+			c.health.SetHealthy(macOSScreenTime)
+		}
 		if err != nil {
 			return regen, opt.URL, nil, err
 		}
@@ -1662,6 +1685,38 @@ func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
 	}
+}
+
+type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// makeScreenTimeDetectingDialFunc returns dialFunc, optionally wrapped (on
+// Apple systems) with a func that sets the returned atomic.Bool for whether
+// Screen Time seemed to intercept the connection.
+//
+// The returned *atomic.Bool is nil on non-Apple systems.
+func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
+	switch runtime.GOOS {
+	case "darwin", "ios":
+		// Continue below.
+	default:
+		return dial, nil
+	}
+	ab := new(atomic.Bool)
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		ab.Store(isTCPLoopback(c.LocalAddr()) && isTCPLoopback(c.RemoteAddr()))
+		return c, nil
+	}, ab
+}
+
+func isTCPLoopback(a net.Addr) bool {
+	if ta, ok := a.(*net.TCPAddr); ok {
+		return ta.IP.IsLoopback()
+	}
+	return false
 }
 
 var (

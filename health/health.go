@@ -88,7 +88,8 @@ type Tracker struct {
 	derpRegionConnected     map[int]bool
 	derpRegionHealthProblem map[int]string
 	derpRegionLastFrame     map[int]time.Time
-	lastMapRequestHeard     time.Time // time we got a 200 from control for a MapRequest
+	derpMap                 *tailcfg.DERPMap // last DERP map from control, could be nil if never received one
+	lastMapRequestHeard     time.Time        // time we got a 200 from control for a MapRequest
 	ipnState                string
 	ipnWantRunning          bool
 	anyInterfaceUp          opt.Bool // empty means unknown (assume true)
@@ -672,6 +673,30 @@ func (t *Tracker) GetDERPRegionReceivedTime(region int) time.Time {
 	return t.derpRegionLastFrame[region]
 }
 
+// SetDERPMap sets the last fetched DERP map in the Tracker. The DERP map is used
+// to provide a region name in user-facing DERP-related warnings.
+func (t *Tracker) SetDERPMap(dm *tailcfg.DERPMap) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.derpMap = dm
+	t.selfCheckLocked()
+}
+
+// derpRegionNameLocked returns the name of the DERP region with the given ID
+// or the empty string if unknown.
+func (t *Tracker) derpRegionNameLocked(regID int) string {
+	if t.derpMap == nil {
+		return ""
+	}
+	if r, ok := t.derpMap.Regions[regID]; ok {
+		return r.RegionName
+	}
+	return ""
+}
+
 // state is an ipn.State.String() value: "Running", "Stopped", "NeedsLogin", etc.
 func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 	if t.nil() {
@@ -914,13 +939,15 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 			return
 		} else if !t.derpRegionConnected[rid] {
 			t.setUnhealthyLocked(noDERPConnectionWarnable, Args{
-				ArgRegionID: fmt.Sprint(rid),
+				ArgDERPRegionID:   fmt.Sprint(rid),
+				ArgDERPRegionName: t.derpRegionNameLocked(rid),
 			})
 			return
 		} else if d := now.Sub(t.derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
 			t.setUnhealthyLocked(derpTimeoutWarnable, Args{
-				ArgRegionID: fmt.Sprint(rid),
-				ArgDuration: d.String(),
+				ArgDERPRegionID:   fmt.Sprint(rid),
+				ArgDERPRegionName: t.derpRegionNameLocked(rid),
+				ArgDuration:       d.String(),
 			})
 			return
 		}
@@ -964,8 +991,8 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	if len(t.derpRegionHealthProblem) > 0 {
 		for regionID, problem := range t.derpRegionHealthProblem {
 			t.setUnhealthyLocked(derpRegionErrorWarnable, Args{
-				ArgRegionID: fmt.Sprint(regionID),
-				ArgError:    problem,
+				ArgDERPRegionID: fmt.Sprint(regionID),
+				ArgError:        problem,
 			})
 		}
 	} else {
