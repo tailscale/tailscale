@@ -1630,6 +1630,11 @@ func (c *sclient) sendPong(data [8]byte) error {
 	return err
 }
 
+const (
+	peerGoneFrameLen    = keyLen + 1
+	peerPresentFrameLen = keyLen + 16 + 2 + 1 // 16 byte IP + 2 byte port + 1 byte flags
+)
+
 // sendPeerGone sends a peerGone frame, without flushing.
 func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) error {
 	switch reason {
@@ -1639,7 +1644,7 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) e
 		c.s.peerGoneNotHereFrames.Add(1)
 	}
 	c.setWriteDeadline()
-	data := make([]byte, 0, keyLen+1)
+	data := make([]byte, 0, peerGoneFrameLen)
 	data = peer.AppendTo(data)
 	data = append(data, byte(reason))
 	if err := writeFrameHeader(c.bw.bw(), framePeerGone, uint32(len(data))); err != nil {
@@ -1653,11 +1658,10 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) e
 // sendPeerPresent sends a peerPresent frame, without flushing.
 func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags PeerPresentFlags) error {
 	c.setWriteDeadline()
-	const frameLen = keyLen + 16 + 2 + 1 // 16 byte IP + 2 byte port + 1 byte flags
-	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, frameLen); err != nil {
+	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, peerPresentFrameLen); err != nil {
 		return err
 	}
-	payload := make([]byte, frameLen)
+	payload := make([]byte, peerPresentFrameLen)
 	_ = peer.AppendTo(payload[:0])
 	a16 := ipPort.Addr().As16()
 	copy(payload[keyLen:], a16[:])
@@ -1688,13 +1692,17 @@ drainUpdates:
 
 	writes := 0
 	for _, pcs := range c.peerStateChange {
-		if c.bw.Available() <= frameHeaderLen+keyLen {
-			break
-		}
+		avail := c.bw.Available()
 		var err error
 		if pcs.present {
+			if avail <= frameHeaderLen+peerPresentFrameLen {
+				break
+			}
 			err = c.sendPeerPresent(pcs.peer, pcs.ipPort, pcs.flags)
 		} else {
+			if avail <= frameHeaderLen+peerGoneFrameLen {
+				break
+			}
 			err = c.sendPeerGone(pcs.peer, PeerGoneReasonDisconnected)
 		}
 		if err != nil {
