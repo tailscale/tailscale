@@ -22,6 +22,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	runtimemetrics "runtime/metrics"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -236,6 +239,20 @@ func main() {
 		}
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+	debug.Handle("set-mutex-profile-fraction", "SetMutexProfileFraction", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := r.FormValue("rate")
+		if s == "" || r.Header.Get("Sec-Debug") != "derp" {
+			http.Error(w, "To set, use: curl -HSec-Debug:derp 'http://derp/debug/set-mutex-profile-fraction?rate=100'", http.StatusBadRequest)
+			return
+		}
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "bad rate value", http.StatusBadRequest)
+			return
+		}
+		old := runtime.SetMutexProfileFraction(v)
+		fmt.Fprintf(w, "mutex changed from %v to %v\n", old, v)
+	}))
 
 	// Longer lived DERP connections send an application layer keepalive. Note
 	// if the keepalive is hit, the user timeout will take precedence over the
@@ -451,4 +468,17 @@ func (l *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	l.numAccepts.Add(1)
 	return cn, nil
+}
+
+func init() {
+	expvar.Publish("go_sync_mutex_wait_seconds", expvar.Func(func() any {
+		const name = "/sync/mutex/wait/total:seconds" // Go 1.20+
+		var s [1]runtimemetrics.Sample
+		s[0].Name = name
+		runtimemetrics.Read(s[:])
+		if v := s[0].Value; v.Kind() == runtimemetrics.KindFloat64 {
+			return v.Float64()
+		}
+		return 0
+	}))
 }
