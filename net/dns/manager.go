@@ -59,11 +59,10 @@ type Manager struct {
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
 
-	// The last configuration we successfully compiled.  Set to nil if
-	// there was any failure applying the last configuration
+	mu sync.Mutex // guards following
+	// config is the last configuration we successfully compiled or nil if there
+	// was any failure applying the last configuration.
 	config *Config
-	// Must be held when accessing/setting config.
-	mu sync.Mutex
 }
 
 // NewManagers created a new manager from the given config.
@@ -123,8 +122,9 @@ func (m *Manager) Set(cfg Config) error {
 	return m.setLocked(cfg)
 }
 
-// Sets the DNS configuration.
-// m.mu must be held
+// setLocked sets the DNS configuration.
+//
+// m.mu must be held.
 func (m *Manager) setLocked(cfg Config) error {
 	syncs.AssertLocked(&m.mu)
 
