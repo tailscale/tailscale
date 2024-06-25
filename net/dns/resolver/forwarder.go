@@ -212,7 +212,9 @@ type forwarder struct {
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
 
-	// To be called when a SERVFAIL is returned due to missing upstream resolvers.
+	// missingUpstreamRecovery, if non-nil, is set called when a SERVFAIL is
+	// returned due to missing upstream resolvers.
+	//
 	// This should attempt to properly (re)set the upstream resolvers.
 	missingUpstreamRecovery func()
 }

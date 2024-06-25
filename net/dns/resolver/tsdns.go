@@ -244,9 +244,11 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, k
 	return r
 }
 
-// Called by the forwarder on SERVFAIL due to missing upstream resolvers
-// The func passed in here should attempt to re-query for those resolvers,
-// repair, or recover
+// SetMissingUpstreamRecovery sets a callback to be called upon encountering
+// a SERVFAIL due to missing upstream resolvers.
+//
+// This call should only happen before the resolver is used. It is not safe
+// for concurrent use.
 func (r *Resolver) SetMissingUpstreamRecovery(f func()) {
 	r.forwarder.missingUpstreamRecovery = f
 }
