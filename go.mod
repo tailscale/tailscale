@@ -5,7 +5,6 @@ go 1.22.0
 require (
 	filippo.io/mkcert v1.4.4
 	fybrik.io/crdoc v0.6.3
-	github.com/Masterminds/squirrel v1.5.4
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.1.0
@@ -113,7 +112,6 @@ require (
 	k8s.io/apimachinery v0.30.1
 	k8s.io/apiserver v0.30.1
 	k8s.io/client-go v0.30.1
-	modernc.org/sqlite v1.29.10
 	nhooyr.io/websocket v1.8.10
 	sigs.k8s.io/controller-runtime v0.18.4
 	sigs.k8s.io/controller-tools v0.15.1-0.20240618033008-7824932b0cab
@@ -127,21 +125,10 @@ require (
 	github.com/cyphar/filepath-securejoin v0.2.4 // indirect
 	github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14 // indirect
 	github.com/dave/brenda v1.1.0 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gobuffalo/flect v1.0.2 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
+	github.com/google/pprof v0.0.0-20240409012703-83162a5b38cd // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
-	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
-	github.com/ncruces/go-strftime v0.1.9 // indirect
-	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
-	modernc.org/libc v1.49.3 // indirect
-	modernc.org/mathutil v1.6.0 // indirect
-	modernc.org/memory v1.8.0 // indirect
-	modernc.org/strutil v1.2.0 // indirect
-	modernc.org/token v1.1.0 // indirect
 )
 
 require (
