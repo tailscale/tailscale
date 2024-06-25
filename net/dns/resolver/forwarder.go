@@ -211,6 +211,10 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+
+	// To be called when a SERVFAIL is returned due to missing upstream resolvers.
+	// This should attempt to properly (re)set the upstream resolvers.
+	missingUpstreamRecovery func()
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *forwarder {
@@ -881,6 +885,12 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		if len(resolvers) == 0 {
 			metricDNSFwdErrorNoUpstream.Add(1)
 			f.logf("no upstream resolvers set, returning SERVFAIL")
+
+			// Attempt to recompile the DNS configuration
+			// If we are being asked to forward queries and we have no
+			// nameservers, the network is in a bad state.
+			f.missingUpstreamRecovery()
+
 			res, err := servfailResponse(query)
 			if err != nil {
 				f.logf("building servfail response: %v", err)
