@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -212,6 +211,10 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+
+	// To be called when a SERVFAIL is returned due to missing upstream resolvers.
+	// This should attempt to properly (re)set the upstream resolvers.
+	missingUpstreamRecovery func()
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *forwarder {
@@ -883,22 +886,10 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			metricDNSFwdErrorNoUpstream.Add(1)
 			f.logf("no upstream resolvers set, returning SERVFAIL")
 
-			if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-				// On apple, having no upstream resolvers here is the result a race condition where
-				// we've tried a reconfig after a major link change but the system has not yet set
-				// the resolvers for the new link.  We use SystemConfiguration to query nameservers, and
-				// the timing of when that will give us the "right" answer is non-deterministic.
-				//
-				// This will typically happen on sleep-wake cycles with a Wifi interface where
-				// it takes some random amount of time (after telling us that the interface exists)
-				// for the system to configure the dns servers.
-				//
-				// Repolling the network monitor  here is a bit odd, but if we're
-				// seeing DNS queries, it's likely that the network is now fully configured, and it's
-				// an ideal time to to requery for the nameservers.
-				f.logf("injecting network monitor event to attempt to refresh the resolvers")
-				f.netMon.InjectEvent()
-			}
+			// Attempt to recompile the DNS configuration
+			// If we are being asked to forward queries and we have no
+			// nameservers, the network is in a bad state.
+			f.missingUpstreamRecovery()
 
 			res, err := servfailResponse(query)
 			if err != nil {

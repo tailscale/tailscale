@@ -244,6 +244,13 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, k
 	return r
 }
 
+// Called by the forwarder on SERVFAIL due to missing upstream resolvers
+// The func passed in here should attempt to re-query for those resolvers,
+// repair, or recover
+func (r *Resolver) SetMissingUpstreamRecovery(f func()) {
+	r.forwarder.missingUpstreamRecovery = f
+}
+
 func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
 
 func (r *Resolver) SetConfig(cfg Config) error {
