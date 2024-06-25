@@ -22,7 +22,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -96,6 +95,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
+	"tailscale.com/util/osuser"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
@@ -5290,7 +5290,7 @@ func (b *LocalBackend) OperatorUserID() string {
 	if opUserName == "" {
 		return ""
 	}
-	u, err := user.Lookup(opUserName)
+	u, err := osuser.LookupByUsername(opUserName)
 	if err != nil {
 		b.logf("error looking up operator %q uid: %v", opUserName, err)
 		return ""
