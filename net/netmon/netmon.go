@@ -60,19 +60,20 @@ type Monitor struct {
 	// and not change at runtime.
 	tsIfName string // tailscale interface name, if known/set ("tailscale0", "utun3", ...)
 
-	mu         sync.Mutex // guards all following fields
-	cbs        set.HandleSet[ChangeFunc]
-	ruleDelCB  set.HandleSet[RuleDeleteCallback]
-	ifState    *State
-	gwValid    bool       // whether gw and gwSelfIP are valid
-	gw         netip.Addr // our gateway's IP
-	gwSelfIP   netip.Addr // our own IP address (that corresponds to gw)
-	started    bool
-	closed     bool
-	goroutines sync.WaitGroup
-	wallTimer  *time.Timer // nil until Started; re-armed AfterFunc per tick
-	lastWall   time.Time
-	timeJumped bool // whether we need to send a changed=true after a big time jump
+	mu              sync.Mutex // guards all following fields
+	cbs             set.HandleSet[ChangeFunc]
+	ruleDelCB       set.HandleSet[RuleDeleteCallback]
+	ifState         *State
+	gwValid         bool       // whether gw and gwSelfIP are valid
+	gw              netip.Addr // our gateway's IP
+	gwSelfIP        netip.Addr // our own IP address (that corresponds to gw)
+	started         bool
+	closed          bool
+	goroutines      sync.WaitGroup
+	wallTimer       *time.Timer // nil until Started; re-armed AfterFunc per tick
+	lastWall        time.Time
+	timeJumped      bool // whether we need to send a changed=true after a big time jump
+	waitForOSNotify bool // if true we should wait for an os poke before reacting to interface changes
 }
 
 // ChangeFunc is a callback function registered with Monitor that's called when the
@@ -114,13 +115,19 @@ type ChangeDelta struct {
 // New instantiates and starts a monitoring instance.
 // The returned monitor is inactive until it's started by the Start method.
 // Use RegisterChangeCallback to get notified of network changes.
-func New(logf logger.Logf) (*Monitor, error) {
+func New(logf logger.Logf, waitForOSNotify ...bool) (*Monitor, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
+	wait := false
+	if len(waitForOSNotify) > 0 {
+		wait = waitForOSNotify[0]
+	}
+
 	m := &Monitor{
-		logf:     logf,
-		change:   make(chan bool, 1),
-		stop:     make(chan struct{}),
-		lastWall: wallTime(),
+		logf:            logf,
+		change:          make(chan bool, 1),
+		stop:            make(chan struct{}),
+		lastWall:        wallTime(),
+		waitForOSNotify: wait,
 	}
 	st, err := m.interfaceStateUncached()
 	if err != nil {
@@ -261,9 +268,17 @@ func (m *Monitor) Start() {
 	if m.om == nil {
 		return
 	}
+
 	m.goroutines.Add(2)
 	go m.pump()
-	go m.debounce()
+
+	// When UsenativeMonitors is set, the expectation is that we'll be notified
+	// of network changes via HandleMajorNetworkChange.  We will still collect
+	// osMon events and keep our internal state up to date, but we will not
+	// act on them until the native monitor gives us a poke.
+	if !m.waitForOSNotify {
+		go m.debounce()
+	}
 }
 
 // Close closes the monitor.
@@ -624,3 +639,27 @@ type ipRuleDeletedMessage struct {
 }
 
 func (ipRuleDeletedMessage) ignore() bool { return true }
+
+// If a platform has an network monitoring service which can/should be used to indicate *when* a
+// new interfaces (or no interface) is ready, call this function at the appropriate time.   It is
+// important that this is called whenever and interface is added or removed.  The caller should
+// debounce and remove any duplicate calls to this function and this will only be relevant if
+// the netmon was constructed with the waitForOSNotify flag set.
+//
+// For example, Apple devices may choose to use NEPathMonitor to detect network changes and call
+// in here when the list of availableInterfaces changes, and/or when the viability of the path changes.
+//
+// Use this with caution.  Usually, netmon is able to detect network changes on it's own.
+func (m *Monitor) NotifyPotentialNetworkChange() {
+	if !m.waitForOSNotify {
+		m.logf("warning: not using os level monitors, but we're getting a network change event. Ignoring.")
+		return
+	}
+
+	if newState, err := m.interfaceStateUncached(); err != nil {
+		m.logf("network change ignored. cannot get cached interfaces.State: %v", err)
+	} else {
+		m.logf("handling potentially interesting network change after os network change")
+		m.handlePotentialChange(newState, false)
+	}
+}
