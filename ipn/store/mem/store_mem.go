@@ -20,7 +20,8 @@ func New(logger.Logf, string) (ipn.StateStore, error) {
 
 // Store is an ipn.StateStore that keeps state in memory only.
 type Store struct {
-	mu    sync.Mutex
+	mu sync.Mutex
+	// +checklocks:mu
 	cache map[ipn.StateKey][]byte
 }
 
