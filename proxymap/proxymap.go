@@ -19,7 +19,12 @@ import (
 // given localhost:port corresponds to.
 type Mapper struct {
 	mu sync.Mutex
-	m  map[string]map[netip.AddrPort]netip.Addr // proto ("tcp", "udp") => ephemeral => tailscale IP
+
+	// m holds the mapping from localhost IP:ports to Tailscale IPs. It is
+	// keyed first by the protocol ("tcp" or "udp"), then by the IP:port.
+	//
+	// +checklocks:mu
+	m map[string]map[netip.AddrPort]netip.Addr
 }
 
 // RegisterIPPortIdentity registers a given node (identified by its

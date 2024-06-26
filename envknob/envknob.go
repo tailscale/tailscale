@@ -36,13 +36,19 @@ import (
 )
 
 var (
-	mu          sync.Mutex
-	set         = map[string]string{}
-	regStr      = map[string]*string{}
-	regBool     = map[string]*bool{}
-	regOptBool  = map[string]*opt.Bool{}
+	mu sync.Mutex
+	// +checklocks:mu
+	set = map[string]string{}
+	// +checklocks:mu
+	regStr = map[string]*string{}
+	// +checklocks:mu
+	regBool = map[string]*bool{}
+	// +checklocks:mu
+	regOptBool = map[string]*opt.Bool{}
+	// +checklocks:mu
 	regDuration = map[string]*time.Duration{}
-	regInt      = map[string]*int{}
+	// +checklocks:mu
+	regInt = map[string]*int{}
 )
 
 func noteEnv(k, v string) {
@@ -51,6 +57,7 @@ func noteEnv(k, v string) {
 	noteEnvLocked(k, v)
 }
 
+// +checklocks:mu
 func noteEnvLocked(k, v string) {
 	if v != "" {
 		set[k] = v
@@ -202,6 +209,7 @@ func RegisterInt(envVar string) func() int {
 	return func() int { return *p }
 }
 
+// +checklocks:mu
 func setBoolLocked(p *bool, envVar, val string) {
 	noteEnvLocked(envVar, val)
 	if val == "" {
@@ -215,6 +223,7 @@ func setBoolLocked(p *bool, envVar, val string) {
 	}
 }
 
+// +checklocks:mu
 func setOptBoolLocked(p *opt.Bool, envVar, val string) {
 	noteEnvLocked(envVar, val)
 	if val == "" {
@@ -228,6 +237,7 @@ func setOptBoolLocked(p *opt.Bool, envVar, val string) {
 	p.Set(b)
 }
 
+// +checklocks:mu
 func setDurationLocked(p *time.Duration, envVar, val string) {
 	noteEnvLocked(envVar, val)
 	if val == "" {
@@ -241,6 +251,7 @@ func setDurationLocked(p *time.Duration, envVar, val string) {
 	}
 }
 
+// +checklocks:mu
 func setIntLocked(p *int, envVar, val string) {
 	noteEnvLocked(envVar, val)
 	if val == "" {
