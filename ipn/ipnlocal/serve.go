@@ -150,6 +150,14 @@ func (s *localListener) Run() {
 			tcp4or6 = "tcp6"
 		}
 
+		// while we were backing off and trying again, the context got canceled
+		// so don't bind, just return, because otherwise there will be no way
+		// to close this listener
+		if s.ctx.Err() != nil {
+			s.logf("localListener context closed before binding")
+			return
+		}
+
 		ln, err := lc.Listen(s.ctx, tcp4or6, net.JoinHostPort(ipStr, fmt.Sprint(s.ap.Port())))
 		if err != nil {
 			if s.shouldWarnAboutListenError(err) {
