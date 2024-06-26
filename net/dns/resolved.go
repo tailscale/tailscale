@@ -165,7 +165,7 @@ func (m *resolvedManager) run(ctx context.Context) {
 
 		// Reset backoff and SetNSOSHealth after successful on reconnect.
 		bo.BackOff(ctx, nil)
-		m.health.SetDNSOSHealth(nil)
+		m.health.SetHealthy(OSConfigWarnable)
 		return nil
 	}
 
@@ -243,9 +243,11 @@ func (m *resolvedManager) run(ctx context.Context) {
 			// Set health while holding the lock, because this will
 			// graciously serialize the resync's health outcome with a
 			// concurrent SetDNS call.
-			m.health.SetDNSOSHealth(err)
 			if err != nil {
 				m.logf("failed to configure systemd-resolved: %v", err)
+				m.health.SetUnhealthy(OSConfigWarnable, health.Args{health.ArgError: err.Error()})
+			} else {
+				m.health.SetHealthy(OSConfigWarnable)
 			}
 		}
 	}

@@ -147,19 +147,27 @@ func (m *Manager) setLocked(cfg Config) error {
 		ocfg.WriteToBufioWriter(w)
 	}))
 
-	if err := m.resolver.SetConfig(rcfg); err != nil {
-		return err
-	}
+	m.resolver.SetConfig(rcfg)
+
 	if err := m.os.SetDNS(ocfg); err != nil {
-		m.health.SetDNSOSHealth(err)
+		m.health.SetUnhealthy(OSConfigWarnable, health.Args{health.ArgError: err.Error()})
 		return err
 	}
 
-	m.health.SetDNSOSHealth(nil)
+	m.health.SetHealthy(OSConfigWarnable)
 	m.config = &cfg
 
 	return nil
 }
+
+var OSConfigWarnable = health.Register(&health.Warnable{
+	Code:     "dns-failed-osconfig",
+	Severity: health.SeverityMedium,
+	Title:    "System DNS configuration failed",
+	Text: func(args health.Args) string {
+		return "Could not configure this device to use the Tailscale DNS resolver. Error: " + args[health.ArgError]
+	},
+})
 
 // compileHostEntries creates a list of single-label resolutions possible
 // from the configured hosts and search domains.
@@ -315,9 +323,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// This is currently (2022-10-13) expected on certain iOS and macOS
 			// builds.
 		} else {
-			m.health.SetDNSOSHealth(err)
+			m.health.SetUnhealthy(OSConfigWarnable, health.Args{health.ArgError: err.Error()})
 			return resolver.Config{}, OSConfig{}, err
 		}
+		m.health.SetHealthy(OSConfigWarnable)
 	}
 
 	if baseCfg == nil {

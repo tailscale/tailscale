@@ -275,7 +275,7 @@ func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret 
 			return "direct", nil
 		}
 
-		health.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
+		health.SetUnhealthy(resolvedNetworkManagerConflictWarnable, nil)
 		dbg("nm-safe", "no")
 		return "systemd-resolved", nil
 	default:
@@ -283,6 +283,16 @@ func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret 
 		return "direct", nil
 	}
 }
+
+// resolvedNetworkManagerConflictWarnable reports whether the system is in a
+// state where NetworkManager and systemd-resolved are in conflict, and we should
+// warn the user about it.
+var resolvedNetworkManagerConflictWarnable = health.Register(&health.Warnable{
+	Code:     "resolved-nm-conflict",
+	Title:    "NetworkManager and systemd-resolved conflict",
+	Text:     health.StaticMessage("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"),
+	Severity: health.SeverityMedium,
+})
 
 func nmVersionBetween(first, last string) (bool, error) {
 	conn, err := dbus.SystemBus()
