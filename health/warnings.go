@@ -5,6 +5,7 @@ package health
 
 import (
 	"fmt"
+	"time"
 )
 
 /**
@@ -211,4 +212,18 @@ var controlHealthWarnable = Register(&Warnable{
 	Text: func(args Args) string {
 		return fmt.Sprintf("The coordination server is reporting an health issue: %v", args[ArgError])
 	},
+})
+
+// warmingUpWarnableDuration is the duration for which the warmingUpWarnable is reported by the backend after the user
+// has changed ipnWantRunning to true from false.
+const warmingUpWarnableDuration = 5 * time.Second
+
+// warmingUpWarnable is a Warnable that is reported by the backend when it is starting up, for a maximum time of
+// warmingUpWarnableDuration. The GUIs use the presence of this Warnable to prevent showing any other warnings until
+// the backend is fully started.
+var warmingUpWarnable = Register(&Warnable{
+	Code:     "warming-up",
+	Title:    "Tailscale is starting",
+	Severity: SeverityLow,
+	Text:     StaticMessage("Tailscale is starting. Please wait."),
 })

@@ -6,6 +6,7 @@ package health
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -199,15 +200,17 @@ func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected an UnhealthyState for w1, got nothing")
 	}
-	if len(us1.DependsOn) != 0 {
-		t.Fatalf("Expected no DependsOn in the unhealthy state, got: %v", us1.DependsOn)
+	wantDependsOn := []WarnableCode{warmingUpWarnable.Code}
+	if !reflect.DeepEqual(us1.DependsOn, wantDependsOn) {
+		t.Fatalf("Expected DependsOn = %v in the unhealthy state, got: %v", wantDependsOn, us1.DependsOn)
 	}
 	ht.SetUnhealthy(w2, Args{ArgError: "w2 is also unhealthy now"})
 	us2, ok := ht.CurrentState().Warnings[w2.Code]
 	if !ok {
 		t.Fatalf("Expected an UnhealthyState for w2, got nothing")
 	}
-	if !reflect.DeepEqual(us2.DependsOn, []WarnableCode{w1.Code}) {
-		t.Fatalf("Expected DependsOn = [w1.Code] in the unhealthy state, got: %v", us2.DependsOn)
+	wantDependsOn = slices.Concat([]WarnableCode{w1.Code}, wantDependsOn)
+	if !reflect.DeepEqual(us2.DependsOn, wantDependsOn) {
+		t.Fatalf("Expected DependsOn = %v in the unhealthy state, got: %v", wantDependsOn, us2.DependsOn)
 	}
 }
