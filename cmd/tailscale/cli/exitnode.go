@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/envknob"
@@ -154,7 +155,8 @@ func runExitNodeSuggest(ctx context.Context, args []string) error {
 		fmt.Println("No exit node suggestion is available.")
 		return nil
 	}
-	fmt.Printf("Suggested exit node: %v\nTo accept this suggestion, use `tailscale set --exit-node=%v`.\n", res.Name, res.ID)
+	hostname := strings.TrimSuffix(res.Name, ".")
+	fmt.Printf("Suggested exit node: %v\nTo accept this suggestion, use `tailscale set --exit-node=%v`.\n", hostname, shellquote.Join(hostname))
 	return nil
 }
 
