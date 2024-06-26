@@ -135,6 +135,7 @@ func (c *Conn) pickDERPFallback() int {
 		return pickDERPFallbackForTests()
 	}
 
+	metricDERPHomeFallback.Add(1)
 	return ids[rands.IntN(uint64(uintptr(unsafe.Pointer(c))), len(ids))]
 }
 
@@ -173,6 +174,7 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 		myDerp := c.myDerp
 		c.mu.Unlock()
 		if myDerp != 0 {
+			metricDERPHomeNoChangeNoControl.Add(1)
 			return myDerp
 		}
 
@@ -948,6 +950,7 @@ func (c *Conn) cleanStaleDerp() {
 		}
 		if ad.lastWrite.Before(tooOld) {
 			c.closeDerpLocked(i, "idle")
+			metricDERPStaleCleaned.Add(1)
 			dirty = true
 		} else {
 			someNonHomeOpen = true
