@@ -124,7 +124,7 @@ const (
 //
 // The current OS thread's access token must have SeTcbPrivilege.
 func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLevel) (sess *Session, err error) {
-	token, err := createToken(srcName, u, tokenTypeIdentification, capLevel)
+	token, err := createToken(srcName, u, tokenTypeImpersonation, capLevel)
 	if err != nil {
 		return nil, err
 	}
