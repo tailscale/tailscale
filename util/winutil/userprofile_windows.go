@@ -135,9 +135,36 @@ func (up *UserProfile) Close() error {
 }
 
 func getRoamingProfilePath(logf logger.Logf, token windows.Token, computerName, userName *uint16) (path *uint16, err error) {
-	// logf is for debugging/testing.
-	if logf == nil {
-		logf = logger.Discard
+	// logf is for debugging/testing. While we would normally replace a nil logf
+	// with logger.Discard, we're using explicit checks within this func so that
+	// we don't waste time allocating and converting UTF-16 strings unnecessarily.
+	var comp string
+	if logf != nil {
+		comp = windows.UTF16PtrToString(computerName)
+		user := windows.UTF16PtrToString(userName)
+		logf("BEGIN getRoamingProfilePath(%q, %q)", comp, user)
+		defer logf("END getRoamingProfilePath(%q, %q)", comp, user)
+	}
+
+	isDomainName, err := isDomainName(computerName)
+	if err != nil {
+		return nil, err
+	}
+	if isDomainName {
+		if logf != nil {
+			logf("computerName %q is a domain, resolving...", comp)
+		}
+		dcInfo, err := resolveDomainController(computerName, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer dcInfo.Close()
+
+		computerName = dcInfo.DomainControllerName
+		if logf != nil {
+			dom := windows.UTF16PtrToString(computerName)
+			logf("%q resolved to %q", comp, dom)
+		}
 	}
 
 	var pbuf *byte
@@ -147,7 +174,9 @@ func getRoamingProfilePath(logf logger.Logf, token windows.Token, computerName, 
 	defer windows.NetApiBufferFree(pbuf)
 
 	ui4 := (*_USER_INFO_4)(unsafe.Pointer(pbuf))
-	logf("getRoamingProfilePath: got %#v", *ui4)
+	if logf != nil {
+		logf("getRoamingProfilePath: got %#v", *ui4)
+	}
 	profilePath := ui4.Profile
 	if profilePath == nil {
 		return nil, nil
@@ -160,6 +189,10 @@ func getRoamingProfilePath(logf logger.Logf, token windows.Token, computerName, 
 	var expanded [windows.MAX_PATH + 1]uint16
 	if err := expandEnvironmentStringsForUser(token, profilePath, &expanded[0], uint32(len(expanded))); err != nil {
 		return nil, err
+	}
+
+	if logf != nil {
+		logf("returning %q", windows.UTF16ToString(expanded[:]))
 	}
 
 	// This buffer is only used briefly, so we don't bother copying it into a shorter slice.
