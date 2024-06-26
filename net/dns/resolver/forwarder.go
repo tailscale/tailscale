@@ -889,7 +889,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			// Attempt to recompile the DNS configuration
 			// If we are being asked to forward queries and we have no
 			// nameservers, the network is in a bad state.
-			f.missingUpstreamRecovery()
+			if f.missingUpstreamRecovery != nil {
+				f.missingUpstreamRecovery()
+			}
 
 			res, err := servfailResponse(query)
 			if err != nil {
