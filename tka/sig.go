@@ -313,9 +313,9 @@ type RotationDetails struct {
 	// PrevNodeKeys is a list of node keys which have been rotated out.
 	PrevNodeKeys []key.NodePublic
 
-	// WrappingPubkey is the public key which has been authorized to sign
+	// InitialSig is the first signature in the chain which led to
 	// this rotating signature.
-	WrappingPubkey []byte
+	InitialSig *NodeKeySignature
 }
 
 // rotationDetails returns the RotationDetails for a SigRotation signature.
@@ -339,7 +339,7 @@ func (s *NodeKeySignature) rotationDetails() (*RotationDetails, error) {
 		}
 		nested = nested.Nested
 	}
-	sri.WrappingPubkey = nested.WrappingPubkey
+	sri.InitialSig = nested
 	return sri, nil
 }
 

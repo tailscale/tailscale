@@ -609,7 +609,9 @@ func TestTKAFilterNetmap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n6, n6Sig := nodeFromAuthKey(preauth)
+	// Two nodes created using the same auth key, both should be valid.
+	n60, n60Sig := nodeFromAuthKey(preauth)
+	n61, n61Sig := nodeFromAuthKey(preauth)
 
 	nm := &netmap.NetworkMap{
 		Peers: nodeViews([]*tailcfg.Node{
@@ -619,7 +621,8 @@ func TestTKAFilterNetmap(t *testing.T) {
 			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},         // messed-up signature
 			{ID: 50, Key: n5.Public(), KeySignature: n5InitialSig.Serialize()}, // rotated
 			{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},
-			{ID: 6, Key: n6.Public(), KeySignature: n6Sig},
+			{ID: 60, Key: n60.Public(), KeySignature: n60Sig},
+			{ID: 61, Key: n61.Public(), KeySignature: n61Sig},
 		}),
 	}
 
@@ -628,7 +631,8 @@ func TestTKAFilterNetmap(t *testing.T) {
 	want := nodeViews([]*tailcfg.Node{
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 		{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},
-		{ID: 6, Key: n6.Public(), KeySignature: n6Sig},
+		{ID: 60, Key: n60.Public(), KeySignature: n60Sig},
+		{ID: 61, Key: n61.Public(), KeySignature: n61Sig},
 	})
 	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
 		return x.Raw32() == y.Raw32()
@@ -1206,6 +1210,14 @@ func TestRotationTracker(t *testing.T) {
 		raw32 := [32]byte{idx}
 		return key.NodePublicFromRaw32(go4mem.B(raw32[:]))
 	}
+
+	rd := func(initialKind tka.SigKind, wrappingKey []byte, prevKeys ...key.NodePublic) *tka.RotationDetails {
+		return &tka.RotationDetails{
+			InitialSig:   &tka.NodeKeySignature{SigKind: initialKind, WrappingPubkey: wrappingKey},
+			PrevNodeKeys: prevKeys,
+		}
+	}
+
 	n1, n2, n3, n4, n5 := newNK(1), newNK(2), newNK(3), newNK(4), newNK(5)
 
 	pk1, pk2, pk3 := []byte{1}, []byte{2}, []byte{3}
@@ -1225,46 +1237,46 @@ func TestRotationTracker(t *testing.T) {
 		{
 			name: "single_prev_key",
 			addDetails: []addDetails{
-				{np: n1, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n2}, WrappingPubkey: pk1}},
+				{np: n1, details: rd(tka.SigDirect, pk1, n2)},
 			},
 			want: set.SetOf([]key.NodePublic{n2}),
 		},
 		{
 			name: "several_prev_keys",
 			addDetails: []addDetails{
-				{np: n1, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n2}, WrappingPubkey: pk1}},
-				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n4}, WrappingPubkey: pk2}},
-				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n3, n4}, WrappingPubkey: pk1}},
+				{np: n1, details: rd(tka.SigDirect, pk1, n2)},
+				{np: n3, details: rd(tka.SigDirect, pk2, n4)},
+				{np: n2, details: rd(tka.SigDirect, pk1, n3, n4)},
 			},
 			want: set.SetOf([]key.NodePublic{n2, n3, n4}),
 		},
 		{
 			name: "several_per_pubkey_latest_wins",
 			addDetails: []addDetails{
-				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1}, WrappingPubkey: pk3}},
-				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
-				{np: n4, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2, n3}, WrappingPubkey: pk3}},
-				{np: n5, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n4}, WrappingPubkey: pk3}},
+				{np: n2, details: rd(tka.SigDirect, pk3, n1)},
+				{np: n3, details: rd(tka.SigDirect, pk3, n1, n2)},
+				{np: n4, details: rd(tka.SigDirect, pk3, n1, n2, n3)},
+				{np: n5, details: rd(tka.SigDirect, pk3, n4)},
 			},
 			want: set.SetOf([]key.NodePublic{n1, n2, n3, n4}),
 		},
 		{
 			name: "several_per_pubkey_same_chain_length_all_rejected",
 			addDetails: []addDetails{
-				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1}, WrappingPubkey: pk3}},
-				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
-				{np: n4, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
-				{np: n5, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
+				{np: n2, details: rd(tka.SigDirect, pk3, n1)},
+				{np: n3, details: rd(tka.SigDirect, pk3, n1, n2)},
+				{np: n4, details: rd(tka.SigDirect, pk3, n1, n2)},
+				{np: n5, details: rd(tka.SigDirect, pk3, n1, n2)},
 			},
 			want: set.SetOf([]key.NodePublic{n1, n2, n3, n4, n5}),
 		},
 		{
 			name: "several_per_pubkey_longest_wins",
 			addDetails: []addDetails{
-				{np: n2, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1}, WrappingPubkey: pk3}},
-				{np: n3, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
-				{np: n4, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2}, WrappingPubkey: pk3}},
-				{np: n5, details: &tka.RotationDetails{PrevNodeKeys: []key.NodePublic{n1, n2, n3}, WrappingPubkey: pk3}},
+				{np: n2, details: rd(tka.SigDirect, pk3, n1)},
+				{np: n3, details: rd(tka.SigDirect, pk3, n1, n2)},
+				{np: n4, details: rd(tka.SigDirect, pk3, n1, n2)},
+				{np: n5, details: rd(tka.SigDirect, pk3, n1, n2, n3)},
 			},
 			want: set.SetOf([]key.NodePublic{n1, n2, n3, n4}),
 		},
