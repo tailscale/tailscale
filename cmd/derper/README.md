@@ -30,7 +30,9 @@ If you've decided or been advised to run your own `derper`, then read on.
 * You must build and update the `cmd/derper` binary yourself. There are no
   packages. Use `go install tailscale.com/cmd/derper@latest` with the latest
   version of Go. You should update this binary approximately as regularly as
-  you update Tailscale nodes.
+  you update Tailscale nodes. If using `--verify-clients`, the `derper` binary
+  and `tailscaled` binary on the machine must be built from the same git revision.
+  (It might work otherwise, but they're developed and only tested together.)
 
 * The DERP protocol does a protocol switch inside TLS from HTTP to a custom
   bidirectional binary protocol. It is thus incompatible with many HTTP proxies.

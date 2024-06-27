@@ -1187,6 +1187,10 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
 		}
 		if err != nil {
+			if strings.Contains(err.Error(), "invalid 'addr' parameter") {
+				// Issue 12617
+				return errors.New("tailscaled version is too old (out of sync with derper binary)")
+			}
 			return fmt.Errorf("failed to query local tailscaled status for %v: %w", clientKey, err)
 		}
 	}
