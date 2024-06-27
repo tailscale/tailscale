@@ -6578,7 +6578,7 @@ func fillAllowedSuggestions() set.Set[tailcfg.StableNodeID] {
 }
 
 func suggestExitNode(report *netcheck.Report, netMap *netmap.NetworkMap, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
-	if report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
+	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
 	}
 	candidates := make([]tailcfg.NodeView, 0, len(netMap.Peers))
