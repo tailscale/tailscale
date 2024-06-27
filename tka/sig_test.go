@@ -356,7 +356,11 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				return sig
 			},
 			want: &RotationDetails{
-				WrappingPubkey: cPub,
+				InitialSig: &NodeKeySignature{
+					SigKind:        SigCredential,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				},
 			},
 		},
 		{
@@ -382,8 +386,13 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				return sig
 			},
 			want: &RotationDetails{
-				WrappingPubkey: cPub,
-				PrevNodeKeys:   []key.NodePublic{n1.Public()},
+				InitialSig: &NodeKeySignature{
+					SigKind:        SigDirect,
+					Pubkey:         n1pub,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				},
+				PrevNodeKeys: []key.NodePublic{n1.Public()},
 			},
 		},
 		{
@@ -418,13 +427,23 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				return sig
 			},
 			want: &RotationDetails{
-				WrappingPubkey: cPub,
-				PrevNodeKeys:   []key.NodePublic{n2.Public(), n1.Public()},
+				InitialSig: &NodeKeySignature{
+					SigKind:        SigDirect,
+					Pubkey:         n1pub,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				},
+				PrevNodeKeys: []key.NodePublic{n2.Public(), n1.Public()},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.want != nil {
+				initialHash := tt.want.InitialSig.SigHash()
+				tt.want.InitialSig.Signature = ed25519.Sign(priv, initialHash[:])
+			}
+
 			sig := tt.sigFn()
 			if err := sig.verifySignature(tt.nodeKey, k); err != nil {
 				t.Fatalf("verifySignature(node) failed: %v", err)
