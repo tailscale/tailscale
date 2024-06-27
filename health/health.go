@@ -78,6 +78,7 @@ type Tracker struct {
 
 	latestVersion   *tailcfg.ClientVersion // or nil
 	checkForUpdates bool
+	applyUpdates    opt.Bool
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -782,17 +783,20 @@ func (t *Tracker) SetLatestVersion(v *tailcfg.ClientVersion) {
 	t.selfCheckLocked()
 }
 
-// SetCheckForUpdates sets whether the client wants to check for updates.
-func (t *Tracker) SetCheckForUpdates(v bool) {
+// SetAutoUpdatePrefs sets the client auto-update preferences. The arguments
+// match the fields of ipn.AutoUpdatePrefs, but we cannot pass that struct
+// directly due to a circular import.
+func (t *Tracker) SetAutoUpdatePrefs(check bool, apply opt.Bool) {
 	if t.nil() {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.checkForUpdates == v {
+	if t.checkForUpdates == check && t.applyUpdates == apply {
 		return
 	}
-	t.checkForUpdates = v
+	t.checkForUpdates = check
+	t.applyUpdates = apply
 	t.selfCheckLocked()
 }
 
@@ -883,20 +887,14 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 func (t *Tracker) updateBuiltinWarnablesLocked() {
 	t.updateWarmingUpWarnableLocked()
 
-	if t.checkForUpdates {
-		if cv := t.latestVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-			if cv.UrgentSecurityUpdate {
-				t.setUnhealthyLocked(securityUpdateAvailableWarnable, Args{
-					ArgCurrentVersion:   version.Short(),
-					ArgAvailableVersion: cv.LatestVersion,
-				})
-			} else {
-				t.setUnhealthyLocked(updateAvailableWarnable, Args{
-					ArgCurrentVersion:   version.Short(),
-					ArgAvailableVersion: cv.LatestVersion,
-				})
-			}
-		}
+	if w, show := t.showUpdateWarnable(); show {
+		t.setUnhealthyLocked(w, Args{
+			ArgCurrentVersion:   version.Short(),
+			ArgAvailableVersion: t.latestVersion.LatestVersion,
+		})
+	} else {
+		t.setHealthyLocked(updateAvailableWarnable)
+		t.setHealthyLocked(securityUpdateAvailableWarnable)
 	}
 
 	if version.IsUnstableBuild() {
@@ -1068,6 +1066,24 @@ func (t *Tracker) updateWarmingUpWarnableLocked() {
 	if !t.ipnWantRunningLastTrue.IsZero() && time.Now().After(t.ipnWantRunningLastTrue.Add(warmingUpWarnableDuration)) {
 		t.setHealthyLocked(warmingUpWarnable)
 	}
+}
+
+func (t *Tracker) showUpdateWarnable() (*Warnable, bool) {
+	if !t.checkForUpdates {
+		return nil, false
+	}
+	cv := t.latestVersion
+	if cv == nil || cv.RunningLatest || cv.LatestVersion == "" {
+		return nil, false
+	}
+	if cv.UrgentSecurityUpdate {
+		return securityUpdateAvailableWarnable, true
+	}
+	// Only show update warning when auto-updates are off
+	if !t.applyUpdates.EqualBool(true) {
+		return updateAvailableWarnable, true
+	}
+	return nil, false
 }
 
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
