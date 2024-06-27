@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -241,6 +242,8 @@ func runReconcilers(opts reconcilerOpts) {
 				&appsv1.StatefulSet{}:        nsFilter,
 				&appsv1.Deployment{}:         nsFilter,
 				&discoveryv1.EndpointSlice{}: nsFilter,
+				&rbacv1.Role{}:               nsFilter,
+				&rbacv1.RoleBinding{}:        nsFilter,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -389,6 +392,27 @@ func runReconcilers(opts reconcilerOpts) {
 	if err != nil {
 		startlog.Fatalf("could not create DNS records reconciler: %v", err)
 	}
+
+	// TSRecorder reconciler.
+	tsRecorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.TSRecorder{})
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.TSRecorder{}).
+		Watches(&appsv1.StatefulSet{}, tsRecorderFilter).
+		Watches(&corev1.Secret{}, tsRecorderFilter).
+		Watches(&rbacv1.Role{}, tsRecorderFilter).
+		Watches(&rbacv1.RoleBinding{}, tsRecorderFilter).
+		Complete(&TSRecorderReconciler{
+			recorder:    eventRecorder,
+			tsNamespace: opts.tailscaleNamespace,
+			Client:      mgr.GetClient(),
+			l:           opts.log.Named("tsrecorder-reconciler"),
+			clock:       tstime.DefaultClock{},
+			tsClient:    opts.tsClient,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create nameserver reconciler: %v", err)
+	}
+
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
@@ -525,6 +549,7 @@ func dnsRecordsReconcilerIngressHandler(ns string, isDefaultLoadBalancer bool, c
 
 type tsClient interface {
 	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
+	Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error)
 	DeleteDevice(ctx context.Context, nodeStableID string) error
 }
 

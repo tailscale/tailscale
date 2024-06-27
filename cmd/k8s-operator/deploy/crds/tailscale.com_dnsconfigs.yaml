@@ -89,11 +89,11 @@ spec:
                   type: object
                   properties:
                     image:
-                      description: Nameserver image.
+                      description: Nameserver image. Defaults to tailscale/k8s-nameserver.
                       type: object
                       properties:
                         repo:
-                          description: Repo defaults to tailscale/k8s-nameserver.
+                          description: Repo is the image repository, e.g. tailscale/k8s-nameserver.
                           type: string
                         tag:
                           description: Tag defaults to operator's own tag.

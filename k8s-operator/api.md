@@ -14,6 +14,8 @@
 - [DNSConfigList](#dnsconfiglist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
+- [TSRecorder](#tsrecorder)
+- [TSRecorderList](#tsrecorderlist)
 
 
 
@@ -243,6 +245,22 @@ _Appears in:_
 | `value` _string_ | Variable references $(VAR_NAME) are expanded using the previously defined<br /> environment variables in the container and any service environment<br />variables. If a variable cannot be resolved, the reference in the input<br />string will be unchanged. Double $$ are reduced to a single $, which<br />allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will<br />produce the string literal "$(VAR_NAME)". Escaped references will never<br />be expanded, regardless of whether the variable exists or not. Defaults<br />to "". |  |  |
 
 
+#### File
+
+
+
+File configures a local file system storage location for writing recordings to.
+
+
+
+_Appears in:_
+- [Storage](#storage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `directory` _string_ | Directory specifies the directory on disk to write recordings to. |  |  |
+
+
 #### Hostname
 
 _Underlying type:_ _string_
@@ -268,10 +286,11 @@ _Appears in:_
 
 _Appears in:_
 - [Nameserver](#nameserver)
+- [TSRecorderSpec](#tsrecorderspec)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
+| `repo` _string_ | Repo is the image repository, e.g. tailscale/k8s-nameserver. |  |  |
 | `tag` _string_ | Tag defaults to operator's own tag. |  |  |
 
 
@@ -319,7 +338,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `image` _[Image](#image)_ | Nameserver image. |  |  |
+| `image` _[Image](#image)_ | Nameserver image. Defaults to tailscale/k8s-nameserver. |  |  |
 
 
 #### NameserverStatus
@@ -496,6 +515,22 @@ _Appears in:_
 | `pod` _[Pod](#pod)_ | Configuration for the proxy Pod. |  |  |
 
 
+#### Storage
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorderSpec](#tsrecorderspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `file` _[File](#file)_ | Configure a local file system storage destination. For more details, see<br />--dst flag: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
+
+
 #### SubnetRouter
 
 
@@ -511,6 +546,86 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `advertiseRoutes` _[Routes](#routes)_ | AdvertiseRoutes refer to CIDRs that the subnet router should make<br />available. Route values must be strings that represent a valid IPv4<br />or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes.<br />https://tailscale.com/kb/1201/4via6-subnets/ |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
+
+
+#### TSRecorder
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorderList](#tsrecorderlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `TSRecorder` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[TSRecorderSpec](#tsrecorderspec)_ | Spec describes the desired recorder instance. |  |  |
+| `status` _[TSRecorderStatus](#tsrecorderstatus)_ | TSRecorderStatus describes the status of the recorder. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### TSRecorderList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `TSRecorderList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[TSRecorder](#tsrecorder) array_ |  |  |  |
+
+
+#### TSRecorderSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorder](#tsrecorder)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale node will be tagged with. Defaults to [tag:k8s-recorder].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a TSRecorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `image` _[Image](#image)_ | TSRecorder image. Defaults to tailscale/tsrecorder, with the same tag as<br />the operator. |  |  |
+| `enableUI` _boolean_ | If enabled, TSRecorder will serve the UI with HTTPS on its MagicDNS hostname.<br />See --ui flag for more details: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
+| `extraVolumes` _[Volume](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#volume-v1-core) array_ | Additional volumes for the pod spec. May be useful if you want to use a<br />local file path for storage. For more details, see --dst flag:<br />https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
+| `extraVolumeMounts` _[VolumeMount](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#volumemount-v1-core) array_ | Additional volume mounts for the tsrecorder container. May be useful if<br />you want to use a local file path for storage. For more details, see<br />--dst flag: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
+| `storage` _[Storage](#storage)_ | Configure where to store session recordings. Exactly one destination must<br />be configured. |  |  |
+
+
+#### TSRecorderStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorder](#tsrecorder)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the TSRecorder.<br />Known condition types are `RecorderReady`. |  |  |
+| `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the TSRecorder statefulset. |  |  |
 
 
 #### Tag
@@ -540,7 +655,25 @@ _Validation:_
 
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
+- [TSRecorderSpec](#tsrecorderspec)
 
+
+
+#### TailnetDevice
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorderStatus](#tsrecorderstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
 
 
 #### TailscaleConfig
