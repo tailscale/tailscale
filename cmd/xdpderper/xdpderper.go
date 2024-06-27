@@ -15,11 +15,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"tailscale.com/derp/xdp"
+	"tailscale.com/net/netutil"
 	"tailscale.com/tsweb"
 )
 
 var (
-	flagDevice  = flag.String("device", "", "target device name")
+	flagDevice  = flag.String("device", "", "target device name (default: autodetect)")
 	flagPort    = flag.Int("dst-port", 0, "destination UDP port to serve")
 	flagVerbose = flag.Bool("verbose", false, "verbose output including verifier errors")
 	flagMode    = flag.String("mode", "xdp", "XDP mode; valid modes: [xdp, xdpgeneric, xdpdrv, xdpoffload]")
@@ -41,8 +42,18 @@ func main() {
 	default:
 		log.Fatal("invalid mode")
 	}
+	deviceName := *flagDevice
+	if deviceName == "" {
+		var err error
+		deviceName, _, err = netutil.DefaultInterfacePortable()
+		if err != nil || deviceName == "" {
+			log.Fatalf("failed to detect default route interface: %v", err)
+		}
+	}
+	log.Printf("binding to device: %s", deviceName)
+
 	server, err := xdp.NewSTUNServer(&xdp.STUNServerConfig{
-		DeviceName:      *flagDevice,
+		DeviceName:      deviceName,
 		DstPort:         *flagPort,
 		AttachFlags:     attachFlags,
 		FullVerifierErr: *flagVerbose,
