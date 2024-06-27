@@ -645,7 +645,7 @@ func (s *Server) start() (reterr error) {
 	s.localAPIServer = &http.Server{Handler: lah}
 	s.lb.ConfigureWebClient(s.localClient)
 	go func() {
-		if err := s.localAPIServer.Serve(lal); err != nil {
+		if err := s.localAPIServer.Serve(lal); err != nil && err != http.ErrServerClosed {
 			s.logf("localapi serve error: %v", err)
 		}
 	}()
