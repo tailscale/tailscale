@@ -3119,11 +3119,35 @@ func TestSuggestExitNode(t *testing.T) {
 			},
 		},
 		{
+			name:       "nil report",
+			lastReport: nil,
+			netMap:     largeNetmap,
+			wantError:  ErrNoPreferredDERP,
+		},
+		{
 			name:       "no preferred derp region",
 			lastReport: preferredNoneReport,
 			netMap: &netmap.NetworkMap{
 				SelfNode: selfNode.View(),
 				DERPMap:  defaultDERPMap,
+			},
+			wantError: ErrNoPreferredDERP,
+		},
+		{
+			name:       "nil netmap",
+			lastReport: noLatency1Report,
+			netMap:     nil,
+			wantError:  ErrNoPreferredDERP,
+		},
+		{
+			name:       "nil derpmap",
+			lastReport: noLatency1Report,
+			netMap: &netmap.NetworkMap{
+				SelfNode: selfNode.View(),
+				DERPMap:  nil,
+				Peers: []tailcfg.NodeView{
+					dallasPeer5,
+				},
 			},
 			wantError: ErrNoPreferredDERP,
 		},
