@@ -556,6 +556,11 @@ func TestTKAFilterNetmap(t *testing.T) {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
 
+	b := &LocalBackend{
+		logf: t.Logf,
+		tka:  &tkaState{authority: authority},
+	}
+
 	n1, n2, n3, n4, n5 := key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode()
 	n1GoodSig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n1.Public()}, nlPriv)
 	if err != nil {
@@ -585,6 +590,27 @@ func TestTKAFilterNetmap(t *testing.T) {
 
 	n5Rotated, n5RotatedSig := resign(n5nl, n5InitialSig.Serialize())
 
+	nodeFromAuthKey := func(authKey string) (key.NodePrivate, tkatype.MarshaledSignature) {
+		_, isWrapped, sig, priv := tka.DecodeWrappedAuthkey(authKey, t.Logf)
+		if !isWrapped {
+			t.Errorf("expected wrapped key")
+		}
+
+		node := key.NewNode()
+		nodeSig, err := tka.SignByCredential(priv, sig, node.Public())
+		if err != nil {
+			t.Error(err)
+		}
+		return node, nodeSig
+	}
+
+	preauth, err := b.NetworkLockWrapPreauthKey("tskey-auth-k7UagY1CNTRL-ZZZZZ", nlPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n6, n6Sig := nodeFromAuthKey(preauth)
+
 	nm := &netmap.NetworkMap{
 		Peers: nodeViews([]*tailcfg.Node{
 			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
@@ -593,18 +619,16 @@ func TestTKAFilterNetmap(t *testing.T) {
 			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},         // messed-up signature
 			{ID: 50, Key: n5.Public(), KeySignature: n5InitialSig.Serialize()}, // rotated
 			{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},
+			{ID: 6, Key: n6.Public(), KeySignature: n6Sig},
 		}),
 	}
 
-	b := &LocalBackend{
-		logf: t.Logf,
-		tka:  &tkaState{authority: authority},
-	}
 	b.tkaFilterNetmapLocked(nm)
 
 	want := nodeViews([]*tailcfg.Node{
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 		{ID: 51, Key: n5Rotated.Public(), KeySignature: n5RotatedSig},
+		{ID: 6, Key: n6.Public(), KeySignature: n6Sig},
 	})
 	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
 		return x.Raw32() == y.Raw32()
