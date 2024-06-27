@@ -476,12 +476,19 @@ runLoop:
 					newCurentEgressIPs = deephash.Hash(&egressAddrs)
 					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
 					if egressIPsHaveChanged && len(egressAddrs) != 0 {
+						var rulesInstalled bool
 						for _, egressAddr := range egressAddrs {
 							ea := egressAddr.Addr()
-							log.Printf("Installing forwarding rules for destination %v", ea.String())
-							if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
-								log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+							if ea.Is4() || (ea.Is6() && nfr.HasIPV6NAT()) {
+								rulesInstalled = true
+								log.Printf("Installing forwarding rules for destination %v", ea.String())
+								if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
+									log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+								}
 							}
+						}
+						if !rulesInstalled {
+							log.Fatalf("no forwarding rules for egress addresses %v, host supports IPv6: %v", egressAddrs, nfr.HasIPV6NAT())
 						}
 					}
 					currentEgressIPs = newCurentEgressIPs
