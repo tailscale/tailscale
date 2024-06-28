@@ -129,11 +129,11 @@ func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config,
 //     are passed through to the Kubernetes API.
 //
 // It never returns.
-func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLogger, mode apiServerProxyMode, host string) {
+func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLogger, mode apiServerProxyMode, host string) {
 	if mode == apiserverProxyModeDisabled {
 		return
 	}
-	ln, err := s.Listen("tcp", ":443")
+	ln, err := ts.Listen("tcp", ":443")
 	if err != nil {
 		log.Fatalf("could not listen on :443: %v", err)
 	}
@@ -142,7 +142,7 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLo
 		log.Fatalf("runAPIServerProxy: failed to parse URL %v", err)
 	}
 
-	lc, err := s.LocalClient()
+	lc, err := ts.LocalClient()
 	if err != nil {
 		log.Fatalf("could not get local client: %v", err)
 	}
@@ -152,7 +152,7 @@ func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, log *zap.SugaredLo
 		lc:          lc,
 		mode:        mode,
 		upstreamURL: u,
-		s:           s,
+		ts:          ts,
 	}
 	ap.rp = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -189,7 +189,7 @@ type apiserverProxy struct {
 	rp  *httputil.ReverseProxy
 
 	mode        apiServerProxyMode
-	s           *tsnet.Server
+	ts          *tsnet.Server
 	upstreamURL *url.URL
 }
 
@@ -225,7 +225,7 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 	if !failOpen && len(addrs) == 0 {
 		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
 		ap.log.Error(msg)
-		http.Error(w, msg, 403)
+		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
 	if r.Method != "POST" || r.Header.Get("Upgrade") != "SPDY/3.1" {
@@ -238,11 +238,11 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		}
 		ap.log.Error(msg)
 		msg += "; failure mode is 'fail closed'; closing connection."
-		http.Error(w, msg, 403)
+		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
 	spdyH := &spdyHijacker{
-		s:              ap.s,
+		ts:             ap.ts,
 		req:            r,
 		who:            who,
 		ResponseWriter: w,
@@ -285,7 +285,7 @@ func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 
 	// Now add the impersonation headers that we want.
 	if err := addImpersonationHeaders(r, h.log); err != nil {
-		log.Fatalf("failed to add impersonation headers: " + err.Error())
+		log.Printf("failed to add impersonation headers: " + err.Error())
 	}
 }
 func (ap *apiserverProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {

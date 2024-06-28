@@ -32,7 +32,7 @@ import (
 // the session contents to be sent to a tsrecorder instance.
 type spdyHijacker struct {
 	http.ResponseWriter
-	s        *tsnet.Server
+	ts       *tsnet.Server
 	req      *http.Request
 	who      *apitype.WhoIsResponse
 	log      *zap.SugaredLogger
@@ -70,25 +70,24 @@ func (h *spdyHijacker) setUpRecording(conn net.Conn, brw *bufio.ReadWriter) (net
 	var wc io.WriteCloser
 	h.log.Infof("kubectl exec session will be recorded, recorders: %v, fail open policy: %t", h.addrs, h.failOpen)
 	ctx := context.Background()
-	rw, _, errChan, err := tailssh.ConnectToRecorder(ctx, h.addrs, h.s.Dialer())
+	rw, _, errChan, err := tailssh.ConnectToRecorder(ctx, h.addrs, h.ts.Dialer())
 	if err != nil {
 		msg := fmt.Sprintf("error connecting to session recorders: %v", err)
-		if !h.failOpen {
-			msg = msg + "; failure mode is 'fail closed'; closing connection."
-			if err := closeConnWithWarning(conn, msg); err != nil {
-				return nil, multierr.New(errors.New(msg), err)
-			}
-			return nil, errors.New(msg)
-		} else {
+		if h.failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
 			h.log.Warnf(msg)
 			return conn, nil
 		}
-	} else {
-		// TODO (irbekrm): log which recorder
-		h.log.Info("successfully connected to a session recorder")
-		wc = rw
+		msg = msg + "; failure mode is 'fail closed'; closing connection."
+		if err := closeConnWithWarning(conn, msg); err != nil {
+			return nil, multierr.New(errors.New(msg), err)
+		}
+		return nil, errors.New(msg)
 	}
+
+	// TODO (irbekrm): log which recorder
+	h.log.Info("successfully connected to a session recorder")
+	wc = rw
 	go func() {
 		err := <-errChan
 		if err == nil {
@@ -106,19 +105,18 @@ func (h *spdyHijacker) setUpRecording(conn net.Conn, brw *bufio.ReadWriter) (net
 	lc := &spdyRemoteConnRecorder{
 		log:  h.log,
 		Conn: conn,
-		lw: &loggingWriter{
-			start:           cl.Now(),
-			clock:           cl,
-			failOpen:        h.failOpen,
-			sessionRecorder: wc,
-			log:             h.log,
+		rec: &recorder{
+			start:    cl.Now(),
+			clock:    cl,
+			failOpen: h.failOpen,
+			conn:     wc,
 		},
 	}
 
 	qp := h.req.URL.Query()
 	ch := CastHeader{
 		Version:     asciicastv2,
-		Timestamp:   lc.lw.start.Unix(),
+		Timestamp:   lc.rec.start.Unix(),
 		ExecCommand: strings.Join(qp["command"], " "),
 		SrcNode:     strings.TrimSuffix(h.who.Node.Name, "."),
 		SrcNodeID:   h.who.Node.StableID,

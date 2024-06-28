@@ -76,17 +76,16 @@ func Test_Writes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &testConn{}
 			sr := &testSessionRecorder{}
-			lw := &loggingWriter{
-				sessionRecorder: sr,
-				clock:           cl,
-				start:           cl.Now(),
-				log:             zl.Sugar(),
+			rec := &recorder{
+				conn:  sr,
+				clock: cl,
+				start: cl.Now(),
 			}
 
 			c := &spdyRemoteConnRecorder{
 				Conn: tc,
 				log:  zl.Sugar(),
-				lw:   lw,
+				rec:  rec,
 			}
 
 			c.stdoutStreamID.Store(stdoutStreamID)
@@ -176,16 +175,15 @@ func Test_Reads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &testConn{}
 			sr := &testSessionRecorder{}
-			lw := &loggingWriter{
-				sessionRecorder: sr,
-				clock:           cl,
-				start:           cl.Now(),
-				log:             zl.Sugar(),
+			rec := &recorder{
+				conn:  sr,
+				clock: cl,
+				start: cl.Now(),
 			}
 			c := &spdyRemoteConnRecorder{
 				Conn: tc,
 				log:  zl.Sugar(),
-				lw:   lw,
+				rec:  rec,
 			}
 			c.resizeStreamID.Store(tt.resizeStreamIDBeforeRead)
 

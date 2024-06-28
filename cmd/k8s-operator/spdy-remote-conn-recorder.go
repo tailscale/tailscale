@@ -24,9 +24,9 @@ import (
 // recorder and forwards the raw bytes to the original destination.
 type spdyRemoteConnRecorder struct {
 	net.Conn
-	// lw knows how to send data written to it to the session recorder.
-	lw *loggingWriter
-	ch CastHeader
+	// rec knows how to send data written to it to a tsrecorder instance.
+	rec *recorder
+	ch  CastHeader
 
 	stdoutStreamID atomic.Uint32
 	stderrStreamID atomic.Uint32
@@ -90,7 +90,7 @@ func (c *spdyRemoteConnRecorder) Read(b []byte) (int, error) {
 					return
 				}
 				j = append(j, '\n')
-				_, err = c.lw.sessionRecorder.Write(j)
+				err = c.rec.writeCastLine(j)
 				if err != nil {
 					c.log.Debugf("received error from recorder: %v", err)
 				}
@@ -139,7 +139,7 @@ func (c *spdyRemoteConnRecorder) Write(b []byte) (int, error) {
 	if !sf.Ctrl {
 		switch sf.StreamID {
 		case c.stdoutStreamID.Load(), c.stderrStreamID.Load():
-			if _, err := c.lw.Write(sf.Payload); err != nil {
+			if err := c.rec.Write(sf.Payload); err != nil {
 				return 0, fmt.Errorf("error sending payload to session recorder: %w", err)
 			}
 		}
@@ -161,7 +161,7 @@ func (c *spdyRemoteConnRecorder) Close() error {
 	c.writeBuf.Reset()
 	c.closed = true
 	err := c.Conn.Close()
-	c.lw.Close()
+	c.rec.Close()
 	return err
 }
 
