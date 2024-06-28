@@ -14,6 +14,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/prometheus/client_golang/prometheus"
+	"tailscale.com/util/multierr"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type config -type counters_key -type counter_key_af -type counter_key_packets_bytes_action -type counter_key_prog_end bpf xdp.c -- -I headers
@@ -27,6 +28,7 @@ type STUNServer struct {
 	metrics  *stunServerMetrics
 	dstPort  int
 	dropSTUN bool
+	link     link.Link
 }
 
 //lint:ignore U1000 used in xdp_linux_test.go, which has a build tag
@@ -87,7 +89,7 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 	if err != nil {
 		return nil, fmt.Errorf("error finding device: %w", err)
 	}
-	_, err = link.AttachXDP(link.XDPOptions{
+	link, err := link.AttachXDP(link.XDPOptions{
 		Program:   objs.XdpProgFunc,
 		Interface: iface.Index,
 		Flags:     link.XDPAttachFlags(config.AttachFlags),
@@ -95,6 +97,7 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 	if err != nil {
 		return nil, fmt.Errorf("error attaching XDP program to dev: %w", err)
 	}
+	server.link = link
 	return server, nil
 }
 
@@ -102,7 +105,12 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 func (s *STUNServer) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.objs.Close()
+	var errs []error
+	if s.link != nil {
+		errs = append(errs, s.link.Close())
+	}
+	errs = append(errs, s.objs.Close())
+	return multierr.New(errs...)
 }
 
 type stunServerMetrics struct {
