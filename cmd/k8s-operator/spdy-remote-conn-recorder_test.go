@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
 
 	"go.uber.org/zap"
@@ -32,6 +33,9 @@ func Test_Writes(t *testing.T) {
 		inputs        [][]byte
 		wantForwarded []byte
 		wantRecorded  []byte
+		firstWrite    bool
+		width         int
+		height        int
 	}{
 		{
 			name:          "single_write_control_frame_with_payload",
@@ -71,22 +75,38 @@ func Test_Writes(t *testing.T) {
 			wantForwarded: []byte{0x80, 0x3, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
 			wantRecorded:  castLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
+		{
+			name:          "single_first_write_stdout_data_frame_with_payload",
+			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
+			wantForwarded: []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
+			wantRecorded:  append(asciinemaResizeMsg(t, 10, 20), castLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
+			width:         10,
+			height:        20,
+			firstWrite:    true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &testConn{}
 			sr := &testSessionRecorder{}
-			lw := &loggingWriter{
-				sessionRecorder: sr,
-				clock:           cl,
-				start:           cl.Now(),
-				log:             zl.Sugar(),
+			rec := &recorder{
+				conn:  sr,
+				clock: cl,
+				start: cl.Now(),
 			}
 
 			c := &spdyRemoteConnRecorder{
 				Conn: tc,
 				log:  zl.Sugar(),
-				lw:   lw,
+				rec:  rec,
+				ch: CastHeader{
+					Width:  tt.width,
+					Height: tt.height,
+				},
+			}
+			if !tt.firstWrite {
+				// this test case does not intend to test that cast header gets written once
+				c.writeCastHeaderOnce.Do(func() {})
 			}
 
 			c.stdoutStreamID.Store(stdoutStreamID)
@@ -131,23 +151,26 @@ func Test_Reads(t *testing.T) {
 	tests := []struct {
 		name                     string
 		inputs                   [][]byte
-		wantRecorded             []byte
 		wantStdoutStreamID       uint32
 		wantStderrStreamID       uint32
 		wantResizeStreamID       uint32
+		wantWidth                int
+		wantHeight               int
 		resizeStreamIDBeforeRead uint32
 	}{
 		{
 			name:                     "resize_data_frame_single_read",
 			inputs:                   [][]byte{append([]byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, uint8(len(resizeMsg))}, resizeMsg...)},
 			resizeStreamIDBeforeRead: 1,
-			wantRecorded:             asciinemaResizeMsg(t, 10, 20),
+			wantWidth:                10,
+			wantHeight:               20,
 		},
 		{
 			name:                     "resize_data_frame_two_reads",
 			inputs:                   [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, uint8(len(resizeMsg))}, resizeMsg},
 			resizeStreamIDBeforeRead: 1,
-			wantRecorded:             asciinemaResizeMsg(t, 10, 20),
+			wantWidth:                10,
+			wantHeight:               20,
 		},
 		{
 			name:               "syn_stream_ctrl_frame_stdout_single_read",
@@ -176,16 +199,15 @@ func Test_Reads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &testConn{}
 			sr := &testSessionRecorder{}
-			lw := &loggingWriter{
-				sessionRecorder: sr,
-				clock:           cl,
-				start:           cl.Now(),
-				log:             zl.Sugar(),
+			rec := &recorder{
+				conn:  sr,
+				clock: cl,
+				start: cl.Now(),
 			}
 			c := &spdyRemoteConnRecorder{
 				Conn: tc,
 				log:  zl.Sugar(),
-				lw:   lw,
+				rec:  rec,
 			}
 			c.resizeStreamID.Store(tt.resizeStreamIDBeforeRead)
 
@@ -201,13 +223,6 @@ func Test_Reads(t *testing.T) {
 					t.Errorf("[%d] spdyRemoteConnRecorder.Read() resulted in an unexpected error: %v", i, err)
 				}
 			}
-			// Assert that the expected bytes have been forwarded to the session recorder.
-			gotRecorded := sr.buf.Bytes()
-			if !reflect.DeepEqual(gotRecorded, tt.wantRecorded) {
-				t.Errorf("expected bytes not recorded, wants\n%v\ngot\n%v", tt.wantRecorded, gotRecorded)
-			}
-
-			// Assert that the expected stream IDs have been stored.
 			if id := c.resizeStreamID.Load(); id != tt.wantResizeStreamID && id != tt.resizeStreamIDBeforeRead {
 				t.Errorf("wants resizeStreamID: %d, got %d", tt.wantResizeStreamID, id)
 			}
@@ -216,6 +231,14 @@ func Test_Reads(t *testing.T) {
 			}
 			if id := c.stdoutStreamID.Load(); id != tt.wantStdoutStreamID {
 				t.Errorf("wants stdoutStreamID: %d, got %d", tt.wantStdoutStreamID, id)
+			}
+			if tt.wantHeight != 0 || tt.wantWidth != 0 {
+				if tt.wantWidth != c.ch.Width {
+					t.Errorf("wants width: %v, got %v", tt.wantWidth, c.ch.Width)
+				}
+				if tt.wantHeight != c.ch.Height {
+					t.Errorf("want height: %v, got %v", tt.wantHeight, c.ch.Height)
+				}
 			}
 		})
 	}
@@ -261,7 +284,9 @@ type testConn struct {
 	// writeBuf contains whatever was send to the conn via Write.
 	writeBuf bytes.Buffer
 	// readBuf contains whatever was sent to the conn via Read.
-	readBuf bytes.Buffer
+	readBuf      bytes.Buffer
+	sync.RWMutex // protects the following
+	closed       bool
 }
 
 var _ net.Conn = &testConn{}
@@ -272,6 +297,18 @@ func (tc *testConn) Read(b []byte) (int, error) {
 
 func (tc *testConn) Write(b []byte) (int, error) {
 	return tc.writeBuf.Write(b)
+}
+
+func (tc *testConn) Close() error {
+	tc.Lock()
+	defer tc.Unlock()
+	tc.closed = true
+	return nil
+}
+func (tc *testConn) isClosed() bool {
+	tc.Lock()
+	defer tc.Unlock()
+	return tc.closed
 }
 
 type testSessionRecorder struct {

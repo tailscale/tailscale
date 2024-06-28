@@ -19,7 +19,6 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/ssh/tailssh"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
@@ -32,15 +31,23 @@ import (
 // the session contents to be sent to a tsrecorder instance.
 type spdyHijacker struct {
 	http.ResponseWriter
-	s        *tsnet.Server
-	req      *http.Request
-	who      *apitype.WhoIsResponse
-	log      *zap.SugaredLogger
-	pod      string           // pod being exec-d
-	ns       string           // namespace of the pod being exec-d
-	addrs    []netip.AddrPort // tsrecorder addresses
-	failOpen bool             // whether to fail open if recording fails
+	ts                *tsnet.Server
+	req               *http.Request
+	who               *apitype.WhoIsResponse
+	log               *zap.SugaredLogger
+	pod               string           // pod being exec-d
+	ns                string           // namespace of the pod being exec-d
+	addrs             []netip.AddrPort // tsrecorder addresses
+	failOpen          bool             // whether to fail open if recording fails
+	connectToRecorder RecorderDialFn
 }
+
+// RecorderDialFn dials the specified netip.AddrPorts that should be tsrecorder
+// addresses. It tries to connect to recorder endpoints one by one, till one
+// connection succeeds. In case of success, returns a list with a single
+// successful recording attempt and an error channel. If the connection errors
+// after having been established, an error is sent down the channel.
+type RecorderDialFn func(context.Context, []netip.AddrPort, func(context.Context, string, string) (net.Conn, error)) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error)
 
 // Hijack hijacks a 'kubectl exec' session and configures for the session
 // contents to be sent to a recorder.
@@ -51,7 +58,7 @@ func (h *spdyHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("error hijacking connection: %w", err)
 	}
 
-	conn, err := h.setUpRecording(reqConn, brw)
+	conn, err := h.setUpRecording(context.Background(), reqConn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error setting up session recording: %w", err)
 	}
@@ -62,68 +69,55 @@ func (h *spdyHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // spdyHijacker.addrs. Returns conn from provided opts, wrapped in recording
 // logic. If connecting to the recorder fails or an error is received during the
 // session and spdyHijacker.failOpen is false, connection will be closed.
-func (h *spdyHijacker) setUpRecording(conn net.Conn, brw *bufio.ReadWriter) (net.Conn, error) {
+func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn, error) {
 	const (
 		// https://docs.asciinema.org/manual/asciicast/v2/
 		asciicastv2 = 2
 	)
 	var wc io.WriteCloser
 	h.log.Infof("kubectl exec session will be recorded, recorders: %v, fail open policy: %t", h.addrs, h.failOpen)
-	ctx := context.Background()
-	rw, _, errChan, err := tailssh.ConnectToRecorder(ctx, h.addrs, h.s.Dialer())
+	// TODO (irbekrm): send client a message that session will be recorded.
+	rw, _, errChan, err := h.connectToRecorder(ctx, h.addrs, h.ts.Dial)
 	if err != nil {
 		msg := fmt.Sprintf("error connecting to session recorders: %v", err)
-		if !h.failOpen {
-			msg = msg + "; failure mode is 'fail closed'; closing connection."
-			if err := closeConnWithWarning(conn, msg); err != nil {
-				return nil, multierr.New(errors.New(msg), err)
-			}
-			return nil, errors.New(msg)
-		} else {
+		if h.failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
 			h.log.Warnf(msg)
 			return conn, nil
 		}
-	} else {
-		// TODO (irbekrm): log which recorder
-		h.log.Info("successfully connected to a session recorder")
-		wc = rw
-	}
-	go func() {
-		err := <-errChan
-		if err == nil {
-			h.log.Info("finished uploading the recording")
-			return
-		}
-		msg := fmt.Sprintf("connection to the session recorder errorred: %v;  failure mode set to 'fail closed'; closing connection", err)
-		h.log.Error(msg)
+		msg = msg + "; failure mode is 'fail closed'; closing connection."
 		if err := closeConnWithWarning(conn, msg); err != nil {
-			h.log.Error(err)
+			return nil, multierr.New(errors.New(msg), err)
 		}
-		return
-	}()
+		return nil, errors.New(msg)
+	}
+
+	// TODO (irbekrm): log which recorder
+	h.log.Info("successfully connected to a session recorder")
+	wc = rw
 	cl := tstime.DefaultClock{}
 	lc := &spdyRemoteConnRecorder{
 		log:  h.log,
 		Conn: conn,
-		lw: &loggingWriter{
-			start:           cl.Now(),
-			clock:           cl,
-			failOpen:        h.failOpen,
-			sessionRecorder: wc,
-			log:             h.log,
+		rec: &recorder{
+			start:    cl.Now(),
+			clock:    cl,
+			failOpen: h.failOpen,
+			conn:     wc,
 		},
 	}
 
 	qp := h.req.URL.Query()
 	ch := CastHeader{
-		Version:     asciicastv2,
-		Timestamp:   lc.lw.start.Unix(),
-		ExecCommand: strings.Join(qp["command"], " "),
-		SrcNode:     strings.TrimSuffix(h.who.Node.Name, "."),
-		SrcNodeID:   h.who.Node.StableID,
-		Namespace:   h.ns,
-		Pod:         h.pod,
+		Version:   asciicastv2,
+		Timestamp: lc.rec.start.Unix(),
+		Command:   strings.Join(qp["command"], " "),
+		SrcNode:   strings.TrimSuffix(h.who.Node.Name, "."),
+		SrcNodeID: h.who.Node.StableID,
+		Kubernetes: &Kubernetes{
+			PodName:   h.pod,
+			Namespace: h.ns,
+		},
 	}
 	if !h.who.Node.IsTagged() {
 		ch.SrcNodeUser = h.who.UserProfile.LoginName
@@ -132,6 +126,32 @@ func (h *spdyHijacker) setUpRecording(conn net.Conn, brw *bufio.ReadWriter) (net
 		ch.SrcNodeTags = h.who.Node.Tags
 	}
 	lc.ch = ch
+	go func() {
+		var err error
+		select {
+		case <-ctx.Done():
+			return
+		case err = <-errChan:
+		}
+		if err == nil {
+			h.log.Info("finished uploading the recording")
+			return
+		}
+		msg := fmt.Sprintf("connection to the session recorder errorred: %v;", err)
+		if h.failOpen {
+			msg += msg + "; failure mode is 'fail open'; continuing session without recording."
+			h.log.Info(msg)
+			return
+		}
+		msg += "; failure mode set to 'fail closed'; closing connection"
+		h.log.Error(msg)
+		lc.failed = true
+		// TODO (irbekrm): write a message to the client
+		if err := lc.Close(); err != nil {
+			h.log.Infof("error closing recorder connections: %v", err)
+		}
+		return
+	}()
 	return lc, nil
 }
 
@@ -167,23 +187,24 @@ type CastHeader struct {
 	// SrcNodeUser is the LoginName of the node originating the connection (if not tagged).
 	SrcNodeUser string `json:"srcNodeUser,omitempty"`
 
+	Command string
+
 	// Kubernetes-specific fields:
-	// Namespace of the Pod that is being exec-ed to.
-	Namespace string `json:"namespace,omitempty"`
-	// Name of the Pod that is being exec-ed to.
-	Pod string `json:"pod,omitempty"`
-	// ExecCommand is the command passed to 'kubectl exec' i.e 'sh' in 'kubectl exec -it my-pod sh'.
-	// Note that a Command field should not be used to store this info as
-	// that will make tsrecorder consider that the session consists of a
-	// non-interactive command.
-	ExecCommand string
+	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
+}
+
+// Kubernetes contains 'kubectl exec' session specific information for
+// tsrecorder.
+type Kubernetes struct {
+	PodName   string
+	Namespace string
 }
 
 func closeConnWithWarning(conn net.Conn, msg string) error {
 	b := io.NopCloser(bytes.NewBuffer([]byte(msg)))
 	resp := http.Response{Status: http.StatusText(http.StatusForbidden), StatusCode: http.StatusForbidden, Body: b}
 	if err := resp.Write(conn); err != nil {
-		return multierr.New(err, conn.Close())
+		return multierr.New(fmt.Errorf("error writing msg %q to conn: %v", msg, err), conn.Close())
 	}
 	return conn.Close()
 }

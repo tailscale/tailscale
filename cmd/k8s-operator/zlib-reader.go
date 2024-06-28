@@ -22,7 +22,7 @@ type zlibReader struct {
 // it into b.
 func (z *zlibReader) Read(b []byte) (int, error) {
 	if z.ReadCloser == nil {
-		r, err := zlib.NewReaderDict(&z.underlying, []byte(spdyTxtDictionary))
+		r, err := zlib.NewReaderDict(&z.underlying, spdyTxtDictionary)
 		if err != nil {
 			return 0, err
 		}

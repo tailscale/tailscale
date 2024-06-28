@@ -14,7 +14,6 @@ import (
 	"net/netip"
 	"time"
 
-	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/multierr"
 )
@@ -31,7 +30,7 @@ import (
 // attempts are in order the recorder(s) was attempted. If successful a
 // successful connection is made, the last attempt in the slice is the
 // attempt for connected recorder.
-func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dialer *tsdial.Dialer) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error) {
+func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dial func(context.Context, string, string) (net.Conn, error)) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error) {
 	if len(recs) == 0 {
 		return nil, nil, nil, errors.New("no recorders configured")
 	}
@@ -40,7 +39,7 @@ func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dialer *tsdia
 	// unbounded context for the upload.
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dialCancel()
-	hc, err := SessionRecordingClientForDialer(dialCtx, dialer)
+	hc, err := SessionRecordingClientForDialer(dialCtx, dial)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -116,12 +115,8 @@ func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dialer *tsdia
 // requests to the session recording server to upload session recordings. It
 // uses the provided dialCtx to dial connections, and limits a single dial to 5
 // seconds.
-func SessionRecordingClientForDialer(dialCtx context.Context, dialer *tsdial.Dialer) (*http.Client, error) {
-	if dialer == nil {
-		return nil, errors.New("no peer API transport")
-	}
-	tr := dialer.PeerAPITransport().Clone()
-	dialContextFn := tr.DialContext
+func SessionRecordingClientForDialer(dialCtx context.Context, dial func(context.Context, string, string) (net.Conn, error)) (*http.Client, error) {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
 
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		perAttemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -133,7 +128,7 @@ func SessionRecordingClientForDialer(dialCtx context.Context, dialer *tsdial.Dia
 				cancel()
 			}
 		}()
-		return dialContextFn(perAttemptCtx, network, addr)
+		return dial(perAttemptCtx, network, addr)
 	}
 	return &http.Client{
 		Transport: tr,

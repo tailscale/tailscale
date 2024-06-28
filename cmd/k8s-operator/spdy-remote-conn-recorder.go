@@ -24,9 +24,9 @@ import (
 // recorder and forwards the raw bytes to the original destination.
 type spdyRemoteConnRecorder struct {
 	net.Conn
-	// lw knows how to send data written to it to the session recorder.
-	lw *loggingWriter
-	ch CastHeader
+	// rec knows how to send data written to it to a tsrecorder instance.
+	rec *recorder
+	ch  CastHeader
 
 	stdoutStreamID atomic.Uint32
 	stderrStreamID atomic.Uint32
@@ -34,6 +34,7 @@ type spdyRemoteConnRecorder struct {
 
 	wmu    sync.Mutex // sequences writes
 	closed bool
+	failed bool
 
 	rmu                 sync.Mutex // sequences reads
 	writeCastHeaderOnce sync.Once
@@ -77,27 +78,12 @@ func (c *spdyRemoteConnRecorder) Read(b []byte) (int, error) {
 		switch sf.StreamID {
 		case c.resizeStreamID.Load():
 			var err error
-			c.writeCastHeaderOnce.Do(func() {
-				var msg spdyResizeMsg
-				if err = json.Unmarshal(sf.Payload, &msg); err != nil {
-					return
-				}
-				c.ch.Width = msg.Width
-				c.ch.Height = msg.Height
-				var j []byte
-				j, err = json.Marshal(c.ch)
-				if err != nil {
-					return
-				}
-				j = append(j, '\n')
-				_, err = c.lw.sessionRecorder.Write(j)
-				if err != nil {
-					c.log.Debugf("received error from recorder: %v", err)
-				}
-			})
-			if err != nil {
-				return 0, err
+			var msg spdyResizeMsg
+			if err = json.Unmarshal(sf.Payload, &msg); err != nil {
+				return 0, fmt.Errorf("error umarshalling resize msg: %w", err)
 			}
+			c.ch.Width = msg.Width
+			c.ch.Height = msg.Height
 		}
 		return n, nil
 	}
@@ -139,7 +125,23 @@ func (c *spdyRemoteConnRecorder) Write(b []byte) (int, error) {
 	if !sf.Ctrl {
 		switch sf.StreamID {
 		case c.stdoutStreamID.Load(), c.stderrStreamID.Load():
-			if _, err := c.lw.Write(sf.Payload); err != nil {
+			var err error
+			c.writeCastHeaderOnce.Do(func() {
+				var j []byte
+				j, err = json.Marshal(c.ch)
+				if err != nil {
+					return
+				}
+				j = append(j, '\n')
+				err = c.rec.writeCastLine(j)
+				if err != nil {
+					c.log.Errorf("received error from recorder: %v", err)
+				}
+			})
+			if err != nil {
+				return 0, fmt.Errorf("error writing CastHeader: %w", err)
+			}
+			if err := c.rec.Write(sf.Payload); err != nil {
 				return 0, fmt.Errorf("error sending payload to session recorder: %w", err)
 			}
 		}
@@ -155,13 +157,13 @@ func (c *spdyRemoteConnRecorder) Close() error {
 	if c.closed {
 		return nil
 	}
-	if c.writeBuf.Len() > 0 {
+	if !c.failed && c.writeBuf.Len() > 0 {
 		c.Conn.Write(c.writeBuf.Bytes())
 	}
 	c.writeBuf.Reset()
 	c.closed = true
 	err := c.Conn.Close()
-	c.lw.Close()
+	c.rec.Close()
 	return err
 }
 

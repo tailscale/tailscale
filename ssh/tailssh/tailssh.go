@@ -1548,7 +1548,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	} else {
 		var errChan <-chan error
 		var attempts []*tailcfg.SSHRecordingAttempt
-		rec.out, attempts, errChan, err = ConnectToRecorder(ctx, recorders, ss.conn.srv.lb.Dialer())
+		rec.out, attempts, errChan, err = ConnectToRecorder(ctx, recorders, ss.conn.srv.lb.Dialer().UserDial)
 		if err != nil {
 			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
 				eventType := tailcfg.SSHSessionRecordingFailed
