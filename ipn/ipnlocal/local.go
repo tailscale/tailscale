@@ -338,6 +338,9 @@ type LocalBackend struct {
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
+
+	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
+	refreshAutoExitNode bool
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -640,7 +643,9 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	hadPAC := b.prevIfState.HasPAC()
 	b.prevIfState = ifst
 	b.pauseOrResumeControlClientLocked()
-
+	if delta.Major && shouldAutoExitNode() {
+		b.refreshAutoExitNode = true
+	}
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
 	// add/remove subnets.
 	if hadPAC != ifst.HasPAC() {
@@ -1215,7 +1220,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		prefs.WantRunning = true
 		prefs.LoggedOut = false
 	}
-	if setExitNodeID(prefs, st.NetMap) {
+	if setExitNodeID(prefs, st.NetMap, b.lastSuggestedExitNode) {
 		prefsChanged = true
 	}
 	if applySysPolicy(prefs) {
@@ -1418,9 +1423,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			b.send(*notify)
 		}
 	}()
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
 	if !b.updateNetmapDeltaLocked(muts) {
 		return false
 	}
@@ -1428,8 +1432,14 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	if b.netMap != nil && mutationsAreWorthyOfTellingIPNBus(muts) {
 		nm := ptr.To(*b.netMap) // shallow clone
 		nm.Peers = make([]tailcfg.NodeView, 0, len(b.peers))
+		shouldAutoExitNode := shouldAutoExitNode()
 		for _, p := range b.peers {
 			nm.Peers = append(nm.Peers, p)
+			// If the auto exit node currently set goes offline, find another auto exit node.
+			if shouldAutoExitNode && b.pm.prefs.ExitNodeID() == p.StableID() && p.Online() != nil && !*p.Online() {
+				b.setAutoExitNodeIDLockedOnEntry(unlock)
+				return false
+			}
 		}
 		slices.SortFunc(nm.Peers, func(a, b tailcfg.NodeView) int {
 			return cmp.Compare(a.ID(), b.ID())
@@ -1491,9 +1501,14 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 
 // setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
-func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap, lastSuggestedExitNode tailcfg.StableNodeID) (prefsChanged bool) {
 	if exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, ""); exitNodeIDStr != "" {
 		exitNodeID := tailcfg.StableNodeID(exitNodeIDStr)
+		if shouldAutoExitNode() && lastSuggestedExitNode != "" {
+			exitNodeID = lastSuggestedExitNode
+		}
+		// Note: when exitNodeIDStr == "auto" && lastSuggestedExitNode == "", then exitNodeID is now "auto" which will never match a peer's node ID.
+		// When there is no a peer matching the node ID, traffic will blackhole, preventing accidental non-exit-node usage when a policy is in effect that requires an exit node.
 		changed := prefs.ExitNodeID != exitNodeID || prefs.ExitNodeIP.IsValid()
 		prefs.ExitNodeID = exitNodeID
 		prefs.ExitNodeIP = netip.Addr{}
@@ -3357,7 +3372,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(newp *ipn.Prefs, unlock unlockOnce)
 	// setExitNodeID returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
-	setExitNodeID(newp, netMap)
+	setExitNodeID(newp, netMap, b.lastSuggestedExitNode)
 	// applySysPolicy does likewise so we can also ignore its return value.
 	applySysPolicy(newp)
 	// We do this to avoid holding the lock while doing everything else.
@@ -4850,12 +4865,44 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
+	refresh := b.refreshAutoExitNode
+	b.refreshAutoExitNode = false
 	b.mu.Unlock()
 
 	if cc == nil {
 		return
 	}
 	cc.SetNetInfo(ni)
+	if refresh {
+		unlock := b.lockAndGetUnlock()
+		defer unlock()
+		b.setAutoExitNodeIDLockedOnEntry(unlock)
+	}
+}
+
+func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) {
+	defer unlock()
+
+	prefs := b.pm.CurrentPrefs()
+	if !prefs.Valid() {
+		b.logf("[unexpected]: received tailnet exit node ID pref change callback but current prefs are nil")
+		return
+	}
+	prefsClone := prefs.AsStruct()
+	newSuggestion, err := b.suggestExitNodeLocked()
+	if err != nil {
+		b.logf("setAutoExitNodeID: %v", err)
+		return
+	}
+	prefsClone.ExitNodeID = newSuggestion.ID
+	_, err = b.editPrefsLockedOnEntry(&ipn.MaskedPrefs{
+		Prefs:         *prefsClone,
+		ExitNodeIDSet: true,
+	}, unlock)
+	if err != nil {
+		b.logf("setAutoExitNodeID: failed to apply exit node ID preference: %v", err)
+		return
+	}
 }
 
 // setNetMapLocked updates the LocalBackend state to reflect the newly
@@ -6526,28 +6573,31 @@ func mayDeref[T any](p *T) (v T) {
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
 
-// SuggestExitNode computes a suggestion based on the current netmap and last netcheck report. If
+// suggestExitNodeLocked computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
 // eligible for consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
 //
 // Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
 // Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
 // without a DERP home, we look for geographic proximity to this device's DERP home.
-func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
-	b.mu.Lock()
+// b.mu.lock() must be held.
+func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
 	netMap := b.netMap
 	prevSuggestion := b.lastSuggestedExitNode
-	b.mu.Unlock()
 
 	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, getAllowedSuggestions())
 	if err != nil {
 		return res, err
 	}
-	b.mu.Lock()
 	b.lastSuggestedExitNode = res.ID
-	b.mu.Unlock()
 	return res, err
+}
+
+func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.suggestExitNodeLocked()
 }
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.
@@ -6786,6 +6836,12 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	const earthRadiusMeters = 6371000
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
+}
+
+// shouldAutoExitNode checks for the auto exit node MDM policy.
+func shouldAutoExitNode() bool {
+	exitNodeIDStr, _ := syspolicy.GetString(syspolicy.ExitNodeID, "")
+	return exitNodeIDStr == "auto:any"
 }
 
 // startAutoUpdate triggers an auto-update attempt. The actual update happens
