@@ -33,17 +33,22 @@ type ACLTest struct {
 	User   string   `json:"user,omitempty"`   // old name for source
 	Accept []string `json:"accept,omitempty"` // expected destination ip:port that user can access
 	Deny   []string `json:"deny,omitempty"`   // expected destination ip:port that user cannot access
+	Allow  []string `json:"allow,omitempty"`  // old name for accept
+}
 
-	Allow []string `json:"allow,omitempty"` // old name for accept
+type ACLAutoApprovers struct {
+	Routes   map[string][]string `json:"routes,omitempty"`
+	ExitNode []string            `json:"exitnode,omitempty"`
 }
 
 // ACLDetails contains all the details for an ACL.
 type ACLDetails struct {
-	Tests     []ACLTest           `json:"tests,omitempty"`
-	ACLs      []ACLRow            `json:"acls,omitempty"`
-	Groups    map[string][]string `json:"groups,omitempty"`
-	TagOwners map[string][]string `json:"tagowners,omitempty"`
-	Hosts     map[string]string   `json:"hosts,omitempty"`
+	Tests         []ACLTest           `json:"tests,omitempty"`
+	ACLs          []ACLRow            `json:"acls,omitempty"`
+	Groups        map[string][]string `json:"groups,omitempty"`
+	TagOwners     map[string][]string `json:"tagowners,omitempty"`
+	Hosts         map[string]string   `json:"hosts,omitempty"`
+	AutoApprovers ACLAutoApprovers    `json:"autoapprovers,omitempty"`
 }
 
 // ACL contains an ACLDetails and metadata.
