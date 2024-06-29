@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.13.0
+    controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
   name: connectors.tailscale.com
 spec:
   group: tailscale.com
@@ -31,48 +31,95 @@ spec:
       name: v1alpha1
       schema:
         openAPIV3Schema:
-          description: 'Connector defines a Tailscale node that will be deployed in the cluster. The node can be configured to act as a Tailscale subnet router and/or a Tailscale exit node. Connector is a cluster-scoped resource. More info: https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource'
+          description: |-
+            Connector defines a Tailscale node that will be deployed in the cluster. The
+            node can be configured to act as a Tailscale subnet router and/or a Tailscale
+            exit node.
+            Connector is a cluster-scoped resource.
+            More info:
+            https://tailscale.com/kb/1236/kubernetes-operator#deploying-exit-nodes-and-subnet-routers-on-kubernetes-using-connector-custom-resource
           type: object
           required:
             - spec
           properties:
             apiVersion:
-              description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
               type: string
             kind:
-              description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
               type: string
             metadata:
               type: object
             spec:
-              description: 'ConnectorSpec describes the desired Tailscale component. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
+              description: |-
+                ConnectorSpec describes the desired Tailscale component.
+                More info:
+                https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
               properties:
                 exitNode:
-                  description: ExitNode defines whether the Connector node should act as a Tailscale exit node. Defaults to false. https://tailscale.com/kb/1103/exit-nodes
+                  description: |-
+                    ExitNode defines whether the Connector node should act as a
+                    Tailscale exit node. Defaults to false.
+                    https://tailscale.com/kb/1103/exit-nodes
                   type: boolean
                 hostname:
-                  description: Hostname is the tailnet hostname that should be assigned to the Connector node. If unset, hostname defaults to <connector name>-connector. Hostname can contain lower case letters, numbers and dashes, it must not start or end with a dash and must be between 2 and 63 characters long.
+                  description: |-
+                    Hostname is the tailnet hostname that should be assigned to the
+                    Connector node. If unset, hostname defaults to <connector
+                    name>-connector. Hostname can contain lower case letters, numbers and
+                    dashes, it must not start or end with a dash and must be between 2
+                    and 63 characters long.
                   type: string
                   pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
                 proxyClass:
-                  description: ProxyClass is the name of the ProxyClass custom resource that contains configuration options that should be applied to the resources created for this Connector. If unset, the operator will create resources with the default configuration.
+                  description: |-
+                    ProxyClass is the name of the ProxyClass custom resource that
+                    contains configuration options that should be applied to the
+                    resources created for this Connector. If unset, the operator will
+                    create resources with the default configuration.
                   type: string
                 subnetRouter:
-                  description: SubnetRouter defines subnet routes that the Connector node should expose to tailnet. If unset, none are exposed. https://tailscale.com/kb/1019/subnets/
+                  description: |-
+                    SubnetRouter defines subnet routes that the Connector node should
+                    expose to tailnet. If unset, none are exposed.
+                    https://tailscale.com/kb/1019/subnets/
                   type: object
                   required:
                     - advertiseRoutes
                   properties:
                     advertiseRoutes:
-                      description: AdvertiseRoutes refer to CIDRs that the subnet router should make available. Route values must be strings that represent a valid IPv4 or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes. https://tailscale.com/kb/1201/4via6-subnets/
+                      description: |-
+                        AdvertiseRoutes refer to CIDRs that the subnet router should make
+                        available. Route values must be strings that represent a valid IPv4
+                        or IPv6 CIDR range. Values can be Tailscale 4via6 subnet routes.
+                        https://tailscale.com/kb/1201/4via6-subnets/
                       type: array
                       minItems: 1
                       items:
                         type: string
                         format: cidr
                 tags:
-                  description: Tags that the Tailscale node will be tagged with. Defaults to [tag:k8s]. To autoapprove the subnet routes or exit node defined by a Connector, you can configure Tailscale ACLs to give these tags the necessary permissions. See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes. If you specify custom tags here, you must also make the operator an owner of these tags. See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator. Tags cannot be changed once a Connector node has been created. Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
+                  description: |-
+                    Tags that the Tailscale node will be tagged with.
+                    Defaults to [tag:k8s].
+                    To autoapprove the subnet routes or exit node defined by a Connector,
+                    you can configure Tailscale ACLs to give these tags the necessary
+                    permissions.
+                    See https://tailscale.com/kb/1018/acls/#auto-approvers-for-routes-and-exit-nodes.
+                    If you specify custom tags here, you must also make the operator an owner of these tags.
+                    See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
+                    Tags cannot be changed once a Connector node has been created.
+                    Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
                   type: array
                   items:
                     type: string
@@ -81,48 +128,93 @@ spec:
                 - rule: has(self.subnetRouter) || self.exitNode == true
                   message: A Connector needs to be either an exit node or a subnet router, or both.
             status:
-              description: ConnectorStatus describes the status of the Connector. This is set and managed by the Tailscale operator.
+              description: |-
+                ConnectorStatus describes the status of the Connector. This is set
+                and managed by the Tailscale operator.
               type: object
               properties:
                 conditions:
-                  description: List of status conditions to indicate the status of the Connector. Known condition types are `ConnectorReady`.
+                  description: |-
+                    List of status conditions to indicate the status of the Connector.
+                    Known condition types are `ConnectorReady`.
                   type: array
                   items:
-                    description: ConnectorCondition contains condition information for a Connector.
+                    description: Condition contains details for one aspect of the current state of this API Resource.
                     type: object
                     required:
+                      - lastTransitionTime
+                      - message
+                      - reason
                       - status
                       - type
                     properties:
                       lastTransitionTime:
-                        description: LastTransitionTime is the timestamp corresponding to the last status change of this condition.
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
                         type: string
                         format: date-time
                       message:
-                        description: Message is a human readable description of the details of the last transition, complementing reason.
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
                         type: string
+                        maxLength: 32768
                       observedGeneration:
-                        description: If set, this represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.condition[x].observedGeneration is 9, the condition is out of date with respect to the current state of the Connector.
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
                         type: integer
                         format: int64
+                        minimum: 0
                       reason:
-                        description: Reason is a brief machine readable explanation for the condition's last transition.
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
                         type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
                       status:
-                        description: Status of the condition, one of ('True', 'False', 'Unknown').
+                        description: status of the condition, one of True, False, Unknown.
                         type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
                       type:
-                        description: Type of the condition, known values are (`SubnetRouterReady`).
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
                         type: string
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                   x-kubernetes-list-map-keys:
                     - type
                   x-kubernetes-list-type: map
+                hostname:
+                  description: |-
+                    Hostname is the fully qualified domain name of the Connector node.
+                    If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
+                    node.
+                  type: string
                 isExitNode:
                   description: IsExitNode is set to true if the Connector acts as an exit node.
                   type: boolean
                 subnetRoutes:
-                  description: SubnetRoutes are the routes currently exposed to tailnet via this Connector instance.
+                  description: |-
+                    SubnetRoutes are the routes currently exposed to tailnet via this
+                    Connector instance.
                   type: string
+                tailnetIPs:
+                  description: |-
+                    TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
+                    assigned to the Connector node.
+                  type: array
+                  items:
+                    type: string
       served: true
       storage: true
       subresources:

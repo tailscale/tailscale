@@ -22,7 +22,7 @@ import (
 	"log"
 	"math"
 	"math/big"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -141,6 +141,8 @@ type Server struct {
 	removePktForwardOther        expvar.Int
 	avgQueueDuration             *uint64          // In milliseconds; accessed atomically
 	tcpRtt                       metrics.LabelMap // histogram
+	meshUpdateBatchSize          *metrics.Histogram
+	meshUpdateLoopCount          *metrics.Histogram
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -323,24 +325,42 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		sentTo:               map[key.NodePublic]map[key.NodePublic]int64{},
 		avgQueueDuration:     new(uint64),
 		tcpRtt:               metrics.LabelMap{Label: "le"},
+		meshUpdateBatchSize:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
+		meshUpdateLoopCount:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100}),
 		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
 		clock:                tstime.StdClock{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
 	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
-	s.packetsDroppedReasonCounters = []*expvar.Int{
-		s.packetsDroppedReason.Get("unknown_dest"),
-		s.packetsDroppedReason.Get("unknown_dest_on_fwd"),
-		s.packetsDroppedReason.Get("gone_disconnected"),
-		s.packetsDroppedReason.Get("gone_not_here"),
-		s.packetsDroppedReason.Get("queue_head"),
-		s.packetsDroppedReason.Get("queue_tail"),
-		s.packetsDroppedReason.Get("write_error"),
-	}
+
+	s.packetsDroppedReasonCounters = s.genPacketsDroppedReasonCounters()
+
 	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
 	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
 	return s
+}
+
+func (s *Server) genPacketsDroppedReasonCounters() []*expvar.Int {
+	getMetric := s.packetsDroppedReason.Get
+	ret := []*expvar.Int{
+		dropReasonUnknownDest:      getMetric("unknown_dest"),
+		dropReasonUnknownDestOnFwd: getMetric("unknown_dest_on_fwd"),
+		dropReasonGoneDisconnected: getMetric("gone_disconnected"),
+		dropReasonQueueHead:        getMetric("queue_head"),
+		dropReasonQueueTail:        getMetric("queue_tail"),
+		dropReasonWriteError:       getMetric("write_error"),
+		dropReasonDupClient:        getMetric("dup_client"),
+	}
+	if len(ret) != int(numDropReasons) {
+		panic("dropReason metrics out of sync")
+	}
+	for i := range numDropReasons {
+		if ret[i] == nil {
+			panic("dropReason metrics out of sync")
+		}
+	}
+	return ret
 }
 
 // SetMesh sets the pre-shared key that regional DERP servers used to mesh
@@ -550,7 +570,7 @@ func (s *Server) registerClient(c *sclient) {
 	}
 	s.keyOfAddr[c.remoteIPPort] = c.key
 	s.curClients.Add(1)
-	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, true)
+	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, c.presentFlags(), true)
 }
 
 // broadcastPeerStateChangeLocked enqueues a message to all watchers
@@ -558,12 +578,13 @@ func (s *Server) registerClient(c *sclient) {
 // presence changed.
 //
 // s.mu must be held.
-func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, present bool) {
+func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, flags PeerPresentFlags, present bool) {
 	for w := range s.watchers {
 		w.peerStateChange = append(w.peerStateChange, peerConnState{
 			peer:    peer,
 			present: present,
 			ipPort:  ipPort,
+			flags:   flags,
 		})
 		go w.requestMeshUpdate()
 	}
@@ -585,7 +606,7 @@ func (s *Server) unregisterClient(c *sclient) {
 			delete(s.clientsMesh, c.key)
 			s.notePeerGoneFromRegionLocked(c.key)
 		}
-		s.broadcastPeerStateChangeLocked(c.key, netip.AddrPort{}, false)
+		s.broadcastPeerStateChangeLocked(c.key, netip.AddrPort{}, 0, false)
 	case *dupClientSet:
 		c.debugLogf("removed duplicate client")
 		if set.removeClient(c) {
@@ -684,6 +705,7 @@ func (s *Server) addWatcher(c *sclient) {
 			peer:    peer,
 			present: true,
 			ipPort:  ac.remoteIPPort,
+			flags:   ac.presentFlags(),
 		})
 	}
 
@@ -709,7 +731,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 
 	clientAP, _ := netip.ParseAddrPort(remoteAddr)
 	if err := s.verifyClient(ctx, clientKey, clientInfo, clientAP.Addr()); err != nil {
-		return fmt.Errorf("client %x rejected: %v", clientKey, err)
+		return fmt.Errorf("client %v rejected: %v", clientKey, err)
 	}
 
 	// At this point we trust the client so we don't time out.
@@ -735,12 +757,12 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		discoSendQueue: make(chan pkt, perClientSendQueueDepth),
 		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan peerGoneMsg),
-		canMesh:        clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
+		canMesh:        s.isMeshPeer(clientInfo),
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
 
 	if c.canMesh {
-		c.meshUpdate = make(chan struct{})
+		c.meshUpdate = make(chan struct{}, 1) // must be buffered; >1 is fine but wasteful
 	}
 	if clientInfo != nil {
 		c.info = *clientInfo
@@ -776,7 +798,6 @@ func (c *sclient) run(ctx context.Context) error {
 	var grp errgroup.Group
 	sendCtx, cancelSender := context.WithCancel(ctx)
 	grp.Go(func() error { return c.sendLoop(sendCtx) })
-	grp.Go(func() error { return c.statsLoop(sendCtx) })
 	defer func() {
 		cancelSender()
 		if err := grp.Wait(); err != nil && !c.s.isClosed() {
@@ -787,6 +808,8 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 		}
 	}()
+
+	c.startStatsLoop(sendCtx)
 
 	for {
 		ft, fl, err := readFrameHeader(c.br)
@@ -922,7 +945,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 
 	srcKey, dstKey, contents, err := s.recvForwardPacket(c.br, fl)
 	if err != nil {
-		return fmt.Errorf("client %x: recvForwardPacket: %v", c.key, err)
+		return fmt.Errorf("client %v: recvForwardPacket: %v", c.key, err)
 	}
 	s.packetsForwardedIn.Add(1)
 
@@ -977,7 +1000,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
 	if err != nil {
-		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
+		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
 
 	var fwd PacketForwarder
@@ -1046,6 +1069,7 @@ const (
 	dropReasonQueueTail                          // destination queue is full, dropped packet at queue tail
 	dropReasonWriteError                         // OS write() failed
 	dropReasonDupClient                          // the public key is connected 2+ times (active/active, fighting)
+	numDropReasons                               // unused; keep last
 )
 
 func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, reason dropReason) {
@@ -1123,30 +1147,51 @@ func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason PeerGoneReaso
 	}
 }
 
+// requestMeshUpdate notes that a c's peerStateChange has been appended to and
+// should now be written.
+//
+// It does not block. If a meshUpdate is already pending for this client, it
+// does nothing.
 func (c *sclient) requestMeshUpdate() {
 	if !c.canMesh {
 		panic("unexpected requestMeshUpdate")
 	}
 	select {
 	case c.meshUpdate <- struct{}{}:
-	case <-c.done:
+	default:
 	}
+}
+
+var localClient tailscale.LocalClient
+
+// isMeshPeer reports whether the client is a trusted mesh peer
+// node in the DERP region.
+func (s *Server) isMeshPeer(info *clientInfo) bool {
+	return info != nil && info.MeshKey != "" && info.MeshKey == s.meshKey
 }
 
 // verifyClient checks whether the client is allowed to connect to the derper,
 // depending on how & whether the server's been configured to verify.
 func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, info *clientInfo, clientIP netip.Addr) error {
+	if s.isMeshPeer(info) {
+		// Trusted mesh peer. No need to verify further. In fact, verifying
+		// further wouldn't work: it's not part of the tailnet so tailscaled and
+		// likely the admission control URL wouldn't know about it.
+		return nil
+	}
+
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
-		status, err := tailscale.Status(ctx)
+		_, err := localClient.WhoIsNodeKey(ctx, clientKey)
+		if err == tailscale.ErrPeerNotFound {
+			return fmt.Errorf("peer %v not authorized (not found in local tailscaled)", clientKey)
+		}
 		if err != nil {
-			return fmt.Errorf("failed to query local tailscaled status: %w", err)
-		}
-		if clientKey == status.Self.PublicKey {
-			return nil
-		}
-		if _, exists := status.Peer[clientKey]; !exists {
-			return fmt.Errorf("client %v not in set of peers", clientKey)
+			if strings.Contains(err.Error(), "invalid 'addr' parameter") {
+				// Issue 12617
+				return errors.New("tailscaled version is too old (out of sync with derper binary)")
+			}
+			return fmt.Errorf("failed to query local tailscaled status for %v: %w", clientKey, err)
 		}
 	}
 
@@ -1405,11 +1450,26 @@ type sclient struct {
 	peerGoneLim *rate.Limiter
 }
 
+func (c *sclient) presentFlags() PeerPresentFlags {
+	var f PeerPresentFlags
+	if c.info.IsProber {
+		f |= PeerPresentIsProber
+	}
+	if c.canMesh {
+		f |= PeerPresentIsMeshPeer
+	}
+	if f == 0 {
+		return PeerPresentIsRegular
+	}
+	return f
+}
+
 // peerConnState represents whether a peer is connected to the server
 // or not.
 type peerConnState struct {
 	ipPort  netip.AddrPort // if present, the peer's IP:port
 	peer    key.NodePublic
+	flags   PeerPresentFlags
 	present bool
 }
 
@@ -1496,7 +1556,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		}
 	}()
 
-	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
+	jitter := rand.N(5 * time.Second)
 	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 
@@ -1583,6 +1643,11 @@ func (c *sclient) sendPong(data [8]byte) error {
 	return err
 }
 
+const (
+	peerGoneFrameLen    = keyLen + 1
+	peerPresentFrameLen = keyLen + 16 + 2 + 1 // 16 byte IP + 2 byte port + 1 byte flags
+)
+
 // sendPeerGone sends a peerGone frame, without flushing.
 func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) error {
 	switch reason {
@@ -1592,7 +1657,7 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) e
 		c.s.peerGoneNotHereFrames.Add(1)
 	}
 	c.setWriteDeadline()
-	data := make([]byte, 0, keyLen+1)
+	data := make([]byte, 0, peerGoneFrameLen)
 	data = peer.AppendTo(data)
 	data = append(data, byte(reason))
 	if err := writeFrameHeader(c.bw.bw(), framePeerGone, uint32(len(data))); err != nil {
@@ -1604,73 +1669,62 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason PeerGoneReasonType) e
 }
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
-func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort) error {
+func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags PeerPresentFlags) error {
 	c.setWriteDeadline()
-	const frameLen = keyLen + 16 + 2
-	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, frameLen); err != nil {
+	if err := writeFrameHeader(c.bw.bw(), framePeerPresent, peerPresentFrameLen); err != nil {
 		return err
 	}
-	payload := make([]byte, frameLen)
+	payload := make([]byte, peerPresentFrameLen)
 	_ = peer.AppendTo(payload[:0])
 	a16 := ipPort.Addr().As16()
 	copy(payload[keyLen:], a16[:])
 	binary.BigEndian.PutUint16(payload[keyLen+16:], ipPort.Port())
+	payload[keyLen+18] = byte(flags)
 	_, err := c.bw.Write(payload)
 	return err
 }
 
-// sendMeshUpdates drains as many mesh peerStateChange entries as
-// possible into the write buffer WITHOUT flushing or otherwise
-// blocking (as it holds c.s.mu while working). If it can't drain them
-// all, it schedules itself to be called again in the future.
+// sendMeshUpdates drains all mesh peerStateChange entries into the write buffer
+// without flushing.
 func (c *sclient) sendMeshUpdates() error {
-	c.s.mu.Lock()
-	defer c.s.mu.Unlock()
+	var lastBatch []peerConnState // memory to best effort reuse
 
-	// allow all happened-before mesh update request goroutines to complete, if
-	// we don't finish the task we'll queue another below.
-drainUpdates:
-	for {
-		select {
-		case <-c.meshUpdate:
-		default:
-			break drainUpdates
+	// takeAll returns c.peerStateChange and empties it.
+	takeAll := func() []peerConnState {
+		c.s.mu.Lock()
+		defer c.s.mu.Unlock()
+		if len(c.peerStateChange) == 0 {
+			return nil
 		}
+		batch := c.peerStateChange
+		if cap(lastBatch) > 16 {
+			lastBatch = nil
+		}
+		c.peerStateChange = lastBatch[:0]
+		return batch
 	}
 
-	writes := 0
-	for _, pcs := range c.peerStateChange {
-		if c.bw.Available() <= frameHeaderLen+keyLen {
-			break
+	for loops := 0; ; loops++ {
+		batch := takeAll()
+		if len(batch) == 0 {
+			c.s.meshUpdateLoopCount.Observe(float64(loops))
+			return nil
 		}
-		var err error
-		if pcs.present {
-			err = c.sendPeerPresent(pcs.peer, pcs.ipPort)
-		} else {
-			err = c.sendPeerGone(pcs.peer, PeerGoneReasonDisconnected)
-		}
-		if err != nil {
-			// Shouldn't happen, though, as we're writing
-			// into available buffer space, not the
-			// network.
-			return err
-		}
-		writes++
-	}
+		c.s.meshUpdateBatchSize.Observe(float64(len(batch)))
 
-	remain := copy(c.peerStateChange, c.peerStateChange[writes:])
-	c.peerStateChange = c.peerStateChange[:remain]
-
-	// Did we manage to write them all into the bufio buffer without flushing?
-	if len(c.peerStateChange) == 0 {
-		if cap(c.peerStateChange) > 16 {
-			c.peerStateChange = nil
+		for _, pcs := range batch {
+			var err error
+			if pcs.present {
+				err = c.sendPeerPresent(pcs.peer, pcs.ipPort, pcs.flags)
+			} else {
+				err = c.sendPeerGone(pcs.peer, PeerGoneReasonDisconnected)
+			}
+			if err != nil {
+				return err
+			}
 		}
-	} else {
-		// Didn't finish in the buffer space provided; schedule a future run.
-		go c.requestMeshUpdate()
+		lastBatch = batch
 	}
-	return nil
 }
 
 // sendPacket writes contents to the client in a RecvPacket frame. If
@@ -1899,6 +1953,8 @@ func (s *Server) ExpVar() expvar.Var {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
 	m.Set("counter_tcp_rtt", &s.tcpRtt)
+	m.Set("counter_mesh_update_batch_size", s.meshUpdateBatchSize)
+	m.Set("counter_mesh_update_loop_count", s.meshUpdateLoopCount)
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long())
 	m.Set("version", &expvarVersion)
@@ -1938,10 +1994,35 @@ func (s *Server) ConsistencyCheck() error {
 			s.curClients.Value(),
 			len(s.clients)))
 	}
+
+	if s.verifyClientsLocalTailscaled {
+		if err := s.checkVerifyClientsLocalTailscaled(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}
 	return errors.New(strings.Join(errs, ", "))
+}
+
+// checkVerifyClientsLocalTailscaled checks that a verifyClients call can be made successfully for the derper hosts own node key.
+func (s *Server) checkVerifyClientsLocalTailscaled() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	status, err := localClient.StatusWithoutPeers(ctx)
+	if err != nil {
+		return fmt.Errorf("localClient.Status: %w", err)
+	}
+	info := &clientInfo{
+		IsProber: true,
+	}
+	clientIP := netip.IPv6Loopback()
+	if err := s.verifyClient(ctx, status.Self.PublicKey, info, clientIP); err != nil {
+		return fmt.Errorf("verifyClient for self nodekey: %w", err)
+	}
+	return nil
 }
 
 const minTimeBetweenLogs = 2 * time.Second

@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
+	"tailscale.com/util/mak"
 )
 
 func TestConnector(t *testing.T) {
@@ -29,7 +30,7 @@ func TestConnector(t *testing.T) {
 		},
 		TypeMeta: metav1.TypeMeta{
 			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.io/v1alpha1",
+			APIVersion: "tailscale.com/v1alpha1",
 		},
 		Spec: tsapi.ConnectorSpec{
 			SubnetRouter: &tsapi.SubnetRouter{
@@ -74,8 +75,25 @@ func TestConnector(t *testing.T) {
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+
+	// Connector status should get updated with the IP/hostname info when available.
+	const hostname = "foo.tailnetxyz.ts.net"
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, "device_id", []byte("1234"))
+		mak.Set(&secret.Data, "device_fqdn", []byte(hostname))
+		mak.Set(&secret.Data, "device_ips", []byte(`["127.0.0.1", "::1"]`))
+	})
+	expectReconciled(t, cr, "", "test")
+	cn.Finalizers = append(cn.Finalizers, "tailscale.com/finalizer")
+	cn.Status.IsExitNode = cn.Spec.ExitNode
+	cn.Status.SubnetRoutes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
+	cn.Status.Hostname = hostname
+	cn.Status.TailnetIPs = []string{"127.0.0.1", "::1"}
+	expectEqual(t, fc, cn, func(o *tsapi.Connector) {
+		o.Status.Conditions = nil
+	})
 
 	// Add another route to be advertised.
 	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
@@ -152,7 +170,7 @@ func TestConnector(t *testing.T) {
 		subnetRoutes: "10.40.0.0/14",
 		hostname:     "test-connector",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// Add an exit node.
@@ -237,7 +255,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
 	}
-	expectEqual(t, fc, expectedSecret(t, opts), nil)
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 
 	// 2. Update Connector to specify a ProxyClass. ProxyClass is not yet
@@ -254,9 +272,9 @@ func TestConnectorWithProxyClass(t *testing.T) {
 	// its resources.
 	mustUpdateStatus(t, fc, "", "custom-metadata", func(pc *tsapi.ProxyClass) {
 		pc.Status = tsapi.ProxyClassStatus{
-			Conditions: []tsapi.ConnectorCondition{{
+			Conditions: []metav1.Condition{{
 				Status:             metav1.ConditionTrue,
-				Type:               tsapi.ProxyClassready,
+				Type:               string(tsapi.ProxyClassready),
 				ObservedGeneration: pc.Generation,
 			}}}
 	})

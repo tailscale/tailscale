@@ -168,10 +168,8 @@ func (v NodeView) Online() *bool {
 func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
 func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
 
-func (v NodeView) CapMap() views.MapFn[NodeCapability, []RawMessage, views.Slice[RawMessage]] {
-	return views.MapFnOf(v.ж.CapMap, func(t []RawMessage) views.Slice[RawMessage] {
-		return views.SliceOf(t)
-	})
+func (v NodeView) CapMap() views.MapSlice[NodeCapability, RawMessage] {
+	return views.MapSliceOf(v.ж.CapMap)
 }
 func (v NodeView) UnsignedPeerAPIOnly() bool    { return v.ж.UnsignedPeerAPIOnly }
 func (v NodeView) ComputedName() string         { return v.ж.ComputedName }
@@ -195,6 +193,7 @@ func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
 }
 
 func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
+func (v NodeView) IsJailed() bool        { return v.ж.IsJailed }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
@@ -235,6 +234,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
 	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
+	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 

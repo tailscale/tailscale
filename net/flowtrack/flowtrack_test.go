@@ -4,19 +4,21 @@
 package flowtrack
 
 import (
+	"encoding/json"
 	"net/netip"
 	"testing"
 
 	"tailscale.com/tstest"
+	"tailscale.com/types/ipproto"
 )
 
 func TestCache(t *testing.T) {
 	c := &Cache[int]{MaxEntries: 2}
 
-	k1 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("1.1.1.1:1")}
-	k2 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("2.2.2.2:2")}
-	k3 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("3.3.3.3:3")}
-	k4 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("4.4.4.4:4")}
+	k1 := MakeTuple(0, netip.MustParseAddrPort("1.1.1.1:1"), netip.MustParseAddrPort("1.1.1.1:1"))
+	k2 := MakeTuple(0, netip.MustParseAddrPort("1.1.1.1:1"), netip.MustParseAddrPort("2.2.2.2:2"))
+	k3 := MakeTuple(0, netip.MustParseAddrPort("1.1.1.1:1"), netip.MustParseAddrPort("3.3.3.3:3"))
+	k4 := MakeTuple(0, netip.MustParseAddrPort("1.1.1.1:1"), netip.MustParseAddrPort("4.4.4.4:4"))
 
 	wantLen := func(want int) {
 		t.Helper()
@@ -78,5 +80,49 @@ func TestCache(t *testing.T) {
 	})
 	if err != nil {
 		t.Error(err)
+	}
+}
+
+func BenchmarkMapKeys(b *testing.B) {
+	b.Run("typed", func(b *testing.B) {
+		c := &Cache[struct{}]{MaxEntries: 1000}
+		var t Tuple
+		for proto := range 20 {
+			t = Tuple{proto: ipproto.Proto(proto), src: netip.MustParseAddr("1.1.1.1").As16(), srcPort: 1, dst: netip.MustParseAddr("1.1.1.1").As16(), dstPort: 1}
+			c.Add(t, struct{}{})
+		}
+		for i := 0; i < b.N; i++ {
+			_, ok := c.Get(t)
+			if !ok {
+				b.Fatal("missing key")
+			}
+		}
+	})
+}
+
+func TestStringJSON(t *testing.T) {
+	v := MakeTuple(123,
+		netip.MustParseAddrPort("1.2.3.4:5"),
+		netip.MustParseAddrPort("6.7.8.9:10"))
+
+	if got, want := v.String(), "(IPProto-123 1.2.3.4:5 => 6.7.8.9:10)"; got != want {
+		t.Errorf("String = %q; want %q", got, want)
+	}
+
+	got, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"proto":123,"src":"1.2.3.4:5","dst":"6.7.8.9:10"}`
+	if string(got) != want {
+		t.Errorf("Marshal = %q; want %q", got, want)
+	}
+
+	var back Tuple
+	if err := json.Unmarshal(got, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back != v {
+		t.Errorf("back = %v; want %v", back, v)
 	}
 }

@@ -78,9 +78,13 @@ func runNetcheck(ctx context.Context, args []string) error {
 		log.Printf("No DERP map from tailscaled; using default.")
 	}
 	if err != nil || noRegions {
-		hc := &http.Client{Transport: tlsdial.NewTransport()}
+		hc := &http.Client{
+			Transport: tlsdial.NewTransport(),
+			Timeout:   10 * time.Second,
+		}
 		dm, err = prodDERPMap(ctx, hc)
 		if err != nil {
+			log.Println("Failed to fetch a DERP map, so netcheck cannot continue. Check your Internet connection.")
 			return err
 		}
 	}
@@ -127,13 +131,13 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 
 	printf("\nReport:\n")
 	printf("\t* UDP: %v\n", report.UDP)
-	if report.GlobalV4 != "" {
-		printf("\t* IPv4: yes, %v\n", report.GlobalV4)
+	if report.GlobalV4.IsValid() {
+		printf("\t* IPv4: yes, %s\n", report.GlobalV4)
 	} else {
 		printf("\t* IPv4: (no addr found)\n")
 	}
-	if report.GlobalV6 != "" {
-		printf("\t* IPv6: yes, %v\n", report.GlobalV6)
+	if report.GlobalV6.IsValid() {
+		printf("\t* IPv6: yes, %s\n", report.GlobalV6)
 	} else if report.IPv6 {
 		printf("\t* IPv6: (no addr found)\n")
 	} else if report.OSHasIPv6 {
@@ -142,7 +146,6 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 		printf("\t* IPv6: no, unavailable in OS\n")
 	}
 	printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
-	printf("\t* HairPinning: %v\n", report.HairPinning)
 	printf("\t* PortMapping: %v\n", portMapping(report))
 	if report.CaptivePortal != "" {
 		printf("\t* CaptivePortal: %v\n", report.CaptivePortal)
@@ -210,6 +213,7 @@ func portMapping(r *netcheck.Report) string {
 }
 
 func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, error) {
+	log.Printf("attempting to fetch a DERPMap from %s", ipn.DefaultControlURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create prodDERPMap request: %w", err)

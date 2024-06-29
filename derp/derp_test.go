@@ -623,7 +623,13 @@ func (tc *testClient) wantPresent(t *testing.T, peers ...key.NodePublic) {
 					}
 				}))
 			}
-			t.Logf("got present with IP %v", m.IPPort)
+			t.Logf("got present with IP %v, flags=%v", m.IPPort, m.Flags)
+			switch m.Flags {
+			case PeerPresentIsMeshPeer, PeerPresentIsRegular:
+				// Okay
+			default:
+				t.Errorf("unexpected PeerPresentIsMeshPeer flags %v", m.Flags)
+			}
 			delete(want, got)
 			if len(want) == 0 {
 				return

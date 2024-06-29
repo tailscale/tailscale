@@ -29,6 +29,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -668,11 +669,14 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	const debug = true
 	if debug {
-		logf = logger.WithPrefix(t.Logf, "... ")
+		logf = logger.WithPrefix(tstest.WhileTestRunningLogger(t), "... ")
 	}
 
 	sys := &tsd.System{}
-	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{SetSubsystem: sys.Set})
+	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
+		SetSubsystem:  sys.Set,
+		HealthTracker: sys.HealthTracker(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

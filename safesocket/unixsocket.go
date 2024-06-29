@@ -6,6 +6,7 @@
 package safesocket
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -16,11 +17,12 @@ import (
 	"runtime"
 )
 
-func connect(path string) (net.Conn, error) {
+func connect(ctx context.Context, path string) (net.Conn, error) {
 	if runtime.GOOS == "js" {
 		return nil, errors.New("safesocket.Connect not yet implemented on js/wasm")
 	}
-	return net.Dial("unix", path)
+	var std net.Dialer
+	return std.DialContext(ctx, "unix", path)
 }
 
 func listen(path string) (net.Listener, error) {

@@ -159,6 +159,10 @@ func (fs wslFS) Stat(name string) (isRegular bool, err error) {
 	return true, nil
 }
 
+func (fs wslFS) Chmod(name string, perm os.FileMode) error {
+	return wslRun(fs.cmd("chmod", "--", fmt.Sprintf("%04o", perm), name))
+}
+
 func (fs wslFS) Rename(oldName, newName string) error {
 	return wslRun(fs.cmd("mv", "--", oldName, newName))
 }
@@ -228,8 +232,8 @@ func wslRun(cmd *exec.Cmd) (err error) {
 	}
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Token:      syscall.Token(token),
-		HideWindow: true,
+		CreationFlags: windows.CREATE_NO_WINDOW,
+		Token:         syscall.Token(token),
 	}
 	return cmd.Run()
 }

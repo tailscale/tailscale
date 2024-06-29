@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/atomicfile"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/types/logger"
@@ -38,6 +39,7 @@ var configureWSL = envknob.RegisterBool("TS_DEBUG_CONFIGURE_WSL")
 type windowsManager struct {
 	logf       logger.Logf
 	guid       string
+	knobs      *controlknobs.Knobs // or nil
 	nrptDB     *nrptRuleDatabase
 	wslManager *wslManager
 
@@ -45,10 +47,14 @@ type windowsManager struct {
 	closing bool
 }
 
-func NewOSConfigurator(logf logger.Logf, health *health.Tracker, interfaceName string) (OSConfigurator, error) {
+// NewOSConfigurator created a new OS configurator.
+//
+// The health tracker and the knobs may be nil.
+func NewOSConfigurator(logf logger.Logf, health *health.Tracker, knobs *controlknobs.Knobs, interfaceName string) (OSConfigurator, error) {
 	ret := &windowsManager{
 		logf:       logf,
 		guid:       interfaceName,
+		knobs:      knobs,
 		wslManager: newWSLManager(logf, health),
 	}
 
@@ -288,6 +294,10 @@ func (m *windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname
 	return nil
 }
 
+func (m *windowsManager) disableLocalDNSOverrideViaNRPT() bool {
+	return m.knobs != nil && m.knobs.DisableLocalDNSOverrideViaNRPT.Load()
+}
+
 func (m *windowsManager) SetDNS(cfg OSConfig) error {
 	// We can configure Windows DNS in one of two ways:
 	//
@@ -322,7 +332,17 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 	}
 
 	if len(cfg.MatchDomains) == 0 {
-		if err := m.setSplitDNS(nil, nil); err != nil {
+		var resolvers []netip.Addr
+		var domains []dnsname.FQDN
+		if !m.disableLocalDNSOverrideViaNRPT() {
+			// Create a default catch-all rule to make ourselves the actual primary resolver.
+			// Without this rule, Windows 8.1 and newer devices issue parallel DNS requests to DNS servers
+			// associated with all network adapters, even when "Override local DNS" is enabled and/or
+			// a Mullvad exit node is being used, resulting in DNS leaks.
+			resolvers = cfg.Nameservers
+			domains = []dnsname.FQDN{"."}
+		}
+		if err := m.setSplitDNS(resolvers, domains); err != nil {
 			return err
 		}
 		if err := m.setHosts(nil); err != nil {
@@ -331,8 +351,6 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
 			return err
 		}
-	} else if m.nrptDB == nil {
-		return errors.New("cannot set per-domain resolvers on Windows 7")
 	} else {
 		if err := m.setSplitDNS(cfg.Nameservers, cfg.MatchDomains); err != nil {
 			return err
@@ -373,7 +391,9 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 		t0 := time.Now()
 		m.logf("running ipconfig /registerdns ...")
 		cmd := exec.Command("ipconfig", "/registerdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: windows.DETACHED_PROCESS,
+		}
 		err := cmd.Run()
 		d := time.Since(t0).Round(time.Millisecond)
 		if err != nil {
@@ -385,7 +405,9 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 		t0 = time.Now()
 		m.logf("running ipconfig /flushdns ...")
 		cmd = exec.Command("ipconfig", "/flushdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: windows.DETACHED_PROCESS,
+		}
 		err = cmd.Run()
 		d = time.Since(t0).Round(time.Millisecond)
 		if err != nil {

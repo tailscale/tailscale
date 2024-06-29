@@ -89,15 +89,6 @@ func ExampleServer_multipleInstances() {
 	}()
 }
 
-// ExampleServer_ignoreLogs shows you how to ignore all of the log messages written
-// by a tsnet instance.
-func ExampleServer_ignoreLogs() {
-	srv := &tsnet.Server{
-		Logf: func(string, ...any) {},
-	}
-	_ = srv
-}
-
 // ExampleServer_ignoreLogsSometimes shows you how to ignore all of the log messages
 // written by a tsnet instance, but allows you to opt-into them if a command-line
 // flag is set.
@@ -107,7 +98,6 @@ func ExampleServer_ignoreLogsSometimes() {
 
 	srv := &tsnet.Server{
 		Hostname: *hostname,
-		Logf:     func(string, ...any) {},
 	}
 
 	if *tsnetVerbose {

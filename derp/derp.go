@@ -83,9 +83,16 @@ const (
 	// a bug).
 	framePeerGone = frameType(0x08) // 32B pub key of peer that's gone + 1 byte reason
 
-	// framePeerPresent is like framePeerGone, but for other
-	// members of the DERP region when they're meshed up together.
-	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected + optional 18B ip:port (16 byte IP + 2 byte BE uint16 port)
+	// framePeerPresent is like framePeerGone, but for other members of the DERP
+	// region when they're meshed up together.
+	//
+	// The message is at least 32 bytes (the public key of the peer that's
+	// connected). If there are at least 18 bytes remaining after that, it's the
+	// 16 byte IP + 2 byte BE uint16 port of the client. If there's another byte
+	// remaining after that, it's a PeerPresentFlags byte.
+	// While current servers send 41 bytes, old servers will send fewer, and newer
+	// servers might send more.
+	framePeerPresent = frameType(0x09)
 
 	// frameWatchConns is how one DERP node in a regional mesh
 	// subscribes to the others in the region.
@@ -124,8 +131,22 @@ const (
 type PeerGoneReasonType byte
 
 const (
-	PeerGoneReasonDisconnected = PeerGoneReasonType(0x00) // peer disconnected from this server
-	PeerGoneReasonNotHere      = PeerGoneReasonType(0x01) // server doesn't know about this peer, unexpected
+	PeerGoneReasonDisconnected  = PeerGoneReasonType(0x00) // peer disconnected from this server
+	PeerGoneReasonNotHere       = PeerGoneReasonType(0x01) // server doesn't know about this peer, unexpected
+	PeerGoneReasonMeshConnBroke = PeerGoneReasonType(0xf0) // invented by Client.RunWatchConnectionLoop on disconnect; not sent on the wire
+)
+
+// PeerPresentFlags is an optional byte of bit flags sent after a framePeerPresent message.
+//
+// For a modern server, the value should always be non-zero. If the value is zero,
+// that means the server doesn't support this field.
+type PeerPresentFlags byte
+
+// PeerPresentFlags bits.
+const (
+	PeerPresentIsRegular  = 1 << 0
+	PeerPresentIsMeshPeer = 1 << 1
+	PeerPresentIsProber   = 1 << 2
 )
 
 var bin = binary.BigEndian

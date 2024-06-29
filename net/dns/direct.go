@@ -276,6 +276,14 @@ func (m *directManager) rename(old, new string) error {
 		return fmt.Errorf("writing to %q in rename of %q: %w", new, old, err)
 	}
 
+	// Explicitly set the permissions on the new file. This ensures that
+	// if we have a umask set which prevents creating world-readable files,
+	// the file will still have the correct permissions once it's renamed
+	// into place. See #12609.
+	if err := m.fs.Chmod(new, 0644); err != nil {
+		return fmt.Errorf("chmod %q in rename of %q: %w", new, old, err)
+	}
+
 	if err := m.fs.Remove(old); err != nil {
 		err2 := m.fs.Truncate(old)
 		if err2 != nil {
@@ -467,6 +475,14 @@ func (m *directManager) atomicWriteFile(fs wholeFileFS, filename string, data []
 	if err := fs.WriteFile(tmpName, data, perm); err != nil {
 		return fmt.Errorf("atomicWriteFile: %w", err)
 	}
+	// Explicitly set the permissions on the temporary file before renaming
+	// it. This ensures that if we have a umask set which prevents creating
+	// world-readable files, the file will still have the correct
+	// permissions once it's renamed into place. See #12609.
+	if err := fs.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("atomicWriteFile: Chmod: %w", err)
+	}
+
 	return m.rename(tmpName, filename)
 }
 
@@ -475,10 +491,11 @@ func (m *directManager) atomicWriteFile(fs wholeFileFS, filename string, data []
 //
 // All name parameters are absolute paths.
 type wholeFileFS interface {
-	Stat(name string) (isRegular bool, err error)
-	Rename(oldName, newName string) error
-	Remove(name string) error
+	Chmod(name string, mode os.FileMode) error
 	ReadFile(name string) ([]byte, error)
+	Remove(name string) error
+	Rename(oldName, newName string) error
+	Stat(name string) (isRegular bool, err error)
 	Truncate(name string) error
 	WriteFile(name string, contents []byte, perm os.FileMode) error
 }
@@ -500,6 +517,10 @@ func (fs directFS) Stat(name string) (isRegular bool, err error) {
 		return false, err
 	}
 	return fi.Mode().IsRegular(), nil
+}
+
+func (fs directFS) Chmod(name string, mode os.FileMode) error {
+	return os.Chmod(fs.path(name), mode)
 }
 
 func (fs directFS) Rename(oldName, newName string) error {

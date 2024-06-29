@@ -7,8 +7,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"hash/fnv"
-	"math/rand"
 	"net"
 	"net/netip"
 	"reflect"
@@ -16,6 +14,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"tailscale.com/derp"
@@ -31,6 +30,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/rands"
 	"tailscale.com/util/sysresources"
 	"tailscale.com/util/testenv"
 )
@@ -94,7 +94,6 @@ type activeDerp struct {
 }
 
 var (
-	processStartUnixNano     = time.Now().UnixNano()
 	pickDERPFallbackForTests func() int
 )
 
@@ -136,9 +135,8 @@ func (c *Conn) pickDERPFallback() int {
 		return pickDERPFallbackForTests()
 	}
 
-	h := fnv.New64()
-	fmt.Fprintf(h, "%p/%d", c, processStartUnixNano) // arbitrary
-	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]
+	metricDERPHomeFallback.Add(1)
+	return ids[rands.IntN(uint64(uintptr(unsafe.Pointer(c))), len(ids))]
 }
 
 // This allows existing tests to pass, but allows us to still test the
@@ -161,6 +159,10 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 	//
 	// For tests, always assume we're connected to control unless we're
 	// explicitly testing this behaviour.
+	//
+	// Despite the above behaviour, ensure that we set the nearest DERP if
+	// we don't currently have one set; any DERP server is better than
+	// none, even if not connected to control.
 	var connectedToControl bool
 	if testenv.InTest() && !checkControlHealthDuringNearestDERPInTests {
 		connectedToControl = true
@@ -169,8 +171,16 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 	}
 	if !connectedToControl {
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.myDerp
+		myDerp := c.myDerp
+		c.mu.Unlock()
+		if myDerp != 0 {
+			metricDERPHomeNoChangeNoControl.Add(1)
+			return myDerp
+		}
+
+		// Intentionally fall through; we don't have a current DERP, so
+		// as mentioned above selecting one even if not connected is
+		// strictly better than doing nothing.
 	}
 
 	preferredDERP = report.PreferredDERP
@@ -940,6 +950,7 @@ func (c *Conn) cleanStaleDerp() {
 		}
 		if ad.lastWrite.Before(tooOld) {
 			c.closeDerpLocked(i, "idle")
+			metricDERPStaleCleaned.Add(1)
 			dirty = true
 		} else {
 			someNonHomeOpen = true

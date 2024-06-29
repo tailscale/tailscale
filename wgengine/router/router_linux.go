@@ -25,6 +25,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/multierr"
@@ -38,17 +39,19 @@ const (
 )
 
 type linuxRouter struct {
-	closed           atomic.Bool
-	logf             func(fmt string, args ...any)
-	tunname          string
-	netMon           *netmon.Monitor
-	unregNetMon      func()
-	addrs            map[netip.Prefix]bool
-	routes           map[netip.Prefix]bool
-	localRoutes      map[netip.Prefix]bool
-	snatSubnetRoutes bool
-	netfilterMode    preftype.NetfilterMode
-	netfilterKind    string
+	closed            atomic.Bool
+	logf              func(fmt string, args ...any)
+	tunname           string
+	netMon            *netmon.Monitor
+	health            *health.Tracker
+	unregNetMon       func()
+	addrs             map[netip.Prefix]bool
+	routes            map[netip.Prefix]bool
+	localRoutes       map[netip.Prefix]bool
+	snatSubnetRoutes  bool
+	statefulFiltering bool
+	netfilterMode     preftype.NetfilterMode
+	netfilterKind     string
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -56,9 +59,9 @@ type linuxRouter struct {
 	ipRuleFixLimiter   *rate.Limiter
 
 	// Various feature checks for the network stack.
-	ipRuleAvailable bool // whether kernel was built with IP_MULTIPLE_TABLES
-	v6Available     bool // whether the kernel supports IPv6
-	fwmaskWorks     bool // whether we can use 'ip rule...fwmark <mark>/<mask>'
+	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES
+	v6Available     bool     // whether the kernel supports IPv6
+	fwmaskWorksLazy opt.Bool // whether we can use 'ip rule...fwmark <mark>/<mask>'; set lazily
 
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
@@ -80,15 +83,16 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 		ambientCapNetAdmin: useAmbientCaps(),
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, netMon, cmd)
+	return newUserspaceRouterAdvanced(logf, tunname, netMon, cmd, health)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner, health *health.Tracker) (Router, error) {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: netfilterOff,
 		netMon:        netMon,
+		health:        health,
 
 		cmd: cmd,
 
@@ -105,20 +109,6 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 			r.logf("[v1] policy routing available; found %d rules", len(rules))
 			r.ipRuleAvailable = true
 		}
-	}
-
-	// To be a good denizen of the 4-byte 'fwmark' bitspace on every packet, we try to
-	// only use the third byte. However, support for masking to part of the fwmark bitspace
-	// was only added to busybox in 1.33.0. As such, we want to detect older versions and
-	// not issue such a stanza.
-	var err error
-	if r.fwmaskWorks, err = ipCmdSupportsFwmask(); err != nil {
-		r.logf("failed to determine ip command fwmask support: %v", err)
-	}
-	if r.fwmaskWorks {
-		r.logf("[v1] ip command supports fwmark masks")
-	} else {
-		r.logf("[v1] ip command does NOT support fwmark masks")
 	}
 
 	// A common installation of OpenWRT involves use of the 'mwan3' package.
@@ -257,6 +247,31 @@ func (r *linuxRouter) useIPCommand() bool {
 	return !ok
 }
 
+// fwmaskWorks reports whether we can use 'ip rule...fwmark <mark>/<mask>'.
+// This is computed lazily on first use. By default, we don't run the "ip"
+// command, so never actually runs this. But the "ip" command is used in tests
+// and can be forced. (see useIPCommand)
+func (r *linuxRouter) fwmaskWorks() bool {
+	if v, ok := r.fwmaskWorksLazy.Get(); ok {
+		return v
+	}
+	// To be a good denizen of the 4-byte 'fwmark' bitspace on every packet, we try to
+	// only use the third byte. However, support for masking to part of the fwmark bitspace
+	// was only added to busybox in 1.33.0. As such, we want to detect older versions and
+	// not issue such a stanza.
+	v, err := ipCmdSupportsFwmask()
+	if err != nil {
+		r.logf("failed to determine ip command fwmask support: %v", err)
+	}
+	r.fwmaskWorksLazy.Set(v)
+	if v {
+		r.logf("[v1] ip command supports fwmark masks")
+	} else {
+		r.logf("[v1] ip command does NOT support fwmark masks")
+	}
+	return v
+}
+
 // onIPRuleDeleted is the callback from the network monitor for when an IP
 // policy rule is deleted. See Issue 1591.
 //
@@ -390,6 +405,7 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.addrs = newAddrs
 
+	// Ensure that the SNAT rule is added or removed as needed.
 	switch {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
 		// state already correct, nothing to do.
@@ -404,6 +420,22 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
 
+	// As above, for stateful filtering
+	switch {
+	case cfg.StatefulFiltering == r.statefulFiltering:
+		// state already correct, nothing to do.
+	case cfg.StatefulFiltering:
+		if err := r.addStatefulRule(); err != nil {
+			errs = append(errs, err)
+		}
+	default:
+		if err := r.delStatefulRule(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	r.statefulFiltering = cfg.StatefulFiltering
+	r.updateStatefulFilteringWithDockerWarning(cfg)
+
 	// Issue 11405: enable IP forwarding on gokrazy.
 	advertisingRoutes := len(cfg.SubnetRoutes) > 0
 	if distro.Get() == distro.Gokrazy && advertisingRoutes {
@@ -411,6 +443,54 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	}
 
 	return multierr.New(errs...)
+}
+
+var dockerStatefulFilteringWarnable = health.Register(&health.Warnable{
+	Code:     "docker-stateful-filtering",
+	Title:    "Docker with stateful filtering",
+	Severity: health.SeverityMedium,
+	Text:     health.StaticMessage("Stateful filtering is enabled and Docker was detected; this may prevent Docker containers on this host from resolving DNS and connecting to Tailscale nodes. See https://tailscale.com/s/stateful-docker"),
+})
+
+func (r *linuxRouter) updateStatefulFilteringWithDockerWarning(cfg *Config) {
+	// If stateful filtering is disabled, clear the warning.
+	if !r.statefulFiltering {
+		r.health.SetHealthy(dockerStatefulFilteringWarnable)
+		return
+	}
+
+	advertisingRoutes := len(cfg.SubnetRoutes) > 0
+
+	// TODO(andrew-d,maisem): we might want to check if we're running in a
+	// container, since, if so, stateful filtering might prevent other
+	// containers from connecting through the Tailscale in this container.
+	//
+	// For now, just check for the case where we're running Tailscale on
+	// the host and Docker is also running.
+
+	// If this node isn't a subnet router or exit node, then we would never
+	// have allowed traffic from a Docker container in to Tailscale, since
+	// there wouldn't be an AllowedIP for the container's source IP. So we
+	// don't need to warn in this case.
+	//
+	// cfg.SubnetRoutes contains all subnet routes for the node, including
+	// the default route (0.0.0.0/0 or ::/0) if this node is an exit node.
+	if advertisingRoutes {
+		// Check for the presence of a Docker interface and warn if it's found
+		// on the system.
+		//
+		// TODO(andrew-d): do a better job at detecting Docker, e.g. by looking
+		// for it in the $PATH or by checking for the presence of the Docker
+		// socket/daemon/etc.
+		ifstate := r.netMon.InterfaceState()
+		if _, found := ifstate.Interface["docker0"]; found {
+			r.health.SetUnhealthy(dockerStatefulFilteringWarnable, nil)
+			return
+		}
+	}
+
+	// If we get here, then we have no warnings; clear anything existing.
+	r.health.SetHealthy(dockerStatefulFilteringWarnable)
 }
 
 // UpdateMagicsockPort implements the Router interface.
@@ -1199,7 +1279,7 @@ func (r *linuxRouter) addIPRulesWithIPCommand() error {
 				"pref", strconv.Itoa(rule.Priority + r.ipPolicyPrefBase),
 			}
 			if rule.Mark != 0 {
-				if r.fwmaskWorks {
+				if r.fwmaskWorks() {
 					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, linuxfw.TailscaleFwmarkMask))
 				} else {
 					args = append(args, "fwmark", fmt.Sprintf("0x%x", rule.Mark))
@@ -1325,6 +1405,26 @@ func (r *linuxRouter) delSNATRule() error {
 		return err
 	}
 	return nil
+}
+
+// addStatefulRule adds a netfilter rule to perform stateful filtering from
+// subnets onto the tailnet.
+func (r *linuxRouter) addStatefulRule() error {
+	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+
+	return r.nfr.AddStatefulRule(r.tunname)
+}
+
+// delStatefulRule removes the netfilter rule to perform stateful filtering
+// from subnets onto the tailnet.
+func (r *linuxRouter) delStatefulRule() error {
+	if r.netfilterMode == netfilterOff {
+		return nil
+	}
+
+	return r.nfr.DelStatefulRule(r.tunname)
 }
 
 // cidrDiff calls add and del as needed to make the set of prefixes in

@@ -230,6 +230,9 @@ type Meta struct {
 	// daemon, if requested.
 	DaemonLong string `json:"daemonLong,omitempty"`
 
+	// GitCommitTime is the commit time of the git commit in GitCommit.
+	GitCommitTime string `json:"gitCommitTime,omitempty"`
+
 	// Cap is the current Tailscale capability version. It's a monotonically
 	// incrementing integer that's incremented whenever a new capability is
 	// added.
@@ -245,6 +248,7 @@ func GetMeta() Meta {
 			MajorMinorPatch: majorMinorPatch(),
 			Short:           Short(),
 			Long:            Long(),
+			GitCommitTime:   getEmbeddedInfo().commitTime,
 			GitCommit:       gitCommit(),
 			GitDirty:        gitDirty(),
 			ExtraGitCommit:  extraGitCommitStamp,

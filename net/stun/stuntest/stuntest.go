@@ -21,8 +21,10 @@ import (
 )
 
 type stunStats struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// +checklocks:mu
 	readIPv4 int
+	// +checklocks:mu
 	readIPv6 int
 }
 
@@ -118,13 +120,14 @@ func DERPMapOf(stun ...string) *tailcfg.DERPMap {
 			ipv4 = "none"
 		}
 		node := &tailcfg.DERPNode{
-			Name:     fmt.Sprint(regionID) + "a",
-			RegionID: regionID,
-			HostName: fmt.Sprintf("d%d%s", regionID, tailcfg.DotInvalid),
-			IPv4:     ipv4,
-			IPv6:     ipv6,
-			STUNPort: port,
-			STUNOnly: true,
+			Name:       fmt.Sprint(regionID) + "a",
+			RegionID:   regionID,
+			HostName:   fmt.Sprintf("d%d%s", regionID, tailcfg.DotInvalid),
+			IPv4:       ipv4,
+			IPv6:       ipv6,
+			STUNPort:   port,
+			STUNOnly:   true,
+			STUNTestIP: host,
 		}
 		m.Regions[regionID] = &tailcfg.DERPRegion{
 			RegionID: regionID,

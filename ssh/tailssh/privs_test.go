@@ -23,7 +23,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func TestDropPrivileges(t *testing.T) {
+func TestDoDropPrivileges(t *testing.T) {
 	type SubprocInput struct {
 		UID              int
 		GID              int
@@ -49,7 +49,7 @@ func TestDropPrivileges(t *testing.T) {
 		f := os.NewFile(3, "out.json")
 
 		// We're in our subprocess; actually drop privileges now.
-		dropPrivileges(t.Logf, input.UID, input.GID, input.AdditionalGroups)
+		doDropPrivileges(t.Logf, input.UID, input.GID, input.AdditionalGroups)
 
 		additional, _ := syscall.Getgroups()
 

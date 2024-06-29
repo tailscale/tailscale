@@ -7,14 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os/exec"
 	"os/user"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 	"unsafe"
 
+	"golang.org/x/exp/constraints"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -642,4 +645,286 @@ func LogonSessionID(token windows.Token) (logonSessionID windows.LUID, err error
 	}
 
 	return origin.originatingLogonSession, nil
+}
+
+// BufUnit is a type constraint for buffers passed into AllocateContiguousBuffer.
+type BufUnit interface {
+	byte | uint16
+}
+
+// AllocateContiguousBuffer allocates memory to satisfy the Windows idiom where
+// some structs contain pointers that are expected to refer to memory within the
+// same buffer containing the struct itself. T is the type that contains
+// the pointers. values must contain the actual data that is to be copied
+// into the buffer after T. AllocateContiguousBuffer returns a pointer to the
+// struct, the total length of the buffer in bytes, and a slice containing
+// each value within the buffer. The caller may use slcs to populate any
+// pointers in t as needed. Each element of slcs corresponds to the element of
+// values in the same position.
+//
+// It is the responsibility of the caller to ensure that any values expected
+// to contain null-terminated strings are in fact null-terminated!
+//
+// AllocateContiguousBuffer panics if no values are passed in, as there are
+// better alternatives for allocating a struct in that case.
+func AllocateContiguousBuffer[T any, BU BufUnit](values ...[]BU) (t *T, tLenBytes uint32, slcs [][]BU) {
+	if len(values) == 0 {
+		panic("len(values) must be > 0")
+	}
+
+	// Get the sizes of T and BU, then compute a preferred alignment for T.
+	tT := reflect.TypeFor[T]()
+	szT := tT.Size()
+	szBU := int(unsafe.Sizeof(BU(0)))
+	alignment := max(tT.Align(), szBU)
+
+	// Our buffers for values will start at the next szBU boundary.
+	tLenBytes = alignUp(uint32(szT), szBU)
+	firstValueOffset := tLenBytes
+
+	// Accumulate the length of each value into tLenBytes
+	for _, v := range values {
+		tLenBytes += uint32(len(v) * szBU)
+	}
+
+	// Now that we know the final length, align up to our preferred boundary.
+	tLenBytes = alignUp(tLenBytes, alignment)
+
+	// Allocate the buffer. We choose a type for the slice that is appropriate
+	// for the desired alignment. Note that we do not have a strict requirement
+	// that T contain pointer fields; we could just be appending more data
+	// within the same buffer.
+	bufLen := tLenBytes / uint32(alignment)
+	var pt unsafe.Pointer
+	switch alignment {
+	case 1:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]byte, bufLen)))
+	case 2:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]uint16, bufLen)))
+	case 4:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]uint32, bufLen)))
+	case 8:
+		pt = unsafe.Pointer(unsafe.SliceData(make([]uint64, bufLen)))
+	default:
+		panic(fmt.Sprintf("bad alignment %d", alignment))
+	}
+
+	t = (*T)(pt)
+	slcs = make([][]BU, 0, len(values))
+
+	// Use the limits of the buffer area after t to construct a slice representing the remaining buffer.
+	firstValuePtr := unsafe.Pointer(uintptr(pt) + uintptr(firstValueOffset))
+	buf := unsafe.Slice((*BU)(firstValuePtr), (tLenBytes-firstValueOffset)/uint32(szBU))
+
+	// Copy each value into the buffer and record a slice describing each value's limits into slcs.
+	var index int
+	for _, v := range values {
+		if len(v) == 0 {
+			// We allow zero-length values; we simply append a nil slice.
+			slcs = append(slcs, nil)
+			continue
+		}
+		valueSlice := buf[index : index+len(v)]
+		copy(valueSlice, v)
+		slcs = append(slcs, valueSlice)
+		index += len(v)
+	}
+
+	return t, tLenBytes, slcs
+}
+
+// alignment must be a power of 2
+func alignUp[V constraints.Integer](v V, alignment int) V {
+	return v + ((-v) & (V(alignment) - 1))
+}
+
+// NTStr is a type constraint requiring the type to be either a
+// windows.NTString or a windows.NTUnicodeString.
+type NTStr interface {
+	windows.NTString | windows.NTUnicodeString
+}
+
+// SetNTString sets the value of nts in-place to point to the string contained
+// within buf. A nul terminator is optional in buf.
+func SetNTString[NTS NTStr, BU BufUnit](nts *NTS, buf []BU) {
+	isEmpty := len(buf) == 0
+	codeUnitSize := uint16(unsafe.Sizeof(BU(0)))
+	lenBytes := len(buf) * int(codeUnitSize)
+	if lenBytes > math.MaxUint16 {
+		panic("buffer length must fit into uint16")
+	}
+	lenBytes16 := uint16(lenBytes)
+
+	switch p := any(nts).(type) {
+	case *windows.NTString:
+		if isEmpty {
+			*p = windows.NTString{}
+			break
+		}
+		p.Buffer = unsafe.SliceData(any(buf).([]byte))
+		p.MaximumLength = lenBytes16
+		p.Length = lenBytes16
+		// account for nul terminator when present
+		if buf[len(buf)-1] == 0 {
+			p.Length -= codeUnitSize
+		}
+	case *windows.NTUnicodeString:
+		if isEmpty {
+			*p = windows.NTUnicodeString{}
+			break
+		}
+		p.Buffer = unsafe.SliceData(any(buf).([]uint16))
+		p.MaximumLength = lenBytes16
+		p.Length = lenBytes16
+		// account for nul terminator when present
+		if buf[len(buf)-1] == 0 {
+			p.Length -= codeUnitSize
+		}
+	default:
+		panic("unknown type")
+	}
+}
+
+type domainControllerAddressType uint32
+
+const (
+	//lint:ignore U1000 maps to a win32 API
+	_DS_INET_ADDRESS    domainControllerAddressType = 1
+	_DS_NETBIOS_ADDRESS domainControllerAddressType = 2
+)
+
+type domainControllerFlag uint32
+
+const (
+	//lint:ignore U1000 maps to a win32 API
+	_DS_PDC_FLAG                    domainControllerFlag = 0x00000001
+	_DS_GC_FLAG                     domainControllerFlag = 0x00000004
+	_DS_LDAP_FLAG                   domainControllerFlag = 0x00000008
+	_DS_DS_FLAG                     domainControllerFlag = 0x00000010
+	_DS_KDC_FLAG                    domainControllerFlag = 0x00000020
+	_DS_TIMESERV_FLAG               domainControllerFlag = 0x00000040
+	_DS_CLOSEST_FLAG                domainControllerFlag = 0x00000080
+	_DS_WRITABLE_FLAG               domainControllerFlag = 0x00000100
+	_DS_GOOD_TIMESERV_FLAG          domainControllerFlag = 0x00000200
+	_DS_NDNC_FLAG                   domainControllerFlag = 0x00000400
+	_DS_SELECT_SECRET_DOMAIN_6_FLAG domainControllerFlag = 0x00000800
+	_DS_FULL_SECRET_DOMAIN_6_FLAG   domainControllerFlag = 0x00001000
+	_DS_WS_FLAG                     domainControllerFlag = 0x00002000
+	_DS_DS_8_FLAG                   domainControllerFlag = 0x00004000
+	_DS_DS_9_FLAG                   domainControllerFlag = 0x00008000
+	_DS_DS_10_FLAG                  domainControllerFlag = 0x00010000
+	_DS_KEY_LIST_FLAG               domainControllerFlag = 0x00020000
+	_DS_PING_FLAGS                  domainControllerFlag = 0x000FFFFF
+	_DS_DNS_CONTROLLER_FLAG         domainControllerFlag = 0x20000000
+	_DS_DNS_DOMAIN_FLAG             domainControllerFlag = 0x40000000
+	_DS_DNS_FOREST_FLAG             domainControllerFlag = 0x80000000
+)
+
+type _DOMAIN_CONTROLLER_INFO struct {
+	DomainControllerName        *uint16
+	DomainControllerAddress     *uint16
+	DomainControllerAddressType domainControllerAddressType
+	DomainGuid                  windows.GUID
+	DomainName                  *uint16
+	DnsForestName               *uint16
+	Flags                       domainControllerFlag
+	DcSiteName                  *uint16
+	ClientSiteName              *uint16
+}
+
+func (dci *_DOMAIN_CONTROLLER_INFO) Close() error {
+	if dci == nil {
+		return nil
+	}
+	return windows.NetApiBufferFree((*byte)(unsafe.Pointer(dci)))
+}
+
+type dsGetDcNameFlag uint32
+
+const (
+	//lint:ignore U1000 maps to a win32 API
+	_DS_FORCE_REDISCOVERY             dsGetDcNameFlag = 0x00000001
+	_DS_DIRECTORY_SERVICE_REQUIRED    dsGetDcNameFlag = 0x00000010
+	_DS_DIRECTORY_SERVICE_PREFERRED   dsGetDcNameFlag = 0x00000020
+	_DS_GC_SERVER_REQUIRED            dsGetDcNameFlag = 0x00000040
+	_DS_PDC_REQUIRED                  dsGetDcNameFlag = 0x00000080
+	_DS_BACKGROUND_ONLY               dsGetDcNameFlag = 0x00000100
+	_DS_IP_REQUIRED                   dsGetDcNameFlag = 0x00000200
+	_DS_KDC_REQUIRED                  dsGetDcNameFlag = 0x00000400
+	_DS_TIMESERV_REQUIRED             dsGetDcNameFlag = 0x00000800
+	_DS_WRITABLE_REQUIRED             dsGetDcNameFlag = 0x00001000
+	_DS_GOOD_TIMESERV_PREFERRED       dsGetDcNameFlag = 0x00002000
+	_DS_AVOID_SELF                    dsGetDcNameFlag = 0x00004000
+	_DS_ONLY_LDAP_NEEDED              dsGetDcNameFlag = 0x00008000
+	_DS_IS_FLAT_NAME                  dsGetDcNameFlag = 0x00010000
+	_DS_IS_DNS_NAME                   dsGetDcNameFlag = 0x00020000
+	_DS_TRY_NEXTCLOSEST_SITE          dsGetDcNameFlag = 0x00040000
+	_DS_DIRECTORY_SERVICE_6_REQUIRED  dsGetDcNameFlag = 0x00080000
+	_DS_WEB_SERVICE_REQUIRED          dsGetDcNameFlag = 0x00100000
+	_DS_DIRECTORY_SERVICE_8_REQUIRED  dsGetDcNameFlag = 0x00200000
+	_DS_DIRECTORY_SERVICE_9_REQUIRED  dsGetDcNameFlag = 0x00400000
+	_DS_DIRECTORY_SERVICE_10_REQUIRED dsGetDcNameFlag = 0x00800000
+	_DS_KEY_LIST_SUPPORT_REQUIRED     dsGetDcNameFlag = 0x01000000
+	_DS_RETURN_DNS_NAME               dsGetDcNameFlag = 0x40000000
+	_DS_RETURN_FLAT_NAME              dsGetDcNameFlag = 0x80000000
+)
+
+func resolveDomainController(domainName *uint16, domainGUID *windows.GUID) (*_DOMAIN_CONTROLLER_INFO, error) {
+	const flags = _DS_DIRECTORY_SERVICE_REQUIRED | _DS_IS_FLAT_NAME | _DS_RETURN_DNS_NAME
+	var dcInfo *_DOMAIN_CONTROLLER_INFO
+	if err := dsGetDcName(nil, domainName, domainGUID, nil, flags, &dcInfo); err != nil {
+		return nil, err
+	}
+	return dcInfo, nil
+}
+
+// ResolveDomainController resolves the DNS name of the nearest available
+// domain controller for the domain specified by domainName.
+func ResolveDomainController(domainName string) (string, error) {
+	domainName16, err := windows.UTF16PtrFromString(domainName)
+	if err != nil {
+		return "", err
+	}
+
+	dcInfo, err := resolveDomainController(domainName16, nil)
+	if err != nil {
+		return "", err
+	}
+	defer dcInfo.Close()
+
+	return windows.UTF16PtrToString(dcInfo.DomainControllerName), nil
+}
+
+type _NETSETUP_NAME_TYPE int32
+
+const (
+	_NetSetupUnknown           _NETSETUP_NAME_TYPE = 0
+	_NetSetupMachine           _NETSETUP_NAME_TYPE = 1
+	_NetSetupWorkgroup         _NETSETUP_NAME_TYPE = 2
+	_NetSetupDomain            _NETSETUP_NAME_TYPE = 3
+	_NetSetupNonExistentDomain _NETSETUP_NAME_TYPE = 4
+	_NetSetupDnsMachine        _NETSETUP_NAME_TYPE = 5
+)
+
+func isDomainName(name *uint16) (bool, error) {
+	err := netValidateName(nil, name, nil, nil, _NetSetupDomain)
+	switch err {
+	case nil:
+		return true, nil
+	case windows.ERROR_NO_SUCH_DOMAIN:
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// IsDomainName checks whether name represents an existing domain reachable by
+// the current machine.
+func IsDomainName(name string) (bool, error) {
+	name16, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return false, err
+	}
+
+	return isDomainName(name16)
 }

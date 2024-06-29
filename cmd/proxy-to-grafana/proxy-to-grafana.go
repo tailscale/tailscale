@@ -46,6 +46,7 @@ var (
 	backendAddr  = flag.String("backend-addr", "", "Address of the Grafana server served over HTTP, in host:port format. Typically localhost:nnnn.")
 	tailscaleDir = flag.String("state-dir", "./", "Alternate directory to use for Tailscale state storage. If empty, a default is used.")
 	useHTTPS     = flag.Bool("use-https", false, "Serve over HTTPS via your *.ts.net subdomain if enabled in Tailscale admin.")
+	loginServer  = flag.String("login-server", "", "URL to alternative control server. If empty, the default Tailscale control is used.")
 )
 
 func main() {
@@ -57,8 +58,9 @@ func main() {
 		log.Fatal("missing --backend-addr")
 	}
 	ts := &tsnet.Server{
-		Dir:      *tailscaleDir,
-		Hostname: *hostname,
+		Dir:        *tailscaleDir,
+		Hostname:   *hostname,
+		ControlURL: *loginServer,
 	}
 
 	// TODO(bradfitz,maisem): move this to a method on tsnet.Server probably.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 var _ unsafe.Pointer
@@ -41,16 +42,23 @@ func errnoErr(e syscall.Errno) error {
 var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
 	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
+	modnetapi32 = windows.NewLazySystemDLL("netapi32.dll")
 	modrstrtmgr = windows.NewLazySystemDLL("rstrtmgr.dll")
+	moduserenv  = windows.NewLazySystemDLL("userenv.dll")
 
-	procQueryServiceConfig2W          = modadvapi32.NewProc("QueryServiceConfig2W")
-	procGetApplicationRestartSettings = modkernel32.NewProc("GetApplicationRestartSettings")
-	procRegisterApplicationRestart    = modkernel32.NewProc("RegisterApplicationRestart")
-	procRmEndSession                  = modrstrtmgr.NewProc("RmEndSession")
-	procRmGetList                     = modrstrtmgr.NewProc("RmGetList")
-	procRmJoinSession                 = modrstrtmgr.NewProc("RmJoinSession")
-	procRmRegisterResources           = modrstrtmgr.NewProc("RmRegisterResources")
-	procRmStartSession                = modrstrtmgr.NewProc("RmStartSession")
+	procQueryServiceConfig2W             = modadvapi32.NewProc("QueryServiceConfig2W")
+	procGetApplicationRestartSettings    = modkernel32.NewProc("GetApplicationRestartSettings")
+	procRegisterApplicationRestart       = modkernel32.NewProc("RegisterApplicationRestart")
+	procDsGetDcNameW                     = modnetapi32.NewProc("DsGetDcNameW")
+	procNetValidateName                  = modnetapi32.NewProc("NetValidateName")
+	procRmEndSession                     = modrstrtmgr.NewProc("RmEndSession")
+	procRmGetList                        = modrstrtmgr.NewProc("RmGetList")
+	procRmJoinSession                    = modrstrtmgr.NewProc("RmJoinSession")
+	procRmRegisterResources              = modrstrtmgr.NewProc("RmRegisterResources")
+	procRmStartSession                   = modrstrtmgr.NewProc("RmStartSession")
+	procExpandEnvironmentStringsForUserW = moduserenv.NewProc("ExpandEnvironmentStringsForUserW")
+	procLoadUserProfileW                 = moduserenv.NewProc("LoadUserProfileW")
+	procUnloadUserProfile                = moduserenv.NewProc("UnloadUserProfile")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
@@ -70,6 +78,22 @@ func getApplicationRestartSettings(process windows.Handle, commandLine *uint16, 
 func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
 	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
 	ret = wingoes.HRESULT(r0)
+	return
+}
+
+func dsGetDcName(computerName *uint16, domainName *uint16, domainGuid *windows.GUID, siteName *uint16, flags dsGetDcNameFlag, dcInfo **_DOMAIN_CONTROLLER_INFO) (ret error) {
+	r0, _, _ := syscall.Syscall6(procDsGetDcNameW.Addr(), 6, uintptr(unsafe.Pointer(computerName)), uintptr(unsafe.Pointer(domainName)), uintptr(unsafe.Pointer(domainGuid)), uintptr(unsafe.Pointer(siteName)), uintptr(flags), uintptr(unsafe.Pointer(dcInfo)))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func netValidateName(server *uint16, name *uint16, account *uint16, password *uint16, nameType _NETSETUP_NAME_TYPE) (ret error) {
+	r0, _, _ := syscall.Syscall6(procNetValidateName.Addr(), 5, uintptr(unsafe.Pointer(server)), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(account)), uintptr(unsafe.Pointer(password)), uintptr(nameType), 0)
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
 	return
 }
 
@@ -109,6 +133,30 @@ func rmStartSession(pSession *_RMHANDLE, flags uint32, sessionKey *uint16) (ret 
 	r0, _, _ := syscall.Syscall(procRmStartSession.Addr(), 3, uintptr(unsafe.Pointer(pSession)), uintptr(flags), uintptr(unsafe.Pointer(sessionKey)))
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func expandEnvironmentStringsForUser(token windows.Token, src *uint16, dst *uint16, dstLen uint32) (err error) {
+	r1, _, e1 := syscall.Syscall6(procExpandEnvironmentStringsForUserW.Addr(), 4, uintptr(token), uintptr(unsafe.Pointer(src)), uintptr(unsafe.Pointer(dst)), uintptr(dstLen), 0, 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func loadUserProfile(token windows.Token, profileInfo *_PROFILEINFO) (err error) {
+	r1, _, e1 := syscall.Syscall(procLoadUserProfileW.Addr(), 2, uintptr(token), uintptr(unsafe.Pointer(profileInfo)), 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func unloadUserProfile(token windows.Token, profile registry.Key) (err error) {
+	r1, _, e1 := syscall.Syscall(procUnloadUserProfile.Addr(), 2, uintptr(token), uintptr(profile), 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
 	}
 	return
 }

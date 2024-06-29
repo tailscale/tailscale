@@ -5,10 +5,10 @@ package ipnlocal
 
 import (
 	"cmp"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"runtime"
 	"slices"
 	"strings"
@@ -353,9 +353,9 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 	if err != nil {
 		return ipn.PrefsView{}, err
 	}
-	savedPrefs, err := ipn.PrefsFromBytes(bs)
-	if err != nil {
-		return ipn.PrefsView{}, fmt.Errorf("PrefsFromBytes: %v", err)
+	savedPrefs := ipn.NewPrefs()
+	if err := ipn.PrefsFromBytes(bs, savedPrefs); err != nil {
+		return ipn.PrefsView{}, fmt.Errorf("parsing saved prefs: %v", err)
 	}
 	pm.logf("using backend prefs for %q: %v", key, savedPrefs.Pretty())
 
@@ -371,12 +371,13 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 	// https://github.com/tailscale/tailscale/pull/11814/commits/1613b18f8280c2bce786980532d012c9f0454fa2#diff-314ba0d799f70c8998940903efb541e511f352b39a9eeeae8d475c921d66c2ac
 	// prefs could set AutoUpdate.Apply=true via EditPrefs or tailnet
 	// auto-update defaults. After that change, such value is "invalid" and
-	// cause any EditPrefs calls to fail (other than disabling autp-updates).
+	// cause any EditPrefs calls to fail (other than disabling auto-updates).
 	//
 	// Reset AutoUpdate.Apply if we detect such invalid prefs.
 	if savedPrefs.AutoUpdate.Apply.EqualBool(true) && !clientupdate.CanAutoUpdate() {
 		savedPrefs.AutoUpdate.Apply.Clear()
 	}
+
 	return savedPrefs.View(), nil
 }
 
@@ -447,7 +448,7 @@ func (pm *profileManager) updateHealth() {
 	if !pm.prefs.Valid() {
 		return
 	}
-	pm.health.SetCheckForUpdates(pm.prefs.AutoUpdate().Check)
+	pm.health.SetAutoUpdatePrefs(pm.prefs.AutoUpdate().Check, pm.prefs.AutoUpdate().Apply)
 }
 
 // NewProfile creates and switches to a new unnamed profile. The new profile is

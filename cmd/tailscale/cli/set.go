@@ -58,6 +58,9 @@ type setArgsT struct {
 	updateCheck            bool
 	updateApply            bool
 	postureChecking        bool
+	snat                   bool
+	statefulFiltering      bool
+	netfilterMode          string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -98,6 +101,10 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
 	switch goos {
+	case "linux":
+		setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
+		setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, etc.)")
+		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
@@ -121,6 +128,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		return err
 	}
 
+	// Note that even though we set the values here regardless of whether the
+	// user passed the flag, the value is only used if the user passed the flag.
+	// See updateMaskedPrefsFromUpOrSetFlag.
 	maskedPrefs := &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			ProfileName:            setArgs.profileName,
@@ -132,6 +142,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			RunWebClient:           setArgs.runWebClient,
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
+			NoSNAT:                 !setArgs.snat,
 			ForceDaemon:            setArgs.forceDaemon,
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
@@ -140,8 +151,20 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
 			},
-			PostureChecking: setArgs.postureChecking,
+			PostureChecking:     setArgs.postureChecking,
+			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 		},
+	}
+
+	if effectiveGOOS() == "linux" {
+		nfMode, warning, err := netfilterModeFromFlag(setArgs.netfilterMode)
+		if err != nil {
+			return err
+		}
+		if warning != "" {
+			warnf(warning)
+		}
+		maskedPrefs.Prefs.NetfilterMode = nfMode
 	}
 
 	if setArgs.exitNodeIP != "" {

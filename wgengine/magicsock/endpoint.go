@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"reflect"
@@ -592,7 +592,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.Add
 		// Randomly select an address to use until we retrieve latency information
 		// and give it a short trustBestAddrUntil time so we avoid flapping between
 		// addresses while waiting on latency information to be populated.
-		udpAddr = candidates[rand.Intn(len(candidates))]
+		udpAddr = candidates[rand.IntN(len(candidates))]
 	}
 
 	de.bestAddr.AddrPort = udpAddr

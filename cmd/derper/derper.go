@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The derper binary is a simple DERP server.
+//
+// For more information, see:
+//
+//   - About: https://tailscale.com/kb/1232/derp-servers
+//   - Protocol & Go docs: https://pkg.go.dev/tailscale.com/derp
+//   - Running a DERP server: https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp
 package main // import "tailscale.com/cmd/derper"
 
 import (
@@ -22,6 +28,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	runtimemetrics "runtime/metrics"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -55,7 +64,7 @@ var (
 	meshPSKFile     = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith        = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
 	bootstrapDNS    = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
-	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list")
+	unpublishedDNS  = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list. If an entry contains a slash, the second part names a DNS record to poll for its TXT record with a `0` to `100` value for rollout percentage.")
 	verifyClients   = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
 	verifyClientURL = flag.String("verify-client-url", "", "if non-empty, an admission controller URL for permitting client connections; see tailcfg.DERPAdmitClientRequest")
 	verifyFailOpen  = flag.Bool("verify-client-url-fail-open", true, "whether we fail open if --verify-client-url is unreachable")
@@ -206,11 +215,16 @@ func main() {
 		io.WriteString(w, `<html><body>
 <h1>DERP</h1>
 <p>
-  This is a
-  <a href="https://tailscale.com/">Tailscale</a>
-  <a href="https://pkg.go.dev/tailscale.com/derp">DERP</a>
-  server.
+  This is a <a href="https://tailscale.com/">Tailscale</a> DERP server.
 </p>
+<p>
+  Documentation:
+</p>
+<ul>
+  <li><a href="https://tailscale.com/kb/1232/derp-servers">About DERP</a></li>
+  <li><a href="https://pkg.go.dev/tailscale.com/derp">Protocol & Go docs</a></li>
+  <li><a href="https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp">How to run a DERP server</a></li>
+</ul>
 `)
 		if !*runDERP {
 			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
@@ -236,6 +250,20 @@ func main() {
 		}
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+	debug.Handle("set-mutex-profile-fraction", "SetMutexProfileFraction", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := r.FormValue("rate")
+		if s == "" || r.Header.Get("Sec-Debug") != "derp" {
+			http.Error(w, "To set, use: curl -HSec-Debug:derp 'http://derp/debug/set-mutex-profile-fraction?rate=100'", http.StatusBadRequest)
+			return
+		}
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "bad rate value", http.StatusBadRequest)
+			return
+		}
+		old := runtime.SetMutexProfileFraction(v)
+		fmt.Fprintf(w, "mutex changed from %v to %v\n", old, v)
+	}))
 
 	// Longer lived DERP connections send an application layer keepalive. Note
 	// if the keepalive is hit, the user timeout will take precedence over the
@@ -451,4 +479,17 @@ func (l *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	l.numAccepts.Add(1)
 	return cn, nil
+}
+
+func init() {
+	expvar.Publish("go_sync_mutex_wait_seconds", expvar.Func(func() any {
+		const name = "/sync/mutex/wait/total:seconds" // Go 1.20+
+		var s [1]runtimemetrics.Sample
+		s[0].Name = name
+		runtimemetrics.Read(s[:])
+		if v := s[0].Value; v.Kind() == runtimemetrics.KindFloat64 {
+			return v.Float64()
+		}
+		return 0
+	}))
 }

@@ -5,6 +5,7 @@ package lazy
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -15,6 +16,11 @@ func TestSyncValue(t *testing.T) {
 		got := lt.Get(fortyTwo)
 		if got != 42 {
 			t.Fatalf("got %v; want 42", got)
+		}
+		if p, ok := lt.Peek(); !ok {
+			t.Fatalf("Peek failed")
+		} else if p != 42 {
+			t.Fatalf("Peek got %v; want 42", p)
 		}
 	}))
 	if n != 0 {
@@ -45,6 +51,12 @@ func TestSyncValueErr(t *testing.T) {
 		if got != 0 || err != wantErr {
 			t.Fatalf("got %v, %v; want 0, %v", got, err, wantErr)
 		}
+
+		if p, ok := lt.Peek(); !ok {
+			t.Fatalf("Peek failed")
+		} else if got != 0 {
+			t.Fatalf("Peek got %v; want 0", p)
+		}
 	}))
 	if n != 0 {
 		t.Errorf("allocs = %v; want 0", n)
@@ -58,6 +70,11 @@ func TestSyncValueSet(t *testing.T) {
 	}
 	if lt.Set(43) {
 		t.Fatalf("Set succeeded after first Set")
+	}
+	if p, ok := lt.Peek(); !ok {
+		t.Fatalf("Peek failed")
+	} else if p != 42 {
+		t.Fatalf("Peek got %v; want 42", p)
 	}
 	n := int(testing.AllocsPerRun(1000, func() {
 		got := lt.Get(fortyTwo)
@@ -79,6 +96,30 @@ func TestSyncValueMustSet(t *testing.T) {
 		}
 	}()
 	lt.MustSet(43)
+}
+
+func TestSyncValueErrPeek(t *testing.T) {
+	var sv SyncValue[int]
+	sv.GetErr(func() (int, error) {
+		return 123, errors.New("boom")
+	})
+	p, ok := sv.Peek()
+	if ok {
+		t.Error("unexpected Peek success")
+	}
+	if p != 0 {
+		t.Fatalf("Peek got %v; want 0", p)
+	}
+	p, err, ok := sv.PeekErr()
+	if !ok {
+		t.Errorf("PeekErr ok=false; want true on error")
+	}
+	if got, want := fmt.Sprint(err), "boom"; got != want {
+		t.Errorf("PeekErr error=%v; want %v", got, want)
+	}
+	if p != 123 {
+		t.Fatalf("PeekErr got %v; want 123", p)
+	}
 }
 
 func TestSyncValueConcurrent(t *testing.T) {

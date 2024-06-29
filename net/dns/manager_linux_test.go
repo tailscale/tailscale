@@ -313,8 +313,9 @@ func (m memFS) Stat(name string) (isRegular bool, err error) {
 	return false, nil
 }
 
-func (m memFS) Rename(oldName, newName string) error { panic("TODO") }
-func (m memFS) Remove(name string) error             { panic("TODO") }
+func (m memFS) Chmod(name string, mode os.FileMode) error { panic("TODO") }
+func (m memFS) Rename(oldName, newName string) error      { panic("TODO") }
+func (m memFS) Remove(name string) error                  { panic("TODO") }
 func (m memFS) ReadFile(name string) ([]byte, error) {
 	v, ok := m[name]
 	if !ok {

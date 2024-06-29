@@ -538,7 +538,7 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 
-	u.Host = fmt.Sprintf("%s:%d", host, port)
+	u.Host = fmt.Sprintf("%s:%d", u.Hostname(), port)
 
 	return u.String(), nil
 }
@@ -626,7 +626,7 @@ func (v ServeConfigView) HasAllowFunnel() bool {
 	}()
 }
 
-// FindFunnel reports whether target exists in in either the background AllowFunnel
+// FindFunnel reports whether target exists in either the background AllowFunnel
 // or any of the foreground configs.
 func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 	if v.AllowFunnel().Get(target) {

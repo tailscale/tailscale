@@ -6,6 +6,7 @@ package localapi
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -118,6 +119,7 @@ var handler = map[string]localAPIHandler{
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"set-gui-visible":             (*Handler).serveSetGUIVisible,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
+	"set-udp-gro-forwarding":      (*Handler).serveSetUDPGROForwarding,
 	"set-use-exit-node-enabled":   (*Handler).serveSetUseExitNodeEnabled,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
@@ -445,7 +447,8 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 // localBackendWhoIsMethods is the subset of ipn.LocalBackend as needed
 // by the localapi WhoIs method.
 type localBackendWhoIsMethods interface {
-	WhoIs(netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	WhoIs(string, netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	WhoIsNodeKey(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	PeerCaps(netip.Addr) tailcfg.PeerCapMap
 }
 
@@ -454,9 +457,21 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "whois access denied", http.StatusForbidden)
 		return
 	}
+	var (
+		n  tailcfg.NodeView
+		u  tailcfg.UserProfile
+		ok bool
+	)
 	var ipp netip.AddrPort
 	if v := r.FormValue("addr"); v != "" {
-		if ip, err := netip.ParseAddr(v); err == nil {
+		if strings.HasPrefix(v, "nodekey:") {
+			var k key.NodePublic
+			if err := k.UnmarshalText([]byte(v)); err != nil {
+				http.Error(w, "invalid nodekey in 'addr' parameter", http.StatusBadRequest)
+				return
+			}
+			n, u, ok = b.WhoIsNodeKey(k)
+		} else if ip, err := netip.ParseAddr(v); err == nil {
 			ipp = netip.AddrPortFrom(ip, 0)
 		} else {
 			var err error
@@ -466,11 +481,13 @@ func (h *Handler) serveWhoIsWithBackend(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 		}
+		if ipp.IsValid() {
+			n, u, ok = b.WhoIs(r.FormValue("proto"), ipp)
+		}
 	} else {
 		http.Error(w, "missing 'addr' parameter", http.StatusBadRequest)
 		return
 	}
-	n, u, ok := b.WhoIs(ipp)
 	if !ok {
 		http.Error(w, "no match for IP:port", http.StatusNotFound)
 		return
@@ -1171,6 +1188,23 @@ func (h *Handler) serveCheckUDPGROForwarding(w http.ResponseWriter, r *http.Requ
 	}
 	var warning string
 	if err := h.b.CheckUDPGROForwarding(); err != nil {
+		warning = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Warning string
+	}{
+		Warning: warning,
+	})
+}
+
+func (h *Handler) serveSetUDPGROForwarding(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "UDP GRO forwarding set access denied", http.StatusForbidden)
+		return
+	}
+	var warning string
+	if err := h.b.SetUDPGROForwarding(); err != nil {
 		warning = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1939,8 +1973,10 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	network := cmp.Or(r.Header.Get("Dial-Network"), "tcp")
+
 	addr := net.JoinHostPort(hostStr, portStr)
-	outConn, err := h.b.Dialer().UserDial(r.Context(), "tcp", addr)
+	outConn, err := h.b.Dialer().UserDial(r.Context(), network, addr)
 	if err != nil {
 		http.Error(w, "dial failure: "+err.Error(), http.StatusBadGateway)
 		return

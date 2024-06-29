@@ -62,6 +62,20 @@ type ProxyClassSpec struct {
 	// recommend that you use those for debugging purposes.
 	// +optional
 	Metrics *Metrics `json:"metrics,omitempty"`
+	// TailscaleConfig contains options to configure the tailscale-specific
+	// parameters of proxies.
+	// +optional
+	TailscaleConfig *TailscaleConfig `json:"tailscale,omitempty"`
+}
+
+type TailscaleConfig struct {
+	// AcceptRoutes can be set to true to make the proxy instance accept
+	// routes advertized by other nodes on the tailnet, such as subnet
+	// routes.
+	// This is equivalent of passing --accept-routes flag to a tailscale Linux client.
+	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines
+	// Defaults to false.
+	AcceptRoutes bool `json:"acceptRoutes,omitempty"`
 }
 
 type StatefulSet struct {
@@ -151,23 +165,6 @@ type Metrics struct {
 }
 
 type Container struct {
-	// Container security context.
-	// Security context specified here will override the security context by the operator.
-	// By default the operator:
-	// - sets 'privileged: true' for the init container
-	// - set NET_ADMIN capability for tailscale container for proxies that
-	// are created for Services or Connector.
-	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
-	// +optional
-	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
-	// Container resource requirements.
-	// By default Tailscale Kubernetes operator does not apply any resource
-	// requirements. The amount of resources required wil depend on the
-	// amount of resources the operator needs to parse, usage patterns and
-	// cluster size.
-	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
-	// +optional
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	// List of environment variables to set in the container.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables
 	// Note that environment variables provided here will take precedence
@@ -177,6 +174,37 @@ type Container struct {
 	// the future.
 	// +optional
 	Env []Env `json:"env,omitempty"`
+	// Container image name. By default images are pulled from
+	// docker.io/tailscale/tailscale, but the official images are also
+	// available at ghcr.io/tailscale/tailscale. Specifying image name here
+	// will override any proxy image values specified via the Kubernetes
+	// operator's Helm chart values or PROXY_IMAGE env var in the operator
+	// Deployment.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+	// +optional
+	Image string `json:"image,omitempty"`
+	// Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+	// Container resource requirements.
+	// By default Tailscale Kubernetes operator does not apply any resource
+	// requirements. The amount of resources required wil depend on the
+	// amount of resources the operator needs to parse, usage patterns and
+	// cluster size.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// Container security context.
+	// Security context specified here will override the security context by the operator.
+	// By default the operator:
+	// - sets 'privileged: true' for the init container
+	// - set NET_ADMIN capability for tailscale container for proxies that
+	// are created for Services or Connector.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
+	// +optional
+	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 }
 
 type Env struct {
@@ -204,5 +232,5 @@ type ProxyClassStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	// +optional
-	Conditions []ConnectorCondition `json:"conditions,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

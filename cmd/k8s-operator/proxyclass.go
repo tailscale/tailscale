@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	dockerref "github.com/distribution/reference"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -109,6 +110,20 @@ func (a *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.
 					}
 					if strings.EqualFold(string(e.Name), "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS") {
 						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+					}
+				}
+				if tc.Image != "" {
+					// Same validation as used by kubelet https://github.com/kubernetes/kubernetes/blob/release-1.30/pkg/kubelet/images/image_manager.go#L212
+					if _, err := dockerref.ParseNormalizedNamed(tc.Image); err != nil {
+						violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleContainer", "image"), tc.Image, err.Error()))
+					}
+				}
+			}
+			if tc := pod.TailscaleInitContainer; tc != nil {
+				if tc.Image != "" {
+					// Same validation as used by kubelet https://github.com/kubernetes/kubernetes/blob/release-1.30/pkg/kubelet/images/image_manager.go#L212
+					if _, err := dockerref.ParseNormalizedNamed(tc.Image); err != nil {
+						violations = append(violations, field.TypeInvalid(field.NewPath("spec", "statefulSet", "pod", "tailscaleInitContainer", "image"), tc.Image, err.Error()))
 					}
 				}
 			}

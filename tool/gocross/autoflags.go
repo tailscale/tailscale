@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"runtime"
 	"strings"
@@ -32,10 +33,10 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		subcommand = ""
 
 		cc          = "cc"
-		targetOS    = env.Get("GOOS", nativeGOOS)
-		targetArch  = env.Get("GOARCH", nativeGOARCH)
+		targetOS    = cmp.Or(env.Get("GOOS", ""), nativeGOOS)
+		targetArch  = cmp.Or(env.Get("GOARCH", ""), nativeGOARCH)
 		buildFlags  = []string{"-trimpath"}
-		cgoCflags   = []string{"-O3", "-std=gnu11"}
+		cgoCflags   = []string{"-O3", "-std=gnu11", "-g"}
 		cgoLdflags  []string
 		ldflags     []string
 		tags        = []string{"tailscale_go"}

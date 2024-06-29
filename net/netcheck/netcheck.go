@@ -13,7 +13,8 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
+	"maps"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -63,9 +64,6 @@ const (
 	// icmpProbeTimeout is the maximum amount of time netcheck will spend
 	// probing with ICMP packets.
 	icmpProbeTimeout = 1 * time.Second
-	// hairpinCheckTimeout is the amount of time we wait for a
-	// hairpinned packet to come back.
-	hairpinCheckTimeout = 100 * time.Millisecond
 	// defaultActiveRetransmitTime is the retransmit interval we use
 	// for STUN probes when we're in steady state (not in start-up),
 	// but don't have previous latency information for a DERP
@@ -95,11 +93,6 @@ type Report struct {
 	// STUN server you're talking to (on IPv4).
 	MappingVariesByDestIP opt.Bool
 
-	// HairPinning is whether the router supports communicating
-	// between two local devices through the NATted public IP address
-	// (on IPv4).
-	HairPinning opt.Bool
-
 	// UPnP is whether UPnP appears present on the LAN.
 	// Empty means not checked.
 	UPnP opt.Bool
@@ -115,14 +108,54 @@ type Report struct {
 	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
 	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
 
-	GlobalV4 string // ip:port of global IPv4
-	GlobalV6 string // [ip]:port of global IPv6
+	GlobalV4Counters map[netip.AddrPort]int // number of times the endpoint was observed
+	GlobalV6Counters map[netip.AddrPort]int // number of times the endpoint was observed
+
+	GlobalV4 netip.AddrPort
+	GlobalV6 netip.AddrPort
 
 	// CaptivePortal is set when we think there's a captive portal that is
 	// intercepting HTTP traffic.
 	CaptivePortal opt.Bool
 
 	// TODO: update Clone when adding new fields
+}
+
+// GetGlobalAddrs returns the v4 and v6 global addresses observed during the
+// netcheck, which includes the best latency endpoint first, followed by any
+// other endpoints that were observed repeatedly. It excludes singular endpoints
+// that are likely only the result of a hard NAT.
+func (r *Report) GetGlobalAddrs() (v4, v6 []netip.AddrPort) {
+	// Always add the best latency entries first.
+	if r.GlobalV4.IsValid() {
+		v4 = append(v4, r.GlobalV4)
+	}
+	if r.GlobalV6.IsValid() {
+		v6 = append(v6, r.GlobalV6)
+	}
+	// Add any other entries for which we have multiple observations.
+	// This covers a case of bad NATs that start to provide new mappings for new
+	// STUN sessions mid-expiration, even while a live mapping for the best
+	// latency endpoint still exists. This has been observed on some Palo Alto
+	// Networks firewalls, wherein new traffic to the old endpoint will not
+	// succeed, but new traffic to the newly discovered endpoints does succeed.
+	for ipp, count := range r.GlobalV4Counters {
+		if ipp == r.GlobalV4 {
+			continue
+		}
+		if count > 1 {
+			v4 = append(v4, ipp)
+		}
+	}
+	for ipp, count := range r.GlobalV6Counters {
+		if ipp == r.GlobalV6 {
+			continue
+		}
+		if count > 1 {
+			v6 = append(v6, ipp)
+		}
+	}
+	return v4, v6
 }
 
 // AnyPortMappingChecked reports whether any of UPnP, PMP, or PCP are non-empty.
@@ -138,6 +171,8 @@ func (r *Report) Clone() *Report {
 	r2.RegionLatency = cloneDurationMap(r2.RegionLatency)
 	r2.RegionV4Latency = cloneDurationMap(r2.RegionV4Latency)
 	r2.RegionV6Latency = cloneDurationMap(r2.RegionV6Latency)
+	r2.GlobalV4Counters = maps.Clone(r2.GlobalV4Counters)
+	r2.GlobalV6Counters = maps.Clone(r2.GlobalV6Counters)
 	return &r2
 }
 
@@ -243,23 +278,6 @@ func (c *Client) vlogf(format string, a ...any) {
 	}
 }
 
-// handleHairSTUN reports whether pkt (from src) was our magic hairpin
-// probe packet that we sent to ourselves.
-func (c *Client) handleHairSTUNLocked(pkt []byte, src netip.AddrPort) bool {
-	rs := c.curState
-	if rs == nil {
-		return false
-	}
-	if tx, err := stun.ParseBindingRequest(pkt); err == nil && tx == rs.hairTX {
-		select {
-		case rs.gotHairSTUN <- src:
-		default:
-		}
-		return true
-	}
-	return false
-}
-
 // MakeNextReportFull forces the next GetReport call to be a full
 // (non-incremental) probe of all DERP regions.
 func (c *Client) MakeNextReportFull() {
@@ -282,10 +300,6 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 	}
 
 	c.mu.Lock()
-	if c.handleHairSTUNLocked(pkt, src) {
-		c.mu.Unlock()
-		return
-	}
 	rs := c.curState
 	c.mu.Unlock()
 
@@ -296,6 +310,8 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 	tx, addrPort, err := stun.ParseResponse(pkt)
 	if err != nil {
 		if _, err := stun.ParseBindingRequest(pkt); err == nil {
+			// We no longer send hairpin checks, but perhaps we might catch a
+			// stray from earlier versions.
 			// This was probably our own netcheck hairpin
 			// check probe coming in late. Ignore.
 			return
@@ -323,6 +339,18 @@ const (
 	probeIPv6                    // STUN IPv6
 	probeHTTPS                   // HTTPS
 )
+
+func (p probeProto) String() string {
+	switch p {
+	case probeIPv4:
+		return "v4"
+	case probeIPv6:
+		return "v6"
+	case probeHTTPS:
+		return "https"
+	}
+	return "?"
+}
 
 type probe struct {
 	// delay is when the probe is started, relative to the time
@@ -396,9 +424,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 	have6if := ifState.HaveV6
 	have4if := ifState.HaveV4
 	plan = make(probePlan)
-	if !have4if && !have6if {
-		return plan
-	}
+
 	had4 := len(last.RegionV4Latency) > 0
 	had6 := len(last.RegionV6Latency) > 0
 	hadBoth := have6if && had4 && had6
@@ -452,10 +478,10 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *netmon.State, last *Report) (pl
 			if try > 1 {
 				delay += time.Duration(try) * 50 * time.Millisecond
 			}
-			if do4 {
+			if n.IPv4 != "none" && (do4 || n.IsTestNode()) {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
-			if do6 {
+			if n.IPv6 != "none" && (do6 || n.IsTestNode()) {
 				p6 = append(p6, probe{delay: delay, node: n.Name, proto: probeIPv6})
 			}
 		}
@@ -478,10 +504,10 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 		for try := 0; try < 3; try++ {
 			n := reg.Nodes[try%len(reg.Nodes)]
 			delay := time.Duration(try) * defaultInitialRetransmitTime
-			if ifState.HaveV4 && nodeMight4(n) {
+			if n.IPv4 != "none" && ((ifState.HaveV4 && nodeMight4(n)) || n.IsTestNode()) {
 				p4 = append(p4, probe{delay: delay, node: n.Name, proto: probeIPv4})
 			}
-			if ifState.HaveV6 && nodeMight6(n) {
+			if n.IPv6 != "none" && ((ifState.HaveV6 && nodeMight6(n)) || n.IsTestNode()) {
 				p6 = append(p6, probe{delay: delay, node: n.Name, proto: probeIPv6})
 			}
 		}
@@ -523,20 +549,15 @@ type reportState struct {
 	c           *Client
 	start       time.Time
 	opts        *GetReportOpts
-	hairTX      stun.TxID
-	gotHairSTUN chan netip.AddrPort
-	hairTimeout chan struct{} // closed on timeout
-	pc4Hair     nettype.PacketConn
 	incremental bool // doing a lite, follow-up netcheck
 	stopProbeCh chan struct{}
 	waitPortMap sync.WaitGroup
 
-	mu            sync.Mutex
-	sentHairCheck bool
-	report        *Report                            // to be returned by GetReport
-	inFlight      map[stun.TxID]func(netip.AddrPort) // called without c.mu held
-	gotEP4        string
-	timers        []*time.Timer
+	mu       sync.Mutex
+	report   *Report                            // to be returned by GetReport
+	inFlight map[stun.TxID]func(netip.AddrPort) // called without c.mu held
+	gotEP4   netip.AddrPort
+	timers   []*time.Timer
 }
 
 func (rs *reportState) anyUDP() bool {
@@ -586,50 +607,6 @@ func (rs *reportState) probeWouldHelp(probe probe, node *tailcfg.DERPNode) bool 
 	return false
 }
 
-func (rs *reportState) startHairCheckLocked(dst netip.AddrPort) {
-	if rs.sentHairCheck || rs.incremental {
-		return
-	}
-	rs.sentHairCheck = true
-	rs.pc4Hair.WriteToUDPAddrPort(stun.Request(rs.hairTX), dst)
-	rs.c.vlogf("sent haircheck to %v", dst)
-	time.AfterFunc(hairpinCheckTimeout, func() { close(rs.hairTimeout) })
-}
-
-func (rs *reportState) waitHairCheck(ctx context.Context) {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	ret := rs.report
-	if rs.incremental {
-		if rs.c.last != nil {
-			ret.HairPinning = rs.c.last.HairPinning
-		}
-		return
-	}
-	if !rs.sentHairCheck {
-		return
-	}
-
-	// First, check whether we have a value before we check for timeouts.
-	select {
-	case <-rs.gotHairSTUN:
-		ret.HairPinning.Set(true)
-		return
-	default:
-	}
-
-	// Now, wait for a response or a timeout.
-	select {
-	case <-rs.gotHairSTUN:
-		ret.HairPinning.Set(true)
-	case <-rs.hairTimeout:
-		rs.c.vlogf("hairCheck timeout")
-		ret.HairPinning.Set(false)
-	case <-ctx.Done():
-		rs.c.vlogf("hairCheck context timeout")
-	}
-}
-
 func (rs *reportState) stopTimers() {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -642,11 +619,6 @@ func (rs *reportState) stopTimers() {
 // is non-zero (for all but HTTPS replies), it's recorded as our UDP
 // IP:port.
 func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort, d time.Duration) {
-	var ipPortStr string
-	if ipp != (netip.AddrPort{}) {
-		ipPortStr = net.JoinHostPort(ipp.Addr().String(), fmt.Sprint(ipp.Port()))
-	}
-
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ret := rs.report
@@ -672,18 +644,19 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort
 	case ipp.Addr().Is6():
 		updateLatency(ret.RegionV6Latency, node.RegionID, d)
 		ret.IPv6 = true
-		ret.GlobalV6 = ipPortStr
+		ret.GlobalV6 = ipp
+		mak.Set(&ret.GlobalV6Counters, ipp, ret.GlobalV6Counters[ipp]+1)
 		// TODO: track MappingVariesByDestIP for IPv6
 		// too? Would be sad if so, but who knows.
 	case ipp.Addr().Is4():
 		updateLatency(ret.RegionV4Latency, node.RegionID, d)
 		ret.IPv4 = true
-		if rs.gotEP4 == "" {
-			rs.gotEP4 = ipPortStr
-			ret.GlobalV4 = ipPortStr
-			rs.startHairCheckLocked(ipp)
+		mak.Set(&ret.GlobalV4Counters, ipp, ret.GlobalV4Counters[ipp]+1)
+		if !rs.gotEP4.IsValid() {
+			rs.gotEP4 = ipp
+			ret.GlobalV4 = ipp
 		} else {
-			if rs.gotEP4 != ipPortStr {
+			if rs.gotEP4 != ipp {
 				ret.MappingVariesByDestIP.Set(true)
 			} else if ret.MappingVariesByDestIP == "" {
 				ret.MappingVariesByDestIP.Set(false)
@@ -795,9 +768,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		opts:        opts,
 		report:      newReport(),
 		inFlight:    map[stun.TxID]func(netip.AddrPort){},
-		hairTX:      stun.NewTxID(), // random payload
-		gotHairSTUN: make(chan netip.AddrPort, 1),
-		hairTimeout: make(chan struct{}),
 		stopProbeCh: make(chan struct{}, 1),
 	}
 	c.curState = rs
@@ -855,33 +825,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		v6udp.Close()
 	}
 
-	// Create a UDP4 socket used for sending to our discovered IPv4 address.
-	rs.pc4Hair, err = nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.NetMon)).ListenPacket(ctx, "udp4", ":0")
-	if err != nil {
-		c.logf("udp4: %v", err)
-		return nil, err
-	}
-	defer rs.pc4Hair.Close()
-
 	if !c.SkipExternalNetwork && c.PortMapper != nil {
 		rs.waitPortMap.Add(1)
 		go rs.probePortMapServices()
 	}
-
-	// At least the Apple Airport Extreme doesn't allow hairpin
-	// sends from a private socket until it's seen traffic from
-	// that src IP:port to something else out on the internet.
-	//
-	// See https://github.com/tailscale/tailscale/issues/188#issuecomment-600728643
-	//
-	// And it seems that even sending to a likely-filtered RFC 5737
-	// documentation-only IPv4 range is enough to set up the mapping.
-	// So do that for now. In the future we might want to classify networks
-	// that do and don't require this separately. But for now help it.
-	const documentationIP = "203.0.113.1"
-	rs.pc4Hair.WriteToUDPAddrPort(
-		[]byte("tailscale netcheck; see https://github.com/tailscale/tailscale/issues/188"),
-		netip.AddrPortFrom(netip.MustParseAddr(documentationIP), 12345))
 
 	plan := makeProbePlan(dm, ifState, last)
 
@@ -960,8 +907,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		captivePortalStop()
 	}
 
-	rs.waitHairCheck(ctx)
-	c.vlogf("hairCheck done")
 	if !c.SkipExternalNetwork && c.PortMapper != nil {
 		rs.waitPortMap.Wait()
 		c.vlogf("portMap done")
@@ -1077,7 +1022,7 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 		if len(rids) == 0 {
 			return false, nil
 		}
-		preferredDERP = rids[rand.Intn(len(rids))]
+		preferredDERP = rids[rand.IntN(len(rids))]
 	}
 
 	node := dm.Regions[preferredDERP].Nodes[0]
@@ -1296,7 +1241,7 @@ func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion
 	// TODO(andrew-d): this is a bit ugly
 	nodeAddr := c.nodeAddr(ctx, node, probeIPv4)
 	if !nodeAddr.IsValid() {
-		return 0, false, fmt.Errorf("no address for node %v", node.Name)
+		return 0, false, fmt.Errorf("no address for node %v (v4-for-icmp)", node.Name)
 	}
 	addr := &net.IPAddr{
 		IP:   net.IP(nodeAddr.Addr().AsSlice()),
@@ -1330,17 +1275,16 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 			fmt.Fprintf(w, " v6os=%v", r.OSHasIPv6)
 		}
 		fmt.Fprintf(w, " mapvarydest=%v", r.MappingVariesByDestIP)
-		fmt.Fprintf(w, " hair=%v", r.HairPinning)
 		if r.AnyPortMappingChecked() {
 			fmt.Fprintf(w, " portmap=%v%v%v", conciseOptBool(r.UPnP, "U"), conciseOptBool(r.PMP, "M"), conciseOptBool(r.PCP, "C"))
 		} else {
 			fmt.Fprintf(w, " portmap=?")
 		}
-		if r.GlobalV4 != "" {
-			fmt.Fprintf(w, " v4a=%v", r.GlobalV4)
+		if r.GlobalV4.IsValid() {
+			fmt.Fprintf(w, " v4a=%s", r.GlobalV4)
 		}
-		if r.GlobalV6 != "" {
-			fmt.Fprintf(w, " v6a=%v", r.GlobalV6)
+		if r.GlobalV6.IsValid() {
+			fmt.Fprintf(w, " v6a=%s", r.GlobalV6)
 		}
 		if r.CaptivePortal != "" {
 			fmt.Fprintf(w, " captiveportal=%v", r.CaptivePortal)
@@ -1549,7 +1493,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 
 	addr := c.nodeAddr(ctx, node, probe.proto)
 	if !addr.IsValid() {
-		c.logf("netcheck.runProbe: named node %q has no address", probe.node)
+		c.logf("netcheck.runProbe: named node %q has no %v address", probe.node, probe.proto)
 		return
 	}
 
@@ -1675,11 +1619,14 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 	c.mu.Unlock()
 
 	probeIsV4 := proto == probeIPv4
-	addrs, _ := lookupIPAddr(ctx, n.HostName)
+	addrs, err := lookupIPAddr(ctx, n.HostName)
 	for _, a := range addrs {
 		if (a.Is4() && probeIsV4) || (a.Is6() && !probeIsV4) {
 			return netip.AddrPortFrom(a, uint16(port))
 		}
+	}
+	if err != nil {
+		c.logf("netcheck: DNS lookup error for %q (node %q region %v): %v", n.HostName, n.Name, n.RegionID, err)
 	}
 	return
 }

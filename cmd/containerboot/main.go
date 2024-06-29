@@ -52,12 +52,19 @@
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
 //     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
 //     and will be re-applied when it changes.
-//   - EXPERIMENTAL_TS_CONFIGFILE_PATH: if specified, a path to tailscaled
-//     config. If this is set, TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY,
+//   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
+//     directory that containers tailscaled config in file. The config file needs to be
+//     named cap-<current-tailscaled-cap>.hujson. If this is set, TS_HOSTNAME,
+//     TS_EXTRA_ARGS, TS_AUTHKEY,
 //     TS_ROUTES, TS_ACCEPT_DNS env vars must not be set. If this is set,
 //     containerboot only runs `tailscaled --config <path-to-this-configfile>`
 //     and not `tailscale up` or `tailscale set`.
 //     The config file contents are currently read once on container start.
+//     NB: This env var is currently experimental and the logic will likely change!
+//     TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS: set to true to
+//     autoconfigure the default network interface for optimal performance for
+//     Tailscale subnet router/exit node.
+//     https://tailscale.com/kb/1320/performance-best-practices#linux-optimizations-for-subnet-routers-and-exit-nodes
 //     NB: This env var is currently experimental and the logic will likely change!
 //   - EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS: if set to true
 //     and if this containerboot instance is an L7 ingress proxy (created by
@@ -92,6 +99,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -107,6 +115,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
+	kubeutils "tailscale.com/k8s-operator"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
@@ -145,9 +154,10 @@ func main() {
 		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
 		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
 		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
-		TailscaledConfigFilePath:              defaultEnv("EXPERIMENTAL_TS_CONFIGFILE_PATH", ""),
+		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
 		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
 		PodIP:                                 defaultEnv("POD_IP", ""),
+		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -194,6 +204,12 @@ func main() {
 		}
 	}
 	defer killTailscaled()
+
+	if cfg.EnableForwardingOptimizations {
+		if err := client.SetUDPGROForwarding(bootCtx); err != nil {
+			log.Printf("[unexpected] error enabling UDP GRO forwarding: %v", err)
+		}
+	}
 
 	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
 	if err != nil {
@@ -305,7 +321,7 @@ authLoop:
 		}
 	}
 
-	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && isTwoStepConfigAuthOnce(cfg) {
+	if hasKubeStateStore(cfg) && isTwoStepConfigAuthOnce(cfg) {
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
 		// wipe it, but it's good hygiene.
@@ -321,11 +337,10 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
-		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
-		startupTasksDone  = false
-		currentIPs        deephash.Sum // tailscale IPs assigned to device
-		currentDeviceInfo deephash.Sum // device ID and fqdn
+		startupTasksDone       = false
+		currentIPs             deephash.Sum // tailscale IPs assigned to device
+		currentDeviceID        deephash.Sum // device ID
+		currentDeviceEndpoints deephash.Sum // device FQDN and IPs
 
 		currentEgressIPs deephash.Sum
 
@@ -339,7 +354,7 @@ authLoop:
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
 	var nfr linuxfw.NetfilterRunner
-	if wantProxy {
+	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
 		if err != nil {
 			log.Fatalf("error creating new netfilter runner: %v", err)
@@ -424,6 +439,20 @@ runLoop:
 				newCurrentIPs := deephash.Hash(&addrs)
 				ipsHaveChanged := newCurrentIPs != currentIPs
 
+				// Store device ID in a Kubernetes Secret before
+				// setting up any routing rules. This ensures
+				// that, for containerboot instances that are
+				// Kubernetes operator proxies, the operator is
+				// able to retrieve the device ID from the
+				// Kubernetes Secret to clean up tailnet nodes
+				// for proxies whose route setup continuously
+				// fails.
+				deviceID := n.NetMap.SelfNode.StableID()
+				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceID, &deviceID) {
+					if err := storeDeviceID(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID()); err != nil {
+						log.Fatalf("storing device ID in Kubernetes Secret: %v", err)
+					}
+				}
 				if cfg.TailnetTargetFQDN != "" {
 					var (
 						egressAddrs          []netip.Prefix
@@ -517,15 +546,36 @@ runLoop:
 				}
 				currentIPs = newCurrentIPs
 
-				deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
-				if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
-					if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
-						log.Fatalf("storing device ID in kube secret: %v", err)
+				// Only store device FQDN and IP addresses to
+				// Kubernetes Secret when any required proxy
+				// route setup has succeeded. IPs and FQDN are
+				// read from the Secret by the Tailscale
+				// Kubernetes operator and, for some proxy
+				// types, such as Tailscale Ingress, advertized
+				// on the Ingress status. Writing them to the
+				// Secret only after the proxy routing has been
+				// set up ensures that the operator does not
+				// advertize endpoints of broken proxies.
+				// TODO (irbekrm): instead of using the IP and FQDN, have some other mechanism for the proxy signal that it is 'Ready'.
+				deviceEndpoints := []any{n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses()}
+				if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
+					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
+						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
 				}
 			}
 			if !startupTasksDone {
-				if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
+				// For containerboot instances that act as TCP
+				// proxies (proxying traffic to an endpoint
+				// passed via one of the env vars that
+				// containerbot reads) and store state in a
+				// Kubernetes Secret, we consider startup tasks
+				// done at the point when device info has been
+				// successfully stored to state Secret.
+				// For all other containerboot instances, if we
+				// just get to this point the startup tasks can
+				// be considered done.
+				if !isL3Proxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
 					// This log message is used in tests to detect when all
 					// post-auth configuration is done.
 					log.Println("Startup complete, waiting for shutdown signal")
@@ -957,15 +1007,22 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 		return err
 	}
 	var local netip.Addr
+	proxyHasIPv4Address := false
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
+		}
+		if pfx.Addr().Is4() {
+			proxyHasIPv4Address = true
 		}
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
 		}
 		local = pfx.Addr()
 		break
+	}
+	if proxyHasIPv4Address && dst.Is6() {
+		log.Printf("Warning: proxy backend ClusterIP is an IPv6 address and the proxy has a IPv4 tailnet address. You might need to disable IPv4 address allocation for the proxy for forwarding to work. See https://github.com/tailscale/tailscale/issues/12156")
 	}
 	if !local.IsValid() {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
@@ -1069,22 +1126,23 @@ type settings struct {
 	// TailnetTargetFQDN is an MagicDNS name to which all incoming
 	// non-Tailscale traffic should be proxied. This must be a full Tailnet
 	// node FQDN.
-	TailnetTargetFQDN        string
-	ServeConfigPath          string
-	DaemonExtraArgs          string
-	ExtraArgs                string
-	InKubernetes             bool
-	UserspaceMode            bool
-	StateDir                 string
-	AcceptDNS                *bool
-	KubeSecret               string
-	SOCKSProxyAddr           string
-	HTTPProxyAddr            string
-	Socket                   string
-	AuthOnce                 bool
-	Root                     string
-	KubernetesCanPatch       bool
-	TailscaledConfigFilePath string
+	TailnetTargetFQDN             string
+	ServeConfigPath               string
+	DaemonExtraArgs               string
+	ExtraArgs                     string
+	InKubernetes                  bool
+	UserspaceMode                 bool
+	StateDir                      string
+	AcceptDNS                     *bool
+	KubeSecret                    string
+	SOCKSProxyAddr                string
+	HTTPProxyAddr                 string
+	Socket                        string
+	AuthOnce                      bool
+	Root                          string
+	KubernetesCanPatch            bool
+	TailscaledConfigFilePath      string
+	EnableForwardingOptimizations bool
 	// If set to true and, if this containerboot instance is a Kubernetes
 	// ingress proxy, set up rules to forward incoming cluster traffic to be
 	// forwarded to the ingress target in cluster.
@@ -1097,6 +1155,13 @@ type settings struct {
 
 func (s *settings) validate() error {
 	if s.TailscaledConfigFilePath != "" {
+		dir, file := path.Split(s.TailscaledConfigFilePath)
+		if _, err := os.Stat(dir); err != nil {
+			return fmt.Errorf("error validating whether directory with tailscaled config file %s exists: %w", dir, err)
+		}
+		if _, err := os.Stat(s.TailscaledConfigFilePath); err != nil {
+			return fmt.Errorf("error validating whether tailscaled config directory %q contains tailscaled config for current capability version %q: %w. If this is a Tailscale Kubernetes operator proxy, please ensure that the version of the operator is not older than the version of the proxy", dir, file, err)
+		}
 		if _, err := conffile.Load(s.TailscaledConfigFilePath); err != nil {
 			return fmt.Errorf("error validating tailscaled configfile contents: %w", err)
 		}
@@ -1120,7 +1185,7 @@ func (s *settings) validate() error {
 		return errors.New("Both TS_TAILNET_TARGET_IP and TS_TAILNET_FQDN cannot be set")
 	}
 	if s.TailscaledConfigFilePath != "" && (s.AcceptDNS != nil || s.AuthKey != "" || s.Routes != nil || s.ExtraArgs != "" || s.Hostname != "") {
-		return errors.New("EXPERIMENTAL_TS_CONFIGFILE_PATH cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
+		return errors.New("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with TS_HOSTNAME, TS_EXTRA_ARGS, TS_AUTHKEY, TS_ROUTES, TS_ACCEPT_DNS.")
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.UserspaceMode {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is not supported in userspace mode")
@@ -1130,6 +1195,9 @@ func (s *settings) validate() error {
 	}
 	if s.AllowProxyingClusterTrafficViaIngress && s.PodIP == "" {
 		return errors.New("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS is set but POD_IP is not set")
+	}
+	if s.EnableForwardingOptimizations && s.UserspaceMode {
+		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
 	}
 	return nil
 }
@@ -1251,4 +1319,56 @@ func isTwoStepConfigAlwaysAuth(cfg *settings) bool {
 // configured in a single step by running 'tailscaled <config opts>'
 func isOneStepConfig(cfg *settings) bool {
 	return cfg.TailscaledConfigFilePath != ""
+}
+
+// isL3Proxy returns true if the Tailscale node needs to be configured to act
+// as an L3 proxy, proxying to an endpoint provided via one of the config env
+// vars.
+func isL3Proxy(cfg *settings) bool {
+	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
+}
+
+// hasKubeStateStore returns true if the state must be stored in a Kubernetes
+// Secret.
+func hasKubeStateStore(cfg *settings) bool {
+	return cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != ""
+}
+
+// tailscaledConfigFilePath returns the path to the tailscaled config file that
+// should be used for the current capability version. It is determined by the
+// TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR environment variable and looks for a
+// file named cap-<capability_version>.hujson in the directory. It searches for
+// the highest capability version that is less than or equal to the current
+// capability version.
+func tailscaledConfigFilePath() string {
+	dir := os.Getenv("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR")
+	if dir == "" {
+		return ""
+	}
+	fe, err := os.ReadDir(dir)
+	if err != nil {
+		log.Fatalf("error reading tailscaled config directory %q: %v", dir, err)
+	}
+	maxCompatVer := tailcfg.CapabilityVersion(-1)
+	for _, e := range fe {
+		// We don't check if type if file as in most cases this will
+		// come from a mounted kube Secret, where the directory contents
+		// will be various symlinks.
+		if e.Type().IsDir() {
+			continue
+		}
+		cv, err := kubeutils.CapVerFromFileName(e.Name())
+		if err != nil {
+			log.Printf("skipping file %q in tailscaled config directory %q: %v", e.Name(), dir, err)
+			continue
+		}
+		if cv > maxCompatVer && cv <= tailcfg.CurrentCapabilityVersion {
+			maxCompatVer = cv
+		}
+	}
+	if maxCompatVer == -1 {
+		log.Fatalf("no tailscaled config file found in %q for current capability version %q", dir, tailcfg.CurrentCapabilityVersion)
+	}
+	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
+	return path.Join(dir, kubeutils.TailscaledConfigFileNameForCap(maxCompatVer))
 }

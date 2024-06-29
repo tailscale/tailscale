@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
@@ -66,7 +67,6 @@ func (v *PrefsView) UnmarshalJSON(b []byte) error {
 
 func (v PrefsView) ControlURL() string                          { return v.ж.ControlURL }
 func (v PrefsView) RouteAll() bool                              { return v.ж.RouteAll }
-func (v PrefsView) AllowSingleHosts() bool                      { return v.ж.AllowSingleHosts }
 func (v PrefsView) ExitNodeID() tailcfg.StableNodeID            { return v.ж.ExitNodeID }
 func (v PrefsView) ExitNodeIP() netip.Addr                      { return v.ж.ExitNodeIP }
 func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.InternalExitNodePrior }
@@ -86,6 +86,7 @@ func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
 func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
+func (v PrefsView) NoStatefulFiltering() opt.Bool         { return v.ж.NoStatefulFiltering }
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() string                  { return v.ж.OperatorUser }
 func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
@@ -96,13 +97,13 @@ func (v PrefsView) NetfilterKind() string                 { return v.ж.Netfilte
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
 	return views.SliceOfViews[*drive.Share, drive.ShareView](v.ж.DriveShares)
 }
-func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
+func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
+func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ControlURL             string
 	RouteAll               bool
-	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
 	InternalExitNodePrior  tailcfg.StableNodeID
@@ -120,6 +121,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	NoSNAT                 bool
+	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
 	ProfileName            string
@@ -128,6 +130,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
+	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})
 

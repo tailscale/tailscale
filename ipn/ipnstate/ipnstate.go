@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
@@ -40,6 +41,9 @@ type Status struct {
 	//  "NoState", "NeedsLogin", "NeedsMachineAuth", "Stopped",
 	//  "Starting", "Running".
 	BackendState string
+
+	// HaveNodeKey is whether the current profile has a node key configured.
+	HaveNodeKey bool `json:",omitempty"`
 
 	AuthURL      string       // current URL provided by control to authorize client
 	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
@@ -122,6 +126,9 @@ type NetworkLockStatus struct {
 
 	// NodeKeySigned is true if our node is authorized by network-lock.
 	NodeKeySigned bool
+
+	// NodeKeySignature is the current signature of this node's key.
+	NodeKeySignature *tka.NodeKeySignature
 
 	// TrustedKeys describes the keys currently trusted to make changes
 	// to network-lock.

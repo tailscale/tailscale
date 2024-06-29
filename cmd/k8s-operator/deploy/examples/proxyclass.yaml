@@ -15,3 +15,9 @@ spec:
         kubernetes.io/os: "linux"
       imagePullSecrets:
       - name: "foo"
+      tailscaleContainer:
+        image: "ghcr.io/tailscale/tailscale:v1.64"
+        imagePullPolicy: IfNotPresent
+      tailscaleInitContainer:
+        image: "ghcr.io/tailscale/tailscale:v1.64"
+        imagePullPolicy: IfNotPresent

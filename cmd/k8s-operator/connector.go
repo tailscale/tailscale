@@ -33,11 +33,8 @@ import (
 
 const (
 	reasonConnectorCreationFailed = "ConnectorCreationFailed"
-
-	reasonConnectorCreated           = "ConnectorCreated"
-	reasonConnectorCleanupFailed     = "ConnectorCleanupFailed"
-	reasonConnectorCleanupInProgress = "ConnectorCleanupInProgress"
-	reasonConnectorInvalid           = "ConnectorInvalid"
+	reasonConnectorCreated        = "ConnectorCreated"
+	reasonConnectorInvalid        = "ConnectorInvalid"
 
 	messageConnectorCreationFailed = "Failed creating Connector: %v"
 	messageConnectorInvalid        = "Connector is invalid: %v"
@@ -108,7 +105,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	}
 
 	oldCnStatus := cn.Status.DeepCopy()
-	setStatus := func(cn *tsapi.Connector, conditionType tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+	setStatus := func(cn *tsapi.Connector, _ tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, status, reason, message, cn.Generation, a.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, cn.Status) {
 			// An error encountered here should get returned by the Reconcile function.
@@ -184,7 +181,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		Connector: &connector{
 			isExitNode: cn.Spec.ExitNode,
 		},
-		ProxyClass: proxyClass,
+		ProxyClassName: proxyClass,
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
@@ -211,7 +208,27 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	gaugeConnectorResources.Set(int64(connectors.Len()))
 
 	_, err := a.ssr.Provision(ctx, logger, sts)
-	return err
+	if err != nil {
+		return err
+	}
+
+	_, tsHost, ips, err := a.ssr.DeviceInfo(ctx, crl)
+	if err != nil {
+		return err
+	}
+
+	if tsHost == "" {
+		logger.Debugf("no Tailscale hostname known yet, waiting for connector pod to finish auth")
+		// No hostname yet. Wait for the connector pod to auth.
+		cn.Status.TailnetIPs = nil
+		cn.Status.Hostname = ""
+		return nil
+	}
+
+	cn.Status.TailnetIPs = ips
+	cn.Status.Hostname = tsHost
+
+	return nil
 }
 
 func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) (bool, error) {

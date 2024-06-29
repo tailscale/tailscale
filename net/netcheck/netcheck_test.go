@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,140 +20,11 @@ import (
 	"time"
 
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstest/nettest"
 )
-
-func TestHairpinSTUN(t *testing.T) {
-	tx := stun.NewTxID()
-	c := &Client{
-		curState: &reportState{
-			hairTX:      tx,
-			gotHairSTUN: make(chan netip.AddrPort, 1),
-		},
-	}
-	req := stun.Request(tx)
-	if !stun.Is(req) {
-		t.Fatal("expected STUN message")
-	}
-	if !c.handleHairSTUNLocked(req, netip.AddrPort{}) {
-		t.Fatal("expected true")
-	}
-	select {
-	case <-c.curState.gotHairSTUN:
-	default:
-		t.Fatal("expected value")
-	}
-}
-
-func TestHairpinWait(t *testing.T) {
-	makeClient := func(t *testing.T) (*Client, *reportState) {
-		tx := stun.NewTxID()
-		c := &Client{}
-		req := stun.Request(tx)
-		if !stun.Is(req) {
-			t.Fatal("expected STUN message")
-		}
-
-		var err error
-		rs := &reportState{
-			c:           c,
-			hairTX:      tx,
-			gotHairSTUN: make(chan netip.AddrPort, 1),
-			hairTimeout: make(chan struct{}),
-			report:      newReport(),
-		}
-		rs.pc4Hair, err = net.ListenUDP("udp4", &net.UDPAddr{
-			IP:   net.ParseIP("127.0.0.1"),
-			Port: 0,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		c.curState = rs
-		return c, rs
-	}
-
-	ll, err := net.ListenPacket("udp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ll.Close()
-	dstAddr := netip.MustParseAddrPort(ll.LocalAddr().String())
-
-	t.Run("Success", func(t *testing.T) {
-		c, rs := makeClient(t)
-		req := stun.Request(rs.hairTX)
-
-		// Start a hairpin check to ourselves.
-		rs.startHairCheckLocked(dstAddr)
-
-		// Fake receiving the stun check from ourselves after some period of time.
-		src := netip.MustParseAddrPort(rs.pc4Hair.LocalAddr().String())
-		c.handleHairSTUNLocked(req, src)
-
-		rs.waitHairCheck(context.Background())
-
-		// Verify that we set HairPinning
-		if got := rs.report.HairPinning; !got.EqualBool(true) {
-			t.Errorf("wanted HairPinning=true, got %v", got)
-		}
-	})
-
-	t.Run("LateReply", func(t *testing.T) {
-		c, rs := makeClient(t)
-		req := stun.Request(rs.hairTX)
-
-		// Start a hairpin check to ourselves.
-		rs.startHairCheckLocked(dstAddr)
-
-		// Wait until we've timed out, to mimic the race in #1795.
-		<-rs.hairTimeout
-
-		// Fake receiving the stun check from ourselves after some period of time.
-		src := netip.MustParseAddrPort(rs.pc4Hair.LocalAddr().String())
-		c.handleHairSTUNLocked(req, src)
-
-		// Wait for a hairpin response
-		rs.waitHairCheck(context.Background())
-
-		// Verify that we set HairPinning
-		if got := rs.report.HairPinning; !got.EqualBool(true) {
-			t.Errorf("wanted HairPinning=true, got %v", got)
-		}
-	})
-
-	t.Run("Timeout", func(t *testing.T) {
-		_, rs := makeClient(t)
-
-		// Start a hairpin check to ourselves.
-		rs.startHairCheckLocked(dstAddr)
-
-		ctx, cancel := context.WithTimeout(context.Background(), hairpinCheckTimeout*50)
-		defer cancel()
-
-		// Wait in the background
-		waitDone := make(chan struct{})
-		go func() {
-			rs.waitHairCheck(ctx)
-			close(waitDone)
-		}()
-
-		// If we do nothing, then we time out; confirm that we set
-		// HairPinning to false in this case.
-		select {
-		case <-waitDone:
-			if got := rs.report.HairPinning; !got.EqualBool(false) {
-				t.Errorf("wanted HairPinning=false, got %v", got)
-			}
-		case <-ctx.Done():
-			t.Fatalf("timed out waiting for hairpin channel")
-		}
-	})
-}
 
 func newTestClient(t testing.TB) *Client {
 	c := &Client{
@@ -188,11 +60,48 @@ func TestBasic(t *testing.T) {
 	if _, ok := r.RegionLatency[1]; !ok {
 		t.Errorf("expected key 1 in DERPLatency; got %+v", r.RegionLatency)
 	}
-	if r.GlobalV4 == "" {
+	if !r.GlobalV4.IsValid() {
 		t.Error("expected GlobalV4 set")
 	}
 	if r.PreferredDERP != 1 {
 		t.Errorf("PreferredDERP = %v; want 1", r.PreferredDERP)
+	}
+	v4Addrs, _ := r.GetGlobalAddrs()
+	if len(v4Addrs) != 1 {
+		t.Error("expected one global IPv4 address")
+	}
+	if got, want := v4Addrs[0], r.GlobalV4; got != want {
+		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestMultiGlobalAddressMapping(t *testing.T) {
+	c := &Client{
+		Logf: t.Logf,
+	}
+
+	rs := &reportState{
+		c:      c,
+		start:  time.Now(),
+		report: newReport(),
+	}
+	derpNode := &tailcfg.DERPNode{}
+	port1 := netip.MustParseAddrPort("127.0.0.1:1234")
+	port2 := netip.MustParseAddrPort("127.0.0.1:2345")
+	port3 := netip.MustParseAddrPort("127.0.0.1:3456")
+	// First report for port1
+	rs.addNodeLatency(derpNode, port1, 10*time.Millisecond)
+	// Singular report for port2
+	rs.addNodeLatency(derpNode, port2, 11*time.Millisecond)
+	// Duplicate reports for port3
+	rs.addNodeLatency(derpNode, port3, 12*time.Millisecond)
+	rs.addNodeLatency(derpNode, port3, 13*time.Millisecond)
+
+	r := rs.report
+	v4Addrs, _ := r.GetGlobalAddrs()
+	wantV4Addrs := []netip.AddrPort{port1, port3}
+	if !slices.Equal(v4Addrs, wantV4Addrs) {
+		t.Errorf("got global addresses: %v, want %v", v4Addrs, wantV4Addrs)
 	}
 }
 
@@ -715,18 +624,6 @@ func (p probe) String() string {
 	return fmt.Sprintf("%s-%s%s%s", p.node, p.proto, delay, wait)
 }
 
-func (p probeProto) String() string {
-	switch p {
-	case probeIPv4:
-		return "v4"
-	case probeIPv6:
-		return "v4"
-	case probeHTTPS:
-		return "https"
-	}
-	return "?"
-}
-
 func TestLogConciseReport(t *testing.T) {
 	dm := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
@@ -744,12 +641,12 @@ func TestLogConciseReport(t *testing.T) {
 		{
 			name: "no_udp",
 			r:    &Report{},
-			want: "udp=false v4=false icmpv4=false v6=false mapvarydest= hair= portmap=? derp=0",
+			want: "udp=false v4=false icmpv4=false v6=false mapvarydest= portmap=? derp=0",
 		},
 		{
 			name: "no_udp_icmp",
 			r:    &Report{ICMPv4: true, IPv4: true},
-			want: "udp=false icmpv4=true v6=false mapvarydest= hair= portmap=? derp=0",
+			want: "udp=false icmpv4=true v6=false mapvarydest= portmap=? derp=0",
 		},
 		{
 			name: "ipv4_one_region",
@@ -764,7 +661,7 @@ func TestLogConciseReport(t *testing.T) {
 					1: 10 * ms,
 				},
 			},
-			want: "udp=true v6=false mapvarydest= hair= portmap=? derp=1 derpdist=1v4:10ms",
+			want: "udp=true v6=false mapvarydest= portmap=? derp=1 derpdist=1v4:10ms",
 		},
 		{
 			name: "ipv4_all_region",
@@ -783,7 +680,7 @@ func TestLogConciseReport(t *testing.T) {
 					3: 30 * ms,
 				},
 			},
-			want: "udp=true v6=false mapvarydest= hair= portmap=? derp=1 derpdist=1v4:10ms,2v4:20ms,3v4:30ms",
+			want: "udp=true v6=false mapvarydest= portmap=? derp=1 derpdist=1v4:10ms,2v4:20ms,3v4:30ms",
 		},
 		{
 			name: "ipboth_all_region",
@@ -808,7 +705,7 @@ func TestLogConciseReport(t *testing.T) {
 					3: 30 * ms,
 				},
 			},
-			want: "udp=true v6=true mapvarydest= hair= portmap=? derp=1 derpdist=1v4:10ms,1v6:10ms,2v4:20ms,2v6:20ms,3v4:30ms,3v6:30ms",
+			want: "udp=true v6=true mapvarydest= portmap=? derp=1 derpdist=1v4:10ms,1v6:10ms,2v4:20ms,2v6:20ms,3v4:30ms,3v6:30ms",
 		},
 		{
 			name: "portmap_all",
@@ -818,7 +715,7 @@ func TestLogConciseReport(t *testing.T) {
 				PMP:  "true",
 				PCP:  "true",
 			},
-			want: "udp=true v4=false v6=false mapvarydest= hair= portmap=UMC derp=0",
+			want: "udp=true v4=false v6=false mapvarydest= portmap=UMC derp=0",
 		},
 		{
 			name: "portmap_some",
@@ -828,7 +725,7 @@ func TestLogConciseReport(t *testing.T) {
 				PMP:  "false",
 				PCP:  "true",
 			},
-			want: "udp=true v4=false v6=false mapvarydest= hair= portmap=UC derp=0",
+			want: "udp=true v4=false v6=false mapvarydest= portmap=UC derp=0",
 		},
 	}
 	for _, tt := range tests {
@@ -882,6 +779,8 @@ func TestSortRegions(t *testing.T) {
 }
 
 func TestNoCaptivePortalWhenUDP(t *testing.T) {
+	nettest.SkipIfNoNetwork(t) // empirically. not sure why.
+
 	// Override noRedirectClient to handle the /generate_204 endpoint
 	var generate204Called atomic.Bool
 	tr := RoundTripFunc(func(req *http.Request) *http.Response {
@@ -934,6 +833,7 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestNodeAddrResolve(t *testing.T) {
+	nettest.SkipIfNoNetwork(t)
 	c := &Client{
 		Logf:        t.Logf,
 		UseDNSCache: true,

@@ -43,8 +43,9 @@ type Client interface {
 	// Login begins an interactive or non-interactive login process.
 	// Client will eventually call the Status callback with either a
 	// LoginFinished flag (on success) or an auth URL (if further
-	// interaction is needed).
-	Login(*tailcfg.Oauth2Token, LoginFlags)
+	// interaction is needed). It merely sets the process in motion,
+	// and doesn't wait for it to complete.
+	Login(LoginFlags)
 	// Logout starts a synchronous logout process. It doesn't return
 	// until the logout operation has been completed.
 	Logout(context.Context) error

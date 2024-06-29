@@ -46,9 +46,6 @@ type Server struct {
 	// is true, the ForceDaemon pref can override this.
 	resetOnZero bool
 
-	startBackendOnce sync.Once
-	runCalled        atomic.Bool
-
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
@@ -471,16 +468,15 @@ func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server
 
 // SetLocalBackend sets the server's LocalBackend.
 //
-// If b.Run has already been called, then lb.Start will be called.
-// Otherwise Start will be called once Run is called.
+// It should only call be called after calling lb.Start.
 func (s *Server) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 	if lb == nil {
 		panic("nil LocalBackend")
 	}
+
 	if !s.lb.CompareAndSwap(nil, lb) {
 		panic("already set")
 	}
-	s.startBackendIfNeeded()
 
 	s.mu.Lock()
 	s.backendWaiter.wakeAll()
@@ -488,21 +484,6 @@ func (s *Server) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 
 	// TODO(bradfitz): send status update to GUI long poller waiter. See
 	// https://github.com/tailscale/tailscale/issues/6522
-}
-
-func (b *Server) startBackendIfNeeded() {
-	if !b.runCalled.Load() {
-		return
-	}
-	lb := b.lb.Load()
-	if lb == nil {
-		return
-	}
-	if lb.Prefs().Valid() {
-		b.startBackendOnce.Do(func() {
-			lb.Start(ipn.Options{})
-		})
-	}
 }
 
 // connIdentityContextKey is the http.Request.Context's context.Value key for either an
@@ -517,7 +498,6 @@ type connIdentityContextKey struct{}
 // If the Server's LocalBackend has already been set, Run starts it.
 // Otherwise, the next call to SetLocalBackend will start it.
 func (s *Server) Run(ctx context.Context, ln net.Listener) error {
-	s.runCalled.Store(true)
 	defer func() {
 		if lb := s.lb.Load(); lb != nil {
 			lb.Shutdown()
@@ -537,7 +517,6 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		ln.Close()
 	}()
 
-	s.startBackendIfNeeded()
 	systemd.Ready()
 
 	hs := &http.Server{

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/tstest"
 	"tailscale.com/util/must"
 	"tailscale.com/util/vizerror"
@@ -87,7 +88,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -104,7 +105,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -121,7 +122,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -137,7 +138,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -153,7 +154,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -171,7 +172,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -190,7 +191,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -208,7 +209,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -227,7 +228,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -245,7 +246,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -264,7 +265,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -282,7 +283,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -301,7 +302,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -319,7 +320,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -338,7 +339,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -355,7 +356,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(RequestIDKey.WithValue(bgCtx, exampleRequestID), "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -373,7 +374,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -390,7 +391,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -412,7 +413,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:    startTime,
+				Time:    startTime,
 				Seconds: 1.0,
 
 				Proto:      "HTTP/1.1",
@@ -432,7 +433,7 @@ func TestStdHandler(t *testing.T) {
 				http.Error(w, e.Msg, 200)
 			},
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -455,7 +456,7 @@ func TestStdHandler(t *testing.T) {
 				http.Error(w, fmt.Sprintf("%s with request ID %s", e.Msg, requestID), 200)
 			},
 			wantLog: AccessLogRecord{
-				When:       startTime,
+				Time:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -485,8 +486,15 @@ func TestStdHandler(t *testing.T) {
 				Step:  time.Second,
 			})
 
+			var onStartRecord, onCompletionRecord AccessLogRecord
 			rec := noopHijacker{httptest.NewRecorder(), false}
-			h := StdHandler(test.rh, HandlerOptions{Logf: logf, Now: clock.Now, OnError: test.errHandler})
+			h := StdHandler(test.rh, HandlerOptions{
+				Logf:         logf,
+				Now:          clock.Now,
+				OnError:      test.errHandler,
+				OnStart:      func(r *http.Request, alr AccessLogRecord) { onStartRecord = alr },
+				OnCompletion: func(r *http.Request, alr AccessLogRecord) { onCompletionRecord = alr },
+			})
 			h.ServeHTTP(&rec, test.r)
 			res := rec.Result()
 			if res.StatusCode != test.wantCode {
@@ -502,6 +510,13 @@ func TestStdHandler(t *testing.T) {
 				}
 				return e.Error()
 			})
+			if diff := cmp.Diff(onStartRecord, test.wantLog, errTransform, cmpopts.IgnoreFields(
+				AccessLogRecord{}, "Time", "Seconds", "Code", "Err")); diff != "" {
+				t.Errorf("onStart callback returned unexpected request log (-got+want):\n%s", diff)
+			}
+			if diff := cmp.Diff(onCompletionRecord, test.wantLog, errTransform); diff != "" {
+				t.Errorf("onCompletion callback returned incorrect request log (-got+want):\n%s", diff)
+			}
 			if diff := cmp.Diff(logs[0], test.wantLog, errTransform); diff != "" {
 				t.Errorf("handler wrote incorrect request log (-got+want):\n%s", diff)
 			}

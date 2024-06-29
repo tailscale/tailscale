@@ -188,11 +188,7 @@ func (v *MapView) UnmarshalJSON(b []byte) error {
 
 func (v MapView) Int() views.Map[string, int] { return views.MapOf(v.ж.Int) }
 
-func (v MapView) SliceInt() views.MapFn[string, []int, views.Slice[int]] {
-	return views.MapFnOf(v.ж.SliceInt, func(t []int) views.Slice[int] {
-		return views.SliceOf(t)
-	})
-}
+func (v MapView) SliceInt() views.MapSlice[string, int] { return views.MapSliceOf(v.ж.SliceInt) }
 
 func (v MapView) StructPtrWithPtr() views.MapFn[string, *StructWithPtrs, StructWithPtrsView] {
 	return views.MapFnOf(v.ж.StructPtrWithPtr, func(t *StructWithPtrs) StructWithPtrsView {

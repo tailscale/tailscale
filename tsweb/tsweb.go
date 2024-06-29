@@ -250,14 +250,28 @@ type HandlerOptions struct {
 	// for each bucket based on the contained parameters.
 	BucketedStats *BucketedStatsOptions
 
+	// OnStart is called inline before ServeHTTP is called. Optional.
+	OnStart OnStartFunc
+
 	// OnError is called if the handler returned a HTTPError. This
 	// is intended to be used to present pretty error pages if
 	// the user agent is determined to be a browser.
 	OnError ErrorHandlerFunc
+
+	// OnCompletion is called inline when ServeHTTP is finished and gets
+	// useful data that the implementor can use for metrics. Optional.
+	OnCompletion OnCompletionFunc
 }
 
 // ErrorHandlerFunc is called to present a error response.
 type ErrorHandlerFunc func(http.ResponseWriter, *http.Request, HTTPError)
+
+// OnStartFunc is called before ServeHTTP is called.
+type OnStartFunc func(*http.Request, AccessLogRecord)
+
+// OnCompletionFunc is called when ServeHTTP is finished and gets
+// useful data that the implementor can use for metrics.
+type OnCompletionFunc func(*http.Request, AccessLogRecord)
 
 // ReturnHandlerFunc is an adapter to allow the use of ordinary
 // functions as ReturnHandlers. If f is a function with the
@@ -299,7 +313,7 @@ type retHandler struct {
 // ServeHTTP implements the http.Handler interface.
 func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg := AccessLogRecord{
-		When:       h.opts.Now(),
+		Time:       h.opts.Now(),
 		RemoteAddr: r.RemoteAddr,
 		Proto:      r.Proto,
 		TLS:        r.TLS != nil,
@@ -312,7 +326,6 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var bucket string
-	bumpStartIfNeeded := func() {}
 	var startRecorded bool
 	if bs := h.opts.BucketedStats; bs != nil {
 		bucket = bs.bucketForRequest(r)
@@ -320,15 +333,17 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			switch v := bs.Started.Map.Get(bucket).(type) {
 			case *expvar.Int:
 				// If we've already seen this bucket for, count it immediately.
-				v.Add(1)
-				startRecorded = true
-			case nil:
 				// Otherwise, for newly seen paths, only count retroactively
 				// (so started-finished doesn't go negative) so we don't fill
 				// this LabelMap up with internet scanning spam.
-				bumpStartIfNeeded = func() { bs.Started.Add(bucket, 1) }
+				v.Add(1)
+				startRecorded = true
 			}
 		}
+	}
+
+	if fn := h.opts.OnStart; fn != nil {
+		fn(r, msg)
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
@@ -374,7 +389,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		lw.code = 200
 	}
 
-	msg.Seconds = h.opts.Now().Sub(msg.When).Seconds()
+	msg.Seconds = h.opts.Now().Sub(msg.Time).Seconds()
 	msg.Code = lw.code
 	msg.Bytes = lw.bytes
 
@@ -438,6 +453,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if h.opts.OnCompletion != nil {
+		h.opts.OnCompletion(r, msg)
+	}
+
 	if bs := h.opts.BucketedStats; bs != nil && bs.Finished != nil {
 		// Only increment metrics for buckets that result in good HTTP statuses
 		// or when we know the start was already counted.
@@ -445,8 +464,12 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// gets most of the way there but there are also plenty of URLs that are
 		// almost right but result in 400s too. Seem easier to just only ignore
 		// all 4xx and 5xx.
-		if startRecorded || msg.Code < 400 {
-			bumpStartIfNeeded()
+		if startRecorded {
+			bs.Finished.Add(bucket, 1)
+		} else if msg.Code < 400 {
+			// This is the first non-error request for this bucket,
+			// so count it now retroactively.
+			bs.Started.Add(bucket, 1)
 			bs.Finished.Add(bucket, 1)
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
@@ -25,6 +26,46 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
 )
+
+// rateLogger responds to calls to update by adding a count for the current period and
+// calling the callback if any previous period has finished since update was last called
+type rateLogger struct {
+	interval    time.Duration
+	start       time.Time
+	periodStart time.Time
+	periodCount int64
+	now         func() time.Time
+	callback    func(int64, time.Time, int64)
+}
+
+func (rl *rateLogger) currentIntervalStart(now time.Time) time.Time {
+	millisSince := now.Sub(rl.start).Milliseconds() % rl.interval.Milliseconds()
+	return now.Add(-(time.Duration(millisSince)) * time.Millisecond)
+}
+
+func (rl *rateLogger) update(numRoutes int64) {
+	now := rl.now()
+	periodEnd := rl.periodStart.Add(rl.interval)
+	if periodEnd.Before(now) {
+		if rl.periodCount != 0 {
+			rl.callback(rl.periodCount, rl.periodStart, numRoutes)
+		}
+		rl.periodCount = 0
+		rl.periodStart = rl.currentIntervalStart(now)
+	}
+	rl.periodCount++
+}
+
+func newRateLogger(now func() time.Time, interval time.Duration, callback func(int64, time.Time, int64)) *rateLogger {
+	nowTime := now()
+	return &rateLogger{
+		callback:    callback,
+		now:         now,
+		interval:    interval,
+		start:       nowTime,
+		periodStart: nowTime,
+	}
+}
 
 // RouteAdvertiser is an interface that allows the AppConnector to advertise
 // newly discovered routes that need to be served through the AppConnector.
@@ -81,6 +122,9 @@ type AppConnector struct {
 
 	// queue provides ordering for update operations
 	queue execqueue.ExecQueue
+
+	writeRateMinute *rateLogger
+	writeRateDay    *rateLogger
 }
 
 // NewAppConnector creates a new AppConnector.
@@ -95,6 +139,12 @@ func NewAppConnector(logf logger.Logf, routeAdvertiser RouteAdvertiser, routeInf
 		ac.wildcards = routeInfo.Wildcards
 		ac.controlRoutes = routeInfo.Control
 	}
+	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time, l int64) {
+		ac.logf("routeInfo write rate: %d in minute starting at %v (%d routes)", c, s, l)
+	})
+	ac.writeRateDay = newRateLogger(time.Now, 24*time.Hour, func(c int64, s time.Time, l int64) {
+		ac.logf("routeInfo write rate: %d in 24 hours starting at %v (%d routes)", c, s, l)
+	})
 	return ac
 }
 
@@ -109,6 +159,15 @@ func (e *AppConnector) storeRoutesLocked() error {
 	if !e.ShouldStoreRoutes() {
 		return nil
 	}
+
+	// log write rate and write size
+	numRoutes := int64(len(e.controlRoutes))
+	for _, rs := range e.domains {
+		numRoutes += int64(len(rs))
+	}
+	e.writeRateMinute.update(numRoutes)
+	e.writeRateDay.update(numRoutes)
+
 	return e.storeRoutesFunc(&RouteInfo{
 		Control:   e.controlRoutes,
 		Domains:   e.domains,
@@ -383,8 +442,10 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 			}
 		}
 
-		e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
-		e.scheduleAdvertisement(domain, toAdvertise...)
+		if len(toAdvertise) > 0 {
+			e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
+			e.scheduleAdvertisement(domain, toAdvertise...)
+		}
 	}
 }
 

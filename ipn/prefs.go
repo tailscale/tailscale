@@ -75,18 +75,6 @@ type Prefs struct {
 	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
-	// AllowSingleHosts specifies whether to install routes for each
-	// node IP on the tailscale network, in addition to a route for
-	// the whole network.
-	// This corresponds to the "tailscale up --host-routes" value,
-	// which defaults to true.
-	//
-	// TODO(danderson): why do we have this? It dumps a lot of stuff
-	// into the routing table, and a single network route _should_ be
-	// all that we need. But when I turn this off in my tailscaled,
-	// packets stop flowing. What's up with that?
-	AllowSingleHosts bool
-
 	// ExitNodeID and ExitNodeIP specify the node that should be used
 	// as an exit node for internet traffic. At most one of these
 	// should be non-zero.
@@ -203,6 +191,20 @@ type Prefs struct {
 	// Linux-only.
 	NoSNAT bool
 
+	// NoStatefulFiltering specifies whether to apply stateful filtering when
+	// advertising routes in AdvertiseRoutes. The default is to not apply
+	// stateful filtering.
+	//
+	// To allow inbound connections from advertised routes, both NoSNAT and
+	// NoStatefulFiltering must be true.
+	//
+	// This is an opt.Bool because it was first added after NoSNAT, with a
+	// backfill based on the value of that parameter. The backfill has been
+	// removed since then, but the field remains an opt.Bool.
+	//
+	// Linux-only.
+	NoStatefulFiltering opt.Bool `json:",omitempty"`
+
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
 	NetfilterMode preftype.NetfilterMode
@@ -237,6 +239,16 @@ type Prefs struct {
 	// by name.
 	DriveShares []*drive.Share
 
+	// AllowSingleHosts was a legacy field that was always true
+	// for the past 4.5 years. It controlled whether Tailscale
+	// peers got /32 or /127 routes for each other.
+	// As of 2024-05-17 we're starting to ignore it, but to let
+	// people still downgrade Tailscale versions and not break
+	// all peer-to-peer networking we still write it to disk (as JSON)
+	// so it can be loaded back by old versions.
+	// TODO(bradfitz): delete this in 2025 sometime. See #12058.
+	AllowSingleHosts marshalAsTrueInJSON
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -267,6 +279,13 @@ func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
 		ok1 == ok2
 }
 
+type marshalAsTrueInJSON struct{}
+
+var trueJSON = []byte("true")
+
+func (marshalAsTrueInJSON) MarshalJSON() ([]byte, error) { return trueJSON, nil }
+func (*marshalAsTrueInJSON) UnmarshalJSON([]byte) error  { return nil }
+
 // AppConnectorPrefs are the app connector settings for the node agent.
 type AppConnectorPrefs struct {
 	// Advertise specifies whether the app connector subsystem is advertising
@@ -284,7 +303,6 @@ type MaskedPrefs struct {
 
 	ControlURLSet             bool                `json:",omitempty"`
 	RouteAllSet               bool                `json:",omitempty"`
-	AllowSingleHostsSet       bool                `json:",omitempty"`
 	ExitNodeIDSet             bool                `json:",omitempty"`
 	ExitNodeIPSet             bool                `json:",omitempty"`
 	InternalExitNodePriorSet  bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
@@ -302,6 +320,7 @@ type MaskedPrefs struct {
 	EggSet                    bool                `json:",omitempty"`
 	AdvertiseRoutesSet        bool                `json:",omitempty"`
 	NoSNATSet                 bool                `json:",omitempty"`
+	NoStatefulFilteringSet    bool                `json:",omitempty"`
 	NetfilterModeSet          bool                `json:",omitempty"`
 	OperatorUserSet           bool                `json:",omitempty"`
 	ProfileNameSet            bool                `json:",omitempty"`
@@ -468,9 +487,6 @@ func (p *Prefs) pretty(goos string) string {
 	var sb strings.Builder
 	sb.WriteString("Prefs{")
 	fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
-	if !p.AllowSingleHosts {
-		sb.WriteString("mesh=false ")
-	}
 	fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
 	if p.RunSSH {
 		sb.WriteString("ssh=true ")
@@ -500,6 +516,13 @@ func (p *Prefs) pretty(goos string) string {
 	}
 	if len(p.AdvertiseRoutes) > 0 || p.NoSNAT {
 		fmt.Fprintf(&sb, "snat=%v ", !p.NoSNAT)
+	}
+	if len(p.AdvertiseRoutes) > 0 || p.NoStatefulFiltering.EqualBool(true) {
+		// Only print if we're advertising any routes, or the user has
+		// turned off stateful filtering (NoStatefulFiltering=true ⇒
+		// StatefulFiltering=false).
+		bb, _ := p.NoStatefulFiltering.Get()
+		fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
 	}
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
@@ -556,7 +579,6 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 
 	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
-		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
@@ -569,6 +591,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
+		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&
@@ -638,11 +661,11 @@ func NewPrefs() *Prefs {
 		// later anyway.
 		ControlURL: "",
 
-		RouteAll:         true,
-		AllowSingleHosts: true,
-		CorpDNS:          true,
-		WantRunning:      false,
-		NetfilterMode:    preftype.NetfilterOn,
+		RouteAll:            true,
+		CorpDNS:             true,
+		WantRunning:         false,
+		NetfilterMode:       preftype.NetfilterOn,
+		NoStatefulFiltering: opt.NewBool(true),
 		AutoUpdate: AutoUpdatePrefs{
 			Check: true,
 			Apply: opt.Bool("unset"),
@@ -851,24 +874,21 @@ func (p *Prefs) ShouldWebClientBeRunning() bool {
 	return p.WantRunning && p.RunWebClient
 }
 
-// PrefsFromBytes deserializes Prefs from a JSON blob.
-func PrefsFromBytes(b []byte) (*Prefs, error) {
-	p := NewPrefs()
+// PrefsFromBytes deserializes Prefs from a JSON blob b into base. Values in
+// base are preserved, unless they are populated in the JSON blob.
+func PrefsFromBytes(b []byte, base *Prefs) error {
 	if len(b) == 0 {
-		return p, nil
+		return nil
 	}
 
-	if err := json.Unmarshal(b, p); err != nil {
-		return nil, err
-	}
-	return p, nil
+	return json.Unmarshal(b, base)
 }
 
 var jsonEscapedZero = []byte(`\u0000`)
 
-// LoadPrefs loads a legacy relaynode config file into Prefs
-// with sensible migration defaults set.
-func LoadPrefs(filename string) (*Prefs, error) {
+// LoadPrefsWindows loads a legacy relaynode config file into Prefs with
+// sensible migration defaults set. Windows-only.
+func LoadPrefsWindows(filename string) (*Prefs, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("LoadPrefs open: %w", err) // err includes path
@@ -881,8 +901,8 @@ func LoadPrefs(filename string) (*Prefs, error) {
 		// to log in again. (better than crashing)
 		return nil, os.ErrNotExist
 	}
-	p, err := PrefsFromBytes(data)
-	if err != nil {
+	p := NewPrefs()
+	if err := PrefsFromBytes(data, p); err != nil {
 		return nil, fmt.Errorf("LoadPrefs(%q) decode: %w", filename, err)
 	}
 	return p, nil

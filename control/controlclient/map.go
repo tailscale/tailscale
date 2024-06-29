@@ -736,6 +736,10 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			if was.IsWireGuardOnly() != n.IsWireGuardOnly {
 				return nil, false
 			}
+		case "IsJailed":
+			if was.IsJailed() != n.IsJailed {
+				return nil, false
+			}
 		case "Expired":
 			if was.Expired() != n.Expired {
 				return nil, false

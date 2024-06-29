@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
@@ -257,7 +259,7 @@ func TestStateSavedOnStart(t *testing.T) {
 	n1.MustDown()
 
 	// And change the hostname to something:
-	if err := n1.Tailscale("up", "--login-server="+n1.env.ControlServer.URL, "--hostname=foo").Run(); err != nil {
+	if err := n1.Tailscale("up", "--login-server="+n1.env.controlURL(), "--hostname=foo").Run(); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 
@@ -287,9 +289,9 @@ func TestOneNodeUpAuth(t *testing.T) {
 	st := n1.MustStatus()
 	t.Logf("Status: %s", st.BackendState)
 
-	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
+	t.Logf("Running up --login-server=%s ...", env.controlURL())
 
-	cmd := n1.Tailscale("up", "--login-server="+env.ControlServer.URL)
+	cmd := n1.Tailscale("up", "--login-server="+env.controlURL())
 	var authCountAtomic int32
 	cmd.Stdout = &authURLParserWriter{fn: func(urlStr string) error {
 		if env.Control.CompleteAuth(urlStr) {
@@ -357,17 +359,49 @@ func TestTwoNodes(t *testing.T) {
 	n2SocksAddrCh := n2.socks5AddrChan()
 	d2 := n2.StartDaemon()
 
+	// Drop some logs to disk on test failure.
+	//
+	// TODO(bradfitz): make all nodes for all tests do this? give each node a
+	// unique integer within the test? But for now only do this test because
+	// this is what we often saw flaking.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		n1.mu.Lock()
+		n2.mu.Lock()
+		defer n1.mu.Unlock()
+		defer n2.mu.Unlock()
+
+		rxNoDates := regexp.MustCompile(`(?m)^\d{4}.\d{2}.\d{2}.\d{2}:\d{2}:\d{2}`)
+		cleanLog := func(n *testNode) []byte {
+			b := n.tailscaledParser.allBuf.Bytes()
+			b = rxNoDates.ReplaceAll(b, nil)
+			return b
+		}
+
+		t.Logf("writing tailscaled logs to n1.log and n2.log")
+		os.WriteFile("n1.log", cleanLog(n1), 0666)
+		os.WriteFile("n2.log", cleanLog(n2), 0666)
+	})
+
 	n1Socks := n1.AwaitSocksAddr(n1SocksAddrCh)
 	n2Socks := n1.AwaitSocksAddr(n2SocksAddrCh)
 	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
 	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
 
 	n1.AwaitListening()
+	t.Logf("n1 is listening")
 	n2.AwaitListening()
+	t.Logf("n2 is listening")
 	n1.MustUp()
+	t.Logf("n1 is up")
 	n2.MustUp()
+	t.Logf("n2 is up")
 	n1.AwaitRunning()
+	t.Logf("n1 is running")
 	n2.AwaitRunning()
+	t.Logf("n2 is running")
 
 	if err := tstest.WaitFor(2*time.Second, func() error {
 		st := n1.MustStatus()
@@ -690,6 +724,121 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+// TestClientSideJailing tests that when one node is jailed for another, the
+// jailed node cannot initiate connections to the other node however the other
+// node can initiate connections to the jailed node.
+func TestClientSideJailing(t *testing.T) {
+	tstest.Shard(t)
+	tstest.Parallel(t)
+	env := newTestEnv(t)
+	registerNode := func() (*testNode, key.NodePublic) {
+		n := newTestNode(t, env)
+		n.StartDaemon()
+		n.AwaitListening()
+		n.MustUp()
+		n.AwaitRunning()
+		k := n.MustStatus().Self.PublicKey
+		return n, k
+	}
+	n1, k1 := registerNode()
+	n2, k2 := registerNode()
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+
+	lc1 := &tailscale.LocalClient{
+		Socket:        n1.sockFile,
+		UseSocketOnly: true,
+	}
+	lc2 := &tailscale.LocalClient{
+		Socket:        n2.sockFile,
+		UseSocketOnly: true,
+	}
+
+	ip1 := n1.AwaitIP4()
+	ip2 := n2.AwaitIP4()
+
+	tests := []struct {
+		name          string
+		n1JailedForN2 bool
+		n2JailedForN1 bool
+	}{
+		{
+			name:          "not_jailed",
+			n1JailedForN2: false,
+			n2JailedForN1: false,
+		},
+		{
+			name:          "uni_jailed",
+			n1JailedForN2: true,
+			n2JailedForN1: false,
+		},
+		{
+			name:          "bi_jailed", // useless config?
+			n1JailedForN2: true,
+			n2JailedForN1: true,
+		},
+	}
+
+	testDial := func(t *testing.T, lc *tailscale.LocalClient, ip netip.Addr, port uint16, shouldFail bool) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c, err := lc.DialTCP(ctx, ip.String(), port)
+		failed := err != nil
+		if failed != shouldFail {
+			t.Errorf("failed = %v; want %v", failed, shouldFail)
+		}
+		if c != nil {
+			c.Close()
+		}
+	}
+
+	b1, err := lc1.WatchIPNBus(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, err := lc2.WatchIPNBus(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPeerIsJailed := func(t *testing.T, b *tailscale.IPNBusWatcher, jailed bool) {
+		t.Helper()
+		for {
+			n, err := b.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.NetMap == nil {
+				continue
+			}
+			if len(n.NetMap.Peers) == 0 {
+				continue
+			}
+			if j := n.NetMap.Peers[0].IsJailed(); j == jailed {
+				break
+			}
+		}
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env.Control.SetJailed(k1, k2, tc.n2JailedForN1)
+			env.Control.SetJailed(k2, k1, tc.n1JailedForN2)
+
+			// Wait for the jailed status to propagate.
+			waitPeerIsJailed(t, b1, tc.n2JailedForN1)
+			waitPeerIsJailed(t, b2, tc.n1JailedForN2)
+
+			testDial(t, lc1, ip2, port, tc.n1JailedForN2)
+			testDial(t, lc2, ip1, port, tc.n2JailedForN1)
+		})
+	}
+}
+
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
@@ -920,7 +1069,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 				// Should not be changed even if sent "true" later.
 				sendAndCheckDefault(t, n, true, false)
 				// But can be changed explicitly by the user.
-				if out, err := n.Tailscale("set", "--auto-update").CombinedOutput(); err != nil {
+				if out, err := n.TailscaleForOutput("set", "--auto-update").CombinedOutput(); err != nil {
 					t.Fatalf("failed to enable auto-update on node: %v\noutput: %s", err, out)
 				}
 				sendAndCheckDefault(t, n, false, true)
@@ -934,7 +1083,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 				// Should not be changed even if sent "false" later.
 				sendAndCheckDefault(t, n, false, true)
 				// But can be changed explicitly by the user.
-				if out, err := n.Tailscale("set", "--auto-update=false").CombinedOutput(); err != nil {
+				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
 				}
 				sendAndCheckDefault(t, n, true, false)
@@ -944,7 +1093,7 @@ func TestAutoUpdateDefaults(t *testing.T) {
 			desc: "user-sets-first",
 			run: func(t *testing.T, n *testNode) {
 				// User sets auto-update first, before receiving defaults.
-				if out, err := n.Tailscale("set", "--auto-update=false").CombinedOutput(); err != nil {
+				if out, err := n.TailscaleForOutput("set", "--auto-update=false").CombinedOutput(); err != nil {
 					t.Fatalf("failed to disable auto-update on node: %v\noutput: %s", err, out)
 				}
 				// Defaults sent from control should be ignored.
@@ -984,6 +1133,16 @@ type testEnv struct {
 
 	TrafficTrap       *trafficTrap
 	TrafficTrapServer *httptest.Server
+}
+
+// controlURL returns e.ControlServer.URL, panicking if it's the empty string,
+// which it should never be in tests.
+func (e *testEnv) controlURL() string {
+	s := e.ControlServer.URL
+	if s == "" {
+		panic("control server not set")
+	}
+	return s
 }
 
 type testEnvOpt interface {
@@ -1034,6 +1193,7 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 		e.TrafficTrapServer.Close()
 		e.ControlServer.Close()
 	})
+	t.Logf("control URL: %v", e.controlURL())
 	return e
 }
 
@@ -1041,7 +1201,8 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 // Currently, the test is simplistic and user==node==machine.
 // That may grow complexity later to test more.
 type testNode struct {
-	env *testEnv
+	env              *testEnv
+	tailscaledParser *nodeOutputParser
 
 	dir        string // temp dir for sock & state
 	configFile string // or empty for none
@@ -1072,11 +1233,16 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 
 	// Look for a data race. Once we see the start marker, start logging the rest.
 	var sawRace bool
+	var sawPanic bool
 	n.addLogLineHook(func(line []byte) {
-		if mem.Contains(mem.B(line), mem.S("WARNING: DATA RACE")) {
+		lineB := mem.B(line)
+		if mem.Contains(lineB, mem.S("WARNING: DATA RACE")) {
 			sawRace = true
 		}
-		if sawRace {
+		if mem.HasPrefix(lineB, mem.S("panic: ")) {
+			sawPanic = true
+		}
+		if sawRace || sawPanic {
 			t.Logf("%s", line)
 		}
 	})
@@ -1167,19 +1333,25 @@ func (n *testNode) AwaitSocksAddr(ch <-chan string) string {
 // per-line callbacks previously registered via
 // testNode.addLogLineHook.
 type nodeOutputParser struct {
-	buf bytes.Buffer
-	n   *testNode
+	allBuf      bytes.Buffer
+	pendLineBuf bytes.Buffer
+	n           *testNode
 }
 
 func (op *nodeOutputParser) Write(p []byte) (n int, err error) {
-	n, err = op.buf.Write(p)
-	op.parseLines()
+	tn := op.n
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+
+	op.allBuf.Write(p)
+	n, err = op.pendLineBuf.Write(p)
+	op.parseLinesLocked()
 	return
 }
 
-func (op *nodeOutputParser) parseLines() {
+func (op *nodeOutputParser) parseLinesLocked() {
 	n := op.n
-	buf := op.buf.Bytes()
+	buf := op.pendLineBuf.Bytes()
 	for len(buf) > 0 {
 		nl := bytes.IndexByte(buf, '\n')
 		if nl == -1 {
@@ -1188,16 +1360,14 @@ func (op *nodeOutputParser) parseLines() {
 		line := buf[:nl+1]
 		buf = buf[nl+1:]
 
-		n.mu.Lock()
 		for _, f := range n.onLogLine {
 			f(line)
 		}
-		n.mu.Unlock()
 	}
 	if len(buf) == 0 {
-		op.buf.Reset()
+		op.pendLineBuf.Reset()
 	} else {
-		io.CopyN(io.Discard, &op.buf, int64(op.buf.Len()-len(buf)))
+		io.CopyN(io.Discard, &op.pendLineBuf, int64(op.pendLineBuf.Len()-len(buf)))
 	}
 }
 
@@ -1249,11 +1419,16 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_DEBUG_FAKE_GOOS="+ipnGOOS,
 		"TS_LOGS_DIR="+t.TempDir(),
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
+		"TS_ASSUME_NETWORK_UP_FOR_TEST=1", // don't pause control client in airplane mode (no wifi, etc)
+		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
+		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
+		"TS_DEBUG_LOG_RATE=all",
 	)
 	if version.IsRace() {
 		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
 	}
-	cmd.Stderr = &nodeOutputParser{n: n}
+	n.tailscaledParser = &nodeOutputParser{n: n}
+	cmd.Stderr = n.tailscaledParser
 	if *verboseTailscaled {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
@@ -1281,7 +1456,7 @@ func (n *testNode) MustUp(extraArgs ...string) {
 	t.Helper()
 	args := []string{
 		"up",
-		"--login-server=" + n.env.ControlServer.URL,
+		"--login-server=" + n.env.controlURL(),
 		"--reset",
 	}
 	args = append(args, extraArgs...)
@@ -1322,7 +1497,7 @@ func (n *testNode) Ping(otherNode *testNode) error {
 func (n *testNode) AwaitListening() {
 	t := n.env.t
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
-		c, err := safesocket.Connect(n.sockFile)
+		c, err := safesocket.ConnectContext(context.Background(), n.sockFile)
 		if err == nil {
 			c.Close()
 		}
@@ -1421,6 +1596,13 @@ func (n *testNode) AwaitNeedsLogin() {
 	}
 }
 
+func (n *testNode) TailscaleForOutput(arg ...string) *exec.Cmd {
+	cmd := n.Tailscale(arg...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd
+}
+
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
 func (n *testNode) Tailscale(arg ...string) *exec.Cmd {
@@ -1478,7 +1660,7 @@ func (tt *trafficTrap) Err() error {
 func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var got bytes.Buffer
 	r.Write(&got)
-	err := fmt.Errorf("unexpected HTTP proxy via proxy: %s", got.Bytes())
+	err := fmt.Errorf("unexpected HTTP request via proxy: %s", got.Bytes())
 	mainError.Store(err)
 	if tt.Err() == nil {
 		// Best effort at remembering the first request.

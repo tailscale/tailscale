@@ -5,16 +5,22 @@ package filter
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/net/flowtrack"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -22,6 +28,9 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
+	"tailscale.com/util/must"
+	"tailscale.com/wgengine/filter/filtertype"
 )
 
 // testAllowedProto is an IP protocol number we treat as allowed for
@@ -31,14 +40,32 @@ const (
 	testDeniedProto  ipproto.Proto = 127 // CRUDP, appropriately cruddy
 )
 
-func m(srcs []netip.Prefix, dsts []NetPortRange, protos ...ipproto.Proto) Match {
-	if protos == nil {
+// m returnns a Match with the given srcs and dsts.
+//
+// opts can be ipproto.Proto values (if none, defaultProtos is used)
+// or tailcfg.NodeCapability values. Other values panic.
+func m(srcs []netip.Prefix, dsts []NetPortRange, opts ...any) Match {
+	var protos []ipproto.Proto
+	var caps []tailcfg.NodeCapability
+	for _, o := range opts {
+		switch o := o.(type) {
+		case ipproto.Proto:
+			protos = append(protos, o)
+		case tailcfg.NodeCapability:
+			caps = append(caps, o)
+		default:
+			panic(fmt.Sprintf("unknown option type %T", o))
+		}
+	}
+	if len(protos) == 0 {
 		protos = defaultProtos
 	}
 	return Match{
-		IPProto: protos,
-		Srcs:    srcs,
-		Dsts:    dsts,
+		IPProto:      views.SliceOf(protos),
+		Srcs:         srcs,
+		SrcsContains: ipset.NewContainsIPFunc(views.SliceOf(srcs)),
+		SrcCaps:      caps,
+		Dsts:         dsts,
 	}
 }
 
@@ -55,6 +82,7 @@ func newFilter(logf logger.Logf) *Filter {
 		m(nets("::/0"), netports("::/0:443")),
 		m(nets("0.0.0.0/0"), netports("0.0.0.0/0:*"), testAllowedProto),
 		m(nets("::/0"), netports("::/0:*"), testAllowedProto),
+		m(nil, netports("1.2.3.4:22"), tailcfg.NodeCapability("cap-hit-1234-ssh")),
 	}
 
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
@@ -69,11 +97,17 @@ func newFilter(logf logger.Logf) *Filter {
 	localNetsSet, _ := localNets.IPSet()
 	logBSet, _ := logB.IPSet()
 
-	return New(matches, localNetsSet, logBSet, nil, logf)
+	return New(matches, nil, localNetsSet, logBSet, nil, logf)
 }
 
 func TestFilter(t *testing.T) {
-	acl := newFilter(t.Logf)
+	filt := newFilter(t.Logf)
+
+	ipWithCap := netip.MustParseAddr("10.0.0.1")
+	ipWithoutCap := netip.MustParseAddr("10.0.0.2")
+	filt.srcIPHasCap = func(ip netip.Addr, cap tailcfg.NodeCapability) bool {
+		return cap == "cap-hit-1234-ssh" && ip == ipWithCap
+	}
 
 	type InOut struct {
 		want Response
@@ -129,21 +163,27 @@ func TestFilter(t *testing.T) {
 		{Accept, parsed(testAllowedProto, "2001::1", "2001::2", 0, 0)},
 		{Drop, parsed(testDeniedProto, "1.2.3.4", "5.6.7.8", 0, 0)},
 		{Drop, parsed(testDeniedProto, "2001::1", "2001::2", 0, 0)},
+
+		// Test use of a node capability to grant access.
+		// 10.0.0.1 has the capability; 10.0.0.2 does not (see srcIPHasCap at top of func)
+		{Accept, parsed(ipproto.TCP, ipWithCap.String(), "1.2.3.4", 30000, 22)},
+		{Drop, parsed(ipproto.TCP, ipWithoutCap.String(), "1.2.3.4", 30000, 22)},
 	}
 	for i, test := range tests {
-		aclFunc := acl.runIn4
+		aclFunc := filt.runIn4
 		if test.p.IPVersion == 6 {
-			aclFunc = acl.runIn6
+			aclFunc = filt.runIn6
 		}
 		if got, why := aclFunc(&test.p); test.want != got {
 			t.Errorf("#%d runIn got=%v want=%v why=%q packet:%v", i, got, test.want, why, test.p)
+			continue
 		}
 		if test.p.IPProto == ipproto.TCP {
 			var got Response
 			if test.p.IPVersion == 4 {
-				got = acl.CheckTCP(test.p.Src.Addr(), test.p.Dst.Addr(), test.p.Dst.Port())
+				got = filt.CheckTCP(test.p.Src.Addr(), test.p.Dst.Addr(), test.p.Dst.Port())
 			} else {
-				got = acl.CheckTCP(test.p.Src.Addr(), test.p.Dst.Addr(), test.p.Dst.Port())
+				got = filt.CheckTCP(test.p.Src.Addr(), test.p.Dst.Addr(), test.p.Dst.Port())
 			}
 			if test.want != got {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
@@ -155,7 +195,7 @@ func TestFilter(t *testing.T) {
 			}
 		}
 		// Update UDP state
-		_, _ = acl.runOut(&test.p)
+		_, _ = filt.runOut(&test.p)
 	}
 }
 
@@ -241,42 +281,55 @@ func TestNoAllocs(t *testing.T) {
 func TestParseIPSet(t *testing.T) {
 	tests := []struct {
 		host    string
-		bits    int
 		want    []netip.Prefix
 		wantErr string
 	}{
-		{"8.8.8.8", 24, pfx("8.8.8.8/24"), ""},
-		{"2601:1234::", 64, pfx("2601:1234::/64"), ""},
-		{"8.8.8.8", 33, nil, `invalid CIDR size 33 for IP "8.8.8.8"`},
-		{"8.8.8.8", -1, pfx("8.8.8.8/32"), ""},
-		{"8.8.8.8", 32, pfx("8.8.8.8/32"), ""},
-		{"8.8.8.8/24", -1, nil, "8.8.8.8/24 contains non-network bits set"},
-		{"8.8.8.0/24", 18, pfx("8.8.8.0/24"), ""}, // the 18 is ignored
-		{"1.0.0.0-1.255.255.255", 5, pfx("1.0.0.0/8"), ""},
-		{"1.0.0.0-2.1.2.3", 5, pfx("1.0.0.0/8", "2.0.0.0/16", "2.1.0.0/23", "2.1.2.0/30"), ""},
-		{"1.0.0.2-1.0.0.1", -1, nil, "invalid IP range \"1.0.0.2-1.0.0.1\""},
-		{"2601:1234::", 129, nil, `invalid CIDR size 129 for IP "2601:1234::"`},
-		{"0.0.0.0", 24, pfx("0.0.0.0/24"), ""},
-		{"::", 64, pfx("::/64"), ""},
-		{"*", 24, pfx("0.0.0.0/0", "::/0"), ""},
+		{"8.8.8.8", pfx("8.8.8.8/32"), ""},
+		{"1::2", pfx("1::2/128"), ""},
+		{"8.8.8.0/24", pfx("8.8.8.0/24"), ""},
+		{"8.8.8.8/24", nil, "8.8.8.8/24 contains non-network bits set"},
+		{"1.0.0.0-1.255.255.255", pfx("1.0.0.0/8"), ""},
+		{"1.0.0.0-2.1.2.3", pfx("1.0.0.0/8", "2.0.0.0/16", "2.1.0.0/23", "2.1.2.0/30"), ""},
+		{"1.0.0.2-1.0.0.1", nil, "invalid IP range \"1.0.0.2-1.0.0.1\""},
+		{"*", pfx("0.0.0.0/0", "::/0"), ""},
 	}
 	for _, tt := range tests {
-		var bits *int
-		if tt.bits != -1 {
-			bits = &tt.bits
-		}
-		got, err := parseIPSet(tt.host, bits)
+		got, gotCap, err := parseIPSet(tt.host)
 		if err != nil {
 			if err.Error() == tt.wantErr {
 				continue
 			}
-			t.Errorf("parseIPSet(%q, %v) error: %v; want error %q", tt.host, tt.bits, err, tt.wantErr)
+			t.Errorf("parseIPSet(%q) error: %v; want error %q", tt.host, err, tt.wantErr)
+		}
+		if gotCap != "" {
+			t.Errorf("parseIPSet(%q) cap: %q; want empty", tt.host, gotCap)
 		}
 		compareIP := cmp.Comparer(func(a, b netip.Addr) bool { return a == b })
 		compareIPPrefix := cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })
 		if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
-			t.Errorf("parseIPSet(%q, %v) = %s; want %s", tt.host, tt.bits, got, tt.want)
+			t.Errorf("parseIPSet(%q) = %s; want %s", tt.host, got, tt.want)
 			continue
+		}
+	}
+
+	capTests := []struct {
+		in   string
+		want tailcfg.NodeCapability
+	}{
+		{"cap:foo", "foo"},
+		{"cap:people-in-8.8.8.0/24", "people-in-8.8.8.0/24"}, // test precedence of "/" search
+	}
+	for _, tt := range capTests {
+		pfxes, gotCap, err := parseIPSet(tt.in)
+		if err != nil {
+			t.Errorf("parseIPSet(%q) error: %v; want no error", tt.in, err)
+			continue
+		}
+		if gotCap != tt.want {
+			t.Errorf("parseIPSet(%q) cap: %q; want %q", tt.in, gotCap, tt.want)
+		}
+		if len(pfxes) != 0 {
+			t.Errorf("parseIPSet(%q) pfxes: %v; want empty", tt.in, pfxes)
 		}
 	}
 }
@@ -432,11 +485,12 @@ func TestLoggingPrivacy(t *testing.T) {
 		logged = true
 	}
 
-	var logB netipx.IPSetBuilder
-	logB.AddPrefix(netip.MustParsePrefix("100.64.0.0/10"))
-	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
-	f.logIPs, _ = logB.IPSet()
+	f.logIPs4 = ipset.NewContainsIPFunc(views.SliceOf([]netip.Prefix{
+		tsaddr.CGNATRange(),
+		tsaddr.TailscaleULARange(),
+	}))
+	f.logIPs6 = f.logIPs4
 
 	var (
 		ts4       = netip.AddrPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
@@ -694,7 +748,7 @@ func nets(nets ...string) (ret []netip.Prefix) {
 
 func ports(s string) PortRange {
 	if s == "*" {
-		return allPorts
+		return filtertype.AllPorts
 	}
 
 	var fs, ls string
@@ -756,12 +810,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			},
 			want: []Match{
 				{
-					IPProto: []ipproto.Proto{
-						ipproto.TCP,
-						ipproto.UDP,
-						ipproto.ICMPv4,
-						ipproto.ICMPv6,
-					},
+					IPProto: defaultProtosView,
 					Dsts: []NetPortRange{
 						{
 							Net:   netip.MustParsePrefix("0.0.0.0/0"),
@@ -793,9 +842,9 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			},
 			want: []Match{
 				{
-					IPProto: []ipproto.Proto{
+					IPProto: views.SliceOf([]ipproto.Proto{
 						ipproto.TCP,
-					},
+					}),
 					Dsts: []NetPortRange{
 						{
 							Net:   netip.MustParsePrefix("1.2.0.0/16"),
@@ -816,10 +865,13 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			compareIP := cmp.Comparer(func(a, b netip.Addr) bool { return a == b })
-			compareIPPrefix := cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })
-			if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
+			cmpOpts := []cmp.Option{
+				cmp.Comparer(func(a, b netip.Addr) bool { return a == b }),
+				cmp.Comparer(func(a, b netip.Prefix) bool { return a == b }),
+				cmp.Comparer(func(a, b views.Slice[ipproto.Proto]) bool { return views.SliceEqual(a, b) }),
+				cmpopts.IgnoreFields(Match{}, ".SrcsContains"),
+			}
+			if diff := cmp.Diff(got, tt.want, cmpOpts...); diff != "" {
 				t.Errorf("wrong (-got+want)\n%s", diff)
 			}
 		})
@@ -906,7 +958,7 @@ func TestPeerCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filt := New(mm, nil, nil, nil, t.Logf)
+	filt := New(mm, nil, nil, nil, nil, t.Logf)
 	tests := []struct {
 		name     string
 		src, dst string // IP
@@ -952,5 +1004,138 @@ func TestPeerCaps(t *testing.T) {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+var (
+	filterMatchFile = flag.String("filter-match-file", "", "JSON file of []filter.Match to benchmark")
+)
+
+func BenchmarkFilterMatchFile(b *testing.B) {
+	if *filterMatchFile == "" {
+		b.Skip("no --filter-match-file specified; skipping")
+	}
+	benchmarkFile(b, *filterMatchFile, benchOpt{v4: true, validLocalDst: true})
+}
+
+func BenchmarkFilterMatch(b *testing.B) {
+	b.Run("not-local-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: true, validLocalDst: false})
+	})
+	b.Run("not-local-v6", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: false})
+	})
+	b.Run("no-match-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: true, validLocalDst: true})
+	})
+	b.Run("no-match-v6", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{v4: false, validLocalDst: true})
+	})
+	b.Run("tcp-not-syn-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			tcpNotSYN:     true,
+			wantAccept:    true,
+		})
+	})
+	b.Run("udp-existing-flow-v4", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			udp:           true,
+			udpOpen:       true,
+			wantAccept:    true,
+		})
+	})
+	b.Run("tcp-not-syn-v4-no-logs", func(b *testing.B) {
+		benchmarkFile(b, "testdata/matches-1.json", benchOpt{
+			v4:            true,
+			validLocalDst: true,
+			tcpNotSYN:     true,
+			wantAccept:    true,
+			noLogs:        true,
+		})
+	})
+}
+
+type benchOpt struct {
+	v4            bool
+	validLocalDst bool
+	tcpNotSYN     bool
+	noLogs        bool
+	wantAccept    bool
+	udp, udpOpen  bool
+}
+
+func benchmarkFile(b *testing.B, file string, opt benchOpt) {
+	var matches []Match
+	bts, err := os.ReadFile(file)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := json.Unmarshal(bts, &matches); err != nil {
+		b.Fatal(err)
+	}
+
+	var localNets netipx.IPSetBuilder
+	pfx := []netip.Prefix{
+		netip.MustParsePrefix("100.96.14.120/32"),
+		netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4843:cd96:6260:e78/128"),
+	}
+	for _, p := range pfx {
+		localNets.AddPrefix(p)
+	}
+
+	var logIPs netipx.IPSetBuilder
+	logIPs.AddPrefix(tsaddr.CGNATRange())
+	logIPs.AddPrefix(tsaddr.TailscaleULARange())
+
+	f := New(matches, nil, must.Get(localNets.IPSet()), must.Get(logIPs.IPSet()), nil, logger.Discard)
+	var srcIP, dstIP netip.Addr
+	if opt.v4 {
+		srcIP = netip.MustParseAddr("1.2.3.4")
+		dstIP = pfx[0].Addr()
+	} else {
+		srcIP = netip.MustParseAddr("2012::3456")
+		dstIP = pfx[1].Addr()
+	}
+	if !opt.validLocalDst {
+		dstIP = dstIP.Next() // to make it not in localNets
+	}
+	proto := ipproto.TCP
+	if opt.udp {
+		proto = ipproto.UDP
+	}
+	const sport = 33123
+	const dport = 443
+	pkt := parsed(proto, srcIP.String(), dstIP.String(), sport, dport)
+	if opt.tcpNotSYN {
+		pkt.TCPFlags = packet.TCPPsh // anything that's not SYN
+	}
+	if opt.udpOpen {
+		tuple := flowtrack.MakeTuple(proto,
+			netip.AddrPortFrom(srcIP, sport),
+			netip.AddrPortFrom(dstIP, dport),
+		)
+		f.state.mu.Lock()
+		f.state.lru.Add(tuple, struct{}{})
+		f.state.mu.Unlock()
+	}
+
+	want := Drop
+	if opt.wantAccept {
+		want = Accept
+	}
+	runFlags := LogDrops | LogAccepts
+	if opt.noLogs {
+		runFlags = 0
+	}
+
+	for range b.N {
+		got := f.RunIn(&pkt, runFlags)
+		if got != want {
+			b.Fatalf("got %v; want %v", got, want)
+		}
 	}
 }

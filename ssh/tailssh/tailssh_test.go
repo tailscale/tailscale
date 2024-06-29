@@ -281,7 +281,11 @@ func (ts *localState) NetMap() *netmap.NetworkMap {
 	}
 }
 
-func (ts *localState) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+func (ts *localState) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+	if proto != "tcp" {
+		return tailcfg.NodeView{}, tailcfg.UserProfile{}, false
+	}
+
 	return (&tailcfg.Node{
 			ID:       2,
 			StableID: "peer-id",

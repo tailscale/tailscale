@@ -137,14 +137,13 @@ func TestExpandProxyTargetDev(t *testing.T) {
 		wantErr          bool
 	}{
 		{name: "port-only", input: "8080", expected: "http://127.0.0.1:8080"},
-		{name: "hostname+port", input: "localhost:8080", expected: "http://127.0.0.1:8080"},
-		{name: "convert-localhost", input: "http://localhost:8080", expected: "http://127.0.0.1:8080"},
+		{name: "hostname+port", input: "localhost:8080", expected: "http://localhost:8080"},
 		{name: "no-change", input: "http://127.0.0.1:8080", expected: "http://127.0.0.1:8080"},
 		{name: "include-path", input: "http://127.0.0.1:8080/foo", expected: "http://127.0.0.1:8080/foo"},
-		{name: "https-scheme", input: "https://localhost:8080", expected: "https://127.0.0.1:8080"},
-		{name: "https+insecure-scheme", input: "https+insecure://localhost:8080", expected: "https+insecure://127.0.0.1:8080"},
-		{name: "change-default-scheme", input: "localhost:8080", defaultScheme: "https", expected: "https://127.0.0.1:8080"},
-		{name: "change-supported-schemes", input: "localhost:8080", defaultScheme: "tcp", supportedSchemes: []string{"tcp"}, expected: "tcp://127.0.0.1:8080"},
+		{name: "https-scheme", input: "https://localhost:8080", expected: "https://localhost:8080"},
+		{name: "https+insecure-scheme", input: "https+insecure://localhost:8080", expected: "https+insecure://localhost:8080"},
+		{name: "change-default-scheme", input: "localhost:8080", defaultScheme: "https", expected: "https://localhost:8080"},
+		{name: "change-supported-schemes", input: "localhost:8080", defaultScheme: "tcp", supportedSchemes: []string{"tcp"}, expected: "tcp://localhost:8080"},
 
 		// errors
 		{name: "invalid-port", input: "localhost:9999999", wantErr: true},

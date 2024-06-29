@@ -7,6 +7,7 @@ package derp
 
 import "context"
 
-func (c *sclient) statsLoop(ctx context.Context) error {
-	return nil
+func (c *sclient) startStatsLoop(ctx context.Context) {
+	// Nothing to do
+	return
 }

@@ -49,7 +49,7 @@ func TestImpersonationHeaders(t *testing.T) {
 			name:     "user-with-cap",
 			emailish: "foo@example.com",
 			capMap: tailcfg.PeerCapMap{
-				capabilityName: {
+				tailcfg.PeerCapabilityKubernetes: {
 					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group2"]}}`),
 					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group3"]}}`), // One group is duplicated.
 					tailcfg.RawMessage(`{"impersonate":{"groups":["group4"]}}`),
@@ -71,8 +71,22 @@ func TestImpersonationHeaders(t *testing.T) {
 			emailish: "tagged-device",
 			tags:     []string{"tag:foo", "tag:bar"},
 			capMap: tailcfg.PeerCapMap{
-				capabilityName: {
+				tailcfg.PeerCapabilityKubernetes: {
 					tailcfg.RawMessage(`{"impersonate":{"groups":["group1"]}}`),
+				},
+			},
+			wantHeaders: http.Header{
+				"Impersonate-Group": {"group1"},
+				"Impersonate-User":  {"node.ts.net"},
+			},
+		},
+		{
+			name:     "mix-of-caps",
+			emailish: "tagged-device",
+			tags:     []string{"tag:foo", "tag:bar"},
+			capMap: tailcfg.PeerCapMap{
+				tailcfg.PeerCapabilityKubernetes: {
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1"]},"recorder":["tag:foo"],"enforceRecorder":true}`),
 				},
 			},
 			wantHeaders: http.Header{
@@ -85,7 +99,7 @@ func TestImpersonationHeaders(t *testing.T) {
 			emailish: "tagged-device",
 			tags:     []string{"tag:foo", "tag:bar"},
 			capMap: tailcfg.PeerCapMap{
-				capabilityName: {
+				tailcfg.PeerCapabilityKubernetes: {
 					tailcfg.RawMessage(`[]`),
 				},
 			},

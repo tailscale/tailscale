@@ -153,11 +153,36 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 				m.Answer = append(m.Answer, rr)
 			}
 		case dns.TypeAAAA:
-			// TODO (irbekrm): implement IPv6 support.
-			// Kubernetes distributions that I am most familiar with
-			// default to IPv4 for Pod CIDR ranges and often many cases don't
-			// support IPv6 at all, so this should not be crucial for now.
-			fallthrough
+			// TODO (irbekrm): add IPv6 support.
+			// The nameserver currently does not support IPv6
+			// (records are not being created for IPv6 Pod addresses).
+			// However, we can expect that some callers will
+			// nevertheless send AAAA queries.
+			// We have to return NOERROR if a query is received for
+			// an AAAA record for a DNS name that we have an A
+			// record for- else the caller might not follow with an
+			// A record query.
+			// https://github.com/tailscale/tailscale/issues/12321
+			// https://datatracker.ietf.org/doc/html/rfc4074
+			q := r.Question[0].Name
+			fqdn, err := dnsname.ToFQDN(q)
+			if err != nil {
+				m = r.SetRcodeFormatError(r)
+				return
+			}
+			// The only supported use of this nameserver is as a
+			// single source of truth for MagicDNS names by
+			// non-tailnet Kubernetes workloads.
+			m.Authoritative = true
+			ips := n.lookupIP4(fqdn)
+			if len(ips) == 0 {
+				// As we are the authoritative nameserver for MagicDNS
+				// names, if we do not have a record for this MagicDNS
+				// name, it does not exist.
+				m = m.SetRcode(r, dns.RcodeNameError)
+				return
+			}
+			m.SetRcode(r, dns.RcodeSuccess)
 		default:
 			log.Printf("[unexpected] nameserver received a query for an unsupported record type: %s", r.Question[0].String())
 			m.SetRcode(r, dns.RcodeNotImplemented)

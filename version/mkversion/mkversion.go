@@ -291,7 +291,10 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 		// so that we we're still in the same range. This way if Apple goes back to
 		// auto-incrementing the number for us, we can go back to it with
 		// reasonable-looking numbers.
-		ret.XcodeMacOS = fmt.Sprintf("%d.%d.%d", otherTime.Year()-1750, otherTime.YearDay(), otherTime.Hour()*60*60+otherTime.Minute()*60+otherTime.Second())
+		// In May 2024, a build with version number 275 was uploaded to the App Store
+		// by mistake, causing any 274.* build to be rejected. To address this, +1 was
+		// added, causing all builds to use the 275.* prefix.
+		ret.XcodeMacOS = fmt.Sprintf("%d.%d.%d", otherTime.Year()-1750+1, otherTime.YearDay(), otherTime.Hour()*60*60+otherTime.Minute()*60+otherTime.Second())
 	}
 
 	return ret, nil

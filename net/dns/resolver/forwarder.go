@@ -211,6 +211,12 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+
+	// missingUpstreamRecovery, if non-nil, is set called when a SERVFAIL is
+	// returned due to missing upstream resolvers.
+	//
+	// This should attempt to properly (re)set the upstream resolvers.
+	missingUpstreamRecovery func()
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *forwarder {
@@ -391,20 +397,8 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	if err != nil {
 		return nil, false
 	}
-	// NOTE: use f.dialer.SystemDial so we close connections on a link
-	// change; on mobile devices when switching between WiFi and cellular,
-	// we need to ensure we don't retain a connection on the old interface
-	// or we can block DNS resolution.
-	//
-	// NOTE: if we ever support arbitrary user-defined DoH providers, this
-	// isn't sufficient; we'd need a dialer that dial a DoH server on the
-	// internet, without going through Tailscale (as SystemDial does), but
-	// also can dial a node on the tailnet (e.g. a PiHole).
-	//
-	// As of the time of writing (2024-02-11), this isn't a problem because
-	// we only support a restricted set of public DoH providers that aren't
-	// on a user's tailnet.
-	dialer := dnscache.Dialer(f.dialer.SystemDial, &dnscache.Resolver{
+
+	dialer := dnscache.Dialer(f.getDialerType(), &dnscache.Resolver{
 		SingleHost:             dohURL.Hostname(),
 		SingleHostStaticResult: allIPs,
 		Logf:                   f.logf,
@@ -699,6 +693,23 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
+func (f *forwarder) getDialerType() dnscache.DialContextFunc {
+	if f.controlKnobs != nil && f.controlKnobs.UserDialUseRoutes.Load() {
+		// It is safe to use UserDial as it dials external servers without going through Tailscale
+		// and closes connections on interface change in the same way as SystemDial does,
+		// thus preventing DNS resolution issues when switching between WiFi and cellular,
+		// but can also dial an internal DNS server on the Tailnet or via a subnet router.
+		//
+		// TODO(nickkhyl): Update tsdial.Dialer to reuse the bart.Table we create in net/tstun.Wrapper
+		// to avoid having two bart tables in memory, especially on iOS. Once that's done,
+		// we can get rid of the nodeAttr/control knob and always use UserDial for DNS.
+		//
+		// See https://github.com/tailscale/tailscale/issues/12027.
+		return f.dialer.UserDial
+	}
+	return f.dialer.SystemDial
+}
+
 func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	ipp, ok := rr.name.IPPort()
 	if !ok {
@@ -717,7 +728,7 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	ctx, cancel := context.WithTimeout(ctx, tcpQueryTimeout)
 	defer cancel()
 
-	conn, err := f.dialer.SystemDial(ctx, tcpFam, ipp.String())
+	conn, err := f.getDialerType()(ctx, tcpFam, ipp.String())
 	if err != nil {
 		return nil, err
 	}
@@ -876,6 +887,14 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		if len(resolvers) == 0 {
 			metricDNSFwdErrorNoUpstream.Add(1)
 			f.logf("no upstream resolvers set, returning SERVFAIL")
+
+			// Attempt to recompile the DNS configuration
+			// If we are being asked to forward queries and we have no
+			// nameservers, the network is in a bad state.
+			if f.missingUpstreamRecovery != nil {
+				f.missingUpstreamRecovery()
+			}
+
 			res, err := servfailResponse(query)
 			if err != nil {
 				f.logf("building servfail response: %v", err)

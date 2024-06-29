@@ -15,8 +15,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"sync"
@@ -41,6 +39,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/metrics"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -55,7 +54,6 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -333,7 +331,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		driveForLocal:         driveForLocal,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
-	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
+	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
@@ -571,10 +569,10 @@ var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	var selfNode tailcfg.NodeView
 	if nm != nil {
-		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.GetAddresses()))
+		ns.atomicIsLocalIPFunc.Store(ipset.NewContainsIPFunc(nm.GetAddresses()))
 		selfNode = nm.SelfNode
 	} else {
-		ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
+		ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	}
 
 	oldPfx := make(map[netip.Prefix]bool)
@@ -670,22 +668,71 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		return filter.DropSilently
 	}
 
-	// If it's not traffic to the service IP (e.g. magicDNS or Taildrive) we don't
-	// care; resume processing.
-	if dst := p.Dst.Addr(); dst != serviceIP && dst != serviceIPv6 {
+	// Determine if we care about this local packet.
+	dst := p.Dst.Addr()
+	switch {
+	case dst == serviceIP || dst == serviceIPv6:
+		// We want to intercept some traffic to the "service IP" (e.g.
+		// 100.100.100.100 for IPv4). However, of traffic to the
+		// service IP, we only care about UDP 53, and TCP on port 53,
+		// 80, and 8080.
+		switch p.IPProto {
+		case ipproto.TCP:
+			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 {
+				return filter.Accept
+			}
+		case ipproto.UDP:
+			if port := p.Dst.Port(); port != 53 {
+				return filter.Accept
+			}
+		}
+	case viaRange.Contains(dst):
+		// We need to handle 4via6 packets leaving the host if the via
+		// route is for this host; otherwise the packet will be dropped
+		// because nothing will translate it.
+		var shouldHandle bool
+		if p.IPVersion == 6 && !ns.isLocalIP(dst) {
+			shouldHandle = ns.lb != nil && ns.lb.ShouldHandleViaIP(dst)
+		}
+		if !shouldHandle {
+			// Unhandled means that we let the regular processing
+			// occur without doing anything ourselves.
+			return filter.Accept
+		}
+
+		if debugNetstack() {
+			ns.logf("netstack: handling local 4via6 packet: version=%d proto=%v dst=%v src=%v",
+				p.IPVersion, p.IPProto, p.Dst, p.Src)
+		}
+
+		// If this is a ping message, handle it and don't pass to
+		// netstack.
+		pingIP, handlePing := ns.shouldHandlePing(p)
+		if handlePing {
+			ns.logf("netstack: handling local 4via6 ping: dst=%v pingIP=%v", dst, pingIP)
+
+			var pong []byte // the reply to the ping, if our relayed ping works
+			if dst.Is4() {
+				h := p.ICMP4Header()
+				h.ToResponse()
+				pong = packet.Generate(&h, p.Payload())
+			} else if dst.Is6() {
+				h := p.ICMP6Header()
+				h.ToResponse()
+				pong = packet.Generate(&h, p.Payload())
+			}
+
+			go ns.userPing(pingIP, pong, userPingDirectionInbound)
+			return filter.DropSilently
+		}
+
+		// Fall through to writing inbound so netstack handles the
+		// 4via6 via connection.
+
+	default:
+		// Not traffic to the service IP or a 4via6 IP, so we don't
+		// care about the packet; resume processing.
 		return filter.Accept
-	}
-	// Of traffic to the service IP, we only care about UDP 53, and TCP
-	// on port 53, 80, and 8080.
-	switch p.IPProto {
-	case ipproto.TCP:
-		if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 {
-			return filter.Accept
-		}
-	case ipproto.UDP:
-		if port := p.Dst.Port(); port != 53 {
-			return filter.Accept
-		}
 	}
 
 	var pn tcpip.NetworkProtocolNumber
@@ -754,7 +801,7 @@ func (ns *Impl) inject() {
 		}
 
 		if debugPackets {
-			ns.logf("[v2] packet Write out: % x", stack.PayloadSince(pkt.NetworkHeader()))
+			ns.logf("[v2] packet Write out: % x", stack.PayloadSince(pkt.NetworkHeader()).AsSlice())
 		}
 
 		// In the normal case, netstack synthesizes the bytes for
@@ -762,31 +809,7 @@ func (ns *Impl) inject() {
 		// However, some uses of netstack (presently, magic DNS)
 		// send traffic destined for the local device, hence must
 		// be injected 'inbound'.
-		sendToHost := false
-
-		// Determine if the packet is from a service IP, in which case it
-		// needs to go back into the machines network (inbound) instead of
-		// out.
-		// TODO(tom): Work out a way to avoid parsing packets to determine if
-		//            its from the service IP. Maybe gvisor netstack magic. I
-		//            went through the fields of PacketBuffer, and nop :/
-		// TODO(tom): Figure out if its safe to modify packet.Parsed to fill in
-		//            the IP src/dest even if its missing the rest of the pkt.
-		//            That way we dont have to do this twitchy-af byte-yeeting.
-		if b := pkt.NetworkHeader().Slice(); len(b) >= 20 { // min ipv4 header
-			switch b[0] >> 4 { // ip proto field
-			case 4:
-				if srcIP := netaddr.IPv4(b[12], b[13], b[14], b[15]); serviceIP == srcIP {
-					sendToHost = true
-				}
-			case 6:
-				if len(b) >= 40 { // min ipv6 header
-					if srcIP, ok := netip.AddrFromSlice(net.IP(b[8:24])); ok && serviceIPv6 == srcIP {
-						sendToHost = true
-					}
-				}
-			}
-		}
+		sendToHost := ns.shouldSendToHost(pkt)
 
 		// pkt has a non-zero refcount, so injection methods takes
 		// ownership of one count and will decrement on completion.
@@ -802,6 +825,57 @@ func (ns *Impl) inject() {
 			}
 		}
 	}
+}
+
+// shouldSendToHost determines if the provided packet should be sent to the
+// host (i.e the current machine running Tailscale), in which case it will
+// return true. It will return false if the packet should be sent outbound, for
+// transit via WireGuard to another Tailscale node.
+func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
+	// Determine if the packet is from a service IP (100.100.100.100 or the
+	// IPv6 variant), in which case it needs to go back into the machine's
+	// network (inbound) instead of out.
+	hdr := pkt.Network()
+	switch v := hdr.(type) {
+	case header.IPv4:
+		srcIP := netip.AddrFrom4(v.SourceAddress().As4())
+		if serviceIP == srcIP {
+			return true
+		}
+
+	case header.IPv6:
+		srcIP := netip.AddrFrom16(v.SourceAddress().As16())
+		if srcIP == serviceIPv6 {
+			return true
+		}
+
+		if viaRange.Contains(srcIP) {
+			// Only send to the host if this 4via6 route is
+			// something this node handles.
+			if ns.lb != nil && ns.lb.ShouldHandleViaIP(srcIP) {
+				dstIP := netip.AddrFrom16(v.DestinationAddress().As16())
+				// Also, only forward to the host if the packet
+				// is destined for a local IP; otherwise, we'd
+				// send traffic that's intended for another
+				// peer from the local 4via6 address to the
+				// host instead of outbound to WireGuard. See:
+				//     https://github.com/tailscale/tailscale/issues/12448
+				if ns.isLocalIP(dstIP) {
+					return true
+				}
+				if debugNetstack() {
+					ns.logf("netstack: sending 4via6 packet to host: src=%v dst=%v", srcIP, dstIP)
+				}
+			}
+		}
+	default:
+		// unknown; don't forward to host
+		if debugNetstack() {
+			ns.logf("netstack: unexpected packet in shouldSendToHost: %T", v)
+		}
+	}
+
+	return false
 }
 
 // isLocalIP reports whether ip is a Tailscale IP assigned to this
@@ -860,13 +934,18 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	return false
 }
 
-// setAmbientCapsRaw is non-nil on Linux for Synology, to run ping with
-// CAP_NET_RAW from tailscaled's binary.
-var setAmbientCapsRaw func(*exec.Cmd)
-
 var userPingSem = syncs.NewSemaphore(20) // 20 child ping processes at once
 
-var isSynology = runtime.GOOS == "linux" && distro.Get() == distro.Synology
+type userPingDirection int
+
+const (
+	// userPingDirectionOutbound is used when the pong packet is to be sent
+	// "outbound"–i.e. from this node to a peer via WireGuard.
+	userPingDirectionOutbound userPingDirection = iota
+	// userPingDirectionInbound is used when the pong packet is to be sent
+	// "inbound"–i.e. from Tailscale to another process on this host.
+	userPingDirectionInbound
+)
 
 // userPing tried to ping dstIP and if it succeeds, injects pingResPkt
 // into the tundev.
@@ -877,54 +956,23 @@ var isSynology = runtime.GOOS == "linux" && distro.Get() == distro.Synology
 // it bounds the number of pings going on at once. The idea is that
 // people only use ping occasionally to see if their internet's working
 // so this doesn't need to be great.
+// On Apple platforms, this function doesn't run the ping command. Instead,
+// it sends a non-privileged ping.
+//
+// The 'direction' parameter is used to determine where the response "pong"
+// packet should be written, if the ping succeeds. See the documentation on the
+// constants for more details.
 //
 // TODO(bradfitz): when we're running on Windows as the system user, use
 // raw socket APIs instead of ping child processes.
-func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
+func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte, direction userPingDirection) {
 	if !userPingSem.TryAcquire() {
 		return
 	}
 	defer userPingSem.Release()
 
 	t0 := time.Now()
-	var err error
-	switch runtime.GOOS {
-	case "windows":
-		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
-	case "darwin", "freebsd":
-		// Note: 2000 ms is actually 1 second + 2,000
-		// milliseconds extra for 3 seconds total.
-		// See https://github.com/tailscale/tailscale/pull/3753 for details.
-		ping := "ping"
-		if dstIP.Is6() {
-			ping = "ping6"
-		}
-		err = exec.Command(ping, "-c", "1", "-W", "2000", dstIP.String()).Run()
-	case "openbsd":
-		ping := "ping"
-		if dstIP.Is6() {
-			ping = "ping6"
-		}
-		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
-	case "android":
-		ping := "/system/bin/ping"
-		if dstIP.Is6() {
-			ping = "/system/bin/ping6"
-		}
-		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
-	default:
-		ping := "ping"
-		if isSynology {
-			ping = "/bin/ping"
-		}
-		cmd := exec.Command(ping, "-c", "1", "-W", "3", dstIP.String())
-		if isSynology && os.Getuid() != 0 {
-			// On DSM7 we run as non-root and need to pass
-			// CAP_NET_RAW if our binary has it.
-			setAmbientCapsRaw(cmd)
-		}
-		err = cmd.Run()
-	}
+	err := ns.sendOutboundUserPing(dstIP, 3*time.Second)
 	d := time.Since(t0)
 	if err != nil {
 		if d < time.Second/2 {
@@ -941,8 +989,14 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 	if debugNetstack() {
 		ns.logf("exec pinged %v in %v", dstIP, time.Since(t0))
 	}
-	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
-		ns.logf("InjectOutbound ping response: %v", err)
+	if direction == userPingDirectionOutbound {
+		if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
+			ns.logf("InjectOutbound ping response: %v", err)
+		}
+	} else if direction == userPingDirectionInbound {
+		if err := ns.tundev.InjectInboundCopy(pingResPkt); err != nil {
+			ns.logf("InjectInboundCopy ping response: %v", err)
+		}
 	}
 }
 
@@ -977,7 +1031,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 			h.ToResponse()
 			pong = packet.Generate(&h, p.Payload())
 		}
-		go ns.userPing(pingIP, pong)
+		go ns.userPing(pingIP, pong, userPingDirectionOutbound)
 		return filter.DropSilently
 	}
 
@@ -1274,8 +1328,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	ns.pm.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
-	defer ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
+	ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP)
+	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(server, client)
@@ -1291,6 +1345,50 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}
 	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
 	return
+}
+
+// ListenPacket listens for incoming packets for the given network and address.
+// Address must be of the form "ip:port" or "[ip]:port".
+//
+// As of 2024-05-18, only udp4 and udp6 are supported.
+func (ns *Impl) ListenPacket(network, address string) (net.PacketConn, error) {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("netstack: ParseAddrPort(%q): %v", address, err)
+	}
+
+	var networkProto tcpip.NetworkProtocolNumber
+	switch network {
+	case "udp":
+		return nil, fmt.Errorf("netstack: udp not supported; use udp4 or udp6")
+	case "udp4":
+		networkProto = ipv4.ProtocolNumber
+		if !ap.Addr().Is4() {
+			return nil, fmt.Errorf("netstack: udp4 requires an IPv4 address")
+		}
+	case "udp6":
+		networkProto = ipv6.ProtocolNumber
+		if !ap.Addr().Is6() {
+			return nil, fmt.Errorf("netstack: udp6 requires an IPv6 address")
+		}
+	default:
+		return nil, fmt.Errorf("netstack: unsupported network %q", network)
+	}
+	var wq waiter.Queue
+	ep, nserr := ns.ipstack.NewEndpoint(udp.ProtocolNumber, networkProto, &wq)
+	if nserr != nil {
+		return nil, fmt.Errorf("netstack: NewEndpoint: %v", nserr)
+	}
+	localAddress := tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFromSlice(ap.Addr().AsSlice()),
+		Port: ap.Port(),
+	}
+	if err := ep.Bind(localAddress); err != nil {
+		ep.Close()
+		return nil, fmt.Errorf("netstack: Bind(%v): %v", localAddress, err)
+	}
+	return gonet.NewUDPConn(&wq, ep), nil
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
@@ -1435,7 +1533,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
-		ns.pm.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
+		ns.pm.RegisterIPPortIdentity("udp", backendLocalIPPort, clientAddr.Addr())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1451,7 +1549,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	}
 	timer := time.AfterFunc(idleTimeout, func() {
 		if isLocal {
-			ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
+			ns.pm.UnregisterIPPortIdentity("udp", backendLocalIPPort)
 		}
 		ns.logf("netstack: UDP session between %s and %s timed out", backendListenAddr, backendRemoteAddr)
 		cancel()

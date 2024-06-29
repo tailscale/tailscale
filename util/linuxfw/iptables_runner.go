@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/multierr"
+	"tailscale.com/version/distro"
 )
 
 // isNotExistError needs to be overridden in tests that rely on distinguishing
@@ -36,6 +38,7 @@ type iptablesInterface interface {
 	Append(table, chain string, args ...string) error
 	Exists(table, chain string, args ...string) (bool, error)
 	Delete(table, chain string, args ...string) error
+	List(table, chain string) ([]string, error)
 	ClearChain(table, chain string) error
 	NewChain(table, chain string) error
 	DeleteChain(table, chain string) error
@@ -85,7 +88,7 @@ func newIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		}
 		supportsV6Filter = checkSupportsV6Filter(ipt6, logf)
 		supportsV6NAT = checkSupportsV6NAT(ipt6, logf)
-		logf("v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
+		logf("netfilter running in iptables mode v6 = %v, v6filter = %v, v6nat = %v", supportsV6, supportsV6Filter, supportsV6NAT)
 	}
 	return &iptablesRunner{
 		ipt4:              ipt4,
@@ -530,6 +533,67 @@ func (i *iptablesRunner) DelSNATRule() error {
 	return nil
 }
 
+func statefulRuleArgs(tunname string) []string {
+	return []string{"-o", tunname, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP"}
+}
+
+// AddStatefulRule adds a netfilter rule for stateful packet filtering using
+// conntrack.
+func (i *iptablesRunner) AddStatefulRule(tunname string) error {
+	// Drop packets that are destined for the tailscale interface if
+	// they're a new connection, per conntrack, to prevent hosts on the
+	// same subnet from being able to use this device as a way to forward
+	// packets on to the Tailscale network.
+	//
+	// The conntrack states are:
+	//    NEW         A packet which creates a new connection.
+	//    ESTABLISHED A packet which belongs to an existing connection
+	//                (i.e., a reply packet, or outgoing packet on a
+	//                connection which has seen replies).
+	//    RELATED     A packet which is related to, but not part of, an
+	//                existing connection, such as an ICMP error.
+	//    INVALID     A packet which could not be identified for some
+	//                reason: this includes running out of memory and ICMP
+	//                errors which don't correspond to any known
+	//                connection. Generally these packets should be
+	//                dropped.
+	//
+	// We drop NEW packets to prevent connections from coming "into"
+	// Tailscale from other hosts on the same network segment; we drop
+	// INVALID packets as well.
+	args := statefulRuleArgs(tunname)
+	for _, ipt := range i.getTables() {
+		// First, find the final "accept" rule.
+		rules, err := ipt.List("filter", "ts-forward")
+		if err != nil {
+			return fmt.Errorf("listing rules in filter/ts-forward: %w", err)
+		}
+		want := fmt.Sprintf("-A %s -o %s -j ACCEPT", "ts-forward", tunname)
+
+		pos := slices.Index(rules, want)
+		if pos < 0 {
+			return fmt.Errorf("couldn't find final ACCEPT rule in filter/ts-forward")
+		}
+
+		if err := ipt.Insert("filter", "ts-forward", pos, args...); err != nil {
+			return fmt.Errorf("adding %v in filter/ts-forward: %w", args, err)
+		}
+	}
+	return nil
+}
+
+// DelStatefulRule removes the netfilter rule for stateful packet filtering
+// using conntrack.
+func (i *iptablesRunner) DelStatefulRule(tunname string) error {
+	args := statefulRuleArgs(tunname)
+	for _, ipt := range i.getTables() {
+		if err := ipt.Delete("filter", "ts-forward", args...); err != nil {
+			return fmt.Errorf("deleting %v in filter/ts-forward: %w", args, err)
+		}
+	}
+	return nil
+}
+
 // buildMagicsockPortRule generates the string slice containing the arguments
 // to describe a rule accepting traffic on a particular port to iptables. It is
 // separated out here to avoid repetition in AddMagicsockPortRule and
@@ -590,6 +654,11 @@ func (i *iptablesRunner) DelMagicsockPortRule(port uint16, network string) error
 // IPTablesCleanUp removes all Tailscale added iptables rules.
 // Any errors that occur are logged to the provided logf.
 func IPTablesCleanUp(logf logger.Logf) {
+	if distro.Get() == distro.Gokrazy {
+		// Gokrazy uses nftables and doesn't have the "iptables" command.
+		// Avoid log spam on cleanup. (#12277)
+		return
+	}
 	err := clearRules(iptables.ProtocolIPv4, logf)
 	if err != nil {
 		logf("linuxfw: clear iptables: %v", err)

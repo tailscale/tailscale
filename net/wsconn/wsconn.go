@@ -105,7 +105,11 @@ type netConn struct {
 	afterReadDeadline atomic.Bool
 
 	readMu sync.Mutex
-	eofed  bool
+	// eofed is true if the reader should return io.EOF from the Read call.
+	//
+	// +checklocks:readMu
+	eofed bool
+	// +checklocks:readMu
 	reader io.Reader
 }
 

@@ -74,7 +74,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-							"/": {Proxy: "http://127.0.0.1:3000"},
+							"/": {Proxy: "http://localhost:3000"},
 						}},
 					},
 					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
@@ -89,7 +89,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-							"/": {Proxy: "http://127.0.0.1:3000"},
+							"/": {Proxy: "http://localhost:3000"},
 						}},
 					},
 				},
@@ -103,7 +103,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-							"/": {Proxy: "http://127.0.0.1:3000"},
+							"/": {Proxy: "http://localhost:3000"},
 						}},
 					},
 				},
@@ -117,7 +117,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-							"/": {Proxy: "http://127.0.0.1:3000"},
+							"/": {Proxy: "http://localhost:3000"},
 						}},
 					},
 				},
@@ -131,7 +131,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					TCP: map[uint16]*ipn.TCPPortHandler{8443: {HTTPS: true}},
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-							"/": {Proxy: "http://127.0.0.1:3000"},
+							"/": {Proxy: "http://localhost:3000"},
 						}},
 					},
 				},
@@ -146,7 +146,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -157,10 +157,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 9999: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
-								"/abc": {Proxy: "http://127.0.0.1:3001"},
+								"/abc": {Proxy: "http://localhost:3001"},
 							}},
 						},
 					},
@@ -171,7 +171,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -182,7 +182,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 8080: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:8080": {Handlers: map[string]*ipn.HTTPHandler{
 								"/abc": {Proxy: "http://127.0.0.1:3001"},
@@ -236,7 +236,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -247,10 +247,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 9999: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
-								"/abc": {Proxy: "http://127.0.0.1:3001"},
+								"/abc": {Proxy: "http://localhost:3001"},
 							}},
 						},
 					},
@@ -261,7 +261,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -272,7 +272,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
 								"/abc": {Proxy: "http://127.0.0.1:3001"},
@@ -361,7 +361,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/foo": {Proxy: "http://127.0.0.1:3000"},
+								"/foo": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -372,10 +372,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/foo": {Proxy: "http://127.0.0.1:3000"},
+								"/foo": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/foo": {Proxy: "http://127.0.0.1:3000"},
+								"/foo": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -439,7 +439,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "127.0.0.1:5432",
+								TCPForward:   "localhost:5432",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -466,7 +466,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "127.0.0.1:123",
+								TCPForward:   "localhost:123",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -560,7 +560,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -572,7 +572,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -584,10 +584,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/bar": {Proxy: "http://127.0.0.1:3001"},
+								"/bar": {Proxy: "http://localhost:3001"},
 							}},
 						},
 					},
@@ -599,10 +599,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/bar": {Proxy: "http://127.0.0.1:3001"},
+								"/bar": {Proxy: "http://localhost:3001"},
 							}},
 						},
 					},
@@ -614,10 +614,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/bar": {Proxy: "http://127.0.0.1:3001"},
+								"/bar": {Proxy: "http://localhost:3001"},
 							}},
 						},
 					},
@@ -628,7 +628,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -636,10 +636,10 @@ func TestServeDevConfigMutations(t *testing.T) {
 				{ // start a tcp forwarder on 8443
 					command: cmd("serve --bg --tcp=8443 tcp://localhost:5432"),
 					want: &ipn.ServeConfig{
-						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "localhost:5432"}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -647,7 +647,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				{ // remove primary port http handler
 					command: cmd("serve off"),
 					want: &ipn.ServeConfig{
-						TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
+						TCP: map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "localhost:5432"}},
 					},
 				},
 				{ // remove tcp forwarder
@@ -717,7 +717,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want: &ipn.ServeConfig{
 						TCP: map[uint16]*ipn.TCPPortHandler{
 							443: {
-								TCPForward:   "127.0.0.1:5432",
+								TCPForward:   "localhost:5432",
 								TerminateTLS: "foo.test.ts.net",
 							},
 						},
@@ -738,7 +738,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -758,7 +758,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
-								"/foo": {Proxy: "http://127.0.0.1:3000"},
+								"/foo": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -769,8 +769,8 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{4545: {HTTPS: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:4545": {Handlers: map[string]*ipn.HTTPHandler{
-								"/foo": {Proxy: "http://127.0.0.1:3000"},
-								"/bar": {Proxy: "http://127.0.0.1:3000"},
+								"/foo": {Proxy: "http://localhost:3000"},
+								"/bar": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},
@@ -800,7 +800,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 						TCP: map[uint16]*ipn.TCPPortHandler{3000: {HTTP: true}},
 						Web: map[ipn.HostPort]*ipn.WebServerConfig{
 							"foo.test.ts.net:3000": {Handlers: map[string]*ipn.HTTPHandler{
-								"/": {Proxy: "http://127.0.0.1:3000"},
+								"/": {Proxy: "http://localhost:3000"},
 							}},
 						},
 					},

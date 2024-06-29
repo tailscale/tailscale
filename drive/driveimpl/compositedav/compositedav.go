@@ -81,23 +81,38 @@ type Handler struct {
 	staticRoot string
 }
 
+var cacheInvalidatingMethods = map[string]bool{
+	"PUT":       true,
+	"POST":      true,
+	"COPY":      true,
+	"MKCOL":     true,
+	"MOVE":      true,
+	"PROPPATCH": true,
+	"DELETE":    true,
+}
+
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "PROPFIND" {
-		h.handlePROPFIND(w, r)
+	pathComponents := shared.CleanAndSplit(r.URL.Path)
+	mpl := h.maxPathLength(r)
+
+	switch r.Method {
+	case "PROPFIND":
+		h.handlePROPFIND(w, r, pathComponents, mpl)
+		return
+	case "LOCK":
+		h.handleLOCK(w, r, pathComponents, mpl)
 		return
 	}
 
-	if r.Method != "GET" {
-		// If the user is performing a modification (e.g. PUT, MKDIR, etc),
+	_, shouldInvalidate := cacheInvalidatingMethods[r.Method]
+	if shouldInvalidate {
+		// If the user is performing a modification (e.g. PUT, MKDIR, etc.),
 		// we need to invalidate the StatCache to make sure we're not knowingly
 		// showing stale stats.
-		// TODO(oxtoacart): maybe be more selective about invalidating cache
+		// TODO(oxtoacart): maybe only invalidate specific paths
 		h.StatCache.invalidate()
 	}
-
-	mpl := h.maxPathLength(r)
-	pathComponents := shared.CleanAndSplit(r.URL.Path)
 
 	if len(pathComponents) >= mpl {
 		h.delegate(mpl, pathComponents[mpl-1:], w, r)
@@ -130,6 +145,8 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 
 // delegate sends the request to the Child WebDAV server.
 func (h *Handler) delegate(mpl int, pathComponents []string, w http.ResponseWriter, r *http.Request) {
+	rewriteIfHeader(r, pathComponents, mpl)
+
 	dest := r.Header.Get("Destination")
 	if dest != "" {
 		// Rewrite destination header

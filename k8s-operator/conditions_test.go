@@ -28,14 +28,14 @@ func TestSetConnectorCondition(t *testing.T) {
 	SetConnectorCondition(&cn, tsapi.ConnectorReady, metav1.ConditionTrue, "someReason", "someMsg", 1, clock, zl.Sugar())
 	assert.Equal(t, cn, tsapi.Connector{
 		Status: tsapi.ConnectorStatus{
-			Conditions: []tsapi.ConnectorCondition{
+			Conditions: []metav1.Condition{
 				{
-					Type:               tsapi.ConnectorReady,
+					Type:               string(tsapi.ConnectorReady),
 					Status:             metav1.ConditionTrue,
 					Reason:             "someReason",
 					Message:            "someMsg",
 					ObservedGeneration: 1,
-					LastTransitionTime: &fakeNow,
+					LastTransitionTime: fakeNow,
 				},
 			},
 		},
@@ -43,28 +43,28 @@ func TestSetConnectorCondition(t *testing.T) {
 
 	// Modify status of an existing condition
 	cn.Status = tsapi.ConnectorStatus{
-		Conditions: []tsapi.ConnectorCondition{
+		Conditions: []metav1.Condition{
 			{
-				Type:               tsapi.ConnectorReady,
+				Type:               string(tsapi.ConnectorReady),
 				Status:             metav1.ConditionFalse,
 				Reason:             "someReason",
 				Message:            "someMsg",
 				ObservedGeneration: 1,
-				LastTransitionTime: &fakePast,
+				LastTransitionTime: fakePast,
 			},
 		},
 	}
 	SetConnectorCondition(&cn, tsapi.ConnectorReady, metav1.ConditionTrue, "anotherReason", "anotherMsg", 2, clock, zl.Sugar())
 	assert.Equal(t, cn, tsapi.Connector{
 		Status: tsapi.ConnectorStatus{
-			Conditions: []tsapi.ConnectorCondition{
+			Conditions: []metav1.Condition{
 				{
-					Type:               tsapi.ConnectorReady,
+					Type:               string(tsapi.ConnectorReady),
 					Status:             metav1.ConditionTrue,
 					Reason:             "anotherReason",
 					Message:            "anotherMsg",
 					ObservedGeneration: 2,
-					LastTransitionTime: &fakeNow,
+					LastTransitionTime: fakeNow,
 				},
 			},
 		},
@@ -72,28 +72,28 @@ func TestSetConnectorCondition(t *testing.T) {
 
 	// Don't modify last transition time if status hasn't changed
 	cn.Status = tsapi.ConnectorStatus{
-		Conditions: []tsapi.ConnectorCondition{
+		Conditions: []metav1.Condition{
 			{
-				Type:               tsapi.ConnectorReady,
+				Type:               string(tsapi.ConnectorReady),
 				Status:             metav1.ConditionTrue,
 				Reason:             "someReason",
 				Message:            "someMsg",
 				ObservedGeneration: 1,
-				LastTransitionTime: &fakePast,
+				LastTransitionTime: fakePast,
 			},
 		},
 	}
 	SetConnectorCondition(&cn, tsapi.ConnectorReady, metav1.ConditionTrue, "anotherReason", "anotherMsg", 2, clock, zl.Sugar())
 	assert.Equal(t, cn, tsapi.Connector{
 		Status: tsapi.ConnectorStatus{
-			Conditions: []tsapi.ConnectorCondition{
+			Conditions: []metav1.Condition{
 				{
-					Type:               tsapi.ConnectorReady,
+					Type:               string(tsapi.ConnectorReady),
 					Status:             metav1.ConditionTrue,
 					Reason:             "anotherReason",
 					Message:            "anotherMsg",
 					ObservedGeneration: 2,
-					LastTransitionTime: &fakePast,
+					LastTransitionTime: fakePast,
 				},
 			},
 		},
