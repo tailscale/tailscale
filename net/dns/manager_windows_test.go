@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/winutil"
+	"tailscale.com/util/winutil/gp"
 )
 
 const testGPRuleID = "{7B1B6151-84E6-41A3-8967-62F7F7B45687}"
@@ -51,7 +52,7 @@ func TestManagerWindowsGP(t *testing.T) {
 
 	// Make sure group policy is refreshed before this test exits but after we've
 	// cleaned everything else up.
-	defer procRefreshPolicyEx.Call(uintptr(1), uintptr(_RP_FORCE))
+	defer gp.RefreshMachinePolicy(true)
 
 	err := createFakeGPKey()
 	if err != nil {
@@ -129,7 +130,7 @@ func TestManagerWindowsGPCopy(t *testing.T) {
 		t.Fatalf("regWatcher.watch: %v\n", err)
 	}
 
-	err = testDoRefresh()
+	err = gp.RefreshMachinePolicy(true)
 	if err != nil {
 		t.Fatalf("testDoRefresh: %v\n", err)
 	}
@@ -153,7 +154,7 @@ func TestManagerWindowsGPCopy(t *testing.T) {
 		t.Fatalf("regWatcher.watch: %v\n", err)
 	}
 
-	err = testDoRefresh()
+	err = gp.RefreshMachinePolicy(true)
 	if err != nil {
 		t.Fatalf("testDoRefresh: %v\n", err)
 	}
@@ -186,8 +187,8 @@ func checkGPNotificationsWork(t *testing.T) {
 	}
 	defer trk.Close()
 
-	r, _, err := procRefreshPolicyEx.Call(uintptr(1), uintptr(_RP_FORCE))
-	if r == 0 {
+	err = gp.RefreshMachinePolicy(true)
+	if err != nil {
 		t.Fatalf("RefreshPolicyEx error: %v\n", err)
 	}
 
@@ -516,13 +517,11 @@ func genRandomSubdomains(t *testing.T, n int) []dnsname.FQDN {
 	return domains
 }
 
-func testDoRefresh() (err error) {
-	r, _, e := procRefreshPolicyEx.Call(uintptr(1), uintptr(_RP_FORCE))
-	if r == 0 {
-		err = e
-	}
-	return err
-}
+var (
+	libUserenv                   = windows.NewLazySystemDLL("userenv.dll")
+	procRegisterGPNotification   = libUserenv.NewProc("RegisterGPNotification")
+	procUnregisterGPNotification = libUserenv.NewProc("UnregisterGPNotification")
+)
 
 // gpNotificationTracker registers with the Windows policy engine and receives
 // notifications when policy refreshes occur.
