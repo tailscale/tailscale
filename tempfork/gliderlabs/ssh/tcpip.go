@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"io"
 	"log"
 	"net"
@@ -53,16 +54,7 @@ func DirectTCPIPHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewCh
 	}
 	go gossh.DiscardRequests(reqs)
 
-	go func() {
-		defer ch.Close()
-		defer dconn.Close()
-		io.Copy(ch, dconn)
-	}()
-	go func() {
-		defer ch.Close()
-		defer dconn.Close()
-		io.Copy(dconn, ch)
-	}()
+	bicopy(ctx, ch, dconn)
 }
 
 type remoteForwardRequest struct {
@@ -117,8 +109,14 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 			// TODO: log listen failure
 			return false, []byte{}
 		}
+
+		// If the bind port was port 0, we need to use the actual port in the
+		// listener map.
 		_, destPortStr, _ := net.SplitHostPort(ln.Addr().String())
 		destPort, _ := strconv.Atoi(destPortStr)
+		if reqPayload.BindPort == 0 {
+			addr = net.JoinHostPort(reqPayload.BindAddr, strconv.Itoa(destPort))
+		}
 		h.Lock()
 		h.forwards[addr] = ln
 		h.Unlock()
@@ -155,16 +153,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 						return
 					}
 					go gossh.DiscardRequests(reqs)
-					go func() {
-						defer ch.Close()
-						defer c.Close()
-						io.Copy(ch, c)
-					}()
-					go func() {
-						defer ch.Close()
-						defer c.Close()
-						io.Copy(c, ch)
-					}()
+					bicopy(ctx, ch, c)
 				}()
 			}
 			h.Lock()
@@ -189,5 +178,45 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 		return true, nil
 	default:
 		return false, nil
+	}
+}
+
+// bicopy copies all of the data between the two connections and will close them
+// after one or both of them are done writing. If the context is canceled, both
+// of the connections will be closed.
+func bicopy(ctx context.Context, c1, c2 io.ReadWriteCloser) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	defer func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}()
+
+	var wg sync.WaitGroup
+	copyFunc := func(dst io.WriteCloser, src io.Reader) {
+		defer func() {
+			wg.Done()
+			// If one side of the copy fails, ensure the other one exits as
+			// well.
+			cancel()
+		}()
+		_, _ = io.Copy(dst, src)
+	}
+
+	wg.Add(2)
+	go copyFunc(c1, c2)
+	go copyFunc(c2, c1)
+
+	// Convert waitgroup to a channel so we can also wait on the context.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-done:
 	}
 }

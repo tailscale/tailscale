@@ -141,7 +141,8 @@ type CapabilityVersion int
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
 //   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
-const CurrentCapabilityVersion CapabilityVersion = 100
+//   - 101: 2024-06-23: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
+const CurrentCapabilityVersion CapabilityVersion = 101
 
 type StableID string
 
@@ -2501,6 +2502,14 @@ type SSHAction struct {
 	// AllowRemotePortForwarding, if true, allows accepted connections
 	// to use remote port forwarding if requested.
 	AllowRemotePortForwarding bool `json:"allowRemotePortForwarding,omitempty"`
+
+	// AllowLocalUnixForwarding, if true, allows accepted connections
+	// to use local unix forwarding if requested.
+	AllowLocalUnixForwarding bool `json:"allowLocalUnixForwarding,omitempty"`
+
+	// AllowRemoteUnixForwarding, if true, allows accepted connections
+	// to use remote unix forwarding if requested.
+	AllowRemoteUnixForwarding bool `json:"allowRemoteUnixForwarding,omitempty"`
 
 	// Recorders defines the destinations of the SSH session recorders.
 	// The recording will be uploaded to http://addr:port/record.
