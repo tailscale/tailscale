@@ -569,3 +569,35 @@ func TestRateLogger(t *testing.T) {
 		t.Fatalf("wasCalled: got false, want true")
 	}
 }
+
+func TestWriteRoutesCoveredByControlRoutes(t *testing.T) {
+	var writeCount int
+	write := func(*RouteInfo) error {
+		writeCount++
+		return nil
+	}
+	// even if there are routes that cover a domain's ip, if we haven't see the domain before we should write
+	ctx := context.Background()
+	rc := &appctest.RouteCollector{}
+	a := NewAppConnector(t.Logf, rc, &RouteInfo{}, write)
+	a.UpdateDomainsAndRoutes([]string{"*.example.com"}, []netip.Prefix{netip.MustParsePrefix("192.1.1.0/31")})
+	a.Wait(ctx)
+	// now we have an app connector that is wanting to learn routes for *.example.com, and is preconfigured with
+	// a route range, when it observes a dns response within the route range it should not publish a new route, but
+	// it should write it's RouteInfo, so that it remembers the domain<->ip addr association.
+	writeCount = 0
+	a.ObserveDNSResponse(dnsResponse("a.example.com.", "192.1.1.1"))
+	a.Wait(ctx)
+	want := 1
+	if writeCount != want {
+		t.Fatalf("writeCount new ip: got %d, want %d", writeCount, want)
+	}
+	// we should NOT write, if we are observing the same ip address again
+	writeCount = 0
+	a.ObserveDNSResponse(dnsResponse("a.example.com.", "192.1.1.1"))
+	a.Wait(ctx)
+	want = 0
+	if writeCount != want {
+		t.Fatalf("writeCount old ip: got %d, want %d", writeCount, want)
+	}
+}
