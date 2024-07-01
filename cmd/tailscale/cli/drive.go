@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -66,9 +67,14 @@ func runDriveShare(ctx context.Context, args []string) error {
 
 	name, path := args[0], args[1]
 
-	err := localClient.DriveShareSet(ctx, &drive.Share{
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+
+	err = localClient.DriveShareSet(ctx, &drive.Share{
 		Name: name,
-		Path: path,
+		Path: absolutePath,
 	})
 	if err == nil {
 		fmt.Printf("Sharing %q as %q\n", path, name)
