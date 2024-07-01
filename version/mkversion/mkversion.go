@@ -336,11 +336,14 @@ type verInfo struct {
 const unknownPatchVersion = 9999999
 
 func infoFromCache(ref string, runner dirRunner) (verInfo, error) {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return verInfo{}, fmt.Errorf("Getting user cache dir: %w", err)
+	tailscaleCache := os.Getenv("TS_MKVERSION_OSS_GIT_CACHE")
+	if tailscaleCache == "" {
+		cacheDir, err := os.UserCacheDir()
+		if err != nil {
+			return verInfo{}, fmt.Errorf("Getting user cache dir: %w", err)
+		}
+		tailscaleCache = filepath.Join(cacheDir, "tailscale-oss")
 	}
-	tailscaleCache := filepath.Join(cacheDir, "tailscale-oss")
 	r := dirRunner(tailscaleCache)
 
 	if _, err := os.Stat(tailscaleCache); err != nil {
