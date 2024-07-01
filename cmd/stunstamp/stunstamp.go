@@ -60,10 +60,13 @@ func getDERPMap(ctx context.Context, url string) (*tailcfg.DERPMap, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("non-200 derp map resp: %d", resp.StatusCode)
+	}
 	dm := tailcfg.DERPMap{}
 	err = json.NewDecoder(resp.Body).Decode(&dm)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("failed to decode derp map resp: %v", err)
 	}
 	return &dm, nil
 }
