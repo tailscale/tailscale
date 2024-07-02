@@ -513,7 +513,7 @@ main() {
 			;;
 		pacman)
 			set -x
-			$SUDO pacman -Sy
+			$SUDO pacman -Syu
 			$SUDO pacman -S tailscale --noconfirm
 			$SUDO systemctl enable --now tailscaled
 			set +x
