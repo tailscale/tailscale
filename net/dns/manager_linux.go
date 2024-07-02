@@ -137,15 +137,34 @@ func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret 
 	case "systemd-resolved":
 		dbg("rc", "resolved")
 
+		// If systemd-resolved says that the we don't have a stub resolver, but
+		// /etc/resolv.conf is symlinked to /run/systemd/resolve/resolv.conf,
+		// then systemd-resolved is managing DNS but the logic in
+		// resolvedIsActuallyResolver will not detect it.
+		//
+		// Check for this case and return early if we find it. See:
+		//    https://github.com/tailscale/tailscale/issues/11342
+		var isResolvedNoStub bool
+		mode, err := env.dbusReadString("org.freedesktop.resolve1", "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager", "DNSStubListener")
+		if err == nil && mode == "no" {
+			target, err := env.fs.Readlink("/etc/resolv.conf")
+			if err == nil && target == "/run/systemd/resolve/resolv.conf" {
+				dbg("resolved", "no-stub")
+				isResolvedNoStub = true
+			}
+		}
+
 		// Some systems, for reasons known only to them, have a
 		// resolv.conf that has the word "systemd-resolved" in its
 		// header, but doesn't actually point to resolved. We mustn't
 		// try to program resolved in that case.
 		// https://github.com/tailscale/tailscale/issues/2136
-		if err := resolvedIsActuallyResolver(logf, env, dbg, bs); err != nil {
-			logf("dns: resolvedIsActuallyResolver error: %v", err)
-			dbg("resolved", "not-in-use")
-			return "direct", nil
+		if !isResolvedNoStub {
+			if err := resolvedIsActuallyResolver(logf, env, dbg, bs); err != nil {
+				logf("dns: resolvedIsActuallyResolver error: %v", err)
+				dbg("resolved", "not-in-use")
+				return "direct", nil
+			}
 		}
 		if err := env.dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
 			dbg("nm", "no")

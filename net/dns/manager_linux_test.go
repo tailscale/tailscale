@@ -313,6 +313,17 @@ func (m memFS) Stat(name string) (isRegular bool, err error) {
 	return false, nil
 }
 
+func (m memFS) Readlink(name string) (string, error) {
+	v, ok := m[name]
+	if !ok {
+		return "", fs.ErrNotExist
+	}
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	panic("unexpected")
+}
+
 func (m memFS) Chmod(name string, mode os.FileMode) error { panic("TODO") }
 func (m memFS) Rename(oldName, newName string) error      { panic("TODO") }
 func (m memFS) Remove(name string) error                  { panic("TODO") }
