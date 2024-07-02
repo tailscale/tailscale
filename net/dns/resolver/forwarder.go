@@ -224,11 +224,12 @@ func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkS
 		panic("nil netMon")
 	}
 	f := &forwarder{
-		logf:         logger.WithPrefix(logf, "forward: "),
-		netMon:       netMon,
-		linkSel:      linkSel,
-		dialer:       dialer,
-		controlKnobs: knobs,
+		logf:                    logger.WithPrefix(logf, "forward: "),
+		netMon:                  netMon,
+		linkSel:                 linkSel,
+		dialer:                  dialer,
+		controlKnobs:            knobs,
+		missingUpstreamRecovery: func() {},
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
