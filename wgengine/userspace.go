@@ -994,13 +994,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		// assigned address.
 		e.logf("wgengine: Reconfig: configuring DNS")
 		err = e.dns.Set(*dnsCfg)
-		e.health.SetDNSHealth(err)
 		if err != nil {
+			e.health.SetUnhealthy(dns.OSConfigWarnable, health.Args{health.ArgError: err.Error()})
 			return err
 		}
 		if err := e.reconfigureVPNIfNecessary(); err != nil {
+			e.health.SetUnhealthy(dns.OSConfigWarnable, health.Args{health.ArgError: err.Error()})
 			return err
 		}
+		e.health.SetHealthy(dns.OSConfigWarnable)
 	}
 
 	// Shutdown the network logger.

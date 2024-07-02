@@ -255,7 +255,7 @@ func (r *Resolver) SetMissingUpstreamRecovery(f func()) {
 
 func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
 
-func (r *Resolver) SetConfig(cfg Config) error {
+func (r *Resolver) SetConfig(cfg Config) {
 	if r.saveConfigForTests != nil {
 		r.saveConfigForTests(cfg)
 	}
@@ -275,7 +275,6 @@ func (r *Resolver) SetConfig(cfg Config) error {
 	r.localDomains = cfg.LocalDomains
 	r.hostToIP = cfg.Hosts
 	r.ipToHost = reverse
-	return nil
 }
 
 // Close shuts down the resolver and ensures poll goroutines have exited.
