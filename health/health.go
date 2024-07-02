@@ -213,8 +213,10 @@ type Warnable struct {
 	// Deprecated: this is only used in one case, and will be removed in a future PR
 	MapDebugFlag string
 
-	// If true, this warnable is related to configuration of networking stack
-	// on the machine that impacts connectivity.
+	// ImpactsConnectivity is whether this Warnable in an unhealthy state will impact the user's
+	// ability to connect to the Internet or other nodes on the tailnet. On platforms where
+	// the client GUI supports a tray icon, the client will display an exclamation mark
+	// on the tray icon when ImpactsConnectivity is set to true and the Warnable is unhealthy.
 	ImpactsConnectivity bool
 }
 
@@ -252,9 +254,16 @@ func (t *Tracker) nil() bool {
 type Severity string
 
 const (
-	SeverityHigh   Severity = "high"
+	// SeverityHigh is the highest severity level, used for critical errors that need immediate attention.
+	// On platforms where the client GUI can deliver notifications, a SeverityHigh Warnable will trigger
+	// a modal notification.
+	SeverityHigh Severity = "high"
+	// SeverityMedium is used for errors that are important but not critical. This won't trigger a modal
+	// notification, however it will be displayed in a more visible way than a SeverityLow Warnable.
 	SeverityMedium Severity = "medium"
-	SeverityLow    Severity = "low"
+	// SeverityLow is used for less important notices that don't need immediate attention. The user will
+	// have to go to a Settings window, or another "hidden" GUI location to see these messages.
+	SeverityLow Severity = "low"
 )
 
 // Args is a map of Args to string values that can be used to provide parameters regarding
