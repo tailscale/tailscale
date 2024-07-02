@@ -356,7 +356,11 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				return sig
 			},
 			want: &RotationDetails{
-				WrappingPubkey: cPub,
+				InitialSig: &NodeKeySignature{
+					SigKind:        SigCredential,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				},
 			},
 		},
 		{
@@ -382,8 +386,13 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				return sig
 			},
 			want: &RotationDetails{
-				WrappingPubkey: cPub,
-				PrevNodeKeys:   []key.NodePublic{n1.Public()},
+				InitialSig: &NodeKeySignature{
+					SigKind:        SigDirect,
+					Pubkey:         n1pub,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				},
+				PrevNodeKeys: []key.NodePublic{n1.Public()},
 			},
 		},
 		{
@@ -418,13 +427,23 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 				return sig
 			},
 			want: &RotationDetails{
-				WrappingPubkey: cPub,
-				PrevNodeKeys:   []key.NodePublic{n2.Public(), n1.Public()},
+				InitialSig: &NodeKeySignature{
+					SigKind:        SigDirect,
+					Pubkey:         n1pub,
+					KeyID:          pub,
+					WrappingPubkey: cPub,
+				},
+				PrevNodeKeys: []key.NodePublic{n2.Public(), n1.Public()},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.want != nil {
+				initialHash := tt.want.InitialSig.SigHash()
+				tt.want.InitialSig.Signature = ed25519.Sign(priv, initialHash[:])
+			}
+
 			sig := tt.sigFn()
 			if err := sig.verifySignature(tt.nodeKey, k); err != nil {
 				t.Fatalf("verifySignature(node) failed: %v", err)
@@ -438,4 +457,43 @@ func TestNodeKeySignatureRotationDetails(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecodeWrappedAuthkey(t *testing.T) {
+	k, isWrapped, sig, priv := DecodeWrappedAuthkey("tskey-32mjsdkdsffds9o87dsfkjlh", nil)
+	if want := "tskey-32mjsdkdsffds9o87dsfkjlh"; k != want {
+		t.Errorf("decodeWrappedAuthkey(<unwrapped-key>).key = %q, want %q", k, want)
+	}
+	if isWrapped {
+		t.Error("decodeWrappedAuthkey(<unwrapped-key>).isWrapped = true, want false")
+	}
+	if sig != nil {
+		t.Errorf("decodeWrappedAuthkey(<unwrapped-key>).sig = %v, want nil", sig)
+	}
+	if priv != nil {
+		t.Errorf("decodeWrappedAuthkey(<unwrapped-key>).priv = %v, want nil", priv)
+	}
+
+	k, isWrapped, sig, priv = DecodeWrappedAuthkey("tskey-auth-k7UagY1CNTRL-ZZZZZ--TLpAEDA1ggnXuw4/fWnNWUwcoOjLemhOvml1juMl5lhLmY5sBUsj8EWEAfL2gdeD9g8VDw5tgcxCiHGlEb67BgU2DlFzZApi4LheLJraA+pYjTGChVhpZz1iyiBPD+U2qxDQAbM3+WFY0EBlggxmVqG53Hu0Rg+KmHJFMlUhfgzo+AQP6+Kk9GzvJJOs4-k36RdoSFqaoARfQo0UncHAV0t3YTqrkD5r/z2jTrE43GZWobnce7RGD4qYckUyVSF+DOj4BA/r4qT0bO8kk6zg", nil)
+	if want := "tskey-auth-k7UagY1CNTRL-ZZZZZ"; k != want {
+		t.Errorf("decodeWrappedAuthkey(<wrapped-key>).key = %q, want %q", k, want)
+	}
+	if !isWrapped {
+		t.Error("decodeWrappedAuthkey(<wrapped-key>).isWrapped = false, want true")
+	}
+
+	if sig == nil {
+		t.Fatal("decodeWrappedAuthkey(<wrapped-key>).sig = nil, want non-nil signature")
+	}
+	sigHash := sig.SigHash()
+	if !ed25519.Verify(sig.KeyID, sigHash[:], sig.Signature) {
+		t.Error("signature failed to verify")
+	}
+
+	// Make sure the private is correct by using it.
+	someSig := ed25519.Sign(priv, []byte{1, 2, 3, 4})
+	if !ed25519.Verify(sig.WrappingPubkey, []byte{1, 2, 3, 4}, someSig) {
+		t.Error("failed to use priv")
+	}
+
 }

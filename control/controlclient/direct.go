@@ -7,8 +7,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -473,7 +471,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverLegacyKey
 	serverNoiseKey := c.serverNoiseKey
-	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
+	authKey, isWrapped, wrappedSig, wrappedKey := tka.DecodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	expired := !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
@@ -565,18 +563,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		// We were given a wrapped pre-auth key, which means that in addition
 		// to being a regular pre-auth key there was a suffix with information to
 		// generate a tailnet-lock signature.
-		nk, err := tryingNewKey.Public().MarshalBinary()
+		nodeKeySignature, err = tka.SignByCredential(wrappedKey, wrappedSig, tryingNewKey.Public())
 		if err != nil {
-			return false, "", nil, fmt.Errorf("marshalling node-key: %w", err)
+			return false, "", nil, err
 		}
-		sig := &tka.NodeKeySignature{
-			SigKind: tka.SigRotation,
-			Pubkey:  nk,
-			Nested:  wrappedSig,
-		}
-		sigHash := sig.SigHash()
-		sig.Signature = ed25519.Sign(wrappedKey, sigHash[:])
-		nodeKeySignature = sig.Serialize()
 	}
 
 	if backendLogID == "" {
@@ -1618,43 +1608,6 @@ func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
 		return
 	}
 	res.Body.Close()
-}
-
-// decodeWrappedAuthkey separates wrapping information from an authkey, if any.
-// In all cases the authkey is returned, sans wrapping information if any.
-//
-// If the authkey is wrapped, isWrapped returns true, along with the wrapping signature
-// and private key.
-func decodeWrappedAuthkey(key string, logf logger.Logf) (authKey string, isWrapped bool, sig *tka.NodeKeySignature, priv ed25519.PrivateKey) {
-	authKey, suffix, found := strings.Cut(key, "--TL")
-	if !found {
-		return key, false, nil, nil
-	}
-	sigBytes, privBytes, found := strings.Cut(suffix, "-")
-	if !found {
-		logf("decoding wrapped auth-key: did not find delimiter")
-		return key, false, nil, nil
-	}
-
-	rawSig, err := base64.RawStdEncoding.DecodeString(sigBytes)
-	if err != nil {
-		logf("decoding wrapped auth-key: signature decode: %v", err)
-		return key, false, nil, nil
-	}
-	rawPriv, err := base64.RawStdEncoding.DecodeString(privBytes)
-	if err != nil {
-		logf("decoding wrapped auth-key: priv decode: %v", err)
-		return key, false, nil, nil
-	}
-
-	sig = new(tka.NodeKeySignature)
-	if err := sig.Unserialize([]byte(rawSig)); err != nil {
-		logf("decoding wrapped auth-key: signature: %v", err)
-		return key, false, nil, nil
-	}
-	priv = ed25519.PrivateKey(rawPriv)
-
-	return authKey, true, sig, priv
 }
 
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {

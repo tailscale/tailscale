@@ -4,7 +4,6 @@
 package controlclient
 
 import (
-	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -146,43 +145,4 @@ func TestTsmpPing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestDecodeWrappedAuthkey(t *testing.T) {
-	k, isWrapped, sig, priv := decodeWrappedAuthkey("tskey-32mjsdkdsffds9o87dsfkjlh", nil)
-	if want := "tskey-32mjsdkdsffds9o87dsfkjlh"; k != want {
-		t.Errorf("decodeWrappedAuthkey(<unwrapped-key>).key = %q, want %q", k, want)
-	}
-	if isWrapped {
-		t.Error("decodeWrappedAuthkey(<unwrapped-key>).isWrapped = true, want false")
-	}
-	if sig != nil {
-		t.Errorf("decodeWrappedAuthkey(<unwrapped-key>).sig = %v, want nil", sig)
-	}
-	if priv != nil {
-		t.Errorf("decodeWrappedAuthkey(<unwrapped-key>).priv = %v, want nil", priv)
-	}
-
-	k, isWrapped, sig, priv = decodeWrappedAuthkey("tskey-auth-k7UagY1CNTRL-ZZZZZ--TLpAEDA1ggnXuw4/fWnNWUwcoOjLemhOvml1juMl5lhLmY5sBUsj8EWEAfL2gdeD9g8VDw5tgcxCiHGlEb67BgU2DlFzZApi4LheLJraA+pYjTGChVhpZz1iyiBPD+U2qxDQAbM3+WFY0EBlggxmVqG53Hu0Rg+KmHJFMlUhfgzo+AQP6+Kk9GzvJJOs4-k36RdoSFqaoARfQo0UncHAV0t3YTqrkD5r/z2jTrE43GZWobnce7RGD4qYckUyVSF+DOj4BA/r4qT0bO8kk6zg", nil)
-	if want := "tskey-auth-k7UagY1CNTRL-ZZZZZ"; k != want {
-		t.Errorf("decodeWrappedAuthkey(<wrapped-key>).key = %q, want %q", k, want)
-	}
-	if !isWrapped {
-		t.Error("decodeWrappedAuthkey(<wrapped-key>).isWrapped = false, want true")
-	}
-
-	if sig == nil {
-		t.Fatal("decodeWrappedAuthkey(<wrapped-key>).sig = nil, want non-nil signature")
-	}
-	sigHash := sig.SigHash()
-	if !ed25519.Verify(sig.KeyID, sigHash[:], sig.Signature) {
-		t.Error("signature failed to verify")
-	}
-
-	// Make sure the private is correct by using it.
-	someSig := ed25519.Sign(priv, []byte{1, 2, 3, 4})
-	if !ed25519.Verify(sig.WrappingPubkey, []byte{1, 2, 3, 4}, someSig) {
-		t.Error("failed to use priv")
-	}
-
 }

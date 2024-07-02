@@ -142,8 +142,9 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 //   - for each SigRotation signature, all previous node keys referenced by the
 //     nested signatures are marked as obsolete.
 //   - if there are multiple SigRotation signatures tracing back to the same
-//     wrapping pubkey (e.g. if a node is cloned with all its keys), we keep
-//     just one of them, marking the others as obsolete.
+//     wrapping pubkey of the initial SigDirect signature (e.g. if a node is
+//     cloned with all its keys), we keep just one of them, marking the others as
+//     obsolete.
 type rotationTracker struct {
 	// obsolete is the set of node keys that are obsolete due to key rotation.
 	// users of rotationTracker should use the obsoleteKeys method for complete results.
@@ -165,6 +166,13 @@ type sigRotationDetails struct {
 func (r *rotationTracker) addRotationDetails(np key.NodePublic, d *tka.RotationDetails) {
 	r.obsolete.Make()
 	r.obsolete.AddSlice(d.PrevNodeKeys)
+	if d.InitialSig.SigKind != tka.SigDirect {
+		// Only enforce uniqueness of chains originating from a SigDirect
+		// signature. Chains that begin with a SigCredential can legitimately
+		// start from the same wrapping pubkey when multiple nodes join the
+		// network using the same reusable auth key.
+		return
+	}
 	rd := sigRotationDetails{
 		np:          np,
 		numPrevKeys: len(d.PrevNodeKeys),
@@ -172,7 +180,7 @@ func (r *rotationTracker) addRotationDetails(np key.NodePublic, d *tka.RotationD
 	if r.byWrappingKey == nil {
 		r.byWrappingKey = make(map[string][]sigRotationDetails)
 	}
-	wp := string(d.WrappingPubkey)
+	wp := string(d.InitialSig.WrappingPubkey)
 	r.byWrappingKey[wp] = append(r.byWrappingKey[wp], rd)
 }
 
