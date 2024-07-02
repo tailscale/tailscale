@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +37,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -51,6 +54,7 @@ var (
 	flagPort               = flag.Int("port", 443, "port to listen on")
 	flagLocalPort          = flag.Int("local-port", -1, "allow requests from localhost")
 	flagUseLocalTailscaled = flag.Bool("use-local-tailscaled", false, "use local tailscaled instead of tsnet")
+	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available outside tailnet")
 )
 
 func main() {
@@ -61,9 +65,10 @@ func main() {
 	}
 
 	var (
-		lc  *tailscale.LocalClient
-		st  *ipnstate.Status
-		err error
+		lc      *tailscale.LocalClient
+		st      *ipnstate.Status
+		err     error
+		watcher *tailscale.IPNBusWatcher
 
 		lns []net.Listener
 	)
@@ -90,6 +95,38 @@ func main() {
 		if !anySuccess {
 			log.Fatalf("failed to listen on any of %v", st.TailscaleIPs)
 		}
+		sc, err := lc.GetServeConfig(ctx)
+		if err != nil {
+			log.Fatalf("could not get serve config: %v", err)
+		}
+		if sc == nil {
+			sc = new(ipn.ServeConfig)
+		}
+		watcher, err = lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+		if err != nil {
+			log.Fatalf("could not set up ipn bus watcher: %v", err)
+		}
+		defer watcher.Close()
+		n, err := watcher.Next()
+		if err != nil {
+			log.Fatalf("could not get initial state from ipn bus watcher: %v", err)
+		}
+		if n.SessionID == "" {
+			log.Fatalf("missing sessionID in ipn.Notify")
+		}
+		foregroundSc := new(ipn.ServeConfig)
+		mak.Set(&sc.Foreground, n.SessionID, foregroundSc)
+		serverURL := strings.TrimSuffix(st.Self.DNSName, ".")
+		fmt.Printf("setting funnel for %s:%v\n", serverURL, uint16(*flagPort))
+		foregroundSc.SetFunnel(serverURL, uint16(*flagPort), *flagFunnel)
+		mak.Set(&foregroundSc.TCP, uint16(*flagPort), &ipn.TCPPortHandler{
+			// TODO(naman): choose ips better?
+			TCPForward: net.JoinHostPort(st.TailscaleIPs[0].String(), portStr),
+		})
+		err = lc.SetServeConfig(ctx, sc)
+		if err != nil {
+			log.Fatalf("could not set serve config: %v", err)
+		}
 	} else {
 		ts := &tsnet.Server{
 			Hostname: "idp",
@@ -105,7 +142,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("getting local client: %v", err)
 		}
-		ln, err := ts.ListenTLS("tcp", fmt.Sprintf(":%d", *flagPort))
+		var ln net.Listener
+		if *flagFunnel {
+			if err := ipn.CheckFunnelAccess(uint16(*flagPort), st.Self); err != nil {
+				log.Fatalf("%v", err)
+			}
+			ln, err = ts.ListenFunnel("tcp", fmt.Sprintf(":%d", *flagPort))
+		} else {
+			ln, err = ts.ListenTLS("tcp", fmt.Sprintf(":%d", *flagPort))
+		}
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -136,7 +181,33 @@ func main() {
 	for _, ln := range lns {
 		go http.Serve(ln, srv)
 	}
-	select {}
+	watcherChan := make(chan error)
+	if watcher != nil {
+		go func() {
+			for {
+				_, err = watcher.Next()
+				if err != nil {
+					watcherChan <- err
+					return
+				}
+			}
+		}()
+	}
+	// need to catch os.Interrupt, otherwise deferred cleanup code doesn't run
+	exitChan := make(chan os.Signal, 1)
+	signal.Notify(exitChan, os.Interrupt)
+	select {
+	case <-exitChan:
+		log.Printf("interrupt, exiting")
+		return
+	case <-watcherChan:
+		if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+			log.Printf("watcher closed, exiting")
+			return
+		}
+		log.Fatalf("watcher error: %v", err)
+		return
+	}
 }
 
 type idpServer struct {
