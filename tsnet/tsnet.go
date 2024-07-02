@@ -292,6 +292,10 @@ func (s *Server) Start() error {
 	return s.initErr
 }
 
+func (s *Server) Dialer() *tsdial.Dialer {
+	return s.dialer
+}
+
 // Up connects the server to the tailnet and waits until it is running.
 // On success it returns the current status, including a Tailscale IP address.
 func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {

@@ -7,6 +7,8 @@ package main
 
 import (
 	"net/http"
+	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -125,4 +127,73 @@ func TestImpersonationHeaders(t *testing.T) {
 			t.Errorf("unexpected header (-want +got):\n%s", d)
 		}
 	}
+}
+
+func Test_determineRecorderConfig(t *testing.T) {
+	addr1, addr2 := netip.MustParseAddrPort("[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:80"), netip.MustParseAddrPort("100.99.99.99:80")
+	tests := []struct {
+		name                  string
+		wantFailOpen          bool
+		wantRecorderAddresses []netip.AddrPort
+		who                   *apitype.WhoIsResponse
+	}{
+		{
+			name:                  "two_ips_fail_closed",
+			who:                   whoResp(map[string][]string{string(tailcfg.PeerCapabilityKubernetes): {`{"recorderAddrs":["[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:80","100.99.99.99:80"],"enforceRecorder":true}`}}),
+			wantRecorderAddresses: []netip.AddrPort{addr1, addr2},
+		},
+		{
+			name:                  "two_ips_fail_open",
+			who:                   whoResp(map[string][]string{string(tailcfg.PeerCapabilityKubernetes): {`{"recorderAddrs":["[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:80","100.99.99.99:80"]}`}}),
+			wantRecorderAddresses: []netip.AddrPort{addr1, addr2},
+			wantFailOpen:          true,
+		},
+		{
+			name:                  "odd_rule_combination_fail_closed",
+			who:                   whoResp(map[string][]string{string(tailcfg.PeerCapabilityKubernetes): {`{"recorderAddrs":["100.99.99.99:80"],"enforceRecorder":false}`, `{"recorderAddrs":["[fd7a:115c:a1e0:ab12:4843:cd96:626b:628b]:80"]}`, `{"enforceRecorder":true,"impersonate":{"groups":["system:masters"]}}`}}),
+			wantRecorderAddresses: []netip.AddrPort{addr2, addr1},
+		},
+		{
+			name:         "no_caps",
+			who:          whoResp(map[string][]string{}),
+			wantFailOpen: true,
+		},
+		{
+			name:         "no_recorder_caps",
+			who:          whoResp(map[string][]string{"foo": {`{"x":"y"}`}, string(tailcfg.PeerCapabilityKubernetes): {`{"impersonate":{"groups":["system:masters"]}}`}}),
+			wantFailOpen: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotFailOpen, gotRecorderAddresses, err := determineRecorderConfig(tt.who)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotFailOpen != tt.wantFailOpen {
+				t.Errorf("determineRecorderConfig() gotFailOpen = %v, want %v", gotFailOpen, tt.wantFailOpen)
+			}
+			if !reflect.DeepEqual(gotRecorderAddresses, tt.wantRecorderAddresses) {
+				t.Errorf("determineRecorderConfig() gotRecorderAddresses = %v, want %v", gotRecorderAddresses, tt.wantRecorderAddresses)
+			}
+		})
+	}
+}
+
+func whoResp(capMap map[string][]string) *apitype.WhoIsResponse {
+	resp := &apitype.WhoIsResponse{
+		CapMap: tailcfg.PeerCapMap{},
+	}
+	for cap, rules := range capMap {
+		resp.CapMap[tailcfg.PeerCapability(cap)] = raw(rules...)
+	}
+	return resp
+}
+
+func raw(in ...string) []tailcfg.RawMessage {
+	var out []tailcfg.RawMessage
+	for _, i := range in {
+		out = append(out, tailcfg.RawMessage(i))
+	}
+	return out
 }
