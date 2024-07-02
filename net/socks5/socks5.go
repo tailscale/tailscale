@@ -214,18 +214,17 @@ func (c *Conn) handleTCP() error {
 	defer srv.Close()
 
 	localAddr := srv.LocalAddr().String()
-	serverAddr, serverPortStr, err := net.SplitHostPort(localAddr)
+	serverAddr, serverPort, err := splitHostPort(localAddr)
 	if err != nil {
 		return err
 	}
-	serverPort, _ := strconv.Atoi(serverPortStr)
 
 	res := &response{
 		reply: success,
 		bindAddr: socksAddr{
 			addrType: getAddrType(serverAddr),
 			addr:     serverAddr,
-			port:     uint16(serverPort),
+			port:     serverPort,
 		},
 	}
 	buf, err := res.marshal()
@@ -265,6 +264,9 @@ func (c *Conn) handleUDP() error {
 
 	addr := c.clientConn.LocalAddr()
 	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return err
+	}
 	clientUDPConn, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		res := errorResponse(generalFailure)
@@ -283,18 +285,17 @@ func (c *Conn) handleUDP() error {
 	}
 	defer serverUDPConn.Close()
 
-	bindAddr, bindPortStr, err := net.SplitHostPort(clientUDPConn.LocalAddr().String())
+	bindAddr, bindPort, err := splitHostPort(clientUDPConn.LocalAddr().String())
 	if err != nil {
 		return err
 	}
-	bindPort, _ := strconv.Atoi(bindPortStr)
 
 	res := &response{
 		reply: success,
 		bindAddr: socksAddr{
 			addrType: getAddrType(bindAddr),
 			addr:     bindAddr,
-			port:     uint16(bindPort),
+			port:     bindPort,
 		},
 	}
 	buf, err := res.marshal()
@@ -304,10 +305,10 @@ func (c *Conn) handleUDP() error {
 	}
 	c.clientConn.Write(buf)
 
-	return c.transferUdp(c.clientConn, clientUDPConn, serverUDPConn)
+	return c.transferUDP(c.clientConn, clientUDPConn, serverUDPConn)
 }
 
-func (c *Conn) transferUdp(associatedTCP net.Conn, clientConn net.PacketConn, targetConn net.PacketConn) error {
+func (c *Conn) transferUDP(associatedTCP net.Conn, clientConn net.PacketConn, targetConn net.PacketConn) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	const bufferSize = 8 * 1024
@@ -322,7 +323,7 @@ func (c *Conn) transferUdp(associatedTCP net.Conn, clientConn net.PacketConn, ta
 			case <-ctx.Done():
 				return
 			default:
-				err := c.handleUdpRequest(clientConn, targetConn, buf, readTimeout)
+				err := c.handleUDPRequest(clientConn, targetConn, buf, readTimeout)
 				if err != nil {
 					if isTimeout(err) {
 						continue
@@ -345,7 +346,7 @@ func (c *Conn) transferUdp(associatedTCP net.Conn, clientConn net.PacketConn, ta
 			case <-ctx.Done():
 				return
 			default:
-				err := c.handleUdpResponse(targetConn, clientConn, buf, readTimeout)
+				err := c.handleUDPResponse(targetConn, clientConn, buf, readTimeout)
 				if err != nil {
 					if isTimeout(err) {
 						continue
@@ -368,7 +369,7 @@ func (c *Conn) transferUdp(associatedTCP net.Conn, clientConn net.PacketConn, ta
 	return err
 }
 
-func (c *Conn) handleUdpRequest(
+func (c *Conn) handleUDPRequest(
 	clientConn net.PacketConn,
 	targetConn net.PacketConn,
 	buf []byte,
@@ -381,7 +382,7 @@ func (c *Conn) handleUdpRequest(
 		return fmt.Errorf("read from client: %w", err)
 	}
 	c.udpClientAddr = addr
-	req, data, err := parseUdpRequest(buf[:n])
+	req, data, err := parseUDPRequest(buf[:n])
 	if err != nil {
 		return fmt.Errorf("parse udp request: %w", err)
 	}
@@ -400,7 +401,7 @@ func (c *Conn) handleUdpRequest(
 	return nil
 }
 
-func (c *Conn) handleUdpResponse(
+func (c *Conn) handleUDPResponse(
 	targetConn net.PacketConn,
 	clientConn net.PacketConn,
 	buf []byte,
@@ -412,12 +413,11 @@ func (c *Conn) handleUdpResponse(
 	if err != nil {
 		return fmt.Errorf("read from target: %w", err)
 	}
-	host, portStr, err := net.SplitHostPort(addr.String())
+	host, port, err := splitHostPort(addr.String())
 	if err != nil {
 		return fmt.Errorf("split host port: %w", err)
 	}
-	port, _ := strconv.Atoi(portStr)
-	hdr := udpRequest{addr: socksAddr{addrType: getAddrType(host), addr: host, port: uint16(port)}}
+	hdr := udpRequest{addr: socksAddr{addrType: getAddrType(host), addr: host, port: port}}
 	pkt, err := hdr.marshal()
 	if err != nil {
 		return fmt.Errorf("marshal udp request: %w", err)
@@ -437,6 +437,21 @@ func (c *Conn) handleUdpResponse(
 func isTimeout(err error) bool {
 	terr, ok := errors.Unwrap(err).(interface{ Timeout() bool })
 	return ok && terr.Timeout()
+}
+
+func splitHostPort(hostport string) (host string, port uint16, err error) {
+	host, portStr, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return "", 0, err
+	}
+	portInt, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, err
+	}
+	if portInt < 0 || portInt > 65535 {
+		return "", 0, fmt.Errorf("invalid port number %d", portInt)
+	}
+	return host, uint16(portInt), nil
 }
 
 // parseClientGreeting parses a request initiation packet.
@@ -519,7 +534,7 @@ func parseClientRequest(r io.Reader) (*request, error) {
 	return &request{
 		command:     commandType(cmd),
 		destination: destination,
-	}, nil
+	}, err
 }
 
 type socksAddr struct {
@@ -582,6 +597,7 @@ func parseSocksAddr(r io.Reader) (addr socksAddr, err error) {
 		port:     port,
 	}, nil
 }
+
 func (s socksAddr) marshal() ([]byte, error) {
 	var addr []byte
 	switch s.addrType {
@@ -654,7 +670,7 @@ type udpRequest struct {
 // +----+------+------+----------+----------+----------+
 // | 2  |  1   |  1   | Variable |    2     | Variable |
 // +----+------+------+----------+----------+----------+
-func parseUdpRequest(data []byte) (*udpRequest, []byte, error) {
+func parseUDPRequest(data []byte) (*udpRequest, []byte, error) {
 	if len(data) < 4 {
 		return nil, nil, fmt.Errorf("invalid packet length")
 	}
@@ -668,12 +684,14 @@ func parseUdpRequest(data []byte) (*udpRequest, []byte, error) {
 
 	reader := bytes.NewReader(data[3:])
 	addr, err := parseSocksAddr(reader)
-	body, _ := io.ReadAll(reader)
+	bodyLen := reader.Len() // (*bytes.Reader).Len() return unread data length
+	body := data[len(data)-bodyLen:]
 	return &udpRequest{
 		frag: frag,
 		addr: addr,
 	}, body, err
 }
+
 func (u *udpRequest) marshal() ([]byte, error) {
 	pkt := make([]byte, 3)
 	pkt[0] = 0

@@ -208,6 +208,9 @@ func TestUDP(t *testing.T) {
 		port:     uint16(backendServerPort),
 	}
 	targetAddrPkt, err := targetAddr.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = conn.Write(append([]byte{0x05, 0x03, 0x00}, targetAddrPkt...)) // client reqeust
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +249,7 @@ func TestUDP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, responseBody, err := parseUdpRequest(buf[:n]) // read udp response
+	_, responseBody, err := parseUDPRequest(buf[:n]) // read udp response
 	if err != nil {
 		t.Fatal(err)
 	}
