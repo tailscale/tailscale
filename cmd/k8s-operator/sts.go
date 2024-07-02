@@ -294,6 +294,7 @@ func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 			Selector: map[string]string{
 				"app": sts.ParentResourceUID,
 			},
+			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
 	logger.Debugf("reconciling headless service for StatefulSet")

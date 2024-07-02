@@ -8,6 +8,8 @@ package linuxfw
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 )
 
@@ -128,8 +130,13 @@ func (n *fakeIPTables) DeleteChain(table, chain string) error {
 
 func NewFakeIPTablesRunner() *iptablesRunner {
 	ipt4 := newFakeIPTables()
-	ipt6 := newFakeIPTables()
+	v6Available := false
+	var ipt6 iptablesInterface
+	if use6, err := strconv.ParseBool(os.Getenv("TS_TEST_FAKE_NETFILTER_6")); use6 || err != nil {
+		ipt6 = newFakeIPTables()
+		v6Available = true
+	}
 
-	iptr := &iptablesRunner{ipt4, ipt6, true, true, true}
+	iptr := &iptablesRunner{ipt4, ipt6, v6Available, v6Available, v6Available}
 	return iptr
 }

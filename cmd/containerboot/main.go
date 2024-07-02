@@ -476,17 +476,19 @@ runLoop:
 					newCurentEgressIPs = deephash.Hash(&egressAddrs)
 					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
 					if egressIPsHaveChanged && len(egressAddrs) != 0 {
+						var rulesInstalled bool
 						for _, egressAddr := range egressAddrs {
 							ea := egressAddr.Addr()
-							// TODO (irbekrm): make it work for IPv6 too.
-							if ea.Is6() {
-								log.Println("Not installing egress forwarding rules for IPv6 as this is currently not supported")
-								continue
+							if ea.Is4() || (ea.Is6() && nfr.HasIPV6NAT()) {
+								rulesInstalled = true
+								log.Printf("Installing forwarding rules for destination %v", ea.String())
+								if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
+									log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
+								}
 							}
-							log.Printf("Installing forwarding rules for destination %v", ea.String())
-							if err := installEgressForwardingRule(ctx, ea.String(), addrs, nfr); err != nil {
-								log.Fatalf("installing egress proxy rules for destination %s: %v", ea.String(), err)
-							}
+						}
+						if !rulesInstalled {
+							log.Fatalf("no forwarding rules for egress addresses %v, host supports IPv6: %v", egressAddrs, nfr.HasIPV6NAT())
 						}
 					}
 					currentEgressIPs = newCurentEgressIPs
@@ -941,7 +943,7 @@ func enableIPForwarding(v4Forwarding, v6Forwarding bool, root string) error {
 	return nil
 }
 
-func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
+func installEgressForwardingRule(_ context.Context, dstStr string, tsIPs []netip.Prefix, nfr linuxfw.NetfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
