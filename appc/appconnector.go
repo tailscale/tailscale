@@ -493,6 +493,7 @@ func (e *AppConnector) isAddrKnownLocked(domain string, addr netip.Addr) bool {
 			// record the new address associated with the domain for faster matching in subsequent
 			// requests and for diagnostic records.
 			e.addDomainAddrLocked(domain, addr)
+			e.storeRoutesLocked()
 			return true
 		}
 	}
