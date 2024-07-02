@@ -257,6 +257,19 @@ type Prefs struct {
 	Persist *persist.Persist `json:"Config"`
 }
 
+// PrefsGetter is any function that returns a PrefsView or an error.
+// It delays fetching of PrefsView from the StateStore until and unless it is needed.
+// This is primarily used when ipnauth needs to access Prefs.OperatorUser on Linux
+// or Prefs.ForceDaemon on Windows.
+// TODO(nickkhyl): consider moving / copying fields that are used in access checks
+// from ipn.Prefs to ipn.LoginProfile.
+type PrefsGetter func() (PrefsView, error)
+
+// PrefsGetterFor returns a new PrefsGetter that always return the specified p.
+func PrefsGetterFor(p PrefsView) PrefsGetter {
+	return func() (PrefsView, error) { return p, nil }
+}
+
 // AutoUpdatePrefs are the auto update settings for the node agent.
 type AutoUpdatePrefs struct {
 	// Check specifies whether background checks for updates are enabled. When

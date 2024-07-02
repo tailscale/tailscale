@@ -9,8 +9,18 @@ import (
 	"net"
 
 	"github.com/tailscale/peercred"
+	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 )
+
+// GetIdentity extracts the identity information from the connection
+// based on the user who owns the other end of the connection.
+// TODO(nickkhyl): rename this to GetConnIdentity once we no longer need
+// the original GetConnIdentity.
+func GetIdentity(c net.Conn) (ci Identity, err error) {
+	creds, _ := peercred.Get(c)
+	return &unixIdentity{goos: envknob.GOOS(), creds: creds}, nil
+}
 
 // GetConnIdentity extracts the identity information from the connection
 // based on the user who owns the other end of the connection.
