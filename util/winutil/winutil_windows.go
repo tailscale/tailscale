@@ -647,7 +647,8 @@ func LogonSessionID(token windows.Token) (logonSessionID windows.LUID, err error
 	return origin.originatingLogonSession, nil
 }
 
-// BufUnit is a type constraint for buffers passed into AllocateContiguousBuffer.
+// BufUnit is a type constraint for buffers passed into AllocateContiguousBuffer
+// and SetNTString.
 type BufUnit interface {
 	byte | uint16
 }
