@@ -55,12 +55,16 @@ type C2NUpdateResponse struct {
 	Started bool
 }
 
-// C2NPostureIdentityResponse contains either a set of identifying serial number
-// from the client or a boolean indicating that the machine has opted out of
-// posture collection.
+// C2NPostureIdentityResponse contains either a set of identifying serial
+// numbers and hardware addresses from the client, or a boolean flag
+// indicating that the machine has opted out of posture collection.
 type C2NPostureIdentityResponse struct {
 	// SerialNumbers is a list of serial numbers of the client machine.
 	SerialNumbers []string `json:",omitempty"`
+
+	// IfaceHardwareAddrs is a list of hardware addresses (MAC addresses)
+	// of the client machine's network interfaces.
+	IfaceHardwareAddrs []string `json:",omitempty"`
 
 	// PostureDisabled indicates if the machine has opted out of
 	// device posture collection.
