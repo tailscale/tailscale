@@ -94,13 +94,13 @@ var LoginStateWarnable = Register(&Warnable{
 	},
 })
 
-// notInMapPollWarnable is a Warnable that warns the user that they cannot connect to the control server.
+// notInMapPollWarnable is a Warnable that warns the user that we are using a stale network map.
 var notInMapPollWarnable = Register(&Warnable{
 	Code:      "not-in-map-poll",
-	Title:     "Cannot connect to control server",
+	Title:     "Out of sync",
 	Severity:  SeverityMedium,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
-	Text:      StaticMessage("Cannot connect to the control server (not in map poll). Check your Internet connection."),
+	Text:      StaticMessage("Unable to connect to the Tailscale coordination server to synchronize the state of your tailnet. Peer reachability might degrade over time."),
 })
 
 // noDERPHomeWarnable is a Warnable that warns the user that Tailscale doesn't have a home DERP.
