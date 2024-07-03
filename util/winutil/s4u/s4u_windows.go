@@ -119,7 +119,7 @@ const (
 // Login logs user u into Windows on behalf of service srcName, loads the user's
 // profile, and returns a Session that may be used for impersonating that user,
 // or optionally creating processes as that user. Logs will be written to logf,
-// if provided.  srcName must be non-empty, ASCII-only, and no longer than 8
+// if provided. srcName must be non-empty, ASCII-only, and no longer than 8
 // characters.
 //
 // The current OS thread's access token must have SeTcbPrivilege.
@@ -281,10 +281,11 @@ type startProcessOpts struct {
 }
 
 // StartProcess creates a new process running under ss via cmdLineInfo.
-// The process will be started with its working directory set to the S4U user's
-// profile directory and its environment set to the S4U user's environment.
-// extraEnv, when specified, contains any additional environment variables to
-// be added to the process's environment.
+// The process will either be started with its working directory set to the S4U
+// user's profile directory, or for Administrative users, the system32
+// directory. The child process will receive the S4U user's environment.
+// extraEnv, when specified, contains any additional environment
+// variables to be inserted into the environment.
 //
 // If called after ss has already been closed, StartProcess will panic.
 func (ss *Session) StartProcess(cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string) (psp *Process, err error) {
@@ -302,10 +303,11 @@ func (ss *Session) StartProcess(cmdLineInfo winutil.CommandLineInfo, extraEnv ma
 // StartProcessWithPTY creates a new process running under ss via cmdLineInfo
 // with a pseudoconsole initialized to initialPtySize. The resulting Process
 // will return non-nil values from Stdin and Stdout, but Stderr will return nil.
-// The process will be started with its working directory set to the S4U user's
-// profile directory and its environment set to the S4U user's environment.
-// extraEnv, when specified, contains any additional environment variables to
-// be added to the process's environment.
+// The process will either be started with its working directory set to the S4U
+// user's profile directory, or for Administrative users, the system32
+// directory. The child process will receive the S4U user's environment.
+// extraEnv, when specified, contains any additional environment
+// variables to be inserted into the environment.
 //
 // If called after ss has already been closed, StartProcessWithPTY will panic.
 func (ss *Session) StartProcessWithPTY(cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string, initialPtySize windows.Coord) (psp *Process, err error) {
@@ -324,10 +326,11 @@ func (ss *Session) StartProcessWithPTY(cmdLineInfo winutil.CommandLineInfo, extr
 // StartProcessWithPipes creates a new process running under ss via cmdLineInfo
 // with all standard handles set to pipes. The resulting Process will return
 // non-nil values from Stdin, Stdout, and Stderr.
-// The process will be started with its working directory set to the S4U user's
-// profile directory and its environment set to the S4U user's environment.
-// extraEnv, when specified, contains any additional environment variables to
-// be added to the process's environment.
+// The process will either be started with its working directory set to the S4U
+// user's profile directory, or for Administrative users, the system32
+// directory. The child process will receive the S4U user's environment.
+// extraEnv, when specified, contains any additional environment
+// variables to be inserted into the environment.
 //
 // If called after ss has already been closed, StartProcessWithPipes will panic.
 func (ss *Session) StartProcessWithPipes(cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string) (psp *Process, err error) {
