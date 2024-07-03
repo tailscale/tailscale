@@ -5,7 +5,10 @@ package health
 
 import (
 	"fmt"
+	"runtime"
 	"time"
+
+	"tailscale.com/version"
 )
 
 /**
@@ -18,7 +21,11 @@ var updateAvailableWarnable = Register(&Warnable{
 	Title:    "Update available",
 	Severity: SeverityLow,
 	Text: func(args Args) string {
-		return fmt.Sprintf("An update from version %s to %s is available. Run `tailscale update` or `tailscale set --auto-update` to update.", args[ArgCurrentVersion], args[ArgAvailableVersion])
+		if version.IsMacAppStore() || version.IsAppleTV() || version.IsMacSys() || version.IsWindowsGUI() || runtime.GOOS == "android" {
+			return fmt.Sprintf("An update from version %s to %s is available.", args[ArgCurrentVersion], args[ArgAvailableVersion])
+		} else {
+			return fmt.Sprintf("An update from version %s to %s is available. Run `tailscale update` or `tailscale set --auto-update` to update now.", args[ArgCurrentVersion], args[ArgAvailableVersion])
+		}
 	},
 })
 
@@ -26,9 +33,13 @@ var updateAvailableWarnable = Register(&Warnable{
 var securityUpdateAvailableWarnable = Register(&Warnable{
 	Code:     "security-update-available",
 	Title:    "Security update available",
-	Severity: SeverityHigh,
+	Severity: SeverityMedium,
 	Text: func(args Args) string {
-		return fmt.Sprintf("An urgent security update from version %s to %s is available. Run `tailscale update` or `tailscale set --auto-update` to update now.", args[ArgCurrentVersion], args[ArgAvailableVersion])
+		if version.IsMacAppStore() || version.IsAppleTV() || version.IsMacSys() || version.IsWindowsGUI() || runtime.GOOS == "android" {
+			return fmt.Sprintf("A security update from version %s to %s is available.", args[ArgCurrentVersion], args[ArgAvailableVersion])
+		} else {
+			return fmt.Sprintf("A security update from version %s to %s is available. Run `tailscale update` or `tailscale set --auto-update` to update now.", args[ArgCurrentVersion], args[ArgAvailableVersion])
+		}
 	},
 })
 
@@ -38,15 +49,15 @@ var unstableWarnable = Register(&Warnable{
 	Code:     "is-using-unstable-version",
 	Title:    "Using an unstable version",
 	Severity: SeverityLow,
-	Text:     StaticMessage("This is an unstable version of Tailscale meant for testing and development purposes: please report any bugs to Tailscale."),
+	Text:     StaticMessage("This is an unstable version of Tailscale meant for testing and development purposes. Please report any issues to Tailscale."),
 })
 
 // NetworkStatusWarnable is a Warnable that warns the user that the network is down.
 var NetworkStatusWarnable = Register(&Warnable{
 	Code:                "network-status",
 	Title:               "Network down",
-	Severity:            SeverityHigh,
-	Text:                StaticMessage("Tailscale cannot connect because the network is down. (No network interface is up.)"),
+	Severity:            SeverityMedium,
+	Text:                StaticMessage("Tailscale cannot connect because the network is down. Check your Internet connection."),
 	ImpactsConnectivity: true,
 })
 
@@ -94,18 +105,19 @@ var notInMapPollWarnable = Register(&Warnable{
 
 // noDERPHomeWarnable is a Warnable that warns the user that Tailscale doesn't have a home DERP.
 var noDERPHomeWarnable = Register(&Warnable{
-	Code:      "no-derp-home",
-	Title:     "No home relay server",
-	Severity:  SeverityHigh,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
-	Text:      StaticMessage("Tailscale could not connect to any relay server. Check your Internet connection."),
+	Code:                "no-derp-home",
+	Title:               "No home relay server",
+	Severity:            SeverityMedium,
+	DependsOn:           []*Warnable{NetworkStatusWarnable},
+	Text:                StaticMessage("Tailscale could not connect to any relay server. Check your Internet connection."),
+	ImpactsConnectivity: true,
 })
 
 // noDERPConnectionWarnable is a Warnable that warns the user that Tailscale couldn't connect to a specific DERP server.
 var noDERPConnectionWarnable = Register(&Warnable{
 	Code:      "no-derp-connection",
 	Title:     "Relay server unavailable",
-	Severity:  SeverityHigh,
+	Severity:  SeverityMedium,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
 	Text: func(args Args) string {
 		if n := args[ArgDERPRegionName]; n != "" {
@@ -114,6 +126,7 @@ var noDERPConnectionWarnable = Register(&Warnable{
 			return fmt.Sprintf("Tailscale could not connect to the relay server with ID '%s'. Your Internet connection might be down, or the server might be temporarily unavailable.", args[ArgDERPRegionID])
 		}
 	},
+	ImpactsConnectivity: true,
 })
 
 // derpTimeoutWarnable is a Warnable that warns the user that Tailscale hasn't heard from the home DERP region for a while.
@@ -135,7 +148,7 @@ var derpTimeoutWarnable = Register(&Warnable{
 var derpRegionErrorWarnable = Register(&Warnable{
 	Code:      "derp-region-error",
 	Title:     "Relay server error",
-	Severity:  SeverityMedium,
+	Severity:  SeverityLow,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
 	Text: func(args Args) string {
 		return fmt.Sprintf("The relay server #%v is reporting an issue: %v", args[ArgDERPRegionID], args[ArgError])
@@ -146,7 +159,7 @@ var derpRegionErrorWarnable = Register(&Warnable{
 var noUDP4BindWarnable = Register(&Warnable{
 	Code:                "no-udp4-bind",
 	Title:               "Incoming connections may fail",
-	Severity:            SeverityHigh,
+	Severity:            SeverityMedium,
 	DependsOn:           []*Warnable{NetworkStatusWarnable},
 	Text:                StaticMessage("Tailscale couldn't listen for incoming UDP connections."),
 	ImpactsConnectivity: true,
