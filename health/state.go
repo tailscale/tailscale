@@ -23,13 +23,14 @@ type State struct {
 // Representation contains information to be shown to the user to inform them
 // that a Warnable is currently unhealthy.
 type UnhealthyState struct {
-	WarnableCode WarnableCode
-	Severity     Severity
-	Title        string
-	Text         string
-	BrokenSince  *time.Time     `json:",omitempty"`
-	Args         Args           `json:",omitempty"`
-	DependsOn    []WarnableCode `json:",omitempty"`
+	WarnableCode        WarnableCode
+	Severity            Severity
+	Title               string
+	Text                string
+	BrokenSince         *time.Time     `json:",omitempty"`
+	Args                Args           `json:",omitempty"`
+	DependsOn           []WarnableCode `json:",omitempty"`
+	ImpactsConnectivity bool           `json:",omitempty"`
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -54,13 +55,14 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 	}
 
 	return &UnhealthyState{
-		WarnableCode: w.Code,
-		Severity:     w.Severity,
-		Title:        w.Title,
-		Text:         text,
-		BrokenSince:  &ws.BrokenSince,
-		Args:         ws.Args,
-		DependsOn:    dependsOnWarnableCodes,
+		WarnableCode:        w.Code,
+		Severity:            w.Severity,
+		Title:               w.Title,
+		Text:                text,
+		BrokenSince:         &ws.BrokenSince,
+		Args:                ws.Args,
+		DependsOn:           dependsOnWarnableCodes,
+		ImpactsConnectivity: w.ImpactsConnectivity,
 	}
 }
 
