@@ -137,6 +137,7 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "# To view the complete list of exit nodes for a country, use `tailscale exit-node list --filter=` followed by the country name.")
 	fmt.Fprintln(w, "# To use an exit node, use `tailscale set --exit-node=` followed by the hostname or IP.")
 	if hasAnyExitNodeSuggestions(peers) {
 		fmt.Fprintln(w, "# To have Tailscale suggest an exit node, use `tailscale exit-node suggest`.")
@@ -231,7 +232,7 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 	for _, ps := range peers {
 		loc := cmp.Or(ps.Location, noLocation)
 
-		if filterBy != "" && loc.Country != filterBy {
+		if filterBy != "" && !strings.EqualFold(loc.Country, filterBy) {
 			continue
 		}
 
@@ -271,9 +272,14 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 			countryAnyPeer = append(countryAnyPeer, city.Peers...)
 			var reducedCityPeers []*ipnstate.PeerStatus
 			for i, peer := range city.Peers {
+				if filterBy != "" {
+					// If the peers are being filtered, we return all peers to the user.
+					reducedCityPeers = append(reducedCityPeers, city.Peers...)
+					break
+				}
+				// If the peers are not being filtered, we only return the highest priority peer and any peer that
+				// is currently the active exit node.
 				if i == 0 || peer.ExitNode {
-					// We only return the highest priority peer and any peer that
-					// is currently the active exit node.
 					reducedCityPeers = append(reducedCityPeers, peer)
 				}
 			}

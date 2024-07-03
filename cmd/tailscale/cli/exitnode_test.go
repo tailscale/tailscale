@@ -219,7 +219,7 @@ func TestFilterFormatAndSortExitNodes(t *testing.T) {
 						{
 							Name: "Rainier",
 							Peers: []*ipnstate.PeerStatus{
-								ps[2],
+								ps[2], ps[3],
 							},
 						},
 					},
