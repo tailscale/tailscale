@@ -712,6 +712,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Del("Tailscale-User-Login")
 	r.Out.Header.Del("Tailscale-User-Name")
 	r.Out.Header.Del("Tailscale-User-Profile-Pic")
+	r.Out.Header.Del("Tailscale-Funneled-Connection")
 	r.Out.Header.Del("Tailscale-Headers-Info")
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
@@ -720,6 +721,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	}
 	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
 	if !ok {
+		r.Out.Header.Set("Tailscale-Funneled-Connection", "?1")
 		return // traffic from outside of Tailnet (funneled)
 	}
 	if node.IsTagged() {
