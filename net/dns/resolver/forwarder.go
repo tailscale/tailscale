@@ -511,10 +511,16 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	isUDPQuery := fq.family == "udp"
 	skipTCP := skipTCPRetry() || (f.controlKnobs != nil && f.controlKnobs.DisableDNSForwarderTCPRetries.Load())
 
+	var vlogf logger.Logf = logger.Discard
+	if verboseDNSForward() {
+		vlogf = f.logf
+	}
+
 	// Print logs about retries if this was because of a truncated response.
 	var explicitRetry atomic.Bool // true if truncated UDP response retried
 	defer func() {
 		if !explicitRetry.Load() {
+			vlogf("forwarder.send(%q): no retry needed", rr.name.Addr)
 			return
 		}
 		if err == nil {
@@ -525,12 +531,16 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}()
 
 	firstUDP := func(ctx context.Context) ([]byte, error) {
+		t0 := time.Now()
+		vlogf("starting UDP query for %q", rr.name.Addr)
 		resp, err := f.sendUDP(ctx, fq, rr)
+		vlogf("UDP query for %q took %v; err=%v", rr.name.Addr, time.Since(t0), err)
 		if err != nil {
 			return nil, err
 		}
 		if !truncatedFlagSet(resp) {
 			// Successful, non-truncated response; no retry.
+			vlogf("reply from %q was not truncated; returning", rr.name.Addr)
 			return resp, nil
 		}
 
@@ -540,12 +550,14 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// falling back to TCP for a truncated query if we can't return
 		// the results to the client.
 		if isUDPQuery {
+			vlogf("reply from %q was truncated, but client was UDP; returning", rr.name.Addr)
 			return resp, nil
 		}
 
 		if skipTCP {
 			// Envknob or control knob disabled the TCP retry behaviour;
 			// just return what we have.
+			vlogf("reply from %q was truncated, but TCP retries are disabled; returning", rr.name.Addr)
 			return resp, nil
 		}
 
@@ -554,6 +566,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// error to cause our retry helper to immediately kick off the
 		// TCP retry.
 		explicitRetry.Store(true)
+		vlogf("reply from %q was truncated; signaling to retry via TCP", rr.name.Addr)
 		return nil, truncatedResponseError{resp}
 	}
 	thenTCP := func(ctx context.Context) ([]byte, error) {
@@ -561,11 +574,16 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// context is canceled and return that error (i.e. not
 		// returning anything).
 		if skipTCP {
+			vlogf("skipping TCP query for %q", rr.name.Addr)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
 
-		return f.sendTCP(ctx, fq, rr)
+		t0 := time.Now()
+		vlogf("starting TCP query for %q", rr.name.Addr)
+		ret, err := f.sendTCP(ctx, fq, rr)
+		vlogf("TCP query for %q took %v; err=%v", rr.name.Addr, time.Since(t0), err)
+		return ret, err
 	}
 
 	// If the input query is TCP, then don't have a timeout between
