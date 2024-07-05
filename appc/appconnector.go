@@ -442,8 +442,10 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) {
 			}
 		}
 
-		e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
-		e.scheduleAdvertisement(domain, toAdvertise...)
+		if len(toAdvertise) > 0 {
+			e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
+			e.scheduleAdvertisement(domain, toAdvertise...)
+		}
 	}
 }
 

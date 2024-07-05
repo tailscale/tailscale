@@ -9,14 +9,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/netip"
 	"strings"
 	"time"
 
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -71,8 +69,8 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		return d.DialContext(ctx, network, addr)
 	})
 
-	add := func(k key.NodePublic, _ netip.AddrPort) { s.AddPacketForwarder(k, c) }
-	remove := func(k key.NodePublic) { s.RemovePacketForwarder(k, c) }
+	add := func(m derp.PeerPresentMessage) { s.AddPacketForwarder(m.Key, c) }
+	remove := func(m derp.PeerGoneMessage) { s.RemovePacketForwarder(m.Peer, c) }
 	go c.RunWatchConnectionLoop(context.Background(), s.PublicKey(), logf, add, remove)
 	return nil
 }

@@ -135,6 +135,7 @@ func (c *Conn) pickDERPFallback() int {
 		return pickDERPFallbackForTests()
 	}
 
+	metricDERPHomeFallback.Add(1)
 	return ids[rands.IntN(uint64(uintptr(unsafe.Pointer(c))), len(ids))]
 }
 
@@ -158,6 +159,10 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 	//
 	// For tests, always assume we're connected to control unless we're
 	// explicitly testing this behaviour.
+	//
+	// Despite the above behaviour, ensure that we set the nearest DERP if
+	// we don't currently have one set; any DERP server is better than
+	// none, even if not connected to control.
 	var connectedToControl bool
 	if testenv.InTest() && !checkControlHealthDuringNearestDERPInTests {
 		connectedToControl = true
@@ -166,8 +171,16 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 	}
 	if !connectedToControl {
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.myDerp
+		myDerp := c.myDerp
+		c.mu.Unlock()
+		if myDerp != 0 {
+			metricDERPHomeNoChangeNoControl.Add(1)
+			return myDerp
+		}
+
+		// Intentionally fall through; we don't have a current DERP, so
+		// as mentioned above selecting one even if not connected is
+		// strictly better than doing nothing.
 	}
 
 	preferredDERP = report.PreferredDERP
@@ -937,6 +950,7 @@ func (c *Conn) cleanStaleDerp() {
 		}
 		if ad.lastWrite.Before(tooOld) {
 			c.closeDerpLocked(i, "idle")
+			metricDERPStaleCleaned.Add(1)
 			dirty = true
 		} else {
 			someNonHomeOpen = true

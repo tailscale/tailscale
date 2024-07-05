@@ -250,18 +250,24 @@ type HandlerOptions struct {
 	// for each bucket based on the contained parameters.
 	BucketedStats *BucketedStatsOptions
 
+	// OnStart is called inline before ServeHTTP is called. Optional.
+	OnStart OnStartFunc
+
 	// OnError is called if the handler returned a HTTPError. This
 	// is intended to be used to present pretty error pages if
 	// the user agent is determined to be a browser.
 	OnError ErrorHandlerFunc
 
-	// OnCompletion is called when ServeHTTP is finished and gets
-	// useful data that the implementor can use for metrics.
+	// OnCompletion is called inline when ServeHTTP is finished and gets
+	// useful data that the implementor can use for metrics. Optional.
 	OnCompletion OnCompletionFunc
 }
 
 // ErrorHandlerFunc is called to present a error response.
 type ErrorHandlerFunc func(http.ResponseWriter, *http.Request, HTTPError)
+
+// OnStartFunc is called before ServeHTTP is called.
+type OnStartFunc func(*http.Request, AccessLogRecord)
 
 // OnCompletionFunc is called when ServeHTTP is finished and gets
 // useful data that the implementor can use for metrics.
@@ -334,6 +340,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				startRecorded = true
 			}
 		}
+	}
+
+	if fn := h.opts.OnStart; fn != nil {
+		fn(r, msg)
 	}
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}

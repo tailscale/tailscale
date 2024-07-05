@@ -6,6 +6,7 @@ package tka
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/hdevalence/ed25519consensus"
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/tkatype"
 )
 
@@ -311,9 +313,9 @@ type RotationDetails struct {
 	// PrevNodeKeys is a list of node keys which have been rotated out.
 	PrevNodeKeys []key.NodePublic
 
-	// WrappingPubkey is the public key which has been authorized to sign
+	// InitialSig is the first signature in the chain which led to
 	// this rotating signature.
-	WrappingPubkey []byte
+	InitialSig *NodeKeySignature
 }
 
 // rotationDetails returns the RotationDetails for a SigRotation signature.
@@ -337,7 +339,7 @@ func (s *NodeKeySignature) rotationDetails() (*RotationDetails, error) {
 		}
 		nested = nested.Nested
 	}
-	sri.WrappingPubkey = nested.WrappingPubkey
+	sri.InitialSig = nested
 	return sri, nil
 }
 
@@ -378,4 +380,65 @@ func ResignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.Marsha
 	}
 
 	return newSig.Serialize(), nil
+}
+
+// SignByCredential signs a node public key by a private key which has its
+// signing authority delegated by a SigCredential signature. This is used by
+// wrapped auth keys.
+func SignByCredential(privKey []byte, wrapped *NodeKeySignature, nodeKey key.NodePublic) (tkatype.MarshaledSignature, error) {
+	if wrapped.SigKind != SigCredential {
+		return nil, fmt.Errorf("wrapped signature must be a credential, got %v", wrapped.SigKind)
+	}
+
+	nk, err := nodeKey.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshalling node-key: %w", err)
+	}
+
+	sig := &NodeKeySignature{
+		SigKind: SigRotation,
+		Pubkey:  nk,
+		Nested:  wrapped,
+	}
+	sigHash := sig.SigHash()
+	sig.Signature = ed25519.Sign(privKey, sigHash[:])
+	return sig.Serialize(), nil
+}
+
+// DecodeWrappedAuthkey separates wrapping information from an authkey, if any.
+// In all cases the authkey is returned, sans wrapping information if any.
+//
+// If the authkey is wrapped, isWrapped returns true, along with the wrapping signature
+// and private key.
+func DecodeWrappedAuthkey(wrappedAuthKey string, logf logger.Logf) (authKey string, isWrapped bool, sig *NodeKeySignature, priv ed25519.PrivateKey) {
+	authKey, suffix, found := strings.Cut(wrappedAuthKey, "--TL")
+	if !found {
+		return wrappedAuthKey, false, nil, nil
+	}
+	sigBytes, privBytes, found := strings.Cut(suffix, "-")
+	if !found {
+		// TODO: propagate these errors to `tailscale up` output?
+		logf("decoding wrapped auth-key: did not find delimiter")
+		return wrappedAuthKey, false, nil, nil
+	}
+
+	rawSig, err := base64.RawStdEncoding.DecodeString(sigBytes)
+	if err != nil {
+		logf("decoding wrapped auth-key: signature decode: %v", err)
+		return wrappedAuthKey, false, nil, nil
+	}
+	rawPriv, err := base64.RawStdEncoding.DecodeString(privBytes)
+	if err != nil {
+		logf("decoding wrapped auth-key: priv decode: %v", err)
+		return wrappedAuthKey, false, nil, nil
+	}
+
+	sig = new(NodeKeySignature)
+	if err := sig.Unserialize(rawSig); err != nil {
+		logf("decoding wrapped auth-key: signature: %v", err)
+		return wrappedAuthKey, false, nil, nil
+	}
+	priv = ed25519.PrivateKey(rawPriv)
+
+	return authKey, true, sig, priv
 }

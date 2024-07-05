@@ -1276,6 +1276,7 @@ func newTestConn(t testing.TB) *Conn {
 
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
+		HealthTracker:          new(health.Tracker),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
 		Port:                   port,
@@ -3127,6 +3128,20 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 			reportDERP:         21,
 			connectedToControl: false,
 			want:               1, // no change
+		},
+		{
+			name:               "not_connected_with_report_derp_and_no_current",
+			old:                0,     // no current DERP
+			reportDERP:         21,    // have new DERP
+			connectedToControl: false, // not connected...
+			want:               21,    // ... but want to change to new DERP
+		},
+		{
+			name:               "not_connected_with_fallback_and_no_current",
+			old:                0,     // no current DERP
+			reportDERP:         0,     // no new DERP
+			connectedToControl: false, // not connected...
+			want:               31,    // ... but we fallback to deterministic value
 		},
 		{
 			name:               "connected_no_derp",

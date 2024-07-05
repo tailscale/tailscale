@@ -6,8 +6,12 @@ package health
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
+
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 )
 
 func TestAppendWarnableDebugFlags(t *testing.T) {
@@ -199,15 +203,103 @@ func TestCheckDependsOnAppearsInUnhealthyState(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected an UnhealthyState for w1, got nothing")
 	}
-	if len(us1.DependsOn) != 0 {
-		t.Fatalf("Expected no DependsOn in the unhealthy state, got: %v", us1.DependsOn)
+	wantDependsOn := []WarnableCode{warmingUpWarnable.Code}
+	if !reflect.DeepEqual(us1.DependsOn, wantDependsOn) {
+		t.Fatalf("Expected DependsOn = %v in the unhealthy state, got: %v", wantDependsOn, us1.DependsOn)
 	}
 	ht.SetUnhealthy(w2, Args{ArgError: "w2 is also unhealthy now"})
 	us2, ok := ht.CurrentState().Warnings[w2.Code]
 	if !ok {
 		t.Fatalf("Expected an UnhealthyState for w2, got nothing")
 	}
-	if !reflect.DeepEqual(us2.DependsOn, []WarnableCode{w1.Code}) {
-		t.Fatalf("Expected DependsOn = [w1.Code] in the unhealthy state, got: %v", us2.DependsOn)
+	wantDependsOn = slices.Concat([]WarnableCode{w1.Code}, wantDependsOn)
+	if !reflect.DeepEqual(us2.DependsOn, wantDependsOn) {
+		t.Fatalf("Expected DependsOn = %v in the unhealthy state, got: %v", wantDependsOn, us2.DependsOn)
+	}
+}
+
+func TestShowUpdateWarnable(t *testing.T) {
+	tests := []struct {
+		desc         string
+		check        bool
+		apply        opt.Bool
+		cv           *tailcfg.ClientVersion
+		wantWarnable *Warnable
+		wantShow     bool
+	}{
+		{
+			desc:         "nil CientVersion",
+			check:        true,
+			cv:           nil,
+			wantWarnable: nil,
+			wantShow:     false,
+		},
+		{
+			desc:         "RunningLatest",
+			check:        true,
+			cv:           &tailcfg.ClientVersion{RunningLatest: true},
+			wantWarnable: nil,
+			wantShow:     false,
+		},
+		{
+			desc:         "no LatestVersion",
+			check:        true,
+			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: ""},
+			wantWarnable: nil,
+			wantShow:     false,
+		},
+		{
+			desc:         "show regular update",
+			check:        true,
+			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
+			wantWarnable: updateAvailableWarnable,
+			wantShow:     true,
+		},
+		{
+			desc:         "show security update",
+			check:        true,
+			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3", UrgentSecurityUpdate: true},
+			wantWarnable: securityUpdateAvailableWarnable,
+			wantShow:     true,
+		},
+		{
+			desc:         "update check disabled",
+			check:        false,
+			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
+			wantWarnable: nil,
+			wantShow:     false,
+		},
+		{
+			desc:         "hide update with auto-updates",
+			check:        true,
+			apply:        opt.NewBool(true),
+			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3"},
+			wantWarnable: nil,
+			wantShow:     false,
+		},
+		{
+			desc:         "show security update with auto-updates",
+			check:        true,
+			apply:        opt.NewBool(true),
+			cv:           &tailcfg.ClientVersion{RunningLatest: false, LatestVersion: "1.2.3", UrgentSecurityUpdate: true},
+			wantWarnable: securityUpdateAvailableWarnable,
+			wantShow:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			tr := &Tracker{
+				checkForUpdates: tt.check,
+				applyUpdates:    tt.apply,
+				latestVersion:   tt.cv,
+			}
+			gotWarnable, gotShow := tr.showUpdateWarnable()
+			if gotWarnable != tt.wantWarnable {
+				t.Errorf("got warnable: %v, want: %v", gotWarnable, tt.wantWarnable)
+			}
+			if gotShow != tt.wantShow {
+				t.Errorf("got show: %v, want: %v", gotShow, tt.wantShow)
+			}
+		})
 	}
 }

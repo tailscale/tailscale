@@ -67,6 +67,11 @@ jobs:
       image: ${{ matrix.image }}
       options: --user root
     steps:
+    - name: install dependencies (pacman)
+      # Refresh the package databases to ensure that the tailscale package is
+      # defined.
+      run: pacman -Sy
+      if: contains(matrix.image, 'archlinux')
     - name: install dependencies (yum)
       # tar and gzip are needed by the actions/checkout below.
       run: yum install -y --allowerasing tar gzip ${{ matrix.deps }}

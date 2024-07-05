@@ -784,3 +784,147 @@ func SetNTString[NTS NTStr, BU BufUnit](nts *NTS, buf []BU) {
 		panic("unknown type")
 	}
 }
+
+type domainControllerAddressType uint32
+
+const (
+	//lint:ignore U1000 maps to a win32 API
+	_DS_INET_ADDRESS    domainControllerAddressType = 1
+	_DS_NETBIOS_ADDRESS domainControllerAddressType = 2
+)
+
+type domainControllerFlag uint32
+
+const (
+	//lint:ignore U1000 maps to a win32 API
+	_DS_PDC_FLAG                    domainControllerFlag = 0x00000001
+	_DS_GC_FLAG                     domainControllerFlag = 0x00000004
+	_DS_LDAP_FLAG                   domainControllerFlag = 0x00000008
+	_DS_DS_FLAG                     domainControllerFlag = 0x00000010
+	_DS_KDC_FLAG                    domainControllerFlag = 0x00000020
+	_DS_TIMESERV_FLAG               domainControllerFlag = 0x00000040
+	_DS_CLOSEST_FLAG                domainControllerFlag = 0x00000080
+	_DS_WRITABLE_FLAG               domainControllerFlag = 0x00000100
+	_DS_GOOD_TIMESERV_FLAG          domainControllerFlag = 0x00000200
+	_DS_NDNC_FLAG                   domainControllerFlag = 0x00000400
+	_DS_SELECT_SECRET_DOMAIN_6_FLAG domainControllerFlag = 0x00000800
+	_DS_FULL_SECRET_DOMAIN_6_FLAG   domainControllerFlag = 0x00001000
+	_DS_WS_FLAG                     domainControllerFlag = 0x00002000
+	_DS_DS_8_FLAG                   domainControllerFlag = 0x00004000
+	_DS_DS_9_FLAG                   domainControllerFlag = 0x00008000
+	_DS_DS_10_FLAG                  domainControllerFlag = 0x00010000
+	_DS_KEY_LIST_FLAG               domainControllerFlag = 0x00020000
+	_DS_PING_FLAGS                  domainControllerFlag = 0x000FFFFF
+	_DS_DNS_CONTROLLER_FLAG         domainControllerFlag = 0x20000000
+	_DS_DNS_DOMAIN_FLAG             domainControllerFlag = 0x40000000
+	_DS_DNS_FOREST_FLAG             domainControllerFlag = 0x80000000
+)
+
+type _DOMAIN_CONTROLLER_INFO struct {
+	DomainControllerName        *uint16
+	DomainControllerAddress     *uint16
+	DomainControllerAddressType domainControllerAddressType
+	DomainGuid                  windows.GUID
+	DomainName                  *uint16
+	DnsForestName               *uint16
+	Flags                       domainControllerFlag
+	DcSiteName                  *uint16
+	ClientSiteName              *uint16
+}
+
+func (dci *_DOMAIN_CONTROLLER_INFO) Close() error {
+	if dci == nil {
+		return nil
+	}
+	return windows.NetApiBufferFree((*byte)(unsafe.Pointer(dci)))
+}
+
+type dsGetDcNameFlag uint32
+
+const (
+	//lint:ignore U1000 maps to a win32 API
+	_DS_FORCE_REDISCOVERY             dsGetDcNameFlag = 0x00000001
+	_DS_DIRECTORY_SERVICE_REQUIRED    dsGetDcNameFlag = 0x00000010
+	_DS_DIRECTORY_SERVICE_PREFERRED   dsGetDcNameFlag = 0x00000020
+	_DS_GC_SERVER_REQUIRED            dsGetDcNameFlag = 0x00000040
+	_DS_PDC_REQUIRED                  dsGetDcNameFlag = 0x00000080
+	_DS_BACKGROUND_ONLY               dsGetDcNameFlag = 0x00000100
+	_DS_IP_REQUIRED                   dsGetDcNameFlag = 0x00000200
+	_DS_KDC_REQUIRED                  dsGetDcNameFlag = 0x00000400
+	_DS_TIMESERV_REQUIRED             dsGetDcNameFlag = 0x00000800
+	_DS_WRITABLE_REQUIRED             dsGetDcNameFlag = 0x00001000
+	_DS_GOOD_TIMESERV_PREFERRED       dsGetDcNameFlag = 0x00002000
+	_DS_AVOID_SELF                    dsGetDcNameFlag = 0x00004000
+	_DS_ONLY_LDAP_NEEDED              dsGetDcNameFlag = 0x00008000
+	_DS_IS_FLAT_NAME                  dsGetDcNameFlag = 0x00010000
+	_DS_IS_DNS_NAME                   dsGetDcNameFlag = 0x00020000
+	_DS_TRY_NEXTCLOSEST_SITE          dsGetDcNameFlag = 0x00040000
+	_DS_DIRECTORY_SERVICE_6_REQUIRED  dsGetDcNameFlag = 0x00080000
+	_DS_WEB_SERVICE_REQUIRED          dsGetDcNameFlag = 0x00100000
+	_DS_DIRECTORY_SERVICE_8_REQUIRED  dsGetDcNameFlag = 0x00200000
+	_DS_DIRECTORY_SERVICE_9_REQUIRED  dsGetDcNameFlag = 0x00400000
+	_DS_DIRECTORY_SERVICE_10_REQUIRED dsGetDcNameFlag = 0x00800000
+	_DS_KEY_LIST_SUPPORT_REQUIRED     dsGetDcNameFlag = 0x01000000
+	_DS_RETURN_DNS_NAME               dsGetDcNameFlag = 0x40000000
+	_DS_RETURN_FLAT_NAME              dsGetDcNameFlag = 0x80000000
+)
+
+func resolveDomainController(domainName *uint16, domainGUID *windows.GUID) (*_DOMAIN_CONTROLLER_INFO, error) {
+	const flags = _DS_DIRECTORY_SERVICE_REQUIRED | _DS_IS_FLAT_NAME | _DS_RETURN_DNS_NAME
+	var dcInfo *_DOMAIN_CONTROLLER_INFO
+	if err := dsGetDcName(nil, domainName, domainGUID, nil, flags, &dcInfo); err != nil {
+		return nil, err
+	}
+	return dcInfo, nil
+}
+
+// ResolveDomainController resolves the DNS name of the nearest available
+// domain controller for the domain specified by domainName.
+func ResolveDomainController(domainName string) (string, error) {
+	domainName16, err := windows.UTF16PtrFromString(domainName)
+	if err != nil {
+		return "", err
+	}
+
+	dcInfo, err := resolveDomainController(domainName16, nil)
+	if err != nil {
+		return "", err
+	}
+	defer dcInfo.Close()
+
+	return windows.UTF16PtrToString(dcInfo.DomainControllerName), nil
+}
+
+type _NETSETUP_NAME_TYPE int32
+
+const (
+	_NetSetupUnknown           _NETSETUP_NAME_TYPE = 0
+	_NetSetupMachine           _NETSETUP_NAME_TYPE = 1
+	_NetSetupWorkgroup         _NETSETUP_NAME_TYPE = 2
+	_NetSetupDomain            _NETSETUP_NAME_TYPE = 3
+	_NetSetupNonExistentDomain _NETSETUP_NAME_TYPE = 4
+	_NetSetupDnsMachine        _NETSETUP_NAME_TYPE = 5
+)
+
+func isDomainName(name *uint16) (bool, error) {
+	err := netValidateName(nil, name, nil, nil, _NetSetupDomain)
+	switch err {
+	case nil:
+		return true, nil
+	case windows.ERROR_NO_SUCH_DOMAIN:
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// IsDomainName checks whether name represents an existing domain reachable by
+// the current machine.
+func IsDomainName(name string) (bool, error) {
+	name16, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return false, err
+	}
+
+	return isDomainName(name16)
+}

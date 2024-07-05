@@ -70,15 +70,18 @@ type nftable struct {
 //     https://wiki.nftables.org/wiki-nftables/index.php/Configuring_chains
 type nftablesRunner struct {
 	conn *nftables.Conn
-	nft4 *nftable // IPv4 tables
-	nft6 *nftable // IPv6 tables
+	nft4 *nftable // IPv4 tables, never nil
+	nft6 *nftable // IPv6 tables or nil if the system does not support IPv6
 
 	v6Available bool // whether the host supports IPv6
 }
 
 func (n *nftablesRunner) ensurePreroutingChain(dst netip.Addr) (*nftables.Table, *nftables.Chain, error) {
 	polAccept := nftables.ChainPolicyAccept
-	table := n.getNFTByAddr(dst)
+	table, err := n.getNFTByAddr(dst)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error setting up nftables for IP family of %v: %w", dst, err)
+	}
 	nat, err := createTableIfNotExist(n.conn, table.Proto, "nat")
 	if err != nil {
 		return nil, nil, fmt.Errorf("error ensuring nat table: %w", err)
@@ -192,7 +195,10 @@ func (n *nftablesRunner) DNATNonTailscaleTraffic(tunname string, dst netip.Addr)
 
 func (n *nftablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
 	polAccept := nftables.ChainPolicyAccept
-	table := n.getNFTByAddr(dst)
+	table, err := n.getNFTByAddr(dst)
+	if err != nil {
+		return fmt.Errorf("error setting up nftables for IP family of %v: %w", dst, err)
+	}
 	nat, err := createTableIfNotExist(n.conn, table.Proto, "nat")
 	if err != nil {
 		return fmt.Errorf("error ensuring nat table exists: %w", err)
@@ -272,7 +278,10 @@ func (n *nftablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
 // we don't want to race with wgengine for rule ordering within chains.
 func (n *nftablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	polAccept := nftables.ChainPolicyAccept
-	table := n.getNFTByAddr(addr)
+	table, err := n.getNFTByAddr(addr)
+	if err != nil {
+		return fmt.Errorf("error setting up nftables for IP family of %v: %w", addr, err)
+	}
 	filterTable, err := createTableIfNotExist(n.conn, table.Proto, "filter")
 	if err != nil {
 		return fmt.Errorf("error ensuring filter table: %w", err)
@@ -786,17 +795,23 @@ func insertLoopbackRule(
 
 // getNFTByAddr returns the nftables with correct IP family
 // that we will be using for the given address.
-func (n *nftablesRunner) getNFTByAddr(addr netip.Addr) *nftable {
-	if addr.Is6() {
-		return n.nft6
+func (n *nftablesRunner) getNFTByAddr(addr netip.Addr) (*nftable, error) {
+	if addr.Is6() && !n.v6Available {
+		return nil, fmt.Errorf("nftables for IPv6 are not available on this host")
 	}
-	return n.nft4
+	if addr.Is6() {
+		return n.nft6, nil
+	}
+	return n.nft4, nil
 }
 
 // AddLoopbackRule adds an nftables rule to permit loopback traffic to
 // a local Tailscale IP. This rule is added only if it does not already exist.
 func (n *nftablesRunner) AddLoopbackRule(addr netip.Addr) error {
-	nf := n.getNFTByAddr(addr)
+	nf, err := n.getNFTByAddr(addr)
+	if err != nil {
+		return fmt.Errorf("error setting up nftables for IP family of %v: %w", addr, err)
+	}
 
 	inputChain, err := getChainFromTable(n.conn, nf.Filter, chainNameInput)
 	if err != nil {
@@ -813,7 +828,10 @@ func (n *nftablesRunner) AddLoopbackRule(addr netip.Addr) error {
 // DelLoopbackRule removes the nftables rule permitting loopback
 // traffic to a Tailscale IP.
 func (n *nftablesRunner) DelLoopbackRule(addr netip.Addr) error {
-	nf := n.getNFTByAddr(addr)
+	nf, err := n.getNFTByAddr(addr)
+	if err != nil {
+		return fmt.Errorf("error setting up nftables for IP family of %v: %w", addr, err)
+	}
 
 	inputChain, err := getChainFromTable(n.conn, nf.Filter, chainNameInput)
 	if err != nil {

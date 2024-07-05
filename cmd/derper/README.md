@@ -2,7 +2,8 @@
 
 This is the code for the [Tailscale DERP server](https://tailscale.com/kb/1232/derp-servers).
 
-In general, you should not need to nor want to run this code. The overwhelming majority of Tailscale users (both individuals and companies) do not.
+In general, you should not need to or want to run this code. The overwhelming
+majority of Tailscale users (both individuals and companies) do not.
 
 In the happy path, Tailscale establishes direct connections between peers and
 data plane traffic flows directly between them, without using DERP for more than
@@ -11,7 +12,7 @@ find yourself wanting DERP for more bandwidth, the real problem is usually the
 network configuration of your Tailscale node(s), making sure that Tailscale can
 get direction connections via some mechanism.
 
-But if you've decided or been advised to run your own `derper`, then read on.
+If you've decided or been advised to run your own `derper`, then read on.
 
 ## Caveats
 
@@ -28,7 +29,10 @@ But if you've decided or been advised to run your own `derper`, then read on.
 
 * You must build and update the `cmd/derper` binary yourself. There are no
   packages. Use `go install tailscale.com/cmd/derper@latest` with the latest
-  version of Go.
+  version of Go. You should update this binary approximately as regularly as
+  you update Tailscale nodes. If using `--verify-clients`, the `derper` binary
+  and `tailscaled` binary on the machine must be built from the same git revision.
+  (It might work otherwise, but they're developed and only tested together.)
 
 * The DERP protocol does a protocol switch inside TLS from HTTP to a custom
   bidirectional binary protocol. It is thus incompatible with many HTTP proxies.
@@ -55,7 +59,7 @@ rely on its DNS which might be broken and dependent on DERP to get back up.
 * Monitor your DERP servers with [`cmd/derpprobe`](../derpprobe/).
 
 * If using `--verify-clients`, a `tailscaled` must be running alongside the
-  `derper`.
+  `derper`, and all clients must be visible to the derper tailscaled in the ACL.
 
 * If using `--verify-clients`, a `tailscaled` must also be running alongside
   your `derpprobe`, and `derpprobe` needs to use `--derp-map=local`.
@@ -72,3 +76,34 @@ rely on its DNS which might be broken and dependent on DERP to get back up.
 * Don't rate-limit UDP STUN packets.
 
 * Don't rate-limit outbound TCP traffic (only inbound).
+
+## Diagnostics
+
+This is not a complete guide on DERP diagnostics.
+
+Running your own DERP services requires exeprtise in multi-layer network and
+application diagnostics. As the DERP runs multiple protocols at multiple layers
+and is not a regular HTTP(s) server you will need expertise in correlative
+analysis to diagnose the most tricky problems. There is no "plain text" or
+"open" mode of operation for DERP.
+
+* The debug handler is accessible at URL path `/debug/`. It is only accessible
+  over localhost or from a Tailscale IP address.
+
+* Go pprof can be accessed via the debug handler at `/debug/pprof/`
+
+* Prometheus compatible metrics can be gathered from the debug handler at
+  `/debug/varz`.
+
+* `cmd/stunc` in the Tailscale repository provides a basic tool for diagnosing
+  issues with STUN.
+
+* `cmd/derpprobe` provides a service for monitoring DERP cluster health.
+
+* `tailscale debug derp` and `tailscale netcheck` provide additional client
+  driven diagnostic information for DERP communications.
+
+* Tailscale logs may provide insight for certain problems, such as if DERPs are
+  unreachable or peers are regularly not reachable in their DERP home regions.
+  There are many possible misconfiguration causes for these problems, but
+  regular log entries are a good first indicator that there is a problem.

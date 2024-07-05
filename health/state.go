@@ -23,13 +23,14 @@ type State struct {
 // Representation contains information to be shown to the user to inform them
 // that a Warnable is currently unhealthy.
 type UnhealthyState struct {
-	WarnableCode WarnableCode
-	Severity     Severity
-	Title        string
-	Text         string
-	BrokenSince  *time.Time     `json:",omitempty"`
-	Args         Args           `json:",omitempty"`
-	DependsOn    []WarnableCode `json:",omitempty"`
+	WarnableCode        WarnableCode
+	Severity            Severity
+	Title               string
+	Text                string
+	BrokenSince         *time.Time     `json:",omitempty"`
+	Args                Args           `json:",omitempty"`
+	DependsOn           []WarnableCode `json:",omitempty"`
+	ImpactsConnectivity bool           `json:",omitempty"`
 }
 
 // unhealthyState returns a unhealthyState of the Warnable given its current warningState.
@@ -41,19 +42,27 @@ func (w *Warnable) unhealthyState(ws *warningState) *UnhealthyState {
 		text = w.Text(Args{})
 	}
 
-	dependsOnWarnableCodes := make([]WarnableCode, len(w.DependsOn))
+	dependsOnWarnableCodes := make([]WarnableCode, len(w.DependsOn), len(w.DependsOn)+1)
 	for i, d := range w.DependsOn {
 		dependsOnWarnableCodes[i] = d.Code
 	}
 
+	if w != warmingUpWarnable {
+		// Here we tell the frontend that all Warnables depend on warmingUpWarnable. GUIs will silence all warnings until all
+		// their dependencies are healthy. This is a special case to prevent the GUI from showing a bunch of warnings when
+		// the backend is still warming up.
+		dependsOnWarnableCodes = append(dependsOnWarnableCodes, warmingUpWarnable.Code)
+	}
+
 	return &UnhealthyState{
-		WarnableCode: w.Code,
-		Severity:     w.Severity,
-		Title:        w.Title,
-		Text:         text,
-		BrokenSince:  &ws.BrokenSince,
-		Args:         ws.Args,
-		DependsOn:    dependsOnWarnableCodes,
+		WarnableCode:        w.Code,
+		Severity:            w.Severity,
+		Title:               w.Title,
+		Text:                text,
+		BrokenSince:         &ws.BrokenSince,
+		Args:                ws.Args,
+		DependsOn:           dependsOnWarnableCodes,
+		ImpactsConnectivity: w.ImpactsConnectivity,
 	}
 }
 

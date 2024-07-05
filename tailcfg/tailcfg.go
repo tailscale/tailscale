@@ -141,8 +141,9 @@ type CapabilityVersion int
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
 //   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
-//   - 101: 2024-06-23: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
-const CurrentCapabilityVersion CapabilityVersion = 101
+//   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
+//   - 102: 2024-07-05: Client understands SSHAction.AllowLocalUnixForwarding and SSHAction.AllowRemoteUnixForwarding.
+const CurrentCapabilityVersion CapabilityVersion = 102
 
 type StableID string
 

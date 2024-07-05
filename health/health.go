@@ -78,6 +78,7 @@ type Tracker struct {
 
 	latestVersion   *tailcfg.ClientVersion // or nil
 	checkForUpdates bool
+	applyUpdates    opt.Bool
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -92,7 +93,8 @@ type Tracker struct {
 	lastMapRequestHeard     time.Time        // time we got a 200 from control for a MapRequest
 	ipnState                string
 	ipnWantRunning          bool
-	anyInterfaceUp          opt.Bool // empty means unknown (assume true)
+	ipnWantRunningLastTrue  time.Time // when ipnWantRunning last changed false -> true
+	anyInterfaceUp          opt.Bool  // empty means unknown (assume true)
 	udp4Unbound             bool
 	controlHealth           []string
 	lastLoginErr            error
@@ -211,8 +213,10 @@ type Warnable struct {
 	// Deprecated: this is only used in one case, and will be removed in a future PR
 	MapDebugFlag string
 
-	// If true, this warnable is related to configuration of networking stack
-	// on the machine that impacts connectivity.
+	// ImpactsConnectivity is whether this Warnable in an unhealthy state will impact the user's
+	// ability to connect to the Internet or other nodes on the tailnet. On platforms where
+	// the client GUI supports a tray icon, the client will display an exclamation mark
+	// on the tray icon when ImpactsConnectivity is set to true and the Warnable is unhealthy.
 	ImpactsConnectivity bool
 }
 
@@ -250,9 +254,16 @@ func (t *Tracker) nil() bool {
 type Severity string
 
 const (
-	SeverityHigh   Severity = "high"
+	// SeverityHigh is the highest severity level, used for critical errors that need immediate attention.
+	// On platforms where the client GUI can deliver notifications, a SeverityHigh Warnable will trigger
+	// a modal notification.
+	SeverityHigh Severity = "high"
+	// SeverityMedium is used for errors that are important but not critical. This won't trigger a modal
+	// notification, however it will be displayed in a more visible way than a SeverityLow Warnable.
 	SeverityMedium Severity = "medium"
-	SeverityLow    Severity = "low"
+	// SeverityLow is used for less important notices that don't need immediate attention. The user will
+	// have to go to a Settings window, or another "hidden" GUI location to see these messages.
+	SeverityLow Severity = "low"
 )
 
 // Args is a map of Args to string values that can be used to provide parameters regarding
@@ -705,7 +716,29 @@ func (t *Tracker) SetIPNState(state string, wantRunning bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.ipnState = state
+	prevWantRunning := t.ipnWantRunning
 	t.ipnWantRunning = wantRunning
+
+	if state == "Running" {
+		// Any time we are told the backend is Running (control+DERP are connected), the Warnable
+		// should be set to healthy, no matter if 5 seconds have passed or not.
+		t.setHealthyLocked(warmingUpWarnable)
+	} else if wantRunning && !prevWantRunning && t.ipnWantRunningLastTrue.IsZero() {
+		// The first time we see wantRunning=true and it used to be false, it means the user requested
+		// the backend to start. We store this timestamp and use it to silence some warnings that are
+		// expected during startup.
+		t.ipnWantRunningLastTrue = time.Now()
+		t.setUnhealthyLocked(warmingUpWarnable, nil)
+		time.AfterFunc(warmingUpWarnableDuration, func() {
+			t.mu.Lock()
+			t.updateWarmingUpWarnableLocked()
+			t.mu.Unlock()
+		})
+	} else if !wantRunning {
+		// Reset the timer when the user decides to stop the backend.
+		t.ipnWantRunningLastTrue = time.Time{}
+	}
+
 	t.selfCheckLocked()
 }
 
@@ -759,17 +792,20 @@ func (t *Tracker) SetLatestVersion(v *tailcfg.ClientVersion) {
 	t.selfCheckLocked()
 }
 
-// SetCheckForUpdates sets whether the client wants to check for updates.
-func (t *Tracker) SetCheckForUpdates(v bool) {
+// SetAutoUpdatePrefs sets the client auto-update preferences. The arguments
+// match the fields of ipn.AutoUpdatePrefs, but we cannot pass that struct
+// directly due to a circular import.
+func (t *Tracker) SetAutoUpdatePrefs(check bool, apply opt.Bool) {
 	if t.nil() {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.checkForUpdates == v {
+	if t.checkForUpdates == check && t.applyUpdates == apply {
 		return
 	}
-	t.checkForUpdates = v
+	t.checkForUpdates = check
+	t.applyUpdates = apply
 	t.selfCheckLocked()
 }
 
@@ -858,20 +894,16 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 // updateBuiltinWarnablesLocked performs a number of checks on the state of the backend,
 // and adds/removes Warnings from the Tracker as needed.
 func (t *Tracker) updateBuiltinWarnablesLocked() {
-	if t.checkForUpdates {
-		if cv := t.latestVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
-			if cv.UrgentSecurityUpdate {
-				t.setUnhealthyLocked(securityUpdateAvailableWarnable, Args{
-					ArgCurrentVersion:   version.Short(),
-					ArgAvailableVersion: cv.LatestVersion,
-				})
-			} else {
-				t.setUnhealthyLocked(updateAvailableWarnable, Args{
-					ArgCurrentVersion:   version.Short(),
-					ArgAvailableVersion: cv.LatestVersion,
-				})
-			}
-		}
+	t.updateWarmingUpWarnableLocked()
+
+	if w, show := t.showUpdateWarnable(); show {
+		t.setUnhealthyLocked(w, Args{
+			ArgCurrentVersion:   version.Short(),
+			ArgAvailableVersion: t.latestVersion.LatestVersion,
+		})
+	} else {
+		t.setHealthyLocked(updateAvailableWarnable)
+		t.setHealthyLocked(securityUpdateAvailableWarnable)
 	}
 
 	if version.IsUnstableBuild() {
@@ -1035,6 +1067,32 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	} else {
 		t.setHealthyLocked(testWarnable)
 	}
+}
+
+// updateWarmingUpWarnableLocked ensures the warmingUpWarnable is healthy if wantRunning has been set to true
+// for more than warmingUpWarnableDuration.
+func (t *Tracker) updateWarmingUpWarnableLocked() {
+	if !t.ipnWantRunningLastTrue.IsZero() && time.Now().After(t.ipnWantRunningLastTrue.Add(warmingUpWarnableDuration)) {
+		t.setHealthyLocked(warmingUpWarnable)
+	}
+}
+
+func (t *Tracker) showUpdateWarnable() (*Warnable, bool) {
+	if !t.checkForUpdates {
+		return nil, false
+	}
+	cv := t.latestVersion
+	if cv == nil || cv.RunningLatest || cv.LatestVersion == "" {
+		return nil, false
+	}
+	if cv.UrgentSecurityUpdate {
+		return securityUpdateAvailableWarnable, true
+	}
+	// Only show update warning when auto-updates are off
+	if !t.applyUpdates.EqualBool(true) {
+		return updateAvailableWarnable, true
+	}
+	return nil, false
 }
 
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.

@@ -131,8 +131,9 @@ const (
 type PeerGoneReasonType byte
 
 const (
-	PeerGoneReasonDisconnected = PeerGoneReasonType(0x00) // peer disconnected from this server
-	PeerGoneReasonNotHere      = PeerGoneReasonType(0x01) // server doesn't know about this peer, unexpected
+	PeerGoneReasonDisconnected  = PeerGoneReasonType(0x00) // peer disconnected from this server
+	PeerGoneReasonNotHere       = PeerGoneReasonType(0x01) // server doesn't know about this peer, unexpected
+	PeerGoneReasonMeshConnBroke = PeerGoneReasonType(0xf0) // invented by Client.RunWatchConnectionLoop on disconnect; not sent on the wire
 )
 
 // PeerPresentFlags is an optional byte of bit flags sent after a framePeerPresent message.

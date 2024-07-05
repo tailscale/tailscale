@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -299,13 +298,13 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		var peers int
-		add := func(k key.NodePublic, _ netip.AddrPort) {
-			t.Logf("add: %v", k.ShortString())
+		add := func(m derp.PeerPresentMessage) {
+			t.Logf("add: %v", m.Key.ShortString())
 			peers++
 			// Signal that the watcher has run
 			watcherChan <- peers
 		}
-		remove := func(k key.NodePublic) { t.Logf("remove: %v", k.ShortString()); peers-- }
+		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
 
 		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
 	}()
@@ -370,15 +369,15 @@ func TestBreakWatcherConn(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		var peers int
-		add := func(k key.NodePublic, _ netip.AddrPort) {
-			t.Logf("add: %v", k.ShortString())
+		add := func(m derp.PeerPresentMessage) {
+			t.Logf("add: %v", m.Key.ShortString())
 			peers++
 			// Signal that the watcher has run
 			watcherChan <- peers
 			// Wait for breaker to run
 			<-breakerChan
 		}
-		remove := func(k key.NodePublic) { t.Logf("remove: %v", k.ShortString()); peers-- }
+		remove := func(m derp.PeerGoneMessage) { t.Logf("remove: %v", m.Peer.ShortString()); peers-- }
 
 		watcher1.RunWatchConnectionLoop(ctx, serverPrivateKey1.Public(), t.Logf, add, remove)
 	}()
@@ -407,8 +406,8 @@ func TestBreakWatcherConn(t *testing.T) {
 	}
 }
 
-func noopAdd(key.NodePublic, netip.AddrPort) {}
-func noopRemove(key.NodePublic)              {}
+func noopAdd(derp.PeerPresentMessage) {}
+func noopRemove(derp.PeerGoneMessage) {}
 
 func TestRunWatchConnectionLoopServeConnect(t *testing.T) {
 	defer func() { testHookWatchLookConnectResult = nil }()

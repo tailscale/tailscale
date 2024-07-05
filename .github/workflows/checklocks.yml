@@ -24,5 +24,11 @@ jobs:
         run: ./tool/go build -o /tmp/checklocks gvisor.dev/gvisor/tools/checklocks/cmd/checklocks
 
       - name: Run checklocks vet
-        # TODO: remove || true once we have applied checklocks annotations everywhere.
-        run: ./tool/go vet -vettool=/tmp/checklocks ./... || true
+        # TODO(#12625): add more packages as we add annotations
+        run: |-
+          ./tool/go vet -vettool=/tmp/checklocks \
+            ./envknob           \
+            ./ipn/store/mem     \
+            ./net/stun/stuntest \
+            ./net/wsconn        \
+            ./proxymap
