@@ -258,14 +258,14 @@ func (c *Conn) startDerpHomeConnectLocked() {
 }
 
 // goDerpConnect starts a goroutine to start connecting to the given
-// DERP node.
+// DERP region ID.
 //
 // c.mu may be held, but does not need to be.
-func (c *Conn) goDerpConnect(node int) {
-	if node == 0 {
+func (c *Conn) goDerpConnect(regionID int) {
+	if regionID == 0 {
 		return
 	}
-	go c.derpWriteChanOfAddr(netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(node)), key.NodePublic{})
+	go c.derpWriteChanForRegion(regionID, key.NodePublic{})
 }
 
 var (
@@ -322,18 +322,15 @@ func bufferedDerpWritesBeforeDrop() int {
 	return bufferedDerpWrites
 }
 
-// derpWriteChanOfAddr returns a DERP client for fake UDP addresses that
-// represent DERP servers, creating them as necessary. For real UDP
-// addresses, it returns nil.
+// derpWriteChanForRegion returns a channel to which to send DERP packet write
+// requests. It creates a new DERP connection to regionID if necessary.
 //
-// If peer is non-zero, it can be used to find an active reverse
-// path, without using addr.
-func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) chan<- derpWriteRequest {
-	if addr.Addr() != tailcfg.DerpMagicIPAddr {
-		return nil
-	}
-	regionID := int(addr.Port())
-
+// If peer is non-zero, it can be used to find an active reverse path, without
+// using regionID.
+//
+// It returns nil if the network is down, the Conn is closed, or the regionID is
+// not known.
+func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan<- derpWriteRequest {
 	if c.networkDown() {
 		return nil
 	}
@@ -347,7 +344,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 		return nil
 	}
 	if c.privateKey.IsZero() {
-		c.logf("magicsock: DERP lookup of %v with no private key; ignoring", addr)
+		c.logf("magicsock: DERP lookup of region %v with no private key; ignoring", regionID)
 		return nil
 	}
 
@@ -453,7 +450,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 		}()
 	}
 
-	go c.runDerpReader(ctx, addr, dc, wg, startGate)
+	go c.runDerpReader(ctx, regionID, dc, wg, startGate)
 	go c.runDerpWriter(ctx, dc, ch, wg, startGate)
 	go c.derpActiveFunc()
 
@@ -516,7 +513,7 @@ type derpReadResult struct {
 
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
-func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
+func (c *Conn) runDerpReader(ctx context.Context, regionID int, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
 	defer wg.Decr()
 	defer dc.Close()
 
@@ -527,7 +524,6 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 	}
 
 	didCopy := make(chan struct{}, 1)
-	regionID := int(derpFakeAddr.Port())
 	res := derpReadResult{regionID: regionID}
 	var pkt derp.ReceivedPacket
 	res.copyBuf = func(dst []byte) int {
