@@ -19,10 +19,6 @@ type Knobs struct {
 	// DisableUPnP indicates whether to attempt UPnP mapping.
 	DisableUPnP atomic.Bool
 
-	// DisableDRPO is whether control says to disable the
-	// DERP route optimization (Issue 150).
-	DisableDRPO atomic.Bool
-
 	// KeepFullWGConfig is whether we should disable the lazy wireguard
 	// programming and instead give WireGuard the full netmap always, even for
 	// idle peers.
@@ -110,7 +106,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	has := capMap.Contains
 	var (
 		keepFullWG                           = has(tailcfg.NodeAttrDebugDisableWGTrim)
-		disableDRPO                          = has(tailcfg.NodeAttrDebugDisableDRPO)
 		disableUPnP                          = has(tailcfg.NodeAttrDisableUPnP)
 		randomizeClientPort                  = has(tailcfg.NodeAttrRandomizeClientPort)
 		disableDeltaUpdates                  = has(tailcfg.NodeAttrDisableDeltaUpdates)
@@ -136,7 +131,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	}
 
 	k.KeepFullWGConfig.Store(keepFullWG)
-	k.DisableDRPO.Store(disableDRPO)
 	k.DisableUPnP.Store(disableUPnP)
 	k.RandomizeClientPort.Store(randomizeClientPort)
 	k.OneCGNAT.Store(oneCGNAT)
@@ -163,7 +157,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 	}
 	return map[string]any{
 		"DisableUPnP":                          k.DisableUPnP.Load(),
-		"DisableDRPO":                          k.DisableDRPO.Load(),
 		"KeepFullWGConfig":                     k.KeepFullWGConfig.Load(),
 		"RandomizeClientPort":                  k.RandomizeClientPort.Load(),
 		"OneCGNAT":                             k.OneCGNAT.Load(),

@@ -20,9 +20,6 @@ var (
 	// debugOmitLocalAddresses removes all local interface addresses
 	// from magicsock's discovered local endpoints. Used in some tests.
 	debugOmitLocalAddresses = envknob.RegisterBool("TS_DEBUG_OMIT_LOCAL_ADDRS")
-	// debugUseDerpRoute temporarily (2020-03-22) controls whether DERP
-	// reverse routing is enabled (Issue 150).
-	debugUseDerpRoute = envknob.RegisterOptBool("TS_DEBUG_ENABLE_DERP_ROUTE")
 	// logDerpVerbose logs all received DERP packets, including their
 	// full payload.
 	logDerpVerbose = envknob.RegisterBool("TS_DEBUG_DERP")

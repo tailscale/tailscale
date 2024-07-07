@@ -2203,10 +2203,6 @@ const (
 	// always giving WireGuard the full netmap, even for idle peers.
 	NodeAttrDebugDisableWGTrim NodeCapability = "debug-no-wg-trim"
 
-	// NodeAttrDebugDisableDRPO disables the DERP Return Path Optimization.
-	// See Issue 150.
-	NodeAttrDebugDisableDRPO NodeCapability = "debug-disable-drpo"
-
 	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
