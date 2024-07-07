@@ -41,32 +41,20 @@ import (
 // preferredDERPFrameTime, so update with care.
 const frameReceiveRecordRate = 5 * time.Second
 
-// useDerpRoute reports whether magicsock should enable the DERP
-// return path optimization (Issue 150).
-//
-// By default it's enabled, unless an environment variable
-// or control says to disable it.
-func (c *Conn) useDerpRoute() bool {
-	if b, ok := debugUseDerpRoute().Get(); ok {
-		return b
-	}
-	return c.controlKnobs == nil || !c.controlKnobs.DisableDRPO.Load()
-}
-
 // derpRoute is a route entry for a public key, saying that a certain
-// peer should be available at DERP node derpID, as long as the
-// current connection for that derpID is dc. (but dc should not be
+// peer should be available at DERP regionID, as long as the
+// current connection for that regionID is dc. (but dc should not be
 // used to write directly; it's owned by the read/write loops)
 type derpRoute struct {
-	derpID int
-	dc     *derphttp.Client // don't use directly; see comment above
+	regionID int
+	dc       *derphttp.Client // don't use directly; see comment above
 }
 
 // removeDerpPeerRoute removes a DERP route entry previously added by addDerpPeerRoute.
-func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Client) {
+func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, regionID int, dc *derphttp.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r2 := derpRoute{derpID, dc}
+	r2 := derpRoute{regionID, dc}
 	if r, ok := c.derpRoute[peer]; ok && r == r2 {
 		delete(c.derpRoute, peer)
 	}
@@ -365,10 +353,10 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan<- 
 	// perhaps peer's home is Frankfurt, but they dialed our home DERP
 	// node in SF to reach us, so we can reply to them using our
 	// SF connection rather than dialing Frankfurt. (Issue 150)
-	if !peer.IsZero() && c.useDerpRoute() {
+	if !peer.IsZero() {
 		if r, ok := c.derpRoute[peer]; ok {
-			if ad, ok := c.activeDerp[r.derpID]; ok && ad.c == r.dc {
-				c.setPeerLastDerpLocked(peer, r.derpID, regionID)
+			if ad, ok := c.activeDerp[r.regionID]; ok && ad.c == r.dc {
+				c.setPeerLastDerpLocked(peer, r.regionID, regionID)
 				*ad.lastWrite = time.Now()
 				return ad.writeCh
 			}
