@@ -140,7 +140,7 @@ func main() {
 		fmt.Printf("setting funnel for %s:%v\n", serverURL, uint16(*flagPort))
 
 		// tailscaled needs to be setting an HTTP header for funneled requests
-		// that older versions.
+		// that older versions don't provide.
 		// TODO(naman): is this the correct check?
 		if *flagFunnel && !version.AtLeast(st.Version, "1.69.0") {
 			log.Fatalf("Local tailscaled not new enough to support -funnel. Update Tailscale or use tsnet mode.")
