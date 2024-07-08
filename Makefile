@@ -21,6 +21,7 @@ updatedeps: ## Update depaware deps
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper \
+		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
 depaware: ## Run depaware checks
@@ -30,6 +31,7 @@ depaware: ## Run depaware checks
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper \
+		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
 buildwindows: ## Build tailscale CLI for windows/amd64
