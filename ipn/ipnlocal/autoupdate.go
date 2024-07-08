@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/clientupdate"
 	"tailscale.com/ipn"
+	"tailscale.com/version"
 )
 
 func (b *LocalBackend) stopOfflineAutoUpdate() {
@@ -28,6 +29,10 @@ func (b *LocalBackend) maybeStartOfflineAutoUpdate(prefs ipn.PrefsView) {
 	// AutoUpdate.Apply field in prefs can only be true for platforms that
 	// support auto-updates. But check it here again, just in case.
 	if !clientupdate.CanAutoUpdate() {
+		return
+	}
+	// On macsys, auto-updates are managed by Sparkle.
+	if version.IsMacSysExt() {
 		return
 	}
 

@@ -248,6 +248,11 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 // CanAutoUpdate reports whether auto-updating via the clientupdate package
 // is supported for the current os/distro.
 func CanAutoUpdate() bool {
+	if version.IsMacSysExt() {
+		// Macsys uses Sparkle for auto-updates, which doesn't have an update
+		// function in this package.
+		return true
+	}
 	_, canAutoUpdate := (&Updater{}).getUpdateFunction()
 	return canAutoUpdate
 }
