@@ -13,6 +13,9 @@ import (
 	"maps"
 	"slices"
 
+	jsonexp "github.com/go-json-experiment/json"
+	jsontext "github.com/go-json-experiment/json/jsontext"
+
 	"go4.org/mem"
 )
 
@@ -223,6 +226,13 @@ func SliceOf[T any](x []T) Slice[T] {
 // MarshalJSON implements json.Marshaler.
 func (v Slice[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.ж)
+}
+
+var _ jsonexp.MarshalerV2 = Slice[string]{nil}
+
+// MarshalJSON implements github.com/go-json-experiment/json.MarshalerV2.
+func (v Slice[T]) MarshalJSONV2(e *jsontext.Encoder, opts jsonexp.Options) error {
+	return jsonexp.MarshalEncode(e, v.ж, opts)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
