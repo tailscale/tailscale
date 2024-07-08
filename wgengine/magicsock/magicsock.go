@@ -919,6 +919,12 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}
 	}
 
+	// Temporarily (2024-07-08) during investigations, allow setting
+	// a pretend endpoint for testing NAT traversal scenarios.
+	// TODO(bradfitz): probably promote this to the config file.
+	// https://github.com/tailscale/tailscale/issues/12578
+	addAddr(pretendpoint(), tailcfg.EndpointExplicitConf)
+
 	// Update our set of endpoints by adding any endpoints that we
 	// previously found but haven't expired yet. This also updates the
 	// cache with the set of endpoints discovered in this function.
