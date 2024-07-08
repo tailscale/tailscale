@@ -355,7 +355,7 @@ func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
 	prefs := b.Prefs().AutoUpdate()
 	return tailcfg.C2NUpdateResponse{
 		Enabled:   envknob.AllowsRemoteUpdate() || prefs.Apply.EqualBool(true),
-		Supported: clientupdate.CanAutoUpdate(),
+		Supported: clientupdate.CanAutoUpdate() && !version.IsMacSysExt(),
 	}
 }
 
