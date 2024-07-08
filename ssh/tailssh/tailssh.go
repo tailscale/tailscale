@@ -46,6 +46,7 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
+	"tailscale.com/version"
 )
 
 var (
@@ -1226,10 +1227,18 @@ func (ss *sshSession) run() {
 	return
 }
 
-// recordSSHToLocalDisk is a deprecated dev knob to allow recording SSH sessions
-// to local storage. It is only used if there is no recording configured by the
-// coordination server. This will be removed in the future.
-var recordSSHToLocalDisk = envknob.RegisterBool("TS_DEBUG_LOG_SSH")
+var debugLogSSH = envknob.RegisterBool("TS_DEBUG_LOG_SSH")
+
+// recordSSHToLocalDisk is a dev knob to allow recording SSH sessions to local
+// storage. It is only used if there is no recording configured by the
+// coordination server. It is only enabled in dev builds for testing, for
+// production use recorders should be configured by the coordination server.
+func recordSSHToLocalDisk() bool {
+	if !version.GetMeta().IsDev {
+		return false
+	}
+	return debugLogSSH()
+}
 
 // recorders returns the list of recorders to use for this session.
 // If the final action has a non-empty list of recorders, that list is
