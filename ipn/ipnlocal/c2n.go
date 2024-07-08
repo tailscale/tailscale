@@ -441,9 +441,13 @@ func tailscaleUpdateCmd(cmdTS string) *exec.Cmd {
 	// tailscaled is restarted during the update, systemd won't kill this
 	// temporary update unit, which could cause unexpected breakage.
 	//
-	// We want to use the --wait flag for systemd-run, to block the update
-	// command until completion and collect output. But this flag was added in
-	// systemd 232, so we need to check the version first.
+	// We want to use a few optional flags:
+	//  * --wait, to block the update command until completion (added in systemd 232)
+	//  * --pipe, to collect stdout/stderr (added in systemd 235)
+	//  * --collect, to clean up failed runs from memory (added in systemd 236)
+	//
+	// We need to check the version of systemd to figure out if those flags are
+	// available.
 	//
 	// The output will look like:
 	//
@@ -461,10 +465,14 @@ func tailscaleUpdateCmd(cmdTS string) *exec.Cmd {
 	if err != nil {
 		return defaultCmd
 	}
-	if systemdVer < 232 {
-		return exec.Command("systemd-run", "--pipe", "--collect", cmdTS, "update", "--yes")
-	} else {
+	if systemdVer >= 236 {
 		return exec.Command("systemd-run", "--wait", "--pipe", "--collect", cmdTS, "update", "--yes")
+	} else if systemdVer >= 235 {
+		return exec.Command("systemd-run", "--wait", "--pipe", cmdTS, "update", "--yes")
+	} else if systemdVer >= 232 {
+		return exec.Command("systemd-run", "--wait", cmdTS, "update", "--yes")
+	} else {
+		return exec.Command("systemd-run", cmdTS, "update", "--yes")
 	}
 }
 
