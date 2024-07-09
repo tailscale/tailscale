@@ -626,7 +626,7 @@ func (pc *peerConfigTable) mapDstIP(src, oldDst netip.Addr) netip.Addr {
 	// The 'dst' of the packet is the address for this local node. It could
 	// be a masquerade address that we told other nodes to use, or one of
 	// our local node's Addresses.
-	c, ok := pc.byIP.Get(src)
+	c, ok := pc.byIP.Lookup(src)
 	if !ok {
 		return oldDst
 	}
@@ -657,7 +657,7 @@ func (pc *peerConfigTable) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	}
 
 	// Look up the configuration for the destination
-	c, ok := pc.byIP.Get(dst)
+	c, ok := pc.byIP.Lookup(dst)
 	if !ok {
 		return oldSrc
 	}
@@ -767,7 +767,7 @@ func (pc *peerConfigTable) inboundPacketIsJailed(p *packet.Parsed) bool {
 	if pc == nil {
 		return false
 	}
-	c, ok := pc.byIP.Get(p.Src.Addr())
+	c, ok := pc.byIP.Lookup(p.Src.Addr())
 	if !ok {
 		return false
 	}
@@ -778,7 +778,7 @@ func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
 	if pc == nil {
 		return false
 	}
-	c, ok := pc.byIP.Get(p.Dst.Addr())
+	c, ok := pc.byIP.Lookup(p.Dst.Addr())
 	if !ok {
 		return false
 	}
