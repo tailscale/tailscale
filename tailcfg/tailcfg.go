@@ -144,7 +144,8 @@ type CapabilityVersion int
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
 //   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
 //   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
-const CurrentCapabilityVersion CapabilityVersion = 101
+//   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
+const CurrentCapabilityVersion CapabilityVersion = 102
 
 type StableID string
 
@@ -2322,6 +2323,10 @@ const (
 	// We began creating this rule on 2024-06-14, and this node attribute
 	// allows us to disable the new behavior remotely if needed.
 	NodeAttrDisableLocalDNSOverrideViaNRPT NodeCapability = "disable-local-dns-override-via-nrpt"
+
+	// NodeAttrDisableMagicSockCryptoRouting disables the use of the
+	// magicsock cryptorouting hook. See tailscale/corp#20732.
+	NodeAttrDisableMagicSockCryptoRouting NodeCapability = "disable-magicsock-crypto-routing"
 )
 
 // SetDNSRequest is a request to add a DNS record.

@@ -1276,7 +1276,8 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (_ conn.Endpoint, ok bool) {
+	var ep *endpoint
 	if stun.Is(b) {
 		c.netChecker.ReceiveSTUNPacket(b, ipp)
 		return nil, false
@@ -1297,7 +1298,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 		de, ok := c.peerMap.endpointForIPPort(ipp)
 		c.mu.Unlock()
 		if !ok {
-			return nil, false
+			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
+				return nil, false
+			}
+			return &lazyEndpoint{c: c, src: ipp}, true
 		}
 		cache.ipp = ipp
 		cache.de = de
@@ -3113,4 +3117,36 @@ func (c *Conn) GetLastNetcheckReport(ctx context.Context) *netcheck.Report {
 // Used for testing purposes.
 func (c *Conn) SetLastNetcheckReportForTest(ctx context.Context, report *netcheck.Report) {
 	c.lastNetCheckReport.Store(report)
+}
+
+// lazyEndpoint is a wireguard conn.Endpoint for when magicsock received a
+// non-disco (presumably WireGuard) packet from a UDP address from which we
+// can't map to a Tailscale peer. But Wireguard most likely can, once it
+// decrypts it. So we implement the conn.PeerAwareEndpoint interface
+// from https://github.com/tailscale/wireguard-go/pull/27 to allow WireGuard
+// to tell us who it is later and get the correct conn.Endpoint.
+type lazyEndpoint struct {
+	c   *Conn
+	src netip.AddrPort
+}
+
+var _ conn.PeerAwareEndpoint = (*lazyEndpoint)(nil)
+var _ conn.Endpoint = (*lazyEndpoint)(nil)
+
+func (le *lazyEndpoint) ClearSrc()           {}
+func (le *lazyEndpoint) SrcIP() netip.Addr   { return le.src.Addr() }
+func (le *lazyEndpoint) DstIP() netip.Addr   { return netip.Addr{} }
+func (le *lazyEndpoint) SrcToString() string { return le.src.String() }
+func (le *lazyEndpoint) DstToString() string { return "dst" }
+func (le *lazyEndpoint) DstToBytes() []byte  { return nil }
+func (le *lazyEndpoint) GetPeerEndpoint(peerPublicKey [32]byte) conn.Endpoint {
+	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	le.c.mu.Lock()
+	defer le.c.mu.Unlock()
+	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
+	if !ok {
+		return nil
+	}
+	le.c.logf("magicsock: lazyEndpoint.GetPeerEndpoint(%v) found: %v", pubKey.ShortString(), ep.nodeAddr)
+	return ep
 }
