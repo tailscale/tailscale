@@ -448,7 +448,7 @@ func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Con
 // in --ignore-destinations
 func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
 	for _, a := range dstAddrs {
-		if _, ok := c.ignoreDsts.Get(a); ok {
+		if _, ok := c.ignoreDsts.Lookup(a); ok {
 			return true
 		}
 	}
@@ -489,7 +489,7 @@ type perPeerState struct {
 func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	return ps.addrToDomain.Get(ip)
+	return ps.addrToDomain.Lookup(ip)
 }
 
 // ipForDomain assigns a pair of unique IP addresses for the given domain and
@@ -515,7 +515,7 @@ func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
 // domain.
 // ps.mu must be held.
 func (ps *perPeerState) isIPUsedLocked(ip netip.Addr) bool {
-	_, ok := ps.addrToDomain.Get(ip)
+	_, ok := ps.addrToDomain.Lookup(ip)
 	return ok
 }
 
