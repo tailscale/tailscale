@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package limiter provides a keyed token bucket rate limiter.
 package limiter
 
 import (

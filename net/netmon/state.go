@@ -1,7 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package interfaces contains helpers for looking up system network interfaces.
 package netmon
 
 import (

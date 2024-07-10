@@ -3,6 +3,7 @@
 
 //go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type SliceContainer
 
+// Package clonerex is an example package for the cloner tool.
 package clonerex
 
 type SliceContainer struct {

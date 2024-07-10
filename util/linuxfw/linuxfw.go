@@ -1,10 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package linuxfw returns the kind of firewall being used by the kernel.
-
 //go:build linux
 
+// Package linuxfw returns the kind of firewall being used by the kernel.
 package linuxfw
 
 import (

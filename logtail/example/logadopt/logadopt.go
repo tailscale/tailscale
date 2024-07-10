@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Command logadopt is a CLI tool to adopt a machine into a logtail collection.
 package main
 
 import (
