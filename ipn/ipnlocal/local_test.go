@@ -2119,6 +2119,72 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 	}
 }
 
+func TestSetControlClientStatusAutoExitNode(t *testing.T) {
+	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withNodeKey())
+	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withNodeKey())
+	derpMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t1",
+						RegionID: 1,
+					},
+				},
+			},
+			2: {
+				Nodes: []*tailcfg.DERPNode{
+					{
+						Name:     "t2",
+						RegionID: 2,
+					},
+				},
+			},
+		},
+	}
+	report := &netcheck.Report{
+		RegionLatency: map[int]time.Duration{
+			1: 10 * time.Millisecond,
+			2: 5 * time.Millisecond,
+			3: 30 * time.Millisecond,
+		},
+		PreferredDERP: 1,
+	}
+	nm := &netmap.NetworkMap{
+		Peers: []tailcfg.NodeView{
+			peer1,
+			peer2,
+		},
+		DERPMap: derpMap,
+	}
+	b := newTestLocalBackend(t)
+	msh := &mockSyspolicyHandler{
+		t: t,
+		stringPolicies: map[syspolicy.Key]*string{
+			syspolicy.ExitNodeID: ptr.To("auto:any"),
+		},
+	}
+	syspolicy.SetHandlerForTest(t, msh)
+	b.netMap = nm
+	b.lastSuggestedExitNode = peer1.StableID()
+	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, report)
+	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+	firstExitNode := b.Prefs().ExitNodeID()
+	newPeer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withOnline(false), withNodeKey())
+	updatedNetmap := &netmap.NetworkMap{
+		Peers: []tailcfg.NodeView{
+			newPeer1,
+			peer2,
+		},
+		DERPMap: derpMap,
+	}
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: updatedNetmap})
+	lastExitNode := b.Prefs().ExitNodeID()
+	if firstExitNode == lastExitNode {
+		t.Errorf("did not switch exit nodes despite auto exit node going offline")
+	}
+}
+
 func TestApplySysPolicy(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -3033,6 +3099,18 @@ func withSuggest() peerOptFunc {
 func withCap(version tailcfg.CapabilityVersion) peerOptFunc {
 	return func(n *tailcfg.Node) {
 		n.Cap = version
+	}
+}
+
+func withOnline(isOnline bool) peerOptFunc {
+	return func(n *tailcfg.Node) {
+		n.Online = &isOnline
+	}
+}
+
+func withNodeKey() peerOptFunc {
+	return func(n *tailcfg.Node) {
+		n.Key = key.NewNode().Public()
 	}
 }
 
