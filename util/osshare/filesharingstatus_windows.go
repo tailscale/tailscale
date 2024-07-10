@@ -1,8 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build windows
-
+// Package osshare provides utilities for enabling/disabling Taildrop file
+// sharing on Windows.
 package osshare
 
 import (

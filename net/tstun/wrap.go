@@ -1,8 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tstun provides a TUN struct implementing the tun.Device interface
-// with additional features as required by wgengine.
 package tstun
 
 import (

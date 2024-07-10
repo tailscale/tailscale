@@ -3,6 +3,7 @@
 
 //go:build windows
 
+// Package wf controls the Windows Filtering Platform to change Windows firewall rules.
 package wf
 
 import (

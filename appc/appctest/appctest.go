@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package appctest contains code to help test App Connectors.
 package appctest
 
 import (

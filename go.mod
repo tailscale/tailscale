@@ -20,7 +20,6 @@ require (
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/creack/pty v1.1.21
 	github.com/dave/courtney v0.4.0
-	github.com/dave/jennifer v1.7.0
 	github.com/dave/patsy v0.0.0-20210517141501-957256f50cba
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
@@ -44,7 +43,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
 	github.com/hdevalence/ed25519consensus v0.2.0
-	github.com/iancoleman/strcase v0.3.0
 	github.com/illarion/gonotify v1.0.1
 	github.com/inetaf/tcpproxy v0.0.0-20240214030015-3ce58045626c
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2

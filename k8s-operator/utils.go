@@ -3,6 +3,7 @@
 
 //go:build !plan9
 
+// Package kube contains types and utilities for the Tailscale Kubernetes Operator.
 package kube
 
 import (

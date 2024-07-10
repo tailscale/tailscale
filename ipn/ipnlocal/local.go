@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package ipnlocal is the heart of the Tailscale node agent that controls
+// all the other misc pieces of the Tailscale node.
 package ipnlocal
 
 import (

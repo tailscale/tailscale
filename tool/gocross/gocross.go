@@ -8,7 +8,6 @@
 // In short, when aliased to `go`, using `go build`, `go test` behave like the
 // upstream Go tools, but produce correctly configured, correctly linked
 // binaries stamped with version information.
-
 package main
 
 import (
