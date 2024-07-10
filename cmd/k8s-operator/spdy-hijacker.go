@@ -117,6 +117,7 @@ func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.C
 		Kubernetes: &Kubernetes{
 			PodName:   h.pod,
 			Namespace: h.ns,
+			Container: strings.Join(qp["container"], " "),
 		},
 	}
 	if !h.who.Node.IsTagged() {
@@ -198,6 +199,7 @@ type CastHeader struct {
 type Kubernetes struct {
 	PodName   string
 	Namespace string
+	Container string
 }
 
 func closeConnWithWarning(conn net.Conn, msg string) error {
