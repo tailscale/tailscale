@@ -452,7 +452,7 @@ func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	c := newConn()
+	c := newConn(t.Logf)
 	dm := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			1: {},
@@ -483,7 +483,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// distribution over nodes works.
 	got := map[int]int{}
 	for range 50 {
-		c = newConn()
+		c = newConn(t.Logf)
 		c.derpMap = dm
 		got[c.pickDERPFallback()]++
 	}
@@ -1185,8 +1185,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 }
 
 func TestDiscoMessage(t *testing.T) {
-	c := newConn()
-	c.logf = t.Logf
+	c := newConn(t.Logf)
 	c.privateKey = key.NewNode()
 
 	peer1Pub := c.DiscoPublicKey()
@@ -3161,8 +3160,7 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
 			ht := new(health.Tracker)
-			c := newConn()
-			c.logf = t.Logf
+			c := newConn(t.Logf)
 			c.myDerp = tt.old
 			c.derpMap = derpMap
 			c.health = ht
