@@ -33,7 +33,16 @@ import (
 
 var whoIsKey = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 
-var counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
+var (
+	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
+	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
+
+	// counterSessionRecordingsAttempted counts the number of session recording attempts.
+	counterSessionRecordingsAttempted = clientmetric.NewCounter("k8s_auth_proxy__session_recordings_attempted")
+
+	// counterSessionRecordingsUploaded counts the number of successfully uploaded session recordings.
+	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
+)
 
 type apiServerProxyMode int
 
@@ -223,6 +232,7 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 		return
 	}
+	counterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
 	if !failOpen && len(addrs) == 0 {
 		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
 		ap.log.Error(msg)
