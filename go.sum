@@ -48,6 +48,8 @@ filippo.io/mkcert v1.4.4 h1:8eVbbwfVlaqUM7OwuftKc2nuYOoTDQWqsoXmzoXZdbc=
 filippo.io/mkcert v1.4.4/go.mod h1:VyvOchVuAye3BoUsPUOOofKygVwLV2KQMVFJNRq+1dA=
 fybrik.io/crdoc v0.6.3 h1:jNNAVINu8up5vrLa0jrV7z7HSlyHF/6lNOrAtrXwYlI=
 fybrik.io/crdoc v0.6.3/go.mod h1:kvZRt7VAzOyrmDpIqREtcKAVFSJYEBoAyniYebsJGtQ=
+fyne.io/systray v1.11.0 h1:D9HISlxSkx+jHSniMBR6fCFOUjk1x/OOOJLa9lJYAKg=
+fyne.io/systray v1.11.0/go.mod h1:RVwqP9nYMo7h5zViCBHri2FgjXF7H2cub7MAq4NSoLs=
 github.com/Abirdcfly/dupword v0.0.11 h1:z6v8rMETchZXUIuHxYNmlUAuKuB21PeaSymTed16wgU=
 github.com/Abirdcfly/dupword v0.0.11/go.mod h1:wH8mVGuf3CP5fsBTkfWwwwKTjDnVVCxtU8d8rgeVYXA=
 github.com/AlekSi/pointer v1.2.0 h1:glcy/gc4h8HnG2Z3ZECSzZ1IX1x2JxRVuDzaJwQE0+w=
@@ -112,6 +114,8 @@ github.com/ashanbrown/forbidigo v1.5.1 h1:WXhzLjOlnuDYPYQo/eFlcFMi8X/kLfvWLYu6CS
 github.com/ashanbrown/forbidigo v1.5.1/go.mod h1:Y8j9jy9ZYAEHXdu723cUlraTqbzjKF1MUyfOKL+AjcU=
 github.com/ashanbrown/makezero v1.1.1 h1:iCQ87C0V0vSyO+M9E/FZYbu65auqH0lnsOkf5FcB28s=
 github.com/ashanbrown/makezero v1.1.1/go.mod h1:i1bJLCRSCHOcOa9Y6MyF2FTfMZMFdHvxKHxgO5Z1axI=
+github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
+github.com/atotto/clipboard v0.1.4/go.mod h1:ZY9tmq7sm5xIbd9bOK4onWV4S6X0u6GY7Vn0Yu86PYI=
 github.com/aws/aws-sdk-go-v2 v1.18.0/go.mod h1:uzbQtefpm44goOPmdKyAlXSNcwlRgF3ePWVW6EtJvvw=
 github.com/aws/aws-sdk-go-v2 v1.24.1 h1:xAojnj+ktS95YZlDf0zxWBkbFtymPeDP+rvUQIH3uAU=
 github.com/aws/aws-sdk-go-v2 v1.24.1/go.mod h1:LNh45Br1YAkEKaAqvmE1m8FUx6a5b/V0oAKV7of29b4=

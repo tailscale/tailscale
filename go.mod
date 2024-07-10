@@ -120,7 +120,9 @@ require (
 )
 
 require (
+	fyne.io/systray v1.11.0 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.4 // indirect
 	github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14 // indirect
