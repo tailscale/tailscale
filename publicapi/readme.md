@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The Tailscale API documentation has moved to https://tailscale.com/api
+
 # Tailscale API
 
 The Tailscale API is a (mostly) RESTful API. Typically, both `POST` bodies and responses are JSON-encoded.

@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The Tailscale API documentation has moved to https://tailscale.com/api
+
 # Tailnet
 
 A tailnet is your private network, composed of all the devices on it and their configuration.
