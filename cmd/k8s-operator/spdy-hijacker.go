@@ -135,6 +135,7 @@ func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.C
 		case err = <-errChan:
 		}
 		if err == nil {
+			counterSessionRecordingsUploaded.Add(1)
 			h.log.Info("finished uploading the recording")
 			return
 		}
