@@ -4,10 +4,12 @@ go 1.23
 
 require (
 	filippo.io/mkcert v1.4.4
+	fyne.io/systray v1.11.0
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.1.0
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
+	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.24.1
 	github.com/aws/aws-sdk-go-v2/config v1.26.5
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.11.64
@@ -28,6 +30,7 @@ require (
 	github.com/dsnet/try v0.0.3
 	github.com/elastic/crd-ref-docs v0.0.12
 	github.com/evanw/esbuild v0.19.11
+	github.com/fogleman/gg v1.3.0
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.6.0
 	github.com/gaissmai/bart v0.11.1
@@ -130,6 +133,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gobuffalo/flect v1.0.2 // indirect
 	github.com/goccy/go-yaml v1.12.0 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/google/pprof v0.0.0-20240409012703-83162a5b38cd // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
