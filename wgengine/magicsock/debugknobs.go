@@ -8,6 +8,7 @@ package magicsock
 import (
 	"log"
 	"net/netip"
+	"strings"
 	"sync"
 
 	"tailscale.com/envknob"
@@ -76,14 +77,33 @@ func inTest() bool { return envknob.Bool("IN_TS_TEST") }
 // pretendpoint returns TS_DEBUG_PRETENDPOINT as an AddrPort, if set.
 // See https://github.com/tailscale/tailscale/issues/12578 and
 // https://github.com/tailscale/tailscale/pull/12735.
-var pretendpoint = sync.OnceValue(func() (ap netip.AddrPort) {
+// pretendpoints returns a slice of AddrPort parsed from TS_DEBUG_PRETENDPOINT,
+// which can now be a CSV string. If the environment variable is not set or
+// invalid, it returns an empty slice.
+var pretendpoints = sync.OnceValue(func() []netip.AddrPort {
 	s := envknob.String("TS_DEBUG_PRETENDPOINT")
 	if s == "" {
-		return
+		return nil
 	}
-	ap, err := netip.ParseAddrPort(s)
-	if err != nil {
-		log.Printf("ignoring invalid TS_DEBUG_PRETENDPOINT %q: %v", s, err)
+
+	var result []netip.AddrPort
+	for _, addrStr := range strings.Split(s, ",") {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+
+		ap, err := netip.ParseAddrPort(addrStr)
+		if err != nil {
+			log.Printf("ignoring invalid AddrPort in TS_DEBUG_PRETENDPOINT: %q: %v", addrStr, err)
+			continue
+		}
+		result = append(result, ap)
 	}
-	return ap
+
+	if len(result) == 0 {
+		log.Printf("no valid AddrPorts found in TS_DEBUG_PRETENDPOINT: %q", s)
+	}
+
+	return result
 })
