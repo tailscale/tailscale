@@ -20,6 +20,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
+	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
@@ -104,6 +105,7 @@ type Wrapper struct {
 	// peerConfig stores the current NAT configuration.
 	peerConfig atomic.Pointer[peerConfigTable]
 
+	buf []byte
 	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
 	// allocated in wrap() and the underlying arrays should never grow.
 	vectorBuffer [][]byte
@@ -159,7 +161,8 @@ type Wrapper struct {
 	// and therefore sees the packets that may be later dropped by it.
 	PreFilterPacketInboundFromWireGuard FilterFunc
 	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
-	PostFilterPacketInboundFromWireGuard FilterFunc
+	PostFilterPacketInboundFromWireGuard      FilterFunc
+	PostFilterPacketInboundFromWireGuardFlush func()
 	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by netstack to hook
 	// packets that should be handled by netstack. If set, this filter runs before
@@ -262,6 +265,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 		startCh:     make(chan struct{}),
 	}
 
+	w.buf = make([]byte, 65535)
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
 	for i := range w.vectorBuffer {
 		w.vectorBuffer[i] = make([]byte, maxBufferSize)
@@ -894,13 +898,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		return 0, res.err
 	}
 	if res.data == nil {
-		n, err := t.injectedRead(res.injected, buffs[0], offset)
-		sizes[0] = n
-		if err != nil && n == 0 {
-			return 0, err
-		}
-
-		return 1, err
+		return t.injectedRead(t.buf, res.injected, buffs, sizes, offset)
 	}
 
 	metricPacketOut.Add(int64(len(res.data)))
@@ -956,25 +954,26 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 }
 
 // injectedRead handles injected reads, which bypass filters.
-func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int, error) {
-	metricPacketOut.Add(1)
-
-	var n int
-	if !res.packet.IsNil() {
-
-		n = copy(buf[offset:], res.packet.NetworkHeader().Slice())
-		n += copy(buf[offset+n:], res.packet.TransportHeader().Slice())
-		n += copy(buf[offset+n:], res.packet.Data().AsRange().ToSlice())
+func (t *Wrapper) injectedRead(buf []byte, res tunInjectedRead, outBuffs [][]byte, sizes []int, offset int) (n int, err error) {
+	var (
+		buffN int
+		gso   stack.GSO
+	)
+	if res.packet != nil {
+		buffN = copy(buf, res.packet.NetworkHeader().Slice())
+		buffN += copy(buf[buffN:], res.packet.TransportHeader().Slice())
+		buffN += copy(buf[buffN:], res.packet.Data().AsRange().ToSlice())
+		gso = res.packet.GSOOptions
 		res.packet.DecRef()
 	} else {
-		n = copy(buf[offset:], res.data)
+		buffN = copy(buf, res.data)
 	}
 
 	pc := t.peerConfig.Load()
 
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
-	p.Decode(buf[offset : offset+n])
+	p.Decode(buf[:buffN])
 	pc.snat(p)
 
 	if m := t.destIPActivity.Load(); m != nil {
@@ -984,10 +983,51 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int
 	}
 
 	if stats := t.stats.Load(); stats != nil {
-		stats.UpdateTxVirtual(buf[offset:][:n])
+		stats.UpdateTxVirtual(buf[:buffN])
 	}
+
+	// gVisor can pass us gso.Type=stack.GSOTCPv{4,6} and gso.NeedsCsum=true for
+	// a TCP segment that is too small to split. This varies from Linux virtio
+	// where we get the equivalent of stack.GSONone if it's too small to split.
+	// So, we have to check size before falling into GSO logic, otherwise
+	// tun.GSOSplit() will clear checksum(s) and return early, resulting in a
+	// packet being fed up to wireguard-go with invalid checksums.
+	// TODO(jwhited): bounds checks and consider res.data was non-nil
+	if gso.Type == stack.GSONone || buffN-int(gso.L3HdrLen) <= int(gso.MSS) {
+		if gso.NeedsCsum {
+			err = tun.GSONoneChecksum(buf[:buffN], gso.L3HdrLen, gso.CsumOffset)
+		}
+		n = 1
+		sizes[0] = buffN
+		copy(outBuffs[0][offset:], buf[:buffN])
+	} else if gso.Type == stack.GSOTCPv4 || gso.Type == stack.GSOTCPv6 {
+		tcphLen := uint16((buf[gso.L3HdrLen+12] >> 4) * 4) // TODO(jwhited): bounds checks
+		hdr := tun.VirtioNetHdr{
+			GSOType:    unix.VIRTIO_NET_HDR_GSO_TCPV4,
+			HdrLen:     gso.L3HdrLen + tcphLen,
+			GSOSize:    gso.MSS,
+			CsumStart:  gso.L3HdrLen,
+			CsumOffset: gso.CsumOffset,
+		}
+		if gso.Type == stack.GSOTCPv6 {
+			hdr.GSOType = unix.VIRTIO_NET_HDR_GSO_TCPV6
+		}
+		// TODO(jwhited): tun.GSOSplit() is an unmodified export of
+		//  tun.gsoSplit(). This will need to be refactored into its own
+		//  package. Its eventual API should not require virtio_net_hdr, but
+		//  something more intermediary/generic. Its 'in' arg is assumed to be
+		//  non-overlapping with 'outBuffs', but it would be more performant if
+		//  we could just assign/copy into outBuffs[0] for 'in' for this use
+		//  case, instead.
+		n, err = tun.GSOSplit(buf[:buffN], hdr, outBuffs, sizes, offset, gso.Type == stack.GSOTCPv6)
+	} else {
+		// TODO(jwhited): unexpected
+		panic("unexpected")
+	}
+
 	t.noteActivity()
-	return n, nil
+	metricPacketOut.Add(int64(n))
+	return n, err
 }
 
 func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback, pc *peerConfigTable) filter.Response {
@@ -1112,6 +1152,7 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 			}
 		}
 	}
+	t.PostFilterPacketInboundFromWireGuardFlush()
 	if t.disableFilter {
 		i = len(buffs)
 	}

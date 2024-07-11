@@ -26,7 +26,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -176,7 +175,7 @@ type Impl struct {
 	ProcessSubnets bool
 
 	ipstack       *stack.Stack
-	linkEP        *channel.Endpoint
+	linkEP        *linkEndpoint
 	tundev        *tstun.Wrapper
 	e             wgengine.Engine
 	pm            *proxymap.Mapper
@@ -285,10 +284,19 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 			return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 		}
 	}
-	linkEP := channel.New(512, uint32(tstun.DefaultTUNMTU()), "")
+	linkEP := newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "")
+	linkEP.LinkEPCapabilities = stack.CapabilityRXChecksumOffload
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
+	go func() {
+		for {
+			<-time.After(time.Second * 2)
+			log.Printf("XXX IP Stats: %+v", ipstack.Stats().IP)
+			log.Printf("XXX TCP Stats: %+v", ipstack.Stats().TCP)
+		}
+	}()
+	linkEP.SupportedGSOKind = stack.HostGSOSupported
 	// By default the netstack NIC will only accept packets for the IPs
 	// registered to it. Since in some cases we dynamically register IPs
 	// based on the packets that arrive, the NIC needs to accept all
@@ -333,6 +341,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
+	ns.tundev.PostFilterPacketInboundFromWireGuardFlush = ns.groFlush
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
 	return ns, nil
@@ -791,7 +800,7 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 func (ns *Impl) inject() {
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
-		if pkt.IsNil() {
+		if pkt == nil {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
 				return
@@ -1000,6 +1009,10 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte, direction userPing
 	}
 }
 
+func (ns *Impl) groFlush() {
+	ns.linkEP.GROFlush()
+}
+
 // injectInbound is installed as a packet hook on the 'inbound' (from a
 // WireGuard peer) path. Returning filter.Accept releases the packet to
 // continue normally (typically being delivered to the host networking stack),
@@ -1048,7 +1061,9 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData(bytes.Clone(p.Buffer())),
 	})
-	ns.linkEP.InjectInbound(pn, packetBuf)
+	packetBuf.NetworkProtocolNumber = pn
+	//packetBuf.RXChecksumValidated = true
+	ns.linkEP.GROEnqueue(packetBuf)
 	packetBuf.DecRef()
 
 	// We've now delivered this to netstack, so we're done.
