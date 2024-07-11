@@ -20,7 +20,7 @@ type State struct {
 	Warnings map[WarnableCode]UnhealthyState
 }
 
-// Representation contains information to be shown to the user to inform them
+// UnhealthyState contains information to be shown to the user to inform them
 // that a Warnable is currently unhealthy.
 type UnhealthyState struct {
 	WarnableCode        WarnableCode
@@ -86,6 +86,10 @@ func (t *Tracker) CurrentState() *State {
 	wm := map[WarnableCode]UnhealthyState{}
 
 	for w, ws := range t.warnableVal {
+		if !w.IsVisible(ws) {
+			// Skip invisible Warnables.
+			continue
+		}
 		wm[w.Code] = *w.unhealthyState(ws)
 	}
 
