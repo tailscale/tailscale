@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -356,6 +357,13 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 	defer func() {
 		if didPanic {
+			// TODO(icio): When the panic below is eventually caught by
+			// http.Server, it cancels the inlight request and the "500 Internal
+			// Server Error" response we wrote to the client below is never
+			// received, even if we flush it.
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 			panic(panicRes)
 		}
 	}()
@@ -364,10 +372,16 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if r := recover(); r != nil {
 				didPanic = true
 				panicRes = r
-				// Even if r is an error, do not wrap it as an error here as
-				// that would allow things like panic(vizerror.New("foo")) which
-				// is really hard to define the behavior of.
-				err = fmt.Errorf("panic: %v", r)
+				if r == http.ErrAbortHandler {
+					err = http.ErrAbortHandler
+				} else {
+					// Even if r is an error, do not wrap it as an error here as
+					// that would allow things like panic(vizerror.New("foo")) which
+					// is really hard to define the behavior of.
+					var stack [10000]byte
+					n := runtime.Stack(stack[:], false)
+					err = fmt.Errorf("panic: %v\n\n%s", r, stack[:n])
+				}
 			}
 		}()
 		return h.rh.ServeHTTPReturn(lw, r)

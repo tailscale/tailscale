@@ -8,11 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -525,6 +527,82 @@ func TestStdHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStdHandler_Panic(t *testing.T) {
+	var r AccessLogRecord
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			panicElsewhere()
+			return nil
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r = alr
+			},
+		},
+	)
+
+	// Run our panicking handler in a http.Server which catches and rethrows
+	// any panics.
+	var recovered atomic.Value
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if r := recovered.Load(); r != nil {
+				panic(r)
+			}
+		}()
+		defer func() {
+			recovered.Store(recover())
+		}()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(s.Close)
+
+	// Send a request to our server.
+	res, err := http.Get(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Load() == nil {
+		t.Fatal("expected panic but saw none")
+	}
+
+	// Check that the log message contained the stack trace in the error.
+	var logerr bool
+	if p := "panic: panicked elsewhere\n\ngoroutine "; !strings.HasPrefix(r.Err, p) {
+		t.Errorf("got error prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
+		logerr = true
+	}
+	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(r.Err, s) {
+		t.Errorf("want substr %q, not found", s)
+		logerr = true
+	}
+	if logerr {
+		t.Logf("logger got error: (quoted) %q\n\n(verbatim)\n%s", r.Err, r.Err)
+	}
+
+	t.Run("check_response", func(t *testing.T) {
+		// TODO(icio): Swallow panics? tailscale/tailscale#12784
+		t.SkipNow()
+
+		// Check that the server sent an error response.
+		if res.StatusCode != 500 {
+			t.Errorf("got status code %d, want %d", res.StatusCode, 500)
+		}
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Errorf("error reading body: %s", err)
+		} else if want := "internal server error\n"; string(body) != want {
+			t.Errorf("got body %q, want %q", body, want)
+		}
+		res.Body.Close()
+	})
+}
+
+func panicElsewhere() {
+	panic("panicked elsewhere")
 }
 
 func BenchmarkLogNot200(b *testing.B) {
