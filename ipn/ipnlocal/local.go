@@ -730,7 +730,9 @@ func (b *LocalBackend) Shutdown() {
 	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {
-		b.sockstatLogger.Shutdown()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		b.sockstatLogger.Shutdown(ctx)
 	}
 	if b.peerAPIServer != nil {
 		b.peerAPIServer.taildrop.Shutdown()
