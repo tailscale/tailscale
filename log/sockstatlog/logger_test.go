@@ -4,6 +4,7 @@
 package sockstatlog
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -28,7 +29,7 @@ func TestResourceCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	lg.Write([]byte("hello"))
-	lg.Shutdown()
+	lg.Shutdown(context.Background())
 }
 
 func TestDelta(t *testing.T) {
