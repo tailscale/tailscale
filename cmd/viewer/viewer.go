@@ -459,7 +459,11 @@ func main() {
 		}
 		genView(buf, it, typ, pkg.Types)
 	}
-	out := pkg.Name + "_view.go"
+	out := pkg.Name + "_view"
+	if *flagBuildTags == "test" {
+		out += "_test"
+	}
+	out += ".go"
 	if err := codegen.WritePackageFile("tailscale/cmd/viewer", pkg, out, it, buf); err != nil {
 		log.Fatal(err)
 	}

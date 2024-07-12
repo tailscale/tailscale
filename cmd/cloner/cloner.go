@@ -78,7 +78,11 @@ func main() {
 		w("	return false")
 		w("}")
 	}
-	cloneOutput := pkg.Name + "_clone.go"
+	cloneOutput := pkg.Name + "_clone"
+	if *flagBuildTags == "test" {
+		cloneOutput += "_test"
+	}
+	cloneOutput += ".go"
 	if err := codegen.WritePackageFile("tailscale.com/cmd/cloner", pkg, cloneOutput, it, buf); err != nil {
 		log.Fatal(err)
 	}
