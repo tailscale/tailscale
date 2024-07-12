@@ -266,6 +266,7 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 		case <-l.shutdownDone:
 		}
 		close(done)
+		l.httpc.CloseIdleConnections()
 	}()
 
 	l.shutdownStartMu.Lock()
