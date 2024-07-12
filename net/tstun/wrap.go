@@ -783,7 +783,7 @@ func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
 	return c.jailed
 }
 
-// SetNetMap is called when a new NetworkMap is received.
+// SetWGConfig is called when a new NetworkMap is received.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
 	cfg := peerConfigTableFromWGConfig(wcfg)
 
