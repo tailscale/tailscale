@@ -15,6 +15,7 @@ import (
 )
 
 func main() {
+	// noop comment
 	args := os.Args[1:]
 	if name, _ := os.Executable(); strings.HasSuffix(filepath.Base(name), ".cgi") {
 		args = []string{"web", "-cgi"}
