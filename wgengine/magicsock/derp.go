@@ -63,11 +63,10 @@ type derpRoute struct {
 }
 
 // removeDerpPeerRoute removes a DERP route entry previously added by addDerpPeerRoute.
-func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Client) {
+func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, derpID int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r2 := derpRoute{derpID, dc}
-	if r, ok := c.derpRoute[peer]; ok && r == r2 {
+	if r, ok := c.derpRoute[peer]; ok && r.derpID == derpID {
 		delete(c.derpRoute, peer)
 	}
 }
@@ -553,7 +552,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 			// Forget that all these peers have routes.
 			for peer := range peerPresent {
 				delete(peerPresent, peer)
-				c.removeDerpPeerRoute(peer, regionID, dc)
+				c.removeDerpPeerRoute(peer, regionID)
 			}
 			if err == derphttp.ErrClientClosed {
 				return
@@ -649,7 +648,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 				c.logf("[unexpected] magicsock: derp-%d peer %s gone, reason %v, removing route",
 					regionID, key.NodePublic(m.Peer).ShortString(), m.Reason)
 			}
-			c.removeDerpPeerRoute(key.NodePublic(m.Peer), regionID, dc)
+			c.removeDerpPeerRoute(key.NodePublic(m.Peer), regionID)
 			continue
 		default:
 			// Ignore.
