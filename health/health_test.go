@@ -186,10 +186,8 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 		}
 
 		if us != nil {
-			t.Logf("watcherFunc was called with an UnhealthyState: %v", us)
 			becameUnhealthy <- struct{}{}
 		} else {
-			t.Logf("watcherFunc was called with an healthy state: %v", us)
 			becameHealthy <- struct{}{}
 		}
 	}
