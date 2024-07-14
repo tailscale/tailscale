@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 
 	qt "github.com/frankban/quicktest"
 )
@@ -20,6 +21,16 @@ type viewStruct struct {
 	Strings    Slice[string]
 	AddrsPtr   *Slice[netip.Prefix] `json:",omitempty"`
 	StringsPtr *Slice[string]       `json:",omitempty"`
+}
+
+type noPtrStruct struct {
+	Int int
+	Str string
+}
+
+type withPtrStruct struct {
+	Int    int
+	StrPtr *string
 }
 
 func BenchmarkSliceIteration(b *testing.B) {
@@ -187,5 +198,217 @@ func TestSliceMapKey(t *testing.T) {
 				t.Fatalf("wantDiff[%d, %+v, %q] == wantDiff[%d, %+v, %q] ", i, ki, si.AsSlice(), j, kj, sj.AsSlice())
 			}
 		}
+	}
+}
+
+func TestContainsPointers(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      reflect.Type
+		wantPtrs bool
+	}{
+		{
+			name:     "bool",
+			typ:      reflect.TypeFor[bool](),
+			wantPtrs: false,
+		},
+		{
+			name:     "int",
+			typ:      reflect.TypeFor[int](),
+			wantPtrs: false,
+		},
+		{
+			name:     "int8",
+			typ:      reflect.TypeFor[int8](),
+			wantPtrs: false,
+		},
+		{
+			name:     "int16",
+			typ:      reflect.TypeFor[int16](),
+			wantPtrs: false,
+		},
+		{
+			name:     "int32",
+			typ:      reflect.TypeFor[int32](),
+			wantPtrs: false,
+		},
+		{
+			name:     "int64",
+			typ:      reflect.TypeFor[int64](),
+			wantPtrs: false,
+		},
+		{
+			name:     "uint",
+			typ:      reflect.TypeFor[uint](),
+			wantPtrs: false,
+		},
+		{
+			name:     "uint8",
+			typ:      reflect.TypeFor[uint8](),
+			wantPtrs: false,
+		},
+		{
+			name:     "uint16",
+			typ:      reflect.TypeFor[uint16](),
+			wantPtrs: false,
+		},
+		{
+			name:     "uint32",
+			typ:      reflect.TypeFor[uint32](),
+			wantPtrs: false,
+		},
+		{
+			name:     "uint64",
+			typ:      reflect.TypeFor[uint64](),
+			wantPtrs: false,
+		},
+		{
+			name:     "uintptr",
+			typ:      reflect.TypeFor[uintptr](),
+			wantPtrs: false,
+		},
+		{
+			name:     "string",
+			typ:      reflect.TypeFor[string](),
+			wantPtrs: false,
+		},
+		{
+			name:     "float32",
+			typ:      reflect.TypeFor[float32](),
+			wantPtrs: false,
+		},
+		{
+			name:     "float64",
+			typ:      reflect.TypeFor[float64](),
+			wantPtrs: false,
+		},
+		{
+			name:     "complex64",
+			typ:      reflect.TypeFor[complex64](),
+			wantPtrs: false,
+		},
+		{
+			name:     "complex128",
+			typ:      reflect.TypeFor[complex128](),
+			wantPtrs: false,
+		},
+		{
+			name:     "netip-Addr",
+			typ:      reflect.TypeFor[netip.Addr](),
+			wantPtrs: false,
+		},
+		{
+			name:     "netip-Prefix",
+			typ:      reflect.TypeFor[netip.Prefix](),
+			wantPtrs: false,
+		},
+		{
+			name:     "netip-AddrPort",
+			typ:      reflect.TypeFor[netip.AddrPort](),
+			wantPtrs: false,
+		},
+		{
+			name:     "bool-ptr",
+			typ:      reflect.TypeFor[*bool](),
+			wantPtrs: true,
+		},
+		{
+			name:     "string-ptr",
+			typ:      reflect.TypeFor[*string](),
+			wantPtrs: true,
+		},
+		{
+			name:     "netip-Addr-ptr",
+			typ:      reflect.TypeFor[*netip.Addr](),
+			wantPtrs: true,
+		},
+		{
+			name:     "unsafe-ptr",
+			typ:      reflect.TypeFor[unsafe.Pointer](),
+			wantPtrs: true,
+		},
+		{
+			name:     "no-ptr-struct",
+			typ:      reflect.TypeFor[noPtrStruct](),
+			wantPtrs: false,
+		},
+		{
+			name:     "ptr-struct",
+			typ:      reflect.TypeFor[withPtrStruct](),
+			wantPtrs: true,
+		},
+		{
+			name:     "string-array",
+			typ:      reflect.TypeFor[[5]string](),
+			wantPtrs: false,
+		},
+		{
+			name:     "int-ptr-array",
+			typ:      reflect.TypeFor[[5]*int](),
+			wantPtrs: true,
+		},
+		{
+			name:     "no-ptr-struct-array",
+			typ:      reflect.TypeFor[[5]noPtrStruct](),
+			wantPtrs: false,
+		},
+		{
+			name:     "with-ptr-struct-array",
+			typ:      reflect.TypeFor[[5]withPtrStruct](),
+			wantPtrs: true,
+		},
+		{
+			name:     "string-slice",
+			typ:      reflect.TypeFor[[]string](),
+			wantPtrs: true,
+		},
+		{
+			name:     "int-ptr-slice",
+			typ:      reflect.TypeFor[[]int](),
+			wantPtrs: true,
+		},
+		{
+			name:     "no-ptr-struct-slice",
+			typ:      reflect.TypeFor[[]noPtrStruct](),
+			wantPtrs: true,
+		},
+		{
+			name:     "string-map",
+			typ:      reflect.TypeFor[map[string]string](),
+			wantPtrs: true,
+		},
+		{
+			name:     "int-map",
+			typ:      reflect.TypeFor[map[int]int](),
+			wantPtrs: true,
+		},
+		{
+			name:     "no-ptr-struct-map",
+			typ:      reflect.TypeFor[map[string]noPtrStruct](),
+			wantPtrs: true,
+		},
+		{
+			name:     "chan",
+			typ:      reflect.TypeFor[chan int](),
+			wantPtrs: true,
+		},
+		{
+			name:     "func",
+			typ:      reflect.TypeFor[func()](),
+			wantPtrs: true,
+		},
+		{
+			name:     "interface",
+			typ:      reflect.TypeFor[any](),
+			wantPtrs: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotPtrs := containsPointers(tt.typ); gotPtrs != tt.wantPtrs {
+				t.Errorf("got %v; want %v", gotPtrs, tt.wantPtrs)
+			}
+		})
 	}
 }

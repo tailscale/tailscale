@@ -14,7 +14,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers
 
 // View returns a readonly view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
@@ -604,3 +604,67 @@ func _GenericCloneableStructViewNeedsRegeneration[T views.ViewCloner[T, V], V vi
 		SliceMap    map[string][]T
 	}{})
 }
+
+// View returns a readonly view of StructWithContainers.
+func (p *StructWithContainers) View() StructWithContainersView {
+	return StructWithContainersView{ж: p}
+}
+
+// StructWithContainersView provides a read-only view over StructWithContainers.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithContainersView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithContainers
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v StructWithContainersView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithContainersView) AsStruct() *StructWithContainers {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v StructWithContainersView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *StructWithContainersView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithContainers
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithContainersView) IntContainer() Container[int] { return v.ж.IntContainer }
+func (v StructWithContainersView) CloneableContainer() ContainerView[*StructWithPtrs, StructWithPtrsView] {
+	return ContainerViewOf(&v.ж.CloneableContainer)
+}
+func (v StructWithContainersView) BasicGenericContainer() Container[GenericBasicStruct[int]] {
+	return v.ж.BasicGenericContainer
+}
+func (v StructWithContainersView) ClonableGenericContainer() ContainerView[*GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
+	return ContainerViewOf(&v.ж.ClonableGenericContainer)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithContainersViewNeedsRegeneration = StructWithContainers(struct {
+	IntContainer             Container[int]
+	CloneableContainer       Container[*StructWithPtrs]
+	BasicGenericContainer    Container[GenericBasicStruct[int]]
+	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
+}{})
