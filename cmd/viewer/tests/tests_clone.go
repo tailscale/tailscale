@@ -416,3 +416,24 @@ func _GenericCloneableStructCloneNeedsRegeneration[T views.ViewCloner[T, V], V v
 		SliceMap    map[string][]T
 	}{})
 }
+
+// Clone makes a deep copy of StructWithContainers.
+// The result aliases no memory with the original.
+func (src *StructWithContainers) Clone() *StructWithContainers {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithContainers)
+	*dst = *src
+	dst.CloneableContainer = *src.CloneableContainer.Clone()
+	dst.ClonableGenericContainer = *src.ClonableGenericContainer.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithContainersCloneNeedsRegeneration = StructWithContainers(struct {
+	IntContainer             Container[int]
+	CloneableContainer       Container[*StructWithPtrs]
+	BasicGenericContainer    Container[GenericBasicStruct[int]]
+	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
+}{})
