@@ -148,8 +148,7 @@ func main() {
 
 		foregroundSc.SetFunnel(serverURL, uint16(*flagPort), *flagFunnel)
 		mak.Set(&foregroundSc.TCP, uint16(*flagPort), &ipn.TCPPortHandler{
-			// TODO(naman): choose ips better?
-			TCPForward: net.JoinHostPort(st.TailscaleIPs[0].String(), portStr),
+			TCPForward: net.JoinHostPort(lns[0].Addr().String(), portStr),
 		})
 		err = lc.SetServeConfig(ctx, sc)
 		if err != nil {
@@ -335,7 +334,6 @@ func (ar *authRequest) allowRelyingParty(ctx context.Context, remoteAddr string,
 
 func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 	who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
-	log.Printf("whois: %v, %v", who.Node.ComputedName, err)
 	if err != nil {
 		log.Printf("Error getting WhoIs: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -493,7 +491,12 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: code not found", http.StatusBadRequest)
 		return
 	}
-	if err := ar.allowRelyingParty(r.Context(), r.RemoteAddr, s.lc, r.FormValue("client_id"), r.FormValue("client_secret")); err != nil {
+	clientID, clientSecret, ok := r.BasicAuth()
+	if !ok {
+		clientID = r.FormValue("client_id")
+		clientSecret = r.FormValue("client_secret")
+	}
+	if err := ar.allowRelyingParty(r.Context(), r.RemoteAddr, s.lc, clientID, clientSecret); err != nil {
 		log.Printf("Error allowing relying party: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -789,19 +792,19 @@ func (s *idpServer) serveClients(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	c, ok := s.funnelClients[path]
 	s.mu.Unlock()
-	if ok {
-		switch r.Method {
-		case "DELETE":
-			s.serveDeleteClient(w, r, path)
-		case "GET":
-			json.NewEncoder(w).Encode(c)
-		default:
-			http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
-		}
+	if !ok {
+		http.Error(w, "tsidp: not found", http.StatusNotFound)
 		return
 	}
 
-	http.Error(w, "tsidp: not found", http.StatusNotFound)
+	switch r.Method {
+	case "DELETE":
+		s.serveDeleteClient(w, r, path)
+	case "GET":
+		json.NewEncoder(w).Encode(c)
+	default:
+		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *idpServer) serveNewClient(w http.ResponseWriter, r *http.Request) {
@@ -817,11 +820,16 @@ func (s *idpServer) serveNewClient(w http.ResponseWriter, r *http.Request) {
 		Name:   r.FormValue("name"),
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	mak.Set(&s.funnelClients, clientID, &newClient)
 	if err := s.storeFunnelClientsLocked(); err != nil {
 		log.Printf("could not write funnel clients db: %v", err)
+		http.Error(w, "tsidp: could not write funnel clients to db", http.StatusInternalServerError)
+		// delete the new client to avoid inconsistent state between memory
+		// and disk
+		delete(s.funnelClients, clientID)
+		return
 	}
-	s.mu.Unlock()
 	json.NewEncoder(w).Encode(newClient)
 }
 
@@ -830,8 +838,8 @@ func (s *idpServer) serveGetClientsList(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	redactedClients := make([]funnelClient, 0)
 	s.mu.Lock()
+	redactedClients := make([]funnelClient, 0, len(s.funnelClients))
 	for _, c := range s.funnelClients {
 		redactedClients = append(redactedClients, funnelClient{
 			ID:     c.ID,
@@ -858,9 +866,15 @@ func (s *idpServer) serveDeleteClient(w http.ResponseWriter, r *http.Request, cl
 		http.Error(w, "tsidp: client not found", http.StatusNotFound)
 		return
 	}
+	deleted := s.funnelClients[clientID]
 	delete(s.funnelClients, clientID)
 	if err := s.storeFunnelClientsLocked(); err != nil {
 		log.Printf("could not write funnel clients db: %v", err)
+		http.Error(w, "tsidp: could not write funnel clients to db", http.StatusInternalServerError)
+		// restore the deleted value to avoid inconsistent state between memory
+		// and disk
+		s.funnelClients[clientID] = deleted
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
