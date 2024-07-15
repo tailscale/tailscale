@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -546,15 +545,10 @@ func TestStdHandler_Panic(t *testing.T) {
 
 	// Run our panicking handler in a http.Server which catches and rethrows
 	// any panics.
-	var recovered atomic.Value
+	recovered := make(chan any, 1)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if r := recovered.Load(); r != nil {
-				panic(r)
-			}
-		}()
-		defer func() {
-			recovered.Store(recover())
+			recovered <- recover()
 		}()
 		h.ServeHTTP(w, r)
 	}))
@@ -565,7 +559,7 @@ func TestStdHandler_Panic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Load() == nil {
+	if <-recovered == nil {
 		t.Fatal("expected panic but saw none")
 	}
 
