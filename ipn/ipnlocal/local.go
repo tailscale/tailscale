@@ -4884,6 +4884,27 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	cc := b.cc
 	var refresh bool
 	if b.MagicConn().DERPs() > 0 || testenv.InTest() {
+		// When b.refreshAutoExitNode is set, we recently observed a link change
+		// that indicates we have switched networks. After switching networks,
+		// the previously selected automatic exit node is no longer as likely
+		// to be a good choice and connectivity will already be broken due to
+		// the network switch. Therefore, it is a good time to switch to a new
+		// exit node because the network is already disrupted.
+		//
+		// Unfortunately, at the time of the link change, no information is
+		// known about the new network's latency or location, so the necessary
+		// details are not available to make a new choice. Instead, it sets
+		// b.refreshAutoExitNode to signal that a new decision should be made
+		// when we have an updated netcheck report. ni is that updated report.
+		//
+		// However, during testing we observed that often the first ni is
+		// inconclusive because it was running during the link change or the
+		// link was otherwise not stable yet. b.MagicConn().updateEndpoints()
+		// can detect when the netcheck failed and trigger a rebind, but the
+		// required information is not available here, and moderate additional
+		// plumbing is required to pass that in. Instead, checking for an active
+		// DERP link offers an easy approximation. We will continue to refine
+		// this over time.
 		refresh = b.refreshAutoExitNode
 		b.refreshAutoExitNode = false
 	}
