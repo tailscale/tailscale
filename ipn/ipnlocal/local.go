@@ -4882,8 +4882,11 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
-	refresh := b.refreshAutoExitNode
-	b.refreshAutoExitNode = false
+	var refresh bool
+	if b.MagicConn().DERPs() > 0 || testenv.InTest() {
+		refresh = b.refreshAutoExitNode
+		b.refreshAutoExitNode = false
+	}
 	b.mu.Unlock()
 
 	if cc == nil {
