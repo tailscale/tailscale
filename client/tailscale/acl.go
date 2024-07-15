@@ -37,6 +37,16 @@ type ACLTest struct {
 	Allow []string `json:"allow,omitempty"` // old name for accept
 }
 
+// NodeAttrGrant defines additional string attributes that apply to specific devices.
+type NodeAttrGrant struct {
+	// Target specifies which nodes the attributes apply to. The nodes can be a
+	// tag (tag:server), user (alice@example.com), group (group:kids), or *.
+	Target []string `json:"target,omitempty"`
+
+	// Attr are the attributes to set on Target(s).
+	Attr []string `json:"attr,omitempty"`
+}
+
 // ACLDetails contains all the details for an ACL.
 type ACLDetails struct {
 	Tests     []ACLTest           `json:"tests,omitempty"`
@@ -44,6 +54,7 @@ type ACLDetails struct {
 	Groups    map[string][]string `json:"groups,omitempty"`
 	TagOwners map[string][]string `json:"tagowners,omitempty"`
 	Hosts     map[string]string   `json:"hosts,omitempty"`
+	NodeAttrs []NodeAttrGrant     `json:"nodeAttrs,omitempty"`
 }
 
 // ACL contains an ACLDetails and metadata.
