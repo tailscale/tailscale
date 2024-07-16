@@ -433,21 +433,34 @@ func (h logHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestID:  RequestIDFromContext(r.Context()),
 	}
 
-	var bucket string
-	var startRecorded bool
-	if bs := h.opts.BucketedStats; bs != nil {
-		bucket = bs.bucketForRequest(r)
-		if bs.Started != nil {
-			switch v := bs.Started.Map.Get(bucket).(type) {
-			case *expvar.Int:
-				// If we've already seen this bucket for, count it immediately.
-				// Otherwise, for newly seen paths, only count retroactively
-				// (so started-finished doesn't go negative) so we don't fill
-				// this LabelMap up with internet scanning spam.
-				v.Add(1)
-				startRecorded = true
-			}
+	if bs := h.opts.BucketedStats; bs != nil && bs.Started != nil && bs.Finished != nil {
+		bucket := bs.bucketForRequest(r)
+		var startRecorded bool
+		switch v := bs.Started.Map.Get(bucket).(type) {
+		case *expvar.Int:
+			// If we've already seen this bucket for, count it immediately.
+			// Otherwise, for newly seen paths, only count retroactively
+			// (so started-finished doesn't go negative) so we don't fill
+			// this LabelMap up with internet scanning spam.
+			v.Add(1)
+			startRecorded = true
 		}
+		defer func() {
+			// Only increment metrics for buckets that result in good HTTP statuses
+			// or when we know the start was already counted.
+			// Otherwise they get full of internet scanning noise. Only filtering 404
+			// gets most of the way there but there are also plenty of URLs that are
+			// almost right but result in 400s too. Seem easier to just only ignore
+			// all 4xx and 5xx.
+			if startRecorded {
+				bs.Finished.Add(bucket, 1)
+			} else if msg.Code < 400 {
+				// This is the first non-error request for this bucket,
+				// so count it now retroactively.
+				bs.Started.Add(bucket, 1)
+				bs.Finished.Add(bucket, 1)
+			}
+		}()
 	}
 
 	if fn := h.opts.OnStart; fn != nil {
@@ -469,27 +482,24 @@ func (h logHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
 
-	// Invoke the handler that we're logging.
-	var recovered any
 	defer func() {
+		// If the handler panicked then make sure we include that in our error.
+		recovered := recover()
 		if recovered != nil {
-			// TODO(icio): When the panic below is eventually caught by
-			// http.Server, it cancels the inlight request and the "500 Internal
-			// Server Error" response we wrote to the client below is never
-			// received, even if we flush it.
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
+			defer panic(recovered)
+			if msg.Err == "" {
+				msg.Err = panic2err(recovered).Error()
+			} else {
+				msg.Err += "\n\nthen " + panic2err(recovered).Error()
 			}
-			panic(recovered)
 		}
-	}()
-	func() {
-		defer func() {
-			recovered = recover()
-		}()
-		h.h.ServeHTTP(lw, r)
+		h.logRequest(r, lw, msg)
 	}()
 
+	h.h.ServeHTTP(lw, r)
+}
+
+func (h logHandler) logRequest(r *http.Request, lw *loggingResponseWriter, msg AccessLogRecord) {
 	// Complete our access log from the loggingResponseWriter.
 	msg.Bytes = lw.bytes
 	msg.Seconds = h.opts.Now().Sub(msg.Time).Seconds()
@@ -506,7 +516,7 @@ func (h logHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		msg.Code = lw.code
 	}
 
-	if !h.opts.QuietLoggingIfSuccessful || (msg.Code != http.StatusOK && msg.Code != http.StatusNotModified) {
+	if !h.opts.QuietLoggingIfSuccessful || (msg.Err != "" || msg.Code != http.StatusOK && msg.Code != http.StatusNotModified) {
 		h.opts.Logf("%s", msg)
 	}
 
@@ -515,22 +525,6 @@ func (h logHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Closing metrics.
-	if bs := h.opts.BucketedStats; bs != nil && bs.Finished != nil {
-		// Only increment metrics for buckets that result in good HTTP statuses
-		// or when we know the start was already counted.
-		// Otherwise they get full of internet scanning noise. Only filtering 404
-		// gets most of the way there but there are also plenty of URLs that are
-		// almost right but result in 400s too. Seem easier to just only ignore
-		// all 4xx and 5xx.
-		if startRecorded {
-			bs.Finished.Add(bucket, 1)
-		} else if msg.Code < 400 {
-			// This is the first non-error request for this bucket,
-			// so count it now retroactively.
-			bs.Started.Add(bucket, 1)
-			bs.Finished.Add(bucket, 1)
-		}
-	}
 	if h.opts.StatusCodeCounters != nil {
 		h.opts.StatusCodeCounters.Add(responseCodeString(msg.Code/100), 1)
 	}
@@ -573,7 +567,7 @@ type loggingResponseWriter struct {
 	logf     logger.Logf
 }
 
-// WriteHeader implements http.Handler.
+// WriteHeader implements [http.ResponseWriter].
 func (l *loggingResponseWriter) WriteHeader(statusCode int) {
 	if l.code != 0 {
 		l.logf("[unexpected] HTTP handler set statusCode twice (%d and %d)", l.code, statusCode)
@@ -583,7 +577,7 @@ func (l *loggingResponseWriter) WriteHeader(statusCode int) {
 	l.ResponseWriter.WriteHeader(statusCode)
 }
 
-// Write implements http.Handler.
+// Write implements [http.ResponseWriter].
 func (l *loggingResponseWriter) Write(bs []byte) (int, error) {
 	if l.code == 0 {
 		l.code = 200
@@ -640,32 +634,20 @@ func (h errorHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// In case the handler panics, we want to recover and continue logging the
-	// error before raising the panic again for the server to handle.
-	var panicRes any
+	var err error
 	defer func() {
-		if panicRes != nil {
-			panic(panicRes)
+		// In case the handler panics, we want to recover and continue logging
+		// the error before raising the panic again for the server to handle.
+		if rec := recover(); rec != nil {
+			defer panic(rec)
+			err = panic2err(rec)
 		}
+		h.handleError(logf, w, r, lw.code, err)
 	}()
-	err := func() (err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				panicRes = r
-				if r == http.ErrAbortHandler {
-					err = http.ErrAbortHandler
-				} else {
-					// Even if r is an error, do not wrap it as an error here as
-					// that would allow things like panic(vizerror.New("foo"))
-					// which is really hard to define the behavior of.
-					var stack [10000]byte
-					n := runtime.Stack(stack[:], false)
-					err = fmt.Errorf("panic: %v\n\n%s", r, stack[:n])
-				}
-			}
-		}()
-		return h.rh.ServeHTTPReturn(lw, r)
-	}()
+	err = h.rh.ServeHTTPReturn(lw, r)
+}
+
+func (h errorHandler) handleError(logf logger.Logf, w http.ResponseWriter, r *http.Request, code int, err error) {
 	if err == nil {
 		return
 	}
@@ -698,9 +680,9 @@ func (h errorHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if lw.code != 0 {
+	if code != 0 {
 		if hOK {
-			logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, lw.code)
+			logf("[unexpected] handler returned HTTPError %v, but already sent a response with code %d", hErr, code)
 		}
 		return
 	}
@@ -713,6 +695,19 @@ func (h errorHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.opts.OnError(w, r, hErr)
+}
+
+func panic2err(recovered any) error {
+	if recovered == http.ErrAbortHandler {
+		return http.ErrAbortHandler
+	}
+
+	// Even if r is an error, do not wrap it as an error here as
+	// that would allow things like panic(vizerror.New("foo"))
+	// which is really hard to define the behavior of.
+	var stack [10000]byte
+	n := runtime.Stack(stack[:], false)
+	return fmt.Errorf("panic: %v\n\n%s", recovered, stack[:n])
 }
 
 // writeHTTPError is the default error response formatter.

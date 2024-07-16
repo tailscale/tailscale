@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -648,10 +649,19 @@ func TestStdHandler_Panic(t *testing.T) {
 
 	// Run our panicking handler in a http.Server which catches and rethrows
 	// any panics.
-	recovered := make(chan any, 1)
+	type panicval struct {
+		val   any
+		stack []byte
+	}
+	recovered := make(chan panicval, 1)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			recovered <- recover()
+			stack := make([]byte, 65<<10)
+			stack = stack[:runtime.Stack(stack, false)]
+			recovered <- panicval{
+				val:   recover(),
+				stack: stack,
+			}
 		}()
 		h.ServeHTTP(w, r)
 	}))
@@ -662,22 +672,110 @@ func TestStdHandler_Panic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if <-recovered == nil {
+	panicked := <-recovered
+	if panicked.val == nil {
 		t.Fatal("expected panic but saw none")
 	}
 
 	// Check that the log message contained the stack trace in the error.
 	var logerr bool
 	if p := "panic: panicked elsewhere\n\ngoroutine "; !strings.HasPrefix(r.Err, p) {
-		t.Errorf("got error prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
+		t.Errorf("got Err prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
 		logerr = true
 	}
 	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(r.Err, s) {
-		t.Errorf("want substr %q, not found", s)
+		t.Errorf("want Err substr %q, not found", s)
 		logerr = true
 	}
 	if logerr {
 		t.Logf("logger got error: (quoted) %q\n\n(verbatim)\n%s", r.Err, r.Err)
+	}
+	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(string(panicked.stack), s) {
+		t.Errorf("want panic stacktrace substr %q, not found", s)
+		logerr = true
+	}
+
+	t.Run("check_response", func(t *testing.T) {
+		// TODO(icio): Swallow panics? tailscale/tailscale#12784
+		t.SkipNow()
+
+		// Check that the server sent an error response.
+		if res.StatusCode != 500 {
+			t.Errorf("got status code %d, want %d", res.StatusCode, 500)
+		}
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Errorf("error reading body: %s", err)
+		} else if want := "internal server error\n"; string(body) != want {
+			t.Errorf("got body %q, want %q", body, want)
+		}
+		res.Body.Close()
+	})
+}
+
+func TestStdHandler_OnErrorPanic(t *testing.T) {
+	var r AccessLogRecord
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			return Error(401, "lacking auth", nil)
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			OnError: func(w http.ResponseWriter, r *http.Request, h HTTPError) {
+				panicElsewhere()
+			},
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r = alr
+			},
+		},
+	)
+
+	// Run our panicking handler in a http.Server which catches and rethrows
+	// any panics.
+	type panicval struct {
+		val   any
+		stack []byte
+	}
+	recovered := make(chan panicval, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			stack := make([]byte, 65<<10)
+			stack = stack[:runtime.Stack(stack, false)]
+			recovered <- panicval{
+				val:   recover(),
+				stack: stack,
+			}
+		}()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(s.Close)
+
+	// Send a request to our server.
+	res, err := http.Get(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	panicked := <-recovered
+	if panicked.val == nil {
+		t.Fatal("expected panic but saw none")
+	}
+
+	// Check that the log message contained the stack trace in the error.
+	var logerr bool
+	if p := "lacking auth\n\nthen panic: panicked elsewhere\n\ngoroutine "; !strings.HasPrefix(r.Err, p) {
+		t.Errorf("got Err prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
+		logerr = true
+	}
+	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(r.Err, s) {
+		t.Errorf("want Err substr %q, not found", s)
+		logerr = true
+	}
+	if logerr {
+		t.Logf("logger got error: (quoted) %q\n\n(verbatim)\n%s", r.Err, r.Err)
+	}
+	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(string(panicked.stack), s) {
+		t.Errorf("want panic stacktrace substr %q, not found", s)
+		logerr = true
 	}
 
 	t.Run("check_response", func(t *testing.T) {
