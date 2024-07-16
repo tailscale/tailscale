@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eks-nlb
+  namespace: tailscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eks-nlb
+  template:
+    metadata:
+      labels:
+        app: eks-nlb
+    spec:
+      serviceAccountName: eks-nlb 
+      containers:
+        - name: eks-nlb
+          image: gcr.io/csi-test-290908/eksnlb:v0.0.15 # this image is publicly available
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  key: aws_access_key_id
+                  name: aws-creds
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: aws_secret_access_key
+                  name: aws-creds
+            - name: AWS_DEFAULT_REGION
+              value: eu-central-1
+--- 
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: eks-nlb
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "update", "patch", "create", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: eks-nlb
+subjects:
+  - kind: ServiceAccount
+    name: eks-nlb
+    namespace: tailscale
+roleRef:
+  kind: ClusterRole
+  name: eks-nlb
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: tailscale
+  name: eks-nlb

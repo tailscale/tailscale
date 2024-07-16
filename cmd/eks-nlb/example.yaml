@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: StatefulSet 
+metadata:
+  name: tailscale
+  namespace: tailscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale 
+  template:
+    metadata:
+      labels:
+        app: tailscale 
+      annotations:
+        tailscale.com/eksnlb-configmap: eks-config
+    spec:
+      serviceAccountName: tailscale
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:unstable
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: ts-creds
+                  key: authkey
+            - name: TS_KUBE_SECRET
+              value: tailscale-secret
+            - name: TS_HOSTNAME
+              value: eks-nlb-test
+            - name: TS_USERSPACE
+              value: "false"
+            - name: TS_TAILSCALED_EXTRA_ARGS
+              value: "--port=41641 --debug=0.0.0.0:9001"
+            - name: TS_DEBUG_PRETENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: pretendpoint
+                  key: pretendpoint
+          securityContext:
+            capabilities:
+              add:
+              - NET_ADMIN
+          resources:
+            limits:
+              memory: 64Mi
+              cpu: 10m
+--- 
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tailscale
+  namespace: tailscale
+rules:
+  - apiGroups: [""] # "" indicates the core API group
+    resources: ["secrets"]
+    verbs: ["get", "update", "patch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tailscale
+  namespace: tailscale
+subjects:
+  - kind: ServiceAccount
+    name: tailscale
+    namespace: tailscale
+roleRef:
+  kind: Role
+  name: tailscale
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tailscale
+  namespace: tailscale
+---
+apiVersion: v1
+data:
+  vpc_id: 
+  lb_arn: 
+kind: ConfigMap
+metadata:
+  name: eks-config
+  namespace: tailscale
+---
+apiVersion: v1
+data:
+  pretendpoint: <lb-ip-1>:<port>,<lb-ip-2>:<port>
+kind: ConfigMap
+metadata:
+  name: pretendpoint
+  namespace: tailscale
