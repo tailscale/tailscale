@@ -49,7 +49,7 @@ case "$TARGET" in
         -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
       --base="${BASE}" \
       --tags="${TAGS}" \
-      --gotags="ts_kube" \
+      --gotags="ts_kube,ts_package_container" \
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \
