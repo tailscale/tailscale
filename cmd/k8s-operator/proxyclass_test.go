@@ -29,7 +29,8 @@ func TestProxyClass(t *testing.T) {
 			// The apiserver is supposed to set the UID, but the fake client
 			// doesn't. So, set it explicitly because other code later depends
 			// on it being set.
-			UID: types.UID("1234-UID"),
+			UID:        types.UID("1234-UID"),
+			Finalizers: []string{"tailscale.com/finalizer"},
 		},
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
