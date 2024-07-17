@@ -45,6 +45,14 @@ var (
 	}
 )
 
+// This test suite is currently not run in CI.
+// It requires some setup not handled by this code:
+// - Kubernetes cluster with tailscale operator installed
+// - Current kubeconfig context set to connect to that cluster (directly, no operator proxy)
+// - Operator installed with --set apiServerProxyConfig.mode="true"
+// - ACLs that define tag:e2e-test-proxy tag. TODO(tomhjp): Can maybe replace this prereq onwards with an API key
+// - OAuth client ID and secret in TS_API_CLIENT_ID and TS_API_CLIENT_SECRET env
+// - OAuth client must have acl write and device write for tag:e2e-test-proxy tag
 func TestMain(m *testing.M) {
 	code, err := runTests(m)
 	if err != nil {

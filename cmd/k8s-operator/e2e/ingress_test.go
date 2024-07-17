@@ -19,10 +19,7 @@ import (
 	"tailscale.com/tstest"
 )
 
-// TestIngress requires some setup not handled by this test:
-// - Kubernetes cluster with tailscale operator installed
-// - Current kubeconfig context set to connect to that cluster
-// - OAuth client ID and secret in TS_API_CLIENT_ID and TS_API_CLIENT_SECRET env
+// See [TestMain] for test requirements.
 func TestIngress(t *testing.T) {
 	if tsClient == nil {
 		t.Skip("TestIngress requires credentials for a tailscale client")
@@ -93,6 +90,9 @@ func TestIngress(t *testing.T) {
 
 	var resp *http.Response
 	if err := tstest.WaitFor(time.Second*60, func() error {
+		// TODO(tomhjp): Get the tailnet DNS name from the associated secret instead.
+		// If we are not the first tailnet node with the requested name, we'll get
+		// a -N suffix.
 		resp, err = tsClient.HTTPClient.Get(fmt.Sprintf("http://%s-%s:80", svc.Namespace, svc.Name))
 		if err != nil {
 			return err

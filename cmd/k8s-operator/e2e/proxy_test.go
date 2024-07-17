@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -18,15 +19,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/tsnet"
+	"tailscale.com/tstest"
 )
 
-// TestProxy requires some setup not handled by this test:
-// - Kubernetes cluster with tailscale operator installed
-// - Current kubeconfig context set to connect to that cluster (directly, no operator proxy)
-// - Operator installed with --set apiServerProxyConfig.mode="true"
-// - ACLs that define tag:e2e-test-proxy tag. TODO(tomhjp): Can maybe replace this prereq onwards with an API key
-// - OAuth client ID and secret in TS_API_CLIENT_ID and TS_API_CLIENT_SECRET env
-// - OAuth client must have device write for tag:e2e-test-proxy tag
+// See [TestMain] for test requirements.
 func TestProxy(t *testing.T) {
 	if tsClient == nil {
 		t.Skip("TestProxy requires credentials for a tailscale client")
@@ -84,7 +80,11 @@ func TestProxy(t *testing.T) {
 	allowedSecret := corev1.Secret{
 		ObjectMeta: objectMeta("tailscale", "operator"),
 	}
-	if err := get(ctx, proxyCl, &allowedSecret); err != nil {
+	// Wait for up to a minute the first time we use the proxy, to give it time
+	// to provision the TLS certs.
+	if err := tstest.WaitFor(time.Second*60, func() error {
+		return get(ctx, proxyCl, &allowedSecret)
+	}); err != nil {
 		t.Fatal(err)
 	}
 
