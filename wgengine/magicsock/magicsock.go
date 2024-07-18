@@ -7,6 +7,7 @@ package magicsock
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -918,6 +919,14 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}
 	}
 
+	// Temporarily (2024-07-08) during investigations, allow setting
+	// pretend endpoint(s) for testing NAT traversal scenarios.
+	// TODO(bradfitz): probably promote this to the config file.
+	// https://github.com/tailscale/tailscale/issues/12578
+	for _, ap := range pretendpoints() {
+		addAddr(ap, tailcfg.EndpointExplicitConf)
+	}
+
 	// Update our set of endpoints by adding any endpoints that we
 	// previously found but haven't expired yet. This also updates the
 	// cache with the set of endpoints discovered in this function.
@@ -1154,7 +1163,8 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (s
 		return c.sendUDP(addr, b)
 	}
 
-	ch := c.derpWriteChanOfAddr(addr, pubKey)
+	regionID := int(addr.Port())
+	ch := c.derpWriteChanForRegion(regionID, pubKey)
 	if ch == nil {
 		metricSendDERPErrorChan.Add(1)
 		return false, nil
@@ -1165,8 +1175,7 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (s
 	// to derpWriteRequest and waited for derphttp.Client.Send to
 	// complete, but that's too slow while holding wireguard-go
 	// internal locks.
-	pkt := make([]byte, len(b))
-	copy(pkt, b)
+	pkt := bytes.Clone(b)
 
 	select {
 	case <-c.donec:
@@ -1267,7 +1276,8 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (_ conn.Endpoint, ok bool) {
+	var ep *endpoint
 	if stun.Is(b) {
 		c.netChecker.ReceiveSTUNPacket(b, ipp)
 		return nil, false
@@ -1288,7 +1298,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 		de, ok := c.peerMap.endpointForIPPort(ipp)
 		c.mu.Unlock()
 		if !ok {
-			return nil, false
+			if c.controlKnobs != nil && c.controlKnobs.DisableCryptorouting.Load() {
+				return nil, false
+			}
+			return &lazyEndpoint{c: c, src: ipp}, true
 		}
 		cache.ipp = ipp
 		cache.de = de
@@ -3104,4 +3117,36 @@ func (c *Conn) GetLastNetcheckReport(ctx context.Context) *netcheck.Report {
 // Used for testing purposes.
 func (c *Conn) SetLastNetcheckReportForTest(ctx context.Context, report *netcheck.Report) {
 	c.lastNetCheckReport.Store(report)
+}
+
+// lazyEndpoint is a wireguard conn.Endpoint for when magicsock received a
+// non-disco (presumably WireGuard) packet from a UDP address from which we
+// can't map to a Tailscale peer. But Wireguard most likely can, once it
+// decrypts it. So we implement the conn.PeerAwareEndpoint interface
+// from https://github.com/tailscale/wireguard-go/pull/27 to allow WireGuard
+// to tell us who it is later and get the correct conn.Endpoint.
+type lazyEndpoint struct {
+	c   *Conn
+	src netip.AddrPort
+}
+
+var _ conn.PeerAwareEndpoint = (*lazyEndpoint)(nil)
+var _ conn.Endpoint = (*lazyEndpoint)(nil)
+
+func (le *lazyEndpoint) ClearSrc()           {}
+func (le *lazyEndpoint) SrcIP() netip.Addr   { return le.src.Addr() }
+func (le *lazyEndpoint) DstIP() netip.Addr   { return netip.Addr{} }
+func (le *lazyEndpoint) SrcToString() string { return le.src.String() }
+func (le *lazyEndpoint) DstToString() string { return "dst" }
+func (le *lazyEndpoint) DstToBytes() []byte  { return nil }
+func (le *lazyEndpoint) GetPeerEndpoint(peerPublicKey [32]byte) conn.Endpoint {
+	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
+	le.c.mu.Lock()
+	defer le.c.mu.Unlock()
+	ep, ok := le.c.peerMap.endpointForNodeKey(pubKey)
+	if !ok {
+		return nil
+	}
+	le.c.logf("magicsock: lazyEndpoint.GetPeerEndpoint(%v) found: %v", pubKey.ShortString(), ep.nodeAddr)
+	return ep
 }

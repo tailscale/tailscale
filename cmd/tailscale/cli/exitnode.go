@@ -156,8 +156,7 @@ func runExitNodeSuggest(ctx context.Context, args []string) error {
 		fmt.Println("No exit node suggestion is available.")
 		return nil
 	}
-	hostname := strings.TrimSuffix(res.Name, ".")
-	fmt.Printf("Suggested exit node: %v\nTo accept this suggestion, use `tailscale set --exit-node=%v`.\n", hostname, shellquote.Join(hostname))
+	fmt.Printf("Suggested exit node: %v\nTo accept this suggestion, use `tailscale set --exit-node=%v`.\n", res.Name, shellquote.Join(res.Name))
 	return nil
 }
 

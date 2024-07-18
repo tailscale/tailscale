@@ -1,11 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// This file exists just so `go mod tidy` won't remove
-// tool modules from our go.mod.
-
 //go:build tools
 
+// This file exists just so `go mod tidy` won't remove
+// tool modules from our go.mod.
 package tools
 
 import (

@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The Tailscale API documentation has moved to https://tailscale.com/api
+
 # Device
 
 A Tailscale device (sometimes referred to as _node_ or _machine_), is any computer or mobile device that joins a tailnet.

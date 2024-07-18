@@ -1,17 +1,6 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
-############################################################################
-#
-# WARNING: Tailscale is not yet officially supported in container
-# environments, such as Docker and Kubernetes. Though it should work, we
-# don't regularly test it, and we know there are some feature limitations.
-#
-# See current bugs tagged "containers":
-#    https://github.com/tailscale/tailscale/labels/containers
-#
-############################################################################
-
 # This Dockerfile includes all the tailscale binaries.
 #
 # To build the Dockerfile:

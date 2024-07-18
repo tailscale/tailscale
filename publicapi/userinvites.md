@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The Tailscale API documentation has moved to https://tailscale.com/api
+
 # User invites
 
 A user invite is an active invitation that lets a user join a tailnet with a pre-assigned [user role](https://tailscale.com/kb/1138/user-roles).

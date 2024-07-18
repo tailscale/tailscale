@@ -8,7 +8,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 
 	dockerref "github.com/distribution/reference"
 	"go.uber.org/zap"
@@ -18,6 +20,7 @@ import (
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +28,8 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstime"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 )
 
 const (
@@ -41,7 +46,19 @@ type ProxyClassReconciler struct {
 	recorder record.EventRecorder
 	logger   *zap.SugaredLogger
 	clock    tstime.Clock
+
+	mu sync.Mutex // protects following
+
+	// managedProxyClasses is a set of all ProxyClass resources that we're currently
+	// managing. This is only used for metrics.
+	managedProxyClasses set.Slice[types.UID]
 }
+
+var (
+	// gaugeProxyClassResources tracks the number of ProxyClass resources
+	// that we're currently managing.
+	gaugeProxyClassResources = clientmetric.NewGauge("k8s_proxyclass_resources")
+)
 
 func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	logger := pcr.logger.With("ProxyClass", req.Name)
@@ -57,9 +74,26 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com ProxyClass: %w", err)
 	}
 	if !pc.DeletionTimestamp.IsZero() {
-		logger.Debugf("ProxyClass is being deleted, do nothing")
-		return reconcile.Result{}, nil
+		logger.Debugf("ProxyClass is being deleted")
+		return reconcile.Result{}, pcr.maybeCleanup(ctx, logger, pc)
 	}
+
+	// Add a finalizer so that we can ensure that metrics get updated when
+	// this ProxyClass is deleted.
+	if !slices.Contains(pc.Finalizers, FinalizerName) {
+		logger.Debugf("updating ProxyClass finalizers")
+		pc.Finalizers = append(pc.Finalizers, FinalizerName)
+		if err := pcr.Update(ctx, pc); err != nil {
+			return res, fmt.Errorf("failed to add finalizer: %w", err)
+		}
+	}
+
+	// Ensure this ProxyClass is tracked in metrics.
+	pcr.mu.Lock()
+	pcr.managedProxyClasses.Add(pc.UID)
+	gaugeProxyClassResources.Set(int64(pcr.managedProxyClasses.Len()))
+	pcr.mu.Unlock()
+
 	oldPCStatus := pc.Status.DeepCopy()
 	if errs := pcr.validate(pc); errs != nil {
 		msg := fmt.Sprintf(messageProxyClassInvalid, errs.ToAggregate().Error())
@@ -77,7 +111,7 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	return reconcile.Result{}, nil
 }
 
-func (a *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.ErrorList) {
+func (pcr *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.ErrorList) {
 	if sts := pc.Spec.StatefulSet; sts != nil {
 		if len(sts.Labels) > 0 {
 			if errs := metavalidation.ValidateLabels(sts.Labels, field.NewPath(".spec.statefulSet.labels")); errs != nil {
@@ -103,13 +137,13 @@ func (a *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.
 			if tc := pod.TailscaleContainer; tc != nil {
 				for _, e := range tc.Env {
 					if strings.HasPrefix(string(e.Name), "TS_") {
-						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+						pcr.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
 					}
 					if strings.EqualFold(string(e.Name), "EXPERIMENTAL_TS_CONFIGFILE_PATH") {
-						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+						pcr.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
 					}
 					if strings.EqualFold(string(e.Name), "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS") {
-						a.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
+						pcr.recorder.Event(pc, corev1.EventTypeWarning, reasonCustomTSEnvVar, fmt.Sprintf(messageCustomTSEnvVar, string(e.Name), "tailscale"))
 					}
 				}
 				if tc.Image != "" {
@@ -134,4 +168,28 @@ func (a *ProxyClassReconciler) validate(pc *tsapi.ProxyClass) (violations field.
 	// Invalid values would get rejected by upstream validations at apply
 	// time.
 	return violations
+}
+
+// maybeCleanup removes tailscale.com finalizer and ensures that the ProxyClass
+// is no longer counted towards k8s_proxyclass_resources.
+func (pcr *ProxyClassReconciler) maybeCleanup(ctx context.Context, logger *zap.SugaredLogger, pc *tsapi.ProxyClass) error {
+	ix := slices.Index(pc.Finalizers, FinalizerName)
+	if ix < 0 {
+		logger.Debugf("no finalizer, nothing to do")
+		pcr.mu.Lock()
+		defer pcr.mu.Unlock()
+		pcr.managedProxyClasses.Remove(pc.UID)
+		gaugeProxyClassResources.Set(int64(pcr.managedProxyClasses.Len()))
+		return nil
+	}
+	pc.Finalizers = append(pc.Finalizers[:ix], pc.Finalizers[ix+1:]...)
+	if err := pcr.Update(ctx, pc); err != nil {
+		return fmt.Errorf("failed to remove finalizer: %w", err)
+	}
+	pcr.mu.Lock()
+	defer pcr.mu.Unlock()
+	pcr.managedProxyClasses.Remove(pc.UID)
+	gaugeProxyClassResources.Set(int64(pcr.managedProxyClasses.Len()))
+	logger.Infof("ProxyClass resources have been cleaned up")
+	return nil
 }

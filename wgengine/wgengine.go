@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package wgengine provides the Tailscale WireGuard engine interface.
 package wgengine
 
 import (

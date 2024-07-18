@@ -3,9 +3,6 @@
 
 //go:build !plan9
 
-// tailscale-operator provides a way to expose services running in a Kubernetes
-// cluster to your Tailnet and to make Tailscale nodes available to cluster
-// workloads
 package main
 
 import (

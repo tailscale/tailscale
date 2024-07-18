@@ -22,7 +22,7 @@ func emptySet(ip netip.Addr) bool { return false }
 
 func bartLookup(t *bart.Table[struct{}]) func(netip.Addr) bool {
 	return func(ip netip.Addr) bool {
-		_, ok := t.Get(ip)
+		_, ok := t.Lookup(ip)
 		return ok
 	}
 }

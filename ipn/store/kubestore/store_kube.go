@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package kubestore contains an ipn.StateStore implementation using Kubernetes Secrets.
-
 package kubestore
 
 import (

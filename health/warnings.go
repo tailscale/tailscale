@@ -59,6 +59,7 @@ var NetworkStatusWarnable = Register(&Warnable{
 	Severity:            SeverityMedium,
 	Text:                StaticMessage("Tailscale cannot connect because the network is down. Check your Internet connection."),
 	ImpactsConnectivity: true,
+	TimeToVisible:       5 * time.Second,
 })
 
 // IPNStateWarnable is a Warnable that warns the user that Tailscale is stopped.
@@ -101,6 +102,8 @@ var notInMapPollWarnable = Register(&Warnable{
 	Severity:  SeverityMedium,
 	DependsOn: []*Warnable{NetworkStatusWarnable},
 	Text:      StaticMessage("Unable to connect to the Tailscale coordination server to synchronize the state of your tailnet. Peer reachability might degrade over time."),
+	// 8 minutes reflects a maximum maintenance window for the coordination server.
+	TimeToVisible: 8 * time.Minute,
 })
 
 // noDERPHomeWarnable is a Warnable that warns the user that Tailscale doesn't have a home DERP.
@@ -111,6 +114,7 @@ var noDERPHomeWarnable = Register(&Warnable{
 	DependsOn:           []*Warnable{NetworkStatusWarnable},
 	Text:                StaticMessage("Tailscale could not connect to any relay server. Check your Internet connection."),
 	ImpactsConnectivity: true,
+	TimeToVisible:       10 * time.Second,
 })
 
 // noDERPConnectionWarnable is a Warnable that warns the user that Tailscale couldn't connect to a specific DERP server.
@@ -127,6 +131,7 @@ var noDERPConnectionWarnable = Register(&Warnable{
 		}
 	},
 	ImpactsConnectivity: true,
+	TimeToVisible:       10 * time.Second,
 })
 
 // derpTimeoutWarnable is a Warnable that warns the user that Tailscale hasn't heard from the home DERP region for a while.

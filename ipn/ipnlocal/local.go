@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package ipnlocal is the heart of the Tailscale node agent that controls
+// all the other misc pieces of the Tailscale node.
 package ipnlocal
 
 import (
@@ -728,7 +730,9 @@ func (b *LocalBackend) Shutdown() {
 	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {
-		b.sockstatLogger.Shutdown()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		b.sockstatLogger.Shutdown(ctx)
 	}
 	if b.peerAPIServer != nil {
 		b.peerAPIServer.taildrop.Shutdown()
@@ -1189,7 +1193,13 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	prefsChanged := false
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	netMap := b.netMap
+	oldNetMap := b.netMap
+	curNetMap := st.NetMap
+	if curNetMap == nil {
+		// The status didn't include a netmap update, so the old one is still
+		// current.
+		curNetMap = oldNetMap
+	}
 
 	if prefs.ControlURL == "" {
 		// Once we get a message from the control plane, set
@@ -1220,7 +1230,14 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		prefs.WantRunning = true
 		prefs.LoggedOut = false
 	}
-	if setExitNodeID(prefs, st.NetMap, b.lastSuggestedExitNode) {
+	if shouldAutoExitNode() {
+		// Re-evaluate exit node suggestion in case circumstances have changed.
+		_, err := b.suggestExitNodeLocked(curNetMap)
+		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
+		}
+	}
+	if setExitNodeID(prefs, curNetMap, b.lastSuggestedExitNode) {
 		prefsChanged = true
 	}
 	if applySysPolicy(prefs) {
@@ -1237,8 +1254,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if prefsChanged {
 		// Prefs will be written out if stale; this is not safe unless locked or cloned.
 		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
-			MagicDNSName: st.NetMap.MagicDNSSuffix(),
-			DomainName:   st.NetMap.DomainName(),
+			MagicDNSName: curNetMap.MagicDNSSuffix(),
+			DomainName:   curNetMap.DomainName(),
 		}); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
@@ -1305,8 +1322,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &p})
 			return
 		}
-		if netMap != nil {
-			diff := st.NetMap.ConciseDiffFrom(netMap)
+		if oldNetMap != nil {
+			diff := st.NetMap.ConciseDiffFrom(oldNetMap)
 			if strings.TrimSpace(diff) == "" {
 				b.logf("[v1] netmap diff: (none)")
 			} else {
@@ -4865,8 +4882,11 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
-	refresh := b.refreshAutoExitNode
-	b.refreshAutoExitNode = false
+	var refresh bool
+	if b.MagicConn().DERPs() > 0 || testenv.InTest() {
+		refresh = b.refreshAutoExitNode
+		b.refreshAutoExitNode = false
+	}
 	b.mu.Unlock()
 
 	if cc == nil {
@@ -4889,7 +4909,7 @@ func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) {
 		return
 	}
 	prefsClone := prefs.AsStruct()
-	newSuggestion, err := b.suggestExitNodeLocked()
+	newSuggestion, err := b.suggestExitNodeLocked(nil)
 	if err != nil {
 		b.logf("setAutoExitNodeID: %v", err)
 		return
@@ -6571,7 +6591,6 @@ func mayDeref[T any](p *T) (v T) {
 }
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
-var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
 
 // suggestExitNodeLocked computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
@@ -6580,10 +6599,17 @@ var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try a
 // Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
 // Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
 // without a DERP home, we look for geographic proximity to this device's DERP home.
+//
+// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated).
+// If netMap is nil, then b.netMap is used.
+//
 // b.mu.lock() must be held.
-func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
+func (b *LocalBackend) suggestExitNodeLocked(netMap *netmap.NetworkMap) (response apitype.ExitNodeSuggestionResponse, err error) {
+	// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated). If netMap is nil, then b.netMap is used.
+	if netMap == nil {
+		netMap = b.netMap
+	}
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
-	netMap := b.netMap
 	prevSuggestion := b.lastSuggestedExitNode
 
 	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, getAllowedSuggestions())
@@ -6597,7 +6623,7 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.suggestExitNodeLocked()
+	return b.suggestExitNodeLocked(nil)
 }
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.

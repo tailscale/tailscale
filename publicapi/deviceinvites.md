@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The Tailscale API documentation has moved to https://tailscale.com/api
+
 # Device invites
 
 A device invite is an invitation that shares a device with an external user (a user not in the device's tailnet).

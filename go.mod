@@ -20,7 +20,6 @@ require (
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/creack/pty v1.1.21
 	github.com/dave/courtney v0.4.0
-	github.com/dave/jennifer v1.7.0
 	github.com/dave/patsy v0.0.0-20210517141501-957256f50cba
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
@@ -30,7 +29,7 @@ require (
 	github.com/evanw/esbuild v0.19.11
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.6.0
-	github.com/gaissmai/bart v0.4.1
+	github.com/gaissmai/bart v0.11.1
 	github.com/go-json-experiment/json v0.0.0-20231102232822-2e55bd4e08b0
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
@@ -44,7 +43,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
 	github.com/hdevalence/ed25519consensus v0.2.0
-	github.com/iancoleman/strcase v0.3.0
 	github.com/illarion/gonotify v1.0.1
 	github.com/inetaf/tcpproxy v0.0.0-20240214030015-3ce58045626c
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2
@@ -82,7 +80,7 @@ require (
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20240627171225-cfa45674af86
+	github.com/tailscale/wireguard-go v0.0.0-20240705152531-2f5d148bcfe1
 	github.com/tailscale/xnet v0.0.0-20240117122442-62b9a7c569f9
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0

@@ -810,7 +810,7 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	match := 0
 	for _, ps := range st.Peer {
 		baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
-		if !strings.EqualFold(s, baseName) {
+		if !strings.EqualFold(s, baseName) && !strings.EqualFold(s, ps.DNSName) {
 			continue
 		}
 		match++

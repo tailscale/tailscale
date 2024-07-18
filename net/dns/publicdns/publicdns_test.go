@@ -134,6 +134,15 @@ func TestDoHIPsOfBase(t *testing.T) {
 				"2606:1a40:1:ffff:ffff:ffff:ffff:0",
 			),
 		},
+		{
+			base: "https://dns.controld.com/hyq3ipr2ct/test-host-name",
+			want: ips(
+				"76.76.2.22",
+				"76.76.10.22",
+				"2606:1a40:0:6:7b5b:5949:35ad:0",
+				"2606:1a40:1:6:7b5b:5949:35ad:0",
+			),
+		},
 	}
 	for _, tt := range tests {
 		got := DoHIPsOfBase(tt.base)
