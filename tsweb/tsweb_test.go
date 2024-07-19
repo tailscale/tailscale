@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/must"
 	"tailscale.com/util/vizerror"
 )
@@ -691,6 +692,81 @@ func TestStdHandler_Panic(t *testing.T) {
 		t.Errorf("got body %q, want %q", body, want)
 	}
 	res.Body.Close()
+}
+
+func TestStdHandler_Canceled(t *testing.T) {
+	now := time.Now()
+
+	r := make(chan AccessLogRecord)
+	var e *HTTPError
+	handlerOpen := make(chan struct{})
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			close(handlerOpen)
+			ctx := r.Context()
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			Now:  func() time.Time { return now },
+			OnError: func(w http.ResponseWriter, r *http.Request, h HTTPError) {
+				e = &h
+			},
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r <- alr
+			},
+		},
+	)
+
+	// Create a context which gets canceled after the handler starts processing
+	// the request.
+	ctx, cancelReq := context.WithCancel(context.Background())
+	go func() {
+		<-handlerOpen
+		cancelReq()
+	}()
+
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+
+	// Send a request to our server.
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, s.URL, nil)
+	if err != nil {
+		t.Fatalf("making request: %s", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("got error %v, want context.Canceled", err)
+	}
+	if res != nil {
+		t.Errorf("got response %#v, want nil", res)
+	}
+
+	// Check that we got the expected log record.
+	got := <-r
+	got.Seconds = 0
+	got.RemoteAddr = ""
+	got.Host = ""
+	got.UserAgent = ""
+	want := AccessLogRecord{
+		Time:       now,
+		Code:       499,
+		Method:     "GET",
+		Err:        "context canceled",
+		Proto:      "HTTP/1.1",
+		RequestURI: "/",
+	}
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("AccessLogRecord wrong (-want +got)\n%s", d)
+	}
+
+	// Check that we rendered no response to the client after
+	// logHandler.OnCompletion has been called.
+	if e != nil {
+		t.Errorf("got OnError callback with %#v, want no callback", e)
+	}
+
 }
 
 func TestStdHandler_OnErrorPanic(t *testing.T) {
