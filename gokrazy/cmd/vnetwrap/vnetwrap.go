@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/binary"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -26,11 +28,18 @@ func serveConn(c net.Conn) {
 
 	buf := make([]byte, 4<<10)
 	for {
-		n, err := c.Read(buf)
-		log.Printf("Read: (%v, %v): %02x", n, err, buf[:n])
-		if err != nil {
+		if _, err := io.ReadFull(c, buf[:4]); err != nil {
+			log.Printf("ReadFull header: %v", err)
 			return
 		}
+		n := binary.BigEndian.Uint32(buf[:4])
+
+		if _, err := io.ReadFull(c, buf[:n]); err != nil {
+			log.Printf("ReadFull pkt: %v", err)
+			return
+		}
+
+		log.Printf("pkt %d bytes: % 02x", n, buf[:n])
 	}
 }
 
