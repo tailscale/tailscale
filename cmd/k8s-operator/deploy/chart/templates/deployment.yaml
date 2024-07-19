@@ -77,6 +77,9 @@ spec:
               value: "{{ .Values.apiServerProxyConfig.mode }}"
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
+            {{- with .Values.operatorConfig.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           volumeMounts:
           - name: oauth
             mountPath: /oauth
