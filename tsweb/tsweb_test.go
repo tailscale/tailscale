@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/must"
 	"tailscale.com/util/vizerror"
 )
@@ -662,40 +663,195 @@ func TestStdHandler_Panic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if <-recovered == nil {
-		t.Fatal("expected panic but saw none")
+	if rec := <-recovered; rec != nil {
+		t.Fatalf("expected no panic but saw: %v", rec)
 	}
 
 	// Check that the log message contained the stack trace in the error.
 	var logerr bool
 	if p := "panic: panicked elsewhere\n\ngoroutine "; !strings.HasPrefix(r.Err, p) {
-		t.Errorf("got error prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
+		t.Errorf("got Err prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
 		logerr = true
 	}
 	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(r.Err, s) {
-		t.Errorf("want substr %q, not found", s)
+		t.Errorf("want Err substr %q, not found", s)
 		logerr = true
 	}
 	if logerr {
 		t.Logf("logger got error: (quoted) %q\n\n(verbatim)\n%s", r.Err, r.Err)
 	}
 
-	t.Run("check_response", func(t *testing.T) {
-		// TODO(icio): Swallow panics? tailscale/tailscale#12784
-		t.SkipNow()
+	// Check that the server sent an error response.
+	if res.StatusCode != 500 {
+		t.Errorf("got status code %d, want %d", res.StatusCode, 500)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Errorf("error reading body: %s", err)
+	} else if want := "Internal Server Error\n"; string(body) != want {
+		t.Errorf("got body %q, want %q", body, want)
+	}
+	res.Body.Close()
+}
 
-		// Check that the server sent an error response.
-		if res.StatusCode != 500 {
-			t.Errorf("got status code %d, want %d", res.StatusCode, 500)
+func TestStdHandler_Canceled(t *testing.T) {
+	now := time.Now()
+
+	r := make(chan AccessLogRecord)
+	var e *HTTPError
+	handlerOpen := make(chan struct{})
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			close(handlerOpen)
+			ctx := r.Context()
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			Now:  func() time.Time { return now },
+			OnError: func(w http.ResponseWriter, r *http.Request, h HTTPError) {
+				e = &h
+			},
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r <- alr
+			},
+		},
+	)
+
+	// Create a context which gets canceled after the handler starts processing
+	// the request.
+	ctx, cancelReq := context.WithCancel(context.Background())
+	go func() {
+		<-handlerOpen
+		cancelReq()
+	}()
+
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+
+	// Send a request to our server.
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, s.URL, nil)
+	if err != nil {
+		t.Fatalf("making request: %s", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("got error %v, want context.Canceled", err)
+	}
+	if res != nil {
+		t.Errorf("got response %#v, want nil", res)
+	}
+
+	// Check that we got the expected log record.
+	got := <-r
+	got.Seconds = 0
+	got.RemoteAddr = ""
+	got.Host = ""
+	got.UserAgent = ""
+	want := AccessLogRecord{
+		Time:       now,
+		Code:       499,
+		Method:     "GET",
+		Err:        "context canceled",
+		Proto:      "HTTP/1.1",
+		RequestURI: "/",
+	}
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("AccessLogRecord wrong (-want +got)\n%s", d)
+	}
+
+	// Check that we rendered no response to the client after
+	// logHandler.OnCompletion has been called.
+	if e != nil {
+		t.Errorf("got OnError callback with %#v, want no callback", e)
+	}
+
+}
+
+func TestStdHandler_OnErrorPanic(t *testing.T) {
+	var r AccessLogRecord
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			// This response is supposed to be written by OnError, but it panics
+			// so nothing is written.
+			return Error(401, "lacking auth", nil)
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			OnError: func(w http.ResponseWriter, r *http.Request, h HTTPError) {
+				panicElsewhere()
+			},
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r = alr
+			},
+		},
+	)
+
+	// Run our panicking handler in a http.Server which catches and rethrows
+	// any panics.
+	recovered := make(chan any, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			recovered <- recover()
+		}()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(s.Close)
+
+	// Send a request to our server.
+	res, err := http.Get(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := <-recovered; rec != nil {
+		t.Fatalf("expected no panic but saw: %v", rec)
+	}
+
+	// Check that the log message contained the stack trace in the error.
+	var logerr bool
+	if p := "lacking auth\n\nthen panic: panicked elsewhere\n\ngoroutine "; !strings.HasPrefix(r.Err, p) {
+		t.Errorf("got Err prefix %q, want %q", r.Err[:min(len(r.Err), len(p))], p)
+		logerr = true
+	}
+	if s := "\ntailscale.com/tsweb.panicElsewhere("; !strings.Contains(r.Err, s) {
+		t.Errorf("want Err substr %q, not found", s)
+		logerr = true
+	}
+	if logerr {
+		t.Logf("logger got error: (quoted) %q\n\n(verbatim)\n%s", r.Err, r.Err)
+	}
+
+	// Check that the server sent a bare 500 response.
+	if res.StatusCode != 500 {
+		t.Errorf("got status code %d, want %d", res.StatusCode, 500)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Errorf("error reading body: %s", err)
+	} else if want := ""; string(body) != want {
+		t.Errorf("got body %q, want %q", body, want)
+	}
+	res.Body.Close()
+}
+
+func TestErrorHandler_Panic(t *testing.T) {
+	// errorHandler should panic when not wrapped in logHandler.
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			t.Fatal("expected errorHandler to panic when not wrapped in logHandler")
 		}
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			t.Errorf("error reading body: %s", err)
-		} else if want := "internal server error\n"; string(body) != want {
-			t.Errorf("got body %q, want %q", body, want)
+		if want := any("uhoh"); rec != want {
+			t.Fatalf("got panic %#v, want %#v", rec, want)
 		}
-		res.Body.Close()
-	})
+	}()
+	ErrorHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			panic("uhoh")
+		}),
+		ErrorOptions{},
+	).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
 }
 
 func panicElsewhere() {

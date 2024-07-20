@@ -48,6 +48,13 @@ operatorConfig:
 
   securityContext: {}
 
+  extraEnv: []
+  # - name: EXTRA_VAR1
+  #   value: "value1"
+  # - name: EXTRA_VAR2
+  #   value: "value2"
+
+
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.
 # https://tailscale.com/kb/1236/kubernetes-operator/#cluster-ingress

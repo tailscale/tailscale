@@ -111,6 +111,14 @@ func (it *ImportTracker) QualifiedName(t types.Type) string {
 	return types.TypeString(t, it.qualifier)
 }
 
+// PackagePrefix returns the prefix to be used when referencing named objects from pkg.
+func (it *ImportTracker) PackagePrefix(pkg *types.Package) string {
+	if s := it.qualifier(pkg); s != "" {
+		return s + "."
+	}
+	return ""
+}
+
 // Write prints all the tracked imports in a single import block to w.
 func (it *ImportTracker) Write(w io.Writer) {
 	fmt.Fprintf(w, "import (\n")

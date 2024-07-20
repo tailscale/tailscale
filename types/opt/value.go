@@ -64,6 +64,14 @@ func (o Value[T]) Get() T {
 	return o.value
 }
 
+// GetOr returns the value of o or def if a value hasn't been set.
+func (o Value[T]) GetOr(def T) T {
+	if o.set {
+		return o.value
+	}
+	return def
+}
+
 // Get returns the value and a flag indicating whether the value is set.
 func (o Value[T]) GetOk() (v T, ok bool) {
 	return o.value, o.set
