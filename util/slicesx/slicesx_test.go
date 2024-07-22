@@ -151,3 +151,49 @@ func TestAppendMatching(t *testing.T) {
 		t.Errorf("got %v; want %v", v, wantOrigMem)
 	}
 }
+
+func TestCutPrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		s, prefix []int
+		after     []int
+		found     bool
+	}{
+		{"has-prefix", []int{1, 2, 3}, []int{1}, []int{2, 3}, true},
+		{"exact-prefix", []int{1, 2, 3}, []int{1, 2, 3}, []int{}, true},
+		{"blank-prefix", []int{1, 2, 3}, []int{}, []int{1, 2, 3}, true},
+		{"no-prefix", []int{1, 2, 3}, []int{42}, []int{1, 2, 3}, false},
+		{"blank-slice", []int{}, []int{42}, []int{}, false},
+		{"blank-all", []int{}, []int{}, []int{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if after, found := CutPrefix(tt.s, tt.prefix); !slices.Equal(after, tt.after) || found != tt.found {
+				t.Errorf("CutPrefix(%v, %v) = %v, %v; want %v, %v", tt.s, tt.prefix, after, found, tt.after, tt.found)
+			}
+		})
+	}
+}
+
+func TestCutSuffix(t *testing.T) {
+	tests := []struct {
+		name      string
+		s, suffix []int
+		before    []int
+		found     bool
+	}{
+		{"has-suffix", []int{1, 2, 3}, []int{3}, []int{1, 2}, true},
+		{"exact-suffix", []int{1, 2, 3}, []int{1, 2, 3}, []int{}, true},
+		{"blank-suffix", []int{1, 2, 3}, []int{}, []int{1, 2, 3}, true},
+		{"no-suffix", []int{1, 2, 3}, []int{42}, []int{1, 2, 3}, false},
+		{"blank-slice", []int{}, []int{42}, []int{}, false},
+		{"blank-all", []int{}, []int{}, []int{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if before, found := CutSuffix(tt.s, tt.suffix); !slices.Equal(before, tt.before) || found != tt.found {
+				t.Errorf("CutSuffix(%v, %v) = %v, %v; want %v, %v", tt.s, tt.suffix, before, found, tt.before, tt.found)
+			}
+		})
+	}
+}
