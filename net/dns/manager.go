@@ -82,7 +82,7 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, linkSel, dialer, knobs),
+		resolver: resolver.New(logf, linkSel, dialer, health, knobs),
 		os:       oscfg,
 		health:   health,
 		knobs:    knobs,

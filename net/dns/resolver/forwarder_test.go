@@ -24,6 +24,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
@@ -457,7 +458,7 @@ func runTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwa
 	var dialer tsdial.Dialer
 	dialer.SetNetMon(netMon)
 
-	fwd := newForwarder(tb.Logf, netMon, nil, &dialer, nil)
+	fwd := newForwarder(tb.Logf, netMon, nil, &dialer, new(health.Tracker), nil)
 	if modify != nil {
 		modify(fwd)
 	}
