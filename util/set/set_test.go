@@ -64,6 +64,22 @@ func TestSetOf(t *testing.T) {
 	}
 }
 
+func TestSetOfFunc(t *testing.T) {
+	type T struct {
+		ID string
+	}
+	ts := []*T{{"one"}, {"two"}, {"three"}, {"four"}}
+	s := SetOfFunc(ts, func(t *T) string { return t.ID })
+	if s.Len() != 4 {
+		t.Errorf("wrong len %d; want 4", s.Len())
+	}
+	for _, e := range []string{"one", "two", "three", "four"} {
+		if !s.Contains(e) {
+			t.Errorf("should contain %s", e)
+		}
+	}
+}
+
 func TestEqual(t *testing.T) {
 	type test struct {
 		name     string

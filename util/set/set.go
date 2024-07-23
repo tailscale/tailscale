@@ -17,6 +17,21 @@ func SetOf[T comparable](slice []T) Set[T] {
 	return Of(slice...)
 }
 
+// SetOfFunc returns a set based on the given slice and func. It is helpful
+// when you want to turn a slice of a non-comparable type to a comparable aspect of it.
+// For example, to turn a slice of "users" to a set by their user ID field you can do something like:
+/*
+	users := []*User{...}
+	userIDs := SetOfFunc(users, func(u *User) string { return u.ID }) // returns set.Set[string]
+*/
+func SetOfFunc[T any, K comparable](slice []T, f func(T) K) Set[K] {
+	s := make(Set[K])
+	for _, e := range slice {
+		s.Add(f(e))
+	}
+	return s
+}
+
 // Of returns a new set constructed from the elements in slice.
 func Of[T comparable](slice ...T) Set[T] {
 	s := make(Set[T])
