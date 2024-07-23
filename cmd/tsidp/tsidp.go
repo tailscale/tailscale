@@ -55,7 +55,7 @@ import (
 type ctxConn struct{}
 
 // funnelClientsFile is the file where client IDs and secrets for OIDC clients
-// accessing the IDP oevr Funnel are persisted.
+// accessing the IDP over Funnel are persisted.
 const funnelClientsFile = "oidc-funnel-clients.json"
 
 var (
@@ -63,7 +63,7 @@ var (
 	flagPort               = flag.Int("port", 443, "port to listen on")
 	flagLocalPort          = flag.Int("local-port", -1, "allow requests from localhost")
 	flagUseLocalTailscaled = flag.Bool("use-local-tailscaled", false, "use local tailscaled instead of tsnet")
-	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available outside the tailnet")
+	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
 )
 
 func main() {
