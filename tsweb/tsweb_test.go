@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"testing"
@@ -494,6 +495,25 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
+			name:     "inner_cancelled",
+			rh:       handlerErr(0, context.Canceled), // return canceled error, but the request was not cancelled
+			r:        req(bgCtx, "http://example.com/"),
+			wantCode: 500,
+			wantLog: AccessLogRecord{
+				Time:       startTime,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				TLS:        false,
+				Host:       "example.com",
+				Method:     "GET",
+				Code:       500,
+				Err:        "context canceled",
+				RequestURI: "/",
+			},
+			wantBody: "Internal Server Error\n",
+		},
+
+		{
 			name: "nested",
 			rh: ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
 				// Here we completely handle the web response with an
@@ -705,6 +725,7 @@ func TestStdHandler_Canceled(t *testing.T) {
 			close(handlerOpen)
 			ctx := r.Context()
 			<-ctx.Done()
+			w.WriteHeader(200) // Ignored.
 			return ctx.Err()
 		}),
 		HandlerOptions{
@@ -718,6 +739,8 @@ func TestStdHandler_Canceled(t *testing.T) {
 			},
 		},
 	)
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
 
 	// Create a context which gets canceled after the handler starts processing
 	// the request.
@@ -726,9 +749,6 @@ func TestStdHandler_Canceled(t *testing.T) {
 		<-handlerOpen
 		cancelReq()
 	}()
-
-	s := httptest.NewServer(h)
-	t.Cleanup(s.Close)
 
 	// Send a request to our server.
 	req, err := http.NewRequestWithContext(ctx, httpm.GET, s.URL, nil)
@@ -766,7 +786,172 @@ func TestStdHandler_Canceled(t *testing.T) {
 	if e != nil {
 		t.Errorf("got OnError callback with %#v, want no callback", e)
 	}
+}
 
+func TestStdHandler_CanceledAfterHeader(t *testing.T) {
+	now := time.Now()
+
+	r := make(chan AccessLogRecord)
+	var e *HTTPError
+	handlerOpen := make(chan struct{})
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			w.WriteHeader(http.StatusNoContent)
+			close(handlerOpen)
+			ctx := r.Context()
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			Now:  func() time.Time { return now },
+			OnError: func(w http.ResponseWriter, r *http.Request, h HTTPError) {
+				e = &h
+			},
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r <- alr
+			},
+		},
+	)
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+
+	// Create a context which gets canceled after the handler starts processing
+	// the request.
+	ctx, cancelReq := context.WithCancel(context.Background())
+	go func() {
+		<-handlerOpen
+		cancelReq()
+	}()
+
+	// Send a request to our server.
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, s.URL, nil)
+	if err != nil {
+		t.Fatalf("making request: %s", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("got error %v, want context.Canceled", err)
+	}
+	if res != nil {
+		t.Errorf("got response %#v, want nil", res)
+	}
+
+	// Check that we got the expected log record.
+	got := <-r
+	got.Seconds = 0
+	got.RemoteAddr = ""
+	got.Host = ""
+	got.UserAgent = ""
+	want := AccessLogRecord{
+		Time:       now,
+		Code:       499,
+		Method:     "GET",
+		Err:        "context canceled (original code 204)",
+		Proto:      "HTTP/1.1",
+		RequestURI: "/",
+	}
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("AccessLogRecord wrong (-want +got)\n%s", d)
+	}
+
+	// Check that we rendered no response to the client after
+	// logHandler.OnCompletion has been called.
+	if e != nil {
+		t.Errorf("got OnError callback with %#v, want no callback", e)
+	}
+}
+
+func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
+	now := time.Now()
+
+	// Start a HTTP server that returns 1MB of data.
+	// We next put a reverse-proxy in front of this server.
+	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for range 1024 {
+			w.Write(make([]byte, 1024))
+		}
+	}))
+	defer rs.Close()
+
+	r := make(chan AccessLogRecord)
+	var e *HTTPError
+	responseStarted := make(chan struct{})
+
+	// Create another server which proxies our 1MB server.
+	// The [httputil.ReverseProxy] will panic with [http.ErrAbortHandler] when
+	// it fails to copy the response to the client.
+	h := StdHandler(
+		ReturnHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			(&httputil.ReverseProxy{
+				Director: func(r *http.Request) {
+					r.URL = must.Get(url.Parse(rs.URL))
+				},
+				ModifyResponse: func(r *http.Response) error {
+					close(responseStarted)
+					return nil
+				},
+			}).ServeHTTP(w, r)
+			return nil
+		}),
+		HandlerOptions{
+			Logf: t.Logf,
+			Now:  func() time.Time { return now },
+			OnError: func(w http.ResponseWriter, r *http.Request, h HTTPError) {
+				e = &h
+			},
+			OnCompletion: func(_ *http.Request, alr AccessLogRecord) {
+				r <- alr
+			},
+		},
+	)
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+
+	// Create a context which gets canceled after the handler starts processing
+	// the request.
+	ctx, cancelReq := context.WithCancel(context.Background())
+	go func() {
+		<-responseStarted
+		cancelReq()
+	}()
+
+	// Send a request to our server.
+	req, err := http.NewRequestWithContext(ctx, httpm.GET, s.URL, nil)
+	if err != nil {
+		t.Fatalf("making request: %s", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("got error %v, want context.Canceled", err)
+	}
+	if res != nil {
+		t.Errorf("got response %#v, want nil", res)
+	}
+
+	// Check that we got the expected log record.
+	got := <-r
+	got.Seconds = 0
+	got.RemoteAddr = ""
+	got.Host = ""
+	got.UserAgent = ""
+	want := AccessLogRecord{
+		Time:       now,
+		Code:       499,
+		Method:     "GET",
+		Err:        "net/http: abort Handler (original code 200)",
+		Proto:      "HTTP/1.1",
+		RequestURI: "/",
+	}
+	if d := cmp.Diff(want, got, cmpopts.IgnoreFields(AccessLogRecord{}, "Bytes")); d != "" {
+		t.Errorf("AccessLogRecord wrong (-want +got)\n%s", d)
+	}
+
+	// Check that we rendered no response to the client after
+	// logHandler.OnCompletion has been called.
+	if e != nil {
+		t.Errorf("got OnError callback with %#v, want no callback", e)
+	}
 }
 
 func TestStdHandler_OnErrorPanic(t *testing.T) {
