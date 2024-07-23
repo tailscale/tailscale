@@ -346,10 +346,8 @@ type LocalBackend struct {
 	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
 	refreshAutoExitNode bool
 
-	// captiveDetectionTimer is a timer acting as debouncer to trigger captive portal detection
-	// upon a lack of Internet connectivity, avoiding spurious detection attempts.
-	// It is always nil unless a captive portal detection attempt is pending.
-	captiveDetectionTimer *time.Timer
+	needsCaptiveDetection chan bool
+	captiveStopGoroutine  chan struct{}
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -405,26 +403,28 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	clock := tstime.StdClock{}
 
 	b := &LocalBackend{
-		ctx:                 ctx,
-		ctxCancel:           cancel,
-		logf:                logf,
-		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		sys:                 sys,
-		health:              sys.HealthTracker(),
-		e:                   e,
-		dialer:              dialer,
-		store:               store,
-		pm:                  pm,
-		backendLogID:        logID,
-		state:               ipn.NoState,
-		portpoll:            new(portlist.Poller),
-		em:                  newExpiryManager(logf),
-		gotPortPollRes:      make(chan struct{}),
-		loginFlags:          loginFlags,
-		clock:               clock,
-		selfUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
-		lastSelfUpdateState: ipnstate.UpdateFinished,
+		ctx:                   ctx,
+		ctxCancel:             cancel,
+		logf:                  logf,
+		keyLogf:               logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		sys:                   sys,
+		health:                sys.HealthTracker(),
+		e:                     e,
+		dialer:                dialer,
+		store:                 store,
+		pm:                    pm,
+		backendLogID:          logID,
+		state:                 ipn.NoState,
+		portpoll:              new(portlist.Poller),
+		em:                    newExpiryManager(logf),
+		gotPortPollRes:        make(chan struct{}),
+		loginFlags:            loginFlags,
+		clock:                 clock,
+		selfUpdateProgress:    make([]ipnstate.UpdateProgress, 0),
+		lastSelfUpdateState:   ipnstate.UpdateFinished,
+		needsCaptiveDetection: make(chan bool),
+		captiveStopGoroutine:  make(chan struct{}),
 	}
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
@@ -739,19 +739,10 @@ func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthySt
 	}
 
 	if isConnectivityImpacted {
-		b.logf("health: connectivity impacted; triggering captive portal detection in %v", captivePortalDetectionInterval)
-		b.mu.Lock()
-		if b.captiveDetectionTimer != nil {
-			b.captiveDetectionTimer.Reset(captivePortalDetectionInterval)
-		} else {
-			b.captiveDetectionTimer = time.AfterFunc(captivePortalDetectionInterval, func() {
-				b.mu.Lock()
-				b.captiveDetectionTimer = nil
-				b.mu.Unlock()
-				b.performCaptiveDetection()
-			})
-		}
-		b.mu.Unlock()
+		b.logf("health: connectivity impacted; triggering captive portal detection")
+		b.needsCaptiveDetection <- true
+	} else {
+		b.needsCaptiveDetection <- false
 	}
 }
 
@@ -2141,18 +2132,68 @@ var captivePortalWarnable = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
+func (b *LocalBackend) checkCaptivePortalLoop() {
+	var tmr *time.Timer
+	for {
+		// First, see if we have a signal on our "healthy" channel, which
+		// takes priority over an existing timer.
+		select {
+		case needsCaptiveDetection := <-b.needsCaptiveDetection:
+			if !needsCaptiveDetection && tmr != nil {
+				println("checkCaptivePortalLoop: canceling existing timer (early)")
+				if !tmr.Stop() {
+					<-tmr.C
+				}
+				tmr = nil
+			}
+		default:
+		}
+
+		var timerChan <-chan time.Time
+		if tmr != nil {
+			timerChan = tmr.C
+		}
+		select {
+		case <-b.captiveStopGoroutine:
+			// All done; stop the timer and then exit.
+			if tmr != nil && !tmr.Stop() {
+				<-tmr.C
+			}
+			println("checkCaptivePortalLoop: shutting down")
+			return
+		case <-timerChan:
+			// Kick off captive portal check
+			println("checkCaptivePortalLoop: will do captive portal check")
+			b.performCaptiveDetection()
+			// nil out timer to force recreation
+			tmr = nil
+		case needsCaptiveDetection := <-b.needsCaptiveDetection:
+			if needsCaptiveDetection {
+				// If there's an existing timer, nothing to do; just
+				// continue waiting for it to expire. Otherwise, create
+				// a new timer.
+				if tmr == nil {
+					tmr = time.NewTimer(2 * time.Second)
+					println("checkCaptivePortalLoop: started new timer")
+				}
+			} else {
+				// Healthy; cancel any existing timer
+				if tmr != nil && !tmr.Stop() {
+					<-tmr.C
+				}
+				if tmr != nil {
+					println("checkCaptivePortalLoop: canceling existing timer")
+				}
+				tmr = nil
+			}
+		}
+	}
+}
+
 // performCaptiveDetection checks if captive portal detection is enabled via controlknob. If so, it runs
 // the detection and updates the Warnable accordingly.
 func (b *LocalBackend) performCaptiveDetection() {
-	captiveDetectionDisabledByControlKnob := b.ControlKnobs().DisableCaptivePortalDetection.Load()
-	if captiveDetectionDisabledByControlKnob {
-		b.logf("performCaptiveDetection: disabled by controlknob")
-		return
-	}
-
-	// Only perform detection if ipn.State is Running.
-	if b.State() != ipn.Running {
-		b.logf("performCaptiveDetection: ignored because not running")
+	if !b.shouldRunCaptivePortalDetection() {
 		return
 	}
 
@@ -2168,13 +2209,24 @@ func (b *LocalBackend) performCaptiveDetection() {
 			preferredDERP = b.hostinfo.NetInfo.PreferredDERP
 		}
 	}
+	ctx := b.ctx
+	netMon := b.NetMon()
 	b.mu.Unlock()
-	found := d.Detect(b.ctx, b.NetMon(), dm, preferredDERP)
+	found := d.Detect(ctx, netMon, dm, preferredDERP)
 	if found {
 		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
 	} else {
 		b.health.SetHealthy(captivePortalWarnable)
 	}
+}
+
+// shouldRunCaptivePortalDetection reports whether captive portal detection
+// should be run. It is enabled by default, but can be disabled via a control
+// knob. It is also only run when the backend is in a Running state.
+func (b *LocalBackend) shouldRunCaptivePortalDetection() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.ControlKnobs().DisableCaptivePortalDetection.Load() && b.State() == ipn.Running
 }
 
 // packetFilterPermitsUnlockedNodes reports any peer in peers with the
@@ -4570,13 +4622,11 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	if newState == ipn.Running {
 		b.authURL = ""
 		b.authURLTime = time.Time{}
+		go b.checkCaptivePortalLoop()
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
-		if b.captiveDetectionTimer != nil {
-			b.captiveDetectionTimer.Stop()
-			b.captiveDetectionTimer = nil
-		}
+		close(b.captiveStopGoroutine)
 	}
 	b.pauseOrResumeControlClientLocked()
 

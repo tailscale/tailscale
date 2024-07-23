@@ -96,7 +96,7 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 			continue
 		}
 		d.logf("[v2] attempting to do captive portal detection on interface %s", ifName)
-		res := d.detectOnInterface(ctx, i.Index, endpoints, netMon)
+		res := d.detectOnInterface(ctx, i.Index, endpoints)
 		if res {
 			d.logf("DetectCaptivePortal(found=true,ifName=%s)", found, ifName)
 			return true
@@ -128,7 +128,7 @@ func interfaceNameDoesNotNeedCaptiveDetection(ifName string, goos string) bool {
 // return a "204 No Content" response and checking if that's what we get.
 //
 // The boolean return is whether we think we have a captive portal.
-func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints []Endpoint, netMon *netmon.Monitor) bool {
+func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints []Endpoint) bool {
 	defer d.httpClient.CloseIdleConnections()
 
 	d.logf("[v2] %d available captive portal detection endpoints: %v", len(endpoints), endpoints)
