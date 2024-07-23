@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -313,7 +314,7 @@ type Conn struct {
 	lastEPERMRebind syncs.AtomicValue[time.Time]
 
 	// staticEndpoints are user set endpoints that this node should
-	// advertize amongst its wireguard endpoints. It is user's
+	// advertise amongst its wireguard endpoints. It is user's
 	// responsibility to ensure that traffic from these endpoints is routed
 	// to the node.
 	staticEndpoints views.Slice[netip.AddrPort]
@@ -643,9 +644,13 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 }
 
 // SetStaticEndpoints sets static endpoints to the provided value and triggers
-// an asynchronous update of the endpoints that this node advertizes.
+// an asynchronous update of the endpoints that this node advertises.
+// Static endpoints are endpoints explicitly configured by user.
 func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 	c.mu.Lock()
+	if reflect.DeepEqual(c.staticEndpoints.AsSlice(), ep.AsSlice()) {
+		return
+	}
 	c.staticEndpoints = ep
 	c.mu.Unlock()
 	// Technically this is not a reSTUNning, but ReSTUN does what we need at
@@ -963,8 +968,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// re-run.
 	eps = c.endpointTracker.update(time.Now(), eps)
 
-	for _, ap := range c.staticEndpoints.AsSlice() {
-		addAddr(ap, tailcfg.EndpointExplicitConf)
+	for i := range c.staticEndpoints.Len() {
+		addAddr(c.staticEndpoints.At(i), tailcfg.EndpointExplicitConf)
 	}
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
@@ -2384,7 +2389,7 @@ func (c *Conn) onPortMapChanged() { c.ReSTUN("portmap-changed") }
 // ReSTUN triggers an address discovery.
 // The provided why string is for debug logging only.
 // If Conn.staticEndpoints have been updated, calling ReSTUN will also result in
-// the new endpoints being advertized.
+// the new endpoints being advertised.
 func (c *Conn) ReSTUN(why string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

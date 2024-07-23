@@ -43,7 +43,7 @@ type ConfigVAlpha struct {
 	ServeConfigTemp *ServeConfig     `json:",omitempty"` // TODO(bradfitz,maisem): make separate stable type for this
 
 	// StaticEndpoints are additional, user-defined endpoints that this node
-	// should advertize amongst its wireguard endpoints.
+	// should advertise amongst its wireguard endpoints.
 	StaticEndpoints []netip.AddrPort `json:",omitempty"`
 
 	// TODO(bradfitz,maisem): future something like:

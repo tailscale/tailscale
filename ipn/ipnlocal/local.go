@@ -619,7 +619,7 @@ func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
 
 func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 
-	// TODO (irbekrm): notify the relevant components to consume any prefs
+	// TODO(irbekrm): notify the relevant components to consume any prefs
 	// updates. Currently only initial configfile settings are applied
 	// immediately.
 	p := b.pm.CurrentPrefs().AsStruct()
@@ -642,7 +642,7 @@ func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 
 	// Ensure that magicsock conn has the up to date static wireguard
 	// endpoints. Setting the endpoints here triggers an asynchronous update
-	// of the node's advertized endpoints.
+	// of the node's advertised endpoints.
 	if b.conf == nil && len(conf.Parsed.StaticEndpoints) != 0 || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
 		ms, ok := b.sys.MagicSock.GetOK()
 		if !ok {
