@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"testing"
@@ -1245,4 +1246,41 @@ func TestBucket(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ExampleMiddlewareStack() {
+	// setHeader returns a middleware that sets header k = vs.
+	setHeader := func(k string, vs ...string) Middleware {
+		k = textproto.CanonicalMIMEHeaderKey(k)
+		return func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header()[k] = vs
+				h.ServeHTTP(w, r)
+			})
+		}
+	}
+
+	// h is a http.Handler which prints the A, B & C response headers, wrapped
+	// in a few middleware which set those headers.
+	var h http.Handler = MiddlewareStack(
+		setHeader("A", "mw1"),
+		MiddlewareStack(
+			setHeader("A", "mw2.1"),
+			setHeader("B", "mw2.2"),
+			setHeader("C", "mw2.3"),
+			setHeader("C", "mw2.4"),
+		),
+		setHeader("B", "mw3"),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("A", w.Header().Get("A"))
+		fmt.Println("B", w.Header().Get("B"))
+		fmt.Println("C", w.Header().Get("C"))
+	}))
+
+	// Invoke the handler.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("", "/", nil))
+	// Output:
+	// A mw2.1
+	// B mw3
+	// C mw2.4
 }
