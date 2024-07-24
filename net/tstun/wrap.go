@@ -162,6 +162,10 @@ type Wrapper struct {
 	PreFilterPacketInboundFromWireGuard FilterFunc
 	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
 	PostFilterPacketInboundFromWireGuard FilterFunc
+	// EndPacketVectorInboundFromWireGuardFlush is a function that runs after all packets in a given vector
+	// have been handled by all filters. Filters may queue packets for the purposes of GRO, requiring an
+	// explicit flush.
+	EndPacketVectorInboundFromWireGuardFlush func()
 	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by netstack to hook
 	// packets that should be handled by netstack. If set, this filter runs before
@@ -1178,6 +1182,9 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 				i++
 			}
 		}
+	}
+	if t.EndPacketVectorInboundFromWireGuardFlush != nil {
+		t.EndPacketVectorInboundFromWireGuardFlush()
 	}
 	if t.disableFilter {
 		i = len(buffs)

@@ -80,7 +80,7 @@ require (
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20240724015428-60eeedfd624b
+	github.com/tailscale/wireguard-go v0.0.0-20240731203015-71393c576b98
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
@@ -104,7 +104,7 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gopkg.in/square/go-jose.v2 v2.6.0
-	gvisor.dev/gvisor v0.0.0-20240306221502-ee1e1f6070e3
+	gvisor.dev/gvisor v0.0.0-20240722211153-64c016c92987
 	honnef.co/go/tools v0.4.6
 	k8s.io/api v0.30.3
 	k8s.io/apimachinery v0.30.3
