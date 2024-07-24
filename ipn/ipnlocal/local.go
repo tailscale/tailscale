@@ -2095,9 +2095,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		}
 	}
 	if prefs.Valid() {
-		ar := prefs.AdvertiseRoutes()
-		for i := range ar.Len() {
-			r := ar.At(i)
+		for _, r := range prefs.AdvertiseRoutes().All() {
 			if r.Bits() == 0 {
 				// When offering a default route to the world, we
 				// filter out locally reachable LANs, so that the
@@ -2312,8 +2310,8 @@ func packetFilterPermitsUnlockedNodes(peers map[tailcfg.NodeID]tailcfg.NodeView,
 			continue
 		}
 		numUnlocked++
-		for i := range p.AllowedIPs().Len() { // not only addresses!
-			b.AddPrefix(p.AllowedIPs().At(i))
+		for _, pfx := range p.AllowedIPs().All() { // not only addresses!
+			b.AddPrefix(pfx)
 		}
 	}
 	if numUnlocked == 0 {
@@ -4105,15 +4103,14 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			return // TODO: propagate error?
 		}
 		var have4 bool
-		for i := range addrs.Len() {
-			if addrs.At(i).Addr().Is4() {
+		for _, addr := range addrs.All() {
+			if addr.Addr().Is4() {
 				have4 = true
 				break
 			}
 		}
 		var ips []netip.Addr
-		for i := range addrs.Len() {
-			addr := addrs.At(i)
+		for _, addr := range addrs.All() {
 			if selfV6Only {
 				if addr.Addr().Is6() {
 					ips = append(ips, addr.Addr())
@@ -4401,8 +4398,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.peerAPIServer = ps
 
 	isNetstack := b.sys.IsNetstack()
-	for i := range addrs.Len() {
-		a := addrs.At(i)
+	for i, a := range addrs.All() {
 		var ln net.Listener
 		var err error
 		skipListen := i > 0 && isNetstack
@@ -5263,8 +5259,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.nodeByAddr[k] = 0
 	}
 	addNode := func(n tailcfg.NodeView) {
-		for i := range n.Addresses().Len() {
-			if ipp := n.Addresses().At(i); ipp.IsSingleIP() {
+		for _, ipp := range n.Addresses().All() {
+			if ipp.IsSingleIP() {
 				b.nodeByAddr[ipp.Addr()] = n.ID()
 			}
 		}

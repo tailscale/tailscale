@@ -6,8 +6,10 @@ package views
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -410,5 +412,17 @@ func TestContainsPointers(t *testing.T) {
 				t.Errorf("got %v; want %v", gotPtrs, tt.wantPtrs)
 			}
 		})
+	}
+}
+
+func TestSliceRange(t *testing.T) {
+	sv := SliceOf([]string{"foo", "bar"})
+	var got []string
+	for i, v := range sv.All() {
+		got = append(got, fmt.Sprintf("%d-%s", i, v))
+	}
+	want := []string{"0-foo", "1-bar"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
 	}
 }
