@@ -290,6 +290,22 @@ func TestSyncValueSetForTest(t *testing.T) {
 						t.Fatalf("CleanupValue: got %v; want %v", gotCleanupValue, wantCleanupValue)
 					}
 				})
+			} else {
+				// Verify that if v wasn't set prior to SetForTest, it's
+				// reverted to a valid unset state during the test cleanup.
+				t.Cleanup(func() {
+					if _, _, ok := v.PeekErr(); ok {
+						t.Fatal("SyncValue is set after cleanup")
+					}
+					wantCleanupValue, wantCleanupErr := 42, errors.New("ka-boom")
+					gotCleanupValue, gotCleanupErr := v.GetErr(func() (int, error) { return wantCleanupValue, wantCleanupErr })
+					if gotCleanupErr != wantCleanupErr {
+						t.Fatalf("CleanupErr: got %v; want %v", gotCleanupErr, wantCleanupErr)
+					}
+					if gotCleanupValue != wantCleanupValue {
+						t.Fatalf("CleanupValue: got %v; want %v", gotCleanupValue, wantCleanupValue)
+					}
+				})
 			}
 
 			// Set the test value and/or error.

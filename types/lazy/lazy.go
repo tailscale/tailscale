@@ -170,8 +170,8 @@ type TB interface {
 func (z *SyncValue[T]) SetForTest(tb TB, val T, err error) {
 	tb.Helper()
 
-	z.once.Do(func() {})
 	oldErr, oldVal := z.err.Load(), z.v
+	z.once.Do(func() {})
 
 	z.v = val
 	if err != nil {
@@ -181,7 +181,11 @@ func (z *SyncValue[T]) SetForTest(tb TB, val T, err error) {
 	}
 
 	tb.Cleanup(func() {
-		z.v = oldVal
-		z.err.Store(oldErr)
+		if oldErr == nil {
+			*z = SyncValue[T]{}
+		} else {
+			z.v = oldVal
+			z.err.Store(oldErr)
+		}
 	})
 }
