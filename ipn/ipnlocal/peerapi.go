@@ -877,7 +877,7 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 		return true
 	}
 	b := h.ps.b
-	if !b.OfferingExitNode() && !b.OfferingAppConnector() {
+	if !b.OfferingExitNode() && !b.OfferingAppConnector() && !b.OfferingNatConnector() {
 		// If we're not an exit node or app connector, there's
 		// no point to being a DNS server for somebody.
 		return false
@@ -950,15 +950,29 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 
 	ctx, cancel := context.WithTimeout(r.Context(), arbitraryTimeout)
 	defer cancel()
-	res, err := h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
-	if err != nil {
-		h.logf("handleDNS fwd error: %v", err)
-		if err := ctx.Err(); err != nil {
+	handled := false
+	var res []byte
+	if h.ps.b.OfferingNatConnector() {
+		var err error
+		res, err, handled = h.ps.b.natConnector.HandleDNSQuery(ctx, q, h.remoteAddr)
+		if err != nil {
+			// TODO fran
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-		} else {
-			http.Error(w, "DNS forwarding error", http.StatusInternalServerError)
+			return
 		}
-		return
+	}
+	if !handled {
+		var err error
+		res, err = h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
+		if err != nil {
+			h.logf("handleDNS fwd error: %v", err)
+			if err := ctx.Err(); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			} else {
+				http.Error(w, "DNS forwarding error", http.StatusInternalServerError)
+			}
+			return
+		}
 	}
 	// TODO(raggi): consider pushing the integration down into the resolver
 	// instead to avoid re-parsing the DNS response for improved performance in

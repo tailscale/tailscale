@@ -51,6 +51,7 @@ type setArgsT struct {
 	advertiseRoutes        string
 	advertiseDefaultRoute  bool
 	advertiseConnector     bool
+	advertiseNatConnector  bool
 	opUser                 string
 	acceptedRisks          string
 	profileName            string
@@ -150,6 +151,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			},
 			AppConnector: ipn.AppConnectorPrefs{
 				Advertise: setArgs.advertiseConnector,
+			},
+			NatConnector: ipn.AppConnectorPrefs{
+				Advertise: setArgs.advertiseNatConnector,
 			},
 			PostureChecking:     setArgs.postureChecking,
 			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),

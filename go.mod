@@ -123,10 +123,13 @@ require (
 require (
 	github.com/Masterminds/sprig v2.22.0+incompatible // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
+	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
+	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.4 // indirect
 	github.com/dave/astrid v0.0.0-20170323122508-8c2895878b14 // indirect
 	github.com/dave/brenda v1.1.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -134,10 +137,27 @@ require (
 	github.com/gobuffalo/flect v1.0.2 // indirect
 	github.com/goccy/go-yaml v1.12.0 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
+	github.com/gomodule/redigo v1.8.9 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/google/pprof v0.0.0-20240409012703-83162a5b38cd // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
+	github.com/hashicorp/go-hclog v1.5.0 // indirect
+	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
+	github.com/hashicorp/go-msgpack v0.5.5 // indirect
+	github.com/hashicorp/golang-lru v0.6.0 // indirect
+	github.com/hashicorp/raft v1.3.11 // indirect
+	github.com/hashicorp/raft-boltdb/v2 v2.2.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
+	github.com/redis/go-redis/v9 v9.6.1 // indirect
+	github.com/syndtr/goleveldb v1.0.0 // indirect
+	github.com/tidwall/btree v1.5.2 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/raft-leveldb v0.2.1 // indirect
+	github.com/tidwall/redcon v1.6.0 // indirect
+	github.com/tidwall/redlog/v2 v2.0.4 // indirect
+	github.com/tidwall/rtime v0.2.0 // indirect
+	github.com/tidwall/uhaha v0.11.2 // indirect
+	go.etcd.io/bbolt v1.3.8 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.47.0 // indirect
 	go.opentelemetry.io/otel v1.22.0 // indirect
 	go.opentelemetry.io/otel/metric v1.22.0 // indirect

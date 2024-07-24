@@ -114,6 +114,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+	upf.BoolVar(&upArgs.advertiseNatConnector, "advertise-nat-connector", false, "advertise this node as a nat connector")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -189,6 +190,7 @@ type upArgsT struct {
 	timeout                time.Duration
 	acceptedRisks          string
 	profileName            string
+	advertiseNatConnector  bool
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -299,6 +301,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.OperatorUser = upArgs.opUser
 	prefs.ProfileName = upArgs.profileName
 	prefs.AppConnector.Advertise = upArgs.advertiseConnector
+	prefs.NatConnector.Advertise = upArgs.advertiseNatConnector
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
@@ -766,6 +769,7 @@ func init() {
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
+	addPrefFlagMapping("advertise-nat-connector", "NatConnector")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -1026,6 +1030,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(hasExitNodeRoutes(prefs.AdvertiseRoutes))
 		case "advertise-connector":
 			set(prefs.AppConnector.Advertise)
+		case "advertise-nat-connector":
+			set(prefs.NatConnector.Advertise)
 		case "snat-subnet-routes":
 			set(!prefs.NoSNAT)
 		case "stateful-filtering":
@@ -1202,7 +1208,7 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 }
 
 func warnOnAdvertiseRouts(ctx context.Context, prefs *ipn.Prefs) {
-	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise {
+	if len(prefs.AdvertiseRoutes) > 0 || prefs.AppConnector.Advertise || prefs.NatConnector.Advertise {
 		// TODO(jwhited): compress CheckIPForwarding and CheckUDPGROForwarding
 		//  into a single HTTP req.
 		if err := localClient.CheckIPForwarding(ctx); err != nil {

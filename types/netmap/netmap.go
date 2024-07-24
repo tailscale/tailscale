@@ -80,6 +80,8 @@ type NetworkMap struct {
 
 	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
 	MaxKeyDuration time.Duration
+
+	ClusterPeers tailcfg.ClusterInfo
 }
 
 // User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns

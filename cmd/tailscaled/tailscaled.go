@@ -625,6 +625,11 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		UseSocketOnly: args.socketpath != paths.DefaultTailscaledSocket(),
 	})
 	configureTaildrop(logf, lb)
+	if f, err := lb.NatcHandlerForFlow(); err == nil && f != nil {
+		ns.GetTCPHandlerForFlow = f
+	} else if err != nil {
+		return nil, fmt.Errorf("lb.NatcHandler: %w", err)
+	}
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}

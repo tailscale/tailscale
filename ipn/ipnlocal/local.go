@@ -60,6 +60,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/natconnector"
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
@@ -233,10 +234,11 @@ type LocalBackend struct {
 	conf           *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm             *profileManager  // mu guards access
 	filterHash     deephash.Sum
-	httpTestClient *http.Client       // for controlclient. nil by default, used by tests.
-	ccGen          clientGen          // function for producing controlclient; lazily populated
-	sshServer      SSHServer          // or nil, initialized lazily.
-	appConnector   *appc.AppConnector // or nil, initialized when configured.
+	httpTestClient *http.Client               // for controlclient. nil by default, used by tests.
+	ccGen          clientGen                  // function for producing controlclient; lazily populated
+	sshServer      SSHServer                  // or nil, initialized lazily.
+	appConnector   *appc.AppConnector         // or nil, initialized when configured.
+	natConnector   *natconnector.NatConnector // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel   context.CancelFunc
 	cc             controlclient.Client
@@ -369,6 +371,8 @@ type LocalBackend struct {
 	// backend is healthy and captive portal detection is not required
 	// (sending false).
 	needsCaptiveDetection chan bool
+
+	natcOnce sync.Once
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -1925,6 +1929,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
 	hostinfo.AppConnector.Set(b.appConnector != nil)
+	hostinfo.NatConnector.Set(b.natConnector != nil)
 	b.logf.JSON(1, "Hostinfo", hostinfo)
 
 	// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -2169,7 +2174,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 		// The correct filter rules are synthesized by the coordination server
 		// and sent down, but the address needs to be part of the 'local net' for the
 		// filter package to even bother checking the filter rules, so we set them here.
-		if prefs.AppConnector().Advertise {
+		if prefs.AppConnector().Advertise || prefs.NatConnector().Advertise {
 			localNetsB.Add(netip.MustParseAddr("0.0.0.0"))
 			localNetsB.Add(netip.MustParseAddr("::0"))
 		}
@@ -3954,6 +3959,39 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 	b.mu.Unlock()
 }
 
+func (b *LocalBackend) NatcHandlerForFlow() (func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool), error) {
+	if !b.pm.CurrentPrefs().NatConnector().Advertise {
+		return nil, nil
+	}
+	n := natconnector.NewNatConnector(b.logf, b.WhoIs)
+	b.natConnector = &n
+	return b.natConnector.GetTCPHandlerForFlow, nil
+}
+
+func (b *LocalBackend) natc(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	// when we get reconfigured how do we cope with that? like if all nodes get removed and then
+	// fresh nodes added, does that work? or do we have to remove and re-add one by one?
+	// Is there a time when we would need to cancel the goroutine we start here (presumably there is)?
+	if !prefs.NatConnector().Advertise {
+		if b.natConnector != nil {
+			b.natConnector.Stop()
+			b.natConnector = nil
+		}
+		return
+	}
+	if nm == nil || !nm.ClusterPeers.Addr.IsValid() {
+		return // TODO log?
+	}
+
+	id := string(nm.SelfNode.StableID())
+	// TODO handle access before StartConsensusMember
+	// start a goroutine for this node to be a member of the consensus protocol for
+	// determining which ip addresses are available for natc.
+	if b.natConnector.ConsensusClient == nil {
+		b.natConnector.StartConsensusMember(id, nm.ClusterPeers, b.varRoot)
+	}
+}
+
 // reconfigAppConnectorLocked updates the app connector state based on the
 // current network map and preferences.
 // b.mu must be held.
@@ -4039,6 +4077,7 @@ func (b *LocalBackend) authReconfig() {
 	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.keyExpired, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
+	b.natc(nm, prefs)
 	b.mu.Unlock()
 
 	if blocked {
@@ -4738,6 +4777,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// records that have ingress enabled but are not actually being used.
 	hi.WireIngress = b.wantIngressLocked()
 	hi.AppConnector.Set(prefs.AppConnector().Advertise)
+	hi.NatConnector.Set(prefs.NatConnector().Advertise)
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -6107,6 +6147,12 @@ func (b *LocalBackend) OfferingAppConnector() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.appConnector != nil
+}
+
+func (b *LocalBackend) OfferingNatConnector() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.natConnector != nil
 }
 
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS

@@ -318,6 +318,7 @@ func (v HostinfoView) Cloud() string                          { return v.ж.Clou
 func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.Userspace }
 func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
 func (v HostinfoView) AppConnector() opt.Bool                 { return v.ж.AppConnector }
+func (v HostinfoView) NatConnector() opt.Bool                 { return v.ж.NatConnector }
 func (v HostinfoView) Location() *Location {
 	if v.ж.Location == nil {
 		return nil
@@ -365,6 +366,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
 	AppConnector    opt.Bool
+	NatConnector    opt.Bool
 	Location        *Location
 }{})
 

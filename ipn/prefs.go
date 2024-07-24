@@ -225,6 +225,7 @@ type Prefs struct {
 	// AppConnector sets the app connector preferences for the node agent. See
 	// AppConnectorPrefs docs for more details.
 	AppConnector AppConnectorPrefs
+	NatConnector AppConnectorPrefs
 
 	// PostureChecking enables the collection of information used for device
 	// posture checks.
@@ -314,6 +315,8 @@ type MaskedPrefs struct {
 	LoggedOutSet              bool                `json:",omitempty"`
 	ShieldsUpSet              bool                `json:",omitempty"`
 	AdvertiseTagsSet          bool                `json:",omitempty"`
+	NatcConsensusAddrSet      bool                `json:",omitempty"`
+	NatcConsensusJoinSet      bool                `json:",omitempty"`
 	HostnameSet               bool                `json:",omitempty"`
 	NotepadURLsSet            bool                `json:",omitempty"`
 	ForceDaemonSet            bool                `json:",omitempty"`
@@ -544,6 +547,7 @@ func (p *Prefs) pretty(goos string) string {
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
+	sb.WriteString(p.NatConnector.Pretty())
 	if p.Persist != nil {
 		sb.WriteString(p.Persist.Pretty())
 	} else {
@@ -602,6 +606,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&
 		p.AppConnector == p2.AppConnector &&
+		p.NatConnector == p2.NatConnector &&
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind

@@ -68,6 +68,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ProfileName            string
 	AutoUpdate             AutoUpdatePrefs
 	AppConnector           AppConnectorPrefs
+	NatConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share

@@ -794,6 +794,7 @@ type Hostinfo struct {
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
 	AppConnector    opt.Bool       `json:",omitempty"` // if the client is running the app-connector service
+	NatConnector    opt.Bool       `json:",omitempty"` // if the client is running the nat-connector service
 
 	// Location represents geographical location data about a
 	// Tailscale host. Location is optional and only set if
@@ -1956,6 +1957,9 @@ type MapResponse struct {
 	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
 	// If zero, the value is unchanged.
 	MaxKeyDuration time.Duration `json:",omitempty"`
+
+	// TODO all the delta stuff
+	ClusterPeers ClusterInfo `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available
@@ -2824,3 +2828,8 @@ type EarlyNoise struct {
 // For some request types, the header may have multiple values. (e.g. OldNodeKey
 // vs NodeKey)
 const LBHeader = "Ts-Lb"
+
+type ClusterInfo struct {
+	Addr   netip.AddrPort
+	Leader netip.AddrPort
+}

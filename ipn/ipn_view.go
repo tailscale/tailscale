@@ -92,6 +92,7 @@ func (v PrefsView) OperatorUser() string                  { return v.ж.Operator
 func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
 func (v PrefsView) AutoUpdate() AutoUpdatePrefs           { return v.ж.AutoUpdate }
 func (v PrefsView) AppConnector() AppConnectorPrefs       { return v.ж.AppConnector }
+func (v PrefsView) NatConnector() AppConnectorPrefs       { return v.ж.NatConnector }
 func (v PrefsView) PostureChecking() bool                 { return v.ж.PostureChecking }
 func (v PrefsView) NetfilterKind() string                 { return v.ж.NetfilterKind }
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
@@ -127,6 +128,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ProfileName            string
 	AutoUpdate             AutoUpdatePrefs
 	AppConnector           AppConnectorPrefs
+	NatConnector           AppConnectorPrefs
 	PostureChecking        bool
 	NetfilterKind          string
 	DriveShares            []*drive.Share
