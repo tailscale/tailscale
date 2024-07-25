@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"go4.org/mem"
 )
 
 var (
@@ -38,6 +39,8 @@ func main() {
 
 var gwMAC = net.HardwareAddr{0x52, 0x54, 0x00, 0x01, 0x01, 0x01}
 
+var fakeDNSIP = netip.AddrFrom4([4]byte{4, 11, 4, 11})
+
 type MAC [6]byte
 
 type Server struct {
@@ -53,6 +56,15 @@ func (s *Server) MacOfIP(ip netip.Addr) (MAC, bool) {
 func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
 	// TODO: cache
 	return net.HardwareAddr(mac[:])
+}
+
+// IPv4ForDNS returns the IP address for the given DNS query name (for IPv4 A
+// queries only).
+func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
+	if qname == "dns" {
+		return fakeDNSIP, true
+	}
+	return netip.Addr{}, false
 }
 
 func (s *Server) serveConn(uc net.Conn) {
@@ -115,7 +127,7 @@ func (s *Server) serveConn(uc net.Conn) {
 		}
 
 		if isDHCPRequest(packet) {
-			res, err := createDHCPResponse(packet)
+			res, err := s.createDHCPResponse(packet)
 			if err != nil {
 				log.Printf("createDHCPResponse: %v", err)
 				continue
@@ -129,11 +141,21 @@ func (s *Server) serveConn(uc net.Conn) {
 			continue
 		}
 
+		if isDNSRequest(packet) {
+			res, err := s.createDNSResponse(packet)
+			if err != nil {
+				log.Printf("createDNSResponse: %v", err)
+				continue
+			}
+			writePkt(res)
+			continue
+		}
+
 		log.Printf("Got packet: %v", packet)
 	}
 }
 
-func createDHCPResponse(request gopacket.Packet) ([]byte, error) {
+func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	ethLayer := request.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
 	ipLayer := request.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	udpLayer := request.Layer(layers.LayerTypeUDP).(*layers.UDP)
@@ -188,7 +210,7 @@ func createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 			},
 			layers.DHCPOption{
 				Type:   layers.DHCPOptDNS,
-				Data:   net.IP{8, 8, 4, 4},
+				Data:   fakeDNSIP.AsSlice(),
 				Length: 4,
 			},
 			layers.DHCPOption{
@@ -251,6 +273,109 @@ func isMDNSQuery(pkt gopacket.Packet) bool {
 	udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
 	// TODO(bradfitz): also check IPv4 DstIP=224.0.0.251 (or whatever)
 	return ok && udp.SrcPort == 5353 && udp.DstPort == 5353
+}
+
+// isDNSRequest reports whether pkt is a DNS request to the fake DNS server.
+func isDNSRequest(pkt gopacket.Packet) bool {
+	udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	if !ok || udp.DstPort != 53 {
+		return false
+	}
+	ip, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	if !ok {
+		return false
+	}
+	dstIP, ok := netip.AddrFromSlice(ip.DstIP)
+	if !ok || dstIP != fakeDNSIP {
+		return false
+	}
+	dns, ok := pkt.Layer(layers.LayerTypeDNS).(*layers.DNS)
+	return ok && dns.QR == false && len(dns.Questions) > 0
+}
+
+func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
+	ethLayer := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+	ipLayer := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	udpLayer := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	dnsLayer := pkt.Layer(layers.LayerTypeDNS).(*layers.DNS)
+
+	if dnsLayer.OpCode != layers.DNSOpCodeQuery || dnsLayer.QR || len(dnsLayer.Questions) == 0 {
+		return nil, nil
+	}
+
+	response := &layers.DNS{
+		ID:           dnsLayer.ID,
+		QR:           true,
+		AA:           true,
+		TC:           false,
+		RD:           dnsLayer.RD,
+		RA:           true,
+		OpCode:       layers.DNSOpCodeQuery,
+		ResponseCode: layers.DNSResponseCodeNoErr,
+	}
+
+	var names []string
+	for _, q := range dnsLayer.Questions {
+		response.QDCount++
+		response.Questions = append(response.Questions, q)
+
+		if mem.HasSuffix(mem.B(q.Name), mem.S(".pool.ntp.org")) {
+			// Just drop DNS queries for NTP servers. For Debian/etc guests used
+			// during development. Not needed. Assume VM guests get correct time
+			// via their hypervisor.
+			return nil, nil
+		}
+
+		names = append(names, q.Type.String()+"/"+string(q.Name))
+		if q.Class != layers.DNSClassIN || q.Type != layers.DNSTypeA {
+			continue
+		}
+
+		if ip, ok := s.IPv4ForDNS(string(q.Name)); ok {
+			log.Printf("IP for %q: %v", q.Name, ip)
+			response.ANCount++
+			response.Answers = append(response.Answers, layers.DNSResourceRecord{
+				Name:  q.Name,
+				Type:  q.Type,
+				Class: q.Class,
+				IP:    ip.AsSlice(),
+				TTL:   60,
+			})
+		}
+	}
+
+	eth2 := &layers.Ethernet{
+		SrcMAC:       ethLayer.DstMAC,
+		DstMAC:       ethLayer.SrcMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip2 := &layers.IPv4{
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolUDP,
+		SrcIP:    ipLayer.DstIP,
+		DstIP:    ipLayer.SrcIP,
+	}
+	udp2 := &layers.UDP{
+		SrcPort: udpLayer.DstPort,
+		DstPort: udpLayer.SrcPort,
+	}
+	udp2.SetNetworkLayerForChecksum(ip2)
+
+	buffer := gopacket.NewSerializeBuffer()
+	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buffer, options, eth2, ip2, udp2, response); err != nil {
+		return nil, err
+	}
+
+	if len(response.Answers) > 0 {
+		back := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeEthernet, gopacket.Lazy)
+		log.Printf("Generated: %v", back)
+	} else {
+		log.Printf("made empty response for %q", names)
+	}
+
+	return buffer.Bytes(), nil
 }
 
 func (s *Server) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
