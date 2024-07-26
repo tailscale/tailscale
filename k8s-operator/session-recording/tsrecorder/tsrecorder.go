@@ -3,7 +3,9 @@
 
 //go:build !plan9
 
-package main
+// Package tsrecorder contains functionality to send recorded kubectl-exec
+// sessions to  tsrecorder.
+package tsrecorder
 
 import (
 	"encoding/json"
@@ -16,9 +18,18 @@ import (
 	"tailscale.com/tstime"
 )
 
-// recorder knows how to send the provided bytes to the configured tsrecorder
+func New(conn io.WriteCloser, clock tstime.Clock, start time.Time, failOpen bool) *Client {
+	return &Client{
+		start:    start,
+		clock:    clock,
+		conn:     conn,
+		failOpen: failOpen,
+	}
+}
+
+// Client knows how to send the provided bytes to the configured tsrecorder
 // instance in asciinema format.
-type recorder struct {
+type Client struct {
 	start time.Time
 	clock tstime.Clock
 
@@ -36,15 +47,15 @@ type recorder struct {
 
 // Write appends timestamp to the provided bytes and sends them to the
 // configured tsrecorder.
-func (rec *recorder) Write(p []byte) (err error) {
+func (c *Client) Write(p []byte) (err error) {
 	if len(p) == 0 {
 		return nil
 	}
-	if rec.backOff {
+	if c.backOff {
 		return nil
 	}
 	j, err := json.Marshal([]any{
-		rec.clock.Now().Sub(rec.start).Seconds(),
+		c.clock.Now().Sub(c.start).Seconds(),
 		"o",
 		string(p),
 	})
@@ -52,37 +63,42 @@ func (rec *recorder) Write(p []byte) (err error) {
 		return fmt.Errorf("error marhalling payload: %w", err)
 	}
 	j = append(j, '\n')
-	if err := rec.writeCastLine(j); err != nil {
-		if !rec.failOpen {
+	if err := c.WriteCastLine(j); err != nil {
+		if !c.failOpen {
 			return fmt.Errorf("error writing payload to recorder: %w", err)
 		}
-		rec.backOff = true
+		c.backOff = true
 	}
 	return nil
 }
 
-func (rec *recorder) Close() error {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if rec.conn == nil {
+func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
 		return nil
 	}
-	err := rec.conn.Close()
-	rec.conn = nil
+	err := c.conn.Close()
+	c.conn = nil
 	return err
 }
 
 // writeCastLine sends bytes to the tsrecorder. The bytes should be in
 // asciinema format.
-func (rec *recorder) writeCastLine(j []byte) error {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if rec.conn == nil {
+func (c *Client) WriteCastLine(j []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
 		return errors.New("recorder closed")
 	}
-	_, err := rec.conn.Write(j)
+	_, err := c.conn.Write(j)
 	if err != nil {
 		return fmt.Errorf("recorder write error: %w", err)
 	}
 	return nil
+}
+
+type ResizeMsg struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }

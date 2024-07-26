@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	sessionrecording "tailscale.com/k8s-operator/session-recording"
 	tskube "tailscale.com/kube"
 	"tailscale.com/ssh/tailssh"
 	"tailscale.com/tailcfg"
@@ -36,12 +37,6 @@ var whoIsKey = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 var (
 	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
 	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
-
-	// counterSessionRecordingsAttempted counts the number of session recording attempts.
-	counterSessionRecordingsAttempted = clientmetric.NewCounter("k8s_auth_proxy__session_recordings_attempted")
-
-	// counterSessionRecordingsUploaded counts the number of successfully uploaded session recordings.
-	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
 )
 
 type apiServerProxyMode int
@@ -173,7 +168,9 @@ func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredL
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ap.serveDefault)
-	mux.HandleFunc("/api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExec)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
+
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
 
 	hs := &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -214,9 +211,10 @@ func (ap *apiserverProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 	ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
-// serveExec serves 'kubectl exec' requests, optionally configuring the kubectl
-// exec sessions to be recorded.
-func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
+// serveExecWS serves 'kubectl exec' requests, optionally configuring the
+// kubectl exec sessions to be recorded. It should only be called for requests
+// for sessions that use WebSockets protocol for streaming.
+func (ap *apiserverProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
 	who, err := ap.whoIs(r)
 	if err != nil {
 		ap.authError(w, err)
@@ -232,14 +230,59 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 		return
 	}
-	counterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
+	sessionrecording.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
 	if !failOpen && len(addrs) == 0 {
 		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
 		ap.log.Error(msg)
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	if r.Method != "POST" || r.Header.Get("Upgrade") != "SPDY/3.1" {
+	if h := r.Header.Get("Upgrade"); h != "websocket" {
+		msg := fmt.Sprintf("[unexpected] 'kubectl exec' session was initiated for WebSocket protocol, but the request does not contain expected upgrade header, wants: 'websocket', got: %q", h)
+		if failOpen {
+			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
+			ap.log.Warn(msg)
+			ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+			return
+		}
+		ap.log.Error(msg)
+		msg += "; failure mode is 'fail closed'; closing connection."
+		http.Error(w, msg, 403)
+		return
+	} else {
+		ap.log.Debugf("detected 'kubectl exec' session streaming protocol is WebSockets")
+	}
+	wsH := sessionrecording.New(ap.ts, r, who, w, r.PathValue("pod"), r.PathValue("namespace"), sessionrecording.WebSocketsProtocol, addrs, failOpen, tailssh.ConnectToRecorder, ap.log)
+
+	ap.rp.ServeHTTP(wsH, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+}
+
+// serveExecSPDY serves 'kubectl exec' requests, optionally configuring the
+// kubectl exec sessions to be recorded. It should only be called for requests
+// that initate 'kubectl exec' sessions using the SPDY protocol for streaming.
+func (ap *apiserverProxy) serveExecSPDY(w http.ResponseWriter, r *http.Request) {
+	who, err := ap.whoIs(r)
+	if err != nil {
+		ap.authError(w, err)
+		return
+	}
+	counterNumRequestsProxied.Add(1)
+	failOpen, addrs, err := determineRecorderConfig(who)
+	if err != nil {
+		ap.log.Errorf("error trying to determine whether the 'kubectl exec' session needs to be recorded: %v", err)
+		return
+	}
+	if failOpen && len(addrs) == 0 { // will not record
+		ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+		return
+	}
+	if !failOpen && len(addrs) == 0 {
+		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
+		ap.log.Error(msg)
+		http.Error(w, msg, 403)
+		return
+	}
+	if r.Header.Get("Upgrade") != "SPDY/3.1" {
 		msg := "'kubectl exec' session recording is configured, but the request is not over SPDY. Session recording is currently only supported for SPDY based clients"
 		if failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
@@ -252,19 +295,7 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	spdyH := &spdyHijacker{
-		ts:                ap.ts,
-		req:               r,
-		who:               who,
-		ResponseWriter:    w,
-		log:               ap.log,
-		pod:               r.PathValue("pod"),
-		ns:                r.PathValue("namespace"),
-		addrs:             addrs,
-		failOpen:          failOpen,
-		connectToRecorder: tailssh.ConnectToRecorder,
-	}
-
+	spdyH := sessionrecording.New(ap.ts, r, who, w, r.PathValue("pod"), r.PathValue("namespace"), sessionrecording.SPDYProtocol, addrs, failOpen, tailssh.ConnectToRecorder, ap.log)
 	ap.rp.ServeHTTP(spdyH, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 

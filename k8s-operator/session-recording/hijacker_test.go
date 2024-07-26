@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package sessionrecording
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/k8s-operator/session-recording/fakes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
@@ -34,39 +35,49 @@ func Test_SPDYHijacker(t *testing.T) {
 		failOpen                    bool
 		failRecorderConnect         bool // fail initial connect to the recorder
 		failRecorderConnPostConnect bool // send error down the error channel
+		proto                       protocol
 		wantsConnClosed             bool
 		wantsSetupErr               bool
 	}{
 		{
-			name: "setup succeeds, conn stays open",
+			name:  "spdy_setup_succeeds_conn_stays_open",
+			proto: SPDYProtocol,
 		},
 		{
-			name:                "setup fails, policy is to fail open, conn stays open",
+			name:  "ws_setup_succeeds_conn_stays_open",
+			proto: WebSocketsProtocol,
+		},
+		{
+			name:                "setup_fails_policy_is_to_fail_open_conn_stays_open",
 			failOpen:            true,
 			failRecorderConnect: true,
+			proto:               SPDYProtocol,
 		},
 		{
-			name:                "setup fails, policy is to fail closed, conn is closed",
+			name:                "setup_fails_policy_is_to_fail_closed_conn_is_closed",
 			failRecorderConnect: true,
 			wantsSetupErr:       true,
 			wantsConnClosed:     true,
+			proto:               SPDYProtocol,
 		},
 		{
-			name:                        "connection fails post-initial connect, policy is to fail open, conn stays open",
+			name:                        "connection_fails_post-initial_connect_policy_is_to_fail_open_conn_stays_open",
 			failRecorderConnPostConnect: true,
 			failOpen:                    true,
+			proto:                       SPDYProtocol,
 		},
 		{
-			name:                        "connection fails post-initial connect, policy is to fail closed, conn is closed",
+			name:                        "connection_fails_post-initial_connect_policy_is_to_fail_closed_conn_is_closed",
 			failRecorderConnPostConnect: true,
 			wantsConnClosed:             true,
+			proto:                       SPDYProtocol,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := &testConn{}
+			tc := &fakes.TestConn{}
 			ch := make(chan error)
-			h := &spdyHijacker{
+			h := &SpdyHijacker{
 				connectToRecorder: func(context.Context, []netip.AddrPort, func(context.Context, string, string) (net.Conn, error)) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
 					if tt.failRecorderConnect {
 						err = errors.New("test")
@@ -78,6 +89,7 @@ func Test_SPDYHijacker(t *testing.T) {
 				log:      zl.Sugar(),
 				ts:       &tsnet.Server{},
 				req:      &http.Request{URL: &url.URL{}},
+				proto:    tt.proto,
 			}
 			ctx := context.Background()
 			_, err := h.setUpRecording(ctx, tc)
@@ -98,8 +110,8 @@ func Test_SPDYHijacker(t *testing.T) {
 			// (test that connection remains open over some period
 			// of time).
 			if err := tstest.WaitFor(timeout, func() (err error) {
-				if tt.wantsConnClosed != tc.isClosed() {
-					return fmt.Errorf("got connection state: %t, wants connection state: %t", tc.isClosed(), tt.wantsConnClosed)
+				if tt.wantsConnClosed != tc.IsClosed() {
+					return fmt.Errorf("got conIection state: %t, wants connection state: %t", tc.IsClosed(), tt.wantsConnClosed)
 				}
 				return nil
 			}); err != nil {

@@ -3,7 +3,9 @@
 
 //go:build !plan9
 
-package main
+// Package spdy has functionality to parse 'kubectl exec' sessions streamed over
+// SPDY.
+package spdy
 
 import (
 	"bytes"
@@ -15,9 +17,21 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"tailscale.com/k8s-operator/session-recording/tsrecorder"
+
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 )
+
+func New(conn net.Conn, rec *tsrecorder.Client, ch tsrecorder.CastHeader, log *zap.SugaredLogger) net.Conn {
+	return &spdyRemoteConnRecorder{
+		Conn: conn,
+		rec:  rec,
+		ch:   ch,
+		log:  log,
+	}
+
+}
 
 // spdyRemoteConnRecorder is a wrapper around net.Conn. It reads the bytestream
 // for a 'kubectl exec' session, sends session recording data to the configured
@@ -25,8 +39,8 @@ import (
 type spdyRemoteConnRecorder struct {
 	net.Conn
 	// rec knows how to send data written to it to a tsrecorder instance.
-	rec *recorder
-	ch  CastHeader
+	rec *tsrecorder.Client
+	ch  tsrecorder.CastHeader
 
 	stdoutStreamID atomic.Uint32
 	stderrStreamID atomic.Uint32
@@ -34,7 +48,6 @@ type spdyRemoteConnRecorder struct {
 
 	wmu    sync.Mutex // sequences writes
 	closed bool
-	failed bool
 
 	rmu                 sync.Mutex // sequences reads
 	writeCastHeaderOnce sync.Once
@@ -78,9 +91,9 @@ func (c *spdyRemoteConnRecorder) Read(b []byte) (int, error) {
 		switch sf.StreamID {
 		case c.resizeStreamID.Load():
 			var err error
-			var msg spdyResizeMsg
+			var msg tsrecorder.ResizeMsg
 			if err = json.Unmarshal(sf.Payload, &msg); err != nil {
-				return 0, fmt.Errorf("error umarshalling resize msg: %w", err)
+				return 0, err
 			}
 			c.ch.Width = msg.Width
 			c.ch.Height = msg.Height
@@ -127,13 +140,14 @@ func (c *spdyRemoteConnRecorder) Write(b []byte) (int, error) {
 		case c.stdoutStreamID.Load(), c.stderrStreamID.Load():
 			var err error
 			c.writeCastHeaderOnce.Do(func() {
+
 				var j []byte
 				j, err = json.Marshal(c.ch)
 				if err != nil {
 					return
 				}
 				j = append(j, '\n')
-				err = c.rec.writeCastLine(j)
+				err = c.rec.WriteCastLine(j)
 				if err != nil {
 					c.log.Errorf("received error from recorder: %v", err)
 				}
@@ -157,7 +171,9 @@ func (c *spdyRemoteConnRecorder) Close() error {
 	if c.closed {
 		return nil
 	}
-	if !c.failed && c.writeBuf.Len() > 0 {
+	// TODO: only do this if this is a normal closure rather than the
+	// reocrding has failed.
+	if c.writeBuf.Len() > 0 {
 		c.Conn.Write(c.writeBuf.Bytes())
 	}
 	c.writeBuf.Reset()
@@ -186,9 +202,4 @@ func (c *spdyRemoteConnRecorder) storeStreamID(sf spdyFrame, header http.Header)
 	case corev1.StreamTypeResize:
 		c.resizeStreamID.Store(id)
 	}
-}
-
-type spdyResizeMsg struct {
-	Width  int `json:"width"`
-	Height int `json:"height"`
 }
