@@ -18,7 +18,7 @@ import (
 )
 
 func TestGetDERPMap(t *testing.T) {
-	dm := getDERPMap()
+	dm := GetDERPMap()
 	if dm == nil {
 		t.Fatal("nil")
 	}
@@ -78,7 +78,7 @@ func TestCache(t *testing.T) {
 	}
 
 	// Verify that our DERP map is merged with the cache.
-	dm := getDERPMap()
+	dm := GetDERPMap()
 	region, ok := dm.Regions[99]
 	if !ok {
 		t.Fatal("expected region 99")

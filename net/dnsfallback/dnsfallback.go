@@ -219,7 +219,7 @@ func lookup(ctx context.Context, host string, logf logger.Logf, ht *health.Track
 		ip      netip.Addr
 	}
 
-	dm := getDERPMap()
+	dm := GetDERPMap()
 
 	var cands4, cands6 []nameIP
 	for _, dr := range dm.Regions {
@@ -310,9 +310,12 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr
 // https://derp10.tailscale.com/bootstrap-dns
 type dnsMap map[string][]netip.Addr
 
-// getDERPMap returns some DERP map. The DERP servers also run a fallback
-// DNS server.
-func getDERPMap() *tailcfg.DERPMap {
+// GetDERPMap returns a fallback DERP map that is always available, useful for basic
+// bootstrapping purposes. The dynamically updated DERP map in LocalBackend should
+// always be preferred over this. Use this DERP map only when the control plane is
+// unreachable or hasn't been reached yet. The DERP servers in the returned map also
+// run a fallback DNS server.
+func GetDERPMap() *tailcfg.DERPMap {
 	dm := getStaticDERPMap()
 
 	// Merge in any DERP servers from the cached map that aren't in the

@@ -145,7 +145,8 @@ type CapabilityVersion int
 //   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
 //   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
 //   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
-const CurrentCapabilityVersion CapabilityVersion = 102
+//   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
+const CurrentCapabilityVersion CapabilityVersion = 103
 
 type StableID string
 
@@ -2327,6 +2328,10 @@ const (
 	// NodeAttrDisableMagicSockCryptoRouting disables the use of the
 	// magicsock cryptorouting hook. See tailscale/corp#20732.
 	NodeAttrDisableMagicSockCryptoRouting NodeCapability = "disable-magicsock-crypto-routing"
+
+	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
+	// automatically when the network state changes.
+	NodeAttrDisableCaptivePortalDetection NodeCapability = "disable-captive-portal-detection"
 )
 
 // SetDNSRequest is a request to add a DNS record.
