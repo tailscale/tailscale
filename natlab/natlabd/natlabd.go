@@ -28,6 +28,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
+	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 )
 
@@ -144,7 +145,6 @@ func (s *Server) initStack() error {
 				if !ok {
 					log.Fatalf("layer %s is not serializable", layer.LayerType().String())
 				}
-				log.Printf("Appending %v ... ", layer.LayerType())
 				switch gl := layer.(type) {
 				case *layers.TCP:
 					gl.SetNetworkLayerForChecksum(layerV4)
@@ -208,7 +208,7 @@ func (s *Server) acceptTCP(r *tcp.ForwarderRequest) {
 	if reqDetails.LocalPort == 123 {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		io.WriteString(tc, "Hello from Go\nGoodbye.\n")
+		io.WriteString(tc, "Hello Andrew from Go\nGoodbye.\n")
 		tc.Close()
 		return
 	}
@@ -338,7 +338,7 @@ func (s *Server) serveConn(uc net.Conn) {
 			return
 		}
 
-		packetRaw := buf[4 : 4+n]
+		packetRaw := buf[4 : 4+n] // raw ethernet frame
 		packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
 		ll, ok := packet.LinkLayer().(*layers.Ethernet)
 		if !ok {
@@ -381,6 +381,17 @@ func (s *Server) serveConn(uc net.Conn) {
 			res, err := s.createDNSResponse(packet)
 			if err != nil {
 				log.Printf("createDNSResponse: %v", err)
+				continue
+			}
+			writePkt(res)
+			continue
+		}
+
+		if isSTUNRequest(packet) {
+			log.Printf("STUN request in")
+			res, err := s.createSTUNResponse(packet)
+			if err != nil {
+				log.Printf("createSTUNResponse: %v", err)
 				continue
 			}
 			writePkt(res)
@@ -569,6 +580,55 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	return ok && dns.QR == false && len(dns.Questions) > 0
 }
 
+// isSTUNRequest reports whether pkt is a STUN request to any STUN server.
+func isSTUNRequest(pkt gopacket.Packet) bool {
+	udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	return ok && udp.DstPort == 3478
+}
+
+func (s *Server) createSTUNResponse(pkt gopacket.Packet) ([]byte, error) {
+	ethLayer := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+	ipLayer := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	udpLayer := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+
+	stunPay := udpLayer.Payload
+	txid, err := stun.ParseBindingRequest(stunPay)
+	if err != nil {
+		log.Printf("invalid STUN request: %v", err)
+		return nil, nil
+	}
+	stunRes := stun.Response(txid, netip.AddrPortFrom(gwIP, 31234))
+
+	eth2 := &layers.Ethernet{
+		SrcMAC:       ethLayer.DstMAC,
+		DstMAC:       ethLayer.SrcMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip2 := &layers.IPv4{
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolUDP,
+		SrcIP:    ipLayer.DstIP,
+		DstIP:    ipLayer.SrcIP,
+	}
+	udp2 := &layers.UDP{
+		SrcPort: udpLayer.DstPort,
+		DstPort: udpLayer.SrcPort,
+	}
+	udp2.SetNetworkLayerForChecksum(ip2)
+
+	buffer := gopacket.NewSerializeBuffer()
+	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buffer, options, eth2, ip2, udp2, gopacket.Payload(stunRes)); err != nil {
+		return nil, err
+	}
+	resRaw := buffer.Bytes()
+	back := gopacket.NewPacket(resRaw, layers.LayerTypeEthernet, gopacket.Default)
+	log.Printf("made STUN reply: %v", back)
+
+	return resRaw, nil
+}
+
 func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 	ethLayer := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
 	ipLayer := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
@@ -700,14 +760,25 @@ func (s *Server) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+type NetworkID string
+
 type Node struct {
-	Name  string     // globally unique
-	LanIP netip.Addr // IP address on the LAN, from DHCP. Optional.
+	Name string // globally unique
+	MAC  MAC    // copied from World.Nodes key
+
+	LANIP netip.Addr // IP address on the LAN, from DHCP. Optional.
+
+	Network NetworkID
 }
 
 type World struct {
-	Nodes map[string]*Node
+	Nodes   map[MAC]*Node
+	Network map[NetworkID]*Network
 }
 
 type Network struct {
+	EasyNAT          bool
+	HardNAT          bool
+	StatefulFirewall bool       // only applicable if !HardNAT && !EasyNAT
+	WANIP            netip.Addr // IP address on the WAN
 }
