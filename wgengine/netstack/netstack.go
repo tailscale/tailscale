@@ -1116,11 +1116,9 @@ func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
 func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	switch s.Len() {
 	case 4:
-		s := s.As4()
-		return netaddr.IPv4(s[0], s[1], s[2], s[3])
+		return netip.AddrFrom4(s.As4())
 	case 16:
-		s := s.As16()
-		return netip.AddrFrom16(s).Unmap()
+		return netip.AddrFrom16(s.As16()).Unmap()
 	}
 	return netip.Addr{}
 }
