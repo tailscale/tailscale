@@ -54,7 +54,7 @@ func lookup(usernameOrUID string, std lookupStd, wantShell bool) (*user.User, st
 	// Skip getent entirely on Non-Unix platforms that won't ever have it.
 	// (Using HasPrefix for "wasip1", anticipating that WASI support will
 	// move beyond "preview 1" some day.)
-	if runtime.GOOS == "windows" || runtime.GOOS == "js" || strings.HasPrefix(runtime.GOOS, "wasi") {
+	if runtime.GOOS == "windows" || runtime.GOOS == "js" || runtime.GOARCH == "wasm" {
 		u, err := std(usernameOrUID)
 		return u, "", err
 	}
