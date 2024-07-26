@@ -100,11 +100,10 @@ func defaultTunName() string {
 // The PORT environment variable is chosen to match what the Linux systemd
 // unit uses, to make documentation more consistent.
 func defaultPort() uint16 {
-	if endpointAddress := envknob.String("ENDPOINT_ADDRESS"); endpointAddress != "" {
-		parts := strings.Split(endpointAddress, ":")
-		if port, err := strconv.ParseUint(parts[1], 10, 16); err == nil {
-			return uint16(port)
-		}
+
+	// Return ENDPOINT_ADDRESS port if set
+	if s, ok := getEndpointAddressPort(); ok {
+		return s
 	}
 
 	if s := envknob.String("PORT"); s != "" {
@@ -116,6 +115,32 @@ func defaultPort() uint16 {
 		return 41641
 	}
 	return 0
+}
+
+// Checks if the environment variable ENDPOINT_ADDRESS is set
+// and returns the port if valid
+func getEndpointAddressPort() (uint16, bool) {
+
+	a := envknob.String("ENDPOINT_ADDRESS")
+	if a == "" {
+		return 0, false
+	}
+
+	_, s, err := net.SplitHostPort(a)
+	if err != nil {
+		return 0, false
+	}
+
+	p, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0, false
+	}
+
+	if p < 1024 || p > 65535 {
+		return 0, false
+	}
+
+	return uint16(p), true
 }
 
 var args struct {
@@ -176,7 +201,7 @@ func main() {
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
-	flag.StringVar(&args.confFile, "config", "", "path to config file")
+	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
