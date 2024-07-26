@@ -190,6 +190,7 @@ func (s *Server) acceptTCP(r *tcp.ForwarderRequest) {
 
 	log.Printf("AcceptTCP: %v", stringifyTEI(reqDetails))
 	clientRemoteIP := netaddrIPFromNetstackIP(reqDetails.RemoteAddress)
+	destIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
 	if !clientRemoteIP.IsValid() {
 		r.Complete(true) // sends a RST
 		return
@@ -202,17 +203,40 @@ func (s *Server) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true) // sends a RST
 		return
 	}
-	r.Complete(false)
 	ep.SocketOptions().SetKeepAlive(true)
 
-	tc := gonet.NewTCPConn(&wq, ep)
-	io.WriteString(tc, "Hello from Go\nGoodbye.\n")
-	tc.Close()
+	if reqDetails.LocalPort == 123 {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		io.WriteString(tc, "Hello from Go\nGoodbye.\n")
+		tc.Close()
+		return
+	}
+
+	if destIP == fakeControlplaneIP {
+		c, err := net.Dial("tcp", "controlplane.tailscale.com:"+strconv.Itoa(int(reqDetails.LocalPort)))
+		if err != nil {
+			r.Complete(true)
+			log.Printf("Dial controlplane: %v", err)
+			return
+		}
+		defer c.Close()
+		tc := gonet.NewTCPConn(&wq, ep)
+		defer tc.Close()
+		r.Complete(false)
+		errc := make(chan error, 2)
+		go func() { _, err := io.Copy(tc, c); errc <- err }()
+		go func() { _, err := io.Copy(c, tc); errc <- err }()
+		<-errc
+	}
 }
 
 var gwMAC = net.HardwareAddr{0x52, 0x54, 0x00, 0x01, 0x01, 0x01}
 
-var fakeDNSIP = netip.AddrFrom4([4]byte{4, 11, 4, 11})
+var (
+	fakeDNSIP          = netip.AddrFrom4([4]byte{4, 11, 4, 11})
+	fakeControlplaneIP = netip.AddrFrom4([4]byte{52, 52, 0, 1})
+)
 
 var gwIP = netip.AddrFrom4([4]byte{192, 168, 1, 1})
 
@@ -265,8 +289,11 @@ func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
 // IPv4ForDNS returns the IP address for the given DNS query name (for IPv4 A
 // queries only).
 func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
-	if qname == "dns" {
+	switch qname {
+	case "dns":
 		return fakeDNSIP, true
+	case "controlplane.tailscale.com":
+		return fakeControlplaneIP, true
 	}
 	return netip.Addr{}, false
 }
@@ -360,8 +387,7 @@ func (s *Server) serveConn(uc net.Conn) {
 			continue
 		}
 
-		if isTCPTo123(packet) {
-			log.Printf("Injecting TCP to 123")
+		if shouldInterceptTCP(packet) {
 			ipp := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 			pktCopy := make([]byte, 0, len(ipp.Contents)+len(ipp.Payload))
 			pktCopy = append(pktCopy, ipp.Contents...)
@@ -504,9 +530,25 @@ func isMDNSQuery(pkt gopacket.Packet) bool {
 	return ok && udp.SrcPort == 5353 && udp.DstPort == 5353
 }
 
-func isTCPTo123(pkt gopacket.Packet) bool {
+func shouldInterceptTCP(pkt gopacket.Packet) bool {
 	tcp, ok := pkt.Layer(layers.LayerTypeTCP).(*layers.TCP)
-	return ok && tcp.DstPort == 123
+	if !ok {
+		return false
+	}
+	ipv4, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	if !ok {
+		return false
+	}
+	if tcp.DstPort == 123 {
+		return true
+	}
+	if tcp.DstPort == 80 || tcp.DstPort == 443 {
+		dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
+		if dstIP == fakeControlplaneIP {
+			return true
+		}
+	}
+	return false
 }
 
 // isDNSRequest reports whether pkt is a DNS request to the fake DNS server.
