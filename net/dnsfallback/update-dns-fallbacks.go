@@ -29,11 +29,13 @@ func main() {
 		log.Fatal(err)
 	}
 	for rid, r := range dm.Regions {
-		// Names misleading to check into git, as this is a
-		// static snapshot and doesn't reflect the live DERP
-		// map.
+		// Names and locations misleading to check into git,
+		// as this is a static snapshot and doesn't reflect
+		// the live DERP map.
 		r.RegionCode = fmt.Sprintf("r%d", rid)
 		r.RegionName = r.RegionCode
+		r.Latitude = 0
+		r.Longitude = 0
 	}
 	out, err := json.MarshalIndent(dm, "", "\t")
 	if err != nil {
