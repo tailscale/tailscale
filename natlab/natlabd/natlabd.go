@@ -30,6 +30,7 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
+	"tailscale.com/util/set"
 )
 
 var (
@@ -37,6 +38,7 @@ var (
 )
 
 const nicID = 1
+const stunPort = 3478
 
 func main() {
 	log.Printf("natlabd.")
@@ -76,31 +78,55 @@ func main() {
 	}
 }
 
+func (s *Server) registerNetwork(n *network) error {
+	if n == nil {
+		return errors.New("nil network")
+	}
+	if s.networks.Contains(n) {
+		// Already registered.
+		return nil
+	}
+	s.networks.Add(n)
+
+	if !n.wanIP.IsValid() {
+		return errors.New("network has no WAN IP")
+	}
+	if _, ok := s.networkByWAN[n.wanIP]; ok {
+		return fmt.Errorf("network with WAN IP %v already exists", n.wanIP)
+	}
+	s.networkByWAN[n.wanIP] = n
+
+	if n.nodesByIP == nil {
+		n.nodesByIP = map[netip.Addr]*node{}
+	}
+	if n.ns == nil {
+		if err := n.initStack(); err != nil {
+			return fmt.Errorf("newServer: initStack: %v", err)
+		}
+	}
+	return nil
+}
+
 func (s *Server) checkWorld() error {
 	for mac, n := range s.nodes {
 		if n == nil {
 			return fmt.Errorf("node %v is nil", mac)
 		}
 		n.mac = mac
-		if n.net == nil {
-			return fmt.Errorf("node %v has nil network", n)
+		if err := s.registerNetwork(n.net); err != nil {
+			return fmt.Errorf("node %v has bad network: %w", mac, err)
 		}
 		if !n.lanIP.IsValid() {
 			return fmt.Errorf("node %v has invalid LAN IP", n)
+		}
+		if n.net == nil {
+			return fmt.Errorf("node %v has nil network", n)
 		}
 		if !n.net.lanIP.Contains(n.lanIP) {
 			return fmt.Errorf("node %v has LAN IP %v not in network %v", n, n.lanIP, n.net.lanIP)
 		}
 		if !n.net.wanIP.IsValid() {
 			return fmt.Errorf("node %v has invalid WAN IP", n)
-		}
-		if n.net.nodesByIP == nil {
-			n.net.nodesByIP = map[netip.Addr]*node{}
-		}
-		if n.net.ns == nil {
-			if err := n.net.initStack(); err != nil {
-				return fmt.Errorf("newServer: initStack: %v", err)
-			}
 		}
 		if _, ok := n.net.nodesByIP[n.lanIP]; ok {
 			return fmt.Errorf("node %v has duplicate LAN IP %v", mac, n.lanIP)
@@ -215,7 +241,6 @@ func (n *network) initStack() error {
 			}
 			if writeFunc, ok := n.writeFunc.Load(node.mac); ok {
 				writeFunc(buffer.Bytes())
-				log.Printf("wrote packet to client: % 02x", buffer.Bytes())
 			} else {
 				log.Printf("No writeFunc for %v", node.mac)
 			}
@@ -369,7 +394,9 @@ type Server struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 
-	nodes map[MAC]*node
+	nodes        map[MAC]*node
+	networks     set.Set[*network]
+	networkByWAN map[netip.Addr]*network
 }
 
 func newServer() (*Server, error) {
@@ -378,6 +405,8 @@ func newServer() (*Server, error) {
 		shutdownCtx:    ctx,
 		shutdownCancel: cancel,
 		nodes:          map[MAC]*node{},
+		networkByWAN:   map[netip.Addr]*network{},
+		networks:       set.Set[*network]{},
 	}
 	return s, nil
 }
@@ -469,6 +498,27 @@ func (s *Server) serveConn(uc net.Conn) {
 	}
 }
 
+func (s *Server) routeUDPPacket(up UDPPacket) {
+	// Find which network owns this based on the destination IP
+	// and all the known networks' wan IPs.
+
+	// But certain things (like STUN) we do in-process.
+	if up.Dst.Port() == stunPort {
+		// TODO(bradfitz): fake latency; time.AfterFunc the response
+		if res, ok := makeSTUNReply(up); ok {
+			s.routeUDPPacket(res)
+		}
+		return
+	}
+
+	netw, ok := s.networkByWAN[up.Dst.Addr()]
+	if !ok {
+		log.Printf("no network to route UDP packet for %v", up.Dst)
+		return
+	}
+	netw.HandleUDPPacket(up)
+}
+
 // writeEth writes a raw Ethernet frame to all (0, 1, or multiple) connected
 // clients on the network.
 //
@@ -533,6 +583,50 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	}
 }
 
+// HandleUDPPacket handles a UDP packet arriving from the internet,
+// addressed to the router's WAN IP. It is then NATed back to a
+// LAN IP here and wrapped in an ethernet layer and delivered
+// to the network.
+func (n *network) HandleUDPPacket(p UDPPacket) {
+	src := p.Src
+	dst := n.doNATIn(p.Src, p.Dst)
+	if !dst.IsValid() {
+		return
+	}
+	node, ok := n.nodesByIP[dst.Addr()]
+	if !ok {
+		log.Printf("no node for dest IP %v", dst.Addr())
+		return
+	}
+
+	eth := &layers.Ethernet{
+		SrcMAC:       n.mac.HWAddr(), // of gateway
+		DstMAC:       node.mac.HWAddr(),
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip := &layers.IPv4{
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolUDP,
+		SrcIP:    src.Addr().AsSlice(),
+		DstIP:    dst.Addr().AsSlice(),
+	}
+	udp := &layers.UDP{
+		SrcPort: layers.UDPPort(src.Port()),
+		DstPort: layers.UDPPort(dst.Port()),
+	}
+	udp.SetNetworkLayerForChecksum(ip)
+
+	buffer := gopacket.NewSerializeBuffer()
+	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buffer, options, eth, ip, udp, gopacket.Payload(p.Payload)); err != nil {
+		log.Printf("serializing UDP: %v", err)
+		return
+	}
+	ethRaw := buffer.Bytes()
+	n.writeEth(ethRaw)
+}
+
 // HandleEthernetIPv4PacketForRouter handles an IPv4 packet that is
 // directed to the router/gateway itself. The packet may be to the
 // broadcast MAC address, or to the router's MAC address. The target
@@ -540,6 +634,15 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	packet := ep.gp
 	writePkt := n.writeEth
+
+	v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	if !ok {
+		return
+	}
+	srcIP, _ := netip.AddrFromSlice(v4.SrcIP)
+	dstIP, _ := netip.AddrFromSlice(v4.DstIP)
+	toForward := dstIP != n.lanIP.Addr()
+	udp, isUDP := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
 
 	if isDHCPRequest(packet) {
 		res, err := n.s.createDHCPResponse(packet)
@@ -557,6 +660,8 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	}
 
 	if isDNSRequest(packet) {
+		// TODO(bradfitz): restrict this to 4.11.4.11? add DNS
+		// on gateway instead?
 		res, err := n.s.createDNSResponse(packet)
 		if err != nil {
 			log.Printf("createDNSResponse: %v", err)
@@ -566,18 +671,20 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if isSTUNRequest(packet) {
-		log.Printf("STUN request in")
-		res, err := n.s.createSTUNResponse(packet)
-		if err != nil {
-			log.Printf("createSTUNResponse: %v", err)
-			return
-		}
-		writePkt(res)
+	if toForward && isUDP {
+		src := netip.AddrPortFrom(srcIP, uint16(udp.SrcPort))
+		dst := netip.AddrPortFrom(dstIP, uint16(udp.DstPort))
+		src = n.doNATOut(src, dst)
+
+		n.s.routeUDPPacket(UDPPacket{
+			Src:     src,
+			Dst:     dst,
+			Payload: udp.Payload,
+		})
 		return
 	}
 
-	if shouldInterceptTCP(packet) {
+	if toForward && shouldInterceptTCP(packet) {
 		ipp := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		pktCopy := make([]byte, 0, len(ipp.Contents)+len(ipp.Payload))
 		pktCopy = append(pktCopy, ipp.Contents...)
@@ -762,53 +869,17 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	return ok && dns.QR == false && len(dns.Questions) > 0
 }
 
-// isSTUNRequest reports whether pkt is a STUN request to any STUN server.
-func isSTUNRequest(pkt gopacket.Packet) bool {
-	udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
-	return ok && udp.DstPort == 3478
-}
-
-func (s *Server) createSTUNResponse(pkt gopacket.Packet) ([]byte, error) {
-	ethLayer := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
-	ipLayer := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	udpLayer := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
-
-	stunPay := udpLayer.Payload
-	txid, err := stun.ParseBindingRequest(stunPay)
+func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
+	txid, err := stun.ParseBindingRequest(req.Payload)
 	if err != nil {
 		log.Printf("invalid STUN request: %v", err)
-		return nil, nil
+		return res, false
 	}
-	stunRes := stun.Response(txid, netip.AddrPortFrom(netip.MustParseAddr("1.2.3.4"), 12345))
-
-	eth2 := &layers.Ethernet{
-		SrcMAC:       ethLayer.DstMAC,
-		DstMAC:       ethLayer.SrcMAC,
-		EthernetType: layers.EthernetTypeIPv4,
-	}
-	ip2 := &layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		Protocol: layers.IPProtocolUDP,
-		SrcIP:    ipLayer.DstIP,
-		DstIP:    ipLayer.SrcIP,
-	}
-	udp2 := &layers.UDP{
-		SrcPort: udpLayer.DstPort,
-		DstPort: udpLayer.SrcPort,
-	}
-	udp2.SetNetworkLayerForChecksum(ip2)
-
-	buffer := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buffer, options, eth2, ip2, udp2, gopacket.Payload(stunRes)); err != nil {
-		return nil, err
-	}
-	resRaw := buffer.Bytes()
-	back := gopacket.NewPacket(resRaw, layers.LayerTypeEthernet, gopacket.Default)
-	log.Printf("made STUN reply: %v", back)
-
-	return resRaw, nil
+	return UDPPacket{
+		Src:     req.Dst,
+		Dst:     req.Src,
+		Payload: stun.Response(txid, req.Src),
+	}, true
 }
 
 func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
@@ -899,6 +970,30 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+// doNATOut performs NAT on an outgoing packet from src to dst, where
+// src is a LAN IP and dst is a WAN IP.
+//
+// It returns the souce WAN ip:port to use.
+func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
+	// TODO(bradfitz): real implementations (multiple styles) later
+	return netip.AddrPortFrom(n.wanIP, src.Port())
+}
+
+// doNATIn performs NAT on an incoming packet from WAN src to WAN dst, returning
+// a new destination LAN ip:port to use.
+func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
+	// TODO(bradfitz): this is temporary. real implementations later.
+	var theNode *node
+	for _, node := range n.nodesByIP {
+		theNode = node
+		break
+	}
+	if theNode == nil {
+		return
+	}
+	return netip.AddrPortFrom(theNode.lanIP, dst.Port())
+}
+
 func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	ethLayer, ok := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
 	if !ok {
@@ -969,4 +1064,15 @@ type Network struct {
 	HardNAT          bool
 	StatefulFirewall bool       // only applicable if !HardNAT && !EasyNAT
 	WANIP            netip.Addr // IP address on the WAN
+}
+
+// UDPPacket is a UDP packet.
+//
+// For the purposes of this project, a UDP packet
+// (not a general IP packet) is the unit to be NAT'ed,
+// as that's all that Tailscale uses.
+type UDPPacket struct {
+	Src     netip.AddrPort
+	Dst     netip.AddrPort
+	Payload []byte // everything after UDP header
 }
