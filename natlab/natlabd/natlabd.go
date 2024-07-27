@@ -51,6 +51,20 @@ func main() {
 		log.Fatalf("newServer: %v", err)
 	}
 
+	// Hard-coded world shape for me.
+	net1 := &network{
+		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x01},
+		wanIP: netip.MustParseAddr("2.1.1.1"),
+		lanIP: netip.MustParsePrefix("192.168.2.1/24"),
+	}
+	s.nodes[client1mac] = &node{
+		net:   net1,
+		lanIP: netip.MustParseAddr("192.168.2.102"),
+	}
+	if err := s.checkWorld(); err != nil {
+		log.Fatalf("checkWorld: %v", err)
+	}
+
 	for {
 		c, err := srv.Accept()
 		if err != nil {
@@ -59,6 +73,35 @@ func main() {
 		}
 		go s.serveConn(c)
 	}
+}
+
+func (s *Server) checkWorld() error {
+	for mac, n := range s.nodes {
+		if n == nil {
+			return fmt.Errorf("node %v is nil", mac)
+		}
+		n.mac = mac
+		if n.net == nil {
+			return fmt.Errorf("node %v has nil network", n)
+		}
+		if !n.lanIP.IsValid() {
+			return fmt.Errorf("node %v has invalid LAN IP", n)
+		}
+		if !n.net.lanIP.Contains(n.lanIP) {
+			return fmt.Errorf("node %v has LAN IP %v not in network %v", n, n.lanIP, n.net.lanIP)
+		}
+		if !n.net.wanIP.IsValid() {
+			return fmt.Errorf("node %v has invalid WAN IP", n)
+		}
+		if n.net.nodesByIP == nil {
+			n.net.nodesByIP = map[netip.Addr]*node{}
+		}
+		if _, ok := n.net.nodesByIP[n.lanIP]; ok {
+			return fmt.Errorf("node %v has duplicate LAN IP %v", mac, n.lanIP)
+		}
+		n.net.nodesByIP[n.lanIP] = n
+	}
+	return nil
 }
 
 func (s *Server) initStack() error {
@@ -77,7 +120,7 @@ func (s *Server) initStack() error {
 	if tcpipErr != nil {
 		return fmt.Errorf("SetTransportProtocolOption SACK: %v", tcpipErr)
 	}
-	s.linkEP = channel.New(512, 1500, tcpip.LinkAddress(gwMAC))
+	s.linkEP = channel.New(512, 1500, tcpip.LinkAddress(gwMACTOREMOVE))
 	if tcpipProblem := s.ns.CreateNIC(nicID, s.linkEP); tcpipProblem != nil {
 		return fmt.Errorf("CreateNIC: %v", tcpipProblem)
 	}
@@ -131,7 +174,7 @@ func (s *Server) initStack() error {
 				layers.LayerTypeIPv4, gopacket.Lazy)
 			layerV4 := goPkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 			eth := &layers.Ethernet{
-				SrcMAC:       gwMAC,
+				SrcMAC:       gwMACTOREMOVE,
 				DstMAC:       client1mac.HWAddr(),
 				EthernetType: layers.EthernetTypeIPv4,
 			}
@@ -231,9 +274,10 @@ func (s *Server) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-var gwMAC = net.HardwareAddr{0x52, 0x54, 0x00, 0x01, 0x01, 0x01}
-
 var (
+	// TODO: remove this and run a netstack per *network instead.
+	gwMACTOREMOVE = net.HardwareAddr{0x52, 0x54, 0x00, 0x01, 0x01, 0x01}
+
 	fakeDNSIP          = netip.AddrFrom4([4]byte{4, 11, 4, 11})
 	fakeControlplaneIP = netip.AddrFrom4([4]byte{52, 52, 0, 1})
 )
@@ -244,6 +288,13 @@ var client1mac = MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee}
 
 type MAC [6]byte
 
+func macOf(hwa net.HardwareAddr) (_ MAC, ok bool) {
+	if len(hwa) != 6 {
+		return MAC{}, false
+	}
+	return MAC(hwa), true
+}
+
 func (m MAC) HWAddr() net.HardwareAddr {
 	return net.HardwareAddr(m[:])
 }
@@ -252,9 +303,36 @@ func (m MAC) String() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
 }
 
+type network struct {
+	mac     MAC
+	doesNAT bool
+	wanIP   netip.Addr
+	lanIP   netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
+
+	nodesByIP map[netip.Addr]*node
+}
+
+func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
+	if n.lanIP.Addr() == ip {
+		return n.mac, true
+	}
+	if n, ok := n.nodesByIP[ip]; ok {
+		return n.mac, true
+	}
+	return MAC{}, false
+}
+
+type node struct {
+	mac   MAC
+	net   *network
+	lanIP netip.Addr // must be in net.lanIP prefix + unique in net
+}
+
 type Server struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
+
+	nodes map[MAC]*node
 
 	writeFunc syncs.Map[MAC, func([]byte)] // MAC -> func to write to that MAC
 
@@ -267,18 +345,12 @@ func newServer() (*Server, error) {
 	s := &Server{
 		shutdownCtx:    ctx,
 		shutdownCancel: cancel,
+		nodes:          map[MAC]*node{},
 	}
 	if err := s.initStack(); err != nil {
 		return nil, fmt.Errorf("newServer: initStack: %v", err)
 	}
 	return s, nil
-}
-
-func (s *Server) MacOfIP(ip netip.Addr) (MAC, bool) {
-	if ip == gwIP {
-		return MAC(gwMAC), true
-	}
-	return MAC{}, false
 }
 
 func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
@@ -423,6 +495,17 @@ func (s *Server) serveConn(uc net.Conn) {
 
 func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	ethLayer := request.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+	srcMAC, ok := macOf(ethLayer.SrcMAC)
+	if !ok {
+		return nil, nil
+	}
+	node, ok := s.nodes[srcMAC]
+	if !ok {
+		log.Printf("DHCP request from unknown node %v; ignoring", srcMAC)
+		return nil, nil
+	}
+	gwIP := node.net.lanIP.Addr()
+
 	ipLayer := request.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	udpLayer := request.Layer(layers.LayerTypeUDP).(*layers.UDP)
 	dhcpLayer := request.Layer(layers.LayerTypeDHCPv4).(*layers.DHCPv4)
@@ -434,11 +517,11 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		Xid:          dhcpLayer.Xid,
 		ClientHWAddr: dhcpLayer.ClientHWAddr,
 		Flags:        dhcpLayer.Flags,
-		YourClientIP: net.IP{192, 168, 1, 100},
+		YourClientIP: node.lanIP.AsSlice(),
 		Options: []layers.DHCPOption{
 			{
 				Type:   layers.DHCPOptServerID,
-				Data:   net.IP{192, 168, 1, 1}, // DHCP server's IP
+				Data:   gwIP.AsSlice(), // DHCP server's IP
 				Length: 4,
 			},
 		},
@@ -471,7 +554,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 			},
 			layers.DHCPOption{
 				Type:   layers.DHCPOptRouter,
-				Data:   net.IP{192, 168, 1, 1},
+				Data:   gwIP.AsSlice(),
 				Length: 4,
 			},
 			layers.DHCPOption{
@@ -481,15 +564,14 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 			},
 			layers.DHCPOption{
 				Type:   layers.DHCPOptSubnetMask,
-				Data:   []byte{255, 255, 255, 0},
+				Data:   net.CIDRMask(node.net.lanIP.Bits(), 32),
 				Length: 4,
 			},
 		)
-
 	}
 
 	eth := &layers.Ethernet{
-		SrcMAC:       gwMAC,
+		SrcMAC:       node.net.mac.HWAddr(),
 		DstMAC:       ethLayer.SrcMAC,
 		EthernetType: layers.EthernetTypeIPv4,
 	}
@@ -715,7 +797,19 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 }
 
 func (s *Server) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
-	ethLayer := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+	ethLayer, ok := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
+	if !ok {
+		return nil, nil
+	}
+	srcMAC, ok := macOf(ethLayer.SrcMAC)
+	if !ok {
+		return nil, nil
+	}
+	node, ok := s.nodes[srcMAC]
+	if !ok {
+		return nil, nil
+	}
+
 	arpLayer, ok := pkt.Layer(layers.LayerTypeARP).(*layers.ARP)
 	if !ok ||
 		arpLayer.Operation != layers.ARPRequest ||
@@ -728,13 +822,13 @@ func (s *Server) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	}
 
 	wantIP := netip.AddrFrom4([4]byte(arpLayer.DstProtAddress))
-	mac, ok := s.MacOfIP(wantIP)
+	foundMAC, ok := node.net.MACOfIP(wantIP)
 	if !ok {
 		return nil, nil
 	}
 
 	eth := &layers.Ethernet{
-		SrcMAC:       s.HWAddr(mac),
+		SrcMAC:       foundMAC.HWAddr(),
 		DstMAC:       ethLayer.SrcMAC,
 		EthernetType: layers.EthernetTypeARP,
 	}
@@ -745,7 +839,7 @@ func (s *Server) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
 		Operation:         layers.ARPReply,
-		SourceHwAddress:   s.HWAddr(mac),
+		SourceHwAddress:   foundMAC.HWAddr(),
 		SourceProtAddress: arpLayer.DstProtAddress,
 		DstHwAddress:      ethLayer.SrcMAC,
 		DstProtAddress:    arpLayer.SourceProtAddress,
