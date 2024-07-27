@@ -65,11 +65,21 @@ func main() {
 		s:     s,
 		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x01},
 		wanIP: netip.MustParseAddr("2.1.1.1"),
-		lanIP: netip.MustParsePrefix("192.168.2.1/24"),
+		lanIP: netip.MustParsePrefix("192.168.1.1/24"),
+	}
+	net2 := &network{
+		s:     s,
+		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x2},
+		wanIP: netip.MustParseAddr("2.2.2.1"),
+		lanIP: netip.MustParsePrefix("10.2.0.1/16"),
 	}
 	s.nodes[MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee}] = &node{
 		net:   net1,
-		lanIP: netip.MustParseAddr("192.168.2.102"),
+		lanIP: netip.MustParseAddr("192.168.1.101"),
+	}
+	s.nodes[MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xef}] = &node{
+		net:   net2,
+		lanIP: netip.MustParseAddr("10.2.0.102"),
 	}
 	if err := s.checkWorld(); err != nil {
 		log.Fatalf("checkWorld: %v", err)
@@ -149,7 +159,7 @@ func (s *Server) checkWorld() error {
 			return fmt.Errorf("node %v has nil network", n)
 		}
 		if !n.net.lanIP.Contains(n.lanIP) {
-			return fmt.Errorf("node %v has LAN IP %v not in network %v", n, n.lanIP, n.net.lanIP)
+			return fmt.Errorf("node with LAN IP %v not in network %v", n.lanIP, n.net.lanIP)
 		}
 		if !n.net.wanIP.IsValid() {
 			return fmt.Errorf("node %v has invalid WAN IP", n)
@@ -159,6 +169,13 @@ func (s *Server) checkWorld() error {
 		}
 		n.net.nodesByIP[n.lanIP] = n
 	}
+
+	for n := range s.networks {
+		if got, ok := s.nodes[n.mac]; ok {
+			return fmt.Errorf("network with mac %v has duplicate router MAC as node %v", n.mac, got.lanIP)
+		}
+	}
+
 	return nil
 }
 
