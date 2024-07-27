@@ -263,7 +263,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	if reqDetails.LocalPort == 123 {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		io.WriteString(tc, "Hello Andrew from Go\nGoodbye.\n")
+		io.WriteString(tc, "Hello from Go\nGoodbye.\n")
 		tc.Close()
 		return
 	}
@@ -300,7 +300,15 @@ func (ep EthernetPacket) SrcMAC() MAC {
 	return MAC(ep.le.SrcMAC)
 }
 
+func (ep EthernetPacket) DstMAC() MAC {
+	return MAC(ep.le.DstMAC)
+}
+
 type MAC [6]byte
+
+func (m MAC) IsBroadcast() bool {
+	return m == MAC{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+}
 
 func macOf(hwa net.HardwareAddr) (_ MAC, ok bool) {
 	if len(hwa) != 6 {
@@ -461,20 +469,39 @@ func (s *Server) serveConn(uc net.Conn) {
 	}
 }
 
+// writeEth writes a raw Ethernet frame to all (0, 1, or multiple) connected
+// clients on the network.
+//
+// This only delivers to client devices and not the virtual router/gateway
+// device.
 func (n *network) writeEth(res []byte) {
-	if len(res) < 6 {
+	if len(res) < 12 {
 		return
 	}
 	dstMAC := MAC(res[0:6])
+	srcMAC := MAC(res[6:12])
+	if dstMAC.IsBroadcast() {
+		n.writeFunc.Range(func(mac MAC, writeFunc func([]byte)) bool {
+			writeFunc(res)
+			return true
+		})
+		return
+	}
+	if srcMAC == dstMAC {
+		log.Printf("dropping write of packet from %v to itself", srcMAC)
+		return
+	}
 	if writeFunc, ok := n.writeFunc.Load(dstMAC); ok {
 		writeFunc(res)
+		return
 	}
 }
 
 func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	packet := ep.gp
-	s := n.s
-	writePkt := n.writeEth
+	dstMAC := ep.DstMAC()
+	isBroadcast := dstMAC.IsBroadcast()
+	forRouter := dstMAC == n.mac || isBroadcast
 
 	switch ep.le.EthernetType {
 	default:
@@ -485,7 +512,7 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 		if err != nil {
 			log.Printf("createARPResponse: %v", err)
 		} else {
-			writePkt(res)
+			n.writeEth(res)
 		}
 		return
 	case layers.EthernetTypeIPv6:
@@ -496,8 +523,26 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 		// Below
 	}
 
+	// Send ethernet broadcasts and unicast ethernet frames to peers
+	// on the same network. This is all LAN traffic that isn't meant
+	// for the router/gw itself:
+	n.writeEth(ep.gp.Data())
+
+	if forRouter {
+		n.HandleEthernetIPv4PacketForRouter(ep)
+	}
+}
+
+// HandleEthernetIPv4PacketForRouter handles an IPv4 packet that is
+// directed to the router/gateway itself. The packet may be to the
+// broadcast MAC address, or to the router's MAC address. The target
+// IP may be the router's IP, or an internet (routed) IP.
+func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
+	packet := ep.gp
+	writePkt := n.writeEth
+
 	if isDHCPRequest(packet) {
-		res, err := s.createDHCPResponse(packet)
+		res, err := n.s.createDHCPResponse(packet)
 		if err != nil {
 			log.Printf("createDHCPResponse: %v", err)
 			return
@@ -512,7 +557,7 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	}
 
 	if isDNSRequest(packet) {
-		res, err := s.createDNSResponse(packet)
+		res, err := n.s.createDNSResponse(packet)
 		if err != nil {
 			log.Printf("createDNSResponse: %v", err)
 			return
@@ -523,7 +568,7 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 
 	if isSTUNRequest(packet) {
 		log.Printf("STUN request in")
-		res, err := s.createSTUNResponse(packet)
+		res, err := n.s.createSTUNResponse(packet)
 		if err != nil {
 			log.Printf("createSTUNResponse: %v", err)
 			return
@@ -541,12 +586,6 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 			Payload: buffer.MakeWithData(pktCopy),
 		})
 		n.linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
-
-		// var list stack.PacketBufferList
-		// list.PushBack(packetBuf)
-		// n, err := s.linkEP.WritePackets(list)
-		// log.Printf("Injected: %v, %v", n, err)
-
 		packetBuf.DecRef()
 		return
 	}
