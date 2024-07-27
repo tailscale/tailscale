@@ -291,6 +291,15 @@ var (
 	fakeControlplaneIP = netip.AddrFrom4([4]byte{52, 52, 0, 1})
 )
 
+type EthernetPacket struct {
+	le *layers.Ethernet
+	gp gopacket.Packet
+}
+
+func (ep EthernetPacket) SrcMAC() MAC {
+	return MAC(ep.le.SrcMAC)
+}
+
 type MAC [6]byte
 
 func macOf(hwa net.HardwareAddr) (_ MAC, ok bool) {
@@ -425,11 +434,13 @@ func (s *Server) serveConn(uc net.Conn) {
 
 		packetRaw := buf[4 : 4+n] // raw ethernet frame
 		packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
-		ll, ok := packet.LinkLayer().(*layers.Ethernet)
-		if !ok {
+		le, ok := packet.LinkLayer().(*layers.Ethernet)
+		if !ok || len(le.SrcMAC) != 6 || len(le.DstMAC) != 6 {
 			continue
 		}
-		srcMAC := MAC(ll.SrcMAC)
+		ep := EthernetPacket{le, packet}
+
+		srcMAC := ep.SrcMAC()
 		if srcNode == nil {
 			srcNode, ok = s.nodes[srcMAC]
 			if !ok {
@@ -446,81 +457,101 @@ func (s *Server) serveConn(uc net.Conn) {
 				continue
 			}
 		}
-
-		if ll.EthernetType == layers.EthernetTypeARP {
-			res, err := netw.createARPResponse(packet)
-			if err != nil {
-				log.Printf("createARPResponse: %v", err)
-			} else {
-				writePkt(res)
-			}
-			continue
-		}
-
-		if ll.EthernetType != layers.EthernetTypeIPv4 {
-			if ll.EthernetType != layers.EthernetTypeIPv6 {
-				log.Printf("Dropping non-IP packet: %v", ll.EthernetType)
-			}
-			continue
-		}
-
-		if isDHCPRequest(packet) {
-			res, err := s.createDHCPResponse(packet)
-			if err != nil {
-				log.Printf("createDHCPResponse: %v", err)
-				continue
-			}
-			writePkt(res)
-			continue
-		}
-
-		if isMDNSQuery(packet) || isIGMP(packet) {
-			// Don't log. Spammy for now.
-			continue
-		}
-
-		if isDNSRequest(packet) {
-			res, err := s.createDNSResponse(packet)
-			if err != nil {
-				log.Printf("createDNSResponse: %v", err)
-				continue
-			}
-			writePkt(res)
-			continue
-		}
-
-		if isSTUNRequest(packet) {
-			log.Printf("STUN request in")
-			res, err := s.createSTUNResponse(packet)
-			if err != nil {
-				log.Printf("createSTUNResponse: %v", err)
-				continue
-			}
-			writePkt(res)
-			continue
-		}
-
-		if shouldInterceptTCP(packet) {
-			ipp := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-			pktCopy := make([]byte, 0, len(ipp.Contents)+len(ipp.Payload))
-			pktCopy = append(pktCopy, ipp.Contents...)
-			pktCopy = append(pktCopy, ipp.Payload...)
-			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-				Payload: buffer.MakeWithData(pktCopy),
-			})
-			netw.linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
-
-			// var list stack.PacketBufferList
-			// list.PushBack(packetBuf)
-			// n, err := s.linkEP.WritePackets(list)
-			// log.Printf("Injected: %v, %v", n, err)
-
-			packetBuf.DecRef()
-			continue
-		}
-
-		log.Printf("Got packet: %v", packet)
+		netw.HandleEthernetPacket(ep)
 	}
+}
+
+func (n *network) writeEth(res []byte) {
+	if len(res) < 6 {
+		return
+	}
+	dstMAC := MAC(res[0:6])
+	if writeFunc, ok := n.writeFunc.Load(dstMAC); ok {
+		writeFunc(res)
+	}
+}
+
+func (n *network) HandleEthernetPacket(ep EthernetPacket) {
+	packet := ep.gp
+	s := n.s
+	writePkt := n.writeEth
+
+	switch ep.le.EthernetType {
+	default:
+		log.Printf("Dropping non-IP packet: %v", ep.le.EthernetType)
+		return
+	case layers.EthernetTypeARP:
+		res, err := n.createARPResponse(packet)
+		if err != nil {
+			log.Printf("createARPResponse: %v", err)
+		} else {
+			writePkt(res)
+		}
+		return
+	case layers.EthernetTypeIPv6:
+		// One day. Low value for now. IPv4 NAT modes is the main thing
+		// this project wants to test.
+		return
+	case layers.EthernetTypeIPv4:
+		// Below
+	}
+
+	if isDHCPRequest(packet) {
+		res, err := s.createDHCPResponse(packet)
+		if err != nil {
+			log.Printf("createDHCPResponse: %v", err)
+			return
+		}
+		writePkt(res)
+		return
+	}
+
+	if isMDNSQuery(packet) || isIGMP(packet) {
+		// Don't log. Spammy for now.
+		return
+	}
+
+	if isDNSRequest(packet) {
+		res, err := s.createDNSResponse(packet)
+		if err != nil {
+			log.Printf("createDNSResponse: %v", err)
+			return
+		}
+		writePkt(res)
+		return
+	}
+
+	if isSTUNRequest(packet) {
+		log.Printf("STUN request in")
+		res, err := s.createSTUNResponse(packet)
+		if err != nil {
+			log.Printf("createSTUNResponse: %v", err)
+			return
+		}
+		writePkt(res)
+		return
+	}
+
+	if shouldInterceptTCP(packet) {
+		ipp := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		pktCopy := make([]byte, 0, len(ipp.Contents)+len(ipp.Payload))
+		pktCopy = append(pktCopy, ipp.Contents...)
+		pktCopy = append(pktCopy, ipp.Payload...)
+		packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+			Payload: buffer.MakeWithData(pktCopy),
+		})
+		n.linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+
+		// var list stack.PacketBufferList
+		// list.PushBack(packetBuf)
+		// n, err := s.linkEP.WritePackets(list)
+		// log.Printf("Injected: %v, %v", n, err)
+
+		packetBuf.DecRef()
+		return
+	}
+
+	log.Printf("Got packet: %v", packet)
 }
 
 func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
