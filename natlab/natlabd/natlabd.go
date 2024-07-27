@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os/exec"
 	"strconv"
 	"sync"
 
@@ -30,6 +32,7 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/set"
 )
 
@@ -51,6 +54,10 @@ func main() {
 	s, err := newServer()
 	if err != nil {
 		log.Fatalf("newServer: %v", err)
+	}
+
+	if err := s.populateDERPMapIPs(); err != nil {
+		log.Printf("warning: ignoring failure to populate DERP map: %v", err)
 	}
 
 	// Hard-coded world shape for me.
@@ -76,6 +83,25 @@ func main() {
 		}
 		go s.serveConn(c)
 	}
+}
+
+func (s *Server) populateDERPMapIPs() error {
+	out, err := exec.Command("tailscale", "debug", "derp-map").Output()
+	if err != nil {
+		return fmt.Errorf("tailscale debug derp-map: %v", err)
+	}
+	var dm tailcfg.DERPMap
+	if err := json.Unmarshal(out, &dm); err != nil {
+		return fmt.Errorf("unmarshal DERPMap: %v", err)
+	}
+	for _, r := range dm.Regions {
+		for _, n := range r.Nodes {
+			if n.IPv4 != "" {
+				s.derpIPs.Add(netip.MustParseAddr(n.IPv4))
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) registerNetwork(n *network) error {
@@ -293,8 +319,14 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destIP == fakeControlplaneIP {
-		c, err := net.Dial("tcp", "controlplane.tailscale.com:"+strconv.Itoa(int(reqDetails.LocalPort)))
+	var targetDial string
+	if n.s.derpIPs.Contains(destIP) {
+		targetDial = destIP.String() + ":" + strconv.Itoa(int(reqDetails.LocalPort))
+	} else if destIP == fakeControlplaneIP {
+		targetDial = "controlplane.tailscale.com:" + strconv.Itoa(int(reqDetails.LocalPort))
+	}
+	if targetDial != "" {
+		c, err := net.Dial("tcp", targetDial)
 		if err != nil {
 			r.Complete(true)
 			log.Printf("Dial controlplane: %v", err)
@@ -394,6 +426,8 @@ type Server struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 
+	derpIPs set.Set[netip.Addr]
+
 	nodes        map[MAC]*node
 	networks     set.Set[*network]
 	networkByWAN map[netip.Addr]*network
@@ -404,9 +438,12 @@ func newServer() (*Server, error) {
 	s := &Server{
 		shutdownCtx:    ctx,
 		shutdownCancel: cancel,
-		nodes:          map[MAC]*node{},
-		networkByWAN:   map[netip.Addr]*network{},
-		networks:       set.Set[*network]{},
+
+		derpIPs: set.Of[netip.Addr](),
+
+		nodes:        map[MAC]*node{},
+		networkByWAN: map[netip.Addr]*network{},
+		networks:     set.Of[*network](),
 	}
 	return s, nil
 }
@@ -684,7 +721,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if toForward && shouldInterceptTCP(packet) {
+	if toForward && n.s.shouldInterceptTCP(packet) {
 		ipp := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		pktCopy := make([]byte, 0, len(ipp.Contents)+len(ipp.Payload))
 		pktCopy = append(pktCopy, ipp.Contents...)
@@ -830,7 +867,7 @@ func isMDNSQuery(pkt gopacket.Packet) bool {
 	return ok && udp.SrcPort == 5353 && udp.DstPort == 5353
 }
 
-func shouldInterceptTCP(pkt gopacket.Packet) bool {
+func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	tcp, ok := pkt.Layer(layers.LayerTypeTCP).(*layers.TCP)
 	if !ok {
 		return false
@@ -842,9 +879,9 @@ func shouldInterceptTCP(pkt gopacket.Packet) bool {
 	if tcp.DstPort == 123 {
 		return true
 	}
+	dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
-		dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
-		if dstIP == fakeControlplaneIP {
+		if dstIP == fakeControlplaneIP || s.derpIPs.Contains(dstIP) {
 			return true
 		}
 	}
