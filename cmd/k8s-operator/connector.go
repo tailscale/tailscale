@@ -57,6 +57,7 @@ type ConnectorReconciler struct {
 
 	subnetRouters set.Slice[types.UID] // for subnet routers gauge
 	exitNodes     set.Slice[types.UID] // for exit nodes gauge
+	dnats         set.Slice[types.UID] // for dnat gauge
 }
 
 var (
@@ -66,6 +67,7 @@ var (
 	gaugeConnectorSubnetRouterResources = clientmetric.NewGauge("k8s_connector_subnetrouter_resources")
 	// gaugeConnectorExitNodeResources tracks the number of Connectors currently managed by this operator instance that are exit nodes.
 	gaugeConnectorExitNodeResources = clientmetric.NewGauge("k8s_connector_exitnode_resources")
+	gaugeConnectorDNATResources     = clientmetric.NewGauge("k8s_connector_dnat_resources")
 )
 
 func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
@@ -149,6 +151,9 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		cn.Status.SubnetRoutes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionTrue, reasonConnectorCreated, reasonConnectorCreated)
 	}
+	if len(cn.Spec.DNAT) != 0 {
+		cn.Status.DNAT = cn.Spec.DNAT[0]
+	}
 	cn.Status.SubnetRoutes = ""
 	return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionTrue, reasonConnectorCreated, reasonConnectorCreated)
 }
@@ -178,33 +183,42 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		Hostname:            hostname,
 		ChildResourceLabels: crl,
 		Tags:                cn.Spec.Tags.Stringify(),
-		Connector: &connector{
-			isExitNode: cn.Spec.ExitNode,
-		},
-		ProxyClassName: proxyClass,
+		ProxyClassName:      proxyClass,
+		isExitNode:          cn.Spec.ExitNode,
 	}
 
 	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
-		sts.Connector.routes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
+		sts.routes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
+	}
+
+	if len(cn.Spec.DNAT) != 0 {
+		sts.ClusterTargetIP = cn.Spec.DNAT[0]
 	}
 
 	a.mu.Lock()
-	if sts.Connector.isExitNode {
+	if sts.isExitNode {
 		a.exitNodes.Add(cn.UID)
 	} else {
 		a.exitNodes.Remove(cn.UID)
 	}
-	if sts.Connector.routes != "" {
+	if sts.routes != "" {
 		a.subnetRouters.Add(cn.GetUID())
 	} else {
 		a.subnetRouters.Remove(cn.GetUID())
 	}
+	if sts.ClusterTargetIP != "" {
+		a.dnats.Add(cn.GetUID())
+	} else {
+		a.dnats.Remove(cn.GetUID())
+	}
 	a.mu.Unlock()
 	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
 	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
+	gaugeConnectorDNATResources.Set(int64(a.exitNodes.Len()))
 	var connectors set.Slice[types.UID]
 	connectors.AddSlice(a.exitNodes.Slice())
 	connectors.AddSlice(a.subnetRouters.Slice())
+	connectors.AddSlice(a.dnats.Slice())
 	gaugeConnectorResources.Set(int64(connectors.Len()))
 
 	_, err := a.ssr.Provision(ctx, logger, sts)
@@ -247,12 +261,15 @@ func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger 
 	a.mu.Lock()
 	a.subnetRouters.Remove(cn.UID)
 	a.exitNodes.Remove(cn.UID)
+	a.dnats.Remove(cn.UID)
 	a.mu.Unlock()
 	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
 	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
+	gaugeConnectorDNATResources.Set(int64(a.dnats.Len()))
 	var connectors set.Slice[types.UID]
 	connectors.AddSlice(a.exitNodes.Slice())
 	connectors.AddSlice(a.subnetRouters.Slice())
+	connectors.AddSlice(a.dnats.Slice())
 	gaugeConnectorResources.Set(int64(connectors.Len()))
 	return true, nil
 }
@@ -261,8 +278,11 @@ func (a *ConnectorReconciler) validate(cn *tsapi.Connector) error {
 	// Connector fields are already validated at apply time with CEL validation
 	// on custom resource fields. The checks here are a backup in case the
 	// CEL validation breaks without us noticing.
-	if !(cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode) {
-		return errors.New("invalid spec: a Connector must expose subnet routes or act as an exit node (or both)")
+	if !(cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode || len(cn.Spec.DNAT) != 0) {
+		return errors.New("invalid spec: a Connector must expose subnet routes or act as an exit node (or both) or have DNAT set")
+	}
+	if (cn.Spec.SubnetRouter != nil || cn.Spec.ExitNode) && len(cn.Spec.DNAT) != 0 {
+		return errors.New("invalid spec: a Connector must not be both a subnet router and an exit node as well as have a DNAT set")
 	}
 	if cn.Spec.SubnetRouter == nil {
 		return nil

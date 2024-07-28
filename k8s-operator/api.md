@@ -84,6 +84,7 @@ _Appears in:_
 | `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this Connector. If unset, the operator will<br />create resources with the default configuration. |  |  |
 | `subnetRouter` _[SubnetRouter](#subnetrouter)_ | SubnetRouter defines subnet routes that the Connector node should<br />expose to tailnet. If unset, none are exposed.<br />https://tailscale.com/kb/1019/subnets/ |  |  |
 | `exitNode` _boolean_ | ExitNode defines whether the Connector node should act as a<br />Tailscale exit node. Defaults to false.<br />https://tailscale.com/kb/1103/exit-nodes |  |  |
+| `dnat` _[dnat](#dnat)_ | DNAT is an address routable from within cluster that tailnet<br />traffic should be routed to. DNAT cannot be set together with<br />.spec.subnetRouter or .spec.exitNode.<br />DNAT is currently restricted to a list of a single IP address. |  | MaxItems: 1 <br />MinItems: 1 <br /> |
 
 
 #### ConnectorStatus
@@ -101,6 +102,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Connector.<br />Known condition types are `ConnectorReady`. |  |  |
 | `subnetRoutes` _string_ | SubnetRoutes are the routes currently exposed to tailnet via this<br />Connector instance. |  |  |
+| `dnat` _string_ | DNAT is a cluster routable IP address that the tailnet traffic to<br />this node is routed to. |  |  |
 | `isExitNode` _boolean_ | IsExitNode is set to true if the Connector acts as an exit node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector node. |  |  |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the Connector node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
