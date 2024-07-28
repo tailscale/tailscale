@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -67,20 +69,27 @@ func main() {
 		wanIP: netip.MustParseAddr("2.1.1.1"),
 		lanIP: netip.MustParsePrefix("192.168.1.1/24"),
 	}
+	node1 := &node{
+		mac:   MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee},
+		net:   net1,
+		lanIP: netip.MustParseAddr("192.168.1.101"),
+	}
+	s.nodes[node1.mac] = node1
+	net1.SetNATTable(&oneToOneNAT{wanIP: net1.wanIP, lanIP: node1.lanIP})
 	net2 := &network{
 		s:     s,
 		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x2},
 		wanIP: netip.MustParseAddr("2.2.2.1"),
 		lanIP: netip.MustParsePrefix("10.2.0.1/16"),
 	}
-	s.nodes[MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee}] = &node{
-		net:   net1,
-		lanIP: netip.MustParseAddr("192.168.1.101"),
-	}
-	s.nodes[MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xef}] = &node{
+	node2 := &node{
+		mac:   MAC{0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xef},
 		net:   net2,
 		lanIP: netip.MustParseAddr("10.2.0.102"),
 	}
+	s.nodes[node2.mac] = node2
+	net2.SetNATTable(&oneToOneNAT{wanIP: net2.wanIP, lanIP: node2.lanIP})
+
 	if err := s.checkWorld(); err != nil {
 		log.Fatalf("checkWorld: %v", err)
 	}
@@ -124,6 +133,9 @@ func (s *Server) registerNetwork(n *network) error {
 	}
 	s.networks.Add(n)
 
+	if n.natTable.Load() == nil {
+		return errors.New("network has no NATTable")
+	}
 	if !n.wanIP.IsValid() {
 		return errors.New("network has no WAN IP")
 	}
@@ -177,6 +189,10 @@ func (s *Server) checkWorld() error {
 	}
 
 	return nil
+}
+
+func (n *network) SetNATTable(nt NATTable) {
+	n.natTable.Store(&nt)
 }
 
 func (n *network) initStack() error {
@@ -406,6 +422,8 @@ type network struct {
 	wanIP     netip.Addr
 	lanIP     netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
 	nodesByIP map[netip.Addr]*node
+
+	natTable atomic.Pointer[NATTable] // odd pointer to interface so we can change impl types
 
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
@@ -751,7 +769,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	log.Printf("Got packet: %v", packet)
+	//log.Printf("Got packet: %v", packet)
 }
 
 func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
@@ -1029,23 +1047,13 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 //
 // It returns the souce WAN ip:port to use.
 func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
-	// TODO(bradfitz): real implementations (multiple styles) later
-	return netip.AddrPortFrom(n.wanIP, src.Port())
+	return (*n.natTable.Load()).PickOutgoingSrc(src, dst, time.Now())
 }
 
 // doNATIn performs NAT on an incoming packet from WAN src to WAN dst, returning
 // a new destination LAN ip:port to use.
 func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
-	// TODO(bradfitz): this is temporary. real implementations later.
-	var theNode *node
-	for _, node := range n.nodesByIP {
-		theNode = node
-		break
-	}
-	if theNode == nil {
-		return
-	}
-	return netip.AddrPortFrom(theNode.lanIP, dst.Port())
+	return (*n.natTable.Load()).PickIncomingDst(src, dst, time.Now())
 }
 
 func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
