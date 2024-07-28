@@ -1,5 +1,11 @@
 package main
 
+// TODO:
+// - [ ] declarative conf
+// - [ ] port mapping
+// - [ ] conf to let you firewall things
+// - [ ] tests for NAT tables
+
 import (
 	"bufio"
 	"context"
@@ -73,6 +79,7 @@ func main() {
 		net:   net1,
 		lanIP: netip.MustParseAddr("192.168.1.101"),
 	}
+
 	s.nodes[node1.mac] = node1
 	net1.SetNATTable(&oneToOneNAT{wanIP: net1.wanIP, lanIP: node1.lanIP})
 	net2 := &network{
