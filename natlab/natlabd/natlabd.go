@@ -81,7 +81,7 @@ func main() {
 	}
 
 	s.nodes[node1.mac] = node1
-	net1.SetNATTable(&oneToOneNAT{wanIP: net1.wanIP, lanIP: node1.lanIP})
+	net1.SetNATTable(&hardNAT{wanIP: net1.wanIP})
 	net2 := &network{
 		s:     s,
 		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x2},

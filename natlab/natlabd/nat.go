@@ -4,6 +4,8 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"time"
+
+	"tailscale.com/util/mak"
 )
 
 // NATTable is what a NAT implementation is expected to do.
@@ -101,16 +103,16 @@ func (n *hardNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc
 	// Instead of proper data structures that would be efficient, we instead
 	// just loop a bunch and look for a free port. This project is only used
 	// by tests and doesn't care about performance, this is good enough.
-	port := src.Port() // start with the port the client used? (TODO: does FreeBSD do this? make knob?)
 	for {
+		port := rand.N(uint16(32<<10)) + 32<<10 // pick some "ephemeral" port
 		ki := hardKeyIn{wanPort: port, src: dst}
 		if _, ok := n.in[ki]; ok {
-			// Collision. Try again.
-			port = rand.N(uint16(32<<10)) + 32<<10 // pick some "ephemeral" port
+			// Port already in use.
 			continue
 		}
-		n.in[ki] = lanAddrAndTime{lanAddr: src, at: at}
-		n.out[ko] = portMappingAndTime{port: port, at: at}
+		mak.Set(&n.in, ki, lanAddrAndTime{lanAddr: src, at: at})
+		mak.Set(&n.out, ko, portMappingAndTime{port: port, at: at})
+		return netip.AddrPortFrom(n.wanIP, port)
 	}
 }
 
@@ -160,8 +162,8 @@ func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc
 		port := 32<<10 + (start + off)
 		if _, ok := n.in[port]; !ok {
 			// Found a free port.
-			n.out[src] = portMappingAndTime{port: port, at: at}
-			n.in[port] = lanAddrAndTime{lanAddr: src, at: at}
+			mak.Set(&n.out, src, portMappingAndTime{port: port, at: at})
+			mak.Set(&n.in, port, lanAddrAndTime{lanAddr: src, at: at})
 			return netip.AddrPortFrom(n.wanIP, port)
 		}
 	}
