@@ -125,3 +125,52 @@ func (n *hardNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst
 	}
 	return netip.AddrPort{} // drop; no mapping
 }
+
+type easyKeyOut struct {
+	src netip.AddrPort
+}
+
+// easyNAT is an "Endpoint Independent" NAT, like Linux and most home routers
+// (many of which are Linux).
+//
+// This is shown as "MappingVariesByDestIP: false" by netcheck, and what
+// Tailscale calls "Easy NAT".
+//
+// Unlike Linux, this implementation is capped at 32k entries and doesn't resort
+// to other allocation strategies when all 32k WAN ports are taken.
+type easyNAT struct {
+	wanIP netip.Addr
+	out   map[netip.AddrPort]portMappingAndTime
+	in    map[uint16]lanAddrAndTime
+}
+
+var _ NATTable = (*easyNAT)(nil)
+
+func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
+	if pm, ok := n.out[src]; ok {
+		// Existing flow.
+		// TODO: bump timestamp
+		return netip.AddrPortFrom(n.wanIP, pm.port)
+	}
+
+	// Loop through all 32k high (ephemeral) ports, starting at a random
+	// position and looping back around to the start.
+	start := rand.N(uint16(32 << 10))
+	for off := range uint16(32 << 10) {
+		port := 32<<10 + (start + off)
+		if _, ok := n.in[port]; !ok {
+			// Found a free port.
+			n.out[src] = portMappingAndTime{port: port, at: at}
+			n.in[port] = lanAddrAndTime{lanAddr: src, at: at}
+			return netip.AddrPortFrom(n.wanIP, port)
+		}
+	}
+	return netip.AddrPort{} // failed to allocate a mapping; TODO: fire an alert?
+}
+
+func (n *easyNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst netip.AddrPort) {
+	if dst.Addr() != n.wanIP {
+		return netip.AddrPort{} // drop; not for us. shouldn't happen if natlabd routing isn't broken.
+	}
+	return n.in[dst.Port()].lanAddr
+}
