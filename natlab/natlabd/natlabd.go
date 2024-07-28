@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket"
@@ -133,7 +132,7 @@ func (s *Server) registerNetwork(n *network) error {
 	}
 	s.networks.Add(n)
 
-	if n.natTable.Load() == nil {
+	if n.natTable == nil {
 		return errors.New("network has no NATTable")
 	}
 	if !n.wanIP.IsValid() {
@@ -192,7 +191,9 @@ func (s *Server) checkWorld() error {
 }
 
 func (n *network) SetNATTable(nt NATTable) {
-	n.natTable.Store(&nt)
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+	n.natTable = nt
 }
 
 func (n *network) initStack() error {
@@ -423,10 +424,11 @@ type network struct {
 	lanIP     netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
 	nodesByIP map[netip.Addr]*node
 
-	natTable atomic.Pointer[NATTable] // odd pointer to interface so we can change impl types
-
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
+
+	natMu    sync.Mutex // held while using + changing natTable
+	natTable NATTable
 
 	// writeFunc is a map of MAC -> func to write to that MAC.
 	// It contains entries for connected nodes only.
@@ -1047,13 +1049,17 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 //
 // It returns the souce WAN ip:port to use.
 func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
-	return (*n.natTable.Load()).PickOutgoingSrc(src, dst, time.Now())
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+	return n.natTable.PickOutgoingSrc(src, dst, time.Now())
 }
 
 // doNATIn performs NAT on an incoming packet from WAN src to WAN dst, returning
 // a new destination LAN ip:port to use.
 func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
-	return (*n.natTable.Load()).PickIncomingDst(src, dst, time.Now())
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+	return n.natTable.PickIncomingDst(src, dst, time.Now())
 }
 
 func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {

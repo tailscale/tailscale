@@ -10,6 +10,13 @@ import (
 // This project tests Tailscale as it faces various combinations various NAT
 // implementations (e.g. Linux easy style NAT vs FreeBSD hard/endpoint dependent
 // NAT vs Cloud 1:1 NAT, etc)
+//
+// Implementations of NATTable need not handle concurrency; the natlab serializes
+// all calls into a NATTable.
+//
+// The provided `at` value will typically be time.Now, except for tests.
+// Implementations should not use real time and should only compare
+// previously provided time values.
 type NATTable interface {
 	// PickOutgoingSrc returns the source address to use for an outgoing packet.
 	//
@@ -19,10 +26,6 @@ type NATTable interface {
 	// Typically, the src is a LAN source IP address, but it might also be a WAN
 	// IP address if the packet is being forwarded for a source machine that has
 	// a public IP address.
-	//
-	// The at value will typically be time.Now, except for tests.
-	// Implementations should not use real time and should only compare
-	// previously provided time values.
 	PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort)
 
 	// PickIncomingDst returns the destination address to use for an incoming
@@ -31,10 +34,6 @@ type NATTable interface {
 	// The result should either be invalid (to drop the packet) or the IP
 	// address of a machine on the local network address, usually a private
 	// LAN IP.
-	//
-	// The at value will typically be time.Now, except for tests.
-	// Implementations should not use real time and should only compare
-	// previously provided time values.
 	PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst netip.AddrPort)
 }
 
