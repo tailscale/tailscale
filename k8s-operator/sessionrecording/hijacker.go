@@ -3,7 +3,9 @@
 
 //go:build !plan9
 
-package main
+// Package sessionrecording contains functionality for recording Kubernetes API
+// server proxy 'kubectl exec' sessions.
+package sessionrecording
 
 import (
 	"bufio"
@@ -19,17 +21,51 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/k8s-operator/sessionrecording/spdy"
+	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 )
 
-// spdyHijacker implements [net/http.Hijacker] interface.
+const SPDYProtocol protocol = "SPDY"
+
+// protocol is the streaming protocol of the hijacked session. Supported
+// protocols are SPDY.
+type protocol string
+
+var (
+	// CounterSessionRecordingsAttempted counts the number of session recording attempts.
+	CounterSessionRecordingsAttempted = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_attempted")
+
+	// counterSessionRecordingsUploaded counts the number of successfully uploaded session recordings.
+	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
+)
+
+func New(ts *tsnet.Server, req *http.Request, who *apitype.WhoIsResponse, w http.ResponseWriter, pod, ns string, proto protocol, addrs []netip.AddrPort, failOpen bool, connFunc RecorderDialFn, log *zap.SugaredLogger) *Hijacker {
+	return &Hijacker{
+		ts:                ts,
+		req:               req,
+		who:               who,
+		ResponseWriter:    w,
+		pod:               pod,
+		ns:                ns,
+		addrs:             addrs,
+		failOpen:          failOpen,
+		connectToRecorder: connFunc,
+		proto:             proto,
+		log:               log,
+	}
+}
+
+// Hijacker implements [net/http.Hijacker] interface.
 // It must be configured with an http request for a 'kubectl exec' session that
 // needs to be recorded. It knows how to hijack the connection and configure for
 // the session contents to be sent to a tsrecorder instance.
-type spdyHijacker struct {
+type Hijacker struct {
 	http.ResponseWriter
 	ts                *tsnet.Server
 	req               *http.Request
@@ -40,6 +76,7 @@ type spdyHijacker struct {
 	addrs             []netip.AddrPort // tsrecorder addresses
 	failOpen          bool             // whether to fail open if recording fails
 	connectToRecorder RecorderDialFn
+	proto             protocol // streaming protocol
 }
 
 // RecorderDialFn dials the specified netip.AddrPorts that should be tsrecorder
@@ -51,7 +88,7 @@ type RecorderDialFn func(context.Context, []netip.AddrPort, func(context.Context
 
 // Hijack hijacks a 'kubectl exec' session and configures for the session
 // contents to be sent to a recorder.
-func (h *spdyHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	h.log.Infof("recorder addrs: %v, failOpen: %v", h.addrs, h.failOpen)
 	reqConn, brw, err := h.ResponseWriter.(http.Hijacker).Hijack()
 	if err != nil {
@@ -69,7 +106,7 @@ func (h *spdyHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // spdyHijacker.addrs. Returns conn from provided opts, wrapped in recording
 // logic. If connecting to the recorder fails or an error is received during the
 // session and spdyHijacker.failOpen is false, connection will be closed.
-func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn, error) {
+func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn, error) {
 	const (
 		// https://docs.asciinema.org/manual/asciicast/v2/
 		asciicastv2 = 2
@@ -96,25 +133,15 @@ func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.C
 	h.log.Info("successfully connected to a session recorder")
 	wc = rw
 	cl := tstime.DefaultClock{}
-	lc := &spdyRemoteConnRecorder{
-		log:  h.log,
-		Conn: conn,
-		rec: &recorder{
-			start:    cl.Now(),
-			clock:    cl,
-			failOpen: h.failOpen,
-			conn:     wc,
-		},
-	}
-
+	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen)
 	qp := h.req.URL.Query()
-	ch := CastHeader{
+	ch := sessionrecording.CastHeader{
 		Version:   asciicastv2,
-		Timestamp: lc.rec.start.Unix(),
+		Timestamp: cl.Now().Unix(),
 		Command:   strings.Join(qp["command"], " "),
 		SrcNode:   strings.TrimSuffix(h.who.Node.Name, "."),
 		SrcNodeID: h.who.Node.StableID,
-		Kubernetes: &Kubernetes{
+		Kubernetes: &sessionrecording.Kubernetes{
 			PodName:   h.pod,
 			Namespace: h.ns,
 			Container: strings.Join(qp["container"], " "),
@@ -126,7 +153,7 @@ func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.C
 	} else {
 		ch.SrcNodeTags = h.who.Node.Tags
 	}
-	lc.ch = ch
+	lc := spdy.New(conn, rec, ch, h.log)
 	go func() {
 		var err error
 		select {
@@ -147,7 +174,7 @@ func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.C
 		}
 		msg += "; failure mode set to 'fail closed'; closing connection"
 		h.log.Error(msg)
-		lc.failed = true
+		lc.Fail()
 		// TODO (irbekrm): write a message to the client
 		if err := lc.Close(); err != nil {
 			h.log.Infof("error closing recorder connections: %v", err)
@@ -155,52 +182,6 @@ func (h *spdyHijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.C
 		return
 	}()
 	return lc, nil
-}
-
-// CastHeader is the asciicast header to be sent to the recorder at the start of
-// the recording of a session.
-// https://docs.asciinema.org/manual/asciicast/v2/#header
-type CastHeader struct {
-	// Version is the asciinema file format version.
-	Version int `json:"version"`
-
-	// Width is the terminal width in characters.
-	Width int `json:"width"`
-
-	// Height is the terminal height in characters.
-	Height int `json:"height"`
-
-	// Timestamp is the unix timestamp of when the recording started.
-	Timestamp int64 `json:"timestamp"`
-
-	// Tailscale-specific fields: SrcNode is the full MagicDNS name of the
-	// tailnet node originating the connection, without the trailing dot.
-	SrcNode string `json:"srcNode"`
-
-	// SrcNodeID is the node ID of the tailnet node originating the connection.
-	SrcNodeID tailcfg.StableNodeID `json:"srcNodeID"`
-
-	// SrcNodeTags is the list of tags on the node originating the connection (if any).
-	SrcNodeTags []string `json:"srcNodeTags,omitempty"`
-
-	// SrcNodeUserID is the user ID of the node originating the connection (if not tagged).
-	SrcNodeUserID tailcfg.UserID `json:"srcNodeUserID,omitempty"` // if not tagged
-
-	// SrcNodeUser is the LoginName of the node originating the connection (if not tagged).
-	SrcNodeUser string `json:"srcNodeUser,omitempty"`
-
-	Command string
-
-	// Kubernetes-specific fields:
-	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
-}
-
-// Kubernetes contains 'kubectl exec' session specific information for
-// tsrecorder.
-type Kubernetes struct {
-	PodName   string
-	Namespace string
-	Container string
 }
 
 func closeConnWithWarning(conn net.Conn, msg string) error {

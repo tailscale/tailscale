@@ -36,6 +36,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/key"
@@ -1428,61 +1429,6 @@ func randBytes(n int) []byte {
 	return b
 }
 
-// CastHeader is the header of an asciinema file.
-type CastHeader struct {
-	// Version is the asciinema file format version.
-	Version int `json:"version"`
-
-	// Width is the terminal width in characters.
-	// It is non-zero for Pty sessions.
-	Width int `json:"width"`
-
-	// Height is the terminal height in characters.
-	// It is non-zero for Pty sessions.
-	Height int `json:"height"`
-
-	// Timestamp is the unix timestamp of when the recording started.
-	Timestamp int64 `json:"timestamp"`
-
-	// Env is the environment variables of the session.
-	// Only "TERM" is set (2023-03-22).
-	Env map[string]string `json:"env"`
-
-	// Command is the command that was executed.
-	// Typically empty for shell sessions.
-	Command string `json:"command,omitempty"`
-
-	// Tailscale-specific fields:
-	// SrcNode is the FQDN of the node originating the connection.
-	// It is also the MagicDNS name for the node.
-	// It does not have a trailing dot.
-	// e.g. "host.tail-scale.ts.net"
-	SrcNode string `json:"srcNode"`
-
-	// SrcNodeID is the node ID of the node originating the connection.
-	SrcNodeID tailcfg.StableNodeID `json:"srcNodeID"`
-
-	// SrcNodeTags is the list of tags on the node originating the connection (if any).
-	SrcNodeTags []string `json:"srcNodeTags,omitempty"`
-
-	// SrcNodeUserID is the user ID of the node originating the connection (if not tagged).
-	SrcNodeUserID tailcfg.UserID `json:"srcNodeUserID,omitempty"` // if not tagged
-
-	// SrcNodeUser is the LoginName of the node originating the connection (if not tagged).
-	SrcNodeUser string `json:"srcNodeUser,omitempty"`
-
-	// SSHUser is the username as presented by the client.
-	SSHUser string `json:"sshUser"` // as presented by the client
-
-	// LocalUser is the effective username on the server.
-	LocalUser string `json:"localUser"`
-
-	// ConnectionID uniquely identifies a connection made to the SSH server.
-	// It may be shared across multiple sessions over the same connection in
-	// case of SSH multiplexing.
-	ConnectionID string `json:"connectionID"`
-}
-
 func (ss *sshSession) openFileForRecording(now time.Time) (_ io.WriteCloser, err error) {
 	varRoot := ss.conn.srv.lb.TailscaleVarRoot()
 	if varRoot == "" {
@@ -1548,7 +1494,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	} else {
 		var errChan <-chan error
 		var attempts []*tailcfg.SSHRecordingAttempt
-		rec.out, attempts, errChan, err = ConnectToRecorder(ctx, recorders, ss.conn.srv.lb.Dialer().UserDial)
+		rec.out, attempts, errChan, err = sessionrecording.ConnectToRecorder(ctx, recorders, ss.conn.srv.lb.Dialer().UserDial)
 		if err != nil {
 			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
 				eventType := tailcfg.SSHSessionRecordingFailed
@@ -1598,7 +1544,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		}()
 	}
 
-	ch := CastHeader{
+	ch := sessionrecording.CastHeader{
 		Version:   2,
 		Width:     w.Width,
 		Height:    w.Height,

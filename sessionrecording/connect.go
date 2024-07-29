@@ -1,7 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tailssh
+// Package sessionrecording contains session recording utils shared amongst
+// Tailscale SSH and Kubernetes API server proxy session recording.
+package sessionrecording
 
 import (
 	"context"

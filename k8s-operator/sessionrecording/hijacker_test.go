@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package sessionrecording
 
 import (
 	"context"
@@ -19,12 +19,13 @@ import (
 
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/k8s-operator/sessionrecording/fakes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
 )
 
-func Test_SPDYHijacker(t *testing.T) {
+func Test_Hijacker(t *testing.T) {
 	zl, err := zap.NewDevelopment()
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +65,9 @@ func Test_SPDYHijacker(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := &testConn{}
+			tc := &fakes.TestConn{}
 			ch := make(chan error)
-			h := &spdyHijacker{
+			h := &Hijacker{
 				connectToRecorder: func(context.Context, []netip.AddrPort, func(context.Context, string, string) (net.Conn, error)) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
 					if tt.failRecorderConnect {
 						err = errors.New("test")
@@ -98,8 +99,8 @@ func Test_SPDYHijacker(t *testing.T) {
 			// (test that connection remains open over some period
 			// of time).
 			if err := tstest.WaitFor(timeout, func() (err error) {
-				if tt.wantsConnClosed != tc.isClosed() {
-					return fmt.Errorf("got connection state: %t, wants connection state: %t", tc.isClosed(), tt.wantsConnClosed)
+				if tt.wantsConnClosed != tc.IsClosed() {
+					return fmt.Errorf("got connection state: %t, wants connection state: %t", tc.IsClosed(), tt.wantsConnClosed)
 				}
 				return nil
 			}); err != nil {

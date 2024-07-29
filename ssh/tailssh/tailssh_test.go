@@ -36,6 +36,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/tsd"
@@ -630,7 +631,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	wg.Wait()
 
 	<-ctx.Done() // wait for recording to finish
-	var ch CastHeader
+	var ch sessionrecording.CastHeader
 	if err := json.NewDecoder(bytes.NewReader(recording)).Decode(&ch); err != nil {
 		t.Fatal(err)
 	}
