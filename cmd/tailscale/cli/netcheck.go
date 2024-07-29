@@ -52,9 +52,15 @@ func runNetcheck(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Ensure that we close the portmapper after running a netcheck; this
+	// will release any port mappings created.
+	pm := portmapper.NewClient(logf, netMon, nil, nil, nil)
+	defer pm.Close()
+
 	c := &netcheck.Client{
 		NetMon:      netMon,
-		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil, nil),
+		PortMapper:  pm,
 		UseDNSCache: false, // always resolve, don't cache
 	}
 	if netcheckArgs.verbose {
