@@ -147,6 +147,8 @@ delta
 diatonic
 diminished
 dominant
+solfege
+solfeggio
 dorian
 enigmatic
 freygish
