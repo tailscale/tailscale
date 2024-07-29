@@ -3,7 +3,8 @@
 
 //go:build !plan9
 
-package main
+// Package tsrecorder contains functionality for connecting to a tsrecorder instance.
+package tsrecorder
 
 import (
 	"encoding/json"
@@ -16,9 +17,18 @@ import (
 	"tailscale.com/tstime"
 )
 
+func New(conn io.WriteCloser, clock tstime.Clock, start time.Time, failOpen bool) *Client {
+	return &Client{
+		start:    start,
+		clock:    clock,
+		conn:     conn,
+		failOpen: failOpen,
+	}
+}
+
 // recorder knows how to send the provided bytes to the configured tsrecorder
 // instance in asciinema format.
-type recorder struct {
+type Client struct {
 	start time.Time
 	clock tstime.Clock
 
@@ -36,7 +46,7 @@ type recorder struct {
 
 // Write appends timestamp to the provided bytes and sends them to the
 // configured tsrecorder.
-func (rec *recorder) Write(p []byte) (err error) {
+func (rec *Client) Write(p []byte) (err error) {
 	if len(p) == 0 {
 		return nil
 	}
@@ -52,7 +62,7 @@ func (rec *recorder) Write(p []byte) (err error) {
 		return fmt.Errorf("error marhalling payload: %w", err)
 	}
 	j = append(j, '\n')
-	if err := rec.writeCastLine(j); err != nil {
+	if err := rec.WriteCastLine(j); err != nil {
 		if !rec.failOpen {
 			return fmt.Errorf("error writing payload to recorder: %w", err)
 		}
@@ -61,7 +71,7 @@ func (rec *recorder) Write(p []byte) (err error) {
 	return nil
 }
 
-func (rec *recorder) Close() error {
+func (rec *Client) Close() error {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if rec.conn == nil {
@@ -74,15 +84,20 @@ func (rec *recorder) Close() error {
 
 // writeCastLine sends bytes to the tsrecorder. The bytes should be in
 // asciinema format.
-func (rec *recorder) writeCastLine(j []byte) error {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if rec.conn == nil {
+func (c *Client) WriteCastLine(j []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
 		return errors.New("recorder closed")
 	}
-	_, err := rec.conn.Write(j)
+	_, err := c.conn.Write(j)
 	if err != nil {
 		return fmt.Errorf("recorder write error: %w", err)
 	}
 	return nil
+}
+
+type ResizeMsg struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }

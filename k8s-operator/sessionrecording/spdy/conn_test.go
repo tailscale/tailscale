@@ -3,19 +3,18 @@
 
 //go:build !plan9
 
-package main
+package spdy
 
 import (
-	"bytes"
 	"encoding/json"
-	"net"
 	"reflect"
-	"sync"
 	"testing"
 
 	"go.uber.org/zap"
+	"tailscale.com/k8s-operator/sessionrecording/fakes"
+	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tstest"
-	"tailscale.com/tstime"
 )
 
 // Test_Writes tests that 1 or more Write calls to spdyRemoteConnRecorder
@@ -56,13 +55,13 @@ func Test_Writes(t *testing.T) {
 			name:          "single_write_stdout_data_frame_with_payload",
 			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
 			wantForwarded: []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:  castLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
+			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 		{
 			name:          "single_write_stderr_data_frame_with_payload",
 			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x2, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
 			wantForwarded: []byte{0x0, 0x0, 0x0, 0x2, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:  castLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
+			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 		{
 			name:          "single_data_frame_unknow_stream_with_payload",
@@ -73,13 +72,13 @@ func Test_Writes(t *testing.T) {
 			name:          "control_frame_and_data_frame_split_across_two_writes",
 			inputs:        [][]byte{{0x80, 0x3, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1}, {0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
 			wantForwarded: []byte{0x80, 0x3, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:  castLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
+			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 		{
 			name:          "single_first_write_stdout_data_frame_with_payload",
 			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
 			wantForwarded: []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
-			wantRecorded:  append(asciinemaResizeMsg(t, 10, 20), castLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
+			wantRecorded:  append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
 			width:         10,
 			height:        20,
 			firstWrite:    true,
@@ -87,19 +86,15 @@ func Test_Writes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := &testConn{}
-			sr := &testSessionRecorder{}
-			rec := &recorder{
-				conn:  sr,
-				clock: cl,
-				start: cl.Now(),
-			}
+			tc := &fakes.TestConn{}
+			sr := &fakes.TestSessionRecorder{}
+			rec := tsrecorder.New(sr, cl, cl.Now(), true)
 
-			c := &spdyRemoteConnRecorder{
+			c := &conn{
 				Conn: tc,
 				log:  zl.Sugar(),
 				rec:  rec,
-				ch: CastHeader{
+				ch: sessionrecording.CastHeader{
 					Width:  tt.width,
 					Height: tt.height,
 				},
@@ -118,13 +113,13 @@ func Test_Writes(t *testing.T) {
 			}
 
 			// Assert that the expected bytes have been forwarded to the original destination.
-			gotForwarded := tc.writeBuf.Bytes()
+			gotForwarded := tc.WriteBufBytes()
 			if !reflect.DeepEqual(gotForwarded, tt.wantForwarded) {
 				t.Errorf("expected bytes not forwarded, wants\n%v\ngot\n%v", tt.wantForwarded, gotForwarded)
 			}
 
 			// Assert that the expected bytes have been forwarded to the session recorder.
-			gotRecorded := sr.buf.Bytes()
+			gotRecorded := sr.Bytes()
 			if !reflect.DeepEqual(gotRecorded, tt.wantRecorded) {
 				t.Errorf("expected bytes not recorded, wants\n%v\ngot\n%v", tt.wantRecorded, gotRecorded)
 			}
@@ -197,14 +192,10 @@ func Test_Reads(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := &testConn{}
-			sr := &testSessionRecorder{}
-			rec := &recorder{
-				conn:  sr,
-				clock: cl,
-				start: cl.Now(),
-			}
-			c := &spdyRemoteConnRecorder{
+			tc := &fakes.TestConn{}
+			sr := &fakes.TestSessionRecorder{}
+			rec := tsrecorder.New(sr, cl, cl.Now(), true)
+			c := &conn{
 				Conn: tc,
 				log:  zl.Sugar(),
 				rec:  rec,
@@ -213,9 +204,8 @@ func Test_Reads(t *testing.T) {
 
 			for i, input := range tt.inputs {
 				c.zlibReqReader = reader
-				tc.readBuf.Reset()
-				_, err := tc.readBuf.Write(input)
-				if err != nil {
+				tc.ResetReadBuf()
+				if err := tc.WriteReadBufBytes(input); err != nil {
 					t.Fatalf("writing bytes to test conn: %v", err)
 				}
 				_, err = c.Read(make([]byte, len(input)))
@@ -244,19 +234,6 @@ func Test_Reads(t *testing.T) {
 	}
 }
 
-func castLine(t *testing.T, p []byte, clock tstime.Clock) []byte {
-	t.Helper()
-	j, err := json.Marshal([]any{
-		clock.Now().Sub(clock.Now()).Seconds(),
-		"o",
-		string(p),
-	})
-	if err != nil {
-		t.Fatalf("error marshalling cast line: %v", err)
-	}
-	return append(j, '\n')
-}
-
 func resizeMsgBytes(t *testing.T, width, height int) []byte {
 	t.Helper()
 	bs, err := json.Marshal(spdyResizeMsg{Width: width, Height: height})
@@ -264,63 +241,4 @@ func resizeMsgBytes(t *testing.T, width, height int) []byte {
 		t.Fatalf("error marshalling resizeMsg: %v", err)
 	}
 	return bs
-}
-
-func asciinemaResizeMsg(t *testing.T, width, height int) []byte {
-	t.Helper()
-	ch := CastHeader{
-		Width:  width,
-		Height: height,
-	}
-	bs, err := json.Marshal(ch)
-	if err != nil {
-		t.Fatalf("error marshalling CastHeader: %v", err)
-	}
-	return append(bs, '\n')
-}
-
-type testConn struct {
-	net.Conn
-	// writeBuf contains whatever was send to the conn via Write.
-	writeBuf bytes.Buffer
-	// readBuf contains whatever was sent to the conn via Read.
-	readBuf      bytes.Buffer
-	sync.RWMutex // protects the following
-	closed       bool
-}
-
-var _ net.Conn = &testConn{}
-
-func (tc *testConn) Read(b []byte) (int, error) {
-	return tc.readBuf.Read(b)
-}
-
-func (tc *testConn) Write(b []byte) (int, error) {
-	return tc.writeBuf.Write(b)
-}
-
-func (tc *testConn) Close() error {
-	tc.Lock()
-	defer tc.Unlock()
-	tc.closed = true
-	return nil
-}
-func (tc *testConn) isClosed() bool {
-	tc.Lock()
-	defer tc.Unlock()
-	return tc.closed
-}
-
-type testSessionRecorder struct {
-	// buf holds data that was sent to the session recorder.
-	buf bytes.Buffer
-}
-
-func (t *testSessionRecorder) Write(b []byte) (int, error) {
-	return t.buf.Write(b)
-}
-
-func (t *testSessionRecorder) Close() error {
-	t.buf.Reset()
-	return nil
 }

@@ -3,7 +3,9 @@
 
 //go:build !plan9
 
-package main
+// Package spdy contains functionality for parsing SPDY streaming sessions. This
+// is used for 'kubectl exec' session recording.
+package spdy
 
 import (
 	"bytes"
@@ -17,16 +19,29 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	srconn "tailscale.com/k8s-operator/sessionrecording/conn"
+	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
+	"tailscale.com/sessionrecording"
 )
 
-// spdyRemoteConnRecorder is a wrapper around net.Conn. It reads the bytestream
-// for a 'kubectl exec' session, sends session recording data to the configured
-// recorder and forwards the raw bytes to the original destination.
-type spdyRemoteConnRecorder struct {
+func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, log *zap.SugaredLogger) srconn.Conn {
+	return &conn{
+		Conn: nc,
+		rec:  rec,
+		ch:   ch,
+		log:  log,
+	}
+}
+
+// conn is a wrapper around net.Conn. It reads the bytestream for a 'kubectl
+// exec' session streamed using SPDY protocol, sends session recording data to
+// the configured recorder and forwards the raw bytes to the original
+// destination.
+type conn struct {
 	net.Conn
 	// rec knows how to send data written to it to a tsrecorder instance.
-	rec *recorder
-	ch  CastHeader
+	rec *tsrecorder.Client
+	ch  sessionrecording.CastHeader
 
 	stdoutStreamID atomic.Uint32
 	stderrStreamID atomic.Uint32
@@ -53,7 +68,7 @@ type spdyRemoteConnRecorder struct {
 // If the frame is a data frame for resize stream, sends resize message to the
 // recorder. If the frame is a SYN_STREAM control frame that starts stdout,
 // stderr or resize stream, store the stream ID.
-func (c *spdyRemoteConnRecorder) Read(b []byte) (int, error) {
+func (c *conn) Read(b []byte) (int, error) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	n, err := c.Conn.Read(b)
@@ -103,7 +118,7 @@ func (c *spdyRemoteConnRecorder) Read(b []byte) (int, error) {
 // Write forwards the raw data of the latest parsed SPDY frame to the original
 // destination. If the frame is an SPDY data frame, it also sends the payload to
 // the connected session recorder.
-func (c *spdyRemoteConnRecorder) Write(b []byte) (int, error) {
+func (c *conn) Write(b []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	c.writeBuf.Write(b)
@@ -133,7 +148,7 @@ func (c *spdyRemoteConnRecorder) Write(b []byte) (int, error) {
 					return
 				}
 				j = append(j, '\n')
-				err = c.rec.writeCastLine(j)
+				err = c.rec.WriteCastLine(j)
 				if err != nil {
 					c.log.Errorf("received error from recorder: %v", err)
 				}
@@ -151,7 +166,7 @@ func (c *spdyRemoteConnRecorder) Write(b []byte) (int, error) {
 	return len(b), err
 }
 
-func (c *spdyRemoteConnRecorder) Close() error {
+func (c *conn) Close() error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if c.closed {
@@ -167,13 +182,19 @@ func (c *spdyRemoteConnRecorder) Close() error {
 	return err
 }
 
-// parseSynStream parses SYN_STREAM SPDY control frame and updates
+func (s *conn) Fail() {
+	s.wmu.Lock()
+	s.failed = true
+	s.wmu.Unlock()
+}
+
+// storeStreamID parses SYN_STREAM SPDY control frame and updates
 // spdyRemoteConnRecorder to store the newly created stream's ID if it is one of
 // the stream types we care about. Storing stream_id:stream_type mapping allows
 // us to parse received data frames (that have stream IDs) differently depening
 // on which stream they belong to (i.e send data frame payload for stdout stream
 // to session recorder).
-func (c *spdyRemoteConnRecorder) storeStreamID(sf spdyFrame, header http.Header) {
+func (c *conn) storeStreamID(sf spdyFrame, header http.Header) {
 	const (
 		streamTypeHeaderKey = "Streamtype"
 	)
