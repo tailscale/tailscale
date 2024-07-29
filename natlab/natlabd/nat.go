@@ -1,12 +1,45 @@
 package main
 
 import (
+	"errors"
 	"math/rand/v2"
 	"net/netip"
 	"time"
 
 	"tailscale.com/util/mak"
 )
+
+// IPPool is the interface that a NAT implementation uses to get information
+// about a network.
+//
+// Outside of tests, this is typically a *network.
+type IPPool interface {
+	// WANIP returns the primary WAN IP address.
+	//
+	// TODO: add another method for networks with multiple WAN IP addresses.
+	WANIP() netip.Addr
+
+	// SoleLanIP reports whether this network has a sole LAN client
+	// and if so, its IP address.
+	SoleLANIP() (_ netip.Addr, ok bool)
+
+	// TODO: port availability stuff for interacting with portmapping
+}
+
+// newTableFunc is a constructor for a NAT table.
+// The provided IPPool is typically (outside of tests) a *network.
+type newTableFunc func(IPPool) (NATTable, error)
+
+// natTypes are the known NAT types.
+var natTypes = map[string]newTableFunc{}
+
+// registerNATType registers a NAT type.
+func registerNATType(name string, f newTableFunc) {
+	if _, ok := natTypes[name]; ok {
+		panic("duplicate NAT type: " + name)
+	}
+	natTypes[name] = f
+}
 
 // NATTable is what a NAT implementation is expected to do.
 //
@@ -46,7 +79,15 @@ type oneToOneNAT struct {
 	wanIP netip.Addr
 }
 
-var _ NATTable = (*oneToOneNAT)(nil)
+func init() {
+	registerNATType("one2one", func(p IPPool) (NATTable, error) {
+		lanIP, ok := p.SoleLANIP()
+		if !ok {
+			return nil, errors.New("can't use one2one NAT type on networks other than single-node networks")
+		}
+		return &oneToOneNAT{lanIP: lanIP, wanIP: p.WANIP()}, nil
+	})
+}
 
 func (n *oneToOneNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
 	return netip.AddrPortFrom(n.wanIP, src.Port())
@@ -86,7 +127,11 @@ type hardNAT struct {
 	in  map[hardKeyIn]lanAddrAndTime
 }
 
-var _ NATTable = (*hardNAT)(nil)
+func init() {
+	registerNATType("hard", func(p IPPool) (NATTable, error) {
+		return &hardNAT{wanIP: p.WANIP()}, nil
+	})
+}
 
 func (n *hardNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
 	ko := hardKeyOut{src.Addr(), dst}
@@ -146,7 +191,11 @@ type easyNAT struct {
 	in    map[uint16]lanAddrAndTime
 }
 
-var _ NATTable = (*easyNAT)(nil)
+func init() {
+	registerNATType("easy", func(p IPPool) (NATTable, error) {
+		return &easyNAT{wanIP: p.WANIP()}, nil
+	})
+}
 
 func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
 	if pm, ok := n.out[src]; ok {
@@ -162,6 +211,7 @@ func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc
 		port := 32<<10 + (start+off)%(32<<10)
 		if _, ok := n.in[port]; !ok {
 			wanAddr := netip.AddrPortFrom(n.wanIP, port)
+
 			// Found a free port.
 			mak.Set(&n.out, src, portMappingAndTime{port: port, at: at})
 			mak.Set(&n.in, port, lanAddrAndTime{lanAddr: src, at: at})

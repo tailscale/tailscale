@@ -45,7 +45,7 @@ import (
 
 var (
 	listen  = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
-	hard    = flag.Bool("hard", false, "use hard NAT")
+	natType = flag.String("nat", "easy", "type of NAT to use")
 	portmap = flag.Bool("portmap", false, "enable portmapping")
 )
 
@@ -84,7 +84,9 @@ func main() {
 	}
 
 	s.nodes[node1.mac] = node1
-	net1.InitNAT(*hard)
+	if err := net1.InitNAT(*natType); err != nil {
+		log.Fatalf("InitNAT: %v", err)
+	}
 	net1.portmap = *portmap
 	net2 := &network{
 		s:     s,
@@ -98,7 +100,9 @@ func main() {
 		lanIP: netip.MustParseAddr("10.2.0.102"),
 	}
 	s.nodes[node2.mac] = node2
-	net2.InitNAT(*hard)
+	if err := net2.InitNAT(*natType); err != nil {
+		log.Fatalf("InitNAT: %v", err)
+	}
 
 	if err := s.checkWorld(); err != nil {
 		log.Fatalf("checkWorld: %v", err)
@@ -201,12 +205,17 @@ func (s *Server) checkWorld() error {
 	return nil
 }
 
-func (n *network) InitNAT(useHardNAT bool) {
-	if useHardNAT {
-		n.SetNATTable(&hardNAT{wanIP: n.wanIP})
-	} else {
-		n.SetNATTable(&easyNAT{wanIP: n.wanIP})
+func (n *network) InitNAT(natType string) error {
+	ctor, ok := natTypes[natType]
+	if !ok {
+		return fmt.Errorf("unknown NAT type %q", natType)
 	}
+	t, err := ctor(n)
+	if err != nil {
+		return fmt.Errorf("error creating NAT type %q for network %v: %w", natType, n.wanIP, err)
+	}
+	n.SetNATTable(t)
+	return nil
 }
 
 func (n *network) SetNATTable(nt NATTable) {
@@ -214,6 +223,20 @@ func (n *network) SetNATTable(nt NATTable) {
 	defer n.natMu.Unlock()
 	n.natTable = nt
 }
+
+// SoleLANIP implements [IPPool].
+func (n *network) SoleLANIP() (netip.Addr, bool) {
+	if len(n.nodesByIP) != 1 {
+		return netip.Addr{}, false
+	}
+	for ip := range n.nodesByIP {
+		return ip, true
+	}
+	return netip.Addr{}, false
+}
+
+// WANIP implements [IPPool].
+func (n *network) WANIP() netip.Addr { return n.wanIP }
 
 func (n *network) initStack() error {
 	n.ns = stack.New(stack.Options{
