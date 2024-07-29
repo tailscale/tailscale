@@ -159,12 +159,13 @@ func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc
 	// position and looping back around to the start.
 	start := rand.N(uint16(32 << 10))
 	for off := range uint16(32 << 10) {
-		port := 32<<10 + (start + off)
+		port := 32<<10 + (start+off)%(32<<10)
 		if _, ok := n.in[port]; !ok {
+			wanAddr := netip.AddrPortFrom(n.wanIP, port)
 			// Found a free port.
 			mak.Set(&n.out, src, portMappingAndTime{port: port, at: at})
 			mak.Set(&n.in, port, lanAddrAndTime{lanAddr: src, at: at})
-			return netip.AddrPortFrom(n.wanIP, port)
+			return wanAddr
 		}
 	}
 	return netip.AddrPort{} // failed to allocate a mapping; TODO: fire an alert?

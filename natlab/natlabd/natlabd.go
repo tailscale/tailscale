@@ -45,6 +45,7 @@ import (
 
 var (
 	listen = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
+	hard   = flag.Bool("hard", false, "use hard NAT")
 )
 
 const nicID = 1
@@ -68,6 +69,7 @@ func main() {
 	}
 
 	// Hard-coded world shape for me.
+
 	net1 := &network{
 		s:     s,
 		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x01},
@@ -81,7 +83,7 @@ func main() {
 	}
 
 	s.nodes[node1.mac] = node1
-	net1.SetNATTable(&hardNAT{wanIP: net1.wanIP})
+	net1.InitNAT(*hard)
 	net2 := &network{
 		s:     s,
 		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x2},
@@ -94,7 +96,7 @@ func main() {
 		lanIP: netip.MustParseAddr("10.2.0.102"),
 	}
 	s.nodes[node2.mac] = node2
-	net2.SetNATTable(&oneToOneNAT{wanIP: net2.wanIP, lanIP: node2.lanIP})
+	net2.InitNAT(*hard)
 
 	if err := s.checkWorld(); err != nil {
 		log.Fatalf("checkWorld: %v", err)
@@ -195,6 +197,14 @@ func (s *Server) checkWorld() error {
 	}
 
 	return nil
+}
+
+func (n *network) InitNAT(useHardNAT bool) {
+	if useHardNAT {
+		n.SetNATTable(&hardNAT{wanIP: n.wanIP})
+	} else {
+		n.SetNATTable(&easyNAT{wanIP: n.wanIP})
+	}
 }
 
 func (n *network) SetNATTable(nt NATTable) {
@@ -676,7 +686,7 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 	}
 	node, ok := n.nodesByIP[dst.Addr()]
 	if !ok {
-		log.Printf("no node for dest IP %v", dst.Addr())
+		log.Printf("no node for dest IP %v in UDP packet %v=>%v", dst.Addr(), p.Src, p.Dst)
 		return
 	}
 
