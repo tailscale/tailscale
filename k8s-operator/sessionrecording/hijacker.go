@@ -33,12 +33,16 @@ import (
 
 const SPDYProtocol protocol = "SPDY"
 
+// protocol is the streaming protocol of the hijacked session. Supported
+// protocols are SPDY.
+type protocol string
+
 var (
-	// counterSessionRecordingsAttempted counts the number of session recording attempts.
-	CounterSessionRecordingsAttempted = clientmetric.NewCounter("k8s_auth_proxy__session_recordings_attempted")
+	// CounterSessionRecordingsAttempted counts the number of session recording attempts.
+	CounterSessionRecordingsAttempted = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_attempted")
 
 	// counterSessionRecordingsUploaded counts the number of successfully uploaded session recordings.
-	CounterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
+	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
 )
 
 func New(ts *tsnet.Server, req *http.Request, who *apitype.WhoIsResponse, w http.ResponseWriter, pod, ns string, proto protocol, addrs []netip.AddrPort, failOpen bool, connFunc RecorderDialFn, log *zap.SugaredLogger) *Hijacker {
@@ -56,10 +60,6 @@ func New(ts *tsnet.Server, req *http.Request, who *apitype.WhoIsResponse, w http
 		log:               log,
 	}
 }
-
-// protocol is the streaming protocol of the hijacked session. Supported
-// protocols are SPDY.
-type protocol string
 
 // Hijacker implements [net/http.Hijacker] interface.
 // It must be configured with an http request for a 'kubectl exec' session that
@@ -162,7 +162,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		case err = <-errChan:
 		}
 		if err == nil {
-			CounterSessionRecordingsUploaded.Add(1)
+			counterSessionRecordingsUploaded.Add(1)
 			h.log.Info("finished uploading the recording")
 			return
 		}

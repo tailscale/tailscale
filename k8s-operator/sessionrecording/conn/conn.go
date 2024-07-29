@@ -11,8 +11,10 @@ import "net"
 
 type Conn interface {
 	net.Conn
-	// Fail can be called to set connection state to failed. This prevents
-	// any so-far written bytes to be forwarded to the original destination
-	// as the connection is closing.
+	// Fail can be called to set connection state to failed. By default any
+	// bytes left over in write buffer are forwarded to the intended
+	// destination when the connection is  being closed except for when the
+	// connection state is failed- so set the state to failed when erroring
+	// out and failure policy is to fail closed.
 	Fail()
 }
