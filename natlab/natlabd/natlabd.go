@@ -44,8 +44,9 @@ import (
 )
 
 var (
-	listen = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
-	hard   = flag.Bool("hard", false, "use hard NAT")
+	listen  = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
+	hard    = flag.Bool("hard", false, "use hard NAT")
+	portmap = flag.Bool("portmap", false, "enable portmapping")
 )
 
 const nicID = 1
@@ -84,6 +85,7 @@ func main() {
 
 	s.nodes[node1.mac] = node1
 	net1.InitNAT(*hard)
+	net1.portmap = *portmap
 	net2 := &network{
 		s:     s,
 		mac:   MAC{0x52, 0x54, 0x00, 0x01, 0x01, 0x2},
@@ -437,6 +439,7 @@ type network struct {
 	s         *Server
 	mac       MAC
 	doesNAT   bool
+	portmap   bool
 	wanIP     netip.Addr
 	lanIP     netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
 	nodesByIP map[netip.Addr]*node
@@ -679,11 +682,18 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 // LAN IP here and wrapped in an ethernet layer and delivered
 // to the network.
 func (n *network) HandleUDPPacket(p UDPPacket) {
-	src := p.Src
 	dst := n.doNATIn(p.Src, p.Dst)
 	if !dst.IsValid() {
 		return
 	}
+	p.Dst = dst
+	n.WriteUDPPacketNoNAT(p)
+}
+
+// WriteUDPPacketNoNAT writes a UDP packet to the network, without
+// doing any NAT translation.
+func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
+	src, dst := p.Src, p.Dst
 	node, ok := n.nodesByIP[dst.Addr()]
 	if !ok {
 		log.Printf("no node for dest IP %v in UDP packet %v=>%v", dst.Addr(), p.Src, p.Dst)
@@ -732,7 +742,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	}
 	srcIP, _ := netip.AddrFromSlice(v4.SrcIP)
 	dstIP, _ := netip.AddrFromSlice(v4.DstIP)
-	toForward := dstIP != n.lanIP.Addr()
+	toForward := dstIP != n.lanIP.Addr() && dstIP != netip.IPv4Unspecified()
 	udp, isUDP := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
 
 	if isDHCPRequest(packet) {
@@ -759,6 +769,15 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			return
 		}
 		writePkt(res)
+		return
+	}
+
+	if !toForward && isNATPMP(packet) {
+		n.handleNATPMPRequest(UDPPacket{
+			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
+			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
+			Payload: udp.Payload,
+		})
 		return
 	}
 
@@ -960,6 +979,11 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	return ok && dns.QR == false && len(dns.Questions) > 0
 }
 
+func isNATPMP(pkt gopacket.Packet) bool {
+	udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
+	return ok && udp.DstPort == 5351 && len(udp.Payload) > 0 && udp.Payload[0] == 0 // version 0, not 2 for PCP
+}
+
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
 	txid, err := stun.ParseBindingRequest(req.Payload)
 	if err != nil {
@@ -1126,6 +1150,31 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	}
 
 	return buffer.Bytes(), nil
+}
+
+func (n *network) handleNATPMPRequest(req UDPPacket) {
+	if string(req.Payload) == "\x00\x00" {
+		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
+
+		res := make([]byte, 0, 12)
+		res = append(res,
+			0,    // version 0 (NAT-PMP)
+			128,  // response to op 0 (128+0)
+			0, 0, // result code success
+		)
+		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
+		wan4 := n.wanIP.As4()
+		res = append(res, wan4[:]...)
+		n.WriteUDPPacketNoNAT(UDPPacket{
+			Src:     req.Dst,
+			Dst:     req.Src,
+			Payload: res,
+		})
+		return
+	}
+
+	log.Printf("TODO: handle NAT-PMP packet % 02x", req.Payload)
+	// TODO: handle NAT-PMP packet 00 01 00 00 ed 40 00 00 00 00 1c 20
 }
 
 type NetworkID string
