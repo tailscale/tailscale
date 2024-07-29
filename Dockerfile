@@ -9,7 +9,7 @@
 #
 # To run the tailscaled agent:
 #
-#     $ docker run -d --name=tailscaled -v /var/lib:/var/lib -v /dev/net/tun:/dev/net/tun --network=host --privileged tailscale/tailscale tailscaled
+#     $ docker run -d --name=tailscaled -v /var/lib:/var/lib -v /dev/net/tun:/dev/net/tun -v /run/xtables.lock:/run/xtables.lock --network=host --privileged tailscale/tailscale tailscaled
 #
 # To then log in:
 #
@@ -56,7 +56,11 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
 FROM alpine:3.18
-RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
+# https://github.com/kubernetes-sigs/iptables-wrappers
+ADD https://raw.githubusercontent.com/kubernetes-sigs/iptables-wrappers/v2/iptables-wrapper-installer.sh /iptables-wrapper-installer.sh
+RUN set -eux; \
+    apk add --no-cache ca-certificates iptables iproute2 ip6tables; \
+    sh /iptables-wrapper-installer.sh --no-sanity-check
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 # For compat with the previous run.sh, although ideally you should be

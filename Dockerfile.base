@@ -2,4 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 FROM alpine:3.18
-RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables iputils
+# https://github.com/kubernetes-sigs/iptables-wrappers
+ADD https://raw.githubusercontent.com/kubernetes-sigs/iptables-wrappers/v2/iptables-wrapper-installer.sh /iptables-wrapper-installer.sh
+RUN set -eux; \
+    apk add --no-cache ca-certificates iptables iproute2 ip6tables; \
+    sh /iptables-wrapper-installer.sh --no-sanity-check
