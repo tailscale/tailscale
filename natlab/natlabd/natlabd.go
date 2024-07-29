@@ -692,6 +692,10 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 
 // WriteUDPPacketNoNAT writes a UDP packet to the network, without
 // doing any NAT translation.
+//
+// The packet will always have the ethernet src MAC of the router
+// so this should not be used for packets between clients on the
+// same ethernet segment.
 func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	src, dst := p.Src, p.Dst
 	node, ok := n.nodesByIP[dst.Addr()]
