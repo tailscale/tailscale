@@ -189,7 +189,7 @@ func (s *conn) Fail() {
 }
 
 // storeStreamID parses SYN_STREAM SPDY control frame and updates
-// spdyRemoteConnRecorder to store the newly created stream's ID if it is one of
+// conn to store the newly created stream's ID if it is one of
 // the stream types we care about. Storing stream_id:stream_type mapping allows
 // us to parse received data frames (that have stream IDs) differently depening
 // on which stream they belong to (i.e send data frame payload for stdout stream

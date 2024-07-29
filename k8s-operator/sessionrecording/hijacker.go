@@ -21,8 +21,10 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"tailscale.com/client/tailscale/apitype"
+	srconn "tailscale.com/k8s-operator/sessionrecording/conn"
 	"tailscale.com/k8s-operator/sessionrecording/spdy"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
+	"tailscale.com/k8s-operator/sessionrecording/ws"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -31,7 +33,10 @@ import (
 	"tailscale.com/util/multierr"
 )
 
-const SPDYProtocol protocol = "SPDY"
+const (
+	SPDYProtocol protocol = "SPDY"
+	WSProtocol   protocol = "WebSockets"
+)
 
 // protocol is the streaming protocol of the hijacked session. Supported
 // protocols are SPDY.
@@ -153,7 +158,17 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	} else {
 		ch.SrcNodeTags = h.who.Node.Tags
 	}
-	lc := spdy.New(conn, rec, ch, h.log)
+
+	var lc srconn.Conn
+	switch h.proto {
+	case SPDYProtocol:
+		lc = spdy.New(conn, rec, ch, h.log)
+	case WSProtocol:
+		lc = ws.New(conn, rec, ch, h.log)
+	default:
+		return nil, fmt.Errorf("unknown protocol: %s", h.proto)
+	}
+
 	go func() {
 		var err error
 		select {
