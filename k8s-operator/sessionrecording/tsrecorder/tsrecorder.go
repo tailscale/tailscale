@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tstime"
 )
 
@@ -44,9 +45,11 @@ type Client struct {
 	conn io.WriteCloser // connection to a tsrecorder instance
 }
 
-// Write appends timestamp to the provided bytes and sends them to the
-// configured tsrecorder.
-func (rec *Client) Write(p []byte) (err error) {
+// WriteOutput can be used to send data output to the terminal to the tsrecorder.
+// This can be data sent to STDOUT or STDERR streams.
+// https://docs.asciinema.org/manual/asciicast/v2/#o-output-data-written-to-a-terminal
+func (rec *Client) WriteOutput(p []byte) (err error) {
+	const outputEventCode = "o"
 	if len(p) == 0 {
 		return nil
 	}
@@ -55,14 +58,54 @@ func (rec *Client) Write(p []byte) (err error) {
 	}
 	j, err := json.Marshal([]any{
 		rec.clock.Now().Sub(rec.start).Seconds(),
-		"o",
+		outputEventCode,
 		string(p),
 	})
 	if err != nil {
 		return fmt.Errorf("error marhalling payload: %w", err)
 	}
+	return rec.write(j)
+}
+
+// WriteResize writes an asciinema resize message. This can be called if
+// terminal size has changed.
+// https://docs.asciinema.org/manual/asciicast/v2/#r-resize
+func (rec *Client) WriteResize(height, width int) (err error) {
+	const resizeEventCode = "r"
+	p := fmt.Sprintf("%dx%d", height, width)
+	j, err := json.Marshal([]any{
+		rec.clock.Now().Sub(rec.start).Seconds(),
+		resizeEventCode,
+		string(p),
+	})
+	if err != nil {
+		return fmt.Errorf("error marhalling payload: %w", err)
+	}
+	return rec.write(j)
+}
+
+// WriteCastHeaders writes asciinema CastHeader. This must be called once,
+// before any payload is sent to the tsrecorder.
+// https://docs.asciinema.org/manual/asciicast/v2/#header
+func (rec *Client) WriteCastHeader(ch sessionrecording.CastHeader) error {
+	var j []byte
+	j, err := json.Marshal(ch)
+	if err != nil {
+		return fmt.Errorf("error writing CastHeader: %w", err)
+	}
 	j = append(j, '\n')
-	if err := rec.WriteCastLine(j); err != nil {
+	return rec.writeCastLine(j)
+}
+
+func (rec *Client) write(j []byte) error {
+	if len(j) == 0 {
+		return nil
+	}
+	if rec.backOff {
+		return nil
+	}
+	j = append(j, '\n')
+	if err := rec.writeCastLine(j); err != nil {
 		if !rec.failOpen {
 			return fmt.Errorf("error writing payload to recorder: %w", err)
 		}
@@ -84,7 +127,7 @@ func (rec *Client) Close() error {
 
 // writeCastLine sends bytes to the tsrecorder. The bytes should be in
 // asciinema format.
-func (c *Client) WriteCastLine(j []byte) error {
+func (c *Client) writeCastLine(j []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
