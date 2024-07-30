@@ -97,7 +97,7 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 		d.logf("[v2] attempting to do captive portal detection on interface %s", ifName)
 		res := d.detectOnInterface(ctx, i.Index, endpoints)
 		if res {
-			d.logf("DetectCaptivePortal(found=true,ifName=%s)", found, ifName)
+			d.logf("DetectCaptivePortal(found=true,ifName=%s)", ifName)
 			return true
 		}
 	}
