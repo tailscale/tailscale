@@ -780,6 +780,9 @@ func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthySt
 		case <-ctx.Done():
 		}
 	} else {
+		// If connectivity is not impacted, we know for sure we're not behind a captive portal,
+		// so drop any warning, and signal that we don't need captive portal detection.
+		b.health.SetHealthy(captivePortalWarnable)
 		select {
 		case b.needsCaptiveDetection <- false:
 		case <-ctx.Done():
