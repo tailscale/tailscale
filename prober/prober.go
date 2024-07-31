@@ -9,6 +9,7 @@ package prober
 import (
 	"container/ring"
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -449,6 +450,13 @@ func (probe *Probe) probeInfoLocked() ProbeInfo {
 	return inf
 }
 
+// RunHandlerResponse is the JSON response format for the RunHandler.
+type RunHandlerResponse struct {
+	ProbeInfo             ProbeInfo
+	PreviousSuccessRatio  float64
+	PreviousMedianLatency time.Duration
+}
+
 // RunHandler runs a probe by name and returns the result as an HTTP response.
 func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 	// Look up prober by name.
@@ -458,16 +466,40 @@ func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 	}
 	p.mu.Lock()
 	probe, ok := p.probes[name]
-	prevInfo := probe.probeInfoLocked()
 	p.mu.Unlock()
 	if !ok {
 		return tsweb.Error(http.StatusNotFound, fmt.Sprintf("unknown probe %q", name), nil)
 	}
+
+	probe.mu.Lock()
+	prevInfo := probe.probeInfoLocked()
+	probe.mu.Unlock()
+
 	info, err := probe.run()
+	respStatus := http.StatusOK
+	if err != nil {
+		respStatus = http.StatusFailedDependency
+	}
+
+	// Return serialized JSON response if the client requested JSON
+	if r.Header.Get("Accept") == "application/json" {
+		resp := &RunHandlerResponse{
+			ProbeInfo:             info,
+			PreviousSuccessRatio:  prevInfo.RecentSuccessRatio(),
+			PreviousMedianLatency: prevInfo.RecentMedianLatency(),
+		}
+		w.WriteHeader(respStatus)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			return tsweb.Error(http.StatusInternalServerError, "error encoding JSON response", err)
+		}
+		return nil
+	}
+
 	stats := fmt.Sprintf("Previous runs: success rate %d%%, median latency %v",
 		int(prevInfo.RecentSuccessRatio()*100), prevInfo.RecentMedianLatency())
 	if err != nil {
-		return tsweb.Error(http.StatusFailedDependency, fmt.Sprintf("Probe failed: %s\n%s", err.Error(), stats), err)
+		return tsweb.Error(respStatus, fmt.Sprintf("Probe failed: %s\n%s", err.Error(), stats), err)
 	}
 	w.WriteHeader(respStatus)
 	w.Write([]byte(fmt.Sprintf("Probe succeeded in %v\n%s", info.Latency, stats)))
