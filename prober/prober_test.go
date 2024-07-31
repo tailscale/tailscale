@@ -5,8 +5,11 @@ package prober
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"tailscale.com/tstest"
+	"tailscale.com/tsweb"
 )
 
 const (
@@ -459,6 +463,87 @@ func TestProbeInfoRecent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProberRunHandler(t *testing.T) {
+	clk := newFakeTime()
+
+	tests := []struct {
+		name                  string
+		probeFunc             func(context.Context) error
+		wantResponseCode      int
+		wantJSONResponse      RunHandlerResponse
+		wantPlaintextResponse string
+	}{
+		{
+			name:             "success",
+			probeFunc:        func(context.Context) error { return nil },
+			wantResponseCode: 200,
+			wantJSONResponse: RunHandlerResponse{
+				ProbeInfo: ProbeInfo{
+					Name:          "success",
+					Interval:      probeInterval,
+					Result:        true,
+					RecentResults: []bool{true, true},
+				},
+				PreviousSuccessRatio: 1,
+			},
+			wantPlaintextResponse: "Probe succeeded",
+		},
+		{
+			name:             "failure",
+			probeFunc:        func(context.Context) error { return fmt.Errorf("error123") },
+			wantResponseCode: 424,
+			wantJSONResponse: RunHandlerResponse{
+				ProbeInfo: ProbeInfo{
+					Name:          "failure",
+					Interval:      probeInterval,
+					Result:        false,
+					Error:         "error123",
+					RecentResults: []bool{false, false},
+				},
+			},
+			wantPlaintextResponse: "Probe failed",
+		},
+	}
+
+	for _, tt := range tests {
+		for _, reqJSON := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s_json-%v", tt.name, reqJSON), func(t *testing.T) {
+				p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+				probe := p.Run(tt.name, probeInterval, nil, FuncProbe(tt.probeFunc))
+				defer probe.Close()
+				<-probe.stopped // wait for the first run.
+
+				w := httptest.NewRecorder()
+
+				req := httptest.NewRequest("GET", "/prober/run/?name="+tt.name, nil)
+				if reqJSON {
+					req.Header.Set("Accept", "application/json")
+				}
+				tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunHandler), tsweb.HandlerOptions{}).ServeHTTP(w, req)
+				if w.Result().StatusCode != tt.wantResponseCode {
+					t.Errorf("unexpected response code: got %d, want %d", w.Code, tt.wantResponseCode)
+				}
+
+				if reqJSON {
+					var gotJSON RunHandlerResponse
+					if err := json.Unmarshal(w.Body.Bytes(), &gotJSON); err != nil {
+						t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, w.Body.String())
+					}
+					if diff := cmp.Diff(tt.wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
+						t.Errorf("unexpected JSON response (-want +got):\n%s", diff)
+					}
+				} else {
+					body, _ := io.ReadAll(w.Result().Body)
+					if !strings.Contains(string(body), tt.wantPlaintextResponse) {
+						t.Errorf("unexpected response body: got %q, want to contain %q", body, tt.wantPlaintextResponse)
+					}
+				}
+			})
+		}
+	}
+
 }
 
 type fakeTicker struct {
