@@ -7,8 +7,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"html"
-	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -70,8 +68,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	tsweb.Debugger(mux)
-	mux.HandleFunc("/", http.HandlerFunc(serveFunc(p)))
+	d := tsweb.Debugger(mux)
+	d.Handle("probe-run", "Run a probe", tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunHandler), tsweb.HandlerOptions{Logf: log.Printf}))
+	mux.Handle("/", tsweb.StdHandler(p.StatusHandler(
+		prober.WithTitle("DERP Prober"),
+		prober.WithPageLink("Prober metrics", "/debug/varz"),
+		prober.WithProbeLink("Run Probe", "/debug/probe-run?name={{.Name}}"),
+	), tsweb.HandlerOptions{Logf: log.Printf}))
 	log.Printf("Listening on %s", *listen)
 	log.Fatal(http.ListenAndServe(*listen, mux))
 }
@@ -104,27 +107,4 @@ func getOverallStatus(p *prober.Prober) (o overallStatus) {
 	sort.Strings(o.bad)
 	sort.Strings(o.good)
 	return
-}
-
-func serveFunc(p *prober.Prober) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		st := getOverallStatus(p)
-		summary := "All good"
-		if (float64(len(st.bad)) / float64(len(st.bad)+len(st.good))) > 0.25 {
-			// Returning a 500 allows monitoring this server externally and configuring
-			// an alert on HTTP response code.
-			w.WriteHeader(500)
-			summary = fmt.Sprintf("%d problems", len(st.bad))
-		}
-
-		io.WriteString(w, "<html><head><style>.bad { font-weight: bold; color: #700; }</style></head>\n")
-		fmt.Fprintf(w, "<body><h1>derp probe</h1>\n%s:<ul>", summary)
-		for _, s := range st.bad {
-			fmt.Fprintf(w, "<li class=bad>%s</li>\n", html.EscapeString(s))
-		}
-		for _, s := range st.good {
-			fmt.Fprintf(w, "<li>%s</li>\n", html.EscapeString(s))
-		}
-		io.WriteString(w, "</ul></body></html>\n")
-	}
 }
