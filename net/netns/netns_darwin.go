@@ -92,7 +92,9 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 	// If the address doesn't parse, use the default index.
 	addr, err := parseAddress(address)
 	if err != nil {
-		logf("[unexpected] netns: error parsing address %q: %v", address, err)
+		if err != errUnspecifiedHost {
+			logf("[unexpected] netns: error parsing address %q: %v", address, err)
+		}
 		return defaultIdx()
 	}
 

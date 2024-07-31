@@ -102,7 +102,9 @@ func controlC(logf logger.Logf, network, address string, c syscall.RawConn) (err
 				}
 			}
 		} else {
-			logf("[unexpected] netns: error parsing address %q: %v", address, err)
+			if err != errUnspecifiedHost {
+				logf("[unexpected] netns: error parsing address %q: %v", address, err)
+			}
 			ifaceIdxV4, ifaceIdxV6 = defIfaceIdxV4, defIfaceIdxV6
 		}
 	} else {
