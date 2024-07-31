@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
 	"strconv"
 	"sync"
@@ -47,6 +48,7 @@ var (
 	listen  = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
 	natType = flag.String("nat", "easy", "type of NAT to use")
 	portmap = flag.Bool("portmap", false, "enable portmapping")
+	dgram   = flag.Bool("dgram", false, "enable datagram mode; for use with macOS Hypervisor.Framework and VZFileHandleNetworkDeviceAttachment")
 )
 
 const nicID = 1
@@ -56,7 +58,26 @@ func main() {
 	log.Printf("natlabd.")
 	flag.Parse()
 
-	srv, err := net.Listen("unix", *listen)
+	if _, err := os.Stat(*listen); err == nil {
+		os.Remove(*listen)
+	}
+
+	var srv net.Listener
+	var err error
+	var conn *net.UnixConn
+	if *dgram {
+		addr, err := net.ResolveUnixAddr("unixgram", *listen)
+		if err != nil {
+			log.Fatalf("ResolveUnixAddr: %v", err)
+		}
+		conn, err = net.ListenUnixgram("unixgram", addr)
+		if err != nil {
+			log.Fatalf("ListenUnixgram: %v", err)
+		}
+		defer conn.Close()
+	} else {
+		srv, err = net.Listen("unix", *listen)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -108,13 +129,18 @@ func main() {
 		log.Fatalf("checkWorld: %v", err)
 	}
 
+	if conn != nil {
+		s.serveConn(conn)
+		return
+	}
+
 	for {
 		c, err := srv.Accept()
 		if err != nil {
 			log.Printf("Accept: %v", err)
 			continue
 		}
-		go s.serveConn(c)
+		go s.serveConn(c.(*net.UnixConn))
 	}
 }
 
@@ -545,8 +571,9 @@ func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
-func (s *Server) serveConn(uc net.Conn) {
-	log.Printf("Got conn %p", uc)
+// serveConn serves a single connection from a client.
+func (s *Server) serveConn(uc *net.UnixConn) {
+	log.Printf("Got conn %T %p", uc, uc)
 	defer uc.Close()
 
 	bw := bufio.NewWriterSize(uc, 2<<10)
@@ -557,10 +584,12 @@ func (s *Server) serveConn(uc net.Conn) {
 		}
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		hdr := binary.BigEndian.AppendUint32(bw.AvailableBuffer()[:0], uint32(len(pkt)))
-		if _, err := bw.Write(hdr); err != nil {
-			log.Printf("Write hdr: %v", err)
-			return
+		if !*dgram { // i.e. qemu mode
+			hdr := binary.BigEndian.AppendUint32(bw.AvailableBuffer()[:0], uint32(len(pkt)))
+			if _, err := bw.Write(hdr); err != nil {
+				log.Printf("Write hdr: %v", err)
+				return
+			}
 		}
 		if _, err := bw.Write(pkt); err != nil {
 			log.Printf("Write pkt: %v", err)
@@ -575,18 +604,28 @@ func (s *Server) serveConn(uc net.Conn) {
 	var srcNode *node
 	var netw *network // non-nil after first packet
 	for {
-		if _, err := io.ReadFull(uc, buf[:4]); err != nil {
-			log.Printf("ReadFull header: %v", err)
-			return
-		}
-		n := binary.BigEndian.Uint32(buf[:4])
+		var packetRaw []byte
+		if *dgram {
+			n, _, err := uc.ReadFromUnix(buf)
+			if err != nil {
+				log.Printf("ReadFromUnix: %v", err)
+				continue
+			}
+			packetRaw = buf[:n]
+		} else {
+			if _, err := io.ReadFull(uc, buf[:4]); err != nil {
+				log.Printf("ReadFull header: %v", err)
+				return
+			}
+			n := binary.BigEndian.Uint32(buf[:4])
 
-		if _, err := io.ReadFull(uc, buf[4:4+n]); err != nil {
-			log.Printf("ReadFull pkt: %v", err)
-			return
+			if _, err := io.ReadFull(uc, buf[4:4+n]); err != nil {
+				log.Printf("ReadFull pkt: %v", err)
+				return
+			}
+			packetRaw = buf[4 : 4+n] // raw ethernet frame
 		}
 
-		packetRaw := buf[4 : 4+n] // raw ethernet frame
 		packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
 		le, ok := packet.LinkLayer().(*layers.Ethernet)
 		if !ok || len(le.SrcMAC) != 6 || len(le.DstMAC) != 6 {
