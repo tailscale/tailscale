@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"log"
@@ -60,6 +61,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/metrics"
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
@@ -4614,6 +4616,12 @@ func unmapIPPrefixes(ippsList ...[]netip.Prefix) (ret []netip.Prefix) {
 	return ret
 }
 
+var metricAdvertisedRoutes = metrics.NewMultiLabelMap[struct{}](
+	"tailscaled_advertised_routes",
+	"gauge",
+	"Number of subnet routes advertised by the node. (excluding exit node /0 routes)",
+)
+
 // b.mu must be held.
 func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ipn.PrefsView) {
 	if h := prefs.Hostname(); h != "" {
@@ -4623,6 +4631,15 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
+
+	// count routes without exit node routes
+	routeCount := expvar.Int{}
+	for _, route := range hi.RoutableIPs {
+		if route.Bits() != 0 {
+			routeCount.Add(1)
+		}
+	}
+	metricAdvertisedRoutes.Set(struct{}{}, &routeCount)
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
