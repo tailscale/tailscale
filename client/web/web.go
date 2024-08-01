@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
 	"tailscale.com/version"
@@ -281,6 +282,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src * data:; script-src 'self' '"+indexScriptHash+"'")
 			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		}
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/metrics") {
+		varz.Handler(w, r)
+		return
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/api/") {
