@@ -315,6 +315,12 @@ func mustHexDecode(s string) []byte {
 }
 
 func TestFilter(t *testing.T) {
+	// Reset the metrics before test. These are global
+	// so the different tests might have affected them.
+	metricInboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonACL}, 0)
+	metricInboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonError}, 0)
+	metricOutboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonACL}, 0)
+
 	chtun, tun := newChannelTUN(t.Logf, true)
 	defer tun.Close()
 
@@ -428,6 +434,22 @@ func TestFilter(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	inACL := metricInboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL})
+	inError := metricInboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonError})
+	outACL := metricOutboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL})
+
+	assertMetricPackets(t, "inACL", "3", inACL.String())
+	assertMetricPackets(t, "inError", "0", inError.String())
+	assertMetricPackets(t, "outACL", "1", outACL.String())
+
+}
+
+func assertMetricPackets(t *testing.T, metricName, want, got string) {
+	t.Helper()
+	if want != got {
+		t.Errorf("%s got unexpected value, got %s, want %s", metricName, got, want)
 	}
 }
 

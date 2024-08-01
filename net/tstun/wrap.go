@@ -34,6 +34,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/netstack/gro"
@@ -868,6 +869,9 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 
 	if filt.RunOut(p, t.filterFlags) != filter.Accept {
 		metricPacketOutDropFilter.Add(1)
+		metricOutboundDroppedPacketsTotal.Add(dropPacketLabel{
+			Reason: DropReasonACL,
+		}, 1)
 		return filter.Drop
 	}
 
@@ -876,7 +880,6 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			return res
 		}
 	}
-
 	return filter.Accept
 }
 
@@ -1133,6 +1136,9 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 
 	if outcome != filter.Accept {
 		metricPacketInDropFilter.Add(1)
+		metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+			Reason: DropReasonACL,
+		}, 1)
 
 		// Tell them, via TSMP, we're dropping them due to the ACL.
 		// Their host networking stack can translate this into ICMP
@@ -1210,6 +1216,11 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	if len(buffs) > 0 {
 		t.noteActivity()
 		_, err := t.tdevWrite(buffs, offset)
+		if err != nil {
+			metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+				Reason: DropReasonError,
+			}, int64(len(buffs)))
+		}
 		return len(buffs), err
 	}
 	return 0, nil
@@ -1447,6 +1458,33 @@ var (
 	metricPacketOutDrop          = clientmetric.NewCounter("tstun_out_to_wg_drop")
 	metricPacketOutDropFilter    = clientmetric.NewCounter("tstun_out_to_wg_drop_filter")
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
+)
+
+type DropReason string
+
+const (
+	DropReasonACL   DropReason = "acl"
+	DropReasonError DropReason = "error"
+)
+
+type dropPacketLabel struct {
+	// Reason indicates what we have done with the packet, and has the following values:
+	// - acl (rejected packets because of ACL)
+	// - error (rejected packets because of an error)
+	Reason DropReason
+}
+
+var (
+	metricInboundDroppedPacketsTotal = usermetric.NewMultiLabelMap[dropPacketLabel](
+		"tailscaled_inbound_dropped_packets_total",
+		"counter",
+		"Counts the number of dropped packets received by the node from other peers",
+	)
+	metricOutboundDroppedPacketsTotal = usermetric.NewMultiLabelMap[dropPacketLabel](
+		"tailscaled_outbound_dropped_packets_total",
+		"counter",
+		"Counts the number of packets dropped while being sent to other peers",
+	)
 )
 
 func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {

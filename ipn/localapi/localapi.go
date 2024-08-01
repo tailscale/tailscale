@@ -63,6 +63,8 @@ import (
 	"tailscale.com/util/osuser"
 	"tailscale.com/util/progresstracking"
 	"tailscale.com/util/rands"
+	"tailscale.com/util/testenv"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -141,6 +143,7 @@ var handler = map[string]localAPIHandler{
 	"update/install":              (*Handler).serveUpdateInstall,
 	"update/progress":             (*Handler).serveUpdateProgress,
 	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
+	"usermetrics":                 (*Handler).serveUserMetrics,
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
 }
@@ -569,6 +572,18 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	clientmetric.WritePrometheusExpositionFormat(w)
+}
+
+// TODO(kradalby): Remove this once we have landed on a final set of
+// metrics to export to clients and consider the metrics stable.
+var debugUsermetricsEndpoint = envknob.RegisterBool("TS_DEBUG_USER_METRICS")
+
+func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
+	if !testenv.InTest() && !debugUsermetricsEndpoint() {
+		http.Error(w, "usermetrics debug flag not enabled", http.StatusForbidden)
+		return
+	}
+	usermetric.Handler(w, r)
 }
 
 func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {

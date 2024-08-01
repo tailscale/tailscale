@@ -106,6 +106,7 @@ import (
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -116,6 +117,9 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
+
+var metricAdvertisedRoutes = usermetric.NewGauge(
+	"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)")
 
 var controlDebugFlags = getControlDebugFlags()
 
@@ -4645,6 +4649,15 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
+
+	// count routes without exit node routes
+	var routes int64
+	for _, route := range hi.RoutableIPs {
+		if route.Bits() != 0 {
+			routes++
+		}
+	}
+	metricAdvertisedRoutes.Set(float64(routes))
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
