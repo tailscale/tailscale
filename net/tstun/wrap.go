@@ -24,6 +24,7 @@ import (
 	"go4.org/mem"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	"tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -870,7 +871,6 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			return res
 		}
 	}
-
 	return filter.Accept
 }
 
@@ -924,6 +924,9 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		if !t.disableFilter {
 			response := t.filterPacketOutboundToWireGuard(p, pc)
 			if response != filter.Accept {
+				metricOutboundPacketsTotal.Add(trafficLabel{
+					Action: TrafficActionDropACL,
+				}, 1)
 				metricPacketOutDrop.Add(1)
 				continue
 			}
@@ -950,6 +953,10 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		// We are done with t.buffer. Let poll() re-use it.
 		t.sendBufferConsumed()
 	}
+
+	metricOutboundPacketsTotal.Add(trafficLabel{
+		Action: TrafficActionAccept,
+	}, int64(len(res.data)))
 
 	t.noteActivity()
 	return buffsPos, res.err
@@ -1177,6 +1184,9 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		if !t.disableFilter {
 			if t.filterPacketInboundFromWireGuard(p, captHook, pc) != filter.Accept {
 				metricPacketInDrop.Add(1)
+				metricInboundPacketsTotal.Add(trafficLabel{
+					Action: TrafficActionDropACL,
+				}, 1)
 			} else {
 				buffs[i] = buff
 				i++
@@ -1194,6 +1204,15 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	if len(buffs) > 0 {
 		t.noteActivity()
 		_, err := t.tdevWrite(buffs, offset)
+		if err != nil {
+			metricInboundPacketsTotal.Add(trafficLabel{
+				Action: TrafficActionDropError,
+			}, int64(len(buffs)))
+		} else {
+			metricInboundPacketsTotal.Add(trafficLabel{
+				Action: TrafficActionAccept,
+			}, int64(len(buffs)))
+		}
 		return len(buffs), err
 	}
 	return 0, nil
@@ -1394,6 +1413,37 @@ var (
 	metricPacketOutDrop          = clientmetric.NewCounter("tstun_out_to_wg_drop")
 	metricPacketOutDropFilter    = clientmetric.NewCounter("tstun_out_to_wg_drop_filter")
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
+)
+
+type TrafficAction string
+
+const (
+	TrafficActionAccept    TrafficAction = "accept"
+	TrafficActionDropACL   TrafficAction = "drop_acl"
+	TrafficActionDropError TrafficAction = "drop_error"
+	TrafficActionDropDst   TrafficAction = "drop_dst_unknown"
+)
+
+type trafficLabel struct {
+	// Action indicates what we have done with the packet, and has the following wvalues:
+	// - accept
+	// - drop_acl (rejected packets because of ACL)
+	// - drop_error (rejected packets because of an error)
+	// - drop_dst_unknown
+	Action TrafficAction
+}
+
+var (
+	metricInboundPacketsTotal = metrics.NewMultiLabelMap[trafficLabel](
+		"tailscaled_inbound_packets_total",
+		"counter",
+		"Counts the number of packets received by the node from other peers",
+	)
+	metricOutboundPacketsTotal = metrics.NewMultiLabelMap[trafficLabel](
+		"tailscaled_outbound_packets_total",
+		"counter",
+		"Counts the number of packets sent by the node to other peers",
+	)
 )
 
 func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {
