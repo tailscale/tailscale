@@ -24,7 +24,6 @@ import (
 	"go4.org/mem"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
-	"tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -35,6 +34,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/usermetrics"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -1434,12 +1434,12 @@ type trafficLabel struct {
 }
 
 var (
-	metricInboundPacketsTotal = metrics.NewMultiLabelMap[trafficLabel](
+	metricInboundPacketsTotal = usermetrics.NewMultiLabelMap[trafficLabel](
 		"tailscaled_inbound_packets_total",
 		"counter",
 		"Counts the number of packets received by the node from other peers",
 	)
-	metricOutboundPacketsTotal = metrics.NewMultiLabelMap[trafficLabel](
+	metricOutboundPacketsTotal = usermetrics.NewMultiLabelMap[trafficLabel](
 		"tailscaled_outbound_packets_total",
 		"counter",
 		"Counts the number of packets sent by the node to other peers",

@@ -34,9 +34,9 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
+	"tailscale.com/util/usermetrics"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -285,7 +285,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/metrics") {
-		varz.Handler(w, r)
+		usermetrics.Handler(w, r)
 		return
 	}
 

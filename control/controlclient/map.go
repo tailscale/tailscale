@@ -23,7 +23,6 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
-	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -34,6 +33,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetrics"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -362,7 +362,7 @@ type healthMessageLabel struct {
 	Severity string
 }
 
-var metricHealthMessages = metrics.NewMultiLabelMap[healthMessageLabel](
+var metricHealthMessages = usermetrics.NewMultiLabelMap[healthMessageLabel](
 	"tailscaled_health_messages",
 	"gauge",
 	"A gauge of health messages from control, by severity",

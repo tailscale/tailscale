@@ -61,7 +61,6 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
-	"tailscale.com/metrics"
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
@@ -108,6 +107,7 @@ import (
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
+	"tailscale.com/util/usermetrics"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -4616,7 +4616,7 @@ func unmapIPPrefixes(ippsList ...[]netip.Prefix) (ret []netip.Prefix) {
 	return ret
 }
 
-var metricAdvertisedRoutes = metrics.NewMultiLabelMap[struct{}](
+var metricAdvertisedRoutes = usermetrics.NewMultiLabelMap[struct{}](
 	"tailscaled_advertised_routes",
 	"gauge",
 	"Number of subnet routes advertised by the node. (excluding exit node /0 routes)",
