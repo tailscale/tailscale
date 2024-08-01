@@ -6,6 +6,7 @@
 package health
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -987,8 +988,12 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	}
 
 	if t.lastLoginErr != nil {
+		var errMsg string
+		if !errors.Is(t.lastLoginErr, context.Canceled) {
+			errMsg = t.lastLoginErr.Error()
+		}
 		t.setUnhealthyLocked(LoginStateWarnable, Args{
-			ArgError: t.lastLoginErr.Error(),
+			ArgError: errMsg,
 		})
 		return
 	} else {
