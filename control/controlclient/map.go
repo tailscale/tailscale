@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"maps"
 	"net"
@@ -22,6 +23,7 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/metrics"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -344,6 +346,9 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
+		warnings := expvar.Int{}
+		warnings.Set(int64(len(resp.Health)))
+		metricHealthMessages.Set(healthMessageLabel{Severity: "warning"}, &warnings)
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
@@ -352,6 +357,16 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
 }
+
+type healthMessageLabel struct {
+	Severity string
+}
+
+var metricHealthMessages = metrics.NewMultiLabelMap[healthMessageLabel](
+	"tailscaled_health_messages",
+	"gauge",
+	"A gauge of health messages from control, by severity",
+)
 
 var (
 	patchDERPRegion   = clientmetric.NewCounter("controlclient_patch_derp")
