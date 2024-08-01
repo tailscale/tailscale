@@ -353,6 +353,12 @@ func (lc *LocalClient) DaemonMetrics(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/metrics")
 }
 
+// UserMetrics returns the user metrics in
+// the Prometheus text exposition format.
+func (lc *LocalClient) UserMetrics(ctx context.Context) ([]byte, error) {
+	return lc.get200(ctx, "/localapi/v0/usermetrics")
+}
+
 // IncrementCounter increments the value of a Tailscale daemon's counter
 // metric by the given delta. If the metric has yet to exist, a new counter
 // metric is created and initialized to delta.

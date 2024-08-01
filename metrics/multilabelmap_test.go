@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"bytes"
+	"expvar"
 	"fmt"
 	"io"
 	"testing"
@@ -22,6 +23,12 @@ func TestMultilabelMap(t *testing.T) {
 	m.Add(L2{"b", "b"}, 3)
 	m.Add(L2{"a", "a"}, 1)
 
+	m.SetFloat(L2{"sf", "sf"}, 3.5)
+	m.SetFloat(L2{"sf", "sf"}, 5.5)
+	m.Set(L2{"sfunc", "sfunc"}, expvar.Func(func() any { return 3 }))
+	m.SetInt(L2{"si", "si"}, 3)
+	m.SetInt(L2{"si", "si"}, 5)
+
 	cur := func() string {
 		var buf bytes.Buffer
 		m.Do(func(kv KeyValue[L2]) {
@@ -33,7 +40,7 @@ func TestMultilabelMap(t *testing.T) {
 		return buf.String()
 	}
 
-	if g, w := cur(), "a/a=1,a/b=2,b/b=3,b/c=4"; g != w {
+	if g, w := cur(), "a/a=1,a/b=2,b/b=3,b/c=4,sf/sf=5.5,sfunc/sfunc=3,si/si=5"; g != w {
 		t.Errorf("got %q; want %q", g, w)
 	}
 
@@ -43,6 +50,9 @@ func TestMultilabelMap(t *testing.T) {
 metricname{foo="a",bar="b"} 2
 metricname{foo="b",bar="b"} 3
 metricname{foo="b",bar="c"} 4
+metricname{foo="sf",bar="sf"} 5.5
+metricname{foo="sfunc",bar="sfunc"} 3
+metricname{foo="si",bar="si"} 5
 `
 	if got := buf.String(); got != want {
 		t.Errorf("promtheus output = %q; want %q", got, want)
@@ -50,7 +60,7 @@ metricname{foo="b",bar="c"} 4
 
 	m.Delete(L2{"b", "b"})
 
-	if g, w := cur(), "a/a=1,a/b=2,b/c=4"; g != w {
+	if g, w := cur(), "a/a=1,a/b=2,b/c=4,sf/sf=5.5,sfunc/sfunc=3,si/si=5"; g != w {
 		t.Errorf("got %q; want %q", g, w)
 	}
 

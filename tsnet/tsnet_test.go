@@ -31,8 +31,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"golang.org/x/net/proxy"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
@@ -813,5 +815,68 @@ func TestUDPConn(t *testing.T) {
 	t.Logf("got: %q", got)
 	if string(got) != "world" {
 		t.Errorf("got %q, want world", got)
+	}
+}
+
+func TestUserMetrics(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// testWarnable is a Warnable that is used within this package for testing purposes only.
+	var testWarnable = health.Register(&health.Warnable{
+		Code:     "test-warnable-tsnet",
+		Title:    "Test warnable",
+		Severity: health.SeverityLow,
+		Text: func(args health.Args) string {
+			return args[health.ArgError]
+		},
+	})
+
+	controlURL, c := startControl(t)
+	s1, _, s1PubKey := startServer(t, ctx, controlURL, "s1")
+
+	s1.lb.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: []netip.Prefix{
+				netip.MustParsePrefix("192.0.2.0/24"),
+				netip.MustParsePrefix("192.0.3.0/24"),
+			},
+		},
+		AdvertiseRoutesSet: true,
+	})
+	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ht := s1.lb.HealthTracker()
+	ht.SetUnhealthy(testWarnable, health.Args{"Text": "Hello world 1"})
+
+	metrics1, err := lc1.UserMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Note that this test will check for two warnings because the health
+	// tracker will have two warnings: one from the testWarnable, added in
+	// this test, and one because we are running the dev/unstable version
+	// of tailscale.
+	want := `# TYPE tailscaled_advertised_routes gauge
+# HELP tailscaled_advertised_routes Number of advertised network routes (e.g. by a subnet router)
+tailscaled_advertised_routes 2
+# TYPE tailscaled_health_messages gauge
+# HELP tailscaled_health_messages Number of health messages broken down by type.
+tailscaled_health_messages{type="warning"} 2
+# TYPE tailscaled_inbound_dropped_packets_total counter
+# HELP tailscaled_inbound_dropped_packets_total Counts the number of dropped packets received by the node from other peers
+# TYPE tailscaled_outbound_dropped_packets_total counter
+# HELP tailscaled_outbound_dropped_packets_total Counts the number of packets dropped while being sent to other peers
+`
+
+	if diff := cmp.Diff(want, string(metrics1)); diff != "" {
+		t.Fatalf("unexpected metrics (-want +got):\n%s", diff)
 	}
 }

@@ -8,6 +8,7 @@ package health
 import (
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"maps"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -1202,6 +1204,18 @@ func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
 }
 
 func (t *Tracker) doOnceInit() {
+	metricHealthMessage.Set(metricHealthMessageLabel{
+		Type: "warning",
+	}, expvar.Func(func() any {
+		if t.nil() {
+			return 0
+		}
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.updateBuiltinWarnablesLocked()
+		return int64(len(t.stringsLocked()))
+	}))
+
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
 		f.name = (ReceiveFunc(i)).String()
@@ -1232,3 +1246,14 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 		f.missing = true
 	}
 }
+
+type metricHealthMessageLabel struct {
+	// TODO: break down by warnable.severity as well?
+	Type string
+}
+
+var metricHealthMessage = usermetric.NewMultiLabelMap[metricHealthMessageLabel](
+	"tailscaled_health_messages",
+	"gauge",
+	"Number of health messages broken down by type.",
+)
