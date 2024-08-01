@@ -37,7 +37,7 @@ func Test_Hijacker(t *testing.T) {
 		failRecorderConnPostConnect bool // send error down the error channel
 		wantsConnClosed             bool
 		wantsSetupErr               bool
-		proto                       protocol
+		proto                       Protocol
 	}{
 		{
 			name:  "setup_succeeds_conn_stays_open",
@@ -45,7 +45,7 @@ func Test_Hijacker(t *testing.T) {
 		},
 		{
 			name:  "setup_succeeds_conn_stays_open_ws",
-			proto: SPDYProtocol,
+			proto: WSProtocol,
 		},
 		{
 			name:                "setup_fails_policy_is_to_fail_open_conn_stays_open",

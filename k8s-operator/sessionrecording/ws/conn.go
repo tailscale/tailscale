@@ -4,7 +4,7 @@
 //go:build !plan9
 
 // package ws has functionality to parse 'kubectl exec' sessions streamed using
-// WebSockets protocol.
+// WebSocket protocol.
 package ws
 
 import (
@@ -18,18 +18,19 @@ import (
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/util/remotecommand"
-	srconn "tailscale.com/k8s-operator/sessionrecording/conn"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/util/multierr"
 )
 
-// New returns a wrapper around net.Conn that intercepts reads and writes for a
-// websocket streaming session over the provided net.Conn, parses the data as
-// websocket messages and sends message payloads for STDIN/STDOUT streams to a
-// tsrecorder instance using the provided client. Caller must ensure that the
-// session is streamed using WebSockets protocol.
-func New(c net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, log *zap.SugaredLogger) srconn.Conn {
+// New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
+// The connection must be a hijacked connection for a 'kubectl exec' session using WebSocket protocol and a *.channel.k8s.io subprotocol.
+// The hijacked connection is used to transmit *.channel.k8s.io streams between Kubernetes client ('kubectl') and the destination proxy controlled by Kubernetes.
+// Data read from the underlying network connection is data sent via one of the streams from the client to the container.
+// Data written to the underlying connection is data sent from the container to the client.
+// We parse the data and send everything for the STDOUT/STDERR streams to the configured tsrecorder as an asciinema recording with the provided header.
+// https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#proposal-new-remotecommand-sub-protocol-version---v5channelk8sio
+func New(c net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, log *zap.SugaredLogger) net.Conn {
 	return &conn{
 		Conn: c,
 		rec:  rec,
@@ -65,7 +66,6 @@ type conn struct {
 	wmu                 sync.Mutex // sequences writes
 	writeCastHeaderOnce sync.Once
 	closed              bool // connection is closed
-	failed              bool // connection has failed, do not attempt to write any more bytes
 	// writeBuf contains bytes for a currently parsed binary data message
 	// being written to the underlying conn. If the message is masked, it is
 	// unmasked in place, so having this buffer allows us to avoid modifying
@@ -77,7 +77,10 @@ type conn struct {
 }
 
 // Read reads bytes from the original connection and parses them as websocket
-// message fragments. If the message is for the resize stream, sets the width
+// message fragments.
+// Bytes read from the original connection are the bytes sent from the Kubernetes client (kubectl) to the destination container via kubelet.
+
+// If the message is for the resize stream, sets the width
 // and height of the CastHeader for this connection.
 // The fragment can be incomplete.
 func (c *conn) Read(b []byte) (int, error) {
@@ -92,10 +95,16 @@ func (c *conn) Read(b []byte) (int, error) {
 		}
 		return 0, err
 	}
+	if n == 0 {
+		c.log.Debug("[unexpected] Read called for 0 length bytes")
+		return 0, nil
+	}
 
 	typ := messageType(opcode(b))
 	if (typ == noOpcode && c.readMsgIsIncomplete()) || c.readBufHasIncompleteFragment() { // subsequent fragment
-		typ = c.currentReadMsg.typ
+		if typ, err = c.curReadMsgType(); err != nil {
+			return 0, err
+		}
 	}
 
 	// A control message can not be fragmented and we are not interested in
@@ -108,7 +117,7 @@ func (c *conn) Read(b []byte) (int, error) {
 	// If we received another message type, return and let the API server close the connection.
 	// https://github.com/kubernetes/client-go/blob/release-1.30/tools/remotecommand/websocket.go#L281
 	if typ != binaryMessage {
-		c.log.Info("[unexpected] received a data message with a type that is not binary message type %d", typ)
+		c.log.Infof("[unexpected] received a data message with a type that is not binary message type %v", typ)
 		return n, nil
 	}
 
@@ -145,7 +154,7 @@ func (c *conn) Read(b []byte) (int, error) {
 		}
 	}
 	c.currentReadMsg = readMsg
-	return n, err
+	return n, nil
 }
 
 // Write parses the written bytes as WebSocket message fragment. If the message
@@ -154,18 +163,24 @@ func (c *conn) Read(b []byte) (int, error) {
 func (c *conn) Write(b []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	if len(b) == 0 {
+		c.log.Debug("[unexpected] Write called with 0 bytes")
+		return 0, nil
+	}
 
 	typ := messageType(opcode(b))
 	// If we are in process of parsing a message fragment, the received
 	// bytes are not structured as a message fragment and can not be used to
 	// determine a message fragment.
 	if c.writeBufHasIncompleteFragment() { // buffer contains previous incomplete fragment
-		typ = c.currentWriteMsg.typ
+		var err error
+		if typ, err = c.curWriteMsgType(); err != nil {
+			return 0, err
+		}
 	}
 
 	if isControlMessage(typ) {
-		n, err := c.Conn.Write(b)
-		return n, err
+		return c.Conn.Write(b)
 	}
 
 	writeMsg := &message{typ: typ} // start a new message...
@@ -197,7 +212,7 @@ func (c *conn) Write(b []byte) (int, error) {
 				var j []byte
 				j, err = json.Marshal(c.ch)
 				if err != nil {
-					c.log.Infof("error marhsalling conn: %v", err)
+					c.log.Errorf("error marhsalling conn: %v", err)
 					return
 				}
 				j = append(j, '\n')
@@ -218,7 +233,7 @@ func (c *conn) Write(b []byte) (int, error) {
 	if err != nil {
 		c.log.Errorf("write: error writing to conn: %v", err)
 	}
-	return len(b), err
+	return len(b), nil
 }
 
 func (c *conn) Close() error {
@@ -227,36 +242,27 @@ func (c *conn) Close() error {
 	if c.closed {
 		return nil
 	}
-	if !c.failed && c.writeBuf.Len() > 0 {
-		c.Conn.Write(c.writeBuf.Bytes())
-	}
 	c.closed = true
 	connCloseErr := c.Conn.Close()
 	recCloseErr := c.rec.Close()
 	return multierr.New(connCloseErr, recCloseErr)
 }
 
-func (c *conn) Fail() {
-	c.wmu.Lock()
-	c.failed = true
-	c.wmu.Unlock()
-}
-
 // writeBufHasIncompleteFragment returns true if the latest data message
 // fragment written to the connection was incomplete and the following write
 // must be the remaining payload bytes of that fragment.
 func (c *conn) writeBufHasIncompleteFragment() bool {
-	return len(c.writeBuf.Bytes()) != 0
+	return c.writeBuf.Len() != 0
 }
 
 // readBufHasIncompleteFragment returns true if the latest data message
 // fragment read from the connection was incomplete and the following read
 // must be the remaining payload bytes of that fragment.
 func (c *conn) readBufHasIncompleteFragment() bool {
-	return len(c.readBuf.Bytes()) != 0
+	return c.readBuf.Len() != 0
 }
 
-// writeMsgIsIncomplete returns true if the latest WebSockets message written to
+// writeMsgIsIncomplete returns true if the latest WebSocket message written to
 // the connection was fragmented and the next data message fragment written to
 // the connection must be a fragment of that message.
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.4
@@ -264,12 +270,25 @@ func (c *conn) writeMsgIsIncomplete() bool {
 	return c.currentWriteMsg != nil && !c.currentWriteMsg.isFinalized
 }
 
-// readMsgIsIncomplete returns true if the latest WebSockets message written to
+// readMsgIsIncomplete returns true if the latest WebSocket message written to
 // the connection was fragmented and the next data message fragment written to
 // the connection must be a fragment of that message.
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.4
 func (c *conn) readMsgIsIncomplete() bool {
 	return c.currentReadMsg != nil && !c.currentReadMsg.isFinalized
+}
+func (c *conn) curReadMsgType() (messageType, error) {
+	if c.currentReadMsg != nil {
+		return c.currentReadMsg.typ, nil
+	}
+	return 0, errors.New("[unexpected] attempted to determine type for nil message")
+}
+
+func (c *conn) curWriteMsgType() (messageType, error) {
+	if c.currentWriteMsg != nil {
+		return c.currentWriteMsg.typ, nil
+	}
+	return 0, errors.New("[unexpected] attempted to determine type for nil message")
 }
 
 // opcode reads the websocket message opcode that denotes the message type.
