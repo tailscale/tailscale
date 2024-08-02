@@ -106,13 +106,19 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 	return false
 }
 
+// interfaceNameDoesNotNeedCaptiveDetection returns true if an interface does not require captive portal detection
+// based on its name. This is useful to avoid making unnecessary HTTP requests on interfaces that are known to not
+// require it. We also avoid making requests on the interface prefixes "pdp" and "rmnet", which are cellular data
+// interfaces on iOS and Android, respectively, and would be needlessly battery-draining.
 func interfaceNameDoesNotNeedCaptiveDetection(ifName string, goos string) bool {
 	ifName = strings.ToLower(ifName)
 	excludedPrefixes := []string{"tailscale", "tun", "tap", "docker", "kube", "wg"}
 	if goos == "windows" {
 		excludedPrefixes = append(excludedPrefixes, "loopback", "tunnel", "ppp", "isatap", "teredo", "6to4")
 	} else if goos == "darwin" || goos == "ios" {
-		excludedPrefixes = append(excludedPrefixes, "awdl", "bridge", "ap", "utun", "tap", "llw", "anpi", "lo", "stf", "gif", "xhc")
+		excludedPrefixes = append(excludedPrefixes, "pdp", "awdl", "bridge", "ap", "utun", "tap", "llw", "anpi", "lo", "stf", "gif", "xhc", "pktap")
+	} else if goos == "android" {
+		excludedPrefixes = append(excludedPrefixes, "rmnet", "p2p", "dummy", "sit")
 	}
 	for _, prefix := range excludedPrefixes {
 		if strings.HasPrefix(ifName, prefix) {
