@@ -5,7 +5,6 @@
 package netstack
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"expvar"
@@ -21,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -284,10 +282,13 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 			return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 		}
 	}
-	linkEP := newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "")
+	var linkEP *linkEndpoint
 	if runtime.GOOS == "linux" {
 		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
+		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", enableGRO)
 		linkEP.SupportedGSOKind = stack.HostGSOSupported
+	} else {
+		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
 	}
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
@@ -336,6 +337,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
+	ns.tundev.EndPacketVectorInboundFromWireGuardFlush = linkEP.flushGRO
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
 	return ns, nil
@@ -737,23 +739,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		// care about the packet; resume processing.
 		return filter.Accept
 	}
-
-	var pn tcpip.NetworkProtocolNumber
-	switch p.IPVersion {
-	case 4:
-		pn = header.IPv4ProtocolNumber
-	case 6:
-		pn = header.IPv6ProtocolNumber
-	}
 	if debugPackets {
 		ns.logf("[v2] service packet in (from %v): % x", p.Src, p.Buffer())
 	}
 
-	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(bytes.Clone(p.Buffer())),
-	})
-	ns.linkEP.InjectInbound(pn, packetBuf)
-	packetBuf.DecRef()
+	ns.linkEP.injectInbound(p)
 	return filter.DropSilently
 }
 
@@ -794,7 +784,7 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 func (ns *Impl) inject() {
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
-		if pkt.IsNil() {
+		if pkt == nil {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
 				return
@@ -1038,21 +1028,10 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 		return filter.DropSilently
 	}
 
-	var pn tcpip.NetworkProtocolNumber
-	switch p.IPVersion {
-	case 4:
-		pn = header.IPv4ProtocolNumber
-	case 6:
-		pn = header.IPv6ProtocolNumber
-	}
 	if debugPackets {
 		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
 	}
-	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(bytes.Clone(p.Buffer())),
-	})
-	ns.linkEP.InjectInbound(pn, packetBuf)
-	packetBuf.DecRef()
+	ns.linkEP.enqueueGRO(p)
 
 	// We've now delivered this to netstack, so we're done.
 	// Instead of returning a filter.Accept here (which would also
