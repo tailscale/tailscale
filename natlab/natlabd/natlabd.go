@@ -46,6 +46,7 @@ import (
 
 var (
 	listen  = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
+	write   = flag.String("write", "/tmp/qemu_client.sock", "path to respond to (for dgram mode)")
 	natType = flag.String("nat", "easy", "type of NAT to use")
 	portmap = flag.Bool("portmap", false, "enable portmapping")
 	dgram   = flag.Bool("dgram", false, "enable datagram mode; for use with macOS Hypervisor.Framework and VZFileHandleNetworkDeviceAttachment")
@@ -65,14 +66,19 @@ func main() {
 	var srv net.Listener
 	var err error
 	var conn *net.UnixConn
+	var raddr *net.UnixAddr
 	if *dgram {
-		addr, err := net.ResolveUnixAddr("unixgram", *listen)
+		laddr, err := net.ResolveUnixAddr("unixgram", *listen)
 		if err != nil {
 			log.Fatalf("ResolveUnixAddr: %v", err)
 		}
-		conn, err = net.ListenUnixgram("unixgram", addr)
+		conn, err = net.ListenUnixgram("unixgram", laddr)
 		if err != nil {
 			log.Fatalf("ListenUnixgram: %v", err)
+		}
+		raddr, err = net.ResolveUnixAddr("unixgram", *write)
+		if err != nil {
+			log.Fatalf("ResolveUnixAddr: %v", err)
 		}
 		defer conn.Close()
 	} else {
@@ -129,18 +135,21 @@ func main() {
 		log.Fatalf("checkWorld: %v", err)
 	}
 
-	if conn != nil {
-		s.serveConn(conn)
-		return
-	}
-
-	for {
-		c, err := srv.Accept()
-		if err != nil {
-			log.Printf("Accept: %v", err)
-			continue
+	if *dgram {
+		if conn != nil && raddr != nil {
+			s.serveConn(conn, raddr)
+		} else {
+			log.Fatalf("no conn or raddr in dgram mode.  no packets for you")
 		}
-		go s.serveConn(c.(*net.UnixConn))
+	} else {
+		for {
+			c, err := srv.Accept()
+			if err != nil {
+				log.Printf("Accept: %v", err)
+				continue
+			}
+			go s.serveConn(c.(*net.UnixConn), nil)
+		}
 	}
 }
 
@@ -572,31 +581,42 @@ func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
 }
 
 // serveConn serves a single connection from a client.
-func (s *Server) serveConn(uc *net.UnixConn) {
+// raddr is the remote address, if known for dgram clients
+func (s *Server) serveConn(uc *net.UnixConn, raddr *net.UnixAddr) {
 	log.Printf("Got conn %T %p", uc, uc)
 	defer uc.Close()
 
-	bw := bufio.NewWriterSize(uc, 2<<10)
-	var writeMu sync.Mutex
-	writePkt := func(pkt []byte) {
-		if pkt == nil {
-			return
+	var writePkt func([]byte)
+
+	if *dgram {
+		writePkt = func(pkt []byte) {
+			if _, err := uc.WriteToUnix(pkt, raddr); err != nil {
+				log.Printf("Write pkt failed: %v", err)
+				return
+			}
+			log.Printf("Write pkt: %v", pkt)
 		}
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		if !*dgram { // i.e. qemu mode
+	} else {
+		bw := bufio.NewWriterSize(uc, 2<<10)
+		var writeMu sync.Mutex
+		writePkt = func(pkt []byte) {
+			if pkt == nil {
+				return
+			}
+			writeMu.Lock()
+			defer writeMu.Unlock()
 			hdr := binary.BigEndian.AppendUint32(bw.AvailableBuffer()[:0], uint32(len(pkt)))
 			if _, err := bw.Write(hdr); err != nil {
 				log.Printf("Write hdr: %v", err)
 				return
 			}
-		}
-		if _, err := bw.Write(pkt); err != nil {
-			log.Printf("Write pkt: %v", err)
-			return
-		}
-		if err := bw.Flush(); err != nil {
-			log.Printf("Flush: %v", err)
+			if _, err := bw.Write(pkt); err != nil {
+				log.Printf("Write pkt: %v", err)
+				return
+			}
+			if err := bw.Flush(); err != nil {
+				log.Printf("Flush: %v", err)
+			}
 		}
 	}
 
