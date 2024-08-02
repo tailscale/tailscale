@@ -242,6 +242,44 @@ const nicID = 1
 // have a UDP packet as big as the MTU.
 const maxUDPPacketSize = tstun.MaxPacketSize
 
+func setTCPBufSizes(ipstack *stack.Stack) error {
+	// tcpip.TCP{Receive,Send}BufferSizeRangeOption is gVisor's version of
+	// Linux's tcp_{r,w}mem. Application within gVisor differs as some Linux
+	// features are not (yet) implemented, and socket buffer memory is not
+	// controlled within gVisor, e.g. we allocate *stack.PacketBuffer's for the
+	// write path within Tailscale. Therefore, we loosen our understanding of
+	// the relationship between these Linux and gVisor tunables. The chosen
+	// values are biased towards higher throughput on high bandwidth-delay
+	// product paths, except on memory-constrained platforms.
+	tcpRXBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{
+		// Min is unused by gVisor at the time of writing, but partially plumbed
+		// for application by the TCP_WINDOW_CLAMP socket option.
+		Min: tcpRXBufMinSize,
+		// Default is used by gVisor at socket creation.
+		Default: tcpRXBufDefSize,
+		// Max is used by gVisor to cap the advertised receive window post-read.
+		// (tcp_moderate_rcvbuf=true, the default).
+		Max: tcpRXBufMaxSize,
+	}
+	tcpipErr := ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRXBufOpt)
+	if tcpipErr != nil {
+		return fmt.Errorf("could not set TCP RX buf size: %v", tcpipErr)
+	}
+	tcpTXBufOpt := tcpip.TCPSendBufferSizeRangeOption{
+		// Min in unused by gVisor at the time of writing.
+		Min: tcpTXBufMinSize,
+		// Default is used by gVisor at socket creation.
+		Default: tcpTXBufDefSize,
+		// Max is used by gVisor to cap the send window.
+		Max: tcpTXBufMaxSize,
+	}
+	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpTXBufOpt)
+	if tcpipErr != nil {
+		return fmt.Errorf("could not set TCP TX buf size: %v", tcpipErr)
+	}
+	return nil
+}
+
 // Create creates and populates a new Impl.
 func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, driveForLocal drive.FileSystemForLocal) (*Impl, error) {
 	if mc == nil {
@@ -281,6 +319,10 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		if tcpipErr != nil {
 			return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 		}
+	}
+	err := setTCPBufSizes(ipstack)
+	if err != nil {
+		return nil, err
 	}
 	var linkEP *linkEndpoint
 	if runtime.GOOS == "linux" {
@@ -514,9 +556,7 @@ func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
 		panic("nil LocalBackend")
 	}
 	ns.lb = lb
-	// size = 0 means use default buffer size
-	const tcpReceiveBufferSize = 0
-	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
+	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpRXBufDefSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
