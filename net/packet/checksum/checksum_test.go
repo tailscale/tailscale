@@ -5,6 +5,7 @@ package checksum
 
 import (
 	"encoding/binary"
+	"math/rand/v2"
 	"net/netip"
 	"testing"
 
@@ -94,7 +95,7 @@ func TestHeaderChecksumsV4(t *testing.T) {
 }
 
 func TestNatChecksumsV6UDP(t *testing.T) {
-	a1, a2 := netip.MustParseAddr("a::1"), netip.MustParseAddr("b::1")
+	a1, a2 := randV6Addr(), randV6Addr()
 
 	// Make a fake UDP packet with 32 bytes of zeros as the datagram payload.
 	b := header.IPv6(make([]byte, header.IPv6MinimumSize+header.UDPMinimumSize+32))
@@ -124,25 +125,43 @@ func TestNatChecksumsV6UDP(t *testing.T) {
 	}
 
 	// Parse the packet.
-	var p packet.Parsed
+	var p, p2 packet.Parsed
 	p.Decode(b)
 	t.Log(p.String())
 
 	// Update the source address of the packet to be the same as the dest.
 	UpdateSrcAddr(&p, a2)
+	p2.Decode(p.Buffer())
+	if p2.Src.Addr() != a2 {
+		t.Fatalf("got %v, want %v", p2.Src, a2)
+	}
 	if !udp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a2.AsSlice()), checksum.Checksum(b.Payload()[header.UDPMinimumSize:], 0)) {
 		t.Fatal("incorrect checksum after updating source address")
 	}
 
 	// Update the dest address of the packet to be the original source address.
 	UpdateDstAddr(&p, a1)
+	p2.Decode(p.Buffer())
+	if p2.Dst.Addr() != a1 {
+		t.Fatalf("got %v, want %v", p2.Dst, a1)
+	}
 	if !udp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a1.AsSlice()), checksum.Checksum(b.Payload()[header.UDPMinimumSize:], 0)) {
 		t.Fatal("incorrect checksum after updating destination address")
 	}
 }
 
+func randV6Addr() netip.Addr {
+	a1, a2 := rand.Int64(), rand.Int64()
+	return netip.AddrFrom16([16]byte{
+		byte(a1 >> 56), byte(a1 >> 48), byte(a1 >> 40), byte(a1 >> 32),
+		byte(a1 >> 24), byte(a1 >> 16), byte(a1 >> 8), byte(a1),
+		byte(a2 >> 56), byte(a2 >> 48), byte(a2 >> 40), byte(a2 >> 32),
+		byte(a2 >> 24), byte(a2 >> 16), byte(a2 >> 8), byte(a2),
+	})
+}
+
 func TestNatChecksumsV6TCP(t *testing.T) {
-	a1, a2 := netip.MustParseAddr("a::1"), netip.MustParseAddr("b::1")
+	a1, a2 := randV6Addr(), randV6Addr()
 
 	// Make a fake TCP packet with no payload.
 	b := header.IPv6(make([]byte, header.IPv6MinimumSize+header.TCPMinimumSize))
@@ -178,18 +197,26 @@ func TestNatChecksumsV6TCP(t *testing.T) {
 	}
 
 	// Parse the packet.
-	var p packet.Parsed
+	var p, p2 packet.Parsed
 	p.Decode(b)
 	t.Log(p.String())
 
 	// Update the source address of the packet to be the same as the dest.
 	UpdateSrcAddr(&p, a2)
+	p2.Decode(p.Buffer())
+	if p2.Src.Addr() != a2 {
+		t.Fatalf("got %v, want %v", p2.Src, a2)
+	}
 	if !tcp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a2.AsSlice()), 0, 0) {
 		t.Fatal("incorrect checksum after updating source address")
 	}
 
 	// Update the dest address of the packet to be the original source address.
 	UpdateDstAddr(&p, a1)
+	p2.Decode(p.Buffer())
+	if p2.Dst.Addr() != a1 {
+		t.Fatalf("got %v, want %v", p2.Dst, a1)
+	}
 	if !tcp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a1.AsSlice()), 0, 0) {
 		t.Fatal("incorrect checksum after updating destination address")
 	}

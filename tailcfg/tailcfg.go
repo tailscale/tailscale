@@ -146,7 +146,8 @@ type CapabilityVersion int
 //   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
 //   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
 //   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
-const CurrentCapabilityVersion CapabilityVersion = 103
+//   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
+const CurrentCapabilityVersion CapabilityVersion = 104
 
 type StableID string
 
