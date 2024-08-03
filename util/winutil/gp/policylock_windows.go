@@ -189,6 +189,7 @@ func (l *PolicyLock) lockSlow() (err error) {
 			select {
 			case resultCh <- policyLockResult{handle, err}:
 				// lockSlow has received the result.
+				break send_result
 			default:
 				select {
 				case <-closing:

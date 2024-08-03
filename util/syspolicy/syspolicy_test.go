@@ -5,16 +5,24 @@ package syspolicy
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
+
+	"tailscale.com/types/logger"
+	"tailscale.com/util/syspolicy/internal/loggerx"
+	"tailscale.com/util/syspolicy/internal/metrics"
+	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/syspolicy/source"
 )
 
 // testHandler encompasses all data types returned when testing any of the syspolicy
 // methods that involve getting a policy value.
 // For keys and the corresponding values, check policy_keys.go.
 type testHandler struct {
-	t     *testing.T
+	t     testing.TB
 	key   Key
 	s     string
 	u64   uint64
@@ -28,7 +36,10 @@ var someOtherError = errors.New("error other than not found")
 
 func (th *testHandler) ReadString(key string) (string, error) {
 	if key != string(th.key) {
-		th.t.Errorf("ReadString(%q) want %q", key, th.key)
+		// The syspolicy package now reads and caches all registered policy settings.
+		// Therefore, it is expected to call the handler requesting all policies
+		// rather than just the specific ones we asked for.
+		return "", ErrNotConfigured
 	}
 	th.calls++
 	return th.s, th.err
@@ -36,7 +47,10 @@ func (th *testHandler) ReadString(key string) (string, error) {
 
 func (th *testHandler) ReadUInt64(key string) (uint64, error) {
 	if key != string(th.key) {
-		th.t.Errorf("ReadUint64(%q) want %q", key, th.key)
+		// The syspolicy package now reads and caches all registered policy settings.
+		// Therefore, it is expected to call the handler requesting all policies
+		// rather than just the specific ones we asked for.
+		return 0, ErrNotConfigured
 	}
 	th.calls++
 	return th.u64, th.err
@@ -44,7 +58,10 @@ func (th *testHandler) ReadUInt64(key string) (uint64, error) {
 
 func (th *testHandler) ReadBoolean(key string) (bool, error) {
 	if key != string(th.key) {
-		th.t.Errorf("ReadBool(%q) want %q", key, th.key)
+		// The syspolicy package now reads and caches all registered policy settings.
+		// Therefore, it is expected to call the handler requesting all policies
+		// rather than just the specific ones we asked for.
+		return false, ErrNotConfigured
 	}
 	th.calls++
 	return th.b, th.err
@@ -52,7 +69,10 @@ func (th *testHandler) ReadBoolean(key string) (bool, error) {
 
 func (th *testHandler) ReadStringArray(key string) ([]string, error) {
 	if key != string(th.key) {
-		th.t.Errorf("ReadStringArray(%q) want %q", key, th.key)
+		// The syspolicy package now reads and caches all registered policy settings.
+		// Therefore, it is expected to call the handler requesting all policies
+		// rather than just the specific ones we asked for.
+		return nil, ErrNotConfigured
 	}
 	th.calls++
 	return th.sArr, th.err
@@ -67,23 +87,28 @@ func TestGetString(t *testing.T) {
 		defaultValue string
 		wantValue    string
 		wantError    error
+		wantMetrics  []metrics.TestState
 	}{
 		{
 			name:         "read existing value",
 			key:          AdminConsoleVisibility,
 			handlerValue: "hide",
 			wantValue:    "hide",
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AdminConsole", Value: 1},
+			},
 		},
 		{
 			name:         "read non-existing value",
 			key:          EnableServerMode,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantError:    nil,
 		},
 		{
 			name:         "read non-existing value, non-blank default",
 			key:          EnableServerMode,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			defaultValue: "test",
 			wantValue:    "test",
 			wantError:    nil,
@@ -93,11 +118,17 @@ func TestGetString(t *testing.T) {
 			key:          NetworkDevicesVisibility,
 			handlerError: someOtherError,
 			wantError:    someOtherError,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_NetworkDevices_error", Value: 1},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h := metrics.NewTestHandler(t)
+			metrics.SetHooksForTest(t, h.AddMetric, h.SetMetric)
 			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
@@ -105,12 +136,21 @@ func TestGetString(t *testing.T) {
 				err: tt.handlerError,
 			})
 			value, err := GetString(tt.key, tt.defaultValue)
-			if err != tt.wantError {
+			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if value != tt.wantValue {
 				t.Errorf("value=%v, want %v", value, tt.wantValue)
 			}
+			wantMetrics := tt.wantMetrics
+			if !metrics.ShouldReport() {
+				// Check that metrics are not reported on platforms
+				// where they shouldn't be reported.
+				// As of 2024-08-02, syspolicy only reports metrics
+				// on Windows and Android.
+				wantMetrics = nil
+			}
+			h.MustEqual(wantMetrics...)
 		})
 	}
 }
@@ -127,7 +167,7 @@ func TestGetUint64(t *testing.T) {
 	}{
 		{
 			name:         "read existing value",
-			key:          KeyExpirationNoticeTime,
+			key:          LogSCMInteractions,
 			handlerValue: 1,
 			wantValue:    1,
 		},
@@ -135,14 +175,14 @@ func TestGetUint64(t *testing.T) {
 			name:         "read non-existing value",
 			key:          LogSCMInteractions,
 			handlerValue: 0,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantValue:    0,
 		},
 		{
 			name:         "read non-existing value, non-zero default",
 			key:          LogSCMInteractions,
 			defaultValue: 2,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantValue:    2,
 		},
 		{
@@ -155,14 +195,21 @@ func TestGetUint64(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			SetHandlerForTest(t, &testHandler{
+			// None of the policy settings tested here are integers.
+			// In fact, we don't have any integer policies as of 2024-07-29.
+			// However, we can register each of them as an integer policy setting
+			// for the duration of the test, providing us with something to test against.
+			if err := setting.SetDefinitionsForTest(t, setting.NewDefinition(tt.key, setting.DeviceSetting, setting.IntegerValue)); err != nil {
+				t.Fatalf("SetDefinitionsForTest failed: %v", err)
+			}
+			rsop.RegisterStoreForTest(t, tt.name, setting.DeviceScope, WrapHandler(&testHandler{
 				t:   t,
 				key: tt.key,
 				u64: tt.handlerValue,
 				err: tt.handlerError,
-			})
+			}))
 			value, err := GetUint64(tt.key, tt.defaultValue)
-			if err != tt.wantError {
+			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if value != tt.wantValue {
@@ -181,32 +228,43 @@ func TestGetBoolean(t *testing.T) {
 		defaultValue bool
 		wantValue    bool
 		wantError    error
+		wantMetrics  []metrics.TestState
 	}{
 		{
 			name:         "read existing value",
 			key:          FlushDNSOnSessionUnlock,
 			handlerValue: true,
 			wantValue:    true,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_FlushDNSOnSessionUnlock", Value: 1},
+			},
 		},
 		{
 			name:         "read non-existing value",
 			key:          LogSCMInteractions,
 			handlerValue: false,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantValue:    false,
 		},
 		{
 			name:         "reading value returns other error",
 			key:          FlushDNSOnSessionUnlock,
 			handlerError: someOtherError,
-			wantError:    someOtherError,
+			wantError:    someOtherError, // expect error...
 			defaultValue: true,
-			wantValue:    false,
+			wantValue:    true, // ...AND default value if the handler fails.
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_FlushDNSOnSessionUnlock_error", Value: 1},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h := metrics.NewTestHandler(t)
+			metrics.SetHooksForTest(t, h.AddMetric, h.SetMetric)
 			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
@@ -214,12 +272,21 @@ func TestGetBoolean(t *testing.T) {
 				err: tt.handlerError,
 			})
 			value, err := GetBoolean(tt.key, tt.defaultValue)
-			if err != tt.wantError {
+			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if value != tt.wantValue {
 				t.Errorf("value=%v, want %v", value, tt.wantValue)
 			}
+			wantMetrics := tt.wantMetrics
+			if !metrics.ShouldReport() {
+				// Check that metrics are not reported on platforms
+				// where they shouldn't be reported.
+				// As of 2024-08-02, syspolicy only reports metrics
+				// on Windows and Android.
+				wantMetrics = nil
+			}
+			h.MustEqual(wantMetrics...)
 		})
 	}
 }
@@ -232,42 +299,61 @@ func TestGetPreferenceOption(t *testing.T) {
 		handlerError error
 		wantValue    PreferenceOption
 		wantError    error
+		wantMetrics  []metrics.TestState
 	}{
 		{
 			name:         "always by policy",
 			key:          EnableIncomingConnections,
 			handlerValue: "always",
-			wantValue:    alwaysByPolicy,
+			wantValue:    setting.AlwaysByPolicy,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AllowIncomingConnections", Value: 1},
+			},
 		},
 		{
 			name:         "never by policy",
 			key:          EnableIncomingConnections,
 			handlerValue: "never",
-			wantValue:    neverByPolicy,
+			wantValue:    setting.NeverByPolicy,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AllowIncomingConnections", Value: 1},
+			},
 		},
 		{
 			name:         "use default",
 			key:          EnableIncomingConnections,
 			handlerValue: "",
-			wantValue:    showChoiceByPolicy,
+			wantValue:    setting.ShowChoiceByPolicy,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AllowIncomingConnections", Value: 1},
+			},
 		},
 		{
 			name:         "read non-existing value",
 			key:          EnableIncomingConnections,
-			handlerError: ErrNoSuchKey,
-			wantValue:    showChoiceByPolicy,
+			handlerError: ErrNotConfigured,
+			wantValue:    setting.ShowChoiceByPolicy,
 		},
 		{
 			name:         "other error is returned",
 			key:          EnableIncomingConnections,
 			handlerError: someOtherError,
-			wantValue:    showChoiceByPolicy,
+			wantValue:    setting.ShowChoiceByPolicy,
 			wantError:    someOtherError,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_AllowIncomingConnections_error", Value: 1},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h := metrics.NewTestHandler(t)
+			metrics.SetHooksForTest(t, h.AddMetric, h.SetMetric)
 			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
@@ -275,12 +361,21 @@ func TestGetPreferenceOption(t *testing.T) {
 				err: tt.handlerError,
 			})
 			option, err := GetPreferenceOption(tt.key)
-			if err != tt.wantError {
+			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if option != tt.wantValue {
 				t.Errorf("option=%v, want %v", option, tt.wantValue)
 			}
+			wantMetrics := tt.wantMetrics
+			if !metrics.ShouldReport() {
+				// Check that metrics are not reported on platforms
+				// where they shouldn't be reported.
+				// As of 2024-08-02, syspolicy only reports metrics
+				// on Windows and Android.
+				wantMetrics = nil
+			}
+			h.MustEqual(wantMetrics...)
 		})
 	}
 }
@@ -293,38 +388,53 @@ func TestGetVisibility(t *testing.T) {
 		handlerError error
 		wantValue    Visibility
 		wantError    error
+		wantMetrics  []metrics.TestState
 	}{
 		{
 			name:         "hidden by policy",
 			key:          AdminConsoleVisibility,
 			handlerValue: "hide",
-			wantValue:    hiddenByPolicy,
+			wantValue:    setting.HiddenByPolicy,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AdminConsole", Value: 1},
+			},
 		},
 		{
 			name:         "visibility default",
 			key:          AdminConsoleVisibility,
 			handlerValue: "show",
-			wantValue:    visibleByPolicy,
+			wantValue:    setting.VisibleByPolicy,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AdminConsole", Value: 1},
+			},
 		},
 		{
 			name:         "read non-existing value",
 			key:          AdminConsoleVisibility,
 			handlerValue: "show",
-			handlerError: ErrNoSuchKey,
-			wantValue:    visibleByPolicy,
+			handlerError: ErrNotConfigured,
+			wantValue:    setting.VisibleByPolicy,
 		},
 		{
 			name:         "other error is returned",
 			key:          AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: someOtherError,
-			wantValue:    visibleByPolicy,
+			wantValue:    setting.VisibleByPolicy,
 			wantError:    someOtherError,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_AdminConsole_error", Value: 1},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h := metrics.NewTestHandler(t)
+			metrics.SetHooksForTest(t, h.AddMetric, h.SetMetric)
 			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
@@ -332,12 +442,21 @@ func TestGetVisibility(t *testing.T) {
 				err: tt.handlerError,
 			})
 			visibility, err := GetVisibility(tt.key)
-			if err != tt.wantError {
+			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if visibility != tt.wantValue {
 				t.Errorf("visibility=%v, want %v", visibility, tt.wantValue)
 			}
+			wantMetrics := tt.wantMetrics
+			if !metrics.ShouldReport() {
+				// Check that metrics are not reported on platforms
+				// where they shouldn't be reported.
+				// As of 2024-08-02, syspolicy only reports metrics
+				// on Windows and Android.
+				wantMetrics = nil
+			}
+			h.MustEqual(wantMetrics...)
 		})
 	}
 }
@@ -351,6 +470,7 @@ func TestGetDuration(t *testing.T) {
 		defaultValue time.Duration
 		wantValue    time.Duration
 		wantError    error
+		wantMetrics  []metrics.TestState
 	}{
 		{
 			name:         "read existing value",
@@ -358,25 +478,34 @@ func TestGetDuration(t *testing.T) {
 			handlerValue: "2h",
 			wantValue:    2 * time.Hour,
 			defaultValue: 24 * time.Hour,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_KeyExpirationNotice", Value: 1},
+			},
 		},
 		{
 			name:         "invalid duration value",
 			key:          KeyExpirationNoticeTime,
 			handlerValue: "-20",
 			wantValue:    24 * time.Hour,
+			wantError:    errors.New(`time: missing unit in duration "-20"`),
 			defaultValue: 24 * time.Hour,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_KeyExpirationNotice_error", Value: 1},
+			},
 		},
 		{
 			name:         "read non-existing value",
 			key:          KeyExpirationNoticeTime,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantValue:    24 * time.Hour,
 			defaultValue: 24 * time.Hour,
 		},
 		{
 			name:         "read non-existing value different default",
 			key:          KeyExpirationNoticeTime,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantValue:    0 * time.Second,
 			defaultValue: 0 * time.Second,
 		},
@@ -387,11 +516,17 @@ func TestGetDuration(t *testing.T) {
 			wantValue:    24 * time.Hour,
 			wantError:    someOtherError,
 			defaultValue: 24 * time.Hour,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_KeyExpirationNotice_error", Value: 1},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h := metrics.NewTestHandler(t)
+			metrics.SetHooksForTest(t, h.AddMetric, h.SetMetric)
 			SetHandlerForTest(t, &testHandler{
 				t:   t,
 				key: tt.key,
@@ -399,12 +534,21 @@ func TestGetDuration(t *testing.T) {
 				err: tt.handlerError,
 			})
 			duration, err := GetDuration(tt.key, tt.defaultValue)
-			if err != tt.wantError {
+			if fmt.Sprint(err) != fmt.Sprint(tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if duration != tt.wantValue {
 				t.Errorf("duration=%v, want %v", duration, tt.wantValue)
 			}
+			wantMetrics := tt.wantMetrics
+			if !metrics.ShouldReport() {
+				// Check that metrics are not reported on platforms
+				// where they shouldn't be reported.
+				// As of 2024-08-02, syspolicy only reports metrics
+				// on Windows and Android.
+				wantMetrics = nil
+			}
+			h.MustEqual(wantMetrics...)
 		})
 	}
 }
@@ -418,23 +562,28 @@ func TestGetStringArray(t *testing.T) {
 		defaultValue []string
 		wantValue    []string
 		wantError    error
+		wantMetrics  []metrics.TestState
 	}{
 		{
 			name:         "read existing value",
 			key:          AllowedSuggestedExitNodes,
 			handlerValue: []string{"foo", "bar"},
 			wantValue:    []string{"foo", "bar"},
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_any", Value: 1},
+				{Name: "$os_syspolicy_AllowedSuggestedExitNodes", Value: 1},
+			},
 		},
 		{
 			name:         "read non-existing value",
 			key:          AllowedSuggestedExitNodes,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			wantError:    nil,
 		},
 		{
 			name:         "read non-existing value, non nil default",
 			key:          AllowedSuggestedExitNodes,
-			handlerError: ErrNoSuchKey,
+			handlerError: ErrNotConfigured,
 			defaultValue: []string{"foo", "bar"},
 			wantValue:    []string{"foo", "bar"},
 			wantError:    nil,
@@ -444,11 +593,17 @@ func TestGetStringArray(t *testing.T) {
 			key:          AllowedSuggestedExitNodes,
 			handlerError: someOtherError,
 			wantError:    someOtherError,
+			wantMetrics: []metrics.TestState{
+				{Name: "$os_syspolicy_errors", Value: 1},
+				{Name: "$os_syspolicy_AllowedSuggestedExitNodes_error", Value: 1},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h := metrics.NewTestHandler(t)
+			metrics.SetHooksForTest(t, h.AddMetric, h.SetMetric)
 			SetHandlerForTest(t, &testHandler{
 				t:    t,
 				key:  tt.key,
@@ -456,13 +611,44 @@ func TestGetStringArray(t *testing.T) {
 				err:  tt.handlerError,
 			})
 			value, err := GetStringArray(tt.key, tt.defaultValue)
-			if err != tt.wantError {
+			if !errorsMatchForTest(err, tt.wantError) {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}
 			if !slices.Equal(tt.wantValue, value) {
 				t.Errorf("value=%v, want %v", value, tt.wantValue)
 			}
+			wantMetrics := tt.wantMetrics
+			if !metrics.ShouldReport() {
+				// Check that metrics are not reported on platforms
+				// where they shouldn't be reported.
+				// As of 2024-08-02, syspolicy only reports metrics
+				// on Windows and Android.
+				wantMetrics = nil
+			}
+			h.MustEqual(wantMetrics...)
 		})
+	}
+}
+
+func BenchmarkGetString(b *testing.B) {
+	loggerx.SetForTest(b, logger.Discard, logger.Discard)
+	setWellKnownSettingsForTest(b)
+
+	store := source.NewTestStore(b)
+	wantControlURL := "https://login.tailscale.com"
+	store.SetStrings(source.TestSetting[string]{Key: ControlURL, Value: wantControlURL})
+
+	_, err := rsop.RegisterStoreForTest(b, "Test Store", setting.DeviceScope, store)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		gotControlURL, _ := GetString(ControlURL, "https://controlplane.tailscale.com")
+		if gotControlURL != wantControlURL {
+			b.Fatalf("got %v; want %v", gotControlURL, wantControlURL)
+		}
 	}
 }
 
@@ -496,4 +682,14 @@ func TestSelectControlURL(t *testing.T) {
 			t.Errorf("(reg %q, disk %q) = %q; want %q", tt.reg, tt.disk, got, tt.want)
 		}
 	}
+}
+
+func errorsMatchForTest(got, want error) bool {
+	if got == nil && want == nil {
+		return true
+	}
+	if got == nil || want == nil {
+		return false
+	}
+	return errors.Is(got, want) || got.Error() == want.Error()
 }

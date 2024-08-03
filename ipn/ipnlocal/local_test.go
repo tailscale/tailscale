@@ -52,6 +52,8 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -2546,6 +2548,14 @@ func TestPreferencePolicyInfo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			definitions := make([]*setting.Definition, 0, len(preferencePolicies)+1)
+			definitions = append(definitions, must.Get(syspolicy.WellKnownSettingDefinition(syspolicy.ControlURL)))
+			for _, pp := range preferencePolicies {
+				definitions = append(definitions, must.Get(syspolicy.WellKnownSettingDefinition(pp.key)))
+			}
+			if err := setting.SetDefinitionsForTest(t, definitions...); err != nil {
+				t.Fatalf("SetDefinitionsForTest failed: %v", err)
+			}
 			for _, pp := range preferencePolicies {
 				t.Run(string(pp.key), func(t *testing.T) {
 					var h syspolicy.Handler
@@ -2572,7 +2582,7 @@ func TestPreferencePolicyInfo(t *testing.T) {
 						msh.stringPolicies[pp.key] = &tt.policyValue
 						h = msh
 					}
-					syspolicy.SetHandlerForTest(t, h)
+					rsop.RegisterStoreForTest(t, tt.name, setting.DeviceScope, syspolicy.WrapHandler(h))
 
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
