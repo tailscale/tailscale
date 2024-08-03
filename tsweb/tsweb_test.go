@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
 	"tailscale.com/util/httpm"
@@ -864,6 +865,7 @@ func TestStdHandler_CanceledAfterHeader(t *testing.T) {
 }
 
 func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13017")
 	now := time.Now()
 
 	// Start a HTTP server that returns 1MB of data.
