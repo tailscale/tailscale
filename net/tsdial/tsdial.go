@@ -166,6 +166,7 @@ func (d *Dialer) Close() error {
 		c.Close()
 	}
 	d.activeSysConns = nil
+	d.PeerAPITransport().CloseIdleConnections()
 	return nil
 }
 
