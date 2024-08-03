@@ -14,7 +14,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/header/parse"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"gvisor.dev/gvisor/pkg/tcpip/stack/gro"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -96,7 +95,7 @@ type linkEndpoint struct {
 	dispatcher stack.NetworkDispatcher
 	linkAddr   tcpip.LinkAddress
 	mtu        uint32
-	gro        gro.GRO // mu only guards access to gro.Dispatcher
+	gro        gro // mu only guards access to gro.Dispatcher
 
 	q *queue // outbound
 }
