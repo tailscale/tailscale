@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/net/netmon"
 )
 
@@ -36,6 +37,7 @@ func TestDetectCaptivePortalReturnsFalse(t *testing.T) {
 }
 
 func TestAllEndpointsAreUpAndReturnExpectedResponse(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13019")
 	d := NewDetector(t.Logf)
 	endpoints := availableEndpoints(nil, 0, t.Logf, runtime.GOOS)
 
