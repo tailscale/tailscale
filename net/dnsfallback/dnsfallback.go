@@ -281,6 +281,7 @@ func lookup(ctx context.Context, host string, logf logger.Logf, ht *health.Track
 func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, queryName string, logf logger.Logf, ht *health.Tracker, netMon *netmon.Monitor) (dnsMap, error) {
 	dialer := netns.NewDialer(logf, netMon)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DisableKeepAlives = true // This transport is meant to be used once.
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(serverIP.String(), "443"))
