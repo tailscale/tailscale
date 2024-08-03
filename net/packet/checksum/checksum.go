@@ -61,7 +61,7 @@ func UpdateDstAddr(q *packet.Parsed, dst netip.Addr) {
 	b := q.Buffer()
 	if dst.Is6() {
 		v6 := dst.As16()
-		copy(b[24:36], v6[:])
+		copy(b[24:40], v6[:])
 		updateV6PacketChecksums(q, old, dst)
 	} else {
 		v4 := dst.As4()
