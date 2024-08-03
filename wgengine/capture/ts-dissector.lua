@@ -5,9 +5,9 @@ end
 tsdebug_ll = Proto("tsdebug", "Tailscale debug")
 PATH = ProtoField.string("tsdebug.PATH","PATH", base.ASCII)
 SNAT_IP_4 = ProtoField.ipv4("tsdebug.SNAT_IP_4", "Pre-NAT Source IPv4 address")
-SNAT_IP_6 = ProtoField.ipv4("tsdebug.SNAT_IP_6", "Pre-NAT Source IPv6 address")
+SNAT_IP_6 = ProtoField.ipv6("tsdebug.SNAT_IP_6", "Pre-NAT Source IPv6 address")
 DNAT_IP_4 = ProtoField.ipv4("tsdebug.DNAT_IP_4", "Pre-NAT Dest IPv4 address")
-DNAT_IP_6 = ProtoField.ipv4("tsdebug.DNAT_IP_6", "Pre-NAT Dest IPv6 address")
+DNAT_IP_6 = ProtoField.ipv6("tsdebug.DNAT_IP_6", "Pre-NAT Dest IPv6 address")
 tsdebug_ll.fields = {PATH, SNAT_IP_4, SNAT_IP_6, DNAT_IP_4, DNAT_IP_6}
 
 function tsdebug_ll.dissector(buffer, pinfo, tree)
@@ -63,7 +63,7 @@ local ts_dissectors = DissectorTable.new("ts.proto", "Tailscale-specific dissect
 tsdisco_meta = Proto("tsdisco", "Tailscale DISCO metadata")
 DISCO_IS_DERP = ProtoField.bool("tsdisco.IS_DERP","From DERP")
 DISCO_SRC_IP_4 = ProtoField.ipv4("tsdisco.SRC_IP_4", "Source IPv4 address")
-DISCO_SRC_IP_6 = ProtoField.ipv4("tsdisco.SRC_IP_6", "Source IPv6 address")
+DISCO_SRC_IP_6 = ProtoField.ipv6("tsdisco.SRC_IP_6", "Source IPv6 address")
 DISCO_SRC_PORT = ProtoField.uint16("tsdisco.SRC_PORT","Source port", base.DEC)
 DISCO_DERP_PUB = ProtoField.bytes("tsdisco.DERP_PUB", "DERP public key", base.SPACE)
 tsdisco_meta.fields = {DISCO_IS_DERP, DISCO_SRC_PORT, DISCO_DERP_PUB, DISCO_SRC_IP_4, DISCO_SRC_IP_6}
