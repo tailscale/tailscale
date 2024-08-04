@@ -1,0 +1,173 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+package setting
+
+import (
+	"slices"
+	"strings"
+
+	xmaps "golang.org/x/exp/maps"
+	"tailscale.com/util/deephash"
+)
+
+// Snapshot is an immutable collection of ([Key], [RawItem]) pairs, representing
+// a set of policy settings applied at a specific moment in time.
+// A nil pointer to [Snapshot] is valid.
+type Snapshot struct {
+	m       map[Key]RawItem
+	sig     deephash.Sum // of m
+	summary Summary
+}
+
+// NewSnapshot returns a new [Snapshot] with the specified items and options.
+func NewSnapshot(items map[Key]RawItem, opts ...SummaryOption) *Snapshot {
+	return &Snapshot{m: xmaps.Clone(items), sig: deephash.Hash(&items), summary: SummaryWith(opts...)}
+}
+
+// All returns a map of all policy settings in s.
+// The returned map must not be modified.
+func (s *Snapshot) All() map[Key]RawItem {
+	if s == nil {
+		return nil
+	}
+	// TODO(nickkhyl): return iter.Seq2[[Key], [RawItem]] in Go 1.23,
+	// and remove [keyItemPair].
+	return s.m
+}
+
+// Get returns the value of the policy setting with the specified key
+// or nil if it is not configured or has an error.
+func (s *Snapshot) Get(k Key) any {
+	v, _ := s.GetErr(k)
+	return v
+}
+
+// GetErr returns the value of the policy setting with the specified key,
+// [ErrNotConfigured] if it is not configured, or an error returned by
+// the policy Store if the policy setting could not be read.
+func (s *Snapshot) GetErr(k Key) (any, error) {
+	if s != nil {
+		if s, ok := s.m[k]; ok {
+			return s.Value(), s.Error()
+		}
+	}
+	return nil, ErrNotConfigured
+}
+
+// GetSetting returns the untyped policy setting with the specified key and true
+// if a policy setting with such key has been configured;
+// otherwise, it returns zero, false.
+func (s *Snapshot) GetSetting(k Key) (setting RawItem, ok bool) {
+	setting, ok = s.m[k]
+	return setting, ok
+}
+
+// Equal reports whether s and s2 are equal.
+func (s *Snapshot) Equal(s2 *Snapshot) bool {
+	if !s.EqualItems(s2) {
+		return false
+	}
+	return s.Summary() == s2.Summary()
+}
+
+// EqualItems reports whether items in s and s2 are equal.
+func (s *Snapshot) EqualItems(s2 *Snapshot) bool {
+	if s == s2 {
+		return true
+	}
+	if s.Len() != s2.Len() {
+		return false
+	}
+	if s.Len() == 0 {
+		return true
+	}
+	return s.sig == s2.sig
+}
+
+// Keys return an iterator over keys in s. The iteration order is not specified
+// and is not guaranteed to be the same from one call to the next.
+func (s *Snapshot) Keys() []Key {
+	if s.m == nil {
+		return nil
+	}
+	// TODO(nickkhyl): return iter.Seq[Key] in Go 1.23.
+	return xmaps.Keys(s.m)
+}
+
+// Len reports the number of [RawItem]s in s.
+func (s *Snapshot) Len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.m)
+}
+
+// Summary returns information about s as a whole rather than about specific [RawItem]s in it.
+func (s *Snapshot) Summary() Summary {
+	if s == nil {
+		return Summary{}
+	}
+	return s.summary
+}
+
+// String implements [fmt.Stringer]
+func (s *Snapshot) String() string {
+	if s.Len() == 0 && s.Summary().IsEmpty() {
+		return "{Empty}"
+	}
+	keys := s.Keys()
+	slices.Sort(keys)
+	var sb strings.Builder
+	if !s.summary.IsEmpty() {
+		sb.WriteRune('{')
+		if s.Len() == 0 {
+			sb.WriteString("Empty, ")
+		}
+		sb.WriteString(s.summary.String())
+		sb.WriteRune('}')
+	}
+	for _, k := range keys {
+		if sb.Len() != 0 {
+			sb.WriteRune('\n')
+		}
+		sb.WriteString(string(k))
+		sb.WriteString(" = ")
+		sb.WriteString(s.m[k].String())
+	}
+	return sb.String()
+}
+
+// MergeSnapshots returns a [Snapshot] that contains all [RawItem]s
+// from snapshot1 and snapshot2 and the [Summary] with the narrower [PolicyScope].
+// If there's a conflict between policy settings in the two snapshots,
+// the policy settings from the snapshot with the broader scope take precedence.
+// In other words, policy settings configured for the [DeviceScope] win
+// over policy settings configured for a user scope.
+func MergeSnapshots(snapshot1, snapshot2 *Snapshot) *Snapshot {
+	scope1, ok1 := snapshot1.Summary().Scope().GetOk()
+	scope2, ok2 := snapshot2.Summary().Scope().GetOk()
+	if ok1 && ok2 && scope1.StrictlyContains(scope2) {
+		// Swap snapshots if snapshot1 has higher precedence than snapshot2.
+		snapshot1, snapshot2 = snapshot2, snapshot1
+	}
+	if snapshot2.Len() == 0 {
+		return snapshot1
+	}
+	summaryOpts := make([]SummaryOption, 0, 2)
+	if scope, ok := snapshot1.Summary().Scope().GetOk(); ok {
+		// Use the scope from snapshot1, if present, which is the more specific snapshot.
+		summaryOpts = append(summaryOpts, scope)
+	}
+	if snapshot1.Len() == 0 {
+		if origin, ok := snapshot2.Summary().Origin().GetOk(); ok {
+			// Use the origin from snapshot2 if snapshot1 is empty.
+			summaryOpts = append(summaryOpts, origin)
+		}
+		return &Snapshot{snapshot2.m, snapshot2.sig, SummaryWith(summaryOpts...)}
+	}
+	m := make(map[Key]RawItem, snapshot1.Len()+snapshot2.Len())
+	xmaps.Copy(m, snapshot1.m)
+	xmaps.Copy(m, snapshot2.m) // snapshot2 has higher precedence
+	return &Snapshot{m, deephash.Hash(&m), SummaryWith(summaryOpts...)}
+}

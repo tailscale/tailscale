@@ -3,7 +3,9 @@
 
 package syspolicy
 
-type Key string
+import "tailscale.com/util/syspolicy/setting"
+
+type Key = setting.Key
 
 const (
 	// Keys with a string value

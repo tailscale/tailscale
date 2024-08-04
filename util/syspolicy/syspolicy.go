@@ -7,6 +7,8 @@ package syspolicy
 import (
 	"errors"
 	"time"
+
+	"tailscale.com/util/syspolicy/setting"
 )
 
 func GetString(key Key, defaultValue string) (string, error) {
@@ -45,78 +47,20 @@ func GetStringArray(key Key, defaultValue []string) ([]string, error) {
 	return v, err
 }
 
-// PreferenceOption is a policy that governs whether a boolean variable
-// is forcibly assigned an administrator-defined value, or allowed to receive
-// a user-defined value.
-type PreferenceOption int
-
-const (
-	showChoiceByPolicy PreferenceOption = iota
-	neverByPolicy
-	alwaysByPolicy
-)
-
-// Show returns if the UI option that controls the choice administered by this
-// policy should be shown. Currently this is true if and only if the policy is
-// showChoiceByPolicy.
-func (p PreferenceOption) Show() bool {
-	return p == showChoiceByPolicy
-}
-
-// ShouldEnable checks if the choice administered by this policy should be
-// enabled. If the administrator has chosen a setting, the administrator's
-// setting is returned, otherwise userChoice is returned.
-func (p PreferenceOption) ShouldEnable(userChoice bool) bool {
-	switch p {
-	case neverByPolicy:
-		return false
-	case alwaysByPolicy:
-		return true
-	default:
-		return userChoice
-	}
-}
-
-// WillOverride checks if the choice administered by the policy is different
-// from the user's choice.
-func (p PreferenceOption) WillOverride(userChoice bool) bool {
-	return p.ShouldEnable(userChoice) != userChoice
-}
-
 // GetPreferenceOption loads a policy from the registry that can be
 // managed by an enterprise policy management system and allows administrative
 // overrides of users' choices in a way that we do not want tailcontrol to have
 // the authority to set. It describes user-decides/always/never options, where
 // "always" and "never" remove the user's ability to make a selection. If not
 // present or set to a different value, "user-decides" is the default.
-func GetPreferenceOption(name Key) (PreferenceOption, error) {
-	opt, err := GetString(name, "user-decides")
+func GetPreferenceOption(name Key) (setting.PreferenceOption, error) {
+	s, err := GetString(name, "user-decides")
 	if err != nil {
-		return showChoiceByPolicy, err
+		return setting.ShowChoiceByPolicy, err
 	}
-	switch opt {
-	case "always":
-		return alwaysByPolicy, nil
-	case "never":
-		return neverByPolicy, nil
-	default:
-		return showChoiceByPolicy, nil
-	}
-}
-
-// Visibility is a policy that controls whether or not a particular
-// component of a user interface is to be shown.
-type Visibility byte
-
-const (
-	visibleByPolicy Visibility = 'v'
-	hiddenByPolicy  Visibility = 'h'
-)
-
-// Show reports whether the UI option administered by this policy should be shown.
-// Currently this is true if and only if the policy is visibleByPolicy.
-func (p Visibility) Show() bool {
-	return p == visibleByPolicy
+	var opt setting.PreferenceOption
+	err = opt.UnmarshalText([]byte(s))
+	return opt, err
 }
 
 // GetVisibility loads a policy from the registry that can be managed
@@ -124,17 +68,14 @@ func (p Visibility) Show() bool {
 // for UI elements. The registry value should be a string set to "show" (return
 // true) or "hide" (return true). If not present or set to a different value,
 // "show" (return false) is the default.
-func GetVisibility(name Key) (Visibility, error) {
-	opt, err := GetString(name, "show")
+func GetVisibility(name Key) (setting.Visibility, error) {
+	s, err := GetString(name, "show")
 	if err != nil {
-		return visibleByPolicy, err
+		return setting.VisibleByPolicy, err
 	}
-	switch opt {
-	case "hide":
-		return hiddenByPolicy, nil
-	default:
-		return visibleByPolicy, nil
-	}
+	var visibility setting.Visibility
+	visibility.UnmarshalText([]byte(s))
+	return visibility, nil
 }
 
 // GetDuration loads a policy from the registry that can be managed
