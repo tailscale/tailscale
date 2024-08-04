@@ -8,6 +8,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"tailscale.com/util/syspolicy/setting"
 )
 
 // testHandler encompasses all data types returned when testing any of the syspolicy
@@ -230,38 +232,38 @@ func TestGetPreferenceOption(t *testing.T) {
 		key          Key
 		handlerValue string
 		handlerError error
-		wantValue    PreferenceOption
+		wantValue    setting.PreferenceOption
 		wantError    error
 	}{
 		{
 			name:         "always by policy",
 			key:          EnableIncomingConnections,
 			handlerValue: "always",
-			wantValue:    alwaysByPolicy,
+			wantValue:    setting.AlwaysByPolicy,
 		},
 		{
 			name:         "never by policy",
 			key:          EnableIncomingConnections,
 			handlerValue: "never",
-			wantValue:    neverByPolicy,
+			wantValue:    setting.NeverByPolicy,
 		},
 		{
 			name:         "use default",
 			key:          EnableIncomingConnections,
 			handlerValue: "",
-			wantValue:    showChoiceByPolicy,
+			wantValue:    setting.ShowChoiceByPolicy,
 		},
 		{
 			name:         "read non-existing value",
 			key:          EnableIncomingConnections,
 			handlerError: ErrNoSuchKey,
-			wantValue:    showChoiceByPolicy,
+			wantValue:    setting.ShowChoiceByPolicy,
 		},
 		{
 			name:         "other error is returned",
 			key:          EnableIncomingConnections,
 			handlerError: someOtherError,
-			wantValue:    showChoiceByPolicy,
+			wantValue:    setting.ShowChoiceByPolicy,
 			wantError:    someOtherError,
 		},
 	}
@@ -291,34 +293,34 @@ func TestGetVisibility(t *testing.T) {
 		key          Key
 		handlerValue string
 		handlerError error
-		wantValue    Visibility
+		wantValue    setting.Visibility
 		wantError    error
 	}{
 		{
 			name:         "hidden by policy",
 			key:          AdminConsoleVisibility,
 			handlerValue: "hide",
-			wantValue:    hiddenByPolicy,
+			wantValue:    setting.HiddenByPolicy,
 		},
 		{
 			name:         "visibility default",
 			key:          AdminConsoleVisibility,
 			handlerValue: "show",
-			wantValue:    visibleByPolicy,
+			wantValue:    setting.VisibleByPolicy,
 		},
 		{
 			name:         "read non-existing value",
 			key:          AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: ErrNoSuchKey,
-			wantValue:    visibleByPolicy,
+			wantValue:    setting.VisibleByPolicy,
 		},
 		{
 			name:         "other error is returned",
 			key:          AdminConsoleVisibility,
 			handlerValue: "show",
 			handlerError: someOtherError,
-			wantValue:    visibleByPolicy,
+			wantValue:    setting.VisibleByPolicy,
 			wantError:    someOtherError,
 		},
 	}
