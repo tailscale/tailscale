@@ -215,6 +215,10 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
 			return up.updateDebLike, true
+		case haveExecutable("zypper"):
+			// Zypper must come before dfn/yum as SUSE-based distros can have both alongside zypper.
+			// This should catch both transactional (Micro) and non-transactional (Leap/Tumbleweed/SLES/SLED).
+			return up.updateSUSE, false
 		case haveExecutable("dnf"):
 			return up.updateFedoraLike("dnf"), true
 		case haveExecutable("yum"):
@@ -549,6 +553,12 @@ func (up *Updater) updateNixos() error {
 	// Direct users to update their nix channel or nixpkgs flake input to
 	// receive the latest version.
 	return errors.New(`individual package updates are not supported on NixOS installations. Update your system channel or flake inputs to get the latest Tailscale version from nixpkgs.`)
+}
+
+func (up *Updater) updateSUSE() error {
+	// SUSE-based distros should update manually.
+	// The package can come from official Tailscale repos or not and the system can be transactional or not.
+	return errors.New(`Use Zypper or transactional-update (on applicable systems) to update Tailscale on openSUSE or SUSE Linux Enterprise installations.`)
 }
 
 const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
