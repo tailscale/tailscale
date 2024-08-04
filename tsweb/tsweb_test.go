@@ -22,7 +22,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
 	"tailscale.com/util/httpm"
@@ -865,7 +864,6 @@ func TestStdHandler_CanceledAfterHeader(t *testing.T) {
 }
 
 func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13017")
 	now := time.Now()
 
 	// Start a HTTP server that returns 1MB of data.
@@ -877,9 +875,8 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 	}))
 	defer rs.Close()
 
-	r := make(chan AccessLogRecord)
+	r := make(chan AccessLogRecord, 1)
 	var e *HTTPError
-	responseStarted := make(chan struct{})
 
 	// Create another server which proxies our 1MB server.
 	// The [httputil.ReverseProxy] will panic with [http.ErrAbortHandler] when
@@ -889,10 +886,6 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 			(&httputil.ReverseProxy{
 				Director: func(r *http.Request) {
 					r.URL = must.Get(url.Parse(rs.URL))
-				},
-				ModifyResponse: func(r *http.Response) error {
-					close(responseStarted)
-					return nil
 				},
 			}).ServeHTTP(w, r)
 			return nil
@@ -914,10 +907,6 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 	// Create a context which gets canceled after the handler starts processing
 	// the request.
 	ctx, cancelReq := context.WithCancel(context.Background())
-	go func() {
-		<-responseStarted
-		cancelReq()
-	}()
 
 	// Send a request to our server.
 	req, err := http.NewRequestWithContext(ctx, httpm.GET, s.URL, nil)
@@ -925,11 +914,18 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 		t.Fatalf("making request: %s", err)
 	}
 	res, err := http.DefaultClient.Do(req)
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("got error %v, want context.Canceled", err)
+	if err != nil {
+		t.Fatalf("got error %v, want nil", err)
 	}
-	if res != nil {
-		t.Errorf("got response %#v, want nil", res)
+	defer res.Body.Close()
+	cancelReq()
+
+	if b, err := io.ReadAll(res.Body); err == nil {
+		t.Errorf("read %d bytes", len(b))
+	} else if !errors.Is(err, context.Canceled) {
+		t.Errorf("got error %v, want context.Canceled", err)
+	} else if len(b) == 1<<20 {
+		t.Errorf("read all 1MB of response, want less")
 	}
 
 	// Check that we got the expected log record.
