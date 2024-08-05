@@ -117,7 +117,8 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 	echo "Testing on ubuntu:focal" && docker build --build-arg="BASE=ubuntu:focal" -t ssh-ubuntu-focal ssh/tailssh/testcontainers && \
 	echo "Testing on ubuntu:jammy" && docker build --build-arg="BASE=ubuntu:jammy" -t ssh-ubuntu-jammy ssh/tailssh/testcontainers && \
 	echo "Testing on ubuntu:mantic" && docker build --build-arg="BASE=ubuntu:mantic" -t ssh-ubuntu-mantic ssh/tailssh/testcontainers && \
-	echo "Testing on ubuntu:noble" && docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers
+	echo "Testing on ubuntu:noble" && docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers && \
+	echo "Testing on alpine:latest" && docker build --build-arg="BASE=alpine:latest" -t ssh-alpine-latest ssh/tailssh/testcontainers
 
 help: ## Show this help
 	@echo "\nSpecify a command. The choices are:\n"

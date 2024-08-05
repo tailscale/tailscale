@@ -399,7 +399,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 		return nil
 	}
 	loginArgs := ia.loginArgs(loginCmdPath)
-	dlogf("logging in with %s %+v", loginCmdPath, loginArgs)
+	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
 	err = unix.Exec(loginCmdPath, loginArgs, os.Environ())
@@ -435,13 +435,18 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
-	loginArgs := []string{"-l", ia.localUser}
+	loginArgs := []string{
+		su,
+		"-w", "SSH_AUTH_SOCK", // pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
+		"-l",
+		ia.localUser,
+	}
 	if ia.cmd != "" {
 		// Note - unlike the login command, su allows using both -l and -c.
 		loginArgs = append(loginArgs, "-c", ia.cmd)
 	}
 
-	dlogf("logging in with %s %q", su, loginArgs)
+	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
 	err = unix.Exec(su, loginArgs, os.Environ())
@@ -473,9 +478,15 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
-	// First try to execute su -l <user> -c true to make sure su supports the
-	// necessary arguments.
-	err = exec.Command(su, "-l", ia.localUser, "-c", "true").Run()
+	// First try to execute su -w SSH_AUTH_SOCK -l <user> -c true
+	// to make sure su supports the necessary arguments.
+	err = exec.Command(
+		su,
+		"-w", "SSH_AUTH_SOCK",
+		"-l",
+		ia.localUser,
+		"-c", "true",
+	).Run()
 	if err != nil {
 		dlogf("su check failed: %s", err)
 		return ""
