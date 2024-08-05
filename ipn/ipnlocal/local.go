@@ -626,7 +626,7 @@ func (b *LocalBackend) SetDirectFileRoot(dir string) {
 // success, or (false, error) on failure.
 //
 // If it is called whilst the LocalBackend is in 'Running' state, only a subset
-// of changes currently deemed safe to chnage for a running system are applied.
+// of changes currently deemed safe to change for a running system are applied.
 // The rest of the changes will get applied next time LocalBackend starts and
 // config is reloaded. Currently (08/2024) changes safe to apply while running
 // are changes to '.AcceptRoutes', '.AdvertiseRoutes' and '.StaticEndpoints'
@@ -705,8 +705,7 @@ func (b *LocalBackend) setConfigLocked(conf *conffile.Config, unlock unlockOnce)
 	return err
 }
 
-// needStaticEndpointUpdate accepts a configfile and returns true if the
-// configfile contains a change to the static wireguard endpoints.
+// needStaticEndpointUpdate reports whether newConf modifies the static wireguard endpoints.
 func (b *LocalBackend) needStaticEndpointsUpdate(newConf *conffile.Config) bool {
 	// If the new configfile does not have static endpoints set and existing
 	// config does not have any (to unset), no need to update.
