@@ -447,7 +447,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	mConn.SetNetInfoCallback(b.setNetInfo)
 
 	if sys.InitialConfig != nil {
-		if err := b.setConfigLocked(sys.InitialConfig); err != nil {
+		if err := b.setConfigLocked(sys.InitialConfig, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -624,9 +624,16 @@ func (b *LocalBackend) SetDirectFileRoot(dir string) {
 //
 // It returns (false, nil) if not running in declarative mode, (true, nil) on
 // success, or (false, error) on failure.
+//
+// If it is called whilst the LocalBackend is in 'Running' state, only a subset
+// of changes currently deemed safe to chnage for a running system are applied.
+// The rest of the changes will get applied next time LocalBackend starts and
+// config is reloaded. Currently (08/2024) changes safe to apply while running
+// are changes to '.AcceptRoutes', '.AdvertiseRoutes' and '.StaticEndpoints'
+// fields.
 func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	unlock := b.lockAndGetUnlock()
+	defer unlock()
 	if b.conf == nil {
 		return false, nil
 	}
@@ -634,40 +641,24 @@ func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := b.setConfigLocked(conf); err != nil {
+	if err := b.setConfigLocked(conf, unlock); err != nil {
 		return false, fmt.Errorf("error setting config: %w", err)
 	}
 
 	return true, nil
 }
 
-func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
-
-	// TODO(irbekrm): notify the relevant components to consume any prefs
-	// updates. Currently only initial configfile settings are applied
-	// immediately.
-	p := b.pm.CurrentPrefs().AsStruct()
-	mp, err := conf.Parsed.ToPrefs()
-	if err != nil {
-		return fmt.Errorf("error parsing config to prefs: %w", err)
-	}
-	p.ApplyEdits(&mp)
-	if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
-		return err
-	}
-
+// setConfigLocked applies tailscaled config from conffile.Config.
+// unlock must be non-nil if called for a 'Running' LocalBackend.
+func (b *LocalBackend) setConfigLocked(conf *conffile.Config, unlock unlockOnce) error {
 	defer func() {
 		b.conf = conf
 	}()
 
-	if conf.Parsed.StaticEndpoints == nil && (b.conf == nil || b.conf.Parsed.StaticEndpoints == nil) {
-		return nil
-	}
-
 	// Ensure that magicsock conn has the up to date static wireguard
 	// endpoints. Setting the endpoints here triggers an asynchronous update
 	// of the node's advertised endpoints.
-	if b.conf == nil && len(conf.Parsed.StaticEndpoints) != 0 || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
+	if b.needStaticEndpointsUpdate(conf) {
 		ms, ok := b.sys.MagicSock.GetOK()
 		if !ok {
 			b.logf("[unexpected] ReloadConfig: MagicSock not set")
@@ -675,7 +666,54 @@ func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 			ms.SetStaticEndpoints(views.SliceOf(conf.Parsed.StaticEndpoints))
 		}
 	}
-	return nil
+
+	oldPrefs := b.pm.CurrentPrefs().AsStruct()
+	newPrefs, err := conf.Parsed.ToPrefs()
+	if err != nil {
+		return fmt.Errorf("error parsing config to prefs: %w", err)
+	}
+
+	// If we are not running it should be safe to set all prefs. We can
+	// assume that these changes will get propagated before state changes to
+	// 'Running'.
+	if b.state != ipn.Running {
+		oldPrefs.ApplyEdits(&newPrefs)
+		return b.pm.SetPrefs(oldPrefs.View(), ipn.NetworkProfile{})
+	}
+
+	// If state is 'Running', selectively apply a few known safe prefs
+	// changes.
+	// As tailscaled will always read the configfile contents on start, we
+	// don't need to do anything to the prefs that aren't considered safe
+	// for reload whilst the state is 'Running'.
+	// TODO (irbekrm): eventually we should re-apply all prefs,
+	// this needs testing and validation.
+	if unlock == nil {
+		b.logf("[unexpected] unable to apply prefs update as setConfigLocked called with nil unlock, please report this")
+		return nil
+	}
+	// Generate a patch of changes safe to apply while in 'Running' state.
+	prefsPatch := &ipn.MaskedPrefs{
+		AdvertiseRoutesSet: newPrefs.AdvertiseRoutesSet,
+		RouteAllSet:        newPrefs.RouteAllSet,
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: newPrefs.AdvertiseRoutes,
+			RouteAll:        newPrefs.RouteAll,
+		},
+	}
+	_, err = b.editPrefsLockedOnEntry(prefsPatch, unlock)
+	return err
+}
+
+// needStaticEndpointUpdate accepts a configfile and returns true if the
+// configfile contains a change to the static wireguard endpoints.
+func (b *LocalBackend) needStaticEndpointsUpdate(newConf *conffile.Config) bool {
+	// If the new configfile does not have static endpoints set and existing
+	// config does not have any (to unset), no need to update.
+	if newConf.Parsed.StaticEndpoints == nil && (b.conf == nil || b.conf.Parsed.StaticEndpoints == nil) {
+		return false
+	}
+	return len(newConf.Parsed.StaticEndpoints) != 0 && b.conf == nil || !reflect.DeepEqual(newConf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints)
 }
 
 var assumeNetworkUpdateForTest = envknob.RegisterBool("TS_ASSUME_NETWORK_UP_FOR_TEST")

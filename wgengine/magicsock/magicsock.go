@@ -659,6 +659,11 @@ func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 	c.ReSTUN("static-endpoint-change")
 }
 
+// GetStaticEndpoints returns any wireguard endpoints explicitly configured by user.
+func (c *Conn) GetStaticEndpoints() views.Slice[netip.AddrPort] {
+	return c.staticEndpoints
+}
+
 // setNetInfoHavePortMap updates NetInfo.HavePortMap to true.
 func (c *Conn) setNetInfoHavePortMap() {
 	c.mu.Lock()
