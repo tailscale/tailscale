@@ -12,7 +12,7 @@ import (
 
 func init() {
 	// downgradeSDDL is a test helper that downgrades the windowsSDDL variable if
-	// the currently running user does not have sufficient priviliges to set the
+	// the currently running user does not have sufficient privileges to set the
 	// SDDL.
 	downgradeSDDL = func() (cleanup func()) {
 		// The current default descriptor can not be set by mere mortal users,
