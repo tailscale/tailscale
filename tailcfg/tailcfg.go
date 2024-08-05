@@ -147,7 +147,8 @@ type CapabilityVersion int
 //   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
 //   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
 //   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
-const CurrentCapabilityVersion CapabilityVersion = 104
+//   - 105: 2024-08-05: Fixed SSH behavior on systems that use busybox (issue #12849)
+const CurrentCapabilityVersion CapabilityVersion = 105
 
 type StableID string
 
