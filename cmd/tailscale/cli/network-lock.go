@@ -789,7 +789,7 @@ func runNetworkLockRevokeKeys(ctx context.Context, args []string) error {
 		}
 
 		fmt.Printf(`Run the following command on another machine with a trusted tailnet lock key:
-	%s lock recover-compromised-key --cosign %X
+	%s lock revoke-keys --cosign %X
 `, os.Args[0], aumBytes)
 		return nil
 	}
@@ -813,10 +813,10 @@ func runNetworkLockRevokeKeys(ctx context.Context, args []string) error {
 		fmt.Printf(`Co-signing completed successfully.
 
 To accumulate an additional signature, run the following command on another machine with a trusted tailnet lock key:
-	%s lock recover-compromised-key --cosign %X
+	%s lock revoke-keys --cosign %X
 
 Alternatively if you are done with co-signing, complete recovery by running the following command:
-	%s lock recover-compromised-key --finish %X
+	%s lock revoke-keys --finish %X
 `, os.Args[0], aumBytes, os.Args[0], aumBytes)
 	}
 
