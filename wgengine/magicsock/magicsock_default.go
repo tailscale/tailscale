@@ -21,16 +21,6 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	portableTrySetSocketBuffer(pconn, logf)
 }
 
-func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
-	return false, false
-}
-
-func getGSOSizeFromControl(control []byte) (int, error) {
-	return 0, nil
-}
-
-func setGSOSizeInControl(control *[]byte, gso uint16) {}
-
 const (
 	controlMessageSize = 0
 )

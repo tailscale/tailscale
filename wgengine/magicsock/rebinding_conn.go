@@ -35,12 +35,12 @@ type RebindingUDPConn struct {
 
 // setConnLocked sets the provided nettype.PacketConn. It should be called only
 // after acquiring RebindingUDPConn.mu. It upgrades the provided
-// nettype.PacketConn to a *batchingUDPConn when appropriate. This upgrade
-// is intentionally pushed closest to where read/write ops occur in order to
-// avoid disrupting surrounding code that assumes nettype.PacketConn is a
+// nettype.PacketConn to a batchingConn when appropriate. This upgrade is
+// intentionally pushed closest to where read/write ops occur in order to avoid
+// disrupting surrounding code that assumes nettype.PacketConn is a
 // *net.UDPConn.
 func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn, network string, batchSize int) {
-	upc := tryUpgradeToBatchingUDPConn(p, network, batchSize)
+	upc := tryUpgradeToBatchingConn(p, network, batchSize)
 	c.pconn = upc
 	c.pconnAtomic.Store(&upc)
 	c.port = uint16(c.localAddrLocked().Port)
@@ -74,7 +74,7 @@ func (c *RebindingUDPConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, e
 func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) error {
 	for {
 		pconn := *c.pconnAtomic.Load()
-		b, ok := pconn.(*batchingUDPConn)
+		b, ok := pconn.(batchingConn)
 		if !ok {
 			for _, buf := range buffs {
 				_, err := c.writeToUDPAddrPortWithInitPconn(pconn, buf, addr)
@@ -101,7 +101,7 @@ func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) err
 func (c *RebindingUDPConn) ReadBatch(msgs []ipv6.Message, flags int) (int, error) {
 	for {
 		pconn := *c.pconnAtomic.Load()
-		b, ok := pconn.(*batchingUDPConn)
+		b, ok := pconn.(batchingConn)
 		if !ok {
 			n, ap, err := c.readFromWithInitPconn(pconn, msgs[0].Buffers[0])
 			if err == nil {
