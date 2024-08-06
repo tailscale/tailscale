@@ -74,10 +74,11 @@ func main() {
 	}
 
 	var (
-		lc      *tailscale.LocalClient
-		st      *ipnstate.Status
-		err     error
-		watcher *tailscale.IPNBusWatcher
+		lc          *tailscale.LocalClient
+		st          *ipnstate.Status
+		err         error
+		watcherChan chan error
+		cleanup     func()
 
 		lns []net.Listener
 	)
@@ -105,55 +106,17 @@ func main() {
 			log.Fatalf("failed to listen on any of %v", st.TailscaleIPs)
 		}
 
-		// In order to support funneling out in local tailscaled mode, we need
-		// to add a serve config to forward the listeners we bound above and
-		// allow those forwarders to be funneled out.
-		sc, err := lc.GetServeConfig(ctx)
-		if err != nil {
-			log.Fatalf("could not get serve config: %v", err)
-		}
-		if sc == nil {
-			sc = new(ipn.ServeConfig)
-		}
-
-		// We watch the IPN bus just to get a session ID. The session expires
-		// when we stop watching the bus, and that auto-deletes the foreground
-		// serve/funnel configs we are creating below.
-		watcher, err = lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
-		if err != nil {
-			log.Fatalf("could not set up ipn bus watcher: %v", err)
-		}
-		defer watcher.Close()
-		n, err := watcher.Next()
-		if err != nil {
-			log.Fatalf("could not get initial state from ipn bus watcher: %v", err)
-		}
-		if n.SessionID == "" {
-			log.Fatalf("missing sessionID in ipn.Notify")
-		}
-
-		// Create a foreground serve config that gets cleaned up when tsidp
-		// exits and the session ID associated with this config is invalidated.
-		foregroundSc := new(ipn.ServeConfig)
-		mak.Set(&sc.Foreground, n.SessionID, foregroundSc)
-		serverURL := strings.TrimSuffix(st.Self.DNSName, ".")
-		fmt.Printf("setting funnel for %s:%v\n", serverURL, uint16(*flagPort))
-
 		// tailscaled needs to be setting an HTTP header for funneled requests
 		// that older versions don't provide.
 		// TODO(naman): is this the correct check?
-		if *flagFunnel && !version.AtLeast(st.Version, "1.69.0") {
+		if *flagFunnel && !version.AtLeast(st.Version, "1.71.0") {
 			log.Fatalf("Local tailscaled not new enough to support -funnel. Update Tailscale or use tsnet mode.")
 		}
-
-		foregroundSc.SetFunnel(serverURL, uint16(*flagPort), *flagFunnel)
-		mak.Set(&foregroundSc.TCP, uint16(*flagPort), &ipn.TCPPortHandler{
-			TCPForward: net.JoinHostPort(lns[0].Addr().String(), portStr),
-		})
-		err = lc.SetServeConfig(ctx, sc)
+		cleanup, watcherChan, err = serveOnLocalTailscaled(ctx, lc, st, uint16(*flagPort), *flagFunnel)
 		if err != nil {
-			log.Fatalf("could not set serve config: %v", err)
+			log.Fatalf("could not serve on local tailscaled: %v", err)
 		}
+		defer cleanup()
 	} else {
 		ts := &tsnet.Server{
 			Hostname: "idp",
@@ -185,8 +148,9 @@ func main() {
 	}
 
 	srv := &idpServer{
-		lc:     lc,
-		funnel: *flagFunnel,
+		lc:          lc,
+		funnel:      *flagFunnel,
+		localTSMode: *flagUseLocalTailscaled,
 	}
 	if *flagPort != 443 {
 		srv.serverURL = fmt.Sprintf("https://%s:%d", strings.TrimSuffix(st.Self.DNSName, "."), *flagPort)
@@ -226,18 +190,6 @@ func main() {
 		}
 		go server.Serve(ln)
 	}
-	watcherChan := make(chan error)
-	if watcher != nil {
-		go func() {
-			for {
-				_, err = watcher.Next()
-				if err != nil {
-					watcherChan <- err
-					return
-				}
-			}
-		}()
-	}
 	// need to catch os.Interrupt, otherwise deferred cleanup code doesn't run
 	exitChan := make(chan os.Signal, 1)
 	signal.Notify(exitChan, os.Interrupt)
@@ -255,11 +207,77 @@ func main() {
 	}
 }
 
+// serveOnLocalTailscaled starts a serve session using an already-running
+// tailscaled instead of starting a fresh tsnet server, serving local dstPort
+// on srcAddrPort
+func serveOnLocalTailscaled(ctx context.Context, lc *tailscale.LocalClient, st *ipnstate.Status, dstPort uint16, shouldFunnel bool) (cleanup func(), watcherChan chan error, err error) {
+	// In order to support funneling out in local tailscaled mode, we need
+	// to add a serve config to forward the listeners we bound above and
+	// allow those forwarders to be funneled out.
+	sc, err := lc.GetServeConfig(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not get serve config: %v", err)
+	}
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
+
+	// We watch the IPN bus just to get a session ID. The session expires
+	// when we stop watching the bus, and that auto-deletes the foreground
+	// serve/funnel configs we are creating below.
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not set up ipn bus watcher: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			watcher.Close()
+		}
+	}()
+	n, err := watcher.Next()
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not get initial state from ipn bus watcher: %v", err)
+	}
+	if n.SessionID == "" {
+		err = fmt.Errorf("missing sessionID in ipn.Notify")
+		return nil, nil, err
+	}
+	watcherChan = make(chan error)
+	go func() {
+		for {
+			_, err = watcher.Next()
+			if err != nil {
+				watcherChan <- err
+				return
+			}
+		}
+	}()
+
+	// Create a foreground serve config that gets cleaned up when tsidp
+	// exits and the session ID associated with this config is invalidated.
+	foregroundSc := new(ipn.ServeConfig)
+	mak.Set(&sc.Foreground, n.SessionID, foregroundSc)
+	serverURL := strings.TrimSuffix(st.Self.DNSName, ".")
+	fmt.Printf("setting funnel for %s:%v\n", serverURL, dstPort)
+
+	foregroundSc.SetFunnel(serverURL, dstPort, shouldFunnel)
+	foregroundSc.SetWebHandler(&ipn.HTTPHandler{
+		Proxy: fmt.Sprintf("https://%s", net.JoinHostPort(serverURL, strconv.Itoa(int(dstPort)))),
+	}, serverURL, uint16(*flagPort), "/", true)
+	err = lc.SetServeConfig(ctx, sc)
+	if err != nil {
+		return nil, watcherChan, fmt.Errorf("could not set serve config: %v", err)
+	}
+
+	return func() { watcher.Close() }, watcherChan, nil
+}
+
 type idpServer struct {
 	lc          *tailscale.LocalClient
 	loopbackURL string
 	serverURL   string // "https://foo.bar.ts.net"
 	funnel      bool
+	localTSMode bool
 
 	lazyMux        lazy.SyncValue[*http.ServeMux]
 	lazySigningKey lazy.SyncValue[*signingKey]
@@ -305,9 +323,12 @@ type authRequest struct {
 	validTill time.Time
 }
 
-func (ar *authRequest) allowRelyingParty(ctx context.Context, remoteAddr string, lc *tailscale.LocalClient, clientID string, clientSecret string) error {
+// allowRelyingParty validates that a relying party identified either by a
+// known remoteAddr or a valid client ID/secret pair is allowed to proceed
+// with the authorization flow associated with this authRequest.
+func (ar *authRequest) allowRelyingParty(r *http.Request, lc *tailscale.LocalClient) error {
 	if ar.localRP {
-		ra, err := netip.ParseAddrPort(remoteAddr)
+		ra, err := netip.ParseAddrPort(r.RemoteAddr)
 		if err != nil {
 			return err
 		}
@@ -317,12 +338,17 @@ func (ar *authRequest) allowRelyingParty(ctx context.Context, remoteAddr string,
 		return nil
 	}
 	if ar.funnelRP != nil {
+		clientID, clientSecret, ok := r.BasicAuth()
+		if !ok {
+			clientID = r.FormValue("client_id")
+			clientSecret = r.FormValue("client_secret")
+		}
 		if ar.funnelRP.ID != clientID || ar.funnelRP.Secret != clientSecret {
 			return fmt.Errorf("tsidp: invalid client credentials")
 		}
 		return nil
 	}
-	who, err := lc.WhoIs(ctx, remoteAddr)
+	who, err := lc.WhoIs(r.Context(), r.RemoteAddr)
 	if err != nil {
 		return fmt.Errorf("tsidp: error getting WhoIs: %w", err)
 	}
@@ -333,23 +359,6 @@ func (ar *authRequest) allowRelyingParty(ctx context.Context, remoteAddr string,
 }
 
 func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
-	who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
-	if err != nil {
-		log.Printf("Error getting WhoIs: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	uq := r.URL.Query()
-
-	code := rands.HexString(32)
-	ar := &authRequest{
-		nonce:       uq.Get("nonce"),
-		remoteUser:  who,
-		redirectURI: uq.Get("redirect_uri"),
-		clientID:    uq.Get("client_id"),
-	}
-
 	// This URL is visited by the user who is being authenticated. If they are
 	// visiting the URL over Funnel, that means they are not part of the
 	// tailnet that they are trying to be authenticated for.
@@ -357,16 +366,53 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: unauthorized", http.StatusUnauthorized)
 		return
 	}
+	log.Printf("%+v", r.Header)
+
+	uq := r.URL.Query()
+
+	redirectURI := uq.Get("redirect_uri")
+	if redirectURI == "" {
+		http.Error(w, "tsidp: must specify redirect_uri", http.StatusBadRequest)
+		return
+	}
+
+	var remoteAddr string
+	if s.localTSMode {
+		// in local tailscaled mode, the local tailscaled is forwarding us
+		// HTTP requests, so reading r.RemoteAddr will just get us our own
+		// address.
+		remoteAddr = r.Header.Get("X-Forwarded-For")
+	} else {
+		remoteAddr = r.RemoteAddr
+	}
+	who, err := s.lc.WhoIs(r.Context(), remoteAddr)
+	if err != nil {
+		log.Printf("Error getting WhoIs: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	code := rands.HexString(32)
+	ar := &authRequest{
+		nonce:       uq.Get("nonce"),
+		remoteUser:  who,
+		redirectURI: redirectURI,
+		clientID:    uq.Get("client_id"),
+	}
 
 	if r.URL.Path == "/authorize/funnel" {
 		s.mu.Lock()
 		c, ok := s.funnelClients[ar.clientID]
 		s.mu.Unlock()
-		ar.funnelRP = c
 		if !ok {
 			http.Error(w, "tsidp: invalid client ID", http.StatusBadRequest)
 			return
 		}
+		if ar.redirectURI != c.RedirectURI {
+			http.Error(w, "tsidp: redirect_uri mismatch", http.StatusBadRequest)
+			return
+		}
+		ar.funnelRP = c
 	} else if r.URL.Path == "/authorize/localhost" {
 		ar.localRP = true
 	} else {
@@ -384,8 +430,10 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 
 	q := make(url.Values)
 	q.Set("code", code)
-	q.Set("state", uq.Get("state"))
-	u := uq.Get("redirect_uri") + "?" + q.Encode()
+	if state := uq.Get("state"); state != "" {
+		q.Set("state", state)
+	}
+	u := redirectURI + "?" + q.Encode()
 	log.Printf("Redirecting to %q", u)
 
 	http.Redirect(w, r, u, http.StatusFound)
@@ -491,12 +539,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: code not found", http.StatusBadRequest)
 		return
 	}
-	clientID, clientSecret, ok := r.BasicAuth()
-	if !ok {
-		clientID = r.FormValue("client_id")
-		clientSecret = r.FormValue("client_secret")
-	}
-	if err := ar.allowRelyingParty(r.Context(), r.RemoteAddr, s.lc, clientID, clientSecret); err != nil {
+	if err := ar.allowRelyingParty(r, s.lc); err != nil {
 		log.Printf("Error allowing relying party: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -764,9 +807,10 @@ func (s *idpServer) serveOpenIDConfig(w http.ResponseWriter, r *http.Request) {
 // funnelClient represents an OIDC client/relying party that is accessing the
 // IDP over Funnel.
 type funnelClient struct {
-	ID     string `json:"client_id"`
-	Secret string `json:"client_secret,omitempty"`
-	Name   string `json:"name,omitempty"`
+	ID          string `json:"client_id"`
+	Secret      string `json:"client_secret,omitempty"`
+	Name        string `json:"name,omitempty"`
+	RedirectURI string `json:"redirect_uri"`
 }
 
 // /clients is a privileged endpoint that allows the visitor to create new
@@ -801,7 +845,12 @@ func (s *idpServer) serveClients(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		s.serveDeleteClient(w, r, path)
 	case "GET":
-		json.NewEncoder(w).Encode(c)
+		json.NewEncoder(w).Encode(&funnelClient{
+			ID:          c.ID,
+			Name:        c.Name,
+			Secret:      "",
+			RedirectURI: c.RedirectURI,
+		})
 	default:
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -812,12 +861,18 @@ func (s *idpServer) serveNewClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	redirectURI := r.FormValue("redirect_uri")
+	if redirectURI == "" {
+		http.Error(w, "tsidp: must provide redirect_uri", http.StatusBadRequest)
+		return
+	}
 	clientID := rands.HexString(32)
 	clientSecret := rands.HexString(64)
 	newClient := funnelClient{
-		ID:     clientID,
-		Secret: clientSecret,
-		Name:   r.FormValue("name"),
+		ID:          clientID,
+		Secret:      clientSecret,
+		Name:        r.FormValue("name"),
+		RedirectURI: redirectURI,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -842,9 +897,10 @@ func (s *idpServer) serveGetClientsList(w http.ResponseWriter, r *http.Request) 
 	redactedClients := make([]funnelClient, 0, len(s.funnelClients))
 	for _, c := range s.funnelClients {
 		redactedClients = append(redactedClients, funnelClient{
-			ID:     c.ID,
-			Name:   c.Name,
-			Secret: "",
+			ID:          c.ID,
+			Name:        c.Name,
+			Secret:      "",
+			RedirectURI: c.RedirectURI,
 		})
 	}
 	s.mu.Unlock()
@@ -984,7 +1040,7 @@ func parseID[T ~int64](input string) (_ T, ok bool) {
 func isFunnelRequest(r *http.Request) bool {
 	// If we're funneling through the local tailscaled, it will set this HTTP
 	// header.
-	if r.Header.Get("Tailscale-Funneled-Connection") == "?1" {
+	if r.Header.Get("Tailscale-Funnel-Host") != "" {
 		return true
 	}
 
