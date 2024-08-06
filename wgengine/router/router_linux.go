@@ -1181,7 +1181,9 @@ var (
 	tailscaleRouteTable = newRouteTable("tailscale", 52)
 )
 
-// ipRules are the policy routing rules that Tailscale uses.
+// baseIPRules are the policy routing rules that Tailscale uses, when not
+// running on a UDM-Pro.
+//
 // The priority is the value represented here added to r.ipPolicyPrefBase,
 // which is usually 5200.
 //
@@ -1196,7 +1198,7 @@ var (
 // and 'ip rule' implementations (including busybox), don't support
 // checking for the lack of a fwmark, only the presence. The technique
 // below works even on very old kernels.
-var ipRules = []netlink.Rule{
+var baseIPRules = []netlink.Rule{
 	// Packets from us, tagged with our fwmark, first try the kernel's
 	// main routing table.
 	{
@@ -1232,6 +1234,34 @@ var ipRules = []netlink.Rule{
 	// usual rules (pref 32766 and 32767, ie. main and default).
 }
 
+// udmProIPRules are the policy routing rules that Tailscale uses, when running
+// on a UDM-Pro.
+//
+// The priority is the value represented here added to
+// r.ipPolicyPrefBase, which is usually 5200.
+//
+// This represents an experiment that will be used to gather more information.
+// If this goes well, Tailscale may opt to use this for all of Linux.
+var udmProIPRules = []netlink.Rule{
+	// non-fwmark packets fall through to the usual rules (pref 32766 and 32767,
+	// ie. main and default).
+	{
+		Priority: 70,
+		Invert:   true,
+		Mark:     linuxfw.TailscaleBypassMarkNum,
+		Table:    tailscaleRouteTable.Num,
+	},
+}
+
+// ipRules returns the appropriate list of ip rules to be used by Tailscale. See
+// comments on baseIPRules and udmProIPRules for more details.
+func ipRules() []netlink.Rule {
+	if distro.Get() == distro.UDMPro {
+		return udmProIPRules
+	}
+	return baseIPRules
+}
+
 // justAddIPRules adds policy routing rule without deleting any first.
 func (r *linuxRouter) justAddIPRules() error {
 	if !r.ipRuleAvailable {
@@ -1243,7 +1273,7 @@ func (r *linuxRouter) justAddIPRules() error {
 	var errAcc error
 	for _, family := range r.addrFamilies() {
 
-		for _, ru := range ipRules {
+		for _, ru := range ipRules() {
 			// Note: r is a value type here; safe to mutate it.
 			ru.Family = family.netlinkInt()
 			if ru.Mark != 0 {
@@ -1272,7 +1302,7 @@ func (r *linuxRouter) addIPRulesWithIPCommand() error {
 	rg := newRunGroup(nil, r.cmd)
 
 	for _, family := range r.addrFamilies() {
-		for _, rule := range ipRules {
+		for _, rule := range ipRules() {
 			args := []string{
 				"ip", family.dashArg(),
 				"rule", "add",
@@ -1320,7 +1350,7 @@ func (r *linuxRouter) delIPRules() error {
 	}
 	var errAcc error
 	for _, family := range r.addrFamilies() {
-		for _, ru := range ipRules {
+		for _, ru := range ipRules() {
 			// Note: r is a value type here; safe to mutate it.
 			// When deleting rules, we want to be a bit specific (mention which
 			// table we were routing to) but not *too* specific (fwmarks, etc).
@@ -1363,7 +1393,7 @@ func (r *linuxRouter) delIPRulesWithIPCommand() error {
 		// That leaves us some flexibility to change these values in later
 		// versions without having ongoing hacks for every possible
 		// combination.
-		for _, rule := range ipRules {
+		for _, rule := range ipRules() {
 			args := []string{
 				"ip", family.dashArg(),
 				"rule", "del",
