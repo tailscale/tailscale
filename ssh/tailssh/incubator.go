@@ -128,7 +128,8 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		incubatorArgs = append(incubatorArgs, "--is-selinux-enforcing")
 	}
 
-	forceV1Behavior := ss.conn.srv.lb.NetMap().HasCap(tailcfg.NodeAttrSSHBehaviorV1)
+	nm := ss.conn.srv.lb.NetMap()
+	forceV1Behavior := nm.HasCap(tailcfg.NodeAttrSSHBehaviorV1) && !nm.HasCap(tailcfg.NodeAttrSSHBehaviorV2)
 	if forceV1Behavior {
 		incubatorArgs = append(incubatorArgs, "--force-v1-behavior")
 	}
