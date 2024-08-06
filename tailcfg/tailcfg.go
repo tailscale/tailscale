@@ -2307,6 +2307,13 @@ const (
 	// Added 2024-05-29 in Tailscale version 1.68.
 	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
 
+	// NodeAttrSSHBehaviorV2 forces SSH to use the V2 behavior (use su, run SFTP in child process).
+	// This overrides NodeAttrSSHBehaviorV1 if set.
+	// See forceV1Behavior in ssh/tailssh/incubator.go for distinction between
+	// V1 and V2 behavior.
+	// Added 2024-08-06 in Tailscale version 1.72.
+	NodeAttrSSHBehaviorV2 NodeCapability = "ssh-behavior-v2"
+
 	// NodeAttrDisableSplitDNSWhenNoCustomResolvers indicates that the node's
 	// DNS manager should not adopt a split DNS configuration even though the
 	// Config of the resolver only contains routes that do not specify custom
