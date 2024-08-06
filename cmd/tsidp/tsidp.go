@@ -366,7 +366,6 @@ func (s *idpServer) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tsidp: unauthorized", http.StatusUnauthorized)
 		return
 	}
-	log.Printf("%+v", r.Header)
 
 	uq := r.URL.Query()
 
