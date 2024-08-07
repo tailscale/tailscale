@@ -27,6 +27,10 @@ type Config struct {
 	networks []*Network
 }
 
+func (c *Config) NumNodes() int {
+	return len(c.nodes)
+}
+
 // AddNode creates a new node in the world.
 //
 // The opts may be of the following types:
@@ -108,6 +112,11 @@ type Node struct {
 
 	mac  MAC
 	nets []*Network
+}
+
+// MAC returns the MAC address of the node.
+func (n *Node) MAC() MAC {
+	return n.mac
 }
 
 // Network returns the first network this node is connected to,

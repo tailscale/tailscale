@@ -19,12 +19,16 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"tailscale.com/client/tailscale"
+	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 	"tailscale.com/version/distro"
 )
@@ -33,17 +37,29 @@ var (
 	driverAddr = flag.String("driver", "test-driver.tailscale:8008", "address of the test driver; by default we use the DNS name test-driver.tailscale which is special cased in the emulated network's DNS server")
 )
 
-func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
+func absify(cmd string) string {
 	if distro.Get() == distro.Gokrazy && !strings.Contains(cmd, "/") {
-		cmd = "/user/" + cmd
+		return "/user/" + cmd
 	}
-	out, err := exec.Command(cmd, args...).CombinedOutput()
+	return cmd
+}
+
+func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
+	out, err := exec.Command(absify(cmd), args...).CombinedOutput()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if err != nil {
 		w.Header().Set("Exec-Err", err.Error())
 		w.WriteHeader(500)
 	}
 	w.Write(out)
+}
+
+type localClientRoundTripper struct {
+	lc *tailscale.LocalClient
+}
+
+func (rt localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return rt.lc.DoLocalRequest(req)
 }
 
 func main() {
@@ -57,6 +73,12 @@ func main() {
 		}
 	}
 	flag.Parse()
+
+	logc, err := net.Dial("tcp", "9.9.9.9:124")
+	if err == nil {
+		log.SetOutput(logc)
+	}
+
 	log.Printf("Tailscale Test Agent running.")
 
 	var mux http.ServeMux
@@ -84,6 +106,11 @@ func main() {
 		}
 	}
 	conns := make(chan net.Conn, 1)
+	var lc tailscale.LocalClient
+	rp := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://local-tailscaled.sock")))
+	rp.Transport = localClientRoundTripper{&lc}
+
+	mux.Handle("/localapi/", rp)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "TTA\n")
@@ -97,7 +124,7 @@ func main() {
 	})
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		target := r.FormValue("target")
-		cmd := exec.Command("tailscale", "ping", target)
+		cmd := exec.Command(absify("tailscale"), "ping", target)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.(http.Flusher).Flush()
 		cmd.Stdout = w

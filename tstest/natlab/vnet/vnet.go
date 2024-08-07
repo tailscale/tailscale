@@ -271,6 +271,20 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
+	if destPort == 124 {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		go func() {
+			defer tc.Close()
+			bs := bufio.NewScanner(tc)
+			for bs.Scan() {
+				line := bs.Text()
+				log.Printf("LOG from guest: %s", line)
+			}
+		}()
+		return
+	}
+
 	if destPort == 8008 && destIP == fakeTestAgentIP {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
@@ -448,6 +462,7 @@ func newDERPServer() *derpServer {
 type Server struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
+	blendReality   bool
 
 	derpIPs set.Set[netip.Addr]
 
@@ -459,11 +474,13 @@ type Server struct {
 	control *testcontrol.Server
 	derps   []*derpServer
 
-	mu                sync.Mutex
-	agentConnWaiter   map[*node]chan<- struct{} // signaled after added to set
-	agentConns        set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
-	agentRoundTripper map[*node]*http.Transport
+	mu              sync.Mutex
+	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
+	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
+	agentDialer     map[*node]DialFunc
 }
+
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
@@ -530,6 +547,10 @@ func New(c *Config) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+func (s *Server) Close() {
+	s.shutdownCancel()
 }
 
 func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
@@ -655,7 +676,7 @@ func (s *Server) routeUDPPacket(up UDPPacket) {
 	if up.Dst.Port() == stunPort {
 		// TODO(bradfitz): fake latency; time.AfterFunc the response
 		if res, ok := makeSTUNReply(up); ok {
-			log.Printf("STUN reply: %+v", res)
+			//log.Printf("STUN reply: %+v", res)
 			s.routeUDPPacket(res)
 		} else {
 			log.Printf("weird: STUN packet not handled")
@@ -1015,14 +1036,17 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	if !ok {
 		return false
 	}
-	if tcp.DstPort == 123 {
+	if tcp.DstPort == 123 || tcp.DstPort == 124 {
 		return true
 	}
 	dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
 		switch dstIP {
-		case fakeProxyControlplaneIP, fakeControlIP, fakeDERP1IP, fakeDERP2IP:
+		case fakeControlIP, fakeDERP1IP, fakeDERP2IP:
 			return true
+		}
+		if dstIP == fakeProxyControlplaneIP {
+			return s.blendReality
 		}
 		if s.derpIPs.Contains(dstIP) {
 			return true
@@ -1294,12 +1318,15 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 	for {
 		ac, ok := s.takeAgentConnOne(n)
 		if ok {
+			log.Printf("got agent conn for %v", n.mac)
 			return ac, true
 		}
 		s.mu.Lock()
 		ready := make(chan struct{})
 		mak.Set(&s.agentConnWaiter, n, ready)
 		s.mu.Unlock()
+
+		log.Printf("waiting for agent conn for %v", n.mac)
 		select {
 		case <-ctx.Done():
 			return nil, false
@@ -1318,36 +1345,41 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 	for ac := range s.agentConns {
 		if ac.node == n {
 			s.agentConns.Delete(ac)
+			log.Printf("XXX takeAgentConnOne HIT for %v", n.mac)
 			return ac, true
 		}
 	}
+	log.Printf("XXX takeAgentConnOne MISS for %v", n.mac)
 	return nil, false
 }
 
-func (s *Server) NodeAgentRoundTripper(ctx context.Context, n *Node) http.RoundTripper {
+func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if rt, ok := s.agentRoundTripper[n.n]; ok {
-		return rt
+	if d, ok := s.agentDialer[n.n]; ok {
+		return d
 	}
-
-	var rt = &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			ac, ok := s.takeAgentConn(ctx, n.n)
-			if !ok {
-				return nil, ctx.Err()
-			}
-			return ac.tc, nil
-		},
+	d := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ac, ok := s.takeAgentConn(ctx, n.n)
+		if !ok {
+			return nil, ctx.Err()
+		}
+		return ac.tc, nil
 	}
+	mak.Set(&s.agentDialer, n.n, d)
+	return d
+}
 
-	mak.Set(&s.agentRoundTripper, n.n, rt)
-	return rt
+func (s *Server) NodeAgentRoundTripper(n *Node) http.RoundTripper {
+	return &http.Transport{
+		DisableKeepAlives: true, // XXX
+		DialContext:       s.NodeAgentDialer(n),
+	}
 }
 
 func (s *Server) NodeStatus(ctx context.Context, n *Node) ([]byte, error) {
-	rt := s.NodeAgentRoundTripper(ctx, n)
+	rt := s.NodeAgentRoundTripper(n)
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://node/status", nil)
 	if err != nil {
 		return nil, err

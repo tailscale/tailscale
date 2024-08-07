@@ -82,7 +82,7 @@ func main() {
 		}
 		for {
 			time.Sleep(5 * time.Second)
-			continue
+			//continue
 			getStatus()
 		}
 	}()
