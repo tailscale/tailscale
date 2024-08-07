@@ -237,7 +237,7 @@ func main() {
 		tsweb.AddBrowserHeaders(w)
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
-	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
+	mux.Handle("/generate_204", http.HandlerFunc(derphttp.ServeNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -337,7 +337,7 @@ func main() {
 		if *httpPort > -1 {
 			go func() {
 				port80mux := http.NewServeMux()
-				port80mux.HandleFunc("/generate_204", serveNoContent)
+				port80mux.HandleFunc("/generate_204", derphttp.ServeNoContent)
 				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
@@ -376,31 +376,6 @@ func main() {
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
 	}
-}
-
-const (
-	noContentChallengeHeader = "X-Tailscale-Challenge"
-	noContentResponseHeader  = "X-Tailscale-Response"
-)
-
-// For captive portal detection
-func serveNoContent(w http.ResponseWriter, r *http.Request) {
-	if challenge := r.Header.Get(noContentChallengeHeader); challenge != "" {
-		badChar := strings.IndexFunc(challenge, func(r rune) bool {
-			return !isChallengeChar(r)
-		}) != -1
-		if len(challenge) <= 64 && !badChar {
-			w.Header().Set(noContentResponseHeader, "response "+challenge)
-		}
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func isChallengeChar(c rune) bool {
-	// Semi-randomly chosen as a limited set of valid characters
-	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
-		('0' <= c && c <= '9') ||
-		c == '.' || c == '-' || c == '_'
 }
 
 var validProdHostname = regexp.MustCompile(`^derp([^.]*)\.tailscale\.com\.?$`)
