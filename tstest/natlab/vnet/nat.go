@@ -5,6 +5,7 @@ package vnet
 
 import (
 	"errors"
+	"log"
 	"math/rand/v2"
 	"net/netip"
 	"time"
@@ -111,9 +112,9 @@ func (n *oneToOneNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (la
 	return netip.AddrPortFrom(n.lanIP, dst.Port())
 }
 
-type hardKeyOut struct {
-	lanIP netip.Addr
-	dst   netip.AddrPort
+type srcDstTuple struct {
+	src netip.AddrPort
+	dst netip.AddrPort
 }
 
 type hardKeyIn struct {
@@ -137,7 +138,7 @@ type lanAddrAndTime struct {
 type hardNAT struct {
 	wanIP netip.Addr
 
-	out map[hardKeyOut]portMappingAndTime
+	out map[srcDstTuple]portMappingAndTime
 	in  map[hardKeyIn]lanAddrAndTime
 }
 
@@ -148,7 +149,7 @@ func init() {
 }
 
 func (n *hardNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
-	ko := hardKeyOut{src.Addr(), dst}
+	ko := srcDstTuple{src, dst}
 	if pm, ok := n.out[ko]; ok {
 		// Existing flow.
 		// TODO: bump timestamp
@@ -196,9 +197,10 @@ func (n *hardNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst
 // Unlike Linux, this implementation is capped at 32k entries and doesn't resort
 // to other allocation strategies when all 32k WAN ports are taken.
 type easyNAT struct {
-	wanIP netip.Addr
-	out   map[netip.AddrPort]portMappingAndTime
-	in    map[uint16]lanAddrAndTime
+	wanIP   netip.Addr
+	out     map[netip.AddrPort]portMappingAndTime
+	in      map[uint16]lanAddrAndTime
+	lastOut map[srcDstTuple]time.Time // (lan:port, wan:port) => last packet out time
 }
 
 func init() {
@@ -208,6 +210,7 @@ func init() {
 }
 
 func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
+	mak.Set(&n.lastOut, srcDstTuple{src, dst}, at)
 	if pm, ok := n.out[src]; ok {
 		// Existing flow.
 		// TODO: bump timestamp
@@ -235,5 +238,14 @@ func (n *easyNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst
 	if dst.Addr() != n.wanIP {
 		return netip.AddrPort{} // drop; not for us. shouldn't happen if natlabd routing isn't broken.
 	}
-	return n.in[dst.Port()].lanAddr
+	lanDst = n.in[dst.Port()].lanAddr
+
+	// Stateful firewall: drop incoming packets that don't have traffic out.
+	// TODO(bradfitz): verify Linux does this in the router code, not in the NAT code.
+	if t, ok := n.lastOut[srcDstTuple{lanDst, src}]; !ok || at.Sub(t) > 300*time.Second {
+		log.Printf("Drop incoming packet from %v to %v; no recent outgoing packet", src, dst)
+		return netip.AddrPort{}
+	}
+
+	return lanDst
 }
