@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -87,13 +88,16 @@ func TestDNSRecordsReconciler(t *testing.T) {
 		},
 	}
 	headlessForEgressSvcFQDN := headlessSvcForParent(egressSvcFQDN, "svc") // create the proxy headless Service
-	ep := endpointSliceForService(headlessForEgressSvcFQDN, "10.9.8.7")
+	ep := endpointSliceForService(headlessForEgressSvcFQDN, "10.9.8.7", discoveryv1.AddressTypeIPv4)
+	epv6 := endpointSliceForService(headlessForEgressSvcFQDN, "2600:1900:4011:161:0:d:0:d", discoveryv1.AddressTypeIPv6)
+
 	mustCreate(t, fc, egressSvcFQDN)
 	mustCreate(t, fc, headlessForEgressSvcFQDN)
 	mustCreate(t, fc, ep)
+	mustCreate(t, fc, epv6)
 	expectReconciled(t, dnsRR, "tailscale", "egress-fqdn") // dns-records-reconciler reconcile the headless Service
 	// ConfigMap should now have a record for foo.bar.ts.net -> 10.8.8.7
-	wantHosts := map[string][]string{"foo.bar.ts.net": {"10.9.8.7"}}
+	wantHosts := map[string][]string{"foo.bar.ts.net": {"10.9.8.7"}} // IPv6 endpoint is currently ignored
 	expectHostsRecords(t, fc, wantHosts)
 
 	// 2. DNS record is updated if tailscale.com/tailnet-fqdn annotation's
@@ -106,7 +110,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	expectHostsRecords(t, fc, wantHosts)
 
 	// 3. DNS record is updated if the IP address of the proxy Pod changes.
-	ep = endpointSliceForService(headlessForEgressSvcFQDN, "10.6.5.4")
+	ep = endpointSliceForService(headlessForEgressSvcFQDN, "10.6.5.4", discoveryv1.AddressTypeIPv4)
 	mustUpdate(t, fc, ep.Namespace, ep.Name, func(ep *discoveryv1.EndpointSlice) {
 		ep.Endpoints[0].Addresses = []string{"10.6.5.4"}
 	})
@@ -116,7 +120,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 
 	// 4. DNS record is created for an ingress proxy configured via Ingress
 	headlessForIngress := headlessSvcForParent(ing, "ingress")
-	ep = endpointSliceForService(headlessForIngress, "10.9.8.7")
+	ep = endpointSliceForService(headlessForIngress, "10.9.8.7", discoveryv1.AddressTypeIPv4)
 	mustCreate(t, fc, headlessForIngress)
 	mustCreate(t, fc, ep)
 	expectReconciled(t, dnsRR, "tailscale", "ts-ingress") // dns-records-reconciler should reconcile the headless Service
@@ -140,6 +144,17 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	expectReconciled(t, dnsRR, "tailscale", "ts-ingress")
 	wantHosts["another.ingress.ts.net"] = []string{"7.8.9.10"}
 	expectHostsRecords(t, fc, wantHosts)
+
+	// 7. A not-ready Endpoint is removed from DNS config.
+	mustUpdate(t, fc, ep.Namespace, ep.Name, func(ep *discoveryv1.EndpointSlice) {
+		ep.Endpoints[0].Conditions.Ready = ptr.To(false)
+		ep.Endpoints = append(ep.Endpoints, discoveryv1.Endpoint{
+			Addresses: []string{"1.2.3.4"},
+		})
+	})
+	expectReconciled(t, dnsRR, "tailscale", "ts-ingress")
+	wantHosts["another.ingress.ts.net"] = []string{"1.2.3.4"}
+	expectHostsRecords(t, fc, wantHosts)
 }
 
 func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
@@ -162,15 +177,21 @@ func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
 	}
 }
 
-func endpointSliceForService(svc *corev1.Service, ip string) *discoveryv1.EndpointSlice {
+func endpointSliceForService(svc *corev1.Service, ip string, fam discoveryv1.AddressType) *discoveryv1.EndpointSlice {
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      svc.Name,
+			Name:      fmt.Sprintf("%s-%s", svc.Name, string(fam)),
 			Namespace: svc.Namespace,
 			Labels:    map[string]string{discoveryv1.LabelServiceName: svc.Name},
 		},
+		AddressType: fam,
 		Endpoints: []discoveryv1.Endpoint{{
 			Addresses: []string{ip},
+			Conditions: discoveryv1.EndpointConditions{
+				Ready:       ptr.To(true),
+				Serving:     ptr.To(true),
+				Terminating: ptr.To(false),
+			},
 		}},
 	}
 }
