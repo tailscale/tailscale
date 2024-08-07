@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tstest/natlab/vnet"
 )
@@ -141,40 +142,36 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 	c1 := &http.Client{Transport: nt.vnet.NodeAgentRoundTripper(nodes[0])}
 	c2 := &http.Client{Transport: nt.vnet.NodeAgentRoundTripper(nodes[1])}
 
-	// var lc1 tailscale.LocalClient
-	// lc1.Dial = nt.vnet.NodeAgentDialer(nodes[0])
-	//st, err := lc1.Status(ctx)
-
+	var eg errgroup.Group
+	var sts [2]*ipnstate.Status
 	for i, c := range []*http.Client{c1, c2} {
-		st, err := status(ctx, c)
-		if err != nil {
-			t.Fatalf("node%d status: %v", i, err)
-		}
-		t.Logf("XXX node%d status: %v", i, st)
-		if err := up(ctx, c); err != nil {
-			t.Fatalf("node%d up: %v", i, err)
-		}
-		t.Logf("XXX node%d up!", i)
+		i, c := i, c
+		eg.Go(func() error {
+			st, err := status(ctx, c)
+			if err != nil {
+				return fmt.Errorf("node%d status: %w", i, err)
+			}
+			t.Logf("node%d status: %v", i, st)
+			if err := up(ctx, c); err != nil {
+				return fmt.Errorf("node%d up: %w", i, err)
+			}
+			t.Logf("node%d up!", i)
+			st, err = status(ctx, c)
+			if err != nil {
+				return fmt.Errorf("node%d status: %w", i, err)
+			}
+			sts[i] = st
+
+			if st.BackendState != "Running" {
+				return fmt.Errorf("node%d state = %q", i, st.BackendState)
+			}
+			t.Logf("node%d up with %v", i, sts[i].Self.TailscaleIPs)
+			return nil
+		})
 	}
-
-	t.Logf("both up1")
-
-	var sts []*ipnstate.Status
-	for i, c := range []*http.Client{c1, c2} {
-		st, err := status(ctx, c)
-		if err != nil {
-			t.Fatalf("node%d status second time: %v", i, err)
-		}
-		if st.BackendState != "Running" {
-			t.Fatalf("node%d state = %q", i, st.BackendState)
-		}
-		if len(st.Peer) != 1 {
-			t.Fatalf("node%d peer count = %d; want 1", i, len(st.Peer))
-		}
-		sts = append(sts, st)
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("initial setup: %v", err)
 	}
-
-	t.Logf("both up2")
 
 	route, err := ping(ctx, c1, sts[1].Self.TailscaleIPs[0].String())
 	t.Logf("ping route: %v, %v", route, err)

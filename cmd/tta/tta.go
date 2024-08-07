@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"flag"
@@ -23,10 +24,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mitchellh/go-ps"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
@@ -45,11 +48,15 @@ func absify(cmd string) string {
 }
 
 func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
+	log.Printf("Got serveCmd for %q %v", cmd, args)
 	out, err := exec.Command(absify(cmd), args...).CombinedOutput()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if err != nil {
 		w.Header().Set("Exec-Err", err.Error())
 		w.WriteHeader(500)
+		log.Printf("Err on serveCmd for %q %v, %d bytes of output: %v", cmd, args, len(out), err)
+	} else {
+		log.Printf("Did serveCmd for %q %v, %d bytes of output", cmd, args, len(out))
 	}
 	w.Write(out)
 }
@@ -74,12 +81,50 @@ func main() {
 	}
 	flag.Parse()
 
+	if distro.Get() == distro.Gokrazy {
+		nsRx := regexp.MustCompile(`(?m)^nameserver (.*)`)
+		for t := time.Now(); time.Since(t) < 10*time.Second; time.Sleep(10 * time.Millisecond) {
+			all, _ := os.ReadFile("/etc/resolv.conf")
+			if nsRx.Match(all) {
+				break
+			}
+		}
+	}
+
 	logc, err := net.Dial("tcp", "9.9.9.9:124")
 	if err == nil {
 		log.SetOutput(logc)
 	}
 
 	log.Printf("Tailscale Test Agent running.")
+
+	if distro.Get() == distro.Gokrazy {
+		procs, err := ps.Processes()
+		if err != nil {
+			log.Fatalf("ps.Processes: %v", err)
+		}
+		killed := false
+		for _, p := range procs {
+			if p.Executable() == "tailscaled" {
+				if op, err := os.FindProcess(p.Pid()); err == nil {
+					op.Signal(os.Interrupt)
+					killed = true
+				}
+			}
+		}
+		log.Printf("killed = %v", killed)
+		if killed {
+			for {
+				_, err := exec.Command(absify("tailscale"), "status", "--json").CombinedOutput()
+				if err == nil {
+					log.Printf("tailscaled back up")
+					break
+				}
+				log.Printf("tailscale status error; sleeping before trying again...")
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}
 
 	var mux http.ServeMux
 	var hs http.Server
@@ -117,6 +162,22 @@ func main() {
 		return
 	})
 	mux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
+		cmd := exec.Command(absify("tailscale"), "debug", "daemon-logs")
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer out.Close()
+		cmd.Start()
+		defer cmd.Process.Kill()
+		go func() {
+			bs := bufio.NewScanner(out)
+			for bs.Scan() {
+				log.Printf("Daemon: %s", bs.Text())
+			}
+		}()
+
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {

@@ -1373,8 +1373,7 @@ func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 
 func (s *Server) NodeAgentRoundTripper(n *Node) http.RoundTripper {
 	return &http.Transport{
-		DisableKeepAlives: true, // XXX
-		DialContext:       s.NodeAgentDialer(n),
+		DialContext: s.NodeAgentDialer(n),
 	}
 }
 
