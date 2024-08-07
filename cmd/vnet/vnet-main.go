@@ -19,6 +19,7 @@ import (
 var (
 	listen  = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
 	nat     = flag.String("nat", "easy", "type of NAT to use")
+	nat2    = flag.String("nat2", "hard", "type of NAT to use for second network")
 	portmap = flag.Bool("portmap", false, "enable portmapping")
 	dgram   = flag.Bool("dgram", false, "enable datagram mode; for use with macOS Hypervisor.Framework and VZFileHandleNetworkDeviceAttachment")
 )
@@ -52,7 +53,7 @@ func main() {
 
 	var c vnet.Config
 	node1 := c.AddNode(c.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.NAT(*nat)))
-	c.AddNode(c.AddNetwork("2.2.2.2", "10.2.0.1/16", vnet.NAT(*nat)))
+	c.AddNode(c.AddNetwork("2.2.2.2", "10.2.0.1/16", vnet.NAT(*nat2)))
 	if *portmap {
 		node1.Network().AddService(vnet.NATPMP)
 	}
@@ -81,6 +82,7 @@ func main() {
 		}
 		for {
 			time.Sleep(5 * time.Second)
+			//continue
 			getStatus()
 		}
 	}()
