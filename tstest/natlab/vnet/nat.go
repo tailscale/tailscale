@@ -112,8 +112,8 @@ func (n *oneToOneNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (la
 }
 
 type hardKeyOut struct {
-	lanIP netip.Addr
-	dst   netip.AddrPort
+	src netip.AddrPort
+	dst netip.AddrPort
 }
 
 type hardKeyIn struct {
@@ -148,7 +148,7 @@ func init() {
 }
 
 func (n *hardNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
-	ko := hardKeyOut{src.Addr(), dst}
+	ko := hardKeyOut{src, dst}
 	if pm, ok := n.out[ko]; ok {
 		// Existing flow.
 		// TODO: bump timestamp

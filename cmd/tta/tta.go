@@ -33,8 +33,6 @@ var (
 	driverAddr = flag.String("driver", "test-driver.tailscale:8008", "address of the test driver; by default we use the DNS name test-driver.tailscale which is special cased in the emulated network's DNS server")
 )
 
-type chanListener <-chan net.Conn
-
 func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
 	if distro.Get() == distro.Gokrazy && !strings.Contains(cmd, "/") {
 		cmd = "/user/" + cmd
@@ -75,7 +73,7 @@ func main() {
 		switch s {
 		case http.StateNew:
 			newSet.Add(c)
-		case http.StateClosed:
+		default:
 			newSet.Delete(c)
 		}
 		if len(newSet) == 0 {
@@ -92,7 +90,7 @@ func main() {
 		return
 	})
 	mux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
-		serveCmd(w, "tailscale", "up", "--auth-key=test")
+		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		serveCmd(w, "tailscale", "status", "--json")
@@ -138,6 +136,8 @@ func connect() (net.Conn, error) {
 	}
 	return c, nil
 }
+
+type chanListener <-chan net.Conn
 
 func (cl chanListener) Accept() (net.Conn, error) {
 	c, ok := <-cl
