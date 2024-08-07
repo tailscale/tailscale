@@ -28,13 +28,15 @@ func Test_Writes(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	tests := []struct {
-		name          string
-		inputs        [][]byte
-		wantForwarded []byte
-		wantRecorded  []byte
-		firstWrite    bool
-		width         int
-		height        int
+		name              string
+		inputs            [][]byte
+		wantForwarded     []byte
+		wantRecorded      []byte
+		firstWrite        bool
+		width             int
+		height            int
+		sendInitialResize bool
+		hasTerm           bool
 	}{
 		{
 			name:          "single_write_control_frame_with_payload",
@@ -75,7 +77,18 @@ func Test_Writes(t *testing.T) {
 			wantRecorded:  fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
 		{
-			name:          "single_first_write_stdout_data_frame_with_payload",
+			name:              "single_first_write_stdout_data_frame_with_payload_sess_has_terminal",
+			inputs:            [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
+			wantForwarded:     []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
+			wantRecorded:      append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
+			width:             10,
+			height:            20,
+			hasTerm:           true,
+			firstWrite:        true,
+			sendInitialResize: true,
+		},
+		{
+			name:          "single_first_write_stdout_data_frame_with_payload_sess_does_not_have_terminal",
 			inputs:        [][]byte{{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5}},
 			wantForwarded: []byte{0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x5, 0x1, 0x2, 0x3, 0x4, 0x5},
 			wantRecorded:  append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
@@ -98,15 +111,21 @@ func Test_Writes(t *testing.T) {
 					Width:  tt.width,
 					Height: tt.height,
 				},
+				initialTermSizeSet: make(chan string, 1),
+				hasTerm:            tt.hasTerm,
 			}
 			if !tt.firstWrite {
 				// this test case does not intend to test that cast header gets written once
 				c.writeCastHeaderOnce.Do(func() {})
 			}
+			if tt.sendInitialResize {
+				c.initialTermSizeSet <- "ok"
+			}
 
 			c.stdoutStreamID.Store(stdoutStreamID)
 			c.stderrStreamID.Store(stderrStreamID)
 			for i, input := range tt.inputs {
+				c.hasTerm = tt.hasTerm
 				if _, err := c.Write(input); err != nil {
 					t.Errorf("[%d] spdyRemoteConnRecorder.Write() unexpected error %v", i, err)
 				}
@@ -196,9 +215,10 @@ func Test_Reads(t *testing.T) {
 			sr := &fakes.TestSessionRecorder{}
 			rec := tsrecorder.New(sr, cl, cl.Now(), true)
 			c := &conn{
-				Conn: tc,
-				log:  zl.Sugar(),
-				rec:  rec,
+				Conn:               tc,
+				log:                zl.Sugar(),
+				rec:                rec,
+				initialTermSizeSet: make(chan string, 1),
 			}
 			c.resizeStreamID.Store(tt.resizeStreamIDBeforeRead)
 

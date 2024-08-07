@@ -24,7 +24,6 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	kubesessionrecording "tailscale.com/k8s-operator/sessionrecording"
 	tskube "tailscale.com/kube"
-	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
@@ -32,11 +31,17 @@ import (
 	"tailscale.com/util/set"
 )
 
-var whoIsKey = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
+const (
+	// 'kubectl exec' session parameters to be extracted from request URL
+	// parameters.
+	podNameKey       = "pod"
+	namespaceNameKey = "namespace"
+)
 
 var (
 	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
 	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
+	whoIsKey                  = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 )
 
 type apiServerProxyMode int
@@ -168,7 +173,8 @@ func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredL
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ap.serveDefault)
-	mux.HandleFunc("/api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExec)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
 
 	hs := &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -209,9 +215,9 @@ func (ap *apiserverProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 	ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
-// serveExec serves 'kubectl exec' requests, optionally configuring the kubectl
-// exec sessions to be recorded.
-func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
+// serveExec serves 'kubectl exec' requests for sessions streamed over SPDY,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveExecSPDY(w http.ResponseWriter, r *http.Request) {
 	who, err := ap.whoIs(r)
 	if err != nil {
 		ap.authError(w, err)
@@ -234,8 +240,8 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	if r.Method != "POST" || r.Header.Get("Upgrade") != "SPDY/3.1" {
-		msg := "'kubectl exec' session recording is configured, but the request is not over SPDY. Session recording is currently only supported for SPDY based clients"
+	if h := r.Header.Get("Upgrade"); h != "SPDY/3.1" {
+		msg := fmt.Sprintf("[unexpected] unable to verify that streaming protocol is SPDY, wants Upgrade header 'SPDY/3.1', got: %s", h)
 		if failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
 			ap.log.Warn(msg)
@@ -247,9 +253,76 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	spdyH := kubesessionrecording.New(ap.ts, r, who, w, r.PathValue("pod"), r.PathValue("namespace"), kubesessionrecording.SPDYProtocol, addrs, failOpen, sessionrecording.ConnectToRecorder, ap.log)
+
+	opts := kubesessionrecording.HijackerOpts{
+		Req:       r,
+		W:         w,
+		Proto:     kubesessionrecording.SPDYProtocol,
+		TS:        ap.ts,
+		Who:       who,
+		Addrs:     addrs,
+		FailOpen:  failOpen,
+		Pod:       r.PathValue(podNameKey),
+		Namespace: r.PathValue(namespaceNameKey),
+		Log:       ap.log,
+	}
+	spdyH := kubesessionrecording.New(opts)
 
 	ap.rp.ServeHTTP(spdyH, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+}
+
+// serveWS serves 'kubectl exec' requests for sessions streamed over WebSockets,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
+	who, err := ap.whoIs(r)
+	if err != nil {
+		ap.authError(w, err)
+		return
+	}
+	counterNumRequestsProxied.Add(1)
+	failOpen, addrs, err := determineRecorderConfig(who)
+	if err != nil {
+		ap.log.Errorf("error trying to determine whether the 'kubectl exec' session needs to be recorded: %v", err)
+		return
+	}
+	if failOpen && len(addrs) == 0 { // will not record
+		ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+		return
+	}
+	kubesessionrecording.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
+	if !failOpen && len(addrs) == 0 {
+		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
+		ap.log.Error(msg)
+		http.Error(w, msg, http.StatusForbidden)
+		return
+	}
+	if h := r.Header.Get("Upgrade"); h != "websocket" {
+		msg := fmt.Sprintf("[unexpected] unable to verify that streaming protocol is WebSockets, wants 'Upgrade' header 'websocket' got %s", h)
+		if failOpen {
+			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
+			ap.log.Warn(msg)
+			ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+			return
+		}
+		ap.log.Error(msg)
+		msg += "; failure mode is 'fail closed'; closing connection."
+		http.Error(w, msg, http.StatusForbidden)
+		return
+	}
+	opts := kubesessionrecording.HijackerOpts{
+		Req:       r,
+		W:         w,
+		Proto:     kubesessionrecording.WSProtocol,
+		TS:        ap.ts,
+		Who:       who,
+		Addrs:     addrs,
+		FailOpen:  failOpen,
+		Pod:       r.PathValue(podNameKey),
+		Namespace: r.PathValue(namespaceNameKey),
+		Log:       ap.log,
+	}
+	wsH := kubesessionrecording.New(opts)
+	ap.rp.ServeHTTP(wsH, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
 func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
@@ -284,9 +357,11 @@ func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 		log.Printf("failed to add impersonation headers: " + err.Error())
 	}
 }
+
 func (ap *apiserverProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {
 	return ap.lc.WhoIs(r.Context(), r.RemoteAddr)
 }
+
 func (ap *apiserverProxy) authError(w http.ResponseWriter, err error) {
 	ap.log.Errorf("failed to authenticate caller: %v", err)
 	http.Error(w, "failed to authenticate caller", http.StatusInternalServerError)
