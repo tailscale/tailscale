@@ -356,6 +356,7 @@ var (
 	fakeControlIP           = netip.AddrFrom4([4]byte{52, 52, 0, 3}) // 3=C for "Control"
 	fakeDERP1IP             = netip.AddrFrom4([4]byte{33, 4, 0, 1})  // 3340=DERP; 1=derp 1
 	fakeDERP2IP             = netip.AddrFrom4([4]byte{33, 4, 0, 2})  // 3340=DERP; 1=derp 1
+	fakeLogCatcherIP        = netip.AddrFrom4([4]byte{52, 52, 0, 4})
 )
 
 type EthernetPacket struct {
@@ -564,6 +565,8 @@ func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
 	switch qname {
 	case "dns":
 		return fakeDNSIP, true
+	case "log.tailscale.io":
+		return fakeLogCatcherIP, true
 	case "test-driver.tailscale":
 		return fakeTestAgentIP, true
 	case "controlplane.tailscale.com":

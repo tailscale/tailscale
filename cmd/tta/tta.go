@@ -12,7 +12,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,8 +28,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mitchellh/go-ps"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/hostinfo"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 	"tailscale.com/version/distro"
@@ -71,8 +70,7 @@ func (rt localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 
 func main() {
 	if distro.Get() == distro.Gokrazy {
-		cmdLine, _ := os.ReadFile("/proc/cmdline")
-		if !bytes.Contains(cmdLine, []byte("tailscale-tta=1")) {
+		if !hostinfo.IsNATLabGuestVM() {
 			// "Exiting immediately with status code 0 when the
 			// GOKRAZY_FIRST_START=1 environment variable is set means “don’t
 			// start the program on boot”"
@@ -97,34 +95,6 @@ func main() {
 	}
 
 	log.Printf("Tailscale Test Agent running.")
-
-	if distro.Get() == distro.Gokrazy {
-		procs, err := ps.Processes()
-		if err != nil {
-			log.Fatalf("ps.Processes: %v", err)
-		}
-		killed := false
-		for _, p := range procs {
-			if p.Executable() == "tailscaled" {
-				if op, err := os.FindProcess(p.Pid()); err == nil {
-					op.Signal(os.Interrupt)
-					killed = true
-				}
-			}
-		}
-		log.Printf("killed = %v", killed)
-		if killed {
-			for {
-				_, err := exec.Command(absify("tailscale"), "status", "--json").CombinedOutput()
-				if err == nil {
-					log.Printf("tailscaled back up")
-					break
-				}
-				log.Printf("tailscale status error; sleeping before trying again...")
-				time.Sleep(50 * time.Millisecond)
-			}
-		}
-	}
 
 	var mux http.ServeMux
 	var hs http.Server
