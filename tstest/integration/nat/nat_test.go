@@ -4,6 +4,8 @@
 package nat
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/natlab/vnet"
 )
@@ -124,7 +127,7 @@ func hardPMP(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("10.7.%d.1/24", n), vnet.HardNAT, vnet.NATPMP))
 }
 
-func (nt *natTest) runTest(node1, node2 addNodeFunc) {
+func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	t := nt.tb
 
 	var c vnet.Config
@@ -255,6 +258,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 	}
 	route := classifyPing(pingRes)
 	t.Logf("ping route: %v", route)
+	return route
 }
 
 func classifyPing(pr *ipnstate.PingResult) pingRoute {
@@ -397,4 +401,89 @@ func TestEasyOne2One(t *testing.T) {
 func TestHardOne2One(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(hard, one2one)
+}
+
+func TestGrid(t *testing.T) {
+	t.Parallel()
+
+	type nodeType struct {
+		name string
+		fn   addNodeFunc
+	}
+	types := []nodeType{
+		{"easy", easy},
+		{"hard", hard},
+		{"easyPMP", easyPMP},
+		{"hardPMP", hardPMP},
+		{"one2one", one2one},
+	}
+
+	sem := syncs.NewSemaphore(2)
+	var (
+		mu  sync.Mutex
+		res = make(map[string]pingRoute)
+	)
+	for i, a := range types {
+		for _, b := range types[i:] {
+			key := a.name + "-" + b.name
+			t.Run(key, func(t *testing.T) {
+				t.Parallel()
+
+				sem.Acquire()
+				defer sem.Release()
+
+				filename := key + ".cache"
+				contents, _ := os.ReadFile(filename)
+				route := pingRoute(strings.TrimSpace(string(contents)))
+
+				if route == "" {
+					nt := newNatTest(t)
+					route = nt.runTest(a.fn, b.fn)
+					if err := os.WriteFile(filename, []byte(string(route)), 0666); err != nil {
+						t.Fatalf("writeFile: %v", err)
+					}
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+				res[key] = route
+				t.Logf("results: %v", res)
+			})
+		}
+	}
+
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		var hb bytes.Buffer
+		pf := func(format string, args ...any) {
+			fmt.Fprintf(&hb, format, args...)
+		}
+		pf("<html><table border=1 cellpadding=5>")
+		pf("<tr><td></td>")
+		for _, a := range types {
+			pf("<td><b>%s</b></td>", a.name)
+		}
+		pf("</tr>\n")
+
+		for _, a := range types {
+			pf("<tr><td><b>%s</b></td>", a.name)
+			for _, b := range types {
+				key := a.name + "-" + b.name
+				key2 := b.name + "-" + a.name
+				v := cmp.Or(res[key], res[key2])
+				if v == "derp" {
+					pf("<td><div style='color: red; font-weight: bold'>%s</div></td>", v)
+				} else {
+					pf("<td>%s</td>", v)
+				}
+			}
+			pf("</tr>\n")
+		}
+		pf("</table></html>")
+
+		if err := os.WriteFile("grid.html", hb.Bytes(), 0666); err != nil {
+			t.Fatalf("writeFile: %v", err)
+		}
+	})
 }
