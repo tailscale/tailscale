@@ -28,19 +28,20 @@ import (
 )
 
 var (
-	rootFlagSet  = flag.NewFlagSet("gitops-pusher", flag.ExitOnError)
-	policyFname  = rootFlagSet.String("policy-file", "./policy.hujson", "filename for policy file")
-	cacheFname   = rootFlagSet.String("cache-file", "./version-cache.json", "filename for the previous known version hash")
-	timeout      = rootFlagSet.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
-	githubSyntax = rootFlagSet.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
-	apiServer    = rootFlagSet.String("api-server", "api.tailscale.com", "API server to contact")
+	rootFlagSet       = flag.NewFlagSet("gitops-pusher", flag.ExitOnError)
+	policyFname       = rootFlagSet.String("policy-file", "./policy.hujson", "filename for policy file")
+	cacheFname        = rootFlagSet.String("cache-file", "./version-cache.json", "filename for the previous known version hash")
+	timeout           = rootFlagSet.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
+	githubSyntax      = rootFlagSet.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
+	apiServer         = rootFlagSet.String("api-server", "api.tailscale.com", "API server to contact")
+	failOnManualEdits = rootFlagSet.Bool("fail-on-manual-edits", false, "fail if manual edits to the ACLs in the admin panel are detected; when set to false (the default) only a warning is printed")
 )
 
-func modifiedExternallyError() {
+func modifiedExternallyError() error {
 	if *githubSyntax {
-		fmt.Printf("::warning file=%s,line=1,col=1,title=Policy File Modified Externally::The policy file was modified externally in the admin console.\n", *policyFname)
+		return fmt.Errorf("::warning file=%s,line=1,col=1,title=Policy File Modified Externally::The policy file was modified externally in the admin console.", *policyFname)
 	} else {
-		fmt.Printf("The policy file was modified externally in the admin console.\n")
+		return fmt.Errorf("The policy file was modified externally in the admin console.")
 	}
 }
 
@@ -66,7 +67,13 @@ func apply(cache *Cache, client *http.Client, tailnet, apiKey string) func(conte
 		log.Printf("cache:   %s", cache.PrevETag)
 
 		if cache.PrevETag != controlEtag {
-			modifiedExternallyError()
+			if err := modifiedExternallyError(); err != nil {
+				if *failOnManualEdits {
+					return err
+				} else {
+					fmt.Println(err)
+				}
+			}
 		}
 
 		if controlEtag == localEtag {
@@ -107,7 +114,13 @@ func test(cache *Cache, client *http.Client, tailnet, apiKey string) func(contex
 		log.Printf("cache:   %s", cache.PrevETag)
 
 		if cache.PrevETag != controlEtag {
-			modifiedExternallyError()
+			if err := modifiedExternallyError(); err != nil {
+				if *failOnManualEdits {
+					return err
+				} else {
+					fmt.Println(err)
+				}
+			}
 		}
 
 		if controlEtag == localEtag {
