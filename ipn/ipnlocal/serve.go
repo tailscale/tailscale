@@ -56,9 +56,13 @@ var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 type serveHTTPContext struct {
 	SrcAddr  netip.AddrPort
 	DestPort uint16
-	Funnel   *funnelFlow
+
+	// provides funnel-specific context, nil if not funneled
+	Funnel *funnelFlow
 }
 
+// funnelFlow represents a funneled connection initiated via IngressPeer
+// to Host.
 type funnelFlow struct {
 	Host        string
 	IngressPeer tailcfg.NodeView
@@ -431,7 +435,8 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 }
 
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
-// the ipn.ServeConfig.
+// the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
+// connection.
 func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, f *funnelFlow) (handler func(net.Conn) error) {
 	b.mu.Lock()
 	sc := b.serveConfig
@@ -720,7 +725,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Del("Tailscale-User-Login")
 	r.Out.Header.Del("Tailscale-User-Name")
 	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Host")
+	r.Out.Header.Del("Tailscale-Funnel-Request")
 	r.Out.Header.Del("Tailscale-Headers-Info")
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
@@ -728,7 +733,7 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 		return
 	}
 	if c.Funnel != nil {
-		r.Out.Header.Set("Tailscale-Funnel-Host", c.Funnel.Host)
+		r.Out.Header.Set("Tailscale-Funnel-Request", "?1")
 		return
 	}
 	node, user, ok := b.WhoIs("tcp", c.SrcAddr)

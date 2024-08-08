@@ -208,8 +208,8 @@ func main() {
 }
 
 // serveOnLocalTailscaled starts a serve session using an already-running
-// tailscaled instead of starting a fresh tsnet server, serving local dstPort
-// on srcAddrPort
+// tailscaled instead of starting a fresh tsnet server, making something
+// listening on clientDNSName:dstPort accessible over serve/funnel.
 func serveOnLocalTailscaled(ctx context.Context, lc *tailscale.LocalClient, st *ipnstate.Status, dstPort uint16, shouldFunnel bool) (cleanup func(), watcherChan chan error, err error) {
 	// In order to support funneling out in local tailscaled mode, we need
 	// to add a serve config to forward the listeners we bound above and
@@ -1039,7 +1039,7 @@ func parseID[T ~int64](input string) (_ T, ok bool) {
 func isFunnelRequest(r *http.Request) bool {
 	// If we're funneling through the local tailscaled, it will set this HTTP
 	// header.
-	if r.Header.Get("Tailscale-Funnel-Host") != "" {
+	if r.Header.Get("Tailscale-Funnel-Request") != "" {
 		return true
 	}
 
