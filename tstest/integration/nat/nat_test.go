@@ -5,9 +5,11 @@ package nat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -196,6 +198,11 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 	for i, c := range clients {
 		i, c := i, c
 		eg.Go(func() error {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				streamDaemonLogs(ctx, t, c, fmt.Sprintf("node%d:", i))
+			}()
 			st, err := c.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("node%d status: %w", i, err)
@@ -226,6 +233,35 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 	t.Logf("ping route: %v, %v", logger.AsJSON(route), err)
 }
 
+func streamDaemonLogs(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, nodeID string) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r, err := c.TailDaemonLogs(ctx)
+	if err != nil {
+		t.Errorf("tailDaemonLogs: %v", err)
+		return
+	}
+	logger := log.New(os.Stderr, nodeID+" ", log.Lmsgprefix)
+	dec := json.NewDecoder(r)
+	for {
+		// /{"logtail":{"client_time":"2024-08-08T17:42:31.95095956Z","proc_id":2024742977,"proc_seq":232},"text":"magicsock: derp-1 connected; connGen=1\n"}
+		var logEntry struct {
+			LogTail struct {
+				ClientTime time.Time `json:"client_time"`
+			}
+			Text string `json:"text"`
+		}
+		if err := dec.Decode(&logEntry); err != nil {
+			if err == io.EOF {
+				return
+			}
+			t.Errorf("log entry: %v", err)
+			return
+		}
+		logger.Printf("%s %s", logEntry.LogTail.ClientTime.Format("2006/01/02 15:04:05"), logEntry.Text)
+	}
+}
+
 func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
 	n := 0
 	var res *ipnstate.PingResult
@@ -245,11 +281,11 @@ func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipn
 		if pr.DERPRegionID == 0 {
 			return pr, nil
 		}
+		res = pr
 		select {
 		case <-ctx.Done():
 		case <-time.After(time.Second):
 		}
-		res = pr
 	}
 	if res == nil {
 		return nil, errors.New("no ping response")
