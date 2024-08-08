@@ -407,6 +407,7 @@ type network struct {
 	wanIP     netip.Addr
 	lanIP     netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
 	nodesByIP map[netip.Addr]*node
+	logf      func(format string, args ...any)
 
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
@@ -722,7 +723,7 @@ func (n *network) writeEth(res []byte) {
 		return
 	}
 	if srcMAC == dstMAC {
-		log.Printf("dropping write of packet from %v to itself", srcMAC)
+		n.logf("dropping write of packet from %v to itself", srcMAC)
 		return
 	}
 	if writeFunc, ok := n.writeFunc.Load(dstMAC); ok {
@@ -739,12 +740,12 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 
 	switch ep.le.EthernetType {
 	default:
-		log.Printf("Dropping non-IP packet: %v", ep.le.EthernetType)
+		n.logf("Dropping non-IP packet: %v", ep.le.EthernetType)
 		return
 	case layers.EthernetTypeARP:
 		res, err := n.createARPResponse(packet)
 		if err != nil {
-			log.Printf("createARPResponse: %v", err)
+			n.logf("createARPResponse: %v", err)
 		} else {
 			n.writeEth(res)
 		}
@@ -774,7 +775,7 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 func (n *network) HandleUDPPacket(p UDPPacket) {
 	dst := n.doNATIn(p.Src, p.Dst)
 	if !dst.IsValid() {
-		log.Printf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
+		n.logf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
 		return
 	}
 	p.Dst = dst
@@ -791,7 +792,7 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	src, dst := p.Src, p.Dst
 	node, ok := n.nodesByIP[dst.Addr()]
 	if !ok {
-		log.Printf("no node for dest IP %v in UDP packet %v=>%v", dst.Addr(), p.Src, p.Dst)
+		n.logf("no node for dest IP %v in UDP packet %v=>%v", dst.Addr(), p.Src, p.Dst)
 		return
 	}
 
@@ -816,7 +817,7 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	buffer := gopacket.NewSerializeBuffer()
 	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 	if err := gopacket.SerializeLayers(buffer, options, eth, ip, udp, gopacket.Payload(p.Payload)); err != nil {
-		log.Printf("serializing UDP: %v", err)
+		n.logf("serializing UDP: %v", err)
 		return
 	}
 	ethRaw := buffer.Bytes()
@@ -843,7 +844,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	if isDHCPRequest(packet) {
 		res, err := n.s.createDHCPResponse(packet)
 		if err != nil {
-			log.Printf("createDHCPResponse: %v", err)
+			n.logf("createDHCPResponse: %v", err)
 			return
 		}
 		writePkt(res)
@@ -860,7 +861,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		// on gateway instead?
 		res, err := n.s.createDNSResponse(packet)
 		if err != nil {
-			log.Printf("createDNSResponse: %v", err)
+			n.logf("createDNSResponse: %v", err)
 			return
 		}
 		writePkt(res)
@@ -1214,15 +1215,15 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 	// First see if there's a port mapping, before doing NAT.
 	if lanAP, ok := n.portMap[dst]; ok {
 		if now.Before(lanAP.expiry) {
-			log.Printf("XXX NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
+			n.logf("XXX NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
 			return lanAP.dst
 		}
-		log.Printf("XXX NAT: doNatIn: port mapping EXPIRED for %v=>%v", dst, lanAP.dst)
+		n.logf("XXX NAT: doNatIn: port mapping EXPIRED for %v=>%v", dst, lanAP.dst)
 		delete(n.portMap, dst)
 		return netip.AddrPort{}
 	}
 	if len(n.portMap) > 0 {
-		log.Printf("XXX NAT: doNatIn: no port mapping for %v; have %v", dst, n.portMap)
+		n.logf("XXX NAT: doNatIn: no port mapping for %v; have %v", dst, n.portMap)
 	}
 
 	return n.natTable.PickIncomingDst(src, dst, now)
@@ -1273,7 +1274,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 				dst:    dst,
 				expiry: time.Now().Add(time.Duration(sec) * time.Second),
 			})
-			log.Printf("XXX allocated NAT mapping from %v to %v", wanAP, dst)
+			n.logf("XXX allocated NAT mapping from %v to %v", wanAP, dst)
 			return wanAP.Port(), true
 		}
 		wantExtPort = rand.N(uint16(32<<10)) + 32<<10
@@ -1370,7 +1371,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		lifetimeSec := binary.BigEndian.Uint32(req.Payload[8:12])
 		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec))
 		if !ok {
-			log.Printf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
+			n.logf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
 		res := make([]byte, 0, 16)
@@ -1390,8 +1391,8 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		})
 		return
 	}
-	log.Printf("TODO: handle NAT-PMP packet % 02x", req.Payload)
 
+	n.logf("TODO: handle NAT-PMP packet % 02x", req.Payload)
 }
 
 // UDPPacket is a UDP packet.
@@ -1419,7 +1420,7 @@ type agentConn struct {
 }
 
 func (s *Server) addIdleAgentConn(ac *agentConn) {
-	log.Printf("got agent conn from %v", ac.node.mac)
+	//log.Printf("got agent conn from %v", ac.node.mac)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1438,7 +1439,7 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 	for {
 		ac, ok := s.takeAgentConnOne(n)
 		if ok {
-			log.Printf("got agent conn for %v", n.mac)
+			//log.Printf("got agent conn for %v", n.mac)
 			return ac, true
 		}
 		s.mu.Lock()
@@ -1446,7 +1447,7 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 		mak.Set(&s.agentConnWaiter, n, ready)
 		s.mu.Unlock()
 
-		log.Printf("waiting for agent conn for %v", n.mac)
+		//log.Printf("waiting for agent conn for %v", n.mac)
 		select {
 		case <-ctx.Done():
 			return nil, false

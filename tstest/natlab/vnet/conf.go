@@ -6,9 +6,11 @@ package vnet
 import (
 	"cmp"
 	"fmt"
+	"log"
 	"net/netip"
 	"slices"
 
+	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
 
@@ -181,6 +183,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			wanIP:     conf.wanIP,
 			lanIP:     conf.lanIP,
 			nodesByIP: map[netip.Addr]*node{},
+			logf:      logger.WithPrefix(log.Printf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)
