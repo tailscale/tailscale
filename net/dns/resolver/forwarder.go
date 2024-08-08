@@ -6,6 +6,8 @@ package resolver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -498,9 +500,10 @@ var (
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	if verboseDNSForward() {
 		id := forwarderCount.Add(1)
-		f.logf("forwarder.send(%q) [%d] ...", rr.name.Addr, id)
+		domain, typ, _ := nameFromQuery(fq.packet)
+		f.logf("forwarder.send(%q, %d, %v, %d) [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), id)
 		defer func() {
-			f.logf("forwarder.send(%q) [%d] = %v, %v", rr.name.Addr, id, len(ret), err)
+			f.logf("forwarder.send(%q, %d, %v, %d) [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), id, len(ret), err)
 		}()
 	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
@@ -866,7 +869,7 @@ type forwardQuery struct {
 // node DNS proxy queries), otherwise f.resolvers is used.
 func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
-	domain, err := nameFromQuery(query.bs)
+	domain, typ, err := nameFromQuery(query.bs)
 	if err != nil {
 		metricDNSFwdErrorName.Add(1)
 		return err
@@ -943,6 +946,12 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	}
 	defer fq.closeOnCtxDone.Close()
 
+	if verboseDNSForward() {
+		domainSha256 := sha256.Sum256([]byte(domain))
+		domainSig := base64.RawStdEncoding.EncodeToString(domainSha256[:3])
+		f.logf("request(%d, %v, %d, %s) %d...", fq.txid, typ, len(domain), domainSig, len(fq.packet))
+	}
+
 	resc := make(chan []byte, 1) // it's fine buffered or not
 	errc := make(chan error, 1)  // it's fine buffered or not too
 	for i := range resolvers {
@@ -982,6 +991,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 				metricDNSFwdErrorContext.Add(1)
 				return fmt.Errorf("waiting to send response: %w", ctx.Err())
 			case responseChan <- packet{v, query.family, query.addr}:
+				if verboseDNSForward() {
+					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+				}
 				metricDNSFwdSuccess.Add(1)
 				f.health.SetHealthy(dnsForwarderFailing)
 				return nil
@@ -1009,6 +1021,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 						}
 						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
 					case responseChan <- res:
+						if verboseDNSForward() {
+							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
+						}
 					}
 				}
 				return firstErr
@@ -1037,24 +1052,28 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 var initListenConfig func(_ *net.ListenConfig, _ *netmon.Monitor, tunName string) error
 
 // nameFromQuery extracts the normalized query name from bs.
-func nameFromQuery(bs []byte) (dnsname.FQDN, error) {
+func nameFromQuery(bs []byte) (dnsname.FQDN, dns.Type, error) {
 	var parser dns.Parser
 
 	hdr, err := parser.Start(bs)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if hdr.Response {
-		return "", errNotQuery
+		return "", 0, errNotQuery
 	}
 
 	q, err := parser.Question()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	n := q.Name.Data[:q.Name.Length]
-	return dnsname.ToFQDN(rawNameToLower(n))
+	fqdn, err := dnsname.ToFQDN(rawNameToLower(n))
+	if err != nil {
+		return "", 0, err
+	}
+	return fqdn, q.Type, nil
 }
 
 // nxDomainResponse returns an NXDomain DNS reply for the provided request.
