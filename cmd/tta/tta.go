@@ -65,6 +65,8 @@ type localClientRoundTripper struct {
 }
 
 func (rt localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.RequestURI = ""
 	return rt.lc.DoLocalRequest(req)
 }
 
