@@ -10,11 +10,15 @@ import (
 	"flag"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"time"
 
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 var (
@@ -70,6 +74,16 @@ func main() {
 
 	s.WriteStartingBanner(os.Stdout)
 	nc := s.NodeAgentClient(node1)
+	go func() {
+		rp := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://gokrazy")))
+		d := rp.Director
+		rp.Director = func(r *http.Request) {
+			d(r)
+			r.Header.Set("X-TTA-GoKrazy", "1")
+		}
+		rp.Transport = nc.HTTPClient.Transport
+		http.ListenAndServe(":8080", rp)
+	}()
 	go func() {
 		getStatus := func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
