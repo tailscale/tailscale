@@ -66,6 +66,7 @@ func main() {
 		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
 		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
+		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
 
@@ -106,6 +107,7 @@ func main() {
 		proxyActAsDefaultLoadBalancer: isDefaultLoadBalancer,
 		proxyTags:                     tags,
 		proxyFirewallMode:             tsFirewallMode,
+		proxyDefaultClass:             defaultProxyClass,
 	}
 	runReconcilers(rOpts)
 }
@@ -279,6 +281,7 @@ func runReconcilers(opts reconcilerOpts) {
 			recorder:              eventRecorder,
 			tsNamespace:           opts.tailscaleNamespace,
 			clock:                 tstime.DefaultClock{},
+			proxyDefaultClass:     opts.proxyDefaultClass,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create service reconciler: %v", err)
@@ -301,6 +304,7 @@ func runReconcilers(opts reconcilerOpts) {
 			recorder: eventRecorder,
 			Client:   mgr.GetClient(),
 			logger:   opts.log.Named("ingress-reconciler"),
+			proxyDefaultClass: opts.proxyDefaultClass,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
@@ -424,6 +428,10 @@ type reconcilerOpts struct {
 	// Auto is usually the best choice, unless you want to explicitly set
 	// specific mode for debugging purposes.
 	proxyFirewallMode string
+	// proxyDefaultClass is the name of the ProxyClass to use as the default
+	// class for proxies that do not have a ProxyClass set.
+	// this is defined by an operator env variable.
+	proxyDefaultClass string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
