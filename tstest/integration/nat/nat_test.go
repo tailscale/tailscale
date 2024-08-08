@@ -14,15 +14,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/natlab/vnet"
+	"tailscale.com/types/logger"
 )
 
 type natTest struct {
@@ -30,19 +33,54 @@ type natTest struct {
 	base    string // base image
 	tempDir string // for qcow2 images
 	vnet    *vnet.Server
+	kernel  string // linux kernel path
 }
 
 func newNatTest(tb testing.TB) *natTest {
+	root, err := os.Getwd()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	modRoot := filepath.Join(root, "../../..")
+
+	linuxKernel, err := findKernelPath(filepath.Join(modRoot, "gokrazy/tsapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
+	if err != nil {
+		tb.Fatalf("findKernelPath: %v", err)
+	}
+	tb.Logf("found kernel: %v", linuxKernel)
+
 	nt := &natTest{
 		tb:      tb,
 		tempDir: tb.TempDir(),
-		base:    "/Users/maisem/dev/tailscale.com/gokrazy/tsapp.qcow2",
+		base:    filepath.Join(modRoot, "gokrazy/tsapp.qcow2"),
+		kernel:  linuxKernel,
 	}
 
 	if _, err := os.Stat(nt.base); err != nil {
 		tb.Skipf("skipping test; base image %q not found", nt.base)
 	}
 	return nt
+}
+
+func findKernelPath(goMod string) (string, error) {
+	b, err := os.ReadFile(goMod)
+	if err != nil {
+		return "", err
+	}
+	mf, err := modfile.Parse("go.mod", b, nil)
+	if err != nil {
+		return "", err
+	}
+	goModB, err := exec.Command("go", "env", "GOMODCACHE").CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range mf.Require {
+		if r.Mod.Path == "github.com/tailscale/gokrazy-kernel" {
+			return strings.TrimSpace(string(goModB)) + "/" + r.Mod.String() + "/vmlinuz", nil
+		}
+	}
+	return "", fmt.Errorf("failed to find kernel in %v", goMod)
 }
 
 type addNodeFunc func(c *vnet.Config) *vnet.Node
@@ -123,7 +161,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 			"-M", "microvm,isa-serial=off",
 			"-m", "1G",
 			"-nodefaults", "-no-user-config", "-nographic",
-			"-kernel", "/Users/maisem/dev/github.com/tailscale/gokrazy-kernel/vmlinuz",
+			"-kernel", nt.kernel,
 			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet tailscale-tta=1",
 			"-drive", "id=blk0,file="+disk+",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
@@ -185,7 +223,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 	}
 
 	route, err := ping(ctx, lc1, sts[1].Self.TailscaleIPs[0])
-	t.Logf("ping route: %v, %v", route, err)
+	t.Logf("ping route: %v, %v", logger.AsJSON(route), err)
 }
 
 func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
