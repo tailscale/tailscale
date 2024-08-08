@@ -68,12 +68,12 @@ func main() {
 	}
 
 	s.WriteStartingBanner(os.Stdout)
-
+	nc := s.NodeAgentClient(node1)
 	go func() {
 		getStatus := func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			st, err := s.NodeStatus(ctx, node1)
+			st, err := nc.Status(ctx)
 			if err != nil {
 				log.Printf("NodeStatus: %v", err)
 				return
