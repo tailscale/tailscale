@@ -496,7 +496,8 @@ func (p *Prober) RunHandler(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	stats := fmt.Sprintf("Previous runs: success rate %d%%, median latency %v",
+	stats := fmt.Sprintf("Last %d probes: success rate %d%%, median latency %v\n",
+		len(prevInfo.RecentResults),
 		int(prevInfo.RecentSuccessRatio()*100), prevInfo.RecentMedianLatency())
 	if err != nil {
 		return tsweb.Error(respStatus, fmt.Sprintf("Probe failed: %s\n%s", err.Error(), stats), err)
