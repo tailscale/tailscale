@@ -66,6 +66,12 @@ func apply(cache *Cache, client *http.Client, tailnet, apiKey string) func(conte
 		log.Printf("local:   %s", localEtag)
 		log.Printf("cache:   %s", cache.PrevETag)
 
+		if controlEtag == localEtag {
+			cache.PrevETag = localEtag
+			log.Println("no update needed, doing nothing")
+			return nil
+		}
+
 		if cache.PrevETag != controlEtag {
 			if err := modifiedExternallyError(); err != nil {
 				if *failOnManualEdits {
@@ -74,12 +80,6 @@ func apply(cache *Cache, client *http.Client, tailnet, apiKey string) func(conte
 					fmt.Println(err)
 				}
 			}
-		}
-
-		if controlEtag == localEtag {
-			cache.PrevETag = localEtag
-			log.Println("no update needed, doing nothing")
-			return nil
 		}
 
 		if err := applyNewACL(ctx, client, tailnet, apiKey, *policyFname, controlEtag); err != nil {
@@ -113,6 +113,11 @@ func test(cache *Cache, client *http.Client, tailnet, apiKey string) func(contex
 		log.Printf("local:   %s", localEtag)
 		log.Printf("cache:   %s", cache.PrevETag)
 
+		if controlEtag == localEtag {
+			log.Println("no updates found, doing nothing")
+			return nil
+		}
+
 		if cache.PrevETag != controlEtag {
 			if err := modifiedExternallyError(); err != nil {
 				if *failOnManualEdits {
@@ -121,11 +126,6 @@ func test(cache *Cache, client *http.Client, tailnet, apiKey string) func(contex
 					fmt.Println(err)
 				}
 			}
-		}
-
-		if controlEtag == localEtag {
-			log.Println("no updates found, doing nothing")
-			return nil
 		}
 
 		if err := testNewACLs(ctx, client, tailnet, apiKey, *policyFname); err != nil {
