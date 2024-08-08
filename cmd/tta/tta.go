@@ -141,7 +141,6 @@ func main() {
 	for {
 		<-needConnCh
 		c, err := connect()
-		log.Printf("Connect: %v", err)
 		if err != nil {
 			s := err.Error()
 			if s != lastErr {
