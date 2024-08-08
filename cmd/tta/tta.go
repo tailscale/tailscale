@@ -11,10 +11,8 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -134,37 +132,7 @@ func main() {
 		return
 	})
 	mux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
-		cmd := exec.Command(absify("tailscale"), "debug", "daemon-logs")
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		defer out.Close()
-		cmd.Start()
-		defer cmd.Process.Kill()
-		go func() {
-			bs := bufio.NewScanner(out)
-			for bs.Scan() {
-				log.Printf("Daemon: %s", bs.Text())
-			}
-		}()
-
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
-	})
-	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		serveCmd(w, "tailscale", "status", "--json")
-	})
-	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
-		target := r.FormValue("target")
-		cmd := exec.Command(absify("tailscale"), "ping", target)
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.(http.Flusher).Flush()
-		cmd.Stdout = w
-		cmd.Stderr = w
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(w, "error: %v\n", err)
-		}
 	})
 	go hs.Serve(chanListener(conns))
 
