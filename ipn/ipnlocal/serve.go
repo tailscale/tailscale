@@ -56,6 +56,16 @@ var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 type serveHTTPContext struct {
 	SrcAddr  netip.AddrPort
 	DestPort uint16
+
+	// provides funnel-specific context, nil if not funneled
+	Funnel *funnelFlow
+}
+
+// funnelFlow represents a funneled connection initiated via IngressPeer
+// to Host.
+type funnelFlow struct {
+	Host        string
+	IngressPeer tailcfg.NodeView
 }
 
 // localListener is the state of host-level net.Listen for a specific (Tailscale IP, port)
@@ -91,7 +101,7 @@ func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, 
 
 		handler: func(conn net.Conn) error {
 			srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
-			handler := b.tcpHandlerForServe(ap.Port(), srcAddr)
+			handler := b.tcpHandlerForServe(ap.Port(), srcAddr, nil)
 			if handler == nil {
 				b.logf("[unexpected] local-serve: no handler for %v to port %v", srcAddr, ap.Port())
 				conn.Close()
@@ -382,7 +392,7 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 		return
 	}
 
-	_, port, err := net.SplitHostPort(string(target))
+	host, port, err := net.SplitHostPort(string(target))
 	if err != nil {
 		logf("got ingress conn for bad target %q; rejecting", target)
 		sendRST()
@@ -407,9 +417,10 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 			return
 		}
 	}
-	// TODO(bradfitz): pass ingressPeer etc in context to tcpHandlerForServe,
-	// extend serveHTTPContext or similar.
-	handler := b.tcpHandlerForServe(dport, srcAddr)
+	handler := b.tcpHandlerForServe(dport, srcAddr, &funnelFlow{
+		Host:        host,
+		IngressPeer: ingressPeer,
+	})
 	if handler == nil {
 		logf("[unexpected] no matching ingress serve handler for %v to port %v", srcAddr, dport)
 		sendRST()
@@ -424,8 +435,9 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 }
 
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
-// the ipn.ServeConfig.
-func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
+// the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
+// connection.
+func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, f *funnelFlow) (handler func(net.Conn) error) {
 	b.mu.Lock()
 	sc := b.serveConfig
 	b.mu.Unlock()
@@ -444,6 +456,7 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 			Handler: http.HandlerFunc(b.serveWebHandler),
 			BaseContext: func(_ net.Listener) context.Context {
 				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
+					Funnel:   f,
 					SrcAddr:  srcAddr,
 					DestPort: dport,
 				})
@@ -712,15 +725,20 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Del("Tailscale-User-Login")
 	r.Out.Header.Del("Tailscale-User-Name")
 	r.Out.Header.Del("Tailscale-User-Profile-Pic")
+	r.Out.Header.Del("Tailscale-Funnel-Request")
 	r.Out.Header.Del("Tailscale-Headers-Info")
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok {
 		return
 	}
+	if c.Funnel != nil {
+		r.Out.Header.Set("Tailscale-Funnel-Request", "?1")
+		return
+	}
 	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
 	if !ok {
-		return // traffic from outside of Tailnet (funneled)
+		return // traffic from outside of Tailnet (funneled or local machine)
 	}
 	if node.IsTagged() {
 		// 2023-06-14: Not setting identity headers for tagged nodes.

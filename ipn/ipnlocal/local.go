@@ -3781,7 +3781,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 			return nil
 		}, opts
 	}
-	if handler := b.tcpHandlerForServe(dst.Port(), src); handler != nil {
+	if handler := b.tcpHandlerForServe(dst.Port(), src, nil); handler != nil {
 		return handler, opts
 	}
 	return nil, nil
