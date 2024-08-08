@@ -71,12 +71,12 @@
     <table class="sortable">
         <thead><tr>
             <th>Name</th>
-            <th>Class & Labels</th>
+            <th>Probe Class & Labels</th>
             <th>Interval</th>
-            <th>Result</th>
+            <th>Last Attempt</th>
             <th>Success</th>
             <th>Latency</th>
-            <th>Error</th>
+            <th>Last Error</th>
         </tr></thead>
         <tbody>
         {{range $name, $probeInfo := .Probes}}
@@ -100,8 +100,8 @@
             <td>{{$probeInfo.Interval}}</td>
             <td data-sort="{{$probeInfo.TimeSinceLast.Milliseconds}}">
                 {{if $probeInfo.TimeSinceLast}}
-                    {{$probeInfo.TimeSinceLast.String}}<br/>
-                    <span class="small">{{$probeInfo.End}}</span>
+                    {{$probeInfo.TimeSinceLast.String}} ago<br/>
+                    <span class="small">{{$probeInfo.End.Format "2006-01-02T15:04:05Z07:00"}}</span>
                 {{else}}
                     Never
                 {{end}}

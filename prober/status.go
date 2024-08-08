@@ -86,7 +86,7 @@ func (p *Prober) StatusHandler(opts ...statusHandlerOpt) tsweb.ReturnHandlerFunc
 			}
 			s := probeStatus{ProbeInfo: info}
 			if !info.End.IsZero() {
-				s.TimeSinceLast = time.Since(info.End)
+				s.TimeSinceLast = time.Since(info.End).Truncate(time.Second)
 			}
 			for textTpl, urlTpl := range params.probeLinks {
 				text, err := renderTemplate(textTpl, info)
