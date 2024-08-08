@@ -33,7 +33,11 @@ type IPPool interface {
 	// and if so, its IP address.
 	SoleLANIP() (_ netip.Addr, ok bool)
 
-	// TODO: port availability stuff for interacting with portmapping
+	// IsPublicPortUsed reports whether the provided WAN IP+port is in use by
+	// anything. (In particular, the NAT-PMP/etc port mappers might have taken
+	// a port.) Implementations should check this before allocating a port,
+	// and then they should report IsPublicPortUsed themselves for that port.
+	IsPublicPortUsed(netip.AddrPort) bool
 }
 
 // newTableFunc is a constructor for a NAT table.
@@ -86,6 +90,10 @@ type NATTable interface {
 	// address of a machine on the local network address, usually a private
 	// LAN IP.
 	PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst netip.AddrPort)
+
+	// IsPublicPortUsed reports whether the provided WAN IP+port is in use by
+	// anything. The port mapper uses this to avoid grabbing an in-use port.
+	IsPublicPortUsed(netip.AddrPort) bool
 }
 
 // oneToOneNAT is a 1:1 NAT, like a typical EC2 VM.
@@ -112,6 +120,10 @@ func (n *oneToOneNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (la
 	return netip.AddrPortFrom(n.lanIP, dst.Port())
 }
 
+func (n *oneToOneNAT) IsPublicPortUsed(netip.AddrPort) bool {
+	return true // all ports are owned by the 1:1 NAT
+}
+
 type srcDstTuple struct {
 	src netip.AddrPort
 	dst netip.AddrPort
@@ -136,6 +148,7 @@ type lanAddrAndTime struct {
 // This is shown as "MappingVariesByDestIP: true" by netcheck, and what
 // Tailscale calls "Hard NAT".
 type hardNAT struct {
+	pool  IPPool
 	wanIP netip.Addr
 
 	out map[srcDstTuple]portMappingAndTime
@@ -144,8 +157,20 @@ type hardNAT struct {
 
 func init() {
 	registerNATType(HardNAT, func(p IPPool) (NATTable, error) {
-		return &hardNAT{wanIP: p.WANIP()}, nil
+		return &hardNAT{pool: p, wanIP: p.WANIP()}, nil
 	})
+}
+
+func (n *hardNAT) IsPublicPortUsed(ap netip.AddrPort) bool {
+	if ap.Addr() != n.wanIP {
+		return false
+	}
+	for k := range n.in {
+		if k.wanPort == ap.Port() {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *hardNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
@@ -165,6 +190,10 @@ func (n *hardNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc
 	// by tests and doesn't care about performance, this is good enough.
 	for {
 		port := rand.N(uint16(32<<10)) + 32<<10 // pick some "ephemeral" port
+		if n.pool.IsPublicPortUsed(netip.AddrPortFrom(n.wanIP, port)) {
+			continue
+		}
+
 		ki := hardKeyIn{wanPort: port, src: dst}
 		if _, ok := n.in[ki]; ok {
 			// Port already in use.
@@ -197,6 +226,7 @@ func (n *hardNAT) PickIncomingDst(src, dst netip.AddrPort, at time.Time) (lanDst
 // Unlike Linux, this implementation is capped at 32k entries and doesn't resort
 // to other allocation strategies when all 32k WAN ports are taken.
 type easyNAT struct {
+	pool    IPPool
 	wanIP   netip.Addr
 	out     map[netip.AddrPort]portMappingAndTime
 	in      map[uint16]lanAddrAndTime
@@ -205,8 +235,16 @@ type easyNAT struct {
 
 func init() {
 	registerNATType(EasyNAT, func(p IPPool) (NATTable, error) {
-		return &easyNAT{wanIP: p.WANIP()}, nil
+		return &easyNAT{pool: p, wanIP: p.WANIP()}, nil
 	})
+}
+
+func (n *easyNAT) IsPublicPortUsed(ap netip.AddrPort) bool {
+	if ap.Addr() != n.wanIP {
+		return false
+	}
+	_, ok := n.in[ap.Port()]
+	return ok
 }
 
 func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc netip.AddrPort) {
@@ -224,6 +262,9 @@ func (n *easyNAT) PickOutgoingSrc(src, dst netip.AddrPort, at time.Time) (wanSrc
 		port := 32<<10 + (start+off)%(32<<10)
 		if _, ok := n.in[port]; !ok {
 			wanAddr := netip.AddrPortFrom(n.wanIP, port)
+			if n.pool.IsPublicPortUsed(wanAddr) {
+				continue
+			}
 
 			// Found a free port.
 			mak.Set(&n.out, src, portMappingAndTime{port: port, at: at})
