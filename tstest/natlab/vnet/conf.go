@@ -33,6 +33,13 @@ func (c *Config) NumNodes() int {
 	return len(c.nodes)
 }
 
+func (c *Config) FirstNetwork() *Network {
+	if len(c.networks) == 0 {
+		return nil
+	}
+	return c.networks[0]
+}
+
 // AddNode creates a new node in the world.
 //
 // The opts may be of the following types:
@@ -143,6 +150,13 @@ type Network struct {
 
 	// ...
 	err error // carried error
+}
+
+func (n *Network) CanTakeMoreNodes() bool {
+	if n.natType == One2OneNAT {
+		return len(n.nodes) == 0
+	}
+	return len(n.nodes) < 150
 }
 
 // NetworkService is a service that can be added to a network.
