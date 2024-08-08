@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"io"
@@ -59,10 +60,10 @@ func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
 }
 
 type localClientRoundTripper struct {
-	lc *tailscale.LocalClient
+	lc tailscale.LocalClient
 }
 
-func (rt localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+func (rt *localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	req.RequestURI = ""
 	return rt.lc.DoLocalRequest(req)
@@ -96,9 +97,31 @@ func main() {
 
 	log.Printf("Tailscale Test Agent running.")
 
-	var mux http.ServeMux
+	gokRP := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://gokrazy")))
+	gokRP.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network != "tcp" {
+				return nil, errors.New("unexpected network")
+			}
+			if addr != "gokrazy:80" {
+				return nil, errors.New("unexpected addr")
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", "/run/gokrazy-http.sock")
+		},
+	}
+
+	var ttaMux http.ServeMux // agent mux
+	var serveMux http.ServeMux
+	serveMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-TTA-GoKrazy") == "1" {
+			gokRP.ServeHTTP(w, r)
+			return
+		}
+		ttaMux.ServeHTTP(w, r)
+	})
 	var hs http.Server
-	hs.Handler = &mux
+	hs.Handler = &serveMux
 	var (
 		stMu   sync.Mutex
 		newSet = set.Set[net.Conn]{} // conns in StateNew
@@ -121,17 +144,16 @@ func main() {
 		}
 	}
 	conns := make(chan net.Conn, 1)
-	var lc tailscale.LocalClient
-	rp := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://local-tailscaled.sock")))
-	rp.Transport = localClientRoundTripper{&lc}
 
-	mux.Handle("/localapi/", rp)
+	lcRP := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://local-tailscaled.sock")))
+	lcRP.Transport = new(localClientRoundTripper)
+	ttaMux.Handle("/localapi/", lcRP)
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	ttaMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "TTA\n")
 		return
 	})
-	mux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
+	ttaMux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
 	})
 	go hs.Serve(chanListener(conns))
@@ -151,8 +173,6 @@ func main() {
 			continue
 		}
 		conns <- c
-
-		time.Sleep(time.Second)
 	}
 }
 
