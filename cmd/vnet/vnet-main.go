@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/tstest/natlab/vnet"
+	"tailscale.com/types/logger"
 )
 
 var (
@@ -78,7 +79,7 @@ func main() {
 				log.Printf("NodeStatus: %v", err)
 				return
 			}
-			log.Printf("NodeStatus: %q", st)
+			log.Printf("NodeStatus: %v", logger.AsJSON(st))
 		}
 		for {
 			time.Sleep(5 * time.Second)

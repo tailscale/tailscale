@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -394,6 +395,11 @@ func (m MAC) String() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
 }
 
+type portMapping struct {
+	dst    netip.AddrPort // LAN IP:port
+	expiry time.Time
+}
+
 type network struct {
 	s         *Server
 	mac       MAC
@@ -408,6 +414,7 @@ type network struct {
 	natStyle syncs.AtomicValue[NAT]
 	natMu    sync.Mutex // held while using + changing natTable
 	natTable NATTable
+	portMap  map[netip.AddrPort]portMapping // WAN ip:port -> LAN ip:port
 
 	// writeFunc is a map of MAC -> func to write to that MAC.
 	// It contains entries for connected nodes only.
@@ -1201,7 +1208,78 @@ func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
 func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
-	return n.natTable.PickIncomingDst(src, dst, time.Now())
+
+	now := time.Now()
+
+	// First see if there's a port mapping, before doing NAT.
+	if lanAP, ok := n.portMap[dst]; ok {
+		if now.Before(lanAP.expiry) {
+			log.Printf("XXX NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
+			return lanAP.dst
+		}
+		log.Printf("XXX NAT: doNatIn: port mapping EXPIRED for %v=>%v", dst, lanAP.dst)
+		delete(n.portMap, dst)
+		return netip.AddrPort{}
+	}
+	if len(n.portMap) > 0 {
+		log.Printf("XXX NAT: doNatIn: no port mapping for %v; have %v", dst, n.portMap)
+	}
+
+	return n.natTable.PickIncomingDst(src, dst, now)
+}
+
+// IsPublicPortUsed reports whether the given public port is currently in use.
+//
+// n.natMu must be held by the caller. (It's only called by nat implementations
+// which are always called with natMu held))
+func (n *network) IsPublicPortUsed(ap netip.AddrPort) bool {
+	_, ok := n.portMap[ap]
+	return ok
+}
+
+func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec int) (gotPort uint16, ok bool) {
+	n.natMu.Lock()
+	defer n.natMu.Unlock()
+
+	if !n.portmap {
+		return 0, false
+	}
+
+	wanAP := netip.AddrPortFrom(n.wanIP, wantExtPort)
+	dst := netip.AddrPortFrom(src, dstLANPort)
+
+	if sec == 0 {
+		lanAP, ok := n.portMap[wanAP]
+		if ok && lanAP.dst.Addr() == src {
+			delete(n.portMap, wanAP)
+		}
+		return 0, false
+	}
+
+	// See if they already have a mapping and extend expiry if so.
+	for k, v := range n.portMap {
+		if v.dst == dst {
+			n.portMap[k] = portMapping{
+				dst:    dst,
+				expiry: time.Now().Add(time.Duration(sec) * time.Second),
+			}
+			return k.Port(), true
+		}
+	}
+
+	for try := 0; try < 20_000; try++ {
+		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
+			mak.Set(&n.portMap, wanAP, portMapping{
+				dst:    dst,
+				expiry: time.Now().Add(time.Duration(sec) * time.Second),
+			})
+			log.Printf("XXX allocated NAT mapping from %v to %v", wanAP, dst)
+			return wanAP.Port(), true
+		}
+		wantExtPort = rand.N(uint16(32<<10)) + 32<<10
+		wanAP = netip.AddrPortFrom(n.wanIP, wantExtPort)
+	}
+	return 0, false
 }
 
 func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
@@ -1254,6 +1332,9 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 }
 
 func (n *network) handleNATPMPRequest(req UDPPacket) {
+	if !n.portmap {
+		return
+	}
 	if string(req.Payload) == "\x00\x00" {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
 
@@ -1274,8 +1355,43 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		return
 	}
 
+	// Map UDP request
+	if len(req.Payload) == 12 && req.Payload[0] == 0 && req.Payload[1] == 1 {
+		// https://www.rfc-editor.org/rfc/rfc6886#section-3.3
+		// "00 01 00 00 ed 40 00 00 00 00 1c 20" =>
+		//   00 ver
+		//   01 op=map UDP
+		//   00 00 reserved  (0 in request; in response, this is the result code)
+		//   ed 40 internal port 60736
+		//   00 00 suggested external port
+		//   00 00 1c 20 suggested lifetime in seconds (7200 sec = 2 hours)
+		internalPort := binary.BigEndian.Uint16(req.Payload[4:6])
+		wantExtPort := binary.BigEndian.Uint16(req.Payload[6:8])
+		lifetimeSec := binary.BigEndian.Uint32(req.Payload[8:12])
+		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec))
+		if !ok {
+			log.Printf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
+			return
+		}
+		res := make([]byte, 0, 16)
+		res = append(res,
+			0,     // version 0 (NAT-PMP)
+			1+128, // response to op 1
+			0, 0,  // result code success
+		)
+		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
+		res = binary.BigEndian.AppendUint16(res, internalPort)
+		res = binary.BigEndian.AppendUint16(res, gotPort)
+		res = binary.BigEndian.AppendUint32(res, lifetimeSec)
+		n.WriteUDPPacketNoNAT(UDPPacket{
+			Src:     req.Dst,
+			Dst:     req.Src,
+			Payload: res,
+		})
+		return
+	}
 	log.Printf("TODO: handle NAT-PMP packet % 02x", req.Payload)
-	// TODO: handle NAT-PMP packet 00 01 00 00 ed 40 00 00 00 00 1c 20
+
 }
 
 // UDPPacket is a UDP packet.
@@ -1349,11 +1465,9 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 	for ac := range s.agentConns {
 		if ac.node == n {
 			s.agentConns.Delete(ac)
-			log.Printf("XXX takeAgentConnOne HIT for %v", n.mac)
 			return ac, true
 		}
 	}
-	log.Printf("XXX takeAgentConnOne MISS for %v", n.mac)
 	return nil, false
 }
 
