@@ -412,10 +412,11 @@ type network struct {
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
 
-	natStyle syncs.AtomicValue[NAT]
-	natMu    sync.Mutex // held while using + changing natTable
-	natTable NATTable
-	portMap  map[netip.AddrPort]portMapping // WAN ip:port -> LAN ip:port
+	natStyle    syncs.AtomicValue[NAT]
+	natMu       sync.Mutex // held while using + changing natTable
+	natTable    NATTable
+	portMap     map[netip.AddrPort]portMapping    // WAN ip:port -> LAN ip:port
+	portMapFlow map[portmapFlowKey]netip.AddrPort // (lanAP, peerWANAP) -> portmapped wanAP
 
 	// writeFunc is a map of MAC -> func to write to that MAC.
 	// It contains entries for connected nodes only.
@@ -1197,11 +1198,25 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 // doNATOut performs NAT on an outgoing packet from src to dst, where
 // src is a LAN IP and dst is a WAN IP.
 //
-// It returns the souce WAN ip:port to use.
+// It returns the source WAN ip:port to use.
 func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
+
+	// First see if there's a port mapping, before doing NAT.
+	if wanAP, ok := n.portMapFlow[portmapFlowKey{
+		peerWAN: dst,
+		lanAP:   src,
+	}]; ok {
+		return wanAP
+	}
+
 	return n.natTable.PickOutgoingSrc(src, dst, time.Now())
+}
+
+type portmapFlowKey struct {
+	peerWAN netip.AddrPort // the peer's WAN ip:port
+	lanAP   netip.AddrPort
 }
 
 // doNATIn performs NAT on an incoming packet from WAN src to WAN dst, returning
@@ -1215,6 +1230,10 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 	// First see if there's a port mapping, before doing NAT.
 	if lanAP, ok := n.portMap[dst]; ok {
 		if now.Before(lanAP.expiry) {
+			mak.Set(&n.portMapFlow, portmapFlowKey{
+				peerWAN: src,
+				lanAP:   lanAP.dst,
+			}, dst)
 			n.logf("XXX NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
 			return lanAP.dst
 		}
