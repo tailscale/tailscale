@@ -1108,9 +1108,9 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	}
 	result.End(c.timeNow())
 
-	// TODO: decide best timing heuristic here.
-	// Maybe the server should return the tcpinfo_rtt?
-	return result.ServerProcessing, ip, nil
+	// TODO(jwhited): consider simplified TCP RTT. We don't need HTTPS or TLS
+	//  involvement above.
+	return result.TCPConnection, ip, nil
 }
 
 func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, need []*tailcfg.DERPRegion) error {
