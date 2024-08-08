@@ -247,7 +247,6 @@ func stringifyTEI(tei stack.TransportEndpointID) string {
 func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	reqDetails := r.ID()
 
-	log.Printf("AcceptTCP: %v", stringifyTEI(reqDetails))
 	clientRemoteIP := netaddrIPFromNetstackIP(reqDetails.RemoteAddress)
 	destIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
 	destPort := reqDetails.LocalPort
@@ -324,6 +323,8 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		go hs.Serve(netutil.NewOneConnListener(tc, nil))
 		return
 	}
+
+	log.Printf("vnet-AcceptTCP: %v", stringifyTEI(reqDetails))
 
 	var targetDial string
 	if n.s.derpIPs.Contains(destIP) {
@@ -641,12 +642,20 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			packetRaw = buf[:n]
 		} else if proto == ProtocolQEMU {
 			if _, err := io.ReadFull(uc, buf[:4]); err != nil {
+				if s.shutdownCtx.Err() != nil {
+					// Return without logging.
+					return
+				}
 				log.Printf("ReadFull header: %v", err)
 				return
 			}
 			n := binary.BigEndian.Uint32(buf[:4])
 
 			if _, err := io.ReadFull(uc, buf[4:4+n]); err != nil {
+				if s.shutdownCtx.Err() != nil {
+					// Return without logging.
+					return
+				}
 				log.Printf("ReadFull pkt: %v", err)
 				return
 			}
@@ -1234,15 +1243,12 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 				peerWAN: src,
 				lanAP:   lanAP.dst,
 			}, dst)
-			n.logf("XXX NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
+			//n.logf("NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
 			return lanAP.dst
 		}
-		n.logf("XXX NAT: doNatIn: port mapping EXPIRED for %v=>%v", dst, lanAP.dst)
+		n.logf("NAT: doNatIn: port mapping EXPIRED for %v=>%v", dst, lanAP.dst)
 		delete(n.portMap, dst)
 		return netip.AddrPort{}
-	}
-	if len(n.portMap) > 0 {
-		n.logf("XXX NAT: doNatIn: no port mapping for %v; have %v", dst, n.portMap)
 	}
 
 	return n.natTable.PickIncomingDst(src, dst, now)
@@ -1293,7 +1299,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 				dst:    dst,
 				expiry: time.Now().Add(time.Duration(sec) * time.Second),
 			})
-			n.logf("XXX allocated NAT mapping from %v to %v", wanAP, dst)
+			n.logf("vnet: allocated NAT mapping from %v to %v", wanAP, dst)
 			return wanAP.Port(), true
 		}
 		wantExtPort = rand.N(uint16(32<<10)) + 32<<10

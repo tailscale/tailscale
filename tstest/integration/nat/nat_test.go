@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -27,8 +28,9 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/natlab/vnet"
-	"tailscale.com/types/logger"
 )
+
+var logTailscaled = flag.Bool("log-tailscaled", false, "log tailscaled output")
 
 type natTest struct {
 	tb      testing.TB
@@ -92,6 +94,13 @@ func easy(c *vnet.Config) *vnet.Node {
 	return c.AddNode(c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
+}
+
+func one2one(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("172.16.%d.1/24", n), vnet.One2OneNAT))
 }
 
 func easyPMP(c *vnet.Config) *vnet.Node {
@@ -205,11 +214,13 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 	for i, c := range clients {
 		i, c := i, c
 		eg.Go(func() error {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				streamDaemonLogs(ctx, t, c, fmt.Sprintf("node%d:", i))
-			}()
+			if *logTailscaled {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					streamDaemonLogs(ctx, t, c, fmt.Sprintf("node%d:", i))
+				}()
+			}
 			st, err := c.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("node%d status: %w", i, err)
@@ -236,9 +247,40 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 		t.Fatalf("initial setup: %v", err)
 	}
 
-	route, err := ping(ctx, lc1, sts[1].Self.TailscaleIPs[0])
-	t.Logf("ping route: %v, %v", logger.AsJSON(route), err)
+	defer nt.vnet.Close()
+
+	pingRes, err := ping(ctx, lc1, sts[1].Self.TailscaleIPs[0])
+	if err != nil {
+		t.Fatalf("ping failure: %v", err)
+	}
+	route := classifyPing(pingRes)
+	t.Logf("ping route: %v", route)
 }
+
+func classifyPing(pr *ipnstate.PingResult) pingRoute {
+	if pr == nil {
+		return routeNil
+	}
+	if pr.Endpoint != "" {
+		ap, err := netip.ParseAddrPort(pr.Endpoint)
+		if err == nil {
+			if ap.Addr().IsPrivate() {
+				return routeLocal
+			}
+			return routeDirect
+		}
+	}
+	return routeDERP // presumably
+}
+
+type pingRoute string
+
+const (
+	routeDERP   pingRoute = "derp"
+	routeLocal  pingRoute = "local"
+	routeDirect pingRoute = "direct"
+	routeNil    pingRoute = "nil" // *ipnstate.PingResult is nil
+)
 
 func streamDaemonLogs(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, nodeID string) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -335,4 +377,24 @@ func TestEasyHardPMP(t *testing.T) {
 func TestEasyPMPHard(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easyPMP, hard)
+}
+
+func TestHardHardPMP(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(hard, hardPMP)
+}
+
+func TestHardHard(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(hard, hard)
+}
+
+func TestEasyOne2One(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easy, one2one)
+}
+
+func TestHardOne2One(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(hard, one2one)
 }
