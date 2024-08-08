@@ -90,13 +90,24 @@ func findKernelPath(goMod string) (string, error) {
 	return "", fmt.Errorf("failed to find kernel in %v", goMod)
 }
 
-type addNodeFunc func(c *vnet.Config) *vnet.Node
+type addNodeFunc func(c *vnet.Config) *vnet.Node // returns nil to omit test
 
 func easy(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
+}
+
+func sameLAN(c *vnet.Config) *vnet.Node {
+	nw := c.FirstNetwork()
+	if nw == nil {
+		return nil
+	}
+	if !nw.CanTakeMoreNodes() {
+		return nil
+	}
+	return c.AddNode(nw)
 }
 
 func one2one(c *vnet.Config) *vnet.Node {
@@ -134,6 +145,9 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	nodes := []*vnet.Node{
 		node1(&c),
 		node2(&c),
+	}
+	if nodes[0] == nil || nodes[1] == nil {
+		t.Skip("skipping test; not applicable combination")
 	}
 
 	var err error
@@ -416,6 +430,7 @@ func TestGrid(t *testing.T) {
 		{"easyPMP", easyPMP},
 		{"hardPMP", hardPMP},
 		{"one2one", one2one},
+		{"sameLAN", sameLAN},
 	}
 
 	sem := syncs.NewSemaphore(2)
@@ -423,9 +438,10 @@ func TestGrid(t *testing.T) {
 		mu  sync.Mutex
 		res = make(map[string]pingRoute)
 	)
-	for i, a := range types {
-		for _, b := range types[i:] {
+	for _, a := range types {
+		for _, b := range types {
 			key := a.name + "-" + b.name
+			keyBack := b.name + "-" + a.name
 			t.Run(key, func(t *testing.T) {
 				t.Parallel()
 
@@ -434,6 +450,10 @@ func TestGrid(t *testing.T) {
 
 				filename := key + ".cache"
 				contents, _ := os.ReadFile(filename)
+				if len(contents) == 0 {
+					filename2 := keyBack + ".cache"
+					contents, _ = os.ReadFile(filename2)
+				}
 				route := pingRoute(strings.TrimSpace(string(contents)))
 
 				if route == "" {
@@ -467,13 +487,18 @@ func TestGrid(t *testing.T) {
 		pf("</tr>\n")
 
 		for _, a := range types {
+			if a.name == "sameLAN" {
+				continue
+			}
 			pf("<tr><td><b>%s</b></td>", a.name)
 			for _, b := range types {
 				key := a.name + "-" + b.name
 				key2 := b.name + "-" + a.name
-				v := cmp.Or(res[key], res[key2])
+				v := cmp.Or(res[key], res[key2], "-")
 				if v == "derp" {
 					pf("<td><div style='color: red; font-weight: bold'>%s</div></td>", v)
+				} else if v == "local" {
+					pf("<td><div style='color: green; font-weight: bold'>%s</div></td>", v)
 				} else {
 					pf("<td>%s</td>", v)
 				}
