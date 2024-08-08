@@ -1214,10 +1214,15 @@ func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 	// First see if there's a port mapping, before doing NAT.
 	if lanAP, ok := n.portMap[dst]; ok {
 		if now.Before(lanAP.expiry) {
+			log.Printf("XXX NAT: doNatIn: port mapping %v=>%v", dst, lanAP.dst)
 			return lanAP.dst
 		}
+		log.Printf("XXX NAT: doNatIn: port mapping EXPIRED for %v=>%v", dst, lanAP.dst)
 		delete(n.portMap, dst)
 		return netip.AddrPort{}
+	}
+	if len(n.portMap) > 0 {
+		log.Printf("XXX NAT: doNatIn: no port mapping for %v; have %v", dst, n.portMap)
 	}
 
 	return n.natTable.PickIncomingDst(src, dst, now)
@@ -1236,7 +1241,12 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
 
+	if !n.portmap {
+		return 0, false
+	}
+
 	wanAP := netip.AddrPortFrom(n.wanIP, wantExtPort)
+	dst := netip.AddrPortFrom(src, dstLANPort)
 
 	if sec == 0 {
 		lanAP, ok := n.portMap[wanAP]
@@ -1246,12 +1256,24 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 		return 0, false
 	}
 
+	// See if they already have a mapping and extend expiry if so.
+	for k, v := range n.portMap {
+		if v.dst == dst {
+			n.portMap[k] = portMapping{
+				dst:    dst,
+				expiry: time.Now().Add(time.Duration(sec) * time.Second),
+			}
+			return k.Port(), true
+		}
+	}
+
 	for try := 0; try < 20_000; try++ {
-		if !n.natTable.IsPublicPortUsed(wanAP) {
+		if wanAP.Port() > 0 && !n.natTable.IsPublicPortUsed(wanAP) {
 			mak.Set(&n.portMap, wanAP, portMapping{
-				dst:    netip.AddrPortFrom(src, dstLANPort),
+				dst:    dst,
 				expiry: time.Now().Add(time.Duration(sec) * time.Second),
 			})
+			log.Printf("XXX allocated NAT mapping from %v to %v", wanAP, dst)
 			return wanAP.Port(), true
 		}
 		wantExtPort = rand.N(uint16(32<<10)) + 32<<10
@@ -1310,6 +1332,9 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 }
 
 func (n *network) handleNATPMPRequest(req UDPPacket) {
+	if !n.portmap {
+		return
+	}
 	if string(req.Payload) == "\x00\x00" {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
 
@@ -1348,12 +1373,13 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 			log.Printf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
-		res := make([]byte, 0, 12)
+		res := make([]byte, 0, 16)
 		res = append(res,
 			0,     // version 0 (NAT-PMP)
 			1+128, // response to op 1
 			0, 0,  // result code success
 		)
+		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
 		res = binary.BigEndian.AppendUint16(res, internalPort)
 		res = binary.BigEndian.AppendUint16(res, gotPort)
 		res = binary.BigEndian.AppendUint32(res, lifetimeSec)
@@ -1439,11 +1465,9 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 	for ac := range s.agentConns {
 		if ac.node == n {
 			s.agentConns.Delete(ac)
-			log.Printf("XXX takeAgentConnOne HIT for %v", n.mac)
 			return ac, true
 		}
 	}
-	log.Printf("XXX takeAgentConnOne MISS for %v", n.mac)
 	return nil, false
 }
 

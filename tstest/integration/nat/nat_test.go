@@ -227,7 +227,7 @@ func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipn
 	n := 0
 	var res *ipnstate.PingResult
 	anyPong := false
-	for {
+	for n < 10 {
 		n++
 		pr, err := c.PingWithOpts(ctx, target, tailcfg.PingDisco, tailscale.PingOpts{})
 		if err != nil {
@@ -242,9 +242,16 @@ func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipn
 		if pr.DERPRegionID == 0 {
 			return pr, nil
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
 		res = pr
 	}
+	if res == nil {
+		return nil, errors.New("no ping response")
+	}
+	return res, nil
 }
 
 func up(ctx context.Context, c *vnet.NodeAgentClient) error {
@@ -270,7 +277,6 @@ func TestEasyEasy(t *testing.T) {
 }
 
 func TestEasyHard(t *testing.T) {
-	t.Skip()
 	nt := newNatTest(t)
 	nt.runTest(easy, hard)
 }
