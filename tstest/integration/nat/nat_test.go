@@ -94,6 +94,13 @@ func easy(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
 }
 
+func easyPMP(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
+}
+
 func hard(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
@@ -161,7 +168,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) {
 
 		cmd := exec.Command("qemu-system-x86_64",
 			"-M", "microvm,isa-serial=off",
-			"-m", "1G",
+			"-m", "384M",
 			"-nodefaults", "-no-user-config", "-nographic",
 			"-kernel", nt.kernel,
 			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet tailscale-tta=1",
@@ -252,7 +259,7 @@ func streamDaemonLogs(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient
 			Text string `json:"text"`
 		}
 		if err := dec.Decode(&logEntry); err != nil {
-			if err == io.EOF {
+			if err == io.EOF || errors.Is(err, context.Canceled) {
 				return
 			}
 			t.Errorf("log entry: %v", err)
@@ -323,4 +330,9 @@ func TestEasyHard(t *testing.T) {
 func TestEasyHardPMP(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, hardPMP)
+}
+
+func TestEasyPMPHard(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easyPMP, hard)
 }
