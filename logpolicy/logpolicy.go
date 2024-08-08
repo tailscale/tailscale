@@ -31,6 +31,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -566,7 +567,7 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || testenv.InTest() {
+	if envknob.NoLogsNoSupport() || testenv.InTest() || hostinfo.IsNATLabGuestVM() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else if val := getLogTarget(); val != "" {
