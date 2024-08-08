@@ -46,6 +46,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netutil"
@@ -279,7 +280,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 			bs := bufio.NewScanner(tc)
 			for bs.Scan() {
 				line := bs.Text()
-				log.Printf("LOG from guest: %s", line)
+				log.Printf("LOG from guest %v: %s", clientRemoteIP, line)
 			}
 		}()
 		return
@@ -1356,6 +1357,11 @@ func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 	return nil, false
 }
 
+type NodeAgentClient struct {
+	*tailscale.LocalClient
+	HTTPClient *http.Client
+}
+
 func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1374,26 +1380,16 @@ func (s *Server) NodeAgentDialer(n *Node) DialFunc {
 	return d
 }
 
-func (s *Server) NodeAgentRoundTripper(n *Node) http.RoundTripper {
-	return &http.Transport{
-		DialContext: s.NodeAgentDialer(n),
+func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
+	d := s.NodeAgentDialer(n)
+	return &NodeAgentClient{
+		LocalClient: &tailscale.LocalClient{
+			Dial: d,
+		},
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: d,
+			},
+		},
 	}
-}
-
-func (s *Server) NodeStatus(ctx context.Context, n *Node) ([]byte, error) {
-	rt := s.NodeAgentRoundTripper(n)
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://node/status", nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := rt.RoundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-		return nil, fmt.Errorf("status: %v, %s, %v", res.Status, body, res.Header)
-	}
-	return io.ReadAll(res.Body)
 }
