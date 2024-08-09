@@ -196,11 +196,14 @@ func (s *Server) initFromConfig(c *Config) error {
 		if err != nil {
 			return err
 		}
+		nw, err := pcapgo.NewNgWriter(pcf, layers.LinkTypeEthernet)
+		if err != nil {
+			return err
+		}
 		pw := &pcapWriter{
 			f: pcf,
-			w: pcapgo.NewWriter(pcf),
+			w: nw,
 		}
-		pw.w.WriteFileHeader(65536, layers.LinkTypeEthernet)
 		s.pcapWriter = pw
 	}
 	for _, conf := range c.networks {
@@ -234,6 +237,12 @@ func (s *Server) initFromConfig(c *Config) error {
 			mac: conf.mac,
 			id:  i + 1,
 			net: netOfConf[conf.Network()],
+		}
+		if s.pcapWriter != nil {
+			s.pcapWriter.w.AddInterface(pcapgo.NgInterface{
+				Name:     fmt.Sprintf("node%d", n.id),
+				LinkType: layers.LinkTypeEthernet,
+			})
 		}
 		conf.n = n
 		if _, ok := s.nodeByMAC[n.mac]; ok {

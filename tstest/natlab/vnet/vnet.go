@@ -568,7 +568,7 @@ func New(c *Config) (*Server, error) {
 }
 
 func (s *Server) Close() {
-	if !s.shuttingDown.Swap(true) {
+	if shutdown := s.shuttingDown.Swap(true); !shutdown {
 		s.shutdownCancel()
 		if s.pcapWriter != nil {
 			s.pcapWriter.Close()
