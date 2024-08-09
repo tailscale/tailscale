@@ -99,6 +99,13 @@ func easy(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
 }
 
+func easyAF(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyAFNAT))
+}
+
 func sameLAN(c *vnet.Config) *vnet.Node {
 	nw := c.FirstNetwork()
 	if nw == nil {
@@ -388,6 +395,11 @@ func TestEasyHard(t *testing.T) {
 	nt.runTest(easy, hard)
 }
 
+func TestEasyAFHard(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easyAF, hard)
+}
+
 func TestEasyHardPMP(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, hardPMP)
@@ -427,6 +439,7 @@ func TestGrid(t *testing.T) {
 	}
 	types := []nodeType{
 		{"easy", easy},
+		{"easyAF", easyAF},
 		{"hard", hard},
 		{"easyPMP", easyPMP},
 		{"hardPMP", hardPMP},
@@ -480,10 +493,13 @@ func TestGrid(t *testing.T) {
 		pf := func(format string, args ...interface{}) {
 			fmt.Fprintf(&hb, format, args...)
 		}
+		rewrite := func(s string) string {
+			return strings.ReplaceAll(s, "PMP", "+pm")
+		}
 		pf("<html><table border=1 cellpadding=5>")
 		pf("<tr><td></td>")
 		for _, a := range types {
-			pf("<td><b>%s</b></td>", a.name)
+			pf("<td><b>%s</b></td>", rewrite(a.name))
 		}
 		pf("</tr>\n")
 
@@ -491,7 +507,7 @@ func TestGrid(t *testing.T) {
 			if a.name == "sameLAN" {
 				continue
 			}
-			pf("<tr><td><b>%s</b></td>", a.name)
+			pf("<tr><td><b>%s</b></td>", rewrite(a.name))
 			for _, b := range types {
 				key := a.name + "-" + b.name
 				key2 := b.name + "-" + a.name
@@ -506,7 +522,14 @@ func TestGrid(t *testing.T) {
 			}
 			pf("</tr>\n")
 		}
-		pf("</table></html>")
+		pf("</table>")
+		pf("<b>easy</b>: Endpoint-Independent Mapping, Address and Port-Dependent Filtering (e.g. Linux, Google Wifi, Unifi, eero)<br>")
+		pf("<b>easyAF</b>: Endpoint-Independent Mapping, Address-Dependent Filtering (James says telephony things or Zyxel type things)<br>")
+		pf("<b>hard</b>: Address and Port-Dependent Mapping, Address and Port-Dependent Filtering (FreeBSD, OPNSense, pfSense)<br>")
+		pf("<b>one2one</b>: One-to-One NAT (e.g. an EC2 instance with a public IPv4)<br>")
+		pf("<b>x+pm</b>: x, with port mapping (NAT-PMP, PCP, UPnP, etc)<br>")
+		pf("<b>sameLAN</b>: a second node in the same LAN as the first<br>")
+		pf("</html>")
 
 		if err := os.WriteFile("grid.html", hb.Bytes(), 0666); err != nil {
 			t.Fatalf("writeFile: %v", err)
