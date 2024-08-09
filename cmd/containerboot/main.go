@@ -52,6 +52,12 @@
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
 //     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
 //     and will be re-applied when it changes.
+//   - TS_HEALTHCHECK_ADDR_PORT: if specified, an HTTP health endpoint will be
+//     served at /healthz at the provided address, which should be in form [<address>]:<port>.
+//     If not set, no health check will be run. If set to :<port>, addr will default to 0.0.0.0
+//     The health endpoint will return 200 OK if this node has at least one tailnet IP address,
+//     otherwise returns 503.
+//     NB: the health criteria might change in the future.
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
 //     named cap-<current-tailscaled-cap>.hujson. If this is set, TS_HOSTNAME,
@@ -95,6 +101,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -158,6 +165,7 @@ func main() {
 		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
+		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -349,6 +357,9 @@ authLoop:
 
 		certDomain        = new(atomic.Pointer[string])
 		certDomainChanged = make(chan bool, 1)
+
+		h             = &healthz{} // http server for the healthz endpoint
+		healthzRunner = sync.OnceFunc(func() { runHealthz(cfg.HealthCheckAddrPort, h) })
 	)
 	if cfg.ServeConfigPath != "" {
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
@@ -564,6 +575,13 @@ runLoop:
 					if err := storeDeviceEndpoints(ctx, cfg.KubeSecret, n.NetMap.SelfNode.Name(), n.NetMap.SelfNode.Addresses().AsSlice()); err != nil {
 						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
+				}
+
+				if cfg.HealthCheckAddrPort != "" {
+					h.Lock()
+					h.hasAddrs = len(addrs) != 0
+					h.Unlock()
+					healthzRunner()
 				}
 			}
 			if !startupTasksDone {
@@ -1152,7 +1170,8 @@ type settings struct {
 	// PodIP is the IP of the Pod if running in Kubernetes. This is used
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
-	PodIP string
+	PodIP               string
+	HealthCheckAddrPort string
 }
 
 func (s *settings) validate() error {
@@ -1200,6 +1219,11 @@ func (s *settings) validate() error {
 	}
 	if s.EnableForwardingOptimizations && s.UserspaceMode {
 		return errors.New("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS is not supported in userspace mode")
+	}
+	if s.HealthCheckAddrPort != "" {
+		if _, err := netip.ParseAddrPort(s.HealthCheckAddrPort); err != nil {
+			return fmt.Errorf("error parsing TS_HEALTH_CHECK_ADDR_PORT value %q: %w", s.HealthCheckAddrPort, err)
+		}
 	}
 	return nil
 }
@@ -1373,4 +1397,42 @@ func tailscaledConfigFilePath() string {
 	}
 	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
 	return path.Join(dir, kubeutils.TailscaledConfigFileNameForCap(maxCompatVer))
+}
+
+// healthz is a simple health check server, if enabled it returns 200 OK if
+// this tailscale node currently has at least one tailnet IP address else
+// returns 503.
+type healthz struct {
+	sync.Mutex
+	hasAddrs bool
+}
+
+func (h *healthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.Lock()
+	defer h.Unlock()
+	if h.hasAddrs {
+		w.Write([]byte("ok"))
+	} else {
+		http.Error(w, "node currently has no tailscale IPs", http.StatusInternalServerError)
+	}
+}
+
+// runHealthz runs a simple HTTP health endpoint on /healthz, listening on the
+// provided address. A containerized tailscale instance is considered healthy if
+// it has at least one tailnet IP address.
+func runHealthz(addr string, h *healthz) {
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("error listening on the provided health endpoint address %q: %v", addr, err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", h)
+	log.Printf("Running healthcheck endpoint at %s/healthz", addr)
+	hs := &http.Server{Handler: mux}
+
+	go func() {
+		if err := hs.Serve(lis); err != nil {
+			log.Fatalf("failed running health endpoint: %v", err)
+		}
+	}()
 }
