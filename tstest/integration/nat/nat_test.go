@@ -33,7 +33,10 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 )
 
-var logTailscaled = flag.Bool("log-tailscaled", false, "log tailscaled output")
+var (
+	logTailscaled = flag.Bool("log-tailscaled", false, "log tailscaled output")
+	pcapFile      = flag.String("pcap", "", "write pcap to file")
+)
 
 type natTest struct {
 	tb      testing.TB
@@ -142,6 +145,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	t := nt.tb
 
 	var c vnet.Config
+	c.SetPCAPFile(*pcapFile)
 	nodes := []*vnet.Node{
 		node1(&c),
 		node2(&c),
