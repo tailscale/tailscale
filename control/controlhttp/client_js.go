@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/url"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/wsconn"
 )

@@ -84,5 +84,5 @@ Client][].  See also the dependencies in the [Tailscale CLI][].
  - [golang.org/x/tools](https://pkg.go.dev/golang.org/x/tools) ([BSD-3-Clause](https://cs.opensource.google/go/x/tools/+/v0.22.0:LICENSE))
  - [gvisor.dev/gvisor/pkg](https://pkg.go.dev/gvisor.dev/gvisor/pkg) ([Apache-2.0](https://github.com/google/gvisor/blob/ee1e1f6070e3/LICENSE))
  - [inet.af/netaddr](https://pkg.go.dev/inet.af/netaddr) ([BSD-3-Clause](Unknown))
- - [nhooyr.io/websocket](https://pkg.go.dev/nhooyr.io/websocket) ([ISC](https://github.com/nhooyr/websocket/blob/v1.8.10/LICENSE.txt))
+ - [github.com/coder/websocket](https://pkg.go.dev/github.com/coder/websocket) ([ISC](https://github.com/nhooyr/websocket/blob/v1.8.10/LICENSE.txt))
  - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/HEAD/LICENSE))
