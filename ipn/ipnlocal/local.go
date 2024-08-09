@@ -1868,6 +1868,14 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		opts.AuthKey = v
 	}
 
+	if b.state != ipn.Running && b.conf == nil && opts.AuthKey == "" {
+		sysak, _ := syspolicy.GetString(syspolicy.AuthKey, "")
+		if sysak != "" {
+			b.logf("Start: setting opts.AuthKey via syspolicy, len=%v", len(sysak))
+			opts.AuthKey = strings.TrimSpace(sysak)
+		}
+	}
+
 	hostinfo := hostinfo.New()
 	applyConfigToHostinfo(hostinfo, b.conf)
 	hostinfo.BackendLogID = b.backendLogID.String()

@@ -92,6 +92,10 @@ const (
 	// organization. A button in the client UI provides easy access to this URL.
 	ManagedByURL Key = "ManagedByURL"
 
+	// AuthKey is an auth key that will be used to login whenever the backend starts. This can be used to
+	// automatically authenticate managed devices, without requiring user interaction.
+	AuthKey Key = "AuthKey"
+
 	// Keys with a string array value.
 	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
 	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
