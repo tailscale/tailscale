@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/prometheus/prometheus/prompb"
+	"github.com/tcnksm/go-httpstat"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
@@ -115,7 +117,104 @@ type result struct {
 	rtt *time.Duration // nil signifies failure, e.g. timeout
 }
 
-func measureSTUNRTT(conn io.ReadWriteCloser, dst netip.AddrPort) (rtt time.Duration, err error) {
+// httpsConn satisfies io.ReadWriteCloser, but is really just used to pass
+// around a persistent laddr for stableConn purposes. The underlying TCP
+// connection is not created until measureHTTPSRTT is called. We *could* retain
+// a dialed *net.TCPConn between probe runs, but resolving if it closes is
+// annoying, so we just dial each time.
+type httpsConn struct {
+	localPort int // passed as :localPort to laddr
+}
+
+func (h *httpsConn) Close() error {
+	return nil
+}
+
+func (h *httpsConn) Write([]byte) (int, error) {
+	return 0, errors.New("unimplemented")
+}
+
+func (h *httpsConn) Read([]byte) (int, error) {
+	return 0, errors.New("unimplemented")
+}
+
+type tempHTTPSError struct {
+	error
+}
+
+func (t tempHTTPSError) Temporary() bool {
+	return true
+}
+
+func measureHTTPSRTT(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
+	hconn, ok := conn.(*httpsConn)
+	if !ok {
+		return 0, fmt.Errorf("unexpected conn type: %T", conn)
+	}
+	defer hconn.Close()
+	var httpResult httpstat.Result
+	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &httpResult), time.Second*3)
+	defer cancel()
+	reqURL := "https://" + dst.String() + "/derp/latency-check"
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	client := &http.Client{}
+	dialer := &net.Dialer{
+		Timeout: time.Second * 2,
+		LocalAddr: &net.TCPAddr{
+			Port: hconn.localPort,
+		},
+	}
+	tcpConn, err := dialer.Dial("tcp", dst.String())
+	if err != nil {
+		return 0, tempHTTPSError{err}
+	}
+	defer tcpConn.Close()
+	tlsConn := tls.Client(tcpConn, &tls.Config{
+		ServerName: hostname,
+	})
+	// Mirror client/netcheck behavior, which handshakes before handing the
+	// tlsConn over to the http.Client via http.Transport
+	err = tlsConn.Handshake()
+	if err != nil {
+		return 0, tempHTTPSError{err}
+	}
+	tlsConnCh := make(chan net.Conn, 1)
+	tlsConnCh <- tlsConn
+	tr := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			select {
+			case tlsConn := <-tlsConnCh:
+				return tlsConn, nil
+			default:
+				return nil, errors.New("unexpected second call of DialTLSContext")
+			}
+		},
+	}
+	client.Transport = tr
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, tempHTTPSError{err}
+	}
+	if resp.StatusCode/100 != 2 {
+		return 0, tempHTTPSError{fmt.Errorf("unexpected status code: %d", resp.StatusCode)}
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+	if err != nil {
+		return 0, tempHTTPSError{err}
+	}
+	httpResult.End(time.Now())
+	// TODO(jwhited): this is TTFB-ish, we probably want
+	// httpResult.TCPConnection instead, but we mirror client logic here to set
+	// a baseline before making changes. We don't even need HTTPS really, we
+	// just want TCP RTT. Again, mirroring the current client logic.
+	return httpResult.ServerProcessing, nil
+}
+
+func measureSTUNRTT(conn io.ReadWriteCloser, _ string, dst netip.AddrPort) (rtt time.Duration, err error) {
 	uconn, ok := conn.(*net.UDPConn)
 	if !ok {
 		return 0, fmt.Errorf("unexpected conn type: %T", conn)
@@ -167,7 +266,7 @@ type nodeMeta struct {
 	addr       netip.Addr
 }
 
-type measureFn func(conn io.ReadWriteCloser, dst netip.AddrPort) (rtt time.Duration, err error)
+type measureFn func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error)
 
 // probe measures round trip time for the node described by meta over
 // conn against dstPort using fn. It may return a nil duration and nil error in
@@ -180,7 +279,7 @@ func probe(meta nodeMeta, conn io.ReadWriteCloser, fn measureFn, dstPort int) (*
 	}
 
 	time.Sleep(rand.N(200 * time.Millisecond)) // jitter across tx
-	rtt, err := fn(conn, netip.AddrPortFrom(meta.addr, uint16(dstPort)))
+	rtt, err := fn(conn, meta.hostname, netip.AddrPortFrom(meta.addr, uint16(dstPort)))
 	if err != nil {
 		if isTemporaryOrTimeoutErr(err) {
 			log.Printf("temp error measuring RTT to %s(%s): %v", meta.hostname, ua.String(), err)
@@ -251,7 +350,7 @@ func nodeMetaFromDERPMap(dm *tailcfg.DERPMap, nodeMetaByAddr map[netip.Addr]node
 	return stale, nil
 }
 
-func newConn(source timestampSource, protocol protocol) (io.ReadWriteCloser, error) {
+func newConn(source timestampSource, protocol protocol, stability connStability) (io.ReadWriteCloser, error) {
 	switch protocol {
 	case protocolSTUN:
 		if source == timestampSourceKernel {
@@ -263,8 +362,13 @@ func newConn(source timestampSource, protocol protocol) (io.ReadWriteCloser, err
 		// TODO(jwhited): implement
 		return nil, errors.New("unimplemented protocol")
 	case protocolHTTPS:
-		// TODO(jwhited): implement
-		return nil, errors.New("unimplemented protocol")
+		localPort := 0
+		if stableConn {
+			// TODO(jwhited): port allocation
+		}
+		return &httpsConn{
+			localPort: localPort,
+		}, nil
 	}
 	return nil, errors.New("unknown protocol")
 }
@@ -285,13 +389,13 @@ func getStableConns(stableConns map[stableConnKey][2]io.ReadWriteCloser, addr ne
 	}
 
 	if protocolSupportsKernelTS(protocol) {
-		kconn, err := newConn(timestampSourceKernel, protocol)
+		kconn, err := newConn(timestampSourceKernel, protocol, stableConn)
 		if err != nil {
 			return conns, err
 		}
 		conns[timestampSourceKernel] = kconn
 	}
-	uconn, err := newConn(timestampSourceUserspace, protocol)
+	uconn, err := newConn(timestampSourceUserspace, protocol, stableConn)
 	if err != nil {
 		if protocolSupportsKernelTS(protocol) {
 			conns[timestampSourceKernel].Close()
@@ -338,7 +442,7 @@ func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableCo
 		}
 		if conn == nil {
 			var err error
-			conn, err = newConn(source, protocol)
+			conn, err = newConn(source, protocol, unstableConn)
 			if err != nil {
 				select {
 				case <-doneCh:
@@ -361,7 +465,7 @@ func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableCo
 		case protocolICMP:
 			// TODO(jwhited): implement
 		case protocolHTTPS:
-			// TODO(jwhited): implement
+			fn = measureHTTPSRTT
 		}
 		rtt, err := probe(meta, conn, fn, dstPort)
 		if err != nil {
@@ -734,8 +838,8 @@ func main() {
 
 	// TODO(jwhited): remove protocol restriction
 	for k := range portsByProtocol {
-		if k != protocolSTUN {
-			log.Fatal("HTTPS & ICMP are not yet supported")
+		if k != protocolSTUN && k != protocolHTTPS {
+			log.Fatal("ICMP is not yet supported")
 		}
 	}
 

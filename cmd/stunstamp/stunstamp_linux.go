@@ -56,7 +56,7 @@ func parseTimestampFromCmsgs(oob []byte) (time.Time, error) {
 	return time.Time{}, errors.New("failed to parse timestamp from cmsgs")
 }
 
-func measureSTUNRTTKernel(conn io.ReadWriteCloser, dst netip.AddrPort) (rtt time.Duration, err error) {
+func measureSTUNRTTKernel(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
 	sconn, ok := conn.(*socket.Conn)
 	if !ok {
 		return 0, fmt.Errorf("conn of unexpected type: %T", conn)
