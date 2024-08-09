@@ -18,6 +18,7 @@ import (
 	_ "tailscale.com/drive/driveimpl"
 	_ "tailscale.com/envknob"
 	_ "tailscale.com/health"
+	_ "tailscale.com/hostinfo"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/conffile"
 	_ "tailscale.com/ipn/ipnlocal"
