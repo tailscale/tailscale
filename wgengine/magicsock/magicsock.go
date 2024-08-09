@@ -2533,6 +2533,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			}
 		}
 		trySetSocketBuffer(pconn, c.logf)
+		trySetUDPSocketOptions(pconn, c.logf)
 
 		// Success.
 		if debugBindSocket() {
