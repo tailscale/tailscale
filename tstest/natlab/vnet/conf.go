@@ -14,6 +14,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 )
 
@@ -206,7 +207,7 @@ func (s *Server) initFromConfig(c *Config) error {
 		}
 		s.pcapWriter = pw
 	}
-	for _, conf := range c.networks {
+	for i, conf := range c.networks {
 		if conf.err != nil {
 			return conf.err
 		}
@@ -228,6 +229,14 @@ func (s *Server) initFromConfig(c *Config) error {
 			return fmt.Errorf("two networks have the same WAN IP %v; Anycast not (yet?) supported", conf.wanIP)
 		}
 		s.networkByWAN[conf.wanIP] = n
+		n.lanInterfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
+			Name:     fmt.Sprintf("network%d-lan", i+1),
+			LinkType: layers.LinkTypeIPv4,
+		}))
+		n.wanInterfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
+			Name:     fmt.Sprintf("network%d-wan", i+1),
+			LinkType: layers.LinkTypeIPv4,
+		}))
 	}
 	for i, conf := range c.nodes {
 		if conf.err != nil {
@@ -235,15 +244,12 @@ func (s *Server) initFromConfig(c *Config) error {
 		}
 		n := &node{
 			mac: conf.mac,
-			id:  i + 1,
 			net: netOfConf[conf.Network()],
 		}
-		if s.pcapWriter != nil {
-			s.pcapWriter.w.AddInterface(pcapgo.NgInterface{
-				Name:     fmt.Sprintf("node%d", n.id),
-				LinkType: layers.LinkTypeEthernet,
-			})
-		}
+		n.interfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
+			Name:     fmt.Sprintf("node%d", i+1),
+			LinkType: layers.LinkTypeEthernet,
+		}))
 		conf.n = n
 		if _, ok := s.nodeByMAC[n.mac]; ok {
 			return fmt.Errorf("two nodes have the same MAC %v", n.mac)
