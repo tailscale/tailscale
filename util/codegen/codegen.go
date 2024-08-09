@@ -247,7 +247,7 @@ func AssertStructUnchanged(t *types.Struct, tname string, params *types.TypePara
 			}
 		}
 		if st.Anonymous() {
-			w("\t%s %s", fname, tag)
+			w("\t%s %s", qname, tag)
 		} else {
 			w("\t%s %s %s", fname, qname, tag)
 		}
