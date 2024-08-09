@@ -404,13 +404,15 @@ type portMapping struct {
 }
 
 type network struct {
-	s         *Server
-	mac       MAC
-	portmap   bool
-	wanIP     netip.Addr
-	lanIP     netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
-	nodesByIP map[netip.Addr]*node
-	logf      func(format string, args ...any)
+	s              *Server
+	mac            MAC
+	portmap        bool
+	lanInterfaceID int
+	wanInterfaceID int
+	wanIP          netip.Addr
+	lanIP          netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
+	nodesByIP      map[netip.Addr]*node
+	logf           func(format string, args ...any)
 
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
@@ -445,10 +447,10 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 }
 
 type node struct {
-	mac   MAC
-	id    int
-	net   *network
-	lanIP netip.Addr // must be in net.lanIP prefix + unique in net
+	mac         MAC
+	interfaceID int
+	net         *network
+	lanIP       netip.Addr // must be in net.lanIP prefix + unique in net
 }
 
 type derpServer struct {
@@ -570,9 +572,7 @@ func New(c *Config) (*Server, error) {
 func (s *Server) Close() {
 	if shutdown := s.shuttingDown.Swap(true); !shutdown {
 		s.shutdownCancel()
-		if s.pcapWriter != nil {
-			s.pcapWriter.Close()
-		}
+		s.pcapWriter.Close()
 	}
 	s.wg.Wait()
 }
@@ -647,17 +647,12 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		if err := bw.Flush(); err != nil {
 			log.Printf("Flush: %v", err)
 		}
-		if s.pcapWriter != nil {
-			ci := gopacket.CaptureInfo{
-				Timestamp:     time.Now(),
-				CaptureLength: len(pkt),
-				Length:        len(pkt),
-			}
-			if srcNode != nil {
-				ci.InterfaceIndex = srcNode.id
-			}
-			must.Do(s.pcapWriter.WritePacket(ci, pkt))
-		}
+		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+			Timestamp:      time.Now(),
+			CaptureLength:  len(pkt),
+			Length:         len(pkt),
+			InterfaceIndex: srcNode.interfaceID,
+		}, pkt))
 	}
 
 	buf := make([]byte, 16<<10)
@@ -717,17 +712,12 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 				continue
 			}
 		}
-		if s.pcapWriter != nil {
-			ci := gopacket.CaptureInfo{
-				Timestamp:     time.Now(),
-				CaptureLength: len(packetRaw),
-				Length:        len(packetRaw),
-			}
-			if srcNode != nil {
-				ci.InterfaceIndex = srcNode.id
-			}
-			must.Do(s.pcapWriter.WritePacket(ci, packetRaw))
-		}
+		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+			Timestamp:      time.Now(),
+			CaptureLength:  len(packetRaw),
+			Length:         len(packetRaw),
+			InterfaceIndex: srcNode.interfaceID,
+		}, packetRaw))
 		netw.HandleEthernetPacket(ep)
 	}
 }
@@ -825,12 +815,34 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 // LAN IP here and wrapped in an ethernet layer and delivered
 // to the network.
 func (n *network) HandleUDPPacket(p UDPPacket) {
+	buf, err := n.serializedUDPPacket(p.Src, p.Dst, p.Payload, nil)
+	if err != nil {
+		n.logf("serializing UDP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.wanInterfaceID,
+	}, buf)
 	dst := n.doNATIn(p.Src, p.Dst)
 	if !dst.IsValid() {
 		n.logf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
 		return
 	}
 	p.Dst = dst
+	buf, err = n.serializedUDPPacket(p.Src, p.Dst, p.Payload, nil)
+	if err != nil {
+		n.logf("serializing UDP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.lanInterfaceID,
+	}, buf)
 	n.WriteUDPPacketNoNAT(p)
 }
 
@@ -853,6 +865,20 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 		DstMAC:       node.mac.HWAddr(),
 		EthernetType: layers.EthernetTypeIPv4,
 	}
+	ethRaw, err := n.serializedUDPPacket(src, dst, p.Payload, eth)
+	if err != nil {
+		n.logf("serializing UDP packet: %v", err)
+		return
+	}
+	n.writeEth(ethRaw)
+}
+
+// serializedUDPPacket serializes a UDP packet with the given source and
+// destination IP:port pairs, and payload.
+//
+// If eth is non-nil, it will be used as the Ethernet layer, otherwise the
+// Ethernet layer will be omitted from the serialization.
+func (n *network) serializedUDPPacket(src, dst netip.AddrPort, payload []byte, eth *layers.Ethernet) ([]byte, error) {
 	ip := &layers.IPv4{
 		Version:  4,
 		TTL:      64,
@@ -868,12 +894,14 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 
 	buffer := gopacket.NewSerializeBuffer()
 	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buffer, options, eth, ip, udp, gopacket.Payload(p.Payload)); err != nil {
-		n.logf("serializing UDP: %v", err)
-		return
+	layers := []gopacket.SerializableLayer{eth, ip, udp, gopacket.Payload(payload)}
+	if eth == nil {
+		layers = layers[1:]
 	}
-	ethRaw := buffer.Bytes()
-	n.writeEth(ethRaw)
+	if err := gopacket.SerializeLayers(buffer, options, layers...); err != nil {
+		return nil, fmt.Errorf("serializing UDP: %v", err)
+	}
+	return buffer.Bytes(), nil
 }
 
 // HandleEthernetIPv4PacketForRouter handles an IPv4 packet that is
@@ -931,10 +959,30 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	if toForward && isUDP {
 		src := netip.AddrPortFrom(srcIP, uint16(udp.SrcPort))
 		dst := netip.AddrPortFrom(dstIP, uint16(udp.DstPort))
-		src0 := src
+		buf, err := n.serializedUDPPacket(src, dst, udp.Payload, nil)
+		if err != nil {
+			n.logf("serializing UDP packet: %v", err)
+			return
+		}
+		n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+			Timestamp:      time.Now(),
+			CaptureLength:  len(buf),
+			Length:         len(buf),
+			InterfaceIndex: n.lanInterfaceID,
+		}, buf)
+
 		src = n.doNATOut(src, dst)
-		_ = src0
-		//log.Printf("XXX UDP out %v=>%v to %v", src0, src, dst)
+		buf, err = n.serializedUDPPacket(src, dst, udp.Payload, nil)
+		if err != nil {
+			n.logf("serializing UDP packet: %v", err)
+			return
+		}
+		n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+			Timestamp:      time.Now(),
+			CaptureLength:  len(buf),
+			Length:         len(buf),
+			InterfaceIndex: n.wanInterfaceID,
+		}, buf)
 
 		n.s.routeUDPPacket(UDPPacket{
 			Src:     src,
