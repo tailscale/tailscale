@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket"
@@ -58,6 +59,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 )
 
@@ -444,6 +446,7 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 
 type node struct {
 	mac   MAC
+	id    int
 	net   *network
 	lanIP netip.Addr // must be in net.lanIP prefix + unique in net
 }
@@ -474,6 +477,8 @@ func newDERPServer() *derpServer {
 type Server struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
+	shuttingDown   atomic.Bool
+	wg             sync.WaitGroup
 	blendReality   bool
 
 	derpIPs set.Set[netip.Addr]
@@ -483,8 +488,9 @@ type Server struct {
 	networks     set.Set[*network]
 	networkByWAN map[netip.Addr]*network
 
-	control *testcontrol.Server
-	derps   []*derpServer
+	control    *testcontrol.Server
+	derps      []*derpServer
+	pcapWriter *pcapWriter
 
 	mu              sync.Mutex
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
@@ -562,7 +568,13 @@ func New(c *Config) (*Server, error) {
 }
 
 func (s *Server) Close() {
-	s.shutdownCancel()
+	if shutdown := s.shuttingDown.Swap(true); !shutdown {
+		s.shutdownCancel()
+		if s.pcapWriter != nil {
+			s.pcapWriter.Close()
+		}
+	}
+	s.wg.Wait()
 }
 
 func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
@@ -601,11 +613,20 @@ const (
 
 // serveConn serves a single connection from a client.
 func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
+	if s.shuttingDown.Load() {
+		return
+	}
+	s.wg.Add(1)
+	defer s.wg.Done()
+	context.AfterFunc(s.shutdownCtx, func() {
+		uc.SetDeadline(time.Now())
+	})
 	log.Printf("Got conn %T %p", uc, uc)
 	defer uc.Close()
 
 	bw := bufio.NewWriterSize(uc, 2<<10)
 	var writeMu sync.Mutex
+	var srcNode *node
 	writePkt := func(pkt []byte) {
 		if pkt == nil {
 			return
@@ -626,10 +647,20 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		if err := bw.Flush(); err != nil {
 			log.Printf("Flush: %v", err)
 		}
+		if s.pcapWriter != nil {
+			ci := gopacket.CaptureInfo{
+				Timestamp:     time.Now(),
+				CaptureLength: len(pkt),
+				Length:        len(pkt),
+			}
+			if srcNode != nil {
+				ci.InterfaceIndex = srcNode.id
+			}
+			must.Do(s.pcapWriter.WritePacket(ci, pkt))
+		}
 	}
 
 	buf := make([]byte, 16<<10)
-	var srcNode *node
 	var netw *network // non-nil after first packet
 	for {
 		var packetRaw []byte
@@ -685,6 +716,17 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 				log.Printf("[conn %p] ignoring frame from MAC %v, expected %v", uc, srcMAC, srcNode.mac)
 				continue
 			}
+		}
+		if s.pcapWriter != nil {
+			ci := gopacket.CaptureInfo{
+				Timestamp:     time.Now(),
+				CaptureLength: len(packetRaw),
+				Length:        len(packetRaw),
+			}
+			if srcNode != nil {
+				ci.InterfaceIndex = srcNode.id
+			}
+			must.Do(s.pcapWriter.WritePacket(ci, packetRaw))
 		}
 		netw.HandleEthernetPacket(ep)
 	}
@@ -840,7 +882,6 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 // IP may be the router's IP, or an internet (routed) IP.
 func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	packet := ep.gp
-	writePkt := n.writeEth
 
 	v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	if !ok {
@@ -857,7 +898,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			n.logf("createDHCPResponse: %v", err)
 			return
 		}
-		writePkt(res)
+		n.writeEth(res)
 		return
 	}
 
@@ -874,7 +915,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			n.logf("createDNSResponse: %v", err)
 			return
 		}
-		writePkt(res)
+		n.writeEth(res)
 		return
 	}
 

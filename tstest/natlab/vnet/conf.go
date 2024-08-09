@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"os"
 	"slices"
 
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcapgo"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
@@ -27,6 +30,11 @@ import (
 type Config struct {
 	nodes    []*Node
 	networks []*Network
+	pcapFile string
+}
+
+func (c *Config) SetPCAPFile(file string) {
+	c.pcapFile = file
 }
 
 func (c *Config) NumNodes() int {
@@ -183,6 +191,21 @@ func (n *Network) AddService(s NetworkService) {
 // there were any configuration issues.
 func (s *Server) initFromConfig(c *Config) error {
 	netOfConf := map[*Network]*network{}
+	if c.pcapFile != "" {
+		pcf, err := os.OpenFile(c.pcapFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		if err != nil {
+			return err
+		}
+		nw, err := pcapgo.NewNgWriter(pcf, layers.LinkTypeEthernet)
+		if err != nil {
+			return err
+		}
+		pw := &pcapWriter{
+			f: pcf,
+			w: nw,
+		}
+		s.pcapWriter = pw
+	}
 	for _, conf := range c.networks {
 		if conf.err != nil {
 			return conf.err
@@ -206,13 +229,20 @@ func (s *Server) initFromConfig(c *Config) error {
 		}
 		s.networkByWAN[conf.wanIP] = n
 	}
-	for _, conf := range c.nodes {
+	for i, conf := range c.nodes {
 		if conf.err != nil {
 			return conf.err
 		}
 		n := &node{
 			mac: conf.mac,
+			id:  i + 1,
 			net: netOfConf[conf.Network()],
+		}
+		if s.pcapWriter != nil {
+			s.pcapWriter.w.AddInterface(pcapgo.NgInterface{
+				Name:     fmt.Sprintf("node%d", n.id),
+				LinkType: layers.LinkTypeEthernet,
+			})
 		}
 		conf.n = n
 		if _, ok := s.nodeByMAC[n.mac]; ok {
