@@ -286,6 +286,9 @@ type UserRuleMatch struct {
 	Users      []string `json:"users"`
 	Ports      []string `json:"ports"`
 	LineNumber int      `json:"lineNumber"`
+	// Via is the list of targets through which Users can access Ports.
+	// See https://tailscale.com/kb/1378/via for more information.
+	Via []string `json:"via,omitempty"`
 
 	// Postures is a list of posture policies that are
 	// associated with this match. The rules can be looked
