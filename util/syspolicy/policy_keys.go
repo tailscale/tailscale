@@ -3,7 +3,21 @@
 
 package syspolicy
 
-type Key string
+import (
+	"tailscale.com/types/lazy"
+	"tailscale.com/util/syspolicy/internal/lazyinit"
+	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/testenv"
+)
+
+type Key = setting.Key
+
+// The const block below lists known policy keys.
+// When adding a key to this list, remember to add a corresponding
+// [setting.Definition] to [implicitDefinitions] below.
+// Otherwise, the [TestKnownKeysRegistered] test will fail as a reminder.
+// Preferably, use a strongly typed policy hierarchy, such as [Policy],
+// instead of adding each key to the list below.
 
 const (
 	// Keys with a string value
@@ -96,3 +110,83 @@ const (
 	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
 	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
 )
+
+// implicitDefinitions is a list of [setting.Definition] that will be registered
+// automatically by [settingDefinitions] as soon as the package needs to ready a policy.
+var implicitDefinitions = []*setting.Definition{
+	// Device policy settings
+	setting.NewDefinition(AllowedSuggestedExitNodes, setting.DeviceSetting, setting.StringListValue),
+	setting.NewDefinition(ApplyUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(CheckUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ControlURL, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(DeviceSerialNumber, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(EnableIncomingConnections, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableRunExitNode, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableServerMode, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableTailscaleDNS, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableTailscaleSubnets, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ExitNodeAllowLANAccess, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ExitNodeID, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(ExitNodeIP, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(FlushDNSOnSessionUnlock, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(LogSCMInteractions, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(LogTarget, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(PostureChecking, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(Tailnet, setting.DeviceSetting, setting.StringValue),
+
+	// User policy settings
+	setting.NewDefinition(AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(AutoUpdateVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(ExitNodeMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(KeyExpirationNoticeTime, setting.UserSetting, setting.DurationValue),
+	setting.NewDefinition(ManagedByCaption, setting.UserSetting, setting.StringValue),
+	setting.NewDefinition(ManagedByOrganizationName, setting.UserSetting, setting.StringValue),
+	setting.NewDefinition(ManagedByURL, setting.UserSetting, setting.StringValue),
+	setting.NewDefinition(NetworkDevicesVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(PreferencesMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(ResetToDefaultsVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(RunExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(SuggestedExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(TestMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(UpdateMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+}
+
+func init() {
+	lazyinit.Defer(func() error {
+		// Avoid implicit [SettingDefinition] registration during tests.
+		// Each test should control which policy settings to register.
+		// Use [setting.SetDefinitionsForTest] to specify necessary definitions,
+		// or [setWellKnownSettingsForTest] to set implicit definitions for the test duration.
+		if testenv.InTest() {
+			return nil
+		}
+		for _, d := range implicitDefinitions {
+			setting.RegisterDefinition(d)
+		}
+		return nil
+	})
+}
+
+var implicitDefinitionMap lazy.SyncValue[setting.DefinitionMap]
+
+// WellKnownSettingDefinition returns a well-known, implicit setting definition by its key,
+// or an [ErrNoSuchKey] if a policy setting with the specified key does not exist
+// among implicit policy definitions.
+func WellKnownSettingDefinition(k Key) (*setting.Definition, error) {
+	m, err := implicitDefinitionMap.GetErr(func() (setting.DefinitionMap, error) {
+		return setting.DefinitionMapOf(implicitDefinitions)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := m[k]; ok {
+		return d, nil
+	}
+	return nil, ErrNoSuchKey
+}
+
+// setWellKnownSettingsForTest registers all implicit setting definitions
+// for the duration of the test.
+func setWellKnownSettingsForTest(tb lazy.TB) error {
+	return setting.SetDefinitionsForTest(tb, implicitDefinitions...)
+}
