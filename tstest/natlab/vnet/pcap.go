@@ -17,6 +17,9 @@ type pcapWriter struct {
 }
 
 func (p *pcapWriter) WritePacket(ci gopacket.CaptureInfo, data []byte) error {
+	if p == nil {
+		return nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.w == nil {
@@ -25,7 +28,19 @@ func (p *pcapWriter) WritePacket(ci gopacket.CaptureInfo, data []byte) error {
 	return p.w.WritePacket(ci, data)
 }
 
+func (p *pcapWriter) AddInterface(i pcapgo.NgInterface) (int, error) {
+	if p == nil {
+		return 0, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.w.AddInterface(i)
+}
+
 func (p *pcapWriter) Close() error {
+	if p == nil {
+		return nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.w != nil {
