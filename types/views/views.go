@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"reflect"
 	"slices"
@@ -206,6 +207,17 @@ type Slice[T any] struct {
 	// It is named distinctively to make you think of how dangerous it is to escape
 	// to callers. You must not let callers be able to mutate it.
 	ж []T
+}
+
+// All returns an iterator over v.
+func (v Slice[T]) All() iter.Seq2[int, T] {
+	return func(yield func(int, T) bool) {
+		for i, v := range v.ж {
+			if !yield(i, v) {
+				return
+			}
+		}
+	}
 }
 
 // MapKey returns a unique key for a slice, based on its address and length.
