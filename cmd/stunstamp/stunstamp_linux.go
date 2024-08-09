@@ -138,12 +138,29 @@ func measureSTUNRTTKernel(conn io.ReadWriteCloser, hostname string, dst netip.Ad
 
 }
 
-func protocolSupportsKernelTS(p protocol) bool {
-	if p == protocolSTUN {
-		return true
+func getProtocolSupportInfo(p protocol) protocolSupportInfo {
+	switch p {
+	case protocolSTUN:
+		return protocolSupportInfo{
+			kernelTS:    true,
+			userspaceTS: true,
+			stableConn:  true,
+		}
+	case protocolHTTPS:
+		return protocolSupportInfo{
+			kernelTS:    false,
+			userspaceTS: true,
+			stableConn:  true,
+		}
+	case protocolTCP:
+		return protocolSupportInfo{
+			kernelTS:    true,
+			userspaceTS: false,
+			stableConn:  true,
+		}
+		// TODO(jwhited): add ICMP
 	}
-	// TODO: jwhited support ICMP
-	return false
+	return protocolSupportInfo{}
 }
 
 func setSOReuseAddr(fd uintptr) error {
