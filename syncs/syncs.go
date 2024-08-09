@@ -315,3 +315,39 @@ func (wg *WaitGroup) Go(f func()) {
 		f()
 	}()
 }
+
+// TODO(https://go.dev/issue/63941): LockFunc, LockValue, and LockValues
+// are helper functions proposed upstream. Their naming and signature
+// are based on the existing OnceFunc, OnceValue, and OnceValues
+// helper functions already in the [sync] package.
+
+// LockFunc runs f while holding the lock.
+func LockFunc(lock sync.Locker, f func()) {
+	lock.Lock()
+	defer lock.Unlock()
+	f()
+}
+
+// LockValue runs f while holding the lock and returns the argument.
+func LockValue[T any](lock sync.Locker, f func() T) T {
+	lock.Lock()
+	defer lock.Unlock()
+	return f()
+}
+
+// LockValues runs f while holding the lock and returns the arguments.
+func LockValues[T1, T2 any](lock sync.Locker, f func() (T1, T2)) (T1, T2) {
+	lock.Lock()
+	defer lock.Unlock()
+	return f()
+}
+
+// Mutex is identical to [sync.Mutex], but with additional methods.
+type Mutex struct{ sync.Mutex }
+
+// Do runs f while holding the lock.
+func (m *Mutex) Do(f func()) {
+	m.Lock()
+	defer m.Unlock()
+	f()
+}
