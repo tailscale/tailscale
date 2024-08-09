@@ -191,6 +191,42 @@ func TestConnector(t *testing.T) {
 
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+
+	// Create a Connector that configures DNAT
+	cn = &tsapi.Connector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+			UID:  types.UID("1234-UID"),
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       tsapi.ConnectorKind,
+			APIVersion: "tailscale.io/v1alpha1",
+		},
+		Spec: tsapi.ConnectorSpec{
+			DNAT: []string{"10.44.0.1"},
+		},
+	}
+	mustCreate(t, fc, cn)
+	expectReconciled(t, cr, "", "test")
+	fullName, shortName = findGenName(t, fc, "", "test", "connector")
+
+	opts = configOpts{
+		stsName:         shortName,
+		secretName:      fullName,
+		parentType:      "connector",
+		clusterTargetIP: "10.44.0.1",
+		hostname:        "test-connector",
+	}
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+
+	// Update DNAT value
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.DNAT = []string{"10.44.0.2"}
+	})
+	opts.clusterTargetIP = "10.44.0.2"
+	expectReconciled(t, cr, "", "test")
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
 }
 
 func TestConnectorWithProxyClass(t *testing.T) {

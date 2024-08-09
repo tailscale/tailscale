@@ -53,6 +53,10 @@ spec:
               jsonPath: .status.isExitNode
               name: IsExitNode
               type: string
+            - description: DNAT of the Connector if any.
+              jsonPath: .status.dnat
+              name: DNAT
+              type: string
             - description: Status of the deployed Connector resources.
               jsonPath: .status.conditions[?(@.type == "ConnectorReady")].reason
               name: Status
@@ -91,6 +95,17 @@ spec:
                             More info:
                             https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
                         properties:
+                            dnat:
+                                description: |-
+                                    DNAT is an address routable from within cluster that tailnet
+                                    traffic should be routed to. DNAT cannot be set together with
+                                    .spec.subnetRouter or .spec.exitNode.
+                                    DNAT is currently restricted to a list of a single IP address.
+                                items:
+                                    type: string
+                                maxItems: 1
+                                minItems: 1
+                                type: array
                             exitNode:
                                 description: |-
                                     ExitNode defines whether the Connector node should act as a
@@ -151,8 +166,10 @@ spec:
                                 type: array
                         type: object
                         x-kubernetes-validations:
-                            - message: A Connector needs to be either an exit node or a subnet router, or both.
-                              rule: has(self.subnetRouter) || self.exitNode == true
+                            - message: A Connector needs to be either an exit node or a subnet router, or both or have .spec.dnat set.
+                              rule: (has(self.subnetRouter) || self.exitNode == true) ||  has(self.dnat)
+                            - message: A Connector with .spec.dnat set must not be an exit node or subnet router.
+                              rule: (has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true)) !=  has(self.dnat)
                     status:
                         description: |-
                             ConnectorStatus describes the status of the Connector. This is set
@@ -219,6 +236,11 @@ spec:
                                 x-kubernetes-list-map-keys:
                                     - type
                                 x-kubernetes-list-type: map
+                            dnat:
+                                description: |-
+                                    DNAT is a cluster routable IP address that the tailnet traffic to
+                                    this node is routed to.
+                                type: string
                             hostname:
                                 description: |-
                                     Hostname is the fully qualified domain name of the Connector node.

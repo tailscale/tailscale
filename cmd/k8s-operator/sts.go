@@ -119,21 +119,17 @@ type tailscaleSTSConfig struct {
 	Hostname string
 	Tags     []string // if empty, use defaultTags
 
-	// Connector specifies a configuration of a Connector instance if that's
-	// what this StatefulSet should be created for.
-	Connector *connector
+	// routes is a list of subnet routes that this proxy should expose.
+	routes string
+
+	// isExitNode defines whether this proxy should act as an exit node.
+	isExitNode bool
 
 	ProxyClassName string // name of ProxyClass if one needs to be applied to the proxy
 
 	ProxyClass *tsapi.ProxyClass // ProxyClass that needs to be applied to the proxy (if there is one)
 }
 
-type connector struct {
-	// routes is a list of subnet routes that this Connector should expose.
-	routes string
-	// isExitNode defines whether this Connector should act as an exit node.
-	isExitNode bool
-}
 type tsnetServer interface {
 	CertDomains() []string
 }
@@ -774,8 +770,8 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	if stsC.TailnetTargetFQDN != "" || stsC.TailnetTargetIP != "" {
 		conf.NoStatefulFiltering = "true"
 	}
-	if stsC.Connector != nil {
-		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
+	if len(stsC.routes) != 0 || stsC.isExitNode {
+		routes, err := netutil.CalcAdvertiseRoutes(stsC.routes, stsC.isExitNode)
 		if err != nil {
 			return nil, fmt.Errorf("error calculating routes: %w", err)
 		}
