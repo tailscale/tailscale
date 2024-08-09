@@ -168,7 +168,8 @@ func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredL
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ap.serveDefault)
-	mux.HandleFunc("/api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExec)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
 
 	hs := &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -209,9 +210,19 @@ func (ap *apiserverProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 	ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
-// serveExec serves 'kubectl exec' requests, optionally configuring the kubectl
-// exec sessions to be recorded.
-func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
+// serveExecSPDY serves 'kubectl exec' requests for sessions streamed over SPDY,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveExecSPDY(w http.ResponseWriter, r *http.Request) {
+	ap.execForProto(w, r, kubesessionrecording.SPDYProtocol)
+}
+
+// serveExecWS serves 'kubectl exec' requests for sessions streamed over WebSocket,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
+	ap.execForProto(w, r, kubesessionrecording.WSProtocol)
+}
+
+func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, proto kubesessionrecording.Protocol) {
 	who, err := ap.whoIs(r)
 	if err != nil {
 		ap.authError(w, err)
@@ -234,8 +245,10 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	if r.Method != "POST" || r.Header.Get("Upgrade") != "SPDY/3.1" {
-		msg := "'kubectl exec' session recording is configured, but the request is not over SPDY. Session recording is currently only supported for SPDY based clients"
+
+	wantsHeader := upgradeHeaderForProto[proto]
+	if h := r.Header.Get("Upgrade"); h != wantsHeader {
+		msg := fmt.Sprintf("[unexpected] unable to verify that streaming protocol is %s, wants Upgrade header %q, got: %q", proto, wantsHeader, h)
 		if failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
 			ap.log.Warn(msg)
@@ -247,9 +260,9 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	spdyH := kubesessionrecording.New(ap.ts, r, who, w, r.PathValue("pod"), r.PathValue("namespace"), kubesessionrecording.SPDYProtocol, addrs, failOpen, sessionrecording.ConnectToRecorder, ap.log)
+	h := kubesessionrecording.New(ap.ts, r, who, w, r.PathValue("pod"), r.PathValue("namespace"), proto, addrs, failOpen, sessionrecording.ConnectToRecorder, ap.log)
 
-	ap.rp.ServeHTTP(spdyH, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+	ap.rp.ServeHTTP(h, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
 func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
@@ -382,3 +395,5 @@ func determineRecorderConfig(who *apitype.WhoIsResponse) (failOpen bool, recorde
 	}
 	return failOpen, recorderAddresses, nil
 }
+
+var upgradeHeaderForProto = map[kubesessionrecording.Protocol]string{kubesessionrecording.SPDYProtocol: "SPDY/3.1", kubesessionrecording.WSProtocol: "websocket"}
