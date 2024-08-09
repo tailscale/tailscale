@@ -42,7 +42,7 @@ RUN go install \
     gvisor.dev/gvisor/pkg/tcpip/stack \
     golang.org/x/crypto/ssh \
     golang.org/x/crypto/acme \
-    nhooyr.io/websocket \
+    github.com/coder/websocket \
     github.com/mdlayher/netlink
 
 COPY . .
