@@ -15,7 +15,8 @@ import (
 
 const (
 	One2OneNAT NAT = "one2one"
-	EasyNAT    NAT = "easy"
+	EasyNAT    NAT = "easy"   // address+port filtering
+	EasyAFNAT  NAT = "easyaf" // address filtering (not port)
 	HardNAT    NAT = "hard"
 )
 
