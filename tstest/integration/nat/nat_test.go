@@ -53,22 +53,22 @@ func newNatTest(tb testing.TB) *natTest {
 	}
 	modRoot := filepath.Join(root, "../../..")
 
-	linuxKernel, err := findKernelPath(filepath.Join(modRoot, "gokrazy/tsapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
-	if err != nil {
-		tb.Fatalf("findKernelPath: %v", err)
-	}
-	tb.Logf("found kernel: %v", linuxKernel)
-
 	nt := &natTest{
 		tb:      tb,
 		tempDir: tb.TempDir(),
 		base:    filepath.Join(modRoot, "gokrazy/tsapp.qcow2"),
-		kernel:  linuxKernel,
 	}
 
 	if _, err := os.Stat(nt.base); err != nil {
 		tb.Skipf("skipping test; base image %q not found", nt.base)
 	}
+
+	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/tsapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
+	if err != nil {
+		tb.Skipf("skipping test; kernel not found: %v", err)
+	}
+	tb.Logf("found kernel: %v", nt.kernel)
+
 	return nt
 }
 
@@ -388,67 +388,54 @@ func up(ctx context.Context, c *vnet.NodeAgentClient) error {
 	return nil
 }
 
+type nodeType struct {
+	name string
+	fn   addNodeFunc
+}
+
+var types = []nodeType{
+	{"easy", easy},
+	{"easyAF", easyAF},
+	{"hard", hard},
+	{"easyPMP", easyPMP},
+	{"hardPMP", hardPMP},
+	{"one2one", one2one},
+	{"sameLAN", sameLAN},
+}
+
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
 }
 
-func TestEasyHard(t *testing.T) {
+var pair = flag.String("pair", "", "comma-separated pair of types to test (easy, easyAF, hard, easyPMP, hardPMP, one2one, sameLAN)")
+
+func TestPair(t *testing.T) {
+	t1, t2, ok := strings.Cut(*pair, ",")
+	if !ok {
+		t.Skipf("skipping test without --pair=type1,type2 set")
+	}
+	find := func(name string) addNodeFunc {
+		for _, nt := range types {
+			if nt.name == name {
+				return nt.fn
+			}
+		}
+		t.Fatalf("unknown type %q", name)
+		return nil
+	}
+
 	nt := newNatTest(t)
-	nt.runTest(easy, hard)
+	nt.runTest(find(t1), find(t2))
 }
 
-func TestEasyAFHard(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(easyAF, hard)
-}
-
-func TestEasyHardPMP(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(easy, hardPMP)
-}
-
-func TestEasyPMPHard(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(easyPMP, hard)
-}
-
-func TestHardHardPMP(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(hard, hardPMP)
-}
-
-func TestHardHard(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(hard, hard)
-}
-
-func TestEasyOne2One(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(easy, one2one)
-}
-
-func TestHardOne2One(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTest(hard, one2one)
-}
+var runGrid = flag.Bool("run-grid", false, "run grid test")
 
 func TestGrid(t *testing.T) {
+	if !*runGrid {
+		t.Skip("skipping grid test; set --run-grid to run")
+	}
 	t.Parallel()
-
-	type nodeType struct {
-		name string
-		fn   addNodeFunc
-	}
-	types := []nodeType{
-		{"easy", easy},
-		{"easyAF", easyAF},
-		{"hard", hard},
-		{"easyPMP", easyPMP},
-		{"hardPMP", hardPMP},
-		{"one2one", one2one},
-		{"sameLAN", sameLAN},
-	}
 
 	sem := syncs.NewSemaphore(2)
 	var (
