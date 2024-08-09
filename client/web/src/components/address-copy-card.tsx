@@ -125,7 +125,7 @@ function AddressRow({
             "text-gray-900 group-hover:text-gray-600"
           )}
         >
-          <Copy className="w-4 h-4" />
+          <Copy className="w-4 h-4" stroke="#292828" />
         </span>
       </button>
     </li>

@@ -19,7 +19,14 @@ export type AuthResponse = {
 
 export type AuthServerMode = "login" | "readonly" | "manage"
 
-export type PeerCapability = "*" | "ssh" | "subnets" | "exitnodes" | "account"
+export type PeerCapability =
+  | "*"
+  | "ssh"
+  | "subnets"
+  | "exitnodes"
+  | "serve"
+  | "funnel"
+  | "account"
 
 /**
  * canEdit reports whether the given auth response specifies that the viewer
