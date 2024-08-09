@@ -648,7 +648,7 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 
 // SetStaticEndpoints sets static endpoints to the provided value and triggers
 // an asynchronous update of the endpoints that this node advertises.
-// Static endpoints are endpoints explicitly configured by user.
+// Static endpoints are endpoints explicitly configured by the user.
 func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 	c.mu.Lock()
 	if reflect.DeepEqual(c.staticEndpoints.AsSlice(), ep.AsSlice()) {
@@ -660,6 +660,13 @@ func (c *Conn) SetStaticEndpoints(ep views.Slice[netip.AddrPort]) {
 	// this point- calls updateEndpoints or queues an update if there is
 	// already an in-progress update.
 	c.ReSTUN("static-endpoint-change")
+}
+
+// GetStaticEndpoints returns any wireguard endpoints explicitly configured by the user.
+func (c *Conn) GetStaticEndpoints() views.Slice[netip.AddrPort] {
+	c.mu.Lock()
+	c.mu.Unlock()
+	return c.staticEndpoints
 }
 
 // setNetInfoHavePortMap updates NetInfo.HavePortMap to true.

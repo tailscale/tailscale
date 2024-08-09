@@ -31,6 +31,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -427,11 +428,15 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	panic("unexpected HTTP request")
 }
 
-func newTestLocalBackend(t testing.TB) *LocalBackend {
+func newTestLocalBackend(t testing.TB, sysOpts ...func(*tsd.System)) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	sys := new(tsd.System)
 	store := new(mem.Store)
 	sys.Set(store)
+	for _, opt := range sysOpts {
+		opt(sys)
+	}
+
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
@@ -3997,4 +4002,97 @@ func TestFillAllowedSuggestions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetConfigLocked(t *testing.T) {
+	wantRoutes := routes([]string{"10.0.0.1/32"})
+	wantAcceptRoutes := opt.NewBool(true)
+	wantTailscaleURL := ptr.To("headscale.foo.com")
+	wantStaticEndpoints := ap([]string{"35.0.0.1:1234"})
+
+	conf := &conffile.Config{
+		Parsed: ipn.ConfigVAlpha{
+			AdvertiseRoutes: wantRoutes,
+			AcceptRoutes:    wantAcceptRoutes,
+			ServerURL:       wantTailscaleURL,
+			Locked:          opt.NewBool(false),
+			StaticEndpoints: wantStaticEndpoints,
+		},
+	}
+	lb := newTestLocalBackend(t, func(sys *tsd.System) { sys.InitialConfig = conf })
+
+	if err := lb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	check := func(t *testing.T) {
+		t.Helper()
+		gotRoutes := lb.Prefs().AdvertiseRoutes().AsSlice()
+		if !reflect.DeepEqual(wantRoutes, gotRoutes) {
+			t.Fatalf("wants advertize routes %v, got %v", wantRoutes, gotRoutes)
+		}
+		if routeAll := lb.Prefs().RouteAll(); !wantAcceptRoutes.EqualBool(routeAll) {
+			t.Fatalf("wants 'RouteAll=%t', got %t", !routeAll, routeAll)
+		}
+		if tsURL := lb.Prefs().ControlURL(); tsURL != *wantTailscaleURL {
+			t.Fatalf("wants 'ControlURL=%s', got %s", *wantTailscaleURL, tsURL)
+		}
+		ms, ok := lb.sys.MagicSock.GetOK()
+		if !ok {
+			t.Fatalf("[unexpected] MagicSock not set")
+		}
+		if staticEndpoints := ms.GetStaticEndpoints().AsSlice(); !reflect.DeepEqual(staticEndpoints, wantStaticEndpoints) {
+			t.Fatalf("wants static endpoints %v, got %v", wantStaticEndpoints, staticEndpoints)
+		}
+	}
+	reset := func(t *testing.T) {
+		t.Helper()
+		unlock := lb.lockAndGetUnlock()
+		defer unlock()
+		if err := lb.setConfigLocked(conf, unlock); err != nil {
+			t.Fatalf("error setting config: %v", err)
+		}
+	}
+	check(t)
+
+	// 1. Reset config while LocalBackend is Running. Change in advertised
+	// routes, accept routes and static endpoints should be applied, but not change in control
+	// URL.
+	lb.state = ipn.Running
+	wantRoutes = routes([]string{"10.0.0.2/32"})
+	wantAcceptRoutes = opt.NewBool(false)
+	// TODO(irbekrm): have some way how to test static endpoint reload. This is currently expected to work.
+	// wantStaticEndpoints = ap([]string{"35.0.0.2:12346"})
+	conf.Parsed.AdvertiseRoutes = wantRoutes
+	conf.Parsed.AcceptRoutes = wantAcceptRoutes
+	conf.Parsed.ServerURL = ptr.To("headscale1.foo.com")
+	reset(t)
+	check(t)
+
+	// 2. Reset config when LocalBackend is Stopped.
+	// All changes should be applied.
+	lb.state = ipn.Stopped
+	wantRoutes = routes([]string{"10.0.0.2/32"})
+	wantAcceptRoutes = opt.NewBool(false)
+	wantTailscaleURL = ptr.To("headscale2.foo.com")
+	conf.Parsed.AdvertiseRoutes = wantRoutes
+	conf.Parsed.AcceptRoutes = wantAcceptRoutes
+	conf.Parsed.ServerURL = wantTailscaleURL
+	reset(t)
+	check(t)
+}
+
+func routes(rs []string) []netip.Prefix {
+	rp := make([]netip.Prefix, 0)
+	for _, r := range rs {
+		rp = append(rp, netip.MustParsePrefix(r))
+	}
+	return rp
+}
+func ap(rs []string) []netip.AddrPort {
+	rp := make([]netip.AddrPort, 0)
+	for _, r := range rs {
+		rp = append(rp, netip.MustParseAddrPort(r))
+	}
+	return rp
 }
