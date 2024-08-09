@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -319,7 +320,23 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:       "go-buildinfo",
+			ShortUsage: "tailscale debug go-buildinfo",
+			ShortHelp:  "Prints Go's runtime/debug.BuildInfo",
+			Exec:       runGoBuildInfo,
+		},
 	},
+}
+
+func runGoBuildInfo(ctx context.Context, args []string) error {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return errors.New("no Go build info")
+	}
+	e := json.NewEncoder(os.Stdout)
+	e.SetIndent("", "\t")
+	return e.Encode(bi)
 }
 
 var debugArgs struct {
