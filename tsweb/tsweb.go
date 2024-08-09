@@ -27,10 +27,10 @@ import (
 	"sync"
 	"time"
 
-	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tsweb/tswebutil"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/ctxkey"
@@ -95,25 +95,9 @@ func allowDebugAccessWithKey(r *http.Request) bool {
 
 // AcceptsEncoding reports whether r accepts the named encoding
 // ("gzip", "br", etc).
+// deprecated: use tswebutil.AcceptsEncoding instead.
 func AcceptsEncoding(r *http.Request, enc string) bool {
-	h := r.Header.Get("Accept-Encoding")
-	if h == "" {
-		return false
-	}
-	if !strings.Contains(h, enc) && !mem.ContainsFold(mem.S(h), mem.S(enc)) {
-		return false
-	}
-	remain := h
-	for len(remain) > 0 {
-		var part string
-		part, remain, _ = strings.Cut(remain, ",")
-		part = strings.TrimSpace(part)
-		part, _, _ = strings.Cut(part, ";")
-		if part == enc {
-			return true
-		}
-	}
-	return false
+	return tswebutil.AcceptsEncoding(r, enc)
 }
 
 // Protected wraps a provided debug handler, h, returning a Handler
