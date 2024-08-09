@@ -692,17 +692,6 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			}
 			packetRaw = buf[4 : 4+n] // raw ethernet frame
 		}
-		if s.pcapWriter != nil {
-			ci := gopacket.CaptureInfo{
-				Timestamp:     time.Now(),
-				CaptureLength: len(packetRaw),
-				Length:        len(packetRaw),
-			}
-			if srcNode != nil {
-				ci.InterfaceIndex = srcNode.id
-			}
-			must.Do(s.pcapWriter.WritePacket(ci, packetRaw))
-		}
 
 		packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
 		le, ok := packet.LinkLayer().(*layers.Ethernet)
@@ -727,6 +716,17 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 				log.Printf("[conn %p] ignoring frame from MAC %v, expected %v", uc, srcMAC, srcNode.mac)
 				continue
 			}
+		}
+		if s.pcapWriter != nil {
+			ci := gopacket.CaptureInfo{
+				Timestamp:     time.Now(),
+				CaptureLength: len(packetRaw),
+				Length:        len(packetRaw),
+			}
+			if srcNode != nil {
+				ci.InterfaceIndex = srcNode.id
+			}
+			must.Do(s.pcapWriter.WritePacket(ci, packetRaw))
 		}
 		netw.HandleEthernetPacket(ep)
 	}
