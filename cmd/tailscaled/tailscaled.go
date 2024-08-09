@@ -35,6 +35,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
@@ -154,6 +155,7 @@ var beCLI func() // non-nil if CLI is linked in
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
 	envknob.ApplyDiskConfig()
+	applyIntegrationTestEnvKnob()
 
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
@@ -894,4 +896,25 @@ func dieOnPipeReadErrorOfFD(fd int) {
 	f := os.NewFile(uintptr(fd), "TS_PARENT_DEATH_FD")
 	f.Read(make([]byte, 1))
 	os.Exit(1)
+}
+
+// applyIntegrationTestEnvKnob applies the tailscaled.env=... environment
+// variables specified on the Linux kernel command line, if the VM is being
+// run in NATLab integration tests.
+//
+// They're specified as: tailscaled.env=FOO=bar tailscaled.env=BAR=baz
+func applyIntegrationTestEnvKnob() {
+	if runtime.GOOS != "linux" || !hostinfo.IsNATLabGuestVM() {
+		return
+	}
+	cmdLine, _ := os.ReadFile("/proc/cmdline")
+	for _, s := range strings.Fields(string(cmdLine)) {
+		suf, ok := strings.CutPrefix(s, "tailscaled.env=")
+		if !ok {
+			continue
+		}
+		if k, v, ok := strings.Cut(suf, "="); ok {
+			envknob.Setenv(k, v)
+		}
+	}
 }
