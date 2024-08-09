@@ -404,14 +404,15 @@ type portMapping struct {
 }
 
 type network struct {
-	s           *Server
-	mac         MAC
-	portmap     bool
-	interfaceID int
-	wanIP       netip.Addr
-	lanIP       netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
-	nodesByIP   map[netip.Addr]*node
-	logf        func(format string, args ...any)
+	s              *Server
+	mac            MAC
+	portmap        bool
+	lanInterfaceID int
+	wanInterfaceID int
+	wanIP          netip.Addr
+	lanIP          netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
+	nodesByIP      map[netip.Addr]*node
+	logf           func(format string, args ...any)
 
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
@@ -646,15 +647,12 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		if err := bw.Flush(); err != nil {
 			log.Printf("Flush: %v", err)
 		}
-		ci := gopacket.CaptureInfo{
-			Timestamp:     time.Now(),
-			CaptureLength: len(pkt),
-			Length:        len(pkt),
-		}
-		if srcNode != nil {
-			ci.InterfaceIndex = srcNode.interfaceID
-		}
-		must.Do(s.pcapWriter.WritePacket(ci, pkt))
+		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+			Timestamp:      time.Now(),
+			CaptureLength:  len(pkt),
+			Length:         len(pkt),
+			InterfaceIndex: srcNode.interfaceID,
+		}, pkt))
 	}
 
 	buf := make([]byte, 16<<10)
@@ -714,13 +712,12 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 				continue
 			}
 		}
-		ci := gopacket.CaptureInfo{
+		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
 			Timestamp:      time.Now(),
 			CaptureLength:  len(packetRaw),
 			Length:         len(packetRaw),
 			InterfaceIndex: srcNode.interfaceID,
-		}
-		must.Do(s.pcapWriter.WritePacket(ci, packetRaw))
+		}, packetRaw))
 		netw.HandleEthernetPacket(ep)
 	}
 }
@@ -818,23 +815,34 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 // LAN IP here and wrapped in an ethernet layer and delivered
 // to the network.
 func (n *network) HandleUDPPacket(p UDPPacket) {
-	dst := n.doNATIn(p.Src, p.Dst)
-	if !dst.IsValid() {
-		n.logf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
-		return
-	}
-	p.Dst = dst
-	buff, err := n.serializedUDPPacket(p.Src, p.Dst, p.Payload, nil)
+	buf, err := n.serializedUDPPacket(p.Src, p.Dst, p.Payload, nil)
 	if err != nil {
 		n.logf("serializing UDP packet: %v", err)
 		return
 	}
 	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
 		Timestamp:      time.Now(),
-		CaptureLength:  len(buff),
-		Length:         len(buff),
-		InterfaceIndex: n.interfaceID,
-	}, buff)
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.wanInterfaceID,
+	}, buf)
+	dst := n.doNATIn(p.Src, p.Dst)
+	if !dst.IsValid() {
+		n.logf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
+		return
+	}
+	p.Dst = dst
+	buf, err = n.serializedUDPPacket(p.Src, p.Dst, p.Payload, nil)
+	if err != nil {
+		n.logf("serializing UDP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.lanInterfaceID,
+	}, buf)
 	n.WriteUDPPacketNoNAT(p)
 }
 
@@ -946,11 +954,6 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	if toForward && isUDP {
 		src := netip.AddrPortFrom(srcIP, uint16(udp.SrcPort))
 		dst := netip.AddrPortFrom(dstIP, uint16(udp.DstPort))
-		src0 := src
-		src = n.doNATOut(src, dst)
-		_ = src0
-		//log.Printf("XXX UDP out %v=>%v to %v", src0, src, dst)
-
 		buf, err := n.serializedUDPPacket(src, dst, udp.Payload, nil)
 		if err != nil {
 			n.logf("serializing UDP packet: %v", err)
@@ -960,7 +963,20 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			Timestamp:      time.Now(),
 			CaptureLength:  len(buf),
 			Length:         len(buf),
-			InterfaceIndex: n.interfaceID,
+			InterfaceIndex: n.lanInterfaceID,
+		}, buf)
+
+		src = n.doNATOut(src, dst)
+		buf, err = n.serializedUDPPacket(src, dst, udp.Payload, nil)
+		if err != nil {
+			n.logf("serializing UDP packet: %v", err)
+			return
+		}
+		n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+			Timestamp:      time.Now(),
+			CaptureLength:  len(buf),
+			Length:         len(buf),
+			InterfaceIndex: n.wanInterfaceID,
 		}, buf)
 
 		n.s.routeUDPPacket(UDPPacket{

@@ -229,8 +229,12 @@ func (s *Server) initFromConfig(c *Config) error {
 			return fmt.Errorf("two networks have the same WAN IP %v; Anycast not (yet?) supported", conf.wanIP)
 		}
 		s.networkByWAN[conf.wanIP] = n
-		n.interfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
-			Name:     fmt.Sprintf("network%d", i+1),
+		n.lanInterfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
+			Name:     fmt.Sprintf("network%d-lan", i+1),
+			LinkType: layers.LinkTypeIPv4,
+		}))
+		n.wanInterfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
+			Name:     fmt.Sprintf("network%d-wan", i+1),
 			LinkType: layers.LinkTypeIPv4,
 		}))
 	}
