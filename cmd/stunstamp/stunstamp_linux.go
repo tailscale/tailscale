@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"time"
 
 	"github.com/mdlayher/socket"
@@ -24,7 +24,7 @@ const (
 		unix.SOF_TIMESTAMPING_SOFTWARE // report software timestamps
 )
 
-func getConnKernelTimestamp() (io.ReadWriteCloser, error) {
+func getUDPConnKernelTimestamp() (io.ReadWriteCloser, error) {
 	sconn, err := socket.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP, "udp", nil)
 	if err != nil {
 		return nil, err
@@ -56,24 +56,23 @@ func parseTimestampFromCmsgs(oob []byte) (time.Time, error) {
 	return time.Time{}, errors.New("failed to parse timestamp from cmsgs")
 }
 
-func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Duration, err error) {
+func measureSTUNRTTKernel(conn io.ReadWriteCloser, dst netip.AddrPort) (rtt time.Duration, err error) {
 	sconn, ok := conn.(*socket.Conn)
 	if !ok {
 		return 0, fmt.Errorf("conn of unexpected type: %T", conn)
 	}
 
 	var to unix.Sockaddr
-	to4 := dst.IP.To4()
-	if to4 != nil {
+	if dst.Addr().Is4() {
 		to = &unix.SockaddrInet4{
-			Port: dst.Port,
+			Port: int(dst.Port()),
 		}
-		copy(to.(*unix.SockaddrInet4).Addr[:], to4)
+		copy(to.(*unix.SockaddrInet4).Addr[:], dst.Addr().AsSlice())
 	} else {
 		to = &unix.SockaddrInet6{
-			Port: dst.Port,
+			Port: int(dst.Port()),
 		}
-		copy(to.(*unix.SockaddrInet6).Addr[:], dst.IP)
+		copy(to.(*unix.SockaddrInet6).Addr[:], dst.Addr().AsSlice())
 	}
 
 	txID := stun.NewTxID()
@@ -138,6 +137,10 @@ func measureRTTKernel(conn io.ReadWriteCloser, dst *net.UDPAddr) (rtt time.Durat
 
 }
 
-func supportsKernelTS() bool {
-	return true
+func protocolSupportsKernelTS(p protocol) bool {
+	if p == protocolSTUN {
+		return true
+	}
+	// TODO: jwhited support ICMP
+	return false
 }
