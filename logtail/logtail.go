@@ -213,6 +213,7 @@ type Logger struct {
 	procSequence uint64
 	flushTimer   tstime.TimerController // used when flushDelay is >0
 	writeBuf     [bufferSize]byte       // owned by Write for reuse
+	bytesBuf     bytes.Buffer           // owned by appendTextOrJSONLocked for reuse
 	jsonDec      jsontext.Decoder       // owned by appendTextOrJSONLocked for reuse
 
 	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
@@ -725,9 +726,16 @@ func (l *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	// whether it contains the reserved "logtail" name at the top-level.
 	var logtailKeyOffset, logtailValOffset, logtailValLength int
 	validJSON := func() bool {
-		// TODO(dsnet): Avoid allocation of bytes.Buffer struct.
+		// The jsontext.NewDecoder API operates on an io.Reader, for which
+		// bytes.Buffer provides a means to convert a []byte into an io.Reader.
+		// However, bytes.NewBuffer normally allocates unless
+		// we immediately shallow copy it into a pre-allocated Buffer struct.
+		// See https://go.dev/issue/67004.
+		l.bytesBuf = *bytes.NewBuffer(src)
+		defer func() { l.bytesBuf = bytes.Buffer{} }() // avoid pinning src
+
 		dec := &l.jsonDec
-		dec.Reset(bytes.NewBuffer(src))
+		dec.Reset(&l.bytesBuf)
 		if tok, err := dec.ReadToken(); tok.Kind() != '{' || err != nil {
 			return false
 		}
