@@ -15,6 +15,7 @@ package vnet
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -61,6 +62,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
+	"tailscale.com/util/zstdframe"
 )
 
 const nicID = 1
@@ -325,6 +327,13 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		go hs.Serve(netutil.NewOneConnListener(tc, nil))
 		return
 	}
+	if destPort == 443 && destIP == fakeLogCatcherIP {
+
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		go n.serveLogCatcherConn(clientRemoteIP, tc)
+		return
+	}
 
 	log.Printf("vnet-AcceptTCP: %v", stringifyTEI(reqDetails))
 
@@ -352,6 +361,51 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	} else {
 		r.Complete(true) // sends a RST
 	}
+}
+
+// serveLogCatchConn serves a TCP connection to "log.tailscale.io", speaking the
+// logtail/logcatcher protocol.
+//
+// We terminate TLS with an arbitrary cert; the client is configured to not
+// validate TLS certs for this hostname when running under these integration
+// tests.
+func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
+	tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's); test client configure to not check
+	tlsConn := tls.Server(c, tlsConfig)
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		all, _ := io.ReadAll(r.Body)
+		if r.Header.Get("Content-Encoding") == "zstd" {
+			var err error
+			all, err = zstdframe.AppendDecode(nil, all)
+			if err != nil {
+				log.Printf("LOGS DECODE ERROR zstd decode: %v", err)
+				http.Error(w, "zstd decode error", http.StatusBadRequest)
+				return
+			}
+		}
+		var logs []struct {
+			Logtail struct {
+				Client_Time time.Time
+			}
+			Text string
+		}
+		if err := json.Unmarshal(all, &logs); err != nil {
+			log.Printf("Logs decode error: %v", err)
+			return
+		}
+		node := n.nodesByIP[clientRemoteIP]
+		if node != nil {
+			node.logMu.Lock()
+			defer node.logMu.Unlock()
+			for _, lg := range logs {
+				tStr := lg.Logtail.Client_Time.Round(time.Millisecond).Format(time.RFC3339Nano)
+				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, lg.Text)
+				log.Printf("LOG %v [%v] %s\n", clientRemoteIP, tStr, lg.Text)
+			}
+		}
+	})
+	hs := &http.Server{Handler: handler}
+	hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
 }
 
 var (
@@ -451,6 +505,12 @@ type node struct {
 	interfaceID int
 	net         *network
 	lanIP       netip.Addr // must be in net.lanIP prefix + unique in net
+
+	// logMu guards logBuf.
+	// TODO(bradfitz): conditionally write these out to separate files at the end?
+	// Currently they only hold logcatcher logs.
+	logMu  sync.Mutex
+	logBuf bytes.Buffer
 }
 
 type derpServer struct {
@@ -1153,7 +1213,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
 		switch dstIP {
-		case fakeControlIP, fakeDERP1IP, fakeDERP2IP:
+		case fakeControlIP, fakeDERP1IP, fakeDERP2IP, fakeLogCatcherIP:
 			return true
 		}
 		if dstIP == fakeProxyControlplaneIP {
@@ -1613,7 +1673,9 @@ func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 	d := s.NodeAgentDialer(n)
 	return &NodeAgentClient{
 		LocalClient: &tailscale.LocalClient{
-			Dial: d,
+			UseSocketOnly: true,
+			OmitAuth:      true,
+			Dial:          d,
 		},
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
@@ -1621,4 +1683,22 @@ func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 			},
 		},
 	}
+}
+
+// EnableHostFirewall enables the host's stateful firewall.
+func (c *NodeAgentClient) EnableHostFirewall(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/fw", nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	all, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		return fmt.Errorf("unexpected status code %v: %s", res.Status, all)
+	}
+	return nil
 }

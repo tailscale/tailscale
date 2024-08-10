@@ -130,13 +130,14 @@ func main() {
 	hs.ConnState = func(c net.Conn, s http.ConnState) {
 		stMu.Lock()
 		defer stMu.Unlock()
+		oldLen := len(newSet)
 		switch s {
 		case http.StateNew:
 			newSet.Add(c)
 		default:
 			newSet.Delete(c)
 		}
-		if len(newSet) == 0 {
+		if oldLen != 0 && len(newSet) == 0 {
 			select {
 			case needConnCh <- true:
 			default:
@@ -147,7 +148,12 @@ func main() {
 
 	lcRP := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://local-tailscaled.sock")))
 	lcRP.Transport = new(localClientRoundTripper)
-	ttaMux.Handle("/localapi/", lcRP)
+	ttaMux.HandleFunc("/localapi/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Got localapi request: %v", r.URL)
+		t0 := time.Now()
+		lcRP.ServeHTTP(w, r)
+		log.Printf("Did localapi request in %v: %v", time.Since(t0).Round(time.Millisecond), r.URL)
+	})
 
 	ttaMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "TTA\n")
@@ -156,7 +162,18 @@ func main() {
 	ttaMux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
 	})
+	ttaMux.HandleFunc("/fw", addFirewallHandler)
+
 	go hs.Serve(chanListener(conns))
+
+	// For doing agent operations locally from gokrazy:
+	// (e.g. with "wget -O - localhost:8123/fw")
+	go func() {
+		err := http.ListenAndServe("127.0.0.1:8123", &ttaMux)
+		if err != nil {
+			log.Fatalf("ListenAndServe: %v", err)
+		}
+	}()
 
 	var lastErr string
 	needConnCh <- true
@@ -204,3 +221,18 @@ func (cl chanListener) Addr() net.Addr {
 		Port: 123,
 	}
 }
+
+func addFirewallHandler(w http.ResponseWriter, r *http.Request) {
+	if addFirewall == nil {
+		http.Error(w, "firewall not supported", 500)
+		return
+	}
+	err := addFirewall()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	io.WriteString(w, "OK\n")
+}
+
+var addFirewall func() error // set by fw_linux.go

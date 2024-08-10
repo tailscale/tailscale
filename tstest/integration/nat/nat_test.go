@@ -102,6 +102,14 @@ func easy(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
 }
 
+// easy + host firewall
+func easyFW(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(vnet.HostFirewall, c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
+}
+
 func easyAF(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
@@ -132,6 +140,29 @@ func easyPMP(c *vnet.Config) *vnet.Node {
 	return c.AddNode(c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
+}
+
+// easy + port mapping + host firewall
+func easyPMPFW(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(vnet.HostFirewall,
+		c.AddNetwork(
+			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
+}
+
+// easy + port mapping + host firewall - BPF
+func easyPMPFWNoBPF(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(
+		vnet.HostFirewall,
+		vnet.TailscaledEnv{
+			Key:   "TS_DEBUG_DISABLE_RAW_DISCO",
+			Value: "1",
+		},
+		c.AddNetwork(
+			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
 }
 
 func hard(c *vnet.Config) *vnet.Node {
@@ -203,12 +234,18 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 			t.Fatalf("qemu-img create: %v, %s", err, out)
 		}
 
+		var envBuf bytes.Buffer
+		for _, e := range node.Env() {
+			fmt.Fprintf(&envBuf, " tailscaled.env=%s=%s", e.Key, e.Value)
+		}
+		envStr := envBuf.String()
+
 		cmd := exec.Command("qemu-system-x86_64",
 			"-M", "microvm,isa-serial=off",
 			"-m", "384M",
 			"-nodefaults", "-no-user-config", "-nographic",
 			"-kernel", nt.kernel,
-			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet tailscale-tta=1",
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet tailscale-tta=1"+envStr,
 			"-drive", "id=blk0,file="+disk+",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
 			"-netdev", "stream,id=net0,addr.type=unix,addr.path="+sockAddr,
@@ -254,10 +291,20 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 				return fmt.Errorf("node%d status: %w", i, err)
 			}
 			t.Logf("node%d status: %v", i, st)
+
+			node := nodes[i]
+			if node.HostFirewall() {
+				if err := c.EnableHostFirewall(ctx); err != nil {
+					return fmt.Errorf("node%d firewall: %w", i, err)
+				}
+				t.Logf("node%d firewalled", i)
+			}
+
 			if err := up(ctx, c); err != nil {
 				return fmt.Errorf("node%d up: %w", i, err)
 			}
 			t.Logf("node%d up!", i)
+
 			st, err = c.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("node%d status: %w", i, err)
@@ -406,6 +453,31 @@ var types = []nodeType{
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
+}
+
+// Tests https://github.com/tailscale/tailscale/issues/3824 ...
+// * server behind a Hard NAT
+// * client behind a NAT with UPnP support
+// * client machine has a stateful host firewall (e.g. ufw)
+
+func TestBPFDisco(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easyPMPFW, hard)
+}
+
+func TestHostFWNoBPF(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easyPMPFWNoBPF, hard)
+}
+
+func TestHostFWPair(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easyFW, easyFW)
+}
+
+func TestOneHostFW(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easy, easyFW)
 }
 
 var pair = flag.String("pair", "", "comma-separated pair of types to test (easy, easyAF, hard, easyPMP, hardPMP, one2one, sameLAN)")

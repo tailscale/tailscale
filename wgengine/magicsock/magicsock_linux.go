@@ -32,6 +32,9 @@ const (
 // Enable/disable using raw sockets to receive disco traffic.
 var debugDisableRawDisco = envknob.RegisterBool("TS_DEBUG_DISABLE_RAW_DISCO")
 
+// debugRawDiscoReads enables logging of raw disco reads.
+var debugRawDiscoReads = envknob.RegisterBool("TS_DEBUG_RAW_DISCO")
+
 // These are our BPF filters that we use for testing packets.
 var (
 	magicsockFilterV4 = []bpf.Instruction{
@@ -211,6 +214,9 @@ func (c *Conn) receiveDisco(pc net.PacketConn, isIPV6 bool) {
 	var buf [1500]byte
 	for {
 		n, src, err := pc.ReadFrom(buf[:])
+		if debugRawDiscoReads() {
+			c.logf("raw disco read from %v = (%v, %v)", src, n, err)
+		}
 		if errors.Is(err, net.ErrClosed) {
 			return
 		} else if err != nil {

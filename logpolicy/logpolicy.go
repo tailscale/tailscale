@@ -464,6 +464,11 @@ func New(collection string, netMon *netmon.Monitor, health *health.Tracker, logf
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
 func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) *Policy {
+	if hostinfo.IsNATLabGuestVM() {
+		// In NATLab Gokrazy instances, tailscaled comes up concurently with
+		// DHCP and the doesn't have DNS for a while. Wait for DHCP first.
+		awaitGokrazyNetwork()
+	}
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -567,7 +572,7 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || testenv.InTest() || hostinfo.IsNATLabGuestVM() {
+	if envknob.NoLogsNoSupport() || testenv.InTest() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else if val := getLogTarget(); val != "" {
@@ -816,4 +821,26 @@ func (noopPretendSuccessTransport) RoundTrip(req *http.Request) (*http.Response,
 		StatusCode: 200,
 		Status:     "200 OK",
 	}, nil
+}
+
+func awaitGokrazyNetwork() {
+	if runtime.GOOS != "linux" || distro.Get() != distro.Gokrazy {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for {
+		// Before DHCP finishes, the /etc/resolv.conf file has just "#MANUAL".
+		all, _ := os.ReadFile("/etc/resolv.conf")
+		if bytes.Contains(all, []byte("nameserver ")) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
