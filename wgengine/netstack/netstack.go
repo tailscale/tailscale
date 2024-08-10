@@ -5,7 +5,6 @@
 package netstack
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"expvar"
@@ -21,12 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -176,7 +173,7 @@ type Impl struct {
 	ProcessSubnets bool
 
 	ipstack       *stack.Stack
-	linkEP        *channel.Endpoint
+	linkEP        *linkEndpoint
 	tundev        *tstun.Wrapper
 	e             wgengine.Engine
 	pm            *proxymap.Mapper
@@ -245,6 +242,44 @@ const nicID = 1
 // have a UDP packet as big as the MTU.
 const maxUDPPacketSize = tstun.MaxPacketSize
 
+func setTCPBufSizes(ipstack *stack.Stack) error {
+	// tcpip.TCP{Receive,Send}BufferSizeRangeOption is gVisor's version of
+	// Linux's tcp_{r,w}mem. Application within gVisor differs as some Linux
+	// features are not (yet) implemented, and socket buffer memory is not
+	// controlled within gVisor, e.g. we allocate *stack.PacketBuffer's for the
+	// write path within Tailscale. Therefore, we loosen our understanding of
+	// the relationship between these Linux and gVisor tunables. The chosen
+	// values are biased towards higher throughput on high bandwidth-delay
+	// product paths, except on memory-constrained platforms.
+	tcpRXBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{
+		// Min is unused by gVisor at the time of writing, but partially plumbed
+		// for application by the TCP_WINDOW_CLAMP socket option.
+		Min: tcpRXBufMinSize,
+		// Default is used by gVisor at socket creation.
+		Default: tcpRXBufDefSize,
+		// Max is used by gVisor to cap the advertised receive window post-read.
+		// (tcp_moderate_rcvbuf=true, the default).
+		Max: tcpRXBufMaxSize,
+	}
+	tcpipErr := ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRXBufOpt)
+	if tcpipErr != nil {
+		return fmt.Errorf("could not set TCP RX buf size: %v", tcpipErr)
+	}
+	tcpTXBufOpt := tcpip.TCPSendBufferSizeRangeOption{
+		// Min in unused by gVisor at the time of writing.
+		Min: tcpTXBufMinSize,
+		// Default is used by gVisor at socket creation.
+		Default: tcpTXBufDefSize,
+		// Max is used by gVisor to cap the send window.
+		Max: tcpTXBufMaxSize,
+	}
+	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpTXBufOpt)
+	if tcpipErr != nil {
+		return fmt.Errorf("could not set TCP TX buf size: %v", tcpipErr)
+	}
+	return nil
+}
+
 // Create creates and populates a new Impl.
 func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper, driveForLocal drive.FileSystemForLocal) (*Impl, error) {
 	if mc == nil {
@@ -285,7 +320,18 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 			return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 		}
 	}
-	linkEP := channel.New(512, uint32(tstun.DefaultTUNMTU()), "")
+	err := setTCPBufSizes(ipstack)
+	if err != nil {
+		return nil, err
+	}
+	var linkEP *linkEndpoint
+	if runtime.GOOS == "linux" {
+		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
+		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", enableGRO)
+		linkEP.SupportedGSOKind = stack.HostGSOSupported
+	} else {
+		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
+	}
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
@@ -333,6 +379,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
+	ns.tundev.EndPacketVectorInboundFromWireGuardFlush = linkEP.flushGRO
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
 	return ns, nil
@@ -509,9 +556,7 @@ func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
 		panic("nil LocalBackend")
 	}
 	ns.lb = lb
-	// size = 0 means use default buffer size
-	const tcpReceiveBufferSize = 0
-	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
+	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpRXBufDefSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
@@ -734,23 +779,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		// care about the packet; resume processing.
 		return filter.Accept
 	}
-
-	var pn tcpip.NetworkProtocolNumber
-	switch p.IPVersion {
-	case 4:
-		pn = header.IPv4ProtocolNumber
-	case 6:
-		pn = header.IPv6ProtocolNumber
-	}
 	if debugPackets {
 		ns.logf("[v2] service packet in (from %v): % x", p.Src, p.Buffer())
 	}
 
-	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(bytes.Clone(p.Buffer())),
-	})
-	ns.linkEP.InjectInbound(pn, packetBuf)
-	packetBuf.DecRef()
+	ns.linkEP.injectInbound(p)
 	return filter.DropSilently
 }
 
@@ -791,7 +824,7 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 func (ns *Impl) inject() {
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
-		if pkt.IsNil() {
+		if pkt == nil {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
 				return
@@ -1035,21 +1068,10 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 		return filter.DropSilently
 	}
 
-	var pn tcpip.NetworkProtocolNumber
-	switch p.IPVersion {
-	case 4:
-		pn = header.IPv4ProtocolNumber
-	case 6:
-		pn = header.IPv6ProtocolNumber
-	}
 	if debugPackets {
 		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
 	}
-	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(bytes.Clone(p.Buffer())),
-	})
-	ns.linkEP.InjectInbound(pn, packetBuf)
-	packetBuf.DecRef()
+	ns.linkEP.enqueueGRO(p)
 
 	// We've now delivered this to netstack, so we're done.
 	// Instead of returning a filter.Accept here (which would also
@@ -1116,11 +1138,9 @@ func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
 func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	switch s.Len() {
 	case 4:
-		s := s.As4()
-		return netaddr.IPv4(s[0], s[1], s[2], s[3])
+		return netip.AddrFrom4(s.As4())
 	case 16:
-		s := s.As16()
-		return netip.AddrFrom16(s).Unmap()
+		return netip.AddrFrom16(s.As16()).Unmap()
 	}
 	return netip.Addr{}
 }

@@ -27,9 +27,9 @@ var flagCopyright = flag.Bool("copyright", true, "add Tailscale copyright to gen
 func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]*types.Named, error) {
 	cfg := &packages.Config{
 		Mode:  packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedName,
-		Tests: false,
+		Tests: buildTags == "test",
 	}
-	if buildTags != "" {
+	if buildTags != "" && !cfg.Tests {
 		cfg.BuildFlags = []string{"-tags=" + buildTags}
 	}
 
@@ -37,11 +37,25 @@ func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.Tests {
+		pkgs = testPackages(pkgs)
+	}
 	if len(pkgs) != 1 {
 		return nil, nil, fmt.Errorf("wrong number of packages: %d", len(pkgs))
 	}
 	pkg := pkgs[0]
 	return pkg, namedTypes(pkg), nil
+}
+
+func testPackages(pkgs []*packages.Package) []*packages.Package {
+	var testPackages []*packages.Package
+	for _, pkg := range pkgs {
+		testPackageID := fmt.Sprintf("%[1]s [%[1]s.test]", pkg.PkgPath)
+		if pkg.ID == testPackageID {
+			testPackages = append(testPackages, pkg)
+		}
+	}
+	return testPackages
 }
 
 // HasNoClone reports whether the provided tag has `codegen:noclone`.
@@ -95,6 +109,14 @@ func (it *ImportTracker) qualifier(pkg *types.Package) string {
 // QualifiedName returns the string representation of t in the package.
 func (it *ImportTracker) QualifiedName(t types.Type) string {
 	return types.TypeString(t, it.qualifier)
+}
+
+// PackagePrefix returns the prefix to be used when referencing named objects from pkg.
+func (it *ImportTracker) PackagePrefix(pkg *types.Package) string {
+	if s := it.qualifier(pkg); s != "" {
+		return s + "."
+	}
+	return ""
 }
 
 // Write prints all the tracked imports in a single import block to w.
@@ -193,13 +215,21 @@ func namedTypes(pkg *packages.Package) map[string]*types.Named {
 // ctx is a single-word context for this assertion, such as "Clone".
 // If non-nil, AssertStructUnchanged will add elements to imports
 // for each package path that the caller must import for the returned code to compile.
-func AssertStructUnchanged(t *types.Struct, tname, ctx string, it *ImportTracker) []byte {
+func AssertStructUnchanged(t *types.Struct, tname string, params *types.TypeParamList, ctx string, it *ImportTracker) []byte {
 	buf := new(bytes.Buffer)
 	w := func(format string, args ...any) {
 		fmt.Fprintf(buf, format+"\n", args...)
 	}
 	w("// A compilation failure here means this code must be regenerated, with the command at the top of this file.")
-	w("var _%s%sNeedsRegeneration = %s(struct {", tname, ctx, tname)
+
+	hasTypeParams := params != nil && params.Len() > 0
+	if hasTypeParams {
+		constraints, identifiers := FormatTypeParams(params, it)
+		w("func _%s%sNeedsRegeneration%s (%s%s) {", tname, ctx, constraints, tname, identifiers)
+		w("_%s%sNeedsRegeneration(struct {", tname, ctx)
+	} else {
+		w("var _%s%sNeedsRegeneration = %s(struct {", tname, ctx, tname)
+	}
 
 	for i := range t.NumFields() {
 		st := t.Field(i)
@@ -209,14 +239,25 @@ func AssertStructUnchanged(t *types.Struct, tname, ctx string, it *ImportTracker
 			continue
 		}
 		qname := it.QualifiedName(ft)
+		var tag string
+		if hasTypeParams {
+			tag = t.Tag(i)
+			if tag != "" {
+				tag = "`" + tag + "`"
+			}
+		}
 		if st.Anonymous() {
-			w("\t%s ", fname)
+			w("\t%s %s", fname, tag)
 		} else {
-			w("\t%s %s", fname, qname)
+			w("\t%s %s %s", fname, qname, tag)
 		}
 	}
 
-	w("}{})\n")
+	if hasTypeParams {
+		w("}{})\n}")
+	} else {
+		w("}{})")
+	}
 	return buf.Bytes()
 }
 
@@ -242,10 +283,21 @@ func ContainsPointers(typ types.Type) bool {
 	switch ft := typ.Underlying().(type) {
 	case *types.Array:
 		return ContainsPointers(ft.Elem())
+	case *types.Basic:
+		if ft.Kind() == types.UnsafePointer {
+			return true
+		}
 	case *types.Chan:
 		return true
 	case *types.Interface:
-		return true // a little too broad
+		if ft.Empty() || ft.IsMethodSet() {
+			return true
+		}
+		for i := 0; i < ft.NumEmbeddeds(); i++ {
+			if ContainsPointers(ft.EmbeddedType(i)) {
+				return true
+			}
+		}
 	case *types.Map:
 		return true
 	case *types.Pointer:
@@ -255,6 +307,12 @@ func ContainsPointers(typ types.Type) bool {
 	case *types.Struct:
 		for i := range ft.NumFields() {
 			if ContainsPointers(ft.Field(i).Type()) {
+				return true
+			}
+		}
+	case *types.Union:
+		for i := range ft.Len() {
+			if ContainsPointers(ft.Term(i).Type()) {
 				return true
 			}
 		}
@@ -272,4 +330,45 @@ func IsViewType(typ types.Type) bool {
 		return false
 	}
 	return t.Field(0).Name() == "ж"
+}
+
+// FormatTypeParams formats the specified params and returns two strings:
+//   - constraints are comma-separated type parameters and their constraints in square brackets (e.g. [T any, V constraints.Integer])
+//   - names are comma-separated type parameter names in square brackets (e.g. [T, V])
+//
+// If params is nil or empty, both return values are empty strings.
+func FormatTypeParams(params *types.TypeParamList, it *ImportTracker) (constraints, names string) {
+	if params == nil || params.Len() == 0 {
+		return "", ""
+	}
+	var constraintList, nameList []string
+	for i := range params.Len() {
+		param := params.At(i)
+		name := param.Obj().Name()
+		constraint := it.QualifiedName(param.Constraint())
+		nameList = append(nameList, name)
+		constraintList = append(constraintList, name+" "+constraint)
+	}
+	constraints = "[" + strings.Join(constraintList, ", ") + "]"
+	names = "[" + strings.Join(nameList, ", ") + "]"
+	return constraints, names
+}
+
+// LookupMethod returns the method with the specified name in t, or nil if the method does not exist.
+func LookupMethod(t types.Type, name string) *types.Func {
+	if t, ok := t.(*types.Named); ok {
+		for i := 0; i < t.NumMethods(); i++ {
+			if method := t.Method(i); method.Name() == name {
+				return method
+			}
+		}
+	}
+	if t, ok := t.Underlying().(*types.Interface); ok {
+		for i := 0; i < t.NumMethods(); i++ {
+			if method := t.Method(i); method.Name() == name {
+				return method
+			}
+		}
+	}
+	return nil
 }

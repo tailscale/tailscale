@@ -82,7 +82,7 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, linkSel, dialer, knobs),
+		resolver: resolver.New(logf, linkSel, dialer, health, knobs),
 		os:       oscfg,
 		health:   health,
 		knobs:    knobs,
@@ -538,7 +538,9 @@ func (m *Manager) FlushCaches() error {
 // CleanUp restores the system DNS configuration to its original state
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
-func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
+//
+// health must not be nil
+func CleanUp(logf logger.Logf, netMon *netmon.Monitor, health *health.Tracker, interfaceName string) {
 	oscfg, err := NewOSConfigurator(logf, nil, nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
@@ -546,7 +548,7 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
 	}
 	d := &tsdial.Dialer{Logf: logf}
 	d.SetNetMon(netMon)
-	dns := NewManager(logf, oscfg, nil, d, nil, nil, runtime.GOOS)
+	dns := NewManager(logf, oscfg, health, d, nil, nil, runtime.GOOS)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

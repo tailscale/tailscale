@@ -6,6 +6,7 @@
 package health
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -69,6 +70,9 @@ type Tracker struct {
 
 	warnables   []*Warnable // keys ever set
 	warnableVal map[*Warnable]*warningState
+	// pendingVisibleTimers contains timers for Warnables that are unhealthy, but are
+	// not visible to the user yet, because they haven't been unhealthy for TimeToVisible
+	pendingVisibleTimers map[*Warnable]*time.Timer
 
 	// sysErr maps subsystems to their current error (or nil if the subsystem is healthy)
 	// Deprecated: using Warnables should be preferred
@@ -162,6 +166,7 @@ func Register(w *Warnable) *Warnable {
 	if registeredWarnables[w.Code] != nil {
 		panic(fmt.Sprintf("health: a Warnable with code %q was already registered", w.Code))
 	}
+
 	mak.Set(&registeredWarnables, w.Code, w)
 	return w
 }
@@ -213,9 +218,16 @@ type Warnable struct {
 	// Deprecated: this is only used in one case, and will be removed in a future PR
 	MapDebugFlag string
 
-	// If true, this warnable is related to configuration of networking stack
-	// on the machine that impacts connectivity.
+	// ImpactsConnectivity is whether this Warnable in an unhealthy state will impact the user's
+	// ability to connect to the Internet or other nodes on the tailnet. On platforms where
+	// the client GUI supports a tray icon, the client will display an exclamation mark
+	// on the tray icon when ImpactsConnectivity is set to true and the Warnable is unhealthy.
 	ImpactsConnectivity bool
+
+	// TimeToVisible is the Duration that the Warnable has to be in an unhealthy state before it
+	// should be surfaced as unhealthy to the user. This is used to prevent transient errors from being
+	// displayed to the user.
+	TimeToVisible time.Duration
 }
 
 // StaticMessage returns a function that always returns the input string, to be used in
@@ -252,9 +264,16 @@ func (t *Tracker) nil() bool {
 type Severity string
 
 const (
-	SeverityHigh   Severity = "high"
+	// SeverityHigh is the highest severity level, used for critical errors that need immediate attention.
+	// On platforms where the client GUI can deliver notifications, a SeverityHigh Warnable will trigger
+	// a modal notification.
+	SeverityHigh Severity = "high"
+	// SeverityMedium is used for errors that are important but not critical. This won't trigger a modal
+	// notification, however it will be displayed in a more visible way than a SeverityLow Warnable.
 	SeverityMedium Severity = "medium"
-	SeverityLow    Severity = "low"
+	// SeverityLow is used for less important notices that don't need immediate attention. The user will
+	// have to go to a Settings window, or another "hidden" GUI location to see these messages.
+	SeverityLow Severity = "low"
 )
 
 // Args is a map of Args to string values that can be used to provide parameters regarding
@@ -280,6 +299,15 @@ func (ws *warningState) Equal(other *warningState) bool {
 		return false
 	}
 	return ws.BrokenSince.Equal(other.BrokenSince) && maps.Equal(ws.Args, other.Args)
+}
+
+// IsVisible returns whether the Warnable should be visible to the user, based on the TimeToVisible
+// field of the Warnable and the BrokenSince time when the Warnable became unhealthy.
+func (w *Warnable) IsVisible(ws *warningState) bool {
+	if ws == nil || w.TimeToVisible == 0 {
+		return true
+	}
+	return time.Since(ws.BrokenSince) >= w.TimeToVisible
 }
 
 // SetUnhealthy sets a warningState for the given Warnable with the provided Args, and should be
@@ -318,7 +346,27 @@ func (t *Tracker) setUnhealthyLocked(w *Warnable, args Args) {
 	mak.Set(&t.warnableVal, w, ws)
 	if !ws.Equal(prevWs) {
 		for _, cb := range t.watchers {
-			go cb(w, w.unhealthyState(ws))
+			// If the Warnable has been unhealthy for more than its TimeToVisible, the callback should be
+			// executed immediately. Otherwise, the callback should be enqueued to run once the Warnable
+			// becomes visible.
+			if w.IsVisible(ws) {
+				go cb(w, w.unhealthyState(ws))
+				continue
+			}
+
+			// The time remaining until the Warnable will be visible to the user is the TimeToVisible
+			// minus the time that has already passed since the Warnable became unhealthy.
+			visibleIn := w.TimeToVisible - time.Since(brokenSince)
+			mak.Set(&t.pendingVisibleTimers, w, time.AfterFunc(visibleIn, func() {
+				t.mu.Lock()
+				defer t.mu.Unlock()
+				// Check if the Warnable is still unhealthy, as it could have become healthy between the time
+				// the timer was set for and the time it was executed.
+				if t.warnableVal[w] != nil {
+					go cb(w, w.unhealthyState(ws))
+					delete(t.pendingVisibleTimers, w)
+				}
+			}))
 		}
 	}
 }
@@ -340,6 +388,13 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 	}
 
 	delete(t.warnableVal, w)
+
+	// Stop any pending visiblity timers for this Warnable
+	if canc, ok := t.pendingVisibleTimers[w]; ok {
+		canc.Stop()
+		delete(t.pendingVisibleTimers, w)
+	}
+
 	for _, cb := range t.watchers {
 		go cb(w, nil)
 	}
@@ -852,6 +907,10 @@ func (t *Tracker) Strings() []string {
 func (t *Tracker) stringsLocked() []string {
 	result := []string{}
 	for w, ws := range t.warnableVal {
+		if !w.IsVisible(ws) {
+			// Do not append invisible warnings.
+			continue
+		}
 		if ws.Args == nil {
 			result = append(result, w.Text(Args{}))
 		} else {
@@ -929,8 +988,12 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	}
 
 	if t.lastLoginErr != nil {
+		var errMsg string
+		if !errors.Is(t.lastLoginErr, context.Canceled) {
+			errMsg = t.lastLoginErr.Error()
+		}
 		t.setUnhealthyLocked(LoginStateWarnable, Args{
-			ArgError: t.lastLoginErr.Error(),
+			ArgError: errMsg,
 		})
 		return
 	} else {

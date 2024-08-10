@@ -76,17 +76,30 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 	// own cert verification, as do the same work that it'd do
 	// (with the baked-in fallback root) in the VerifyConnection hook.
 	conf.InsecureSkipVerify = true
-	conf.VerifyConnection = func(cs tls.ConnectionState) error {
+	conf.VerifyConnection = func(cs tls.ConnectionState) (retErr error) {
 		// Perform some health checks on this certificate before we do
 		// any verification.
+		var selfSignedIssuer string
+		if certs := cs.PeerCertificates; len(certs) > 0 && certIsSelfSigned(certs[0]) {
+			selfSignedIssuer = certs[0].Issuer.String()
+		}
 		if ht != nil {
-			if certIsSelfSigned(cs.PeerCertificates[0]) {
-				// Self-signed certs are never valid.
-				ht.SetTLSConnectionError(cs.ServerName, fmt.Errorf("certificate is self-signed"))
-			} else {
-				// Ensure we clear any error state for this ServerName.
-				ht.SetTLSConnectionError(cs.ServerName, nil)
-			}
+			defer func() {
+				if retErr != nil && selfSignedIssuer != "" {
+					// Self-signed certs are never valid.
+					//
+					// TODO(bradfitz): plumb down the selfSignedIssuer as a
+					// structured health warning argument.
+					ht.SetTLSConnectionError(cs.ServerName, fmt.Errorf("likely intercepted connection; certificate is self-signed by %v", selfSignedIssuer))
+				} else {
+					// Ensure we clear any error state for this ServerName.
+					ht.SetTLSConnectionError(cs.ServerName, nil)
+					if selfSignedIssuer != "" {
+						// Log the self-signed issuer, but don't treat it as an error.
+						log.Printf("tlsdial: warning: server cert for %q passed x509 validation but is self-signed by %q", host, selfSignedIssuer)
+					}
+				}
+			}()
 		}
 
 		// First try doing x509 verification with the system's

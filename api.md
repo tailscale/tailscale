@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The Tailscale API documentation has moved to https://tailscale.com/api
+
 # Tailscale API
 
 The Tailscale API documentation is located in **[tailscale/publicapi](./publicapi/readme.md#tailscale-api)**.

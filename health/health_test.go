@@ -162,6 +162,51 @@ func TestWatcher(t *testing.T) {
 	}
 }
 
+// TestWatcherWithTimeToVisible tests that a registered watcher function gets called with the correct
+// Warnable and non-nil/nil UnhealthyState upon setting a Warnable to unhealthy/healthy, but the Warnable
+// has a TimeToVisible set, which means that a watcher should only be notified of an unhealthy state after
+// the TimeToVisible duration has passed.
+func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
+	ht := Tracker{}
+	mw := Register(&Warnable{
+		Code:                "test-warnable-3-secs-to-visible",
+		Title:               "Test Warnable with 3 seconds to visible",
+		Text:                StaticMessage("Hello world"),
+		TimeToVisible:       2 * time.Second,
+		ImpactsConnectivity: true,
+	})
+	defer unregister(mw)
+
+	becameUnhealthy := make(chan struct{})
+	becameHealthy := make(chan struct{})
+
+	watchFunc := func(w *Warnable, us *UnhealthyState) {
+		if w != mw {
+			t.Fatalf("watcherFunc was called, but with an unexpected Warnable: %v, want: %v", w, w)
+		}
+
+		if us != nil {
+			becameUnhealthy <- struct{}{}
+		} else {
+			becameHealthy <- struct{}{}
+		}
+	}
+
+	ht.RegisterWatcher(watchFunc)
+	ht.SetUnhealthy(mw, Args{ArgError: "Hello world"})
+
+	select {
+	case <-becameUnhealthy:
+		// Test failed because the watcher got notified of an unhealthy state
+		t.Fatalf("watcherFunc was called with an unhealthy state")
+	case <-becameHealthy:
+		// Test failed because the watcher got of a healthy state
+		t.Fatalf("watcherFunc was called with a healthy state")
+	case <-time.After(1 * time.Second):
+		// As expected, watcherFunc still had not been called after 1 second
+	}
+}
+
 func TestRegisterWarnablePanicsWithDuplicate(t *testing.T) {
 	w := &Warnable{
 		Code: "test-warnable-1",

@@ -252,8 +252,10 @@ func (m *Map[K, V]) Delete(key K) {
 	delete(m.m, key)
 }
 
-// Range iterates over the map in undefined order calling f for each entry.
+// Range iterates over the map in an undefined order calling f for each entry.
 // Iteration stops if f returns false. Map changes are blocked during iteration.
+// A read lock is held for the entire duration of the iteration.
+// Use the [WithLock] method instead to mutate the map during iteration.
 func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -262,6 +264,15 @@ func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 			return
 		}
 	}
+}
+
+// WithLock calls f with the underlying map.
+// Use of m2 must not escape the duration of this call.
+// The write-lock is held for the entire duration of this call.
+func (m *Map[K, V]) WithLock(f func(m2 map[K]V)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f(m.m)
 }
 
 // Len returns the length of the map.

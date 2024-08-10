@@ -5,16 +5,22 @@ package prober
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"tailscale.com/tstest"
+	"tailscale.com/tsweb"
 )
 
 const (
@@ -290,6 +296,254 @@ func TestOnceMode(t *testing.T) {
 			t.Fatalf("expected %d %s metrics; got %d (error %s)", wantCount, metric, c, err)
 		}
 	}
+}
+
+func TestProberProbeInfo(t *testing.T) {
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+
+	p.Run("probe1", probeInterval, nil, FuncProbe(func(context.Context) error {
+		clk.Advance(500 * time.Millisecond)
+		return nil
+	}))
+	p.Run("probe2", probeInterval, nil, FuncProbe(func(context.Context) error { return fmt.Errorf("error2") }))
+	p.Wait()
+
+	info := p.ProbeInfo()
+	wantInfo := map[string]ProbeInfo{
+		"probe1": {
+			Name:            "probe1",
+			Interval:        probeInterval,
+			Labels:          map[string]string{"class": "", "name": "probe1"},
+			Latency:         500 * time.Millisecond,
+			Result:          true,
+			RecentResults:   []bool{true},
+			RecentLatencies: []time.Duration{500 * time.Millisecond},
+		},
+		"probe2": {
+			Name:            "probe2",
+			Interval:        probeInterval,
+			Labels:          map[string]string{"class": "", "name": "probe2"},
+			Error:           "error2",
+			RecentResults:   []bool{false},
+			RecentLatencies: nil, // no latency for failed probes
+		},
+	}
+
+	if diff := cmp.Diff(wantInfo, info, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End")); diff != "" {
+		t.Fatalf("unexpected ProbeInfo (-want +got):\n%s", diff)
+	}
+}
+
+func TestProbeInfoRecent(t *testing.T) {
+	type probeResult struct {
+		latency time.Duration
+		err     error
+	}
+	tests := []struct {
+		name                    string
+		results                 []probeResult
+		wantProbeInfo           ProbeInfo
+		wantRecentSuccessRatio  float64
+		wantRecentMedianLatency time.Duration
+	}{
+		{
+			name:                    "no_runs",
+			wantProbeInfo:           ProbeInfo{},
+			wantRecentSuccessRatio:  0,
+			wantRecentMedianLatency: 0,
+		},
+		{
+			name:    "single_success",
+			results: []probeResult{{latency: 100 * time.Millisecond, err: nil}},
+			wantProbeInfo: ProbeInfo{
+				Latency:         100 * time.Millisecond,
+				Result:          true,
+				RecentResults:   []bool{true},
+				RecentLatencies: []time.Duration{100 * time.Millisecond},
+			},
+			wantRecentSuccessRatio:  1,
+			wantRecentMedianLatency: 100 * time.Millisecond,
+		},
+		{
+			name:    "single_failure",
+			results: []probeResult{{latency: 100 * time.Millisecond, err: errors.New("error123")}},
+			wantProbeInfo: ProbeInfo{
+				Result:          false,
+				RecentResults:   []bool{false},
+				RecentLatencies: nil,
+				Error:           "error123",
+			},
+			wantRecentSuccessRatio:  0,
+			wantRecentMedianLatency: 0,
+		},
+		{
+			name: "recent_mix",
+			results: []probeResult{
+				{latency: 10 * time.Millisecond, err: errors.New("error1")},
+				{latency: 20 * time.Millisecond, err: nil},
+				{latency: 30 * time.Millisecond, err: nil},
+				{latency: 40 * time.Millisecond, err: errors.New("error4")},
+				{latency: 50 * time.Millisecond, err: nil},
+				{latency: 60 * time.Millisecond, err: nil},
+				{latency: 70 * time.Millisecond, err: errors.New("error7")},
+				{latency: 80 * time.Millisecond, err: nil},
+			},
+			wantProbeInfo: ProbeInfo{
+				Result:        true,
+				Latency:       80 * time.Millisecond,
+				RecentResults: []bool{false, true, true, false, true, true, false, true},
+				RecentLatencies: []time.Duration{
+					20 * time.Millisecond,
+					30 * time.Millisecond,
+					50 * time.Millisecond,
+					60 * time.Millisecond,
+					80 * time.Millisecond,
+				},
+			},
+			wantRecentSuccessRatio:  0.625,
+			wantRecentMedianLatency: 50 * time.Millisecond,
+		},
+		{
+			name: "only_last_10",
+			results: []probeResult{
+				{latency: 10 * time.Millisecond, err: errors.New("old_error")},
+				{latency: 20 * time.Millisecond, err: nil},
+				{latency: 30 * time.Millisecond, err: nil},
+				{latency: 40 * time.Millisecond, err: nil},
+				{latency: 50 * time.Millisecond, err: nil},
+				{latency: 60 * time.Millisecond, err: nil},
+				{latency: 70 * time.Millisecond, err: nil},
+				{latency: 80 * time.Millisecond, err: nil},
+				{latency: 90 * time.Millisecond, err: nil},
+				{latency: 100 * time.Millisecond, err: nil},
+				{latency: 110 * time.Millisecond, err: nil},
+			},
+			wantProbeInfo: ProbeInfo{
+				Result:        true,
+				Latency:       110 * time.Millisecond,
+				RecentResults: []bool{true, true, true, true, true, true, true, true, true, true},
+				RecentLatencies: []time.Duration{
+					20 * time.Millisecond,
+					30 * time.Millisecond,
+					40 * time.Millisecond,
+					50 * time.Millisecond,
+					60 * time.Millisecond,
+					70 * time.Millisecond,
+					80 * time.Millisecond,
+					90 * time.Millisecond,
+					100 * time.Millisecond,
+					110 * time.Millisecond,
+				},
+			},
+			wantRecentSuccessRatio:  1,
+			wantRecentMedianLatency: 70 * time.Millisecond,
+		},
+	}
+
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			probe := newProbe(p, "", probeInterval, nil, FuncProbe(func(context.Context) error { return nil }))
+			for _, r := range tt.results {
+				probe.recordStart()
+				clk.Advance(r.latency)
+				probe.recordEnd(r.err)
+			}
+			info := probe.probeInfoLocked()
+			if diff := cmp.Diff(tt.wantProbeInfo, info, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Interval")); diff != "" {
+				t.Fatalf("unexpected ProbeInfo (-want +got):\n%s", diff)
+			}
+			if got := info.RecentSuccessRatio(); got != tt.wantRecentSuccessRatio {
+				t.Errorf("recentSuccessRatio() = %v, want %v", got, tt.wantRecentSuccessRatio)
+			}
+			if got := info.RecentMedianLatency(); got != tt.wantRecentMedianLatency {
+				t.Errorf("recentMedianLatency() = %v, want %v", got, tt.wantRecentMedianLatency)
+			}
+		})
+	}
+}
+
+func TestProberRunHandler(t *testing.T) {
+	clk := newFakeTime()
+
+	tests := []struct {
+		name                  string
+		probeFunc             func(context.Context) error
+		wantResponseCode      int
+		wantJSONResponse      RunHandlerResponse
+		wantPlaintextResponse string
+	}{
+		{
+			name:             "success",
+			probeFunc:        func(context.Context) error { return nil },
+			wantResponseCode: 200,
+			wantJSONResponse: RunHandlerResponse{
+				ProbeInfo: ProbeInfo{
+					Name:          "success",
+					Interval:      probeInterval,
+					Result:        true,
+					RecentResults: []bool{true, true},
+				},
+				PreviousSuccessRatio: 1,
+			},
+			wantPlaintextResponse: "Probe succeeded",
+		},
+		{
+			name:             "failure",
+			probeFunc:        func(context.Context) error { return fmt.Errorf("error123") },
+			wantResponseCode: 424,
+			wantJSONResponse: RunHandlerResponse{
+				ProbeInfo: ProbeInfo{
+					Name:          "failure",
+					Interval:      probeInterval,
+					Result:        false,
+					Error:         "error123",
+					RecentResults: []bool{false, false},
+				},
+			},
+			wantPlaintextResponse: "Probe failed",
+		},
+	}
+
+	for _, tt := range tests {
+		for _, reqJSON := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s_json-%v", tt.name, reqJSON), func(t *testing.T) {
+				p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+				probe := p.Run(tt.name, probeInterval, nil, FuncProbe(tt.probeFunc))
+				defer probe.Close()
+				<-probe.stopped // wait for the first run.
+
+				w := httptest.NewRecorder()
+
+				req := httptest.NewRequest("GET", "/prober/run/?name="+tt.name, nil)
+				if reqJSON {
+					req.Header.Set("Accept", "application/json")
+				}
+				tsweb.StdHandler(tsweb.ReturnHandlerFunc(p.RunHandler), tsweb.HandlerOptions{}).ServeHTTP(w, req)
+				if w.Result().StatusCode != tt.wantResponseCode {
+					t.Errorf("unexpected response code: got %d, want %d", w.Code, tt.wantResponseCode)
+				}
+
+				if reqJSON {
+					var gotJSON RunHandlerResponse
+					if err := json.Unmarshal(w.Body.Bytes(), &gotJSON); err != nil {
+						t.Fatalf("failed to unmarshal JSON response: %v; body: %s", err, w.Body.String())
+					}
+					if diff := cmp.Diff(tt.wantJSONResponse, gotJSON, cmpopts.IgnoreFields(ProbeInfo{}, "Start", "End", "Labels", "RecentLatencies")); diff != "" {
+						t.Errorf("unexpected JSON response (-want +got):\n%s", diff)
+					}
+				} else {
+					body, _ := io.ReadAll(w.Result().Body)
+					if !strings.Contains(string(body), tt.wantPlaintextResponse) {
+						t.Errorf("unexpected response body: got %q, want to contain %q", body, tt.wantPlaintextResponse)
+					}
+				}
+			})
+		}
+	}
+
 }
 
 type fakeTicker struct {

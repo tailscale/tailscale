@@ -1,21 +1,11 @@
 #!/usr/bin/env sh
-
 #
-# Runs `go build` with flags configured for docker distribution. All
-# it does differently from `go build` is burn git commit and version
-# information into the binaries inside docker, so that we can track down user
-# issues.
-#
-############################################################################
-#
-# WARNING: Tailscale is not yet officially supported in container
-# environments, such as Docker and Kubernetes. Though it should work, we
-# don't regularly test it, and we know there are some feature limitations.
-#
-# See current bugs tagged "containers":
-#    https://github.com/tailscale/tailscale/labels/containers
-#
-############################################################################
+# This script builds Tailscale container images using
+# github.com/tailscale/mkctr.
+# By default the images will be tagged with the current version and git
+# hash of this repository as produced by ./cmd/mkversion.
+# This is the image build mechanim used to build the official Tailscale
+# container images.
 
 set -eu
 
@@ -49,7 +39,7 @@ case "$TARGET" in
         -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
       --base="${BASE}" \
       --tags="${TAGS}" \
-      --gotags="ts_kube" \
+      --gotags="ts_kube,ts_package_container" \
       --repos="${REPOS}" \
       --push="${PUSH}" \
       --target="${PLATFORM}" \

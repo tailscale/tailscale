@@ -51,8 +51,8 @@ import (
 // Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
 //go:generate go run tailscale.com/cmd/k8s-operator/generate staticmanifests
 
-// Generate CRD docs from the yamls
-//go:generate go run fybrik.io/crdoc --resources=./deploy/crds --output=../../k8s-operator/api.md
+// Generate CRD API docs.
+//go:generate go run github.com/elastic/crd-ref-docs --renderer=markdown --source-path=../../k8s-operator/apis/ --config=../../k8s-operator/api-docs-config.yaml --output-path=../../k8s-operator/api.md
 
 func main() {
 	// Required to use our client API. We're fine with the instability since the

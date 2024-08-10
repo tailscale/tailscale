@@ -333,6 +333,9 @@ func (c *Direct) Close() error {
 		}
 	}
 	c.noiseClient = nil
+	if tr, ok := c.httpc.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
 	return nil
 }
 

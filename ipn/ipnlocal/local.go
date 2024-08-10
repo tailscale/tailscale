@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package ipnlocal is the heart of the Tailscale node agent that controls
+// all the other misc pieces of the Tailscale node.
 package ipnlocal
 
 import (
@@ -23,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -57,6 +60,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
+	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -341,6 +345,21 @@ type LocalBackend struct {
 
 	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
 	refreshAutoExitNode bool
+
+	// captiveCtx and captiveCancel are used to control captive portal
+	// detection. They are protected by 'mu' and can be changed during the
+	// lifetime of a LocalBackend.
+	//
+	// captiveCtx will always be non-nil, though it might be a canceled
+	// context. captiveCancel is non-nil if checkCaptivePortalLoop is
+	// running, and is set to nil after being canceled.
+	captiveCtx    context.Context
+	captiveCancel context.CancelFunc
+	// needsCaptiveDetection is a channel that is used to signal either
+	// that captive portal detection is required (sending true) or that the
+	// backend is healthy and captive portal detection is not required
+	// (sending false).
+	needsCaptiveDetection chan bool
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -389,48 +408,49 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		sds.SetDialer(dialer.SystemDial)
 	}
 
-	if sys.InitialConfig != nil {
-		p := pm.CurrentPrefs().AsStruct()
-		mp, err := sys.InitialConfig.Parsed.ToPrefs()
-		if err != nil {
-			return nil, err
-		}
-		p.ApplyEdits(&mp)
-		if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
-			return nil, err
-		}
-	}
-
 	envknob.LogCurrent(logf)
 	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := tstime.StdClock{}
 
+	// Until we transition to a Running state, use a canceled context for
+	// our captive portal detection.
+	captiveCtx, captiveCancel := context.WithCancel(ctx)
+	captiveCancel()
+
 	b := &LocalBackend{
-		ctx:                 ctx,
-		ctxCancel:           cancel,
-		logf:                logf,
-		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		sys:                 sys,
-		health:              sys.HealthTracker(),
-		conf:                sys.InitialConfig,
-		e:                   e,
-		dialer:              dialer,
-		store:               store,
-		pm:                  pm,
-		backendLogID:        logID,
-		state:               ipn.NoState,
-		portpoll:            new(portlist.Poller),
-		em:                  newExpiryManager(logf),
-		gotPortPollRes:      make(chan struct{}),
-		loginFlags:          loginFlags,
-		clock:               clock,
-		selfUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
-		lastSelfUpdateState: ipnstate.UpdateFinished,
+		ctx:                   ctx,
+		ctxCancel:             cancel,
+		logf:                  logf,
+		keyLogf:               logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		sys:                   sys,
+		health:                sys.HealthTracker(),
+		e:                     e,
+		dialer:                dialer,
+		store:                 store,
+		pm:                    pm,
+		backendLogID:          logID,
+		state:                 ipn.NoState,
+		portpoll:              new(portlist.Poller),
+		em:                    newExpiryManager(logf),
+		gotPortPollRes:        make(chan struct{}),
+		loginFlags:            loginFlags,
+		clock:                 clock,
+		selfUpdateProgress:    make([]ipnstate.UpdateProgress, 0),
+		lastSelfUpdateState:   ipnstate.UpdateFinished,
+		captiveCtx:            captiveCtx,
+		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
+		needsCaptiveDetection: make(chan bool),
 	}
 	mConn.SetNetInfoCallback(b.setNetInfo)
+
+	if sys.InitialConfig != nil {
+		if err := b.setConfigLocked(sys.InitialConfig); err != nil {
+			return nil, err
+		}
+	}
 
 	netMon := sys.NetMon.Get()
 	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon, sys.HealthTracker())
@@ -614,9 +634,48 @@ func (b *LocalBackend) ReloadConfig() (ok bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	b.conf = conf
-	// TODO(bradfitz): apply things
+	if err := b.setConfigLocked(conf); err != nil {
+		return false, fmt.Errorf("error setting config: %w", err)
+	}
+
 	return true, nil
+}
+
+func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
+
+	// TODO(irbekrm): notify the relevant components to consume any prefs
+	// updates. Currently only initial configfile settings are applied
+	// immediately.
+	p := b.pm.CurrentPrefs().AsStruct()
+	mp, err := conf.Parsed.ToPrefs()
+	if err != nil {
+		return fmt.Errorf("error parsing config to prefs: %w", err)
+	}
+	p.ApplyEdits(&mp)
+	if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+		return err
+	}
+
+	defer func() {
+		b.conf = conf
+	}()
+
+	if conf.Parsed.StaticEndpoints == nil && (b.conf == nil || b.conf.Parsed.StaticEndpoints == nil) {
+		return nil
+	}
+
+	// Ensure that magicsock conn has the up to date static wireguard
+	// endpoints. Setting the endpoints here triggers an asynchronous update
+	// of the node's advertised endpoints.
+	if b.conf == nil && len(conf.Parsed.StaticEndpoints) != 0 || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
+		ms, ok := b.sys.MagicSock.GetOK()
+		if !ok {
+			b.logf("[unexpected] ReloadConfig: MagicSock not set")
+		} else {
+			ms.SetStaticEndpoints(views.SliceOf(conf.Parsed.StaticEndpoints))
+		}
+	}
+	return nil
 }
 
 var assumeNetworkUpdateForTest = envknob.RegisterBool("TS_ASSUME_NETWORK_UP_FOR_TEST")
@@ -633,6 +692,10 @@ func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	networkUp := b.prevIfState.AnyInterfaceUp()
 	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest() && !assumeNetworkUpdateForTest()))
 }
+
+// captivePortalDetectionInterval is the duration to wait in an unhealthy state with connectivity broken
+// before running captive portal detection.
+const captivePortalDetectionInterval = 2 * time.Second
 
 // linkChange is our network monitor callback, called whenever the network changes.
 func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
@@ -684,6 +747,47 @@ func (b *LocalBackend) onHealthChange(w *health.Warnable, us *health.UnhealthySt
 	b.send(ipn.Notify{
 		Health: state,
 	})
+
+	isConnectivityImpacted := false
+	for _, w := range state.Warnings {
+		// Ignore the captive portal warnable itself.
+		if w.ImpactsConnectivity && w.WarnableCode != captivePortalWarnable.Code {
+			isConnectivityImpacted = true
+			break
+		}
+	}
+
+	// captiveCtx can be changed, and is protected with 'mu'; grab that
+	// before we start our select, below.
+	//
+	// It is guaranteed to be non-nil.
+	b.mu.Lock()
+	ctx := b.captiveCtx
+	b.mu.Unlock()
+
+	// If the context is canceled, we don't need to do anything.
+	if ctx.Err() != nil {
+		return
+	}
+
+	if isConnectivityImpacted {
+		b.logf("health: connectivity impacted; triggering captive portal detection")
+
+		// Ensure that we select on captiveCtx so that we can time out
+		// triggering captive portal detection if the backend is shutdown.
+		select {
+		case b.needsCaptiveDetection <- true:
+		case <-ctx.Done():
+		}
+	} else {
+		// If connectivity is not impacted, we know for sure we're not behind a captive portal,
+		// so drop any warning, and signal that we don't need captive portal detection.
+		b.health.SetHealthy(captivePortalWarnable)
+		select {
+		case b.needsCaptiveDetection <- false:
+		case <-ctx.Done():
+		}
+	}
 }
 
 // Shutdown halts the backend and all its sub-components. The backend
@@ -695,6 +799,11 @@ func (b *LocalBackend) Shutdown() {
 		return
 	}
 	b.shutdownCalled = true
+
+	if b.captiveCancel != nil {
+		b.logf("canceling captive portal context")
+		b.captiveCancel()
+	}
 
 	if b.loginFlags&controlclient.LoginEphemeral != 0 {
 		b.mu.Unlock()
@@ -728,7 +837,9 @@ func (b *LocalBackend) Shutdown() {
 	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {
-		b.sockstatLogger.Shutdown()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		b.sockstatLogger.Shutdown(ctx)
 	}
 	if b.peerAPIServer != nil {
 		b.peerAPIServer.taildrop.Shutdown()
@@ -1189,7 +1300,13 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 
 	prefsChanged := false
 	prefs := b.pm.CurrentPrefs().AsStruct()
-	netMap := b.netMap
+	oldNetMap := b.netMap
+	curNetMap := st.NetMap
+	if curNetMap == nil {
+		// The status didn't include a netmap update, so the old one is still
+		// current.
+		curNetMap = oldNetMap
+	}
 
 	if prefs.ControlURL == "" {
 		// Once we get a message from the control plane, set
@@ -1220,7 +1337,14 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 		prefs.WantRunning = true
 		prefs.LoggedOut = false
 	}
-	if setExitNodeID(prefs, st.NetMap, b.lastSuggestedExitNode) {
+	if shouldAutoExitNode() {
+		// Re-evaluate exit node suggestion in case circumstances have changed.
+		_, err := b.suggestExitNodeLocked(curNetMap)
+		if err != nil && !errors.Is(err, ErrNoPreferredDERP) {
+			b.logf("SetControlClientStatus failed to select auto exit node: %v", err)
+		}
+	}
+	if setExitNodeID(prefs, curNetMap, b.lastSuggestedExitNode) {
 		prefsChanged = true
 	}
 	if applySysPolicy(prefs) {
@@ -1237,8 +1361,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	if prefsChanged {
 		// Prefs will be written out if stale; this is not safe unless locked or cloned.
 		if err := b.pm.SetPrefs(prefs.View(), ipn.NetworkProfile{
-			MagicDNSName: st.NetMap.MagicDNSSuffix(),
-			DomainName:   st.NetMap.DomainName(),
+			MagicDNSName: curNetMap.MagicDNSSuffix(),
+			DomainName:   curNetMap.DomainName(),
 		}); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
@@ -1305,8 +1429,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &p})
 			return
 		}
-		if netMap != nil {
-			diff := st.NetMap.ConciseDiffFrom(netMap)
+		if oldNetMap != nil {
+			diff := st.NetMap.ConciseDiffFrom(oldNetMap)
 			if strings.TrimSpace(diff) == "" {
 				b.logf("[v1] netmap diff: (none)")
 			} else {
@@ -2045,6 +2169,122 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	if b.sshServer != nil {
 		go b.sshServer.OnPolicyChange()
 	}
+}
+
+// captivePortalWarnable is a Warnable which is set to an unhealthy state when a captive portal is detected.
+var captivePortalWarnable = health.Register(&health.Warnable{
+	Code:  "captive-portal-detected",
+	Title: "Captive portal detected",
+	// High severity, because captive portals block all traffic and require user intervention.
+	Severity:            health.SeverityHigh,
+	Text:                health.StaticMessage("This network requires you to log in using your web browser."),
+	ImpactsConnectivity: true,
+})
+
+func (b *LocalBackend) checkCaptivePortalLoop(ctx context.Context) {
+	var tmr *time.Timer
+
+	maybeStartTimer := func() {
+		// If there's an existing timer, nothing to do; just continue
+		// waiting for it to expire. Otherwise, create a new timer.
+		if tmr == nil {
+			tmr = time.NewTimer(captivePortalDetectionInterval)
+		}
+	}
+	maybeStopTimer := func() {
+		if tmr == nil {
+			return
+		}
+		if !tmr.Stop() {
+			<-tmr.C
+		}
+		tmr = nil
+	}
+
+	for {
+		if ctx.Err() != nil {
+			maybeStopTimer()
+			return
+		}
+
+		// First, see if we have a signal on our "healthy" channel, which
+		// takes priority over an existing timer. Because a select is
+		// nondeterministic, we explicitly check this channel before
+		// entering the main select below, so that we're guaranteed to
+		// stop the timer before starting captive portal detection.
+		select {
+		case needsCaptiveDetection := <-b.needsCaptiveDetection:
+			if needsCaptiveDetection {
+				maybeStartTimer()
+			} else {
+				maybeStopTimer()
+			}
+		default:
+		}
+
+		var timerChan <-chan time.Time
+		if tmr != nil {
+			timerChan = tmr.C
+		}
+		select {
+		case <-ctx.Done():
+			// All done; stop the timer and then exit.
+			maybeStopTimer()
+			return
+		case <-timerChan:
+			// Kick off captive portal check
+			b.performCaptiveDetection()
+			// nil out timer to force recreation
+			tmr = nil
+		case needsCaptiveDetection := <-b.needsCaptiveDetection:
+			if needsCaptiveDetection {
+				maybeStartTimer()
+			} else {
+				// Healthy; cancel any existing timer
+				maybeStopTimer()
+			}
+		}
+	}
+}
+
+// performCaptiveDetection checks if captive portal detection is enabled via controlknob. If so, it runs
+// the detection and updates the Warnable accordingly.
+func (b *LocalBackend) performCaptiveDetection() {
+	if !b.shouldRunCaptivePortalDetection() {
+		return
+	}
+
+	d := captivedetection.NewDetector(b.logf)
+	var dm *tailcfg.DERPMap
+	b.mu.Lock()
+	if b.netMap != nil {
+		dm = b.netMap.DERPMap
+	}
+	preferredDERP := 0
+	if b.hostinfo != nil {
+		if b.hostinfo.NetInfo != nil {
+			preferredDERP = b.hostinfo.NetInfo.PreferredDERP
+		}
+	}
+	ctx := b.ctx
+	netMon := b.NetMon()
+	b.mu.Unlock()
+	found := d.Detect(ctx, netMon, dm, preferredDERP)
+	if found {
+		b.health.SetUnhealthy(captivePortalWarnable, health.Args{})
+	} else {
+		b.health.SetHealthy(captivePortalWarnable)
+	}
+}
+
+// shouldRunCaptivePortalDetection reports whether captive portal detection
+// should be run. It is enabled by default, but can be disabled via a control
+// knob. It is also only run when the user explicitly wants the backend to be
+// running.
+func (b *LocalBackend) shouldRunCaptivePortalDetection() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.ControlKnobs().DisableCaptivePortalDetection.Load() && b.pm.prefs.WantRunning()
 }
 
 // packetFilterPermitsUnlockedNodes reports any peer in peers with the
@@ -3541,7 +3781,7 @@ func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c
 			return nil
 		}, opts
 	}
-	if handler := b.tcpHandlerForServe(dst.Port(), src); handler != nil {
+	if handler := b.tcpHandlerForServe(dst.Port(), src, nil); handler != nil {
 		return handler, opts
 	}
 	return nil, nil
@@ -4440,9 +4680,27 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	if newState == ipn.Running {
 		b.authURL = ""
 		b.authURLTime = time.Time{}
+
+		// Start a captive portal detection loop if none has been
+		// started. Create a new context if none is present, since it
+		// can be shut down if we transition away from Running.
+		if b.captiveCancel == nil {
+			b.captiveCtx, b.captiveCancel = context.WithCancel(b.ctx)
+			go b.checkCaptivePortalLoop(b.captiveCtx)
+		}
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
+
+		// Stop any existing captive portal detection loop.
+		if b.captiveCancel != nil {
+			b.captiveCancel()
+			b.captiveCancel = nil
+
+			// NOTE: don't set captiveCtx to nil here, to ensure
+			// that we always have a (canceled) context to wait on
+			// in onHealthChange.
+		}
 	}
 	b.pauseOrResumeControlClientLocked()
 
@@ -4865,8 +5123,32 @@ func (b *LocalBackend) Logout(ctx context.Context) error {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
-	refresh := b.refreshAutoExitNode
-	b.refreshAutoExitNode = false
+	var refresh bool
+	if b.MagicConn().DERPs() > 0 || testenv.InTest() {
+		// When b.refreshAutoExitNode is set, we recently observed a link change
+		// that indicates we have switched networks. After switching networks,
+		// the previously selected automatic exit node is no longer as likely
+		// to be a good choice and connectivity will already be broken due to
+		// the network switch. Therefore, it is a good time to switch to a new
+		// exit node because the network is already disrupted.
+		//
+		// Unfortunately, at the time of the link change, no information is
+		// known about the new network's latency or location, so the necessary
+		// details are not available to make a new choice. Instead, it sets
+		// b.refreshAutoExitNode to signal that a new decision should be made
+		// when we have an updated netcheck report. ni is that updated report.
+		//
+		// However, during testing we observed that often the first ni is
+		// inconclusive because it was running during the link change or the
+		// link was otherwise not stable yet. b.MagicConn().updateEndpoints()
+		// can detect when the netcheck failed and trigger a rebind, but the
+		// required information is not available here, and moderate additional
+		// plumbing is required to pass that in. Instead, checking for an active
+		// DERP link offers an easy approximation. We will continue to refine
+		// this over time.
+		refresh = b.refreshAutoExitNode
+		b.refreshAutoExitNode = false
+	}
 	b.mu.Unlock()
 
 	if cc == nil {
@@ -4889,7 +5171,7 @@ func (b *LocalBackend) setAutoExitNodeIDLockedOnEntry(unlock unlockOnce) {
 		return
 	}
 	prefsClone := prefs.AsStruct()
-	newSuggestion, err := b.suggestExitNodeLocked()
+	newSuggestion, err := b.suggestExitNodeLocked(nil)
 	if err != nil {
 		b.logf("setAutoExitNodeID: %v", err)
 		return
@@ -6571,7 +6853,6 @@ func mayDeref[T any](p *T) (v T) {
 }
 
 var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
-var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try again later")
 
 // suggestExitNodeLocked computes a suggestion based on the current netmap and last netcheck report. If
 // there are multiple equally good options, one is selected at random, so the result is not stable. To be
@@ -6580,10 +6861,17 @@ var ErrCannotSuggestExitNode = errors.New("unable to suggest an exit node, try a
 // Currently, peers with a DERP home are preferred over those without (typically this means Mullvad).
 // Peers are selected based on having a DERP home that is the lowest latency to this device. For peers
 // without a DERP home, we look for geographic proximity to this device's DERP home.
+//
+// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated).
+// If netMap is nil, then b.netMap is used.
+//
 // b.mu.lock() must be held.
-func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
+func (b *LocalBackend) suggestExitNodeLocked(netMap *netmap.NetworkMap) (response apitype.ExitNodeSuggestionResponse, err error) {
+	// netMap is an optional netmap to use that overrides b.netMap (needed for SetControlClientStatus before b.netMap is updated). If netMap is nil, then b.netMap is used.
+	if netMap == nil {
+		netMap = b.netMap
+	}
 	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
-	netMap := b.netMap
 	prevSuggestion := b.lastSuggestedExitNode
 
 	res, err := suggestExitNode(lastReport, netMap, prevSuggestion, randomRegion, randomNode, getAllowedSuggestions())
@@ -6597,7 +6885,7 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.suggestExitNodeLocked()
+	return b.suggestExitNodeLocked(nil)
 }
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.

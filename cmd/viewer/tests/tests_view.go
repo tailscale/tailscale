@@ -10,10 +10,11 @@ import (
 	"errors"
 	"net/netip"
 
+	"golang.org/x/exp/constraints"
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers
 
 // View returns a readonly view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
@@ -221,15 +222,15 @@ func (v MapView) SlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrs, v
 func (v MapView) StructWithoutPtrKey() views.Map[StructWithoutPtrs, int] {
 	return views.MapOf(v.ж.StructWithoutPtrKey)
 }
-func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported") }
-func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
-func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
 
 func (v MapView) StructWithPtr() views.MapFn[string, StructWithPtrs, StructWithPtrsView] {
 	return views.MapFnOf(v.ж.StructWithPtr, func(t StructWithPtrs) StructWithPtrsView {
 		return t.View()
 	})
 }
+func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported") }
+func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
+func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MapViewNeedsRegeneration = Map(struct {
@@ -241,10 +242,10 @@ var _MapViewNeedsRegeneration = Map(struct {
 	SlicesWithPtrs      map[string][]*StructWithPtrs
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int
+	StructWithPtr       map[string]StructWithPtrs
 	SliceIntPtr         map[string][]*int
 	PointerKey          map[*string]int
 	StructWithPtrKey    map[StructWithPtrs]int
-	StructWithPtr       map[string]StructWithPtrs
 }{})
 
 // View returns a readonly view of StructWithSlices.
@@ -301,24 +302,24 @@ func (v StructWithSlicesView) ValuePointers() views.SliceView[*StructWithoutPtrs
 func (v StructWithSlicesView) StructPointers() views.SliceView[*StructWithPtrs, StructWithPtrsView] {
 	return views.SliceOfViews[*StructWithPtrs, StructWithPtrsView](v.ж.StructPointers)
 }
-func (v StructWithSlicesView) Structs() StructWithPtrs    { panic("unsupported") }
-func (v StructWithSlicesView) Ints() *int                 { panic("unsupported") }
 func (v StructWithSlicesView) Slice() views.Slice[string] { return views.SliceOf(v.ж.Slice) }
 func (v StructWithSlicesView) Prefixes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.Prefixes)
 }
 func (v StructWithSlicesView) Data() views.ByteSlice[[]byte] { return views.ByteSliceOf(v.ж.Data) }
+func (v StructWithSlicesView) Structs() StructWithPtrs       { panic("unsupported") }
+func (v StructWithSlicesView) Ints() *int                    { panic("unsupported") }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Values         []StructWithoutPtrs
 	ValuePointers  []*StructWithoutPtrs
 	StructPointers []*StructWithPtrs
-	Structs        []StructWithPtrs
-	Ints           []*int
 	Slice          []string
 	Prefixes       []netip.Prefix
 	Data           []byte
+	Structs        []StructWithPtrs
+	Ints           []*int
 }{})
 
 // View returns a readonly view of StructWithEmbedded.
@@ -375,4 +376,295 @@ func (v StructWithEmbeddedView) StructWithSlices() StructWithSlicesView {
 var _StructWithEmbeddedViewNeedsRegeneration = StructWithEmbedded(struct {
 	A *StructWithPtrs
 	StructWithSlices
+}{})
+
+// View returns a readonly view of GenericIntStruct.
+func (p *GenericIntStruct[T]) View() GenericIntStructView[T] {
+	return GenericIntStructView[T]{ж: p}
+}
+
+// GenericIntStructView[T] provides a read-only view over GenericIntStruct[T].
+//
+// Its methods should only be called if `Valid()` returns true.
+type GenericIntStructView[T constraints.Integer] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *GenericIntStruct[T]
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v GenericIntStructView[T]) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v GenericIntStructView[T]) AsStruct() *GenericIntStruct[T] {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v GenericIntStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *GenericIntStructView[T]) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x GenericIntStruct[T]
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v GenericIntStructView[T]) Value() T { return v.ж.Value }
+func (v GenericIntStructView[T]) Pointer() *T {
+	if v.ж.Pointer == nil {
+		return nil
+	}
+	x := *v.ж.Pointer
+	return &x
+}
+
+func (v GenericIntStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
+
+func (v GenericIntStructView[T]) Map() views.Map[string, T]  { return views.MapOf(v.ж.Map) }
+func (v GenericIntStructView[T]) PtrSlice() *T               { panic("unsupported") }
+func (v GenericIntStructView[T]) PtrKeyMap() map[*T]string   { panic("unsupported") }
+func (v GenericIntStructView[T]) PtrValueMap() map[string]*T { panic("unsupported") }
+func (v GenericIntStructView[T]) SliceMap() map[string][]T   { panic("unsupported") }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericIntStructViewNeedsRegeneration[T constraints.Integer](GenericIntStruct[T]) {
+	_GenericIntStructViewNeedsRegeneration(struct {
+		Value       T
+		Pointer     *T
+		Slice       []T
+		Map         map[string]T
+		PtrSlice    []*T
+		PtrKeyMap   map[*T]string `json:"-"`
+		PtrValueMap map[string]*T
+		SliceMap    map[string][]T
+	}{})
+}
+
+// View returns a readonly view of GenericNoPtrsStruct.
+func (p *GenericNoPtrsStruct[T]) View() GenericNoPtrsStructView[T] {
+	return GenericNoPtrsStructView[T]{ж: p}
+}
+
+// GenericNoPtrsStructView[T] provides a read-only view over GenericNoPtrsStruct[T].
+//
+// Its methods should only be called if `Valid()` returns true.
+type GenericNoPtrsStructView[T StructWithoutPtrs | netip.Prefix | BasicType] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *GenericNoPtrsStruct[T]
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v GenericNoPtrsStructView[T]) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v GenericNoPtrsStructView[T]) AsStruct() *GenericNoPtrsStruct[T] {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v GenericNoPtrsStructView[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *GenericNoPtrsStructView[T]) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x GenericNoPtrsStruct[T]
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v GenericNoPtrsStructView[T]) Value() T { return v.ж.Value }
+func (v GenericNoPtrsStructView[T]) Pointer() *T {
+	if v.ж.Pointer == nil {
+		return nil
+	}
+	x := *v.ж.Pointer
+	return &x
+}
+
+func (v GenericNoPtrsStructView[T]) Slice() views.Slice[T] { return views.SliceOf(v.ж.Slice) }
+
+func (v GenericNoPtrsStructView[T]) Map() views.Map[string, T]  { return views.MapOf(v.ж.Map) }
+func (v GenericNoPtrsStructView[T]) PtrSlice() *T               { panic("unsupported") }
+func (v GenericNoPtrsStructView[T]) PtrKeyMap() map[*T]string   { panic("unsupported") }
+func (v GenericNoPtrsStructView[T]) PtrValueMap() map[string]*T { panic("unsupported") }
+func (v GenericNoPtrsStructView[T]) SliceMap() map[string][]T   { panic("unsupported") }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericNoPtrsStructViewNeedsRegeneration[T StructWithoutPtrs | netip.Prefix | BasicType](GenericNoPtrsStruct[T]) {
+	_GenericNoPtrsStructViewNeedsRegeneration(struct {
+		Value       T
+		Pointer     *T
+		Slice       []T
+		Map         map[string]T
+		PtrSlice    []*T
+		PtrKeyMap   map[*T]string `json:"-"`
+		PtrValueMap map[string]*T
+		SliceMap    map[string][]T
+	}{})
+}
+
+// View returns a readonly view of GenericCloneableStruct.
+func (p *GenericCloneableStruct[T, V]) View() GenericCloneableStructView[T, V] {
+	return GenericCloneableStructView[T, V]{ж: p}
+}
+
+// GenericCloneableStructView[T, V] provides a read-only view over GenericCloneableStruct[T, V].
+//
+// Its methods should only be called if `Valid()` returns true.
+type GenericCloneableStructView[T views.ViewCloner[T, V], V views.StructView[T]] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *GenericCloneableStruct[T, V]
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v GenericCloneableStructView[T, V]) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v GenericCloneableStructView[T, V]) AsStruct() *GenericCloneableStruct[T, V] {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v GenericCloneableStructView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *GenericCloneableStructView[T, V]) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x GenericCloneableStruct[T, V]
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v GenericCloneableStructView[T, V]) Value() V { return v.ж.Value.View() }
+func (v GenericCloneableStructView[T, V]) Slice() views.SliceView[T, V] {
+	return views.SliceOfViews[T, V](v.ж.Slice)
+}
+
+func (v GenericCloneableStructView[T, V]) Map() views.MapFn[string, T, V] {
+	return views.MapFnOf(v.ж.Map, func(t T) V {
+		return t.View()
+	})
+}
+func (v GenericCloneableStructView[T, V]) Pointer() map[string]T      { panic("unsupported") }
+func (v GenericCloneableStructView[T, V]) PtrSlice() *T               { panic("unsupported") }
+func (v GenericCloneableStructView[T, V]) PtrKeyMap() map[*T]string   { panic("unsupported") }
+func (v GenericCloneableStructView[T, V]) PtrValueMap() map[string]*T { panic("unsupported") }
+func (v GenericCloneableStructView[T, V]) SliceMap() map[string][]T   { panic("unsupported") }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericCloneableStructViewNeedsRegeneration[T views.ViewCloner[T, V], V views.StructView[T]](GenericCloneableStruct[T, V]) {
+	_GenericCloneableStructViewNeedsRegeneration(struct {
+		Value       T
+		Slice       []T
+		Map         map[string]T
+		Pointer     *T
+		PtrSlice    []*T
+		PtrKeyMap   map[*T]string `json:"-"`
+		PtrValueMap map[string]*T
+		SliceMap    map[string][]T
+	}{})
+}
+
+// View returns a readonly view of StructWithContainers.
+func (p *StructWithContainers) View() StructWithContainersView {
+	return StructWithContainersView{ж: p}
+}
+
+// StructWithContainersView provides a read-only view over StructWithContainers.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithContainersView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithContainers
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v StructWithContainersView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithContainersView) AsStruct() *StructWithContainers {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v StructWithContainersView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *StructWithContainersView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithContainers
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithContainersView) IntContainer() Container[int] { return v.ж.IntContainer }
+func (v StructWithContainersView) CloneableContainer() ContainerView[*StructWithPtrs, StructWithPtrsView] {
+	return ContainerViewOf(&v.ж.CloneableContainer)
+}
+func (v StructWithContainersView) BasicGenericContainer() Container[GenericBasicStruct[int]] {
+	return v.ж.BasicGenericContainer
+}
+func (v StructWithContainersView) ClonableGenericContainer() ContainerView[*GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
+	return ContainerViewOf(&v.ж.ClonableGenericContainer)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithContainersViewNeedsRegeneration = StructWithContainers(struct {
+	IntContainer             Container[int]
+	CloneableContainer       Container[*StructWithPtrs]
+	BasicGenericContainer    Container[GenericBasicStruct[int]]
+	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
 }{})

@@ -27,6 +27,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version"
+	"tailscale.com/version/distro"
 )
 
 var started = time.Now()
@@ -462,3 +463,15 @@ func IsSELinuxEnforcing() bool {
 	out, _ := exec.Command("getenforce").Output()
 	return string(bytes.TrimSpace(out)) == "Enforcing"
 }
+
+// IsNATLabGuestVM reports whether the current host is a NAT Lab guest VM.
+func IsNATLabGuestVM() bool {
+	if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy {
+		cmdLine, _ := os.ReadFile("/proc/cmdline")
+		return bytes.Contains(cmdLine, []byte("tailscale-tta=1"))
+	}
+	return false
+}
+
+// NAT Lab VMs have a unique MAC address prefix.
+// See

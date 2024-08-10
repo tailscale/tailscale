@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package tailcfg contains types used by the Tailscale protocol with between
+// the node and the coordination server.
 package tailcfg
 
 //go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
@@ -141,7 +143,11 @@ type CapabilityVersion int
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
 //   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
-const CurrentCapabilityVersion CapabilityVersion = 100
+//   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
+//   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
+//   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
+//   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
+const CurrentCapabilityVersion CapabilityVersion = 104
 
 type StableID string
 
@@ -1183,6 +1189,7 @@ const (
 	EndpointSTUN           = EndpointType(2)
 	EndpointPortmapped     = EndpointType(3)
 	EndpointSTUN4LocalPort = EndpointType(4) // hard NAT: STUN'ed IPv4 address + local fixed port
+	EndpointExplicitConf   = EndpointType(5) // explicitly configured (routing to be done by client)
 )
 
 func (et EndpointType) String() string {
@@ -1197,6 +1204,8 @@ func (et EndpointType) String() string {
 		return "portmap"
 	case EndpointSTUN4LocalPort:
 		return "stun4localport"
+	case EndpointExplicitConf:
+		return "explicitconf"
 	}
 	return "other"
 }
@@ -2202,10 +2211,6 @@ const (
 	// always giving WireGuard the full netmap, even for idle peers.
 	NodeAttrDebugDisableWGTrim NodeCapability = "debug-no-wg-trim"
 
-	// NodeAttrDebugDisableDRPO disables the DERP Return Path Optimization.
-	// See Issue 150.
-	NodeAttrDebugDisableDRPO NodeCapability = "debug-disable-drpo"
-
 	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
@@ -2320,6 +2325,14 @@ const (
 	// We began creating this rule on 2024-06-14, and this node attribute
 	// allows us to disable the new behavior remotely if needed.
 	NodeAttrDisableLocalDNSOverrideViaNRPT NodeCapability = "disable-local-dns-override-via-nrpt"
+
+	// NodeAttrDisableMagicSockCryptoRouting disables the use of the
+	// magicsock cryptorouting hook. See tailscale/corp#20732.
+	NodeAttrDisableMagicSockCryptoRouting NodeCapability = "disable-magicsock-crypto-routing"
+
+	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
+	// automatically when the network state changes.
+	NodeAttrDisableCaptivePortalDetection NodeCapability = "disable-captive-portal-detection"
 )
 
 // SetDNSRequest is a request to add a DNS record.

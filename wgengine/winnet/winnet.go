@@ -3,6 +3,7 @@
 
 //go:build windows
 
+// Package winnet contains Windows-specific networking code.
 package winnet
 
 import (

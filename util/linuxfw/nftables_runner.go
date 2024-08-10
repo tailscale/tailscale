@@ -592,9 +592,23 @@ func New(logf logger.Logf, prefHint string) (NetfilterRunner, error) {
 	mode := detectFirewallMode(logf, prefHint)
 	switch mode {
 	case FirewallModeIPTables:
-		return newIPTablesRunner(logf)
+		// Note that we don't simply return an newIPTablesRunner here because it
+		// would return a `nil` iptablesRunner which is different from returning
+		// a nil NetfilterRunner.
+		ipr, err := newIPTablesRunner(logf)
+		if err != nil {
+			return nil, err
+		}
+		return ipr, nil
 	case FirewallModeNfTables:
-		return newNfTablesRunner(logf)
+		// Note that we don't simply return an newNfTablesRunner here because it
+		// would return a `nil` nftablesRunner which is different from returning
+		// a nil NetfilterRunner.
+		nfr, err := newNfTablesRunner(logf)
+		if err != nil {
+			return nil, err
+		}
+		return nfr, nil
 	default:
 		return nil, fmt.Errorf("unknown firewall mode %v", mode)
 	}

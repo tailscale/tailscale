@@ -7,9 +7,13 @@ package tests
 import (
 	"fmt"
 	"net/netip"
+
+	"golang.org/x/exp/constraints"
+	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded --clone-only-type=OnlyGetClone
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers --clone-only-type=OnlyGetClone
 
 type StructWithoutPtrs struct {
 	Int int
@@ -25,12 +29,12 @@ type Map struct {
 	SlicesWithPtrs      map[string][]*StructWithPtrs
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int `json:"-"`
+	StructWithPtr       map[string]StructWithPtrs
 
 	// Unsupported views.
 	SliceIntPtr      map[string][]*int
 	PointerKey       map[*string]int        `json:"-"`
 	StructWithPtrKey map[StructWithPtrs]int `json:"-"`
-	StructWithPtr    map[string]StructWithPtrs
 }
 
 type StructWithPtrs struct {
@@ -50,12 +54,14 @@ type StructWithSlices struct {
 	Values         []StructWithoutPtrs
 	ValuePointers  []*StructWithoutPtrs
 	StructPointers []*StructWithPtrs
-	Structs        []StructWithPtrs
-	Ints           []*int
 
 	Slice    []string
 	Prefixes []netip.Prefix
 	Data     []byte
+
+	// Unsupported views.
+	Structs []StructWithPtrs
+	Ints    []*int
 }
 
 type OnlyGetClone struct {
@@ -65,4 +71,94 @@ type OnlyGetClone struct {
 type StructWithEmbedded struct {
 	A *StructWithPtrs
 	StructWithSlices
+}
+
+type GenericIntStruct[T constraints.Integer] struct {
+	Value   T
+	Pointer *T
+	Slice   []T
+	Map     map[string]T
+
+	// Unsupported views.
+	PtrSlice    []*T
+	PtrKeyMap   map[*T]string `json:"-"`
+	PtrValueMap map[string]*T
+	SliceMap    map[string][]T
+}
+
+type BasicType interface {
+	~bool | constraints.Integer | constraints.Float | constraints.Complex | ~string
+}
+
+type GenericNoPtrsStruct[T StructWithoutPtrs | netip.Prefix | BasicType] struct {
+	Value   T
+	Pointer *T
+	Slice   []T
+	Map     map[string]T
+
+	// Unsupported views.
+	PtrSlice    []*T
+	PtrKeyMap   map[*T]string `json:"-"`
+	PtrValueMap map[string]*T
+	SliceMap    map[string][]T
+}
+
+type GenericCloneableStruct[T views.ViewCloner[T, V], V views.StructView[T]] struct {
+	Value T
+	Slice []T
+	Map   map[string]T
+
+	// Unsupported views.
+	Pointer     *T
+	PtrSlice    []*T
+	PtrKeyMap   map[*T]string `json:"-"`
+	PtrValueMap map[string]*T
+	SliceMap    map[string][]T
+}
+
+// Container is a pre-defined container type, such as a collection, an optional
+// value or a generic wrapper.
+type Container[T any] struct {
+	Item T
+}
+
+func (c *Container[T]) Clone() *Container[T] {
+	if c == nil {
+		return nil
+	}
+	if cloner, ok := any(c.Item).(views.Cloner[T]); ok {
+		return &Container[T]{cloner.Clone()}
+	}
+	if !views.ContainsPointers[T]() {
+		return ptr.To(*c)
+	}
+	panic(fmt.Errorf("%T contains pointers, but is not cloneable", c.Item))
+}
+
+// ContainerView is a pre-defined readonly view of a Container[T].
+type ContainerView[T views.ViewCloner[T, V], V views.StructView[T]] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *Container[T]
+}
+
+func (cv ContainerView[T, V]) Item() V {
+	return cv.ж.Item.View()
+}
+
+func ContainerViewOf[T views.ViewCloner[T, V], V views.StructView[T]](c *Container[T]) ContainerView[T, V] {
+	return ContainerView[T, V]{c}
+}
+
+type GenericBasicStruct[T BasicType] struct {
+	Value T
+}
+
+type StructWithContainers struct {
+	IntContainer             Container[int]
+	CloneableContainer       Container[*StructWithPtrs]
+	BasicGenericContainer    Container[GenericBasicStruct[int]]
+	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
 }

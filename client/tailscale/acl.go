@@ -41,6 +41,16 @@ type ACLAutoApprovers struct {
 	ExitNode []string            `json:"exitnode,omitempty"`
 }
 
+// NodeAttrGrant defines additional string attributes that apply to specific devices.
+type NodeAttrGrant struct {
+	// Target specifies which nodes the attributes apply to. The nodes can be a
+	// tag (tag:server), user (alice@example.com), group (group:kids), or *.
+	Target []string `json:"target,omitempty"`
+
+	// Attr are the attributes to set on Target(s).
+	Attr []string `json:"attr,omitempty"`
+}
+
 // ACLDetails contains all the details for an ACL.
 type ACLDetails struct {
 	Tests         []ACLTest           `json:"tests,omitempty"`
@@ -48,6 +58,7 @@ type ACLDetails struct {
 	Groups        map[string][]string `json:"groups,omitempty"`
 	TagOwners     map[string][]string `json:"tagowners,omitempty"`
 	Hosts         map[string]string   `json:"hosts,omitempty"`
+  NodeAttrs     []NodeAttrGrant     `json:"nodeAttrs,omitempty"`
 	AutoApprovers ACLAutoApprovers    `json:"autoapprovers,omitempty"`
 }
 
@@ -155,7 +166,12 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 // ACLTestFailureSummary specifies the JSON format sent to the
 // JavaScript client to be rendered in the HTML.
 type ACLTestFailureSummary struct {
-	User     string   `json:"user,omitempty"`
+	// User is the source ("src") value of the ACL test that failed.
+	// The name "user" is a legacy holdover from the original naming and
+	// is kept for compatibility but it may also contain any value
+	// that's valid in a ACL test "src" field.
+	User string `json:"user,omitempty"`
+
 	Errors   []string `json:"errors,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -275,6 +291,9 @@ type UserRuleMatch struct {
 	Users      []string `json:"users"`
 	Ports      []string `json:"ports"`
 	LineNumber int      `json:"lineNumber"`
+	// Via is the list of targets through which Users can access Ports.
+	// See https://tailscale.com/kb/1378/via for more information.
+	Via []string `json:"via,omitempty"`
 
 	// Postures is a list of posture policies that are
 	// associated with this match. The rules can be looked

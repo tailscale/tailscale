@@ -88,7 +88,7 @@ fi
 # case, cmd/cloner invokes go with GO111MODULE=off at some stage.
 #
 # Anyway, build gocross in a stripped down universe.
-gocross_path="gocross"
+gocross_path="./gocross"
 gocross_ok=0
 wantver="$(git rev-parse HEAD)"
 if [[ -x "$gocross_path" ]]; then

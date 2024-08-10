@@ -9,7 +9,9 @@ import (
 	"maps"
 	"net/netip"
 
+	"golang.org/x/exp/constraints"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 )
 
 // Clone makes a deep copy of StructWithPtrs.
@@ -71,13 +73,21 @@ func (src *Map) Clone() *Map {
 	if dst.StructPtrWithPtr != nil {
 		dst.StructPtrWithPtr = map[string]*StructWithPtrs{}
 		for k, v := range src.StructPtrWithPtr {
-			dst.StructPtrWithPtr[k] = v.Clone()
+			if v == nil {
+				dst.StructPtrWithPtr[k] = nil
+			} else {
+				dst.StructPtrWithPtr[k] = v.Clone()
+			}
 		}
 	}
 	if dst.StructPtrWithoutPtr != nil {
 		dst.StructPtrWithoutPtr = map[string]*StructWithoutPtrs{}
 		for k, v := range src.StructPtrWithoutPtr {
-			dst.StructPtrWithoutPtr[k] = v.Clone()
+			if v == nil {
+				dst.StructPtrWithoutPtr[k] = nil
+			} else {
+				dst.StructPtrWithoutPtr[k] = ptr.To(*v)
+			}
 		}
 	}
 	dst.StructWithoutPtr = maps.Clone(src.StructWithoutPtr)
@@ -94,6 +104,12 @@ func (src *Map) Clone() *Map {
 		}
 	}
 	dst.StructWithoutPtrKey = maps.Clone(src.StructWithoutPtrKey)
+	if dst.StructWithPtr != nil {
+		dst.StructWithPtr = map[string]StructWithPtrs{}
+		for k, v := range src.StructWithPtr {
+			dst.StructWithPtr[k] = *(v.Clone())
+		}
+	}
 	if dst.SliceIntPtr != nil {
 		dst.SliceIntPtr = map[string][]*int{}
 		for k := range src.SliceIntPtr {
@@ -102,12 +118,6 @@ func (src *Map) Clone() *Map {
 	}
 	dst.PointerKey = maps.Clone(src.PointerKey)
 	dst.StructWithPtrKey = maps.Clone(src.StructWithPtrKey)
-	if dst.StructWithPtr != nil {
-		dst.StructWithPtr = map[string]StructWithPtrs{}
-		for k, v := range src.StructWithPtr {
-			dst.StructWithPtr[k] = *(v.Clone())
-		}
-	}
 	return dst
 }
 
@@ -121,10 +131,10 @@ var _MapCloneNeedsRegeneration = Map(struct {
 	SlicesWithPtrs      map[string][]*StructWithPtrs
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int
+	StructWithPtr       map[string]StructWithPtrs
 	SliceIntPtr         map[string][]*int
 	PointerKey          map[*string]int
 	StructWithPtrKey    map[StructWithPtrs]int
-	StructWithPtr       map[string]StructWithPtrs
 }{})
 
 // Clone makes a deep copy of StructWithSlices.
@@ -139,15 +149,26 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 	if src.ValuePointers != nil {
 		dst.ValuePointers = make([]*StructWithoutPtrs, len(src.ValuePointers))
 		for i := range dst.ValuePointers {
-			dst.ValuePointers[i] = src.ValuePointers[i].Clone()
+			if src.ValuePointers[i] == nil {
+				dst.ValuePointers[i] = nil
+			} else {
+				dst.ValuePointers[i] = ptr.To(*src.ValuePointers[i])
+			}
 		}
 	}
 	if src.StructPointers != nil {
 		dst.StructPointers = make([]*StructWithPtrs, len(src.StructPointers))
 		for i := range dst.StructPointers {
-			dst.StructPointers[i] = src.StructPointers[i].Clone()
+			if src.StructPointers[i] == nil {
+				dst.StructPointers[i] = nil
+			} else {
+				dst.StructPointers[i] = src.StructPointers[i].Clone()
+			}
 		}
 	}
+	dst.Slice = append(src.Slice[:0:0], src.Slice...)
+	dst.Prefixes = append(src.Prefixes[:0:0], src.Prefixes...)
+	dst.Data = append(src.Data[:0:0], src.Data...)
 	if src.Structs != nil {
 		dst.Structs = make([]StructWithPtrs, len(src.Structs))
 		for i := range dst.Structs {
@@ -164,9 +185,6 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 			}
 		}
 	}
-	dst.Slice = append(src.Slice[:0:0], src.Slice...)
-	dst.Prefixes = append(src.Prefixes[:0:0], src.Prefixes...)
-	dst.Data = append(src.Data[:0:0], src.Data...)
 	return dst
 }
 
@@ -175,11 +193,11 @@ var _StructWithSlicesCloneNeedsRegeneration = StructWithSlices(struct {
 	Values         []StructWithoutPtrs
 	ValuePointers  []*StructWithoutPtrs
 	StructPointers []*StructWithPtrs
-	Structs        []StructWithPtrs
-	Ints           []*int
 	Slice          []string
 	Prefixes       []netip.Prefix
 	Data           []byte
+	Structs        []StructWithPtrs
+	Ints           []*int
 }{})
 
 // Clone makes a deep copy of OnlyGetClone.
@@ -215,4 +233,207 @@ func (src *StructWithEmbedded) Clone() *StructWithEmbedded {
 var _StructWithEmbeddedCloneNeedsRegeneration = StructWithEmbedded(struct {
 	A *StructWithPtrs
 	StructWithSlices
+}{})
+
+// Clone makes a deep copy of GenericIntStruct.
+// The result aliases no memory with the original.
+func (src *GenericIntStruct[T]) Clone() *GenericIntStruct[T] {
+	if src == nil {
+		return nil
+	}
+	dst := new(GenericIntStruct[T])
+	*dst = *src
+	if dst.Pointer != nil {
+		dst.Pointer = ptr.To(*src.Pointer)
+	}
+	dst.Slice = append(src.Slice[:0:0], src.Slice...)
+	dst.Map = maps.Clone(src.Map)
+	if src.PtrSlice != nil {
+		dst.PtrSlice = make([]*T, len(src.PtrSlice))
+		for i := range dst.PtrSlice {
+			if src.PtrSlice[i] == nil {
+				dst.PtrSlice[i] = nil
+			} else {
+				dst.PtrSlice[i] = ptr.To(*src.PtrSlice[i])
+			}
+		}
+	}
+	dst.PtrKeyMap = maps.Clone(src.PtrKeyMap)
+	if dst.PtrValueMap != nil {
+		dst.PtrValueMap = map[string]*T{}
+		for k, v := range src.PtrValueMap {
+			if v == nil {
+				dst.PtrValueMap[k] = nil
+			} else {
+				dst.PtrValueMap[k] = ptr.To(*v)
+			}
+		}
+	}
+	if dst.SliceMap != nil {
+		dst.SliceMap = map[string][]T{}
+		for k := range src.SliceMap {
+			dst.SliceMap[k] = append([]T{}, src.SliceMap[k]...)
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericIntStructCloneNeedsRegeneration[T constraints.Integer](GenericIntStruct[T]) {
+	_GenericIntStructCloneNeedsRegeneration(struct {
+		Value       T
+		Pointer     *T
+		Slice       []T
+		Map         map[string]T
+		PtrSlice    []*T
+		PtrKeyMap   map[*T]string `json:"-"`
+		PtrValueMap map[string]*T
+		SliceMap    map[string][]T
+	}{})
+}
+
+// Clone makes a deep copy of GenericNoPtrsStruct.
+// The result aliases no memory with the original.
+func (src *GenericNoPtrsStruct[T]) Clone() *GenericNoPtrsStruct[T] {
+	if src == nil {
+		return nil
+	}
+	dst := new(GenericNoPtrsStruct[T])
+	*dst = *src
+	if dst.Pointer != nil {
+		dst.Pointer = ptr.To(*src.Pointer)
+	}
+	dst.Slice = append(src.Slice[:0:0], src.Slice...)
+	dst.Map = maps.Clone(src.Map)
+	if src.PtrSlice != nil {
+		dst.PtrSlice = make([]*T, len(src.PtrSlice))
+		for i := range dst.PtrSlice {
+			if src.PtrSlice[i] == nil {
+				dst.PtrSlice[i] = nil
+			} else {
+				dst.PtrSlice[i] = ptr.To(*src.PtrSlice[i])
+			}
+		}
+	}
+	dst.PtrKeyMap = maps.Clone(src.PtrKeyMap)
+	if dst.PtrValueMap != nil {
+		dst.PtrValueMap = map[string]*T{}
+		for k, v := range src.PtrValueMap {
+			if v == nil {
+				dst.PtrValueMap[k] = nil
+			} else {
+				dst.PtrValueMap[k] = ptr.To(*v)
+			}
+		}
+	}
+	if dst.SliceMap != nil {
+		dst.SliceMap = map[string][]T{}
+		for k := range src.SliceMap {
+			dst.SliceMap[k] = append([]T{}, src.SliceMap[k]...)
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericNoPtrsStructCloneNeedsRegeneration[T StructWithoutPtrs | netip.Prefix | BasicType](GenericNoPtrsStruct[T]) {
+	_GenericNoPtrsStructCloneNeedsRegeneration(struct {
+		Value       T
+		Pointer     *T
+		Slice       []T
+		Map         map[string]T
+		PtrSlice    []*T
+		PtrKeyMap   map[*T]string `json:"-"`
+		PtrValueMap map[string]*T
+		SliceMap    map[string][]T
+	}{})
+}
+
+// Clone makes a deep copy of GenericCloneableStruct.
+// The result aliases no memory with the original.
+func (src *GenericCloneableStruct[T, V]) Clone() *GenericCloneableStruct[T, V] {
+	if src == nil {
+		return nil
+	}
+	dst := new(GenericCloneableStruct[T, V])
+	*dst = *src
+	dst.Value = src.Value.Clone()
+	if src.Slice != nil {
+		dst.Slice = make([]T, len(src.Slice))
+		for i := range dst.Slice {
+			dst.Slice[i] = src.Slice[i].Clone()
+		}
+	}
+	if dst.Map != nil {
+		dst.Map = map[string]T{}
+		for k, v := range src.Map {
+			dst.Map[k] = v.Clone()
+		}
+	}
+	if dst.Pointer != nil {
+		dst.Pointer = ptr.To((*src.Pointer).Clone())
+	}
+	if src.PtrSlice != nil {
+		dst.PtrSlice = make([]*T, len(src.PtrSlice))
+		for i := range dst.PtrSlice {
+			if src.PtrSlice[i] == nil {
+				dst.PtrSlice[i] = nil
+			} else {
+				dst.PtrSlice[i] = ptr.To((*src.PtrSlice[i]).Clone())
+			}
+		}
+	}
+	dst.PtrKeyMap = maps.Clone(src.PtrKeyMap)
+	if dst.PtrValueMap != nil {
+		dst.PtrValueMap = map[string]*T{}
+		for k, v := range src.PtrValueMap {
+			if v == nil {
+				dst.PtrValueMap[k] = nil
+			} else {
+				dst.PtrValueMap[k] = ptr.To((*v).Clone())
+			}
+		}
+	}
+	if dst.SliceMap != nil {
+		dst.SliceMap = map[string][]T{}
+		for k := range src.SliceMap {
+			dst.SliceMap[k] = append([]T{}, src.SliceMap[k]...)
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericCloneableStructCloneNeedsRegeneration[T views.ViewCloner[T, V], V views.StructView[T]](GenericCloneableStruct[T, V]) {
+	_GenericCloneableStructCloneNeedsRegeneration(struct {
+		Value       T
+		Slice       []T
+		Map         map[string]T
+		Pointer     *T
+		PtrSlice    []*T
+		PtrKeyMap   map[*T]string `json:"-"`
+		PtrValueMap map[string]*T
+		SliceMap    map[string][]T
+	}{})
+}
+
+// Clone makes a deep copy of StructWithContainers.
+// The result aliases no memory with the original.
+func (src *StructWithContainers) Clone() *StructWithContainers {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithContainers)
+	*dst = *src
+	dst.CloneableContainer = *src.CloneableContainer.Clone()
+	dst.ClonableGenericContainer = *src.ClonableGenericContainer.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithContainersCloneNeedsRegeneration = StructWithContainers(struct {
+	IntContainer             Container[int]
+	CloneableContainer       Container[*StructWithPtrs]
+	BasicGenericContainer    Container[GenericBasicStruct[int]]
+	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
 }{})

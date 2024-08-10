@@ -25,6 +25,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
@@ -202,6 +203,7 @@ type Resolver struct {
 	logf               logger.Logf
 	netMon             *netmon.Monitor  // non-nil
 	dialer             *tsdial.Dialer   // non-nil
+	health             *health.Tracker  // non-nil
 	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
@@ -224,9 +226,13 @@ type ForwardLinkSelector interface {
 }
 
 // New returns a new resolver.
-func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *Resolver {
+// dialer and health must be non-nil.
+func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *Resolver {
 	if dialer == nil {
 		panic("nil Dialer")
+	}
+	if health == nil {
+		panic("nil health")
 	}
 	netMon := dialer.NetMon()
 	if netMon == nil {
@@ -239,8 +245,9 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, k
 		hostToIP: map[dnsname.FQDN][]netip.Addr{},
 		ipToHost: map[netip.Addr]dnsname.FQDN{},
 		dialer:   dialer,
+		health:   health,
 	}
-	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer, knobs)
+	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer, health, knobs)
 	return r
 }
 

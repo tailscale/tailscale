@@ -1,9 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package kube provides a client to interact with Kubernetes.
-// This package is Tailscale-internal and not meant for external consumption.
-// Further, the API should not be considered stable.
 package kube
 
 import (

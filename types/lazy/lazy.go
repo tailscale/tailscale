@@ -154,3 +154,38 @@ func SyncFuncErr[T any](fill func() (T, error)) func() (T, error) {
 		return v, err
 	}
 }
+
+// TB is a subset of testing.TB that we use to set up test helpers.
+// It's defined here to avoid pulling in the testing package.
+type TB interface {
+	Helper()
+	Cleanup(func())
+}
+
+// SetForTest sets z's value and error.
+// It's used in tests only and reverts z's state back when tb and all its
+// subtests complete.
+// It is not safe for concurrent use and must not be called concurrently with
+// any SyncValue methods, including another call to itself.
+func (z *SyncValue[T]) SetForTest(tb TB, val T, err error) {
+	tb.Helper()
+
+	oldErr, oldVal := z.err.Load(), z.v
+	z.once.Do(func() {})
+
+	z.v = val
+	if err != nil {
+		z.err.Store(ptr.To(err))
+	} else {
+		z.err.Store(nilErrPtr)
+	}
+
+	tb.Cleanup(func() {
+		if oldErr == nil {
+			*z = SyncValue[T]{}
+		} else {
+			z.v = oldVal
+			z.err.Store(oldErr)
+		}
+	})
+}

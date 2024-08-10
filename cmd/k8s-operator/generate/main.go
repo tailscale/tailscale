@@ -3,6 +3,7 @@
 
 //go:build !plan9
 
+// The generate command creates tailscale.com CRDs.
 package main
 
 import (

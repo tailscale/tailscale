@@ -86,23 +86,26 @@ func controlC(logf logger.Logf, network, address string, c syscall.RawConn) (err
 	var ifaceIdxV4, ifaceIdxV6 uint32
 	if useRoute := bindToInterfaceByRoute.Load() || bindToInterfaceByRouteEnv(); useRoute {
 		addr, err := parseAddress(address)
-		if err != nil {
-			return fmt.Errorf("parseAddress: %w", err)
-		}
-
-		if canV4 && (addr.Is4() || addr.Is4In6()) {
-			addrV4 := addr.Unmap()
-			ifaceIdxV4, err = getInterfaceIndex(logf, addrV4, defIfaceIdxV4)
-			if err != nil {
-				return fmt.Errorf("getInterfaceIndex(%v): %w", addrV4, err)
+		if err == nil {
+			if canV4 && (addr.Is4() || addr.Is4In6()) {
+				addrV4 := addr.Unmap()
+				ifaceIdxV4, err = getInterfaceIndex(logf, addrV4, defIfaceIdxV4)
+				if err != nil {
+					return fmt.Errorf("getInterfaceIndex(%v): %w", addrV4, err)
+				}
 			}
-		}
 
-		if canV6 && addr.Is6() {
-			ifaceIdxV6, err = getInterfaceIndex(logf, addr, defIfaceIdxV6)
-			if err != nil {
-				return fmt.Errorf("getInterfaceIndex(%v): %w", addr, err)
+			if canV6 && addr.Is6() {
+				ifaceIdxV6, err = getInterfaceIndex(logf, addr, defIfaceIdxV6)
+				if err != nil {
+					return fmt.Errorf("getInterfaceIndex(%v): %w", addr, err)
+				}
 			}
+		} else {
+			if err != errUnspecifiedHost {
+				logf("[unexpected] netns: error parsing address %q: %v", address, err)
+			}
+			ifaceIdxV4, ifaceIdxV6 = defIfaceIdxV4, defIfaceIdxV6
 		}
 	} else {
 		ifaceIdxV4, ifaceIdxV6 = defIfaceIdxV4, defIfaceIdxV6

@@ -23,6 +23,7 @@ import (
 
 	miekdns "github.com/miekg/dns"
 	dns "golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -354,6 +355,7 @@ func newResolver(t testing.TB) *Resolver {
 	return New(t.Logf,
 		nil, // no link selector
 		tsdial.NewDialer(netmon.NewStatic()),
+		new(health.Tracker),
 		nil, // no control knobs
 	)
 }
@@ -1068,7 +1070,7 @@ func TestForwardLinkSelection(t *testing.T) {
 			return "special"
 		}
 		return ""
-	}), new(tsdial.Dialer), nil /* no control knobs */)
+	}), new(tsdial.Dialer), new(health.Tracker), nil /* no control knobs */)
 
 	// Test non-special IP.
 	if got, err := fwd.packetListener(netip.Addr{}); err != nil {
