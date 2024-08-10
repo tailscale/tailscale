@@ -70,6 +70,16 @@ func (c *Config) AddNode(opts ...any) *Node {
 				o.nodes = append(o.nodes, n)
 			}
 			n.nets = append(n.nets, o)
+		case TailscaledEnv:
+			n.env = append(n.env, o)
+		case NodeOption:
+			if o == HostFirewall {
+				n.hostFW = true
+			} else {
+				if n.err == nil {
+					n.err = fmt.Errorf("unknown NodeOption %q", o)
+				}
+			}
 		default:
 			if n.err == nil {
 				n.err = fmt.Errorf("unknown AddNode option type %T", o)
@@ -77,6 +87,19 @@ func (c *Config) AddNode(opts ...any) *Node {
 		}
 	}
 	return n
+}
+
+// NodeOption is an option that can be passed to Config.AddNode.
+type NodeOption string
+
+const (
+	HostFirewall NodeOption = "HostFirewall"
+)
+
+// TailscaledEnv is а option that can be passed to Config.AddNode
+// to set an environment variable for tailscaled.
+type TailscaledEnv struct {
+	Key, Value string
 }
 
 // AddNetwork add a new network.
@@ -125,6 +148,9 @@ type Node struct {
 	err error
 	n   *node // nil until NewServer called
 
+	env    []TailscaledEnv
+	hostFW bool
+
 	// TODO(bradfitz): this is halfway converted to supporting multiple NICs
 	// but not done. We need a MAC-per-Network.
 
@@ -135,6 +161,14 @@ type Node struct {
 // MAC returns the MAC address of the node.
 func (n *Node) MAC() MAC {
 	return n.mac
+}
+
+func (n *Node) Env() []TailscaledEnv {
+	return n.env
+}
+
+func (n *Node) HostFirewall() bool {
+	return n.hostFW
 }
 
 // Network returns the first network this node is connected to,
