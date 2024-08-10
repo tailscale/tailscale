@@ -58,7 +58,7 @@ type ACLDetails struct {
 	Groups        map[string][]string `json:"groups,omitempty"`
 	TagOwners     map[string][]string `json:"tagowners,omitempty"`
 	Hosts         map[string]string   `json:"hosts,omitempty"`
-  NodeAttrs     []NodeAttrGrant     `json:"nodeAttrs,omitempty"`
+        NodeAttrs     []NodeAttrGrant     `json:"nodeAttrs,omitempty"`
 	AutoApprovers ACLAutoApprovers    `json:"autoapprovers,omitempty"`
 }
 
