@@ -69,6 +69,14 @@ type LocalClient struct {
 	// connecting to the GUI client variants.
 	UseSocketOnly bool
 
+	// OmitAuth, if true, omits sending the local Tailscale daemon any
+	// authentication token that might be required by the platform.
+	//
+	// As of 2024-08-12, only macOS uses an authentication token. OmitAuth is
+	// meant for when Dial is set and the LocalAPI is being proxied to a
+	// different operating system, such as in integration tests.
+	OmitAuth bool
+
 	// tsClient does HTTP requests to the local Tailscale daemon.
 	// It's lazily initialized on first use.
 	tsClient     *http.Client
@@ -124,8 +132,10 @@ func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error)
 			},
 		}
 	})
-	if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {
-		req.SetBasicAuth("", token)
+	if !lc.OmitAuth {
+		if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {
+			req.SetBasicAuth("", token)
+		}
 	}
 	return lc.tsClient.Do(req)
 }
