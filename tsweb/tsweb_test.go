@@ -22,7 +22,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
 	"tailscale.com/util/httpm"
@@ -865,14 +864,14 @@ func TestStdHandler_CanceledAfterHeader(t *testing.T) {
 }
 
 func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13017")
 	now := time.Now()
 
-	// Start a HTTP server that returns 1MB of data.
+	// Start a HTTP server that writes back zeros until the request is abandoned.
 	// We next put a reverse-proxy in front of this server.
 	rs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for range 1024 {
-			w.Write(make([]byte, 1024))
+		zeroes := make([]byte, 1024)
+		for r.Context().Err() == nil {
+			w.Write(zeroes)
 		}
 	}))
 	defer rs.Close()
@@ -880,8 +879,9 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 	r := make(chan AccessLogRecord)
 	var e *HTTPError
 	responseStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
 
-	// Create another server which proxies our 1MB server.
+	// Create another server which proxies our zeroes server.
 	// The [httputil.ReverseProxy] will panic with [http.ErrAbortHandler] when
 	// it fails to copy the response to the client.
 	h := StdHandler(
@@ -889,10 +889,6 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 			(&httputil.ReverseProxy{
 				Director: func(r *http.Request) {
 					r.URL = must.Get(url.Parse(rs.URL))
-				},
-				ModifyResponse: func(r *http.Response) error {
-					close(responseStarted)
-					return nil
 				},
 			}).ServeHTTP(w, r)
 			return nil
@@ -908,7 +904,11 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 			},
 		},
 	)
-	s := httptest.NewServer(h)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(responseStarted)
+		<-requestCanceled
+		h.ServeHTTP(w, r.WithContext(context.WithoutCancel(r.Context())))
+	}))
 	t.Cleanup(s.Close)
 
 	// Create a context which gets canceled after the handler starts processing
@@ -925,6 +925,7 @@ func TestStdHandler_ConnectionClosedDuringBody(t *testing.T) {
 		t.Fatalf("making request: %s", err)
 	}
 	res, err := http.DefaultClient.Do(req)
+	close(requestCanceled)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("got error %v, want context.Canceled", err)
 	}
