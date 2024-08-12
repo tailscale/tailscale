@@ -34,7 +34,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/usermetrics"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -1434,12 +1434,12 @@ type trafficLabel struct {
 }
 
 var (
-	metricInboundPacketsTotal = usermetrics.NewMultiLabelMap[trafficLabel](
+	metricInboundPacketsTotal = usermetric.NewMultiLabelMap[trafficLabel](
 		"tailscaled_inbound_packets_total",
 		"counter",
 		"Counts the number of packets received by the node from other peers",
 	)
-	metricOutboundPacketsTotal = usermetrics.NewMultiLabelMap[trafficLabel](
+	metricOutboundPacketsTotal = usermetric.NewMultiLabelMap[trafficLabel](
 		"tailscaled_outbound_packets_total",
 		"counter",
 		"Counts the number of packets sent by the node to other peers",

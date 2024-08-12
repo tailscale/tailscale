@@ -36,7 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
-	"tailscale.com/util/usermetrics"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -285,7 +285,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/metrics") {
-		usermetrics.Handler(w, r)
+		usermetric.Handler(w, r)
 		return
 	}
 

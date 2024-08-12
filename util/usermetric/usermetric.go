@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package usermetrics provides a container and handler
+// Package usermetric provides a container and handler
 // for user-facing metrics.
-package usermetrics
+package usermetric
 
 import (
 	"expvar"
@@ -19,7 +19,7 @@ var vars expvar.Map
 // MultiLabelMap[T] variable with the given name and returns it.
 // The variable is registered with the userfacing metrics package.
 //
-// Note that usermetrics are not protected against duplicate
+// Note that usermetric are not protected against duplicate
 // metrics name. It is the caller's responsibility to ensure that
 // the name is unique.
 func NewMultiLabelMap[T comparable](name string, promType, helpText string) *metrics.MultiLabelMap[T] {
