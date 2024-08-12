@@ -157,8 +157,9 @@ func main() {
 	envknob.ApplyDiskConfig()
 	applyIntegrationTestEnvKnob()
 
+	defaultVerbosity := envknob.RegisterInt("TS_LOG_VERBOSITY")
 	printVersion := false
-	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
+	flag.IntVar(&args.verbose, "verbose", defaultVerbosity(), "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
