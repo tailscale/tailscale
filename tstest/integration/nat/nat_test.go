@@ -145,7 +145,20 @@ func easyPMP(c *vnet.Config) *vnet.Node {
 // easy + port mapping + host firewall
 func easyPMPFW(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
-	return c.AddNode(vnet.HostFirewall,
+	return c.AddNode(
+		vnet.HostFirewall,
+		vnet.TailscaledEnv{
+			Key:   "TS_DEBUG_RAW_DISCO",
+			Value: "1",
+		},
+		vnet.TailscaledEnv{
+			Key:   "TS_DEBUG_DISCO",
+			Value: "1",
+		},
+		vnet.TailscaledEnv{
+			Key:   "TS_LOG_VERBOSITY",
+			Value: "2",
+		},
 		c.AddNetwork(
 			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
