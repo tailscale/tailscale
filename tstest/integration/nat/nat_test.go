@@ -7,12 +7,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -193,6 +191,10 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	if nodes[0] == nil || nodes[1] == nil {
 		t.Skip("skipping test; not applicable combination")
 	}
+	if *logTailscaled {
+		nodes[0].SetVerboseSyslog(true)
+		nodes[1].SetVerboseSyslog(true)
+	}
 
 	var err error
 	nt.vnet, err = vnet.New(&c)
@@ -247,7 +249,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 			"-m", "384M",
 			"-nodefaults", "-no-user-config", "-nographic",
 			"-kernel", nt.kernel,
-			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet tailscale-tta=1"+envStr,
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=52.52.0.9:995 tailscale-tta=1"+envStr,
 			"-drive", "id=blk0,file="+disk+",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
 			"-netdev", "stream,id=net0,addr.type=unix,addr.path="+sockAddr,
@@ -281,13 +283,6 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	for i, c := range clients {
 		i, c := i, c
 		eg.Go(func() error {
-			if *logTailscaled {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					streamDaemonLogs(ctx, t, c, fmt.Sprintf("node%d:", i))
-				}()
-			}
 			st, err := c.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("node%d status: %w", i, err)
@@ -360,35 +355,6 @@ const (
 	routeDirect pingRoute = "direct"
 	routeNil    pingRoute = "nil" // *ipnstate.PingResult is nil
 )
-
-func streamDaemonLogs(ctx context.Context, t testing.TB, c *vnet.NodeAgentClient, nodeID string) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	r, err := c.TailDaemonLogs(ctx)
-	if err != nil {
-		t.Errorf("tailDaemonLogs: %v", err)
-		return
-	}
-	logger := log.New(os.Stderr, nodeID+" ", log.Lmsgprefix)
-	dec := json.NewDecoder(r)
-	for {
-		// /{"logtail":{"client_time":"2024-08-08T17:42:31.95095956Z","proc_id":2024742977,"proc_seq":232},"text":"magicsock: derp-1 connected; connGen=1\n"}
-		var logEntry struct {
-			LogTail struct {
-				ClientTime time.Time `json:"client_time"`
-			}
-			Text string `json:"text"`
-		}
-		if err := dec.Decode(&logEntry); err != nil {
-			if err == io.EOF || errors.Is(err, context.Canceled) {
-				return
-			}
-			t.Errorf("log entry: %v", err)
-			return
-		}
-		logger.Printf("%s %s", logEntry.LogTail.ClientTime.Format("2006/01/02 15:04:05"), logEntry.Text)
-	}
-}
 
 func ping(ctx context.Context, c *vnet.NodeAgentClient, target netip.Addr) (*ipnstate.PingResult, error) {
 	n := 0
