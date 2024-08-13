@@ -301,7 +301,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 			if err != nil {
 				return fmt.Errorf("%v status: %w", node, err)
 			}
-			t.Logf("%v status: %v", node, st)
+			t.Logf("%v status: %v", node, st.BackendState)
 
 			if node.HostFirewall() {
 				if err := c.EnableHostFirewall(ctx); err != nil {
