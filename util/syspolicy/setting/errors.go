@@ -42,9 +42,9 @@ func NewErrorText(text string) *ErrorText {
 	return ptr.To(ErrorText(text))
 }
 
-// NewErrorTextFromError returns an [ErrorText] with the text of the specified error,
+// MaybeErrorText returns an [ErrorText] with the text of the specified error,
 // or nil if err is nil, [ErrNotConfigured], or [ErrNoSuchKey].
-func NewErrorTextFromError(err error) *ErrorText {
+func MaybeErrorText(err error) *ErrorText {
 	if err == nil || errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrNoSuchKey) {
 		return nil
 	}
