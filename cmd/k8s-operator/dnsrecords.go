@@ -24,6 +24,7 @@ import (
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 const (
@@ -167,41 +168,65 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 		}
 	}
 
-	// Get the Pod IP addresses for the proxy from the EndpointSlice for the
-	// headless Service.
+	// Get the Pod IP addresses for the proxy from the EndpointSlices for
+	// the headless Service. The Service can have multiple EndpointSlices
+	// associated with it, for example in dual-stack clusters.
 	labels := map[string]string{discoveryv1.LabelServiceName: headlessSvc.Name} // https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
-	eps, err := getSingleObject[discoveryv1.EndpointSlice](ctx, dnsRR.Client, dnsRR.tsNamespace, labels)
-	if err != nil {
-		return fmt.Errorf("error getting the EndpointSlice for the proxy's headless Service: %w", err)
+	var eps = new(discoveryv1.EndpointSliceList)
+	if err := dnsRR.List(ctx, eps, client.InNamespace(dnsRR.tsNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("error listing EndpointSlices for the proxy's headless Service: %w", err)
 	}
-	if eps == nil {
+	if len(eps.Items) == 0 {
 		logger.Debugf("proxy's headless Service EndpointSlice does not yet exist. We will reconcile again once it's created")
 		return nil
 	}
-	// An EndpointSlice for a Service can have a list of endpoints that each
+	// Each EndpointSlice for a Service can have a list of endpoints that each
 	// can have multiple addresses - these are the IP addresses of any Pods
 	// selected by that Service. Pick all the IPv4 addresses.
-	ips := make([]string, 0)
-	for _, ep := range eps.Endpoints {
-		for _, ip := range ep.Addresses {
-			if !net.IsIPv4String(ip) {
-				logger.Infof("EndpointSlice contains IP address %q that is not IPv4, ignoring. Currently only IPv4 is supported", ip)
-			} else {
-				ips = append(ips, ip)
+	// It is also possible that multiple EndpointSlices have overlapping addresses.
+	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#duplicate-endpoints
+	ips := make(set.Set[string], 0)
+	for _, slice := range eps.Items {
+		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
+			logger.Infof("EndpointSlice is for AddressType %s, currently only IPv4 address type is supported", slice.AddressType)
+			continue
+		}
+		for _, ep := range slice.Endpoints {
+			if !epIsReady(&ep) {
+				logger.Debugf("Endpoint with addresses %v appears not ready to receive traffic %v", ep.Addresses, ep.Conditions.String())
+				continue
+			}
+			for _, ip := range ep.Addresses {
+				if !net.IsIPv4String(ip) {
+					logger.Infof("EndpointSlice contains IP address %q that is not IPv4, ignoring. Currently only IPv4 is supported", ip)
+				} else {
+					ips.Add(ip)
+				}
 			}
 		}
 	}
-	if len(ips) == 0 {
+	if ips.Len() == 0 {
 		logger.Debugf("EndpointSlice for the Service contains no IPv4 addresses. We will reconcile again once they are created.")
 		return nil
 	}
 	updateFunc := func(rec *operatorutils.Records) {
-		mak.Set(&rec.IP4, fqdn, ips)
+		mak.Set(&rec.IP4, fqdn, ips.Slice())
 	}
 	if err = dnsRR.updateDNSConfig(ctx, updateFunc); err != nil {
 		return fmt.Errorf("error updating DNS records: %w", err)
 	}
 	return nil
+}
+
+// epIsReady reports whether the endpoint is currently in a state to receive new
+// traffic. As per kube docs, only explicitly set 'false' for 'Ready' or
+// 'Serving' conditions or explicitly set 'true' for 'Terminating' condition
+// means that the Endpoint is NOT ready.
+// https://github.com/kubernetes/kubernetes/blob/60c4c2b2521fb454ce69dee737e3eb91a25e0535/pkg/apis/discovery/types.go#L109-L131
+func epIsReady(ep *discoveryv1.Endpoint) bool {
+	return (ep.Conditions.Ready == nil || *ep.Conditions.Ready) &&
+		(ep.Conditions.Serving == nil || *ep.Conditions.Serving) &&
+		(ep.Conditions.Terminating == nil || !*ep.Conditions.Terminating)
 }
 
 // maybeCleanup ensures that the DNS record for the proxy has been removed from
