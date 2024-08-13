@@ -60,7 +60,8 @@ func (c *Config) FirstNetwork() *Network {
 func (c *Config) AddNode(opts ...any) *Node {
 	num := len(c.nodes)
 	n := &Node{
-		mac: MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(num)}, // 52=TS then 0xcc for ccclient
+		num: num + 1,
+		mac: MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(num) + 1}, // 52=TS then 0xcc for ccclient
 	}
 	c.nodes = append(c.nodes, n)
 	for _, o := range opts {
@@ -119,7 +120,7 @@ type TailscaledEnv struct {
 func (c *Config) AddNetwork(opts ...any) *Network {
 	num := len(c.networks)
 	n := &Network{
-		mac: MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(num)}, // 52=TS then 0xee for 'etwork
+		mac: MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(num) + 1}, // 52=TS then 0xee for 'etwork
 	}
 	c.networks = append(c.networks, n)
 	for _, o := range opts {
@@ -150,6 +151,7 @@ func (c *Config) AddNetwork(opts ...any) *Network {
 // Node is the configuration of a node in the virtual network.
 type Node struct {
 	err error
+	num int   // 1-based node number
 	n   *node // nil until NewServer called
 
 	env           []TailscaledEnv
@@ -161,6 +163,16 @@ type Node struct {
 
 	mac  MAC
 	nets []*Network
+}
+
+// Num returns the 1-based node number.
+func (n *Node) Num() int {
+	return n.num
+}
+
+// String returns the string "nodeN" where N is the 1-based node number.
+func (n *Node) String() string {
+	return fmt.Sprintf("node%d", n.num)
 }
 
 // MAC returns the MAC address of the node.
@@ -285,17 +297,18 @@ func (s *Server) initFromConfig(c *Config) error {
 			LinkType: layers.LinkTypeIPv4,
 		}))
 	}
-	for i, conf := range c.nodes {
+	for _, conf := range c.nodes {
 		if conf.err != nil {
 			return conf.err
 		}
 		n := &node{
+			num:           conf.num,
 			mac:           conf.mac,
 			net:           netOfConf[conf.Network()],
 			verboseSyslog: conf.VerboseSyslog(),
 		}
 		n.interfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
-			Name:     fmt.Sprintf("node%d", i+1),
+			Name:     n.String(),
 			LinkType: layers.LinkTypeEthernet,
 		}))
 		conf.n = n

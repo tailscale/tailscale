@@ -69,3 +69,12 @@ func TestConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestNodeString(t *testing.T) {
+	if g, w := (&Node{num: 1}).String(), "node1"; g != w {
+		t.Errorf("got %q; want %q", g, w)
+	}
+	if g, w := (&node{num: 1}).String(), "node1"; g != w {
+		t.Errorf("got %q; want %q", g, w)
+	}
+}
