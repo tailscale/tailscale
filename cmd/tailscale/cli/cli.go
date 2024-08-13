@@ -84,6 +84,13 @@ var localClient = tailscale.LocalClient{
 
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) (err error) {
+	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy {
+		// We're running on gokrazy and it's the first start.
+		// Don't run the tailscale CLI as a service; just exit.
+		// See https://gokrazy.org/development/process-interface/
+		os.Exit(0)
+	}
+
 	args = CleanUpArgs(args)
 
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
