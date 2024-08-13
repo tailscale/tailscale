@@ -56,14 +56,14 @@ func newNatTest(tb testing.TB) *natTest {
 	nt := &natTest{
 		tb:      tb,
 		tempDir: tb.TempDir(),
-		base:    filepath.Join(modRoot, "gokrazy/tsapp.qcow2"),
+		base:    filepath.Join(modRoot, "gokrazy/natlabapp.qcow2"),
 	}
 
 	if _, err := os.Stat(nt.base); err != nil {
 		tb.Skipf("skipping test; base image %q not found", nt.base)
 	}
 
-	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/tsapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
+	nt.kernel, err = findKernelPath(filepath.Join(modRoot, "gokrazy/natlabapp/builddir/github.com/tailscale/gokrazy-kernel/go.mod"))
 	if err != nil {
 		tb.Skipf("skipping test; kernel not found: %v", err)
 	}
@@ -262,11 +262,12 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 			"-m", "384M",
 			"-nodefaults", "-no-user-config", "-nographic",
 			"-kernel", nt.kernel,
-			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=52.52.0.9:995 tailscale-tta=1"+envStr,
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=52.52.0.9:995 tailscale-tta=1"+envStr,
 			"-drive", "id=blk0,file="+disk+",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
 			"-netdev", "stream,id=net0,addr.type=unix,addr.path="+sockAddr,
 			"-device", "virtio-serial-device",
+			"-device", "virtio-rng-device",
 			"-device", "virtio-net-device,netdev=net0,mac="+node.MAC().String(),
 			"-chardev", "stdio,id=virtiocon0,mux=on",
 			"-device", "virtconsole,chardev=virtiocon0",
