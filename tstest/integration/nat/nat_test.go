@@ -44,6 +44,8 @@ type natTest struct {
 	tempDir string // for qcow2 images
 	vnet    *vnet.Server
 	kernel  string // linux kernel path
+
+	gotRoute pingRoute
 }
 
 func newNatTest(tb testing.TB) *natTest {
@@ -328,9 +330,10 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	if err != nil {
 		t.Fatalf("ping failure: %v", err)
 	}
-	route := classifyPing(pingRes)
-	t.Logf("ping route: %v", route)
-	return route
+	nt.gotRoute = classifyPing(pingRes)
+	t.Logf("ping route: %v", nt.gotRoute)
+
+	return nt.gotRoute
 }
 
 func classifyPing(pr *ipnstate.PingResult) pingRoute {
@@ -450,34 +453,51 @@ var types = []nodeType{
 	{"sameLAN", sameLAN},
 }
 
+// want sets the expected ping route for the test.
+func (nt *natTest) want(r pingRoute) {
+	if nt.gotRoute != r {
+		nt.tb.Errorf("ping route = %v; want %v", nt.gotRoute, r)
+	}
+}
+
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
+	nt.want(routeDirect)
 }
 
-// Tests https://github.com/tailscale/tailscale/issues/3824 ...
+func TestSameLAN(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(easy, sameLAN)
+	nt.want(routeLocal)
+}
+
+// TestBPFDisco tests https://github.com/tailscale/tailscale/issues/3824 ...
 // * server behind a Hard NAT
 // * client behind a NAT with UPnP support
 // * client machine has a stateful host firewall (e.g. ufw)
-
 func TestBPFDisco(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easyPMPFW, hard)
+	nt.want(routeDirect)
 }
 
 func TestHostFWNoBPF(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easyPMPFWNoBPF, hard)
+	nt.want(routeDERP)
 }
 
 func TestHostFWPair(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easyFW, easyFW)
+	nt.want(routeDirect)
 }
 
 func TestOneHostFW(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easyFW)
+	nt.want(routeDirect)
 }
 
 var pair = flag.String("pair", "", "comma-separated pair of types to test (easy, easyAF, hard, easyPMP, hardPMP, one2one, sameLAN)")
