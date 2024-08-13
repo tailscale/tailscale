@@ -73,9 +73,12 @@ func (c *Config) AddNode(opts ...any) *Node {
 		case TailscaledEnv:
 			n.env = append(n.env, o)
 		case NodeOption:
-			if o == HostFirewall {
+			switch o {
+			case HostFirewall:
 				n.hostFW = true
-			} else {
+			case VerboseSyslog:
+				n.verboseSyslog = true
+			default:
 				if n.err == nil {
 					n.err = fmt.Errorf("unknown NodeOption %q", o)
 				}
@@ -93,7 +96,8 @@ func (c *Config) AddNode(opts ...any) *Node {
 type NodeOption string
 
 const (
-	HostFirewall NodeOption = "HostFirewall"
+	HostFirewall  NodeOption = "HostFirewall"
+	VerboseSyslog NodeOption = "VerboseSyslog"
 )
 
 // TailscaledEnv is а option that can be passed to Config.AddNode
@@ -148,8 +152,9 @@ type Node struct {
 	err error
 	n   *node // nil until NewServer called
 
-	env    []TailscaledEnv
-	hostFW bool
+	env           []TailscaledEnv
+	hostFW        bool
+	verboseSyslog bool
 
 	// TODO(bradfitz): this is halfway converted to supporting multiple NICs
 	// but not done. We need a MAC-per-Network.
@@ -169,6 +174,14 @@ func (n *Node) Env() []TailscaledEnv {
 
 func (n *Node) HostFirewall() bool {
 	return n.hostFW
+}
+
+func (n *Node) VerboseSyslog() bool {
+	return n.verboseSyslog
+}
+
+func (n *Node) SetVerboseSyslog(v bool) {
+	n.verboseSyslog = v
 }
 
 // Network returns the first network this node is connected to,
@@ -277,8 +290,9 @@ func (s *Server) initFromConfig(c *Config) error {
 			return conf.err
 		}
 		n := &node{
-			mac: conf.mac,
-			net: netOfConf[conf.Network()],
+			mac:           conf.mac,
+			net:           netOfConf[conf.Network()],
+			verboseSyslog: conf.VerboseSyslog(),
 		}
 		n.interfaceID = must.Get(s.pcapWriter.AddInterface(pcapgo.NgInterface{
 			Name:     fmt.Sprintf("node%d", i+1),

@@ -16,6 +16,8 @@ github.com/tailscale/gokrazy v0.0.0-20240602215456-7b9b6bbf726a h1:7dnA8x14JihQm
 github.com/tailscale/gokrazy v0.0.0-20240602215456-7b9b6bbf726a/go.mod h1:NHROeDlzn0icUl3f+tEYvGGpcyBDMsr3AvKLHOWRe5M=
 github.com/tailscale/gokrazy v0.0.0-20240802144848-676865a4e84f h1:ZSAGWpgs+6dK2oIz5OR+HUul3oJbnhFn8YNgcZ3d9SQ=
 github.com/tailscale/gokrazy v0.0.0-20240802144848-676865a4e84f/go.mod h1:+/WWMckeuQt+DG6690A6H8IgC+HpBFq2fmwRKcSbxdk=
+github.com/tailscale/gokrazy v0.0.0-20240812224643-6b21ddf64678 h1:2B8/FbIRqmVgRUulQ4iu1EojniufComYe5Yj4BtIn1c=
+github.com/tailscale/gokrazy v0.0.0-20240812224643-6b21ddf64678/go.mod h1:+/WWMckeuQt+DG6690A6H8IgC+HpBFq2fmwRKcSbxdk=
 golang.org/x/sys v0.0.0-20201005065044-765f4ea38db3/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.20.0 h1:Od9JTbYCk261bKm4M/mw7AklTlFYIa0bIp9BgSm1S8Y=
 golang.org/x/sys v0.20.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=

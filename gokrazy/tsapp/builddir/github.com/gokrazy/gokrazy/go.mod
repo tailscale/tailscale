@@ -12,4 +12,4 @@ require (
 	golang.org/x/sys v0.20.0 // indirect
 )
 
-replace github.com/gokrazy/gokrazy => github.com/tailscale/gokrazy v0.0.0-20240802144848-676865a4e84f
+replace github.com/gokrazy/gokrazy => github.com/tailscale/gokrazy v0.0.0-20240812224643-6b21ddf64678

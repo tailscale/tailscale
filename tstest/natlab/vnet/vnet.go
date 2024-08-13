@@ -397,10 +397,10 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 		if node != nil {
 			node.logMu.Lock()
 			defer node.logMu.Unlock()
+			node.logCatcherWrites++
 			for _, lg := range logs {
 				tStr := lg.Logtail.Client_Time.Round(time.Millisecond).Format(time.RFC3339Nano)
 				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, lg.Text)
-				log.Printf("LOG %v [%v] %s\n", clientRemoteIP, tStr, lg.Text)
 			}
 		}
 	})
@@ -416,6 +416,7 @@ var (
 	fakeDERP1IP             = netip.AddrFrom4([4]byte{33, 4, 0, 1})  // 3340=DERP; 1=derp 1
 	fakeDERP2IP             = netip.AddrFrom4([4]byte{33, 4, 0, 2})  // 3340=DERP; 1=derp 1
 	fakeLogCatcherIP        = netip.AddrFrom4([4]byte{52, 52, 0, 4})
+	fakeSyslogIP            = netip.AddrFrom4([4]byte{52, 52, 0, 9})
 )
 
 type EthernetPacket struct {
@@ -501,16 +502,18 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 }
 
 type node struct {
-	mac         MAC
-	interfaceID int
-	net         *network
-	lanIP       netip.Addr // must be in net.lanIP prefix + unique in net
+	mac           MAC
+	interfaceID   int
+	net           *network
+	lanIP         netip.Addr // must be in net.lanIP prefix + unique in net
+	verboseSyslog bool
 
 	// logMu guards logBuf.
 	// TODO(bradfitz): conditionally write these out to separate files at the end?
 	// Currently they only hold logcatcher logs.
-	logMu  sync.Mutex
-	logBuf bytes.Buffer
+	logMu            sync.Mutex
+	logBuf           bytes.Buffer
+	logCatcherWrites int
 }
 
 type derpServer struct {
@@ -1004,6 +1007,19 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			return
 		}
 		n.writeEth(res)
+		return
+	}
+
+	if isUDP && dstIP == fakeSyslogIP {
+		node, ok := n.nodesByIP[srcIP]
+		if !ok {
+			return
+		}
+		if node.verboseSyslog {
+			// TODO(bradfitz): parse this and capture it, structured, into
+			// node's log buffer.
+			log.Printf("syslog from %v: %s", srcIP, udp.Payload)
+		}
 		return
 	}
 
