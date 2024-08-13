@@ -322,7 +322,7 @@ func (s *Server) initFromConfig(c *Config) error {
 		// octet 101 (for first node), 102, etc. The node number comes from the
 		// last octent of the MAC address (0-based)
 		ip4 := n.net.lanIP.Addr().As4()
-		ip4[3] = 101 + n.mac[5]
+		ip4[3] = 100 + n.mac[5]
 		n.lanIP = netip.AddrFrom4(ip4)
 		n.net.nodesByIP[n.lanIP] = n
 	}
