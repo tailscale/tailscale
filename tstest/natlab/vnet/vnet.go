@@ -277,14 +277,21 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	if destPort == 124 {
+		node, ok := n.nodesByIP[clientRemoteIP]
+		if !ok {
+			log.Printf("no node for TCP 124 connection from %v", clientRemoteIP)
+			r.Complete(true)
+			return
+		}
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
+
 		go func() {
 			defer tc.Close()
 			bs := bufio.NewScanner(tc)
 			for bs.Scan() {
 				line := bs.Text()
-				log.Printf("LOG from guest %v: %s", clientRemoteIP, line)
+				log.Printf("LOG from %v: %s", node, line)
 			}
 		}()
 		return
@@ -503,6 +510,7 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 
 type node struct {
 	mac           MAC
+	num           int // 1-based node number
 	interfaceID   int
 	net           *network
 	lanIP         netip.Addr // must be in net.lanIP prefix + unique in net
@@ -514,6 +522,11 @@ type node struct {
 	logMu            sync.Mutex
 	logBuf           bytes.Buffer
 	logCatcherWrites int
+}
+
+// String returns the string "nodeN" where N is the 1-based node number.
+func (n *node) String() string {
+	return fmt.Sprintf("node%d", n.num)
 }
 
 type derpServer struct {
@@ -801,8 +814,13 @@ func (s *Server) routeUDPPacket(up UDPPacket) {
 		return
 	}
 
-	netw, ok := s.networkByWAN[up.Dst.Addr()]
+	dstIP := up.Dst.Addr()
+	netw, ok := s.networkByWAN[dstIP]
 	if !ok {
+		if dstIP.IsPrivate() {
+			// Not worth spamming logs. RFC 1918 space doesn't route.
+			return
+		}
 		log.Printf("no network to route UDP packet for %v", up.Dst)
 		return
 	}
@@ -1018,7 +1036,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		if node.verboseSyslog {
 			// TODO(bradfitz): parse this and capture it, structured, into
 			// node's log buffer.
-			log.Printf("syslog from %v: %s", srcIP, udp.Payload)
+			log.Printf("syslog from %v: %s", node, udp.Payload)
 		}
 		return
 	}

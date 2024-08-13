@@ -283,35 +283,35 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	for i, c := range clients {
 		i, c := i, c
 		eg.Go(func() error {
+			node := nodes[i]
 			st, err := c.Status(ctx)
 			if err != nil {
-				return fmt.Errorf("node%d status: %w", i, err)
+				return fmt.Errorf("%v status: %w", node, err)
 			}
-			t.Logf("node%d status: %v", i, st)
+			t.Logf("%v status: %v", node, st)
 
-			node := nodes[i]
 			if node.HostFirewall() {
 				if err := c.EnableHostFirewall(ctx); err != nil {
-					return fmt.Errorf("node%d firewall: %w", i, err)
+					return fmt.Errorf("%v firewall: %w", node, err)
 				}
-				t.Logf("node%d firewalled", i)
+				t.Logf("%v firewalled", node)
 			}
 
 			if err := up(ctx, c); err != nil {
-				return fmt.Errorf("node%d up: %w", i, err)
+				return fmt.Errorf("%v up: %w", node, err)
 			}
-			t.Logf("node%d up!", i)
+			t.Logf("%v up!", node)
 
 			st, err = c.Status(ctx)
 			if err != nil {
-				return fmt.Errorf("node%d status: %w", i, err)
+				return fmt.Errorf("%v status: %w", node, err)
 			}
 			sts[i] = st
 
 			if st.BackendState != "Running" {
-				return fmt.Errorf("node%d state = %q", i, st.BackendState)
+				return fmt.Errorf("%v state = %q", node, st.BackendState)
 			}
-			t.Logf("node%d up with %v", i, sts[i].Self.TailscaleIPs)
+			t.Logf("%v up with %v", node, sts[i].Self.TailscaleIPs)
 			return nil
 		})
 	}
