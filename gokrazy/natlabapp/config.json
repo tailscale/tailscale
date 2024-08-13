@@ -1,26 +1,19 @@
 {
-    "Hostname": "tsapp",
+    "Hostname": "natlabapp",
     "Update": {
         "NoPassword": true
     },
     "SerialConsole": "ttyS0,115200",
     "GokrazyPackages": [
-        "github.com/gokrazy/gokrazy/cmd/dhcp",
-        "github.com/gokrazy/gokrazy/cmd/randomd",
-        "github.com/gokrazy/gokrazy/cmd/ntp"
+        "github.com/gokrazy/gokrazy/cmd/dhcp"
     ],
     "Packages": [
         "github.com/gokrazy/serial-busybox",
-        "github.com/gokrazy/breakglass",
         "tailscale.com/cmd/tailscale",
-        "tailscale.com/cmd/tailscaled"
+        "tailscale.com/cmd/tailscaled",
+        "tailscale.com/cmd/tta"
     ],
     "PackageConfig": {
-        "github.com/gokrazy/breakglass": {
-            "CommandLineFlags": [
-                "-authorized_keys=ec2"
-            ]
-        },
         "tailscale.com/cmd/tailscale": {
             "ExtraFilePaths": {
                 "/usr": "usr-dir"
@@ -28,6 +21,7 @@
         }
     },
     "KernelPackage": "github.com/tailscale/gokrazy-kernel",
-    "FirmwarePackage": "github.com/tailscale/gokrazy-kernel",
+    "FirmwarePackage": "",
+    "EEPROMPackage": "",
     "InternalCompatibilityFlags": {}
 }

@@ -1,2 +1,3 @@
-tsapp.img
+*.qcow2
+*.img
 go.work
