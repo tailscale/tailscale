@@ -271,7 +271,6 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 			"-chardev", "stdio,id=virtiocon0,mux=on",
 			"-device", "virtconsole,chardev=virtiocon0",
 			"-mon", "chardev=virtiocon0,mode=readline",
-			"-audio", "none",
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
