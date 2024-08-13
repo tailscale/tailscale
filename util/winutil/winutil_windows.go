@@ -52,7 +52,7 @@ func GetDesktopPID() (uint32, error) {
 }
 
 func getPolicyString(name string) (string, error) {
-	s, err := getRegStringInternal(regPolicyBase, name)
+	s, err := getRegStringInternal(registry.LOCAL_MACHINE, regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
 		return getRegString(name)
@@ -65,7 +65,7 @@ func getPolicyStringArray(name string) ([]string, error) {
 }
 
 func getRegString(name string) (string, error) {
-	s, err := getRegStringInternal(regBase, name)
+	s, err := getRegStringInternal(registry.LOCAL_MACHINE, regBase, name)
 	if err != nil {
 		return "", err
 	}
@@ -89,8 +89,8 @@ func getRegInteger(name string) (uint64, error) {
 	return i, err
 }
 
-func getRegStringInternal(subKey, name string) (string, error) {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
+func getRegStringInternal(key registry.Key, subKey, name string) (string, error) {
+	key, err := registry.OpenKey(key, subKey, registry.READ)
 	if err != nil {
 		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
@@ -107,6 +107,24 @@ func getRegStringInternal(subKey, name string) (string, error) {
 		return "", err
 	}
 	return val, nil
+}
+
+// GetRegUserString looks up a registry path in the current user key, or returns
+// an empty string and error.
+func GetRegUserString(name string) (string, error) {
+	return getRegStringInternal(registry.CURRENT_USER, regBase, name)
+}
+
+// SetRegUserString sets a SZ value identified by name in the current user key
+// to the string specified by value.
+func SetRegUserString(name, value string) error {
+	key, _, err := registry.CreateKey(registry.CURRENT_USER, regBase, registry.SET_VALUE)
+	if err != nil {
+		log.Printf("registry.CreateKey(%v): %v", regBase, err)
+	}
+	defer key.Close()
+
+	return key.SetStringValue(name, value)
 }
 
 // GetRegStrings looks up a registry value in the local machine path, or returns
