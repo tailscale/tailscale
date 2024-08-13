@@ -224,7 +224,9 @@ func (dnsRR *dnsRecordsReconciler) maybeProvision(ctx context.Context, headlessS
 // means that the Endpoint is NOT ready.
 // https://github.com/kubernetes/kubernetes/blob/60c4c2b2521fb454ce69dee737e3eb91a25e0535/pkg/apis/discovery/types.go#L109-L131
 func epIsReady(ep *discoveryv1.Endpoint) bool {
-	return (ep.Conditions.Ready == nil || *ep.Conditions.Ready) && (ep.Conditions.Serving == nil || *ep.Conditions.Serving) && (ep.Conditions.Terminating == nil || !*ep.Conditions.Terminating)
+	return (ep.Conditions.Ready == nil || *ep.Conditions.Ready) &&
+		(ep.Conditions.Serving == nil || *ep.Conditions.Serving) &&
+		(ep.Conditions.Terminating == nil || !*ep.Conditions.Terminating)
 }
 
 // maybeCleanup ensures that the DNS record for the proxy has been removed from
