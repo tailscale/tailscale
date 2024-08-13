@@ -393,6 +393,11 @@ func (q *Parsed) Buffer() []byte {
 // Payload returns the payload of the IP subprotocol section.
 // This is a read-only view; that is, q retains the ownership of the buffer.
 func (q *Parsed) Payload() []byte {
+	// If the packet is truncated, return nothing instead of crashing.
+	if q.length > len(q.b) || q.dataofs > len(q.b) {
+		return nil
+	}
+
 	return q.b[q.dataofs:q.length]
 }
 
