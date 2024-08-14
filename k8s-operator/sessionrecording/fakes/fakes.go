@@ -13,6 +13,9 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
+
+	"math/rand"
 
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tstime"
@@ -115,4 +118,21 @@ func AsciinemaResizeMsg(t *testing.T, width, height int) []byte {
 		t.Fatalf("error marshalling CastHeader: %v", err)
 	}
 	return append(bs, '\n')
+}
+
+func RandomBytes(t *testing.T) [][]byte {
+	t.Helper()
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	n := r.Intn(4096)
+	b := make([]byte, n)
+	t.Logf("RandomBytes: generating byte slice of length %d", n)
+	_, err := r.Read(b)
+	if err != nil {
+		t.Fatalf("error generating random byte slice: %v", err)
+	}
+	if len(b) < 2 {
+		return [][]byte{b}
+	}
+	split := r.Intn(len(b) - 1)
+	return [][]byte{b[:split], b[split:]}
 }

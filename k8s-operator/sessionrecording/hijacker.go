@@ -23,6 +23,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/k8s-operator/sessionrecording/spdy"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
+	"tailscale.com/k8s-operator/sessionrecording/ws"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
@@ -31,11 +32,14 @@ import (
 	"tailscale.com/util/multierr"
 )
 
-const SPDYProtocol protocol = "SPDY"
+const (
+	SPDYProtocol Protocol = "SPDY"
+	WSProtocol   Protocol = "WebSocket"
+)
 
-// protocol is the streaming protocol of the hijacked session. Supported
-// protocols are SPDY.
-type protocol string
+// Protocol is the streaming protocol of the hijacked session. Supported
+// protocols are SPDY and WebSocket.
+type Protocol string
 
 var (
 	// CounterSessionRecordingsAttempted counts the number of session recording attempts.
@@ -45,20 +49,33 @@ var (
 	counterSessionRecordingsUploaded = clientmetric.NewCounter("k8s_auth_proxy_session_recordings_uploaded")
 )
 
-func New(ts *tsnet.Server, req *http.Request, who *apitype.WhoIsResponse, w http.ResponseWriter, pod, ns string, proto protocol, addrs []netip.AddrPort, failOpen bool, connFunc RecorderDialFn, log *zap.SugaredLogger) *Hijacker {
+func New(opts HijackerOpts) *Hijacker {
 	return &Hijacker{
-		ts:                ts,
-		req:               req,
-		who:               who,
-		ResponseWriter:    w,
-		pod:               pod,
-		ns:                ns,
-		addrs:             addrs,
-		failOpen:          failOpen,
-		connectToRecorder: connFunc,
-		proto:             proto,
-		log:               log,
+		ts:                opts.TS,
+		req:               opts.Req,
+		who:               opts.Who,
+		ResponseWriter:    opts.W,
+		pod:               opts.Pod,
+		ns:                opts.Namespace,
+		addrs:             opts.Addrs,
+		failOpen:          opts.FailOpen,
+		proto:             opts.Proto,
+		log:               opts.Log,
+		connectToRecorder: sessionrecording.ConnectToRecorder,
 	}
+}
+
+type HijackerOpts struct {
+	TS        *tsnet.Server
+	Req       *http.Request
+	W         http.ResponseWriter
+	Who       *apitype.WhoIsResponse
+	Addrs     []netip.AddrPort
+	Log       *zap.SugaredLogger
+	Pod       string
+	Namespace string
+	FailOpen  bool
+	Proto     Protocol
 }
 
 // Hijacker implements [net/http.Hijacker] interface.
@@ -76,7 +93,7 @@ type Hijacker struct {
 	addrs             []netip.AddrPort // tsrecorder addresses
 	failOpen          bool             // whether to fail open if recording fails
 	connectToRecorder RecorderDialFn
-	proto             protocol // streaming protocol
+	proto             Protocol // streaming protocol
 }
 
 // RecorderDialFn dials the specified netip.AddrPorts that should be tsrecorder
@@ -111,10 +128,14 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		// https://docs.asciinema.org/manual/asciicast/v2/
 		asciicastv2 = 2
 	)
-	var wc io.WriteCloser
+	var (
+		wc      io.WriteCloser
+		err     error
+		errChan <-chan error
+	)
 	h.log.Infof("kubectl exec session will be recorded, recorders: %v, fail open policy: %t", h.addrs, h.failOpen)
 	// TODO (irbekrm): send client a message that session will be recorded.
-	rw, _, errChan, err := h.connectToRecorder(ctx, h.addrs, h.ts.Dial)
+	wc, _, errChan, err = h.connectToRecorder(ctx, h.addrs, h.ts.Dial)
 	if err != nil {
 		msg := fmt.Sprintf("error connecting to session recorders: %v", err)
 		if h.failOpen {
@@ -131,7 +152,6 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 
 	// TODO (irbekrm): log which recorder
 	h.log.Info("successfully connected to a session recorder")
-	wc = rw
 	cl := tstime.DefaultClock{}
 	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen)
 	qp := h.req.URL.Query()
@@ -153,7 +173,17 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	} else {
 		ch.SrcNodeTags = h.who.Node.Tags
 	}
-	lc := spdy.New(conn, rec, ch, h.log)
+
+	var lc net.Conn
+	switch h.proto {
+	case SPDYProtocol:
+		lc = spdy.New(conn, rec, ch, h.log)
+	case WSProtocol:
+		lc = ws.New(conn, rec, ch, h.log)
+	default:
+		return nil, fmt.Errorf("unknown protocol: %s", h.proto)
+	}
+
 	go func() {
 		var err error
 		select {
@@ -174,7 +204,6 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		}
 		msg += "; failure mode set to 'fail closed'; closing connection"
 		h.log.Error(msg)
-		lc.Fail()
 		// TODO (irbekrm): write a message to the client
 		if err := lc.Close(); err != nil {
 			h.log.Infof("error closing recorder connections: %v", err)

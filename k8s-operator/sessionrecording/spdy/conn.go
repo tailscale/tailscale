@@ -19,12 +19,18 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
-	srconn "tailscale.com/k8s-operator/sessionrecording/conn"
 	"tailscale.com/k8s-operator/sessionrecording/tsrecorder"
 	"tailscale.com/sessionrecording"
 )
 
-func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, log *zap.SugaredLogger) srconn.Conn {
+// New wraps the provided network connection and returns a connection whose reads and writes will get triggered as data is received on the hijacked connection.
+// The connection must be a hijacked connection for a 'kubectl exec' session using SPDY.
+// The hijacked connection is used to transmit SPDY streams between Kubernetes client ('kubectl') and the destination container.
+// Data read from the underlying network connection is data sent via one of the SPDY streams from the client to the container.
+// Data written to the underlying connection is data sent from the container to the client.
+// We parse the data and send everything for the STDOUT/STDERR streams to the configured tsrecorder as an asciinema recording with the provided header.
+// https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#background-remotecommand-subprotocol
+func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, log *zap.SugaredLogger) net.Conn {
 	return &conn{
 		Conn: nc,
 		rec:  rec,
@@ -49,7 +55,6 @@ type conn struct {
 
 	wmu    sync.Mutex // sequences writes
 	closed bool
-	failed bool
 
 	rmu                 sync.Mutex // sequences reads
 	writeCastHeaderOnce sync.Once
@@ -172,9 +177,6 @@ func (c *conn) Close() error {
 	if c.closed {
 		return nil
 	}
-	if !c.failed && c.writeBuf.Len() > 0 {
-		c.Conn.Write(c.writeBuf.Bytes())
-	}
 	c.writeBuf.Reset()
 	c.closed = true
 	err := c.Conn.Close()
@@ -182,14 +184,8 @@ func (c *conn) Close() error {
 	return err
 }
 
-func (s *conn) Fail() {
-	s.wmu.Lock()
-	s.failed = true
-	s.wmu.Unlock()
-}
-
 // storeStreamID parses SYN_STREAM SPDY control frame and updates
-// spdyRemoteConnRecorder to store the newly created stream's ID if it is one of
+// conn to store the newly created stream's ID if it is one of
 // the stream types we care about. Storing stream_id:stream_type mapping allows
 // us to parse received data frames (that have stream IDs) differently depening
 // on which stream they belong to (i.e send data frame payload for stdout stream
