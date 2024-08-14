@@ -326,8 +326,9 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	var linkEP *linkEndpoint
 	if runtime.GOOS == "linux" {
-		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
-		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", enableGRO)
+		// TODO(jwhited): add Windows GSO support https://github.com/tailscale/corp/issues/21874
+		// TODO(jwhited): exercise enableGRO in relation to https://github.com/tailscale/corp/issues/22353
+		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
 		linkEP.SupportedGSOKind = stack.HostGSOSupported
 	} else {
 		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
