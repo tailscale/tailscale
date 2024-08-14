@@ -21,6 +21,15 @@ func TestNew(t *testing.T) {
 	t.Logf("Got: %s", j)
 }
 
+// TestGetHostname asserts that GetHostname always returns a non-empty string.
+func TestGetHostname(t *testing.T) {
+	h := GetHostname()
+	if h == "" {
+		t.Fatalf("empty hostname")
+	}
+	t.Logf("Got: %s", h)
+}
+
 func TestOSVersion(t *testing.T) {
 	if osVersion == nil {
 		t.Skip("not available for OS")

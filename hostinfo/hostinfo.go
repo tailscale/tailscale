@@ -34,7 +34,7 @@ var started = time.Now()
 
 // New returns a partially populated Hostinfo for the current host.
 func New() *tailcfg.Hostinfo {
-	hostname, _ := os.Hostname()
+	hostname := GetHostname()
 	hostname = dnsname.FirstLabel(hostname)
 	return &tailcfg.Hostinfo{
 		IPNVersion:      version.Long(),
