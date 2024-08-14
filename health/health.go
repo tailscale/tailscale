@@ -65,6 +65,11 @@ type Tracker struct {
 	// magicsock receive functions: IPv4, IPv6, and DERP.
 	MagicSockReceiveFuncs [3]ReceiveFuncStats // indexed by ReceiveFunc values
 
+	// initOnce guards the initialization of the Tracker.
+	// Notably, it initializes the MagicSockReceiveFuncs names.
+	// mu should not be held during init.
+	initOnce sync.Once
+
 	// mu guards everything that follows.
 	mu sync.Mutex
 
@@ -433,6 +438,7 @@ func (t *Tracker) RegisterWatcher(cb func(w *Warnable, r *UnhealthyState)) (unre
 	if t.nil() {
 		return func() {}
 	}
+	t.initOnce.Do(t.doOnceInit)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.watchers == nil {
@@ -859,6 +865,7 @@ func (t *Tracker) timerSelfCheck() {
 	if t.nil() {
 		return
 	}
+	t.initOnce.Do(t.doOnceInit)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.checkReceiveFuncsLocked()
@@ -1168,6 +1175,11 @@ type ReceiveFuncStats struct {
 	missing bool
 }
 
+// Name returns the name of the receive func ("ReceiveIPv4", "ReceiveIPv6", etc).
+func (s *ReceiveFuncStats) Name() string {
+	return s.name
+}
+
 func (s *ReceiveFuncStats) Enter() {
 	s.numCalls.Add(1)
 	s.inCall.Store(true)
@@ -1185,15 +1197,20 @@ func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
 	if t == nil {
 		return nil
 	}
+	t.initOnce.Do(t.doOnceInit)
 	return &t.MagicSockReceiveFuncs[which]
+}
+
+func (t *Tracker) doOnceInit() {
+	for i := range t.MagicSockReceiveFuncs {
+		f := &t.MagicSockReceiveFuncs[i]
+		f.name = (ReceiveFunc(i)).String()
+	}
 }
 
 func (t *Tracker) checkReceiveFuncsLocked() {
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
-		if f.name == "" {
-			f.name = (ReceiveFunc(i)).String()
-		}
 		if runtime.GOOS == "js" && i < 2 {
 			// Skip IPv4 and IPv6 on js.
 			continue
