@@ -1752,10 +1752,17 @@ func (ww *multiFilePostResponseWriter) Write(p []byte) (int, error) {
 }
 
 func (ww *multiFilePostResponseWriter) Flush(w http.ResponseWriter) error {
-	maps.Copy(w.Header(), ww.Header())
-	w.WriteHeader(ww.statusCode)
-	_, err := io.Copy(w, ww.body)
-	return err
+	if ww.header != nil {
+		maps.Copy(w.Header(), ww.header)
+	}
+	if ww.statusCode > 0 {
+		w.WriteHeader(ww.statusCode)
+	}
+	if ww.body != nil {
+		_, err := io.Copy(w, ww.body)
+		return err
+	}
+	return nil
 }
 
 func (h *Handler) singleFilePut(
