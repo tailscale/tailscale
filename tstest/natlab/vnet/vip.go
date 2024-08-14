@@ -11,7 +11,7 @@ import (
 var vips = map[string]virtualIP{} // DNS name => details
 
 var (
-	fakeDNS               = newVIP("dns", "4.11.4.11", "2000:4:11::4:11")
+	fakeDNS               = newVIP("dns", "4.11.4.11", "2411::411")
 	fakeProxyControlplane = newVIP("controlplane.tailscale.com", 1)
 	fakeTestAgent         = newVIP("test-driver.tailscale", 2)
 	fakeControl           = newVIP("control.tailscale", 3)
@@ -30,6 +30,18 @@ type virtualIP struct {
 func (v virtualIP) Match(a netip.Addr) bool {
 	return v.v4 == a.Unmap() || v.v6 == a
 }
+
+// FakeDNSIPv4 returns the fake DNS IPv4 address.
+func FakeDNSIPv4() netip.Addr { return fakeDNS.v4 }
+
+// FakeDNSIPv6 returns the fake DNS IPv6 address.
+func FakeDNSIPv6() netip.Addr { return fakeDNS.v6 }
+
+// FakeSyslogIPv4 returns the fake syslog IPv4 address.
+func FakeSyslogIPv4() netip.Addr { return fakeSyslog.v4 }
+
+// FakeSyslogIPv6 returns the fake syslog IPv6 address.
+func FakeSyslogIPv6() netip.Addr { return fakeSyslog.v6 }
 
 // newVIP returns a new virtual IP.
 //
@@ -67,8 +79,14 @@ func newVIP(name string, opts ...any) (v virtualIP) {
 	}
 	if !v.v6.IsValid() && v.v4.IsValid() {
 		// Map 1.2.3.4 to 2052::0102:0304
-		a := [16]byte{0: 2, 2: 5, 3: 2} // 2052::
-		copy(a[12:], v.v4.AsSlice())
+		// But make 52.52.0.x map to 2052::x
+		a := [16]byte{0: 0x20, 1: 0x52} // 2052::
+		v4 := v.v4.As4()
+		if v4[0] == 52 && v4[1] == 52 && v4[2] == 0 {
+			a[15] = v4[3]
+		} else {
+			copy(a[12:], v.v4.AsSlice())
+		}
 		v.v6 = netip.AddrFrom16(a)
 	}
 	for _, b := range vips {

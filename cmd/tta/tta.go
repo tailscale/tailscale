@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/atomicfile"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/util/must"
@@ -85,11 +86,23 @@ func main() {
 	flag.Parse()
 
 	if distro.Get() == distro.Gokrazy {
-		nsRx := regexp.MustCompile(`(?m)^nameserver (.*)`)
-		for t := time.Now(); time.Since(t) < 10*time.Second; time.Sleep(10 * time.Millisecond) {
-			all, _ := os.ReadFile("/etc/resolv.conf")
-			if nsRx.Match(all) {
+		cmdLine, _ := os.ReadFile("/proc/cmdline")
+		explicitNS := false
+		for _, s := range strings.Fields(string(cmdLine)) {
+			if ns, ok := strings.CutPrefix(s, "tta.nameserver="); ok {
+				err := atomicfile.WriteFile("/tmp/resolv.conf", []byte("nameserver "+ns+"\n"), 0644)
+				log.Printf("Wrote /tmp/resolv.conf: %v", err)
+				explicitNS = true
 				break
+			}
+		}
+		if !explicitNS {
+			nsRx := regexp.MustCompile(`(?m)^nameserver (.*)`)
+			for t := time.Now(); time.Since(t) < 10*time.Second; time.Sleep(10 * time.Millisecond) {
+				all, _ := os.ReadFile("/etc/resolv.conf")
+				if nsRx.Match(all) {
+					break
+				}
 			}
 		}
 	}
