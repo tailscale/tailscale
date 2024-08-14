@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"expvar"
 	"fmt"
 	"maps"
 	"net"
@@ -33,7 +32,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -346,9 +344,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
-		warnings := expvar.Int{}
-		warnings.Set(int64(len(resp.Health)))
-		metricHealthMessages.Set(healthMessageLabel{Severity: "warning"}, &warnings)
 	}
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
@@ -357,16 +352,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
 }
-
-type healthMessageLabel struct {
-	Severity string
-}
-
-var metricHealthMessages = usermetric.NewMultiLabelMap[healthMessageLabel](
-	"tailscaled_health_messages",
-	"gauge",
-	"A gauge of health messages from control, by severity",
-)
 
 var (
 	patchDERPRegion   = clientmetric.NewCounter("controlclient_patch_derp")

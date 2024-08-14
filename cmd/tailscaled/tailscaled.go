@@ -63,6 +63,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -339,6 +340,13 @@ func run() (err error) {
 	var logf logger.Logf = log.Printf
 
 	sys := new(tsd.System)
+
+	health := sys.HealthTracker()
+	metricHealthMessages.Set(healthMessageLabel{
+		Severity: "warning",
+	}, expvar.Func(func() any {
+		return health.OverallErrorCount()
+	}))
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
@@ -919,3 +927,13 @@ func applyIntegrationTestEnvKnob() {
 		}
 	}
 }
+
+type healthMessageLabel struct {
+	Severity string
+}
+
+var metricHealthMessages = usermetric.NewMultiLabelMap[healthMessageLabel](
+	"tailscaled_health_messages",
+	"gauge",
+	"A gauge of health messages from control, by severity",
+)

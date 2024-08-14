@@ -897,6 +897,18 @@ func (t *Tracker) OverallError() error {
 	return t.multiErrLocked()
 }
 
+// OverallErrorCount returns the number of errors currently known to the
+// Tracker.
+func (t *Tracker) OverallErrorCount() int64 {
+	if t.nil() {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.updateBuiltinWarnablesLocked()
+	return int64(len(t.stringsLocked()))
+}
+
 // Strings() returns a string array containing the Text of all Warnings
 // currently known to the Tracker. These strings can be presented to the
 // user, although ideally you would use the Code property on each Warning
