@@ -95,11 +95,29 @@ func findKernelPath(goMod string) (string, error) {
 
 type addNodeFunc func(c *vnet.Config) *vnet.Node // returns nil to omit test
 
+func v6cidr(n int) string {
+	return fmt.Sprintf("2000:%d::1/64", n)
+}
+
 func easy(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
+}
+
+func easyAnd6(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n),
+		v6cidr(n),
+		vnet.EasyNAT))
+}
+
+func just6(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	return c.AddNode(c.AddNetwork(v6cidr(n))) // public IPv6 prefix
 }
 
 // easy + host firewall
@@ -255,6 +273,11 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 		for _, e := range node.Env() {
 			fmt.Fprintf(&envBuf, " tailscaled.env=%s=%s", e.Key, e.Value)
 		}
+		sysLogAddr := net.JoinHostPort(vnet.FakeSyslogIPv4().String(), "995")
+		if node.IsV6Only() {
+			fmt.Fprintf(&envBuf, " tta.nameserver=%s", vnet.FakeDNSIPv6())
+			sysLogAddr = net.JoinHostPort(vnet.FakeSyslogIPv6().String(), "995")
+		}
 		envStr := envBuf.String()
 
 		cmd := exec.Command("qemu-system-x86_64",
@@ -262,7 +285,7 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 			"-m", "384M",
 			"-nodefaults", "-no-user-config", "-nographic",
 			"-kernel", nt.kernel,
-			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target=52.52.0.9:995 tailscale-tta=1"+envStr,
+			"-append", "console=hvc0 root=PARTUUID=60c24cc1-f3f9-427a-8199-76baa2d60001/PARTNROFF=1 ro init=/gokrazy/init panic=10 oops=panic pci=off nousb tsc=unstable clocksource=hpet gokrazy.remote_syslog.target="+sysLogAddr+" tailscale-tta=1"+envStr,
 			"-drive", "id=blk0,file="+disk+",format=qcow2",
 			"-device", "virtio-blk-device,drive=blk0",
 			"-netdev", "stream,id=net0,addr.type=unix,addr.path="+sockAddr,
@@ -442,6 +465,20 @@ func (nt *natTest) want(r pingRoute) {
 func TestEasyEasy(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(easy, easy)
+	nt.want(routeDirect)
+}
+
+func TestJustIPv6(t *testing.T) {
+	t.Skip("TODO: get this working")
+	nt := newNatTest(t)
+	nt.runTest(just6, just6)
+	nt.want(routeDirect)
+}
+
+func TestEasy4AndJust6(t *testing.T) {
+	t.Skip("TODO: get this working")
+	nt := newNatTest(t)
+	nt.runTest(easyAnd6, just6)
 	nt.want(routeDirect)
 }
 

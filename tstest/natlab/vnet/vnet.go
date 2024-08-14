@@ -35,6 +35,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"go4.org/mem"
@@ -45,6 +46,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
@@ -99,7 +101,7 @@ func (n *network) InitNAT(natType NAT) error {
 	}
 	t, err := ctor(n)
 	if err != nil {
-		return fmt.Errorf("error creating NAT type %q for network %v: %w", natType, n.wanIP, err)
+		return fmt.Errorf("error creating NAT type %q for network %v: %w", natType, n.wanIP4, err)
 	}
 	n.setNATTable(t)
 	n.natStyle.Store(natType)
@@ -124,12 +126,13 @@ func (n *network) SoleLANIP() (netip.Addr, bool) {
 }
 
 // WANIP implements [IPPool].
-func (n *network) WANIP() netip.Addr { return n.wanIP }
+func (n *network) WANIP() netip.Addr { return n.wanIP4 }
 
 func (n *network) initStack() error {
 	n.ns = stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{
 			ipv4.NewProtocol,
+			ipv6.NewProtocol,
 			arp.NewProtocol,
 		},
 		TransportProtocols: []stack.TransportProtocolFactory{
@@ -149,25 +152,48 @@ func (n *network) initStack() error {
 	n.ns.SetPromiscuousMode(nicID, true)
 	n.ns.SetSpoofing(nicID, true)
 
-	prefix := tcpip.AddrFrom4Slice(n.lanIP.Addr().AsSlice()).WithPrefix()
-	prefix.PrefixLen = n.lanIP.Bits()
-	if tcpProb := n.ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
-		Protocol:          ipv4.ProtocolNumber,
-		AddressWithPrefix: prefix,
-	}, stack.AddressProperties{}); tcpProb != nil {
-		return errors.New(tcpProb.String())
-	}
+	var routes []tcpip.Route
 
-	ipv4Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 4)), tcpip.MaskFromBytes(make([]byte, 4)))
-	if err != nil {
-		return fmt.Errorf("could not create IPv4 subnet: %v", err)
-	}
-	n.ns.SetRouteTable([]tcpip.Route{
-		{
+	if n.v4 {
+		prefix := tcpip.AddrFrom4Slice(n.lanIP4.Addr().AsSlice()).WithPrefix()
+		prefix.PrefixLen = n.lanIP4.Bits()
+		if tcpProb := n.ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+			Protocol:          ipv4.ProtocolNumber,
+			AddressWithPrefix: prefix,
+		}, stack.AddressProperties{}); tcpProb != nil {
+			return errors.New(tcpProb.String())
+		}
+
+		ipv4Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 4)), tcpip.MaskFromBytes(make([]byte, 4)))
+		if err != nil {
+			return fmt.Errorf("could not create IPv4 subnet: %v", err)
+		}
+		routes = append(routes, tcpip.Route{
 			Destination: ipv4Subnet,
 			NIC:         nicID,
-		},
-	})
+		})
+	}
+	if n.v6 {
+		prefix := tcpip.AddrFrom16(n.wanIP6.Addr().As16()).WithPrefix()
+		prefix.PrefixLen = n.wanIP6.Bits()
+		if tcpProb := n.ns.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+			Protocol:          ipv6.ProtocolNumber,
+			AddressWithPrefix: prefix,
+		}, stack.AddressProperties{}); tcpProb != nil {
+			return errors.New(tcpProb.String())
+		}
+
+		ipv6Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 16)), tcpip.MaskFromBytes(make([]byte, 16)))
+		if err != nil {
+			return fmt.Errorf("could not create IPv6 subnet: %v", err)
+		}
+		routes = append(routes, tcpip.Route{
+			Destination: ipv6Subnet,
+			NIC:         nicID,
+		})
+	}
+
+	n.ns.SetRouteTable(routes)
 
 	const tcpReceiveBufferSize = 0 // default
 	const maxInFlightConnectionAttempts = 8192
@@ -186,55 +212,72 @@ func (n *network) initStack() error {
 				}
 				continue
 			}
-
-			ipRaw := pkt.ToView().AsSlice()
-			goPkt := gopacket.NewPacket(
-				ipRaw,
-				layers.LayerTypeIPv4, gopacket.Lazy)
-			layerV4 := goPkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-
-			dstIP, _ := netip.AddrFromSlice(layerV4.DstIP)
-			node, ok := n.nodesByIP[dstIP]
-			if !ok {
-				log.Printf("no MAC for dest IP %v", dstIP)
-				continue
-			}
-			eth := &layers.Ethernet{
-				SrcMAC:       n.mac.HWAddr(),
-				DstMAC:       node.mac.HWAddr(),
-				EthernetType: layers.EthernetTypeIPv4,
-			}
-			buffer := gopacket.NewSerializeBuffer()
-			options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-			sls := []gopacket.SerializableLayer{
-				eth,
-			}
-			for _, layer := range goPkt.Layers() {
-				sl, ok := layer.(gopacket.SerializableLayer)
-				if !ok {
-					log.Fatalf("layer %s is not serializable", layer.LayerType().String())
-				}
-				switch gl := layer.(type) {
-				case *layers.TCP:
-					gl.SetNetworkLayerForChecksum(layerV4)
-				case *layers.UDP:
-					gl.SetNetworkLayerForChecksum(layerV4)
-				}
-				sls = append(sls, sl)
-			}
-
-			if err := gopacket.SerializeLayers(buffer, options, sls...); err != nil {
-				log.Printf("Serialize error: %v", err)
-				continue
-			}
-			if nw, ok := n.writers.Load(node.mac); ok {
-				nw.write(buffer.Bytes())
-			} else {
-				log.Printf("No writeFunc for %v", node.mac)
-			}
+			n.handleIPPacketFromGvisor(pkt.ToView().AsSlice())
 		}
 	}()
 	return nil
+}
+
+func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
+	if len(ipRaw) == 0 {
+		panic("empty packet from gvisor")
+	}
+	var goPkt gopacket.Packet
+	ipVer := ipRaw[0] >> 4 // 4 or 6
+	switch ipVer {
+	case 4:
+		goPkt = gopacket.NewPacket(
+			ipRaw,
+			layers.LayerTypeIPv4, gopacket.Lazy)
+	case 6:
+		goPkt = gopacket.NewPacket(
+			ipRaw,
+			layers.LayerTypeIPv6, gopacket.Lazy)
+	default:
+		return
+	}
+	flow, ok := flow(goPkt)
+	if !ok {
+		panic("unexpected gvisor packet")
+	}
+	node, ok := n.nodeForDestIP(flow.dst)
+	if !ok {
+		n.logf("no node for netstack dest IP %v", flow.dst)
+		return
+	}
+	eth := &layers.Ethernet{
+		SrcMAC:       n.mac.HWAddr(),
+		DstMAC:       node.mac.HWAddr(),
+		EthernetType: flow.etherType(),
+	}
+	buffer := gopacket.NewSerializeBuffer()
+	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	sls := []gopacket.SerializableLayer{
+		eth,
+	}
+	for _, layer := range goPkt.Layers() {
+		sl, ok := layer.(gopacket.SerializableLayer)
+		if !ok {
+			log.Fatalf("layer %s is not serializable", layer.LayerType().String())
+		}
+		switch gl := layer.(type) {
+		case *layers.TCP:
+			gl.SetNetworkLayerForChecksum(goPkt.NetworkLayer())
+		case *layers.UDP:
+			gl.SetNetworkLayerForChecksum(goPkt.NetworkLayer())
+		}
+		sls = append(sls, sl)
+	}
+
+	if err := gopacket.SerializeLayers(buffer, options, sls...); err != nil {
+		n.logf("gvisor: serialize error: %v", err)
+		return
+	}
+	if nw, ok := n.writers.Load(node.mac); ok {
+		nw.write(buffer.Bytes())
+	} else {
+		n.logf("gvisor write: no writeFunc for %v", node.mac)
+	}
 }
 
 func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
@@ -263,6 +306,8 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true) // sends a RST
 		return
 	}
+
+	log.Printf("vnet-AcceptTCP: %v", stringifyTEI(reqDetails))
 
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -326,8 +371,6 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		go n.serveLogCatcherConn(clientRemoteIP, tc)
 		return
 	}
-
-	log.Printf("vnet-AcceptTCP: %v", stringifyTEI(reqDetails))
 
 	var targetDial string
 	if n.s.derpIPs.Contains(destIP) {
@@ -419,6 +462,12 @@ func (m MAC) IsBroadcast() bool {
 	return m == MAC{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 }
 
+// IsIPv6Multicast reports whether m is an IPv6 multicast MAC address,
+// typically one containing a solicited-node multicast address.
+func (m MAC) IsIPv6Multicast() bool {
+	return m[0] == 0x33 && m[1] == 0x33
+}
+
 func macOf(hwa net.HardwareAddr) (_ MAC, ok bool) {
 	if len(hwa) != 6 {
 		return MAC{}, false
@@ -455,13 +504,18 @@ func (nw *networkWriter) write(b []byte) {
 
 type network struct {
 	s              *Server
-	mac            MAC
+	num            int // 1-based
+	mac            MAC // of router
 	portmap        bool
 	lanInterfaceID int
 	wanInterfaceID int
-	wanIP          netip.Addr
-	lanIP          netip.Prefix // with host bits set (e.g. 192.168.2.1/24)
-	nodesByIP      map[netip.Addr]*node
+	v4             bool                 // network supports IPv4
+	v6             bool                 // network support IPv6
+	wanIP6         netip.Prefix         // router's WAN IPv6, if any, as a /64.
+	wanIP4         netip.Addr           // router's LAN IPv4, if any
+	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
+	nodesByIP      map[netip.Addr]*node // by LAN IPv4
+	nodesByMAC     map[MAC]*node
 	logf           func(format string, args ...any)
 
 	ns     *stack.Stack
@@ -472,6 +526,9 @@ type network struct {
 	natTable    NATTable
 	portMap     map[netip.AddrPort]portMapping    // WAN ip:port -> LAN ip:port
 	portMapFlow map[portmapFlowKey]netip.AddrPort // (lanAP, peerWANAP) -> portmapped wanAP
+
+	macMu     sync.Mutex
+	macOfIPv6 map[netip.Addr]MAC // IPv6 source IP -> MAC
 
 	// writers is a map of MAC -> networkWriters to write packets to that MAC.
 	// It contains entries for connected nodes only.
@@ -494,7 +551,7 @@ func (n *network) registerWriter(mac MAC, raddr *net.UnixAddr, interfaceID int, 
 }
 
 func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
-	if n.lanIP.Addr() == ip {
+	if n.lanIP4.Addr() == ip {
 		return n.mac, true
 	}
 	if n, ok := n.nodesByIP[ip]; ok {
@@ -559,7 +616,7 @@ type Server struct {
 	nodes        []*node
 	nodeByMAC    map[MAC]*node
 	networks     set.Set[*network]
-	networkByWAN map[netip.Addr]*network
+	networkByWAN *bart.Table[*network]
 
 	control    *testcontrol.Server
 	derps      []*derpServer
@@ -621,10 +678,11 @@ func New(c *Config) (*Server, error) {
 			ExplicitBaseURL: "http://control.tailscale",
 		},
 
-		derpIPs: set.Of[netip.Addr](),
+		blendReality: c.blendReality,
+		derpIPs:      set.Of[netip.Addr](),
 
 		nodeByMAC:    map[MAC]*node{},
-		networkByWAN: map[netip.Addr]*network{},
+		networkByWAN: &bart.Table[*network]{},
 		networks:     set.Of[*network](),
 	}
 	for range 2 {
@@ -653,15 +711,6 @@ func (s *Server) Close() {
 func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
 	// TODO: cache
 	return net.HardwareAddr(mac[:])
-}
-
-// IPv4ForDNS returns the IP address for the given DNS query name (for IPv4 A
-// queries only).
-func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
-	if v, ok := vips[qname]; ok {
-		return v.v4, v.v4.IsValid()
-	}
-	return netip.Addr{}, false
 }
 
 type Protocol int
@@ -767,6 +816,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
 		le, ok := packet.LinkLayer().(*layers.Ethernet)
 		if !ok || len(le.SrcMAC) != 6 || len(le.DstMAC) != 6 {
+			log.Printf("ignoring non-Ethernet packet: % 02x", packetRaw)
 			continue
 		}
 		ep := EthernetPacket{le, packet}
@@ -815,7 +865,7 @@ func (s *Server) routeUDPPacket(up UDPPacket) {
 	}
 
 	dstIP := up.Dst.Addr()
-	netw, ok := s.networkByWAN[dstIP]
+	netw, ok := s.networkByWAN.Lookup(dstIP)
 	if !ok {
 		if dstIP.IsPrivate() {
 			// Not worth spamming logs. RFC 1918 space doesn't route.
@@ -832,34 +882,59 @@ func (s *Server) routeUDPPacket(up UDPPacket) {
 //
 // This only delivers to client devices and not the virtual router/gateway
 // device.
-func (n *network) writeEth(res []byte) {
+//
+// It reports whether a packet was written to any clients.
+func (n *network) writeEth(res []byte) bool {
 	if len(res) < 12 {
-		return
+		return false
 	}
 	dstMAC := MAC(res[0:6])
 	srcMAC := MAC(res[6:12])
 	if dstMAC.IsBroadcast() {
+		num := 0
 		n.writers.Range(func(mac MAC, nw networkWriter) bool {
+			num++
 			nw.write(res)
 			return true
 		})
-		return
+		return num > 0
 	}
 	if srcMAC == dstMAC {
 		n.logf("dropping write of packet from %v to itself", srcMAC)
-		return
+		return false
 	}
 	if nw, ok := n.writers.Load(dstMAC); ok {
 		nw.write(res)
-		return
+		return true
 	}
+
+	const debugMiss = false
+	if debugMiss {
+		gp := gopacket.NewPacket(res, layers.LayerTypeEthernet, gopacket.Lazy)
+		n.logf("no writeFunc for dst %v from src %v; pkt=%v", dstMAC, srcMAC, gp)
+	}
+
+	return false
 }
+
+var (
+	macAllRouters = MAC{0: 0x33, 1: 0x33, 5: 0x02}
+)
 
 func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	packet := ep.gp
 	dstMAC := ep.DstMAC()
 	isBroadcast := dstMAC.IsBroadcast()
-	forRouter := dstMAC == n.mac || isBroadcast
+	isV6SpecialMAC := dstMAC[0] == 0x33 && dstMAC[1] == 0x33
+
+	// forRouter is whether the packet is destined for the router itself
+	// or if it's a special thing (like V6 NDP) that the router should handle.
+	forRouter := dstMAC == n.mac || isBroadcast || isV6SpecialMAC
+
+	const debug = false
+	if debug {
+		n.logf("HandleEthernetPacket: %v => %v; type %v, forRouter=%v", ep.SrcMAC(), ep.DstMAC(), ep.le.EthernetType, forRouter)
+	}
 
 	switch ep.le.EthernetType {
 	default:
@@ -874,9 +949,38 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 		}
 		return
 	case layers.EthernetTypeIPv6:
-		// One day. Low value for now. IPv4 NAT modes is the main thing
-		// this project wants to test.
-		return
+		if !n.v6 {
+			n.logf("dropping IPv6 packet on v4-only network")
+			return
+		}
+		if dstMAC == macAllRouters {
+			if rs, ok := ep.gp.Layer(layers.LayerTypeICMPv6RouterSolicitation).(*layers.ICMPv6RouterSolicitation); ok {
+				n.handleIPv6RouterSolicitation(ep, rs)
+			} else {
+				n.logf("unexpected IPv6 packet to all-routers: %v", ep.gp)
+			}
+			return
+		}
+		isMcast := dstMAC.IsIPv6Multicast()
+		if isMcast || dstMAC == n.mac {
+			if ns, ok := ep.gp.Layer(layers.LayerTypeICMPv6NeighborSolicitation).(*layers.ICMPv6NeighborSolicitation); ok {
+				n.handleIPv6NeighborSolicitation(ep, ns)
+				return
+			}
+			if ep.gp.Layer(layers.LayerTypeMLDv2MulticastListenerReport) != nil {
+				// We don't care about these (yet?) and Linux spams a bunch
+				// a bunch of them out, so explicitly ignore them to prevent
+				// log spam when verbose logging is enabled.
+				return
+			}
+			if isMcast {
+				return
+			}
+		}
+
+		// TODO(bradfitz): handle packets to e.g. [fe80::50cc:ccff:fecc:cc01]:43619
+		// and don't fall through to the router below.
+
 	case layers.EthernetTypeIPv4:
 		// Below
 	}
@@ -884,10 +988,12 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	// Send ethernet broadcasts and unicast ethernet frames to peers
 	// on the same network. This is all LAN traffic that isn't meant
 	// for the router/gw itself:
-	n.writeEth(ep.gp.Data())
+	if isBroadcast || !forRouter {
+		n.writeEth(ep.gp.Data())
+	}
 
 	if forRouter {
-		n.HandleEthernetIPv4PacketForRouter(ep)
+		n.HandleEthernetPacketForRouter(ep)
 	}
 }
 
@@ -927,6 +1033,25 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 	n.WriteUDPPacketNoNAT(p)
 }
 
+func (n *network) nodeForDestIP(ip netip.Addr) (node *node, ok bool) {
+	node, ok = n.nodesByIP[ip]
+	if !ok && ip.Is6() {
+		var mac MAC
+		n.macMu.Lock()
+		mac, ok = n.macOfIPv6[ip]
+		n.macMu.Unlock()
+		if !ok {
+			log.Printf("XXX no MAC for IPv6 %v", ip)
+			return nil, false
+		}
+		node, ok = n.nodesByMAC[mac]
+		if !ok {
+			log.Printf("XXX no node for MAC %v", mac)
+		}
+	}
+	return node, ok
+}
+
 // WriteUDPPacketNoNAT writes a UDP packet to the network, without
 // doing any NAT translation.
 //
@@ -935,7 +1060,7 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 // same ethernet segment.
 func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	src, dst := p.Src, p.Dst
-	node, ok := n.nodesByIP[dst.Addr()]
+	node, ok := n.nodeForDestIP(dst.Addr())
 	if !ok {
 		n.logf("no node for dest IP %v in UDP packet %v=>%v", dst.Addr(), p.Src, p.Dst)
 		return
@@ -944,7 +1069,7 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	eth := &layers.Ethernet{
 		SrcMAC:       n.mac.HWAddr(), // of gateway
 		DstMAC:       node.mac.HWAddr(),
-		EthernetType: layers.EthernetTypeIPv4,
+		EthernetType: p.etherType(),
 	}
 	ethRaw, err := n.serializedUDPPacket(src, dst, p.Payload, eth)
 	if err != nil {
@@ -954,19 +1079,40 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	n.writeEth(ethRaw)
 }
 
+type serializableNetworkLayer interface {
+	gopacket.SerializableLayer
+	gopacket.NetworkLayer
+}
+
+func mkIPLayer(proto layers.IPProtocol, src, dst netip.Addr) serializableNetworkLayer {
+	if src.Is4() {
+		return &layers.IPv4{
+			Version:  4,
+			TTL:      64,
+			Protocol: proto,
+			SrcIP:    src.AsSlice(),
+			DstIP:    dst.AsSlice(),
+		}
+	}
+	if src.Is6() {
+		return &layers.IPv6{
+			Version:    6,
+			HopLimit:   64,
+			NextHeader: proto,
+			SrcIP:      src.AsSlice(),
+			DstIP:      dst.AsSlice(),
+		}
+	}
+	panic("invalid src IP")
+}
+
 // serializedUDPPacket serializes a UDP packet with the given source and
 // destination IP:port pairs, and payload.
 //
 // If eth is non-nil, it will be used as the Ethernet layer, otherwise the
 // Ethernet layer will be omitted from the serialization.
 func (n *network) serializedUDPPacket(src, dst netip.AddrPort, payload []byte, eth *layers.Ethernet) ([]byte, error) {
-	ip := &layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		Protocol: layers.IPProtocolUDP,
-		SrcIP:    src.Addr().AsSlice(),
-		DstIP:    dst.Addr().AsSlice(),
-	}
+	ip := mkIPLayer(layers.IPProtocolUDP, src.Addr(), dst.Addr())
 	udp := &layers.UDP{
 		SrcPort: layers.UDPPort(src.Port()),
 		DstPort: layers.UDPPort(dst.Port()),
@@ -980,26 +1126,33 @@ func (n *network) serializedUDPPacket(src, dst netip.AddrPort, payload []byte, e
 		layers = layers[1:]
 	}
 	if err := gopacket.SerializeLayers(buffer, options, layers...); err != nil {
-		return nil, fmt.Errorf("serializing UDP: %v", err)
+		return nil, fmt.Errorf("serializing UDP from %v to %v: %v", src, dst, err)
 	}
 	return buffer.Bytes(), nil
 }
 
-// HandleEthernetIPv4PacketForRouter handles an IPv4 packet that is
+// HandleEthernetPacketForRouter handles an IPv4 packet that is
 // directed to the router/gateway itself. The packet may be to the
 // broadcast MAC address, or to the router's MAC address. The target
 // IP may be the router's IP, or an internet (routed) IP.
-func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
+func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 	packet := ep.gp
-
-	v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	flow, ok := flow(packet)
 	if !ok {
+		n.logf("dropping non-IP packet: %v", packet)
 		return
 	}
-	srcIP, _ := netip.AddrFromSlice(v4.SrcIP)
-	dstIP, _ := netip.AddrFromSlice(v4.DstIP)
-	toForward := dstIP != n.lanIP.Addr() && dstIP != netip.IPv4Unspecified()
+	srcIP, dstIP := flow.src, flow.dst
+
+	toForward := dstIP != n.lanIP4.Addr() && dstIP != netip.IPv4Unspecified() && !dstIP.IsLinkLocalUnicast()
 	udp, isUDP := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
+
+	// Pre-NAT mapping, for DNS/etc responses:
+	if srcIP.Is6() {
+		n.macMu.Lock()
+		mak.Set(&n.macOfIPv6, srcIP, ep.SrcMAC())
+		n.macMu.Unlock()
+	}
 
 	if isDHCPRequest(packet) {
 		res, err := n.s.createDHCPResponse(packet)
@@ -1017,8 +1170,6 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	}
 
 	if isDNSRequest(packet) {
-		// TODO(bradfitz): restrict this to 4.11.4.11? add DNS
-		// on gateway instead?
 		res, err := n.s.createDNSResponse(packet)
 		if err != nil {
 			n.logf("createDNSResponse: %v", err)
@@ -1029,7 +1180,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	}
 
 	if isUDP && fakeSyslog.Match(dstIP) {
-		node, ok := n.nodesByIP[srcIP]
+		node, ok := n.nodeForDestIP(srcIP)
 		if !ok {
 			return
 		}
@@ -1083,6 +1234,12 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			InterfaceIndex: n.wanInterfaceID,
 		}, buf)
 
+		if src.Addr().Is6() {
+			n.macMu.Lock()
+			mak.Set(&n.macOfIPv6, src.Addr(), ep.SrcMAC())
+			n.macMu.Unlock()
+		}
+
 		n.s.routeUDPPacket(UDPPacket{
 			Src:     src,
 			Dst:     dst,
@@ -1092,14 +1249,23 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 	}
 
 	if toForward && n.s.shouldInterceptTCP(packet) {
-		ipp := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-		pktCopy := make([]byte, 0, len(ipp.Contents)+len(ipp.Payload))
-		pktCopy = append(pktCopy, ipp.Contents...)
-		pktCopy = append(pktCopy, ipp.Payload...)
+		var base *layers.BaseLayer
+		proto := header.IPv4ProtocolNumber
+		if v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {
+			base = &v4.BaseLayer
+		} else if v6, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6); ok {
+			base = &v6.BaseLayer
+			proto = header.IPv6ProtocolNumber
+		} else {
+			panic("not v4, not v6")
+		}
+		pktCopy := make([]byte, 0, len(base.Contents)+len(base.Payload))
+		pktCopy = append(pktCopy, base.Contents...)
+		pktCopy = append(pktCopy, base.Payload...)
 		packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			Payload: buffer.MakeWithData(pktCopy),
 		})
-		n.linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+		n.linkEP.InjectInbound(proto, packetBuf)
 		packetBuf.DecRef()
 		return
 	}
@@ -1111,9 +1277,116 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	//log.Printf("Got packet: %v", packet)
+	n.logf("router got unknown packet: %v", packet)
 }
 
+func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICMPv6RouterSolicitation) {
+	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+
+	// Send a router advertisement back.
+	eth := &layers.Ethernet{
+		SrcMAC:       n.mac.HWAddr(),
+		DstMAC:       ep.SrcMAC().HWAddr(),
+		EthernetType: layers.EthernetTypeIPv6,
+	}
+	n.logf("sending IPv6 router advertisement to %v from %v", eth.SrcMAC, eth.DstMAC)
+	ip := &layers.IPv6{
+		Version:    6,
+		HopLimit:   255,
+		NextHeader: layers.IPProtocolICMPv6,
+		SrcIP:      net.ParseIP("fe80::1"),
+		DstIP:      v6.SrcIP,
+	}
+	icmp := &layers.ICMPv6{
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeRouterAdvertisement, 0),
+	}
+	pfx := make([]byte, 0, 30)                      // it's 32 on the wire, once gopacket adds two byte header
+	pfx = append(pfx, byte(64))                     // CIDR length
+	pfx = append(pfx, byte(0xc0))                   // flags: On-Link, Autonomous
+	pfx = binary.BigEndian.AppendUint32(pfx, 86400) // valid lifetime
+	pfx = binary.BigEndian.AppendUint32(pfx, 14400) // preferred lifetime
+	pfx = binary.BigEndian.AppendUint32(pfx, 0)     // reserved
+	wanIP := n.wanIP6.Addr().As16()
+	pfx = append(pfx, wanIP[:]...)
+
+	ra := &layers.ICMPv6RouterAdvertisement{
+		RouterLifetime: 1800,
+		Options: []layers.ICMPv6Option{
+			{
+				Type: layers.ICMPv6OptPrefixInfo,
+				Data: pfx,
+			},
+		},
+	}
+	icmp.SetNetworkLayerForChecksum(ip)
+	buffer := gopacket.NewSerializeBuffer()
+	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buffer, options, eth, ip, icmp, ra); err != nil {
+		n.logf("serializing ICMPv6 RA: %v", err)
+		return
+	}
+	n.writeEth(buffer.Bytes())
+}
+
+func (n *network) handleIPv6NeighborSolicitation(ep EthernetPacket, ns *layers.ICMPv6NeighborSolicitation) {
+	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+
+	targetIP, ok := netip.AddrFromSlice(ns.TargetAddress)
+	if !ok {
+		return
+	}
+	var srcMAC MAC
+	if targetIP == netip.MustParseAddr("fe80::1") {
+		srcMAC = n.mac
+	} else {
+		n.logf("Ignoring IPv6 NS request from %v for target %v", ep.SrcMAC(), targetIP)
+		return
+	}
+	n.logf("replying to IPv6 NS %v->%v about target %v (replySrc=%v)", ep.SrcMAC(), ep.DstMAC(), targetIP, srcMAC)
+
+	// Send a neighbor advertisement back.
+	eth := &layers.Ethernet{
+		SrcMAC:       srcMAC.HWAddr(),
+		DstMAC:       ep.SrcMAC().HWAddr(),
+		EthernetType: layers.EthernetTypeIPv6,
+	}
+	ip := &layers.IPv6{
+		Version:    6,
+		HopLimit:   255,
+		NextHeader: layers.IPProtocolICMPv6,
+		SrcIP:      ns.TargetAddress,
+		DstIP:      v6.SrcIP,
+	}
+	icmp := &layers.ICMPv6{
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeNeighborAdvertisement, 0),
+	}
+	var flags uint8 = 0x40 // solicited
+	if srcMAC == n.mac {
+		flags |= 0x80 // router
+	}
+	flags |= 0x20 // override
+
+	na := &layers.ICMPv6NeighborAdvertisement{
+		TargetAddress: ns.TargetAddress,
+		Flags:         flags,
+	}
+	na.Options = append(na.Options, layers.ICMPv6Option{
+		Type: layers.ICMPv6OptTargetAddress,
+		Data: srcMAC.HWAddr(),
+	})
+	icmp.SetNetworkLayerForChecksum(ip)
+	buffer := gopacket.NewSerializeBuffer()
+	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buffer, options, eth, ip, icmp, na); err != nil {
+		n.logf("serializing ICMPv6 RA: %v", err)
+		return
+	}
+	if !n.writeEth(buffer.Bytes()) {
+		n.logf("failed to writeEth for IPv6 NA reply for %v", targetIP)
+	}
+}
+
+// createDHCPResponse creates a DHCPv4 response for the given DHCPv4 request.
 func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	ethLayer := request.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
 	srcMAC, ok := macOf(ethLayer.SrcMAC)
@@ -1125,7 +1398,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		log.Printf("DHCP request from unknown node %v; ignoring", srcMAC)
 		return nil, nil
 	}
-	gwIP := node.net.lanIP.Addr()
+	gwIP := node.net.lanIP4.Addr()
 
 	ipLayer := request.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	udpLayer := request.Layer(layers.LayerTypeUDP).(*layers.UDP)
@@ -1185,7 +1458,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 			},
 			layers.DHCPOption{
 				Type:   layers.DHCPOptSubnetMask,
-				Data:   net.CIDRMask(node.net.lanIP.Bits(), 32),
+				Data:   net.CIDRMask(node.net.lanIP4.Bits(), 32),
 				Length: 4,
 			},
 		)
@@ -1194,7 +1467,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	eth := &layers.Ethernet{
 		SrcMAC:       node.net.mac.HWAddr(),
 		DstMAC:       ethLayer.SrcMAC,
-		EthernetType: layers.EthernetTypeIPv4,
+		EthernetType: layers.EthernetTypeIPv4, // never IPv6 for DHCP
 	}
 
 	ip := &layers.IPv4{
@@ -1249,34 +1522,66 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	if !ok {
 		return false
 	}
-	ipv4, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	if !ok {
-		return false
-	}
 	if tcp.DstPort == 123 {
 		// Test port for TCP interception. Not really useful, but cute for
 		// demos.
 		return true
 	}
-	dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
+	flow, ok := flow(pkt)
+	if !ok {
+		return false
+	}
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
 		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher} {
-			if v.Match(dstIP) {
+			if v.Match(flow.dst) {
 				return true
 			}
 		}
-		if fakeProxyControlplane.Match(dstIP) {
+		if fakeProxyControlplane.Match(flow.dst) {
 			return s.blendReality
 		}
-		if s.derpIPs.Contains(dstIP) {
+		if s.derpIPs.Contains(flow.dst) {
 			return true
 		}
 	}
-	if tcp.DstPort == 8008 && fakeTestAgent.Match(dstIP) {
+	if tcp.DstPort == 8008 && fakeTestAgent.Match(flow.dst) {
 		// Connection from cmd/tta.
 		return true
 	}
 	return false
+}
+
+type ipSrcDst struct {
+	src netip.Addr
+	dst netip.Addr
+}
+
+func (f ipSrcDst) etherType() layers.EthernetType {
+	if f.dst.Is6() {
+		return layers.EthernetTypeIPv6
+	}
+	return layers.EthernetTypeIPv4
+}
+
+func (p UDPPacket) etherType() layers.EthernetType {
+	if p.Dst.Addr().Is6() {
+		return layers.EthernetTypeIPv6
+	}
+	return layers.EthernetTypeIPv4
+}
+
+func flow(gp gopacket.Packet) (f ipSrcDst, ok bool) {
+	if gp == nil {
+		return f, false
+	}
+	n := gp.NetworkLayer()
+	if n == nil {
+		return f, false
+	}
+	sb, db := n.NetworkFlow().Endpoints()
+	src, _ := netip.AddrFromSlice(sb.Raw())
+	dst, _ := netip.AddrFromSlice(db.Raw())
+	return ipSrcDst{src: src, dst: dst}, src.IsValid() && dst.IsValid()
 }
 
 // isDNSRequest reports whether pkt is a DNS request to the fake DNS server.
@@ -1285,12 +1590,12 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	if !ok || udp.DstPort != 53 {
 		return false
 	}
-	ip, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	f, ok := flow(pkt)
 	if !ok {
 		return false
 	}
-	dstIP, ok := netip.AddrFromSlice(ip.DstIP)
-	if !ok || !fakeDNS.Match(dstIP) {
+	if !fakeDNS.Match(f.dst) {
+		// TODO(bradfitz): maybe support configs where DNS is local in the LAN
 		return false
 	}
 	dns, ok := pkt.Layer(layers.LayerTypeDNS).(*layers.DNS)
@@ -1316,8 +1621,11 @@ func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
 }
 
 func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
+	flow, ok := flow(pkt)
+	if !ok {
+		return nil, nil
+	}
 	ethLayer := pkt.Layer(layers.LayerTypeEthernet).(*layers.Ethernet)
-	ipLayer := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	udpLayer := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
 	dnsLayer := pkt.Layer(layers.LayerTypeDNS).(*layers.DNS)
 
@@ -1349,34 +1657,35 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		}
 
 		names = append(names, q.Type.String()+"/"+string(q.Name))
-		if q.Class != layers.DNSClassIN || q.Type != layers.DNSTypeA {
+		if q.Class != layers.DNSClassIN {
 			continue
 		}
 
-		if ip, ok := s.IPv4ForDNS(string(q.Name)); ok {
-			response.ANCount++
-			response.Answers = append(response.Answers, layers.DNSResourceRecord{
-				Name:  q.Name,
-				Type:  q.Type,
-				Class: q.Class,
-				IP:    ip.AsSlice(),
-				TTL:   60,
-			})
+		if q.Type == layers.DNSTypeA || q.Type == layers.DNSTypeAAAA {
+			if v, ok := vips[string(q.Name)]; ok {
+				ip := v.v4
+				if q.Type == layers.DNSTypeAAAA {
+					ip = v.v6
+				}
+				response.ANCount++
+				response.Answers = append(response.Answers, layers.DNSResourceRecord{
+					Name:  q.Name,
+					Type:  q.Type,
+					Class: q.Class,
+					IP:    ip.AsSlice(),
+					TTL:   60,
+				})
+			}
 		}
 	}
 
+	// Make reply layers, all reversed.
 	eth2 := &layers.Ethernet{
 		SrcMAC:       ethLayer.DstMAC,
 		DstMAC:       ethLayer.SrcMAC,
-		EthernetType: layers.EthernetTypeIPv4,
+		EthernetType: flow.etherType(),
 	}
-	ip2 := &layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		Protocol: layers.IPProtocolUDP,
-		SrcIP:    ipLayer.DstIP,
-		DstIP:    ipLayer.SrcIP,
-	}
+	ip2 := mkIPLayer(layers.IPProtocolUDP, flow.dst, flow.src)
 	udp2 := &layers.UDP{
 		SrcPort: udpLayer.DstPort,
 		DstPort: udpLayer.SrcPort,
@@ -1393,7 +1702,7 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 	if debugDNS {
 		if len(response.Answers) > 0 {
 			back := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeEthernet, gopacket.Lazy)
-			log.Printf("Generated: %v", back)
+			log.Printf("createDNSResponse generated answers: %v", back)
 		} else {
 			log.Printf("made empty response for %q", names)
 		}
@@ -1409,6 +1718,11 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 //
 // If newSrc is invalid, the packet should be dropped.
 func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
+	if src.Addr().Is6() {
+		// TODO(bradfitz): IPv6 NAT? For now, normal IPv6 only.
+		return src
+	}
+
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
 
@@ -1433,6 +1747,11 @@ type portmapFlowKey struct {
 //
 // If newDst is invalid, the packet should be dropped.
 func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
+	if dst.Addr().Is6() {
+		// TODO(bradfitz): IPv6 NAT? For now, normal IPv6 only.
+		return dst
+	}
+
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
 
@@ -1473,7 +1792,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 		return 0, false
 	}
 
-	wanAP := netip.AddrPortFrom(n.wanIP, wantExtPort)
+	wanAP := netip.AddrPortFrom(n.wanIP4, wantExtPort)
 	dst := netip.AddrPortFrom(src, dstLANPort)
 
 	if sec == 0 {
@@ -1505,7 +1824,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 			return wanAP.Port(), true
 		}
 		wantExtPort = rand.N(uint16(32<<10)) + 32<<10
-		wanAP = netip.AddrPortFrom(n.wanIP, wantExtPort)
+		wanAP = netip.AddrPortFrom(n.wanIP4, wantExtPort)
 	}
 	return 0, false
 }
@@ -1540,7 +1859,7 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 
 	a2 := &layers.ARP{
 		AddrType:          layers.LinkTypeEthernet,
-		Protocol:          layers.EthernetTypeIPv4,
+		Protocol:          layers.EthernetTypeIPv4, // never IPv6; IPv6 equivalent of ARP is handleIPv6NeighborSolicitation
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
 		Operation:         layers.ARPReply,
@@ -1573,7 +1892,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 			0, 0, // result code success
 		)
 		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
-		wan4 := n.wanIP.As4()
+		wan4 := n.wanIP4.As4()
 		res = append(res, wan4[:]...)
 		n.WriteUDPPacketNoNAT(UDPPacket{
 			Src:     req.Dst,
@@ -1637,7 +1956,7 @@ func (s *Server) WriteStartingBanner(w io.Writer) {
 	fmt.Fprintf(w, "vnet serving clients:\n")
 
 	for _, n := range s.nodes {
-		fmt.Fprintf(w, "  %v %15v (%v, %v)\n", n.mac, n.lanIP, n.net.wanIP, n.net.natStyle.Load())
+		fmt.Fprintf(w, "  %v %15v (%v, %v)\n", n.mac, n.lanIP, n.net.wanIP4, n.net.natStyle.Load())
 	}
 }
 
