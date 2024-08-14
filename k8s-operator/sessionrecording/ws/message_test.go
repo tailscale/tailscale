@@ -193,7 +193,9 @@ func bytesSlice2ByteLen(t *testing.T) ([]byte, []byte) {
 // This is used to generate test input representing websocket message with payload length hint 127.
 // https://www.rfc-editor.org/rfc/rfc6455#section-5.2
 func byteSlice8ByteLen(t *testing.T) ([]byte, []byte) {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	nanos := time.Now().UnixNano()
+	t.Logf("Creating random source with seed %v", nanos)
+	r := rand.New(rand.NewSource(nanos))
 	var n uint64
 	n = uint64(rand.Intn(websocket.DefaultMaxPayloadBytes - 1)) // space for and additional 1 byte stream ID
 	t.Logf("byteSlice8ByteLen: generating message payload of length %d", n)
