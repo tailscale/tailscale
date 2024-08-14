@@ -211,6 +211,26 @@ func (v *MultiLabelMap[T]) Set(key T, val expvar.Var) {
 	v.m.Store(key, val)
 }
 
+// SetInt sets val to the *[expvar.Int] value stored under the given map key,
+// creating it if it doesn't exist yet.
+// It does nothing if key exists but is of the wrong type.
+func (v *MultiLabelMap[T]) SetInt(key T, val int64) {
+	// Set to Int; ignore otherwise.
+	if iv, ok := v.getOrFill(key, newInt).(*expvar.Int); ok {
+		iv.Set(val)
+	}
+}
+
+// SetFloat sets val to the *[expvar.Float] value stored under the given map key,
+// creating it if it doesn't exist yet.
+// It does nothing if key exists but is of the wrong type.
+func (v *MultiLabelMap[T]) SetFloat(key T, val float64) {
+	// Set to Float; ignore otherwise.
+	if iv, ok := v.getOrFill(key, newFloat).(*expvar.Float); ok {
+		iv.Set(val)
+	}
+}
+
 // Add adds delta to the *[expvar.Int] value stored under the given map key,
 // creating it if it doesn't exist yet.
 // It does nothing if key exists but is of the wrong type.
