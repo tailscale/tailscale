@@ -33,6 +33,21 @@ func NewMultiLabelMap[T comparable](name string, promType, helpText string) *met
 	return m
 }
 
+// NewMap creates and register a new
+// Map variable with the given name and returns it.
+//
+// Note that usermetric are not protected against duplicate
+// metrics name. It is the caller's responsibility to ensure that
+// the name is unique.
+func NewMap(name string, promType, helpText string) *metrics.MultiLabelMap[struct{}] {
+	m := &metrics.MultiLabelMap[struct{}]{
+		Type: promType,
+		Help: helpText,
+	}
+	vars.Set(name, m)
+	return m
+}
+
 // Handler returns a varz.Handler that serves the userfacing expvar contained
 // in this package.
 func Handler(w http.ResponseWriter, r *http.Request) {
