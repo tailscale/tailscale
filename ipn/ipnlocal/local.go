@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"expvar"
 	"fmt"
 	"io"
 	"log"
@@ -4616,7 +4615,7 @@ func unmapIPPrefixes(ippsList ...[]netip.Prefix) (ret []netip.Prefix) {
 	return ret
 }
 
-var metricAdvertisedRoutes = usermetric.NewMultiLabelMap[struct{}](
+var metricAdvertisedRoutes = usermetric.NewMap(
 	"tailscaled_advertised_routes",
 	"gauge",
 	"Number of subnet routes advertised by the node. (excluding exit node /0 routes)",
@@ -4633,13 +4632,13 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
 	// count routes without exit node routes
-	routeCount := expvar.Int{}
+	routeCount := 0
 	for _, route := range hi.RoutableIPs {
 		if route.Bits() != 0 {
-			routeCount.Add(1)
+			routeCount++
 		}
 	}
-	metricAdvertisedRoutes.Set(struct{}{}, &routeCount)
+	metricAdvertisedRoutes.SetInt(struct{}{}, int64(routeCount))
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
