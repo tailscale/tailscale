@@ -448,7 +448,7 @@ func viewTypeForContainerType(typ types.Type) (*types.Named, *types.Func) {
 	}
 	// ...and add the element view type.
 	// For that, we need to first determine the named elem type...
-	elemType, ok := baseType(containerType.TypeArgs().At(0)).(*types.Named)
+	elemType, ok := baseType(containerType.TypeArgs().At(containerType.TypeArgs().Len() - 1)).(*types.Named)
 	if !ok {
 		return nil, nil
 	}

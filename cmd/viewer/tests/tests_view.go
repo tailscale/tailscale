@@ -657,14 +657,22 @@ func (v StructWithContainersView) CloneableContainer() ContainerView[*StructWith
 func (v StructWithContainersView) BasicGenericContainer() Container[GenericBasicStruct[int]] {
 	return v.ж.BasicGenericContainer
 }
-func (v StructWithContainersView) ClonableGenericContainer() ContainerView[*GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
-	return ContainerViewOf(&v.ж.ClonableGenericContainer)
+func (v StructWithContainersView) CloneableGenericContainer() ContainerView[*GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
+	return ContainerViewOf(&v.ж.CloneableGenericContainer)
+}
+func (v StructWithContainersView) CloneableMap() MapContainerView[int, *StructWithPtrs, StructWithPtrsView] {
+	return MapContainerViewOf(&v.ж.CloneableMap)
+}
+func (v StructWithContainersView) CloneableGenericMap() MapContainerView[int, *GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
+	return MapContainerViewOf(&v.ж.CloneableGenericMap)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithContainersViewNeedsRegeneration = StructWithContainers(struct {
-	IntContainer             Container[int]
-	CloneableContainer       Container[*StructWithPtrs]
-	BasicGenericContainer    Container[GenericBasicStruct[int]]
-	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	IntContainer              Container[int]
+	CloneableContainer        Container[*StructWithPtrs]
+	BasicGenericContainer     Container[GenericBasicStruct[int]]
+	CloneableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	CloneableMap              MapContainer[int, *StructWithPtrs]
+	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
 }{})
