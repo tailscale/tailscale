@@ -33,19 +33,14 @@ func NewMultiLabelMap[T comparable](name string, promType, helpText string) *met
 	return m
 }
 
-// NewMap creates and register a new
-// Map variable with the given name and returns it.
+// Publish declares a named exported variable. This should be called from a
+// package's init function when it creates its Vars.
 //
 // Note that usermetric are not protected against duplicate
 // metrics name. It is the caller's responsibility to ensure that
 // the name is unique.
-func NewMap(name string, promType, helpText string) *metrics.MultiLabelMap[struct{}] {
-	m := &metrics.MultiLabelMap[struct{}]{
-		Type: promType,
-		Help: helpText,
-	}
-	vars.Set(name, m)
-	return m
+func Publish(name string, v expvar.Var) {
+	vars.Set(name, v)
 }
 
 // Handler returns a varz.Handler that serves the userfacing expvar contained
