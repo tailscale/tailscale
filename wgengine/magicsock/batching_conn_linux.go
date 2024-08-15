@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -366,6 +367,10 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 // tryUpgradeToBatchingConn probes the capabilities of the OS and pconn, and
 // upgrades pconn to a *linuxBatchingConn if appropriate.
 func tryUpgradeToBatchingConn(pconn nettype.PacketConn, network string, batchSize int) nettype.PacketConn {
+	if runtime.GOOS != "linux" {
+		// Exclude Android.
+		return pconn
+	}
 	if network != "udp4" && network != "udp6" {
 		return pconn
 	}
