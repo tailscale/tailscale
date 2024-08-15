@@ -863,6 +863,9 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 
 	if filt.RunOut(p, t.filterFlags) != filter.Accept {
 		metricPacketOutDropFilter.Add(1)
+		metricOutboundDroppedPacketsTotal.Add(dropPacketLabel{
+			Reason: DropReasonACL,
+		}, 1)
 		return filter.Drop
 	}
 
@@ -924,8 +927,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		if !t.disableFilter {
 			response := t.filterPacketOutboundToWireGuard(p, pc)
 			if response != filter.Accept {
-				metricOutboundPacketsTotal.Add(trafficLabel{
-					Action: TrafficActionDropACL,
+				metricOutboundDroppedPacketsTotal.Add(dropPacketLabel{
+					Reason: DropReasonError,
 				}, 1)
 				metricPacketOutDrop.Add(1)
 				continue
@@ -953,10 +956,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		// We are done with t.buffer. Let poll() re-use it.
 		t.sendBufferConsumed()
 	}
-
-	metricOutboundPacketsTotal.Add(trafficLabel{
-		Action: TrafficActionAccept,
-	}, int64(len(res.data)))
 
 	t.noteActivity()
 	return buffsPos, res.err
@@ -1134,6 +1133,9 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 
 	if outcome != filter.Accept {
 		metricPacketInDropFilter.Add(1)
+		metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+			Reason: DropReasonACL,
+		}, 1)
 
 		// Tell them, via TSMP, we're dropping them due to the ACL.
 		// Their host networking stack can translate this into ICMP
@@ -1184,8 +1186,8 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		if !t.disableFilter {
 			if t.filterPacketInboundFromWireGuard(p, captHook, pc) != filter.Accept {
 				metricPacketInDrop.Add(1)
-				metricInboundPacketsTotal.Add(trafficLabel{
-					Action: TrafficActionDropACL,
+				metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+					Reason: DropReasonError,
 				}, 1)
 			} else {
 				buffs[i] = buff
@@ -1205,12 +1207,8 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		t.noteActivity()
 		_, err := t.tdevWrite(buffs, offset)
 		if err != nil {
-			metricInboundPacketsTotal.Add(trafficLabel{
-				Action: TrafficActionDropError,
-			}, int64(len(buffs)))
-		} else {
-			metricInboundPacketsTotal.Add(trafficLabel{
-				Action: TrafficActionAccept,
+			metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+				Reason: DropReasonError,
 			}, int64(len(buffs)))
 		}
 		return len(buffs), err
@@ -1415,34 +1413,30 @@ var (
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
 )
 
-type TrafficAction string
+type DropReason string
 
 const (
-	TrafficActionAccept    TrafficAction = "accept"
-	TrafficActionDropACL   TrafficAction = "drop_acl"
-	TrafficActionDropError TrafficAction = "drop_error"
-	TrafficActionDropDst   TrafficAction = "drop_dst_unknown"
+	DropReasonACL   DropReason = "acl"
+	DropReasonError DropReason = "error"
 )
 
-type trafficLabel struct {
-	// Action indicates what we have done with the packet, and has the following wvalues:
-	// - accept
-	// - drop_acl (rejected packets because of ACL)
-	// - drop_error (rejected packets because of an error)
-	// - drop_dst_unknown
-	Action TrafficAction
+type dropPacketLabel struct {
+	// Reason indicates what we have done with the packet, and has the following values:
+	// - acl (rejected packets because of ACL)
+	// - error (rejected packets because of an error)
+	Reason DropReason
 }
 
 var (
-	metricInboundPacketsTotal = usermetric.NewMultiLabelMap[trafficLabel](
-		"tailscaled_inbound_packets_total",
+	metricInboundDroppedPacketsTotal = usermetric.NewMultiLabelMap[dropPacketLabel](
+		"tailscaled_inbound_dropped_packets_total",
 		"counter",
-		"Counts the number of packets received by the node from other peers",
+		"Counts the number of dropped packets received by the node from other peers",
 	)
-	metricOutboundPacketsTotal = usermetric.NewMultiLabelMap[trafficLabel](
-		"tailscaled_outbound_packets_total",
+	metricOutboundDroppedPacketsTotal = usermetric.NewMultiLabelMap[dropPacketLabel](
+		"tailscaled_outbound_dropped_packets_total",
 		"counter",
-		"Counts the number of packets sent by the node to other peers",
+		"Counts the number of dropped packets sent by the node to other peers",
 	)
 )
 
