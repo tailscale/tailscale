@@ -927,9 +927,6 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		if !t.disableFilter {
 			response := t.filterPacketOutboundToWireGuard(p, pc)
 			if response != filter.Accept {
-				metricOutboundDroppedPacketsTotal.Add(dropPacketLabel{
-					Reason: DropReasonError,
-				}, 1)
 				metricPacketOutDrop.Add(1)
 				continue
 			}
@@ -1186,9 +1183,6 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		if !t.disableFilter {
 			if t.filterPacketInboundFromWireGuard(p, captHook, pc) != filter.Accept {
 				metricPacketInDrop.Add(1)
-				metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
-					Reason: DropReasonError,
-				}, 1)
 			} else {
 				buffs[i] = buff
 				i++
