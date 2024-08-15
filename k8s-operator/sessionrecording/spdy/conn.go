@@ -28,7 +28,7 @@ import (
 // The hijacked connection is used to transmit SPDY streams between Kubernetes client ('kubectl') and the destination container.
 // Data read from the underlying network connection is data sent via one of the SPDY streams from the client to the container.
 // Data written to the underlying connection is data sent from the container to the client.
-// We parse the data and send everything for the STDOUT/STDERR streams to the configured tsrecorder as an asciinema recording with the provided header.
+// We parse the data and send everything for the stdout/stderr streams to the configured tsrecorder as an asciinema recording with the provided header.
 // https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#background-remotecommand-subprotocol
 func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) net.Conn {
 	return &conn{
@@ -37,7 +37,7 @@ func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, ha
 		ch:                 ch,
 		log:                log,
 		hasTerm:            hasTerm,
-		initialTermSizeSet: make(chan string, 1),
+		initialTermSizeSet: make(chan struct{}),
 	}
 }
 
@@ -68,8 +68,8 @@ type conn struct {
 	// starts as well as at any time the client detects a terminal change.
 	// We can intercept the resize message on Read calls. As there is no
 	// guarantee that the resize message from client will be intercepted
-	// before server writes STDOUT messages that we must record, we need to
-	// ensure that parsing STDOUT/STDERR messages written to the connection
+	// before server writes stdout messages that we must record, we need to
+	// ensure that parsing stdout/stderr messages written to the connection
 	// waits till a resize message has been received and a CastHeader with
 	// correct terminal dimensions can be written.
 
@@ -82,8 +82,8 @@ type conn struct {
 	// initialTermSizeSet channel gets sent a value once, when the Read has
 	// received a resize message and set the initial terminal size. It must
 	// be set to a buffered channel to prevent Reads being blocked on the
-	// first STDOUT/STDERR write reading from the channel.
-	initialTermSizeSet chan string
+	// first stdout/stderr write reading from the channel.
+	initialTermSizeSet chan struct{}
 	// sendInitialTermSizeSetOnce is used to ensure that a value is sent to
 	// initialTermSizeSet channel only once, when the initial resize message
 	// is received.
@@ -142,7 +142,7 @@ func (c *conn) Read(b []byte) (int, error) {
 			var isInitialResize bool
 			c.sendinitialTermSizeSetOnce.Do(func() {
 				isInitialResize = true
-				c.initialTermSizeSet <- "set" // unblock sending of CastHeader
+				close(c.initialTermSizeSet) // unblock sending of CastHeader
 			})
 			if !isInitialResize {
 				if err := c.rec.WriteResize(c.ch.Height, c.ch.Width); err != nil {

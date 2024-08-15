@@ -102,7 +102,7 @@ func Test_Writes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
-			rec := tsrecorder.New(sr, cl, cl.Now(), true)
+			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 
 			c := &conn{
 				Conn: tc,
@@ -112,7 +112,7 @@ func Test_Writes(t *testing.T) {
 					Width:  tt.width,
 					Height: tt.height,
 				},
-				initialTermSizeSet: make(chan string, 1),
+				initialTermSizeSet: make(chan struct{}),
 				hasTerm:            tt.hasTerm,
 			}
 			if !tt.firstWrite {
@@ -120,7 +120,7 @@ func Test_Writes(t *testing.T) {
 				c.writeCastHeaderOnce.Do(func() {})
 			}
 			if tt.sendInitialResize {
-				c.initialTermSizeSet <- "ok"
+				close(c.initialTermSizeSet)
 			}
 
 			c.stdoutStreamID.Store(stdoutStreamID)
@@ -214,12 +214,12 @@ func Test_Reads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
-			rec := tsrecorder.New(sr, cl, cl.Now(), true)
+			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 			c := &conn{
 				Conn:               tc,
 				log:                zl.Sugar(),
 				rec:                rec,
-				initialTermSizeSet: make(chan string, 1),
+				initialTermSizeSet: make(chan struct{}),
 			}
 			c.resizeStreamID.Store(tt.resizeStreamIDBeforeRead)
 

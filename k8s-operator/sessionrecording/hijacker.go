@@ -127,7 +127,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	const (
 		// https://docs.asciinema.org/manual/asciicast/v2/
 		asciicastv2  = 2
-		hasTTYKey    = "tty"
+		ttyKey       = "tty"
 		commandKey   = "command"
 		containerKey = "container"
 	)
@@ -156,9 +156,9 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	// TODO (irbekrm): log which recorder
 	h.log.Info("successfully connected to a session recorder")
 	cl := tstime.DefaultClock{}
-	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen)
+	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen, h.log)
 	qp := h.req.URL.Query()
-	tty := strings.Join(qp[hasTTYKey], "")
+	tty := strings.Join(qp[ttyKey], "")
 	hasTerm := (tty == "true") // session has terminal attached
 	ch := sessionrecording.CastHeader{
 		Version:   asciicastv2,

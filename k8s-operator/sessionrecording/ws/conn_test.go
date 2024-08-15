@@ -61,12 +61,11 @@ func Test_conn_Read(t *testing.T) {
 			tc := &fakes.TestConn{}
 			tc.ResetReadBuf()
 			c := &conn{
-				Conn:               tc,
-				log:                zl.Sugar(),
-				initialTermSizeSet: make(chan string, 1),
+				Conn: tc,
+				log:  zl.Sugar(),
 			}
 			for i, input := range tt.inputs {
-				c.initialTermSizeSet = make(chan string, 1)
+				c.initialTermSizeSet = make(chan struct{})
 				if err := tc.WriteReadBufBytes(input); err != nil {
 					t.Fatalf("writing bytes to test conn: %v", err)
 				}
@@ -164,7 +163,7 @@ func Test_conn_Write(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
-			rec := tsrecorder.New(sr, cl, cl.Now(), true)
+			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 			c := &conn{
 				Conn: tc,
 				log:  zl.Sugar(),
@@ -173,7 +172,7 @@ func Test_conn_Write(t *testing.T) {
 					Height: tt.height,
 				},
 				rec:                rec,
-				initialTermSizeSet: make(chan string, 1),
+				initialTermSizeSet: make(chan struct{}),
 				hasTerm:            tt.hasTerm,
 			}
 			if !tt.firstWrite {
@@ -181,7 +180,7 @@ func Test_conn_Write(t *testing.T) {
 				c.writeCastHeaderOnce.Do(func() {})
 			}
 			if tt.sendInitialResize {
-				c.initialTermSizeSet <- "ok"
+				close(c.initialTermSizeSet)
 			}
 			for i, input := range tt.inputs {
 				_, err := c.Write(input)
@@ -241,7 +240,7 @@ func Test_conn_WriteRand(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	sr := &fakes.TestSessionRecorder{}
-	rec := tsrecorder.New(sr, cl, cl.Now(), true)
+	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
 		tc := &fakes.TestConn{}
 		c := &conn{
