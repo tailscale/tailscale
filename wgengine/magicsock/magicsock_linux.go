@@ -6,6 +6,7 @@ package magicsock
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +25,6 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
-	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -50,6 +50,14 @@ var (
 		// For raw sockets (with ETH_P_IP set), the BPF program
 		// receives the entire IPv4 packet, but not the Ethernet
 		// header.
+
+		// Double-check that this is a UDP packet; we shouldn't be
+		// seeing anything else given how we create our AF_PACKET
+		// socket, but an extra check here is cheap, and matches the
+		// check that we do in the IPv6 path.
+		bpf.LoadAbsolute{Off: 9, Size: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(ipproto.UDP), SkipTrue: 1, SkipFalse: 0},
+		bpf.RetConstant{Val: 0x0},
 
 		// Disco packets are so small they should never get
 		// fragmented, and we don't want to handle reassembly.
@@ -235,7 +243,6 @@ func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 	var (
 		ctx = context.Background()
 		buf [1500]byte
-		pkt packet.Parsed
 	)
 	for {
 		n, _, err := sock.Recvfrom(ctx, buf[:], 0)
@@ -244,10 +251,11 @@ func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 			return nil, fmt.Errorf("reading during raw disco self-test: %w", err)
 		}
 
-		if !decodeDiscoPacket(&pkt, c.discoLogf, buf[:n], family == "ip6") {
+		_ /* src */, _ /* dst */, payload := parseUDPPacket(buf[:n], family == "ip6")
+		if payload == nil {
 			continue
 		}
-		if payload := pkt.Payload(); !bytes.Equal(payload, testDiscoPacket) {
+		if !bytes.Equal(payload, testDiscoPacket) {
 			c.discoLogf("listenRawDisco: self-test: received mismatched UDP packet of %d bytes", len(payload))
 			continue
 		}
@@ -260,50 +268,60 @@ func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 	return sock, nil
 }
 
-// decodeDiscoPacket decodes a disco packet from buf, using pkt as storage for
-// the parsed packet. It returns true if the packet is a valid disco packet,
-// and false otherwise.
+// parseUDPPacket is a basic parser for UDP packets that returns the source and
+// destination addresses, and the payload. The returned payload is a sub-slice
+// of the input buffer.
 //
-// It will log the reason for the packet being invalid to logf; it is the
-// caller's responsibility to control log verbosity.
-func decodeDiscoPacket(pkt *packet.Parsed, logf logger.Logf, buf []byte, isIPv6 bool) bool {
-	// Do a quick length check before we parse the packet, so we can drop
-	// things that we know are too small.
-	var minSize int
+// It expects to be called with a buffer that contains the entire UDP packet,
+// including the IP header, and one that has been filtered with the BPF
+// programs above.
+//
+// If an error occurs, it will return the zero values for all return values.
+func parseUDPPacket(buf []byte, isIPv6 bool) (src, dst netip.AddrPort, payload []byte) {
+	// First, parse the IPv4 or IPv6 header to get to the UDP header. Since
+	// we assume this was filtered with BPF, we know that there will be no
+	// IPv6 extension headers.
+	var (
+		srcIP, dstIP netip.Addr
+		udp          []byte
+	)
 	if isIPv6 {
-		minSize = ipv6.HeaderLen + udpHeaderSize + discoMinHeaderSize
+		// Basic length check to ensure that we don't panic
+		if len(buf) < ipv6.HeaderLen+udpHeaderSize {
+			return
+		}
+
+		// Extract the source and destination addresses from the IPv6
+		// header.
+		srcIP, _ = netip.AddrFromSlice(buf[8:24])
+		dstIP, _ = netip.AddrFromSlice(buf[24:40])
+
+		// We know that the UDP packet starts immediately after the IPv6
+		// packet.
+		udp = buf[ipv6.HeaderLen:]
 	} else {
-		minSize = ipv4.HeaderLen + udpHeaderSize + discoMinHeaderSize
-	}
-	if len(buf) < minSize {
-		logf("decodeDiscoPacket: received packet too small to be a disco packet: %d bytes < %d", len(buf), minSize)
-		return false
+		// This is an IPv4 packet; read the length field from the header.
+		if len(buf) < ipv4.HeaderLen {
+			return
+		}
+		udpOffset := int((buf[0] & 0x0F) << 2)
+		if udpOffset+udpHeaderSize > len(buf) {
+			return
+		}
+
+		// Parse the source and destination IPs.
+		srcIP, _ = netip.AddrFromSlice(buf[12:16])
+		dstIP, _ = netip.AddrFromSlice(buf[16:20])
+		udp = buf[udpOffset:]
 	}
 
-	// Parse the packet.
-	pkt.Decode(buf)
+	// Parse the ports
+	srcPort := binary.BigEndian.Uint16(udp[0:2])
+	dstPort := binary.BigEndian.Uint16(udp[2:4])
 
-	// Verify that this is a UDP packet.
-	if pkt.IPProto != ipproto.UDP {
-		logf("decodeDiscoPacket: received non-UDP packet: %d", pkt.IPProto)
-		return false
-	}
-
-	// Ensure that it's the right version of IP; given how we configure our
-	// listening sockets, we shouldn't ever get the wrong one, but it's
-	// best to confirm.
-	var wantVersion uint8
-	if isIPv6 {
-		wantVersion = 6
-	} else {
-		wantVersion = 4
-	}
-	if pkt.IPVersion != wantVersion {
-		logf("decodeDiscoPacket: received mismatched IP version %d (want %d)", pkt.IPVersion, wantVersion)
-		return false
-	}
-
-	return true
+	// The payload starts after the UDP header.
+	payload = udp[8:]
+	return netip.AddrPortFrom(srcIP, srcPort), netip.AddrPortFrom(dstIP, dstPort), payload
 }
 
 // ethernetProtoIPv4 returns the constant unix.ETH_P_IP, in network byte order.
@@ -358,10 +376,7 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 		dlogf  logger.Logf = logger.WithPrefix(c.discoLogf, prefix)
 	)
 
-	var (
-		buf [1500]byte
-		pkt packet.Parsed
-	)
+	var buf [1500]byte
 	for {
 		n, src, err := pc.Recvfrom(ctx, buf[:], 0)
 		if debugRawDiscoReads() {
@@ -375,12 +390,13 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 			return
 		}
 
-		if !decodeDiscoPacket(&pkt, dlogf, buf[:n], isIPV6) {
+		srcAddr, dstAddr, payload := parseUDPPacket(buf[:n], family == "ip6")
+		if payload == nil {
 			// callee logged
 			continue
 		}
 
-		dstPort := pkt.Dst.Port()
+		dstPort := dstAddr.Port()
 		if dstPort == 0 {
 			logf("[unexpected] received packet for port 0")
 		}
@@ -417,7 +433,7 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 			metricRecvDiscoPacketIPv4.Add(1)
 		}
 
-		c.handleDiscoMessage(pkt.Payload(), pkt.Src, key.NodePublic{}, discoRXPathRawSocket)
+		c.handleDiscoMessage(payload, srcAddr, key.NodePublic{}, discoRXPathRawSocket)
 	}
 }
 

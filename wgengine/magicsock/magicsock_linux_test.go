@@ -4,114 +4,112 @@
 package magicsock
 
 import (
+	"bytes"
 	"encoding/binary"
-	"net"
 	"net/netip"
 	"testing"
 
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/cpu"
 	"golang.org/x/sys/unix"
 	"tailscale.com/disco"
-	"tailscale.com/net/packet"
-	"tailscale.com/types/ipproto"
 )
 
-func TestDecodeDiscoPacket(t *testing.T) {
-	mk4 := func(proto ipproto.Proto, src, dst netip.Addr, data []byte) []byte {
-		if !src.Is4() || !dst.Is4() {
-			panic("not an IPv4 address")
-		}
-		iph := &ipv4.Header{
-			Version:  ipv4.Version,
-			Len:      ipv4.HeaderLen,
-			TotalLen: ipv4.HeaderLen + len(data),
-			TTL:      64,
-			Protocol: int(proto),
-			Src:      net.IP(src.AsSlice()),
-			Dst:      net.IP(dst.AsSlice()),
-		}
-		hdr, err := iph.Marshal()
-		if err != nil {
-			panic(err)
-		}
-		return append(hdr, data...)
+func TestParseUDPPacket(t *testing.T) {
+	src4 := netip.MustParseAddrPort("127.0.0.1:12345")
+	dst4 := netip.MustParseAddrPort("127.0.0.2:54321")
+
+	src6 := netip.MustParseAddrPort("[::1]:12345")
+	dst6 := netip.MustParseAddrPort("[::2]:54321")
+
+	udp4Packet := []byte{
+		// IPv4 header
+		0x45, 0x00, 0x00, 0x26, 0x00, 0x00, 0x00, 0x00,
+		0x40, 0x11, 0x00, 0x00,
+		0x7f, 0x00, 0x00, 0x01, // source ip
+		0x7f, 0x00, 0x00, 0x02, // dest ip
+
+		// UDP header
+		0x30, 0x39, // src port
+		0xd4, 0x31, // dest port
+		0x00, 0x12, // length; 8 bytes header + 10 bytes payload = 18 bytes
+		0x00, 0x00, // checksum; unused
+
+		// Payload: disco magic plus 4 bytes
+		0x54, 0x53, 0xf0, 0x9f, 0x92, 0xac, 0x00, 0x01, 0x02, 0x03,
 	}
-	mk6 := func(proto ipproto.Proto, src, dst netip.Addr, data []byte) []byte {
-		if !src.Is6() || !dst.Is6() {
-			panic("not an IPv6 address")
-		}
-		// The ipv6 package doesn't have a Marshal method, so just do
-		// the most basic thing and construct the header manually.
-		buf := make([]byte, ipv6.HeaderLen, ipv6.HeaderLen+len(data))
-		buf[0] = 6 << 4 // version
-		binary.BigEndian.PutUint16(buf[4:6], uint16(len(data)))
-		buf[6] = byte(proto)
-		copy(buf[8:24], src.AsSlice())
-		copy(buf[24:40], dst.AsSlice())
-		return append(buf, data...)
+	udp6Packet := []byte{
+		// IPv6 header
+		0x60, 0x00, 0x00, 0x00,
+		0x00, 0x12, // payload length
+		0x11, // next header: UDP
+		0x00, // hop limit; unused
+
+		// Source IP
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+		// Dest IP
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+
+		// UDP header
+		0x30, 0x39, // src port
+		0xd4, 0x31, // dest port
+		0x00, 0x12, // length; 8 bytes header + 10 bytes payload = 18 bytes
+		0x00, 0x00, // checksum; unused
+
+		// Payload: disco magic plus 4 bytes
+		0x54, 0x53, 0xf0, 0x9f, 0x92, 0xac, 0x00, 0x01, 0x02, 0x03,
 	}
 
-	mkUDP := func(srcPort, dstPort uint16, data []byte) []byte {
-		udp := make([]byte, 8, 8+len(data))
-		binary.BigEndian.PutUint16(udp[0:2], srcPort)
-		binary.BigEndian.PutUint16(udp[2:4], dstPort)
-		binary.BigEndian.PutUint16(udp[4:6], uint16(8+len(data)))
-		return append(udp, data...)
-	}
-	mkUDP4 := func(src, dst netip.AddrPort, data []byte) []byte {
-		return mk4(ipproto.UDP, src.Addr(), dst.Addr(), mkUDP(src.Port(), dst.Port(), data))
-	}
-	mkUDP6 := func(src, dst netip.AddrPort, data []byte) []byte {
-		return mk6(ipproto.UDP, src.Addr(), dst.Addr(), mkUDP(src.Port(), dst.Port(), data))
-	}
-
-	ip4 := netip.MustParseAddrPort("127.0.0.10:12345")
-	ip4_2 := netip.MustParseAddrPort("127.0.0.99:54321")
-	ip6 := netip.MustParseAddrPort("[::1]:12345")
-
-	testCases := []struct {
-		name string
-		in   []byte
-		is6  bool
-		want bool
-	}{
-		{
-			name: "too_short_4",
-			in:   mkUDP4(ip4, ip4_2, append([]byte(disco.Magic), 0x00, 0x00)),
-			is6:  false,
-			want: false,
-		},
-		{
-			name: "too_short_6",
-			in:   mkUDP6(ip6, ip6, append([]byte(disco.Magic), 0x00, 0x00)),
-			is6:  true,
-			want: false,
-		},
-		{
-			name: "valid_4",
-			in:   mkUDP4(ip4, ip4_2, testDiscoPacket),
-			is6:  false,
-			want: true,
-		},
-		{
-			name: "valid_6",
-			in:   mkUDP6(ip6, ip6, testDiscoPacket),
-			is6:  true,
-			want: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var pkt packet.Parsed
-			got := decodeDiscoPacket(&pkt, t.Logf, tc.in, tc.is6)
-			if got != tc.want {
-				t.Errorf("got %v; want %v", got, tc.want)
+	// Verify that parsing the UDP packet works correctly.
+	t.Run("IPv4", func(t *testing.T) {
+		src, dst, payload := parseUDPPacket(udp4Packet, false)
+		if src != src4 {
+			t.Errorf("src = %v; want %v", src, src4)
+		}
+		if dst != dst4 {
+			t.Errorf("dst = %v; want %v", dst, dst4)
+		}
+		if !bytes.HasPrefix(payload, []byte(disco.Magic)) {
+			t.Errorf("payload = %x; must start with %x", payload, disco.Magic)
+		}
+	})
+	t.Run("IPv6", func(t *testing.T) {
+		src, dst, payload := parseUDPPacket(udp6Packet, true)
+		if src != src6 {
+			t.Errorf("src = %v; want %v", src, src6)
+		}
+		if dst != dst6 {
+			t.Errorf("dst = %v; want %v", dst, dst6)
+		}
+		if !bytes.HasPrefix(payload, []byte(disco.Magic)) {
+			t.Errorf("payload = %x; must start with %x", payload, disco.Magic)
+		}
+	})
+	t.Run("Truncated", func(t *testing.T) {
+		truncateBy := func(b []byte, n int) []byte {
+			if n >= len(b) {
+				return nil
 			}
-		})
-	}
+			return b[:len(b)-n]
+		}
+
+		src, dst, payload := parseUDPPacket(truncateBy(udp4Packet, 11), false)
+		if payload != nil {
+			t.Errorf("payload = %x; want nil", payload)
+		}
+		if src.IsValid() || dst.IsValid() {
+			t.Errorf("src = %v, dst = %v; want invalid", src, dst)
+		}
+
+		src, dst, payload = parseUDPPacket(truncateBy(udp6Packet, 11), true)
+		if payload != nil {
+			t.Errorf("payload = %x; want nil", payload)
+		}
+		if src.IsValid() || dst.IsValid() {
+			t.Errorf("src = %v, dst = %v; want invalid", src, dst)
+		}
+	})
 }
 
 func TestEthernetProto(t *testing.T) {
