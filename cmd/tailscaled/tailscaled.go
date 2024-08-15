@@ -35,7 +35,11 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
+<<<<<<< HEAD
 	"tailscale.com/hostinfo"
+=======
+	"tailscale.com/health"
+>>>>>>> 4a8cbaec4 (move metrics to health package)
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
@@ -63,7 +67,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -341,11 +344,11 @@ func run() (err error) {
 
 	sys := new(tsd.System)
 
-	health := sys.HealthTracker()
-	metricHealthMessages.Set(healthMessageLabel{
+	healthTracker := sys.HealthTracker()
+	health.MetricHealthMessage.Set(health.MetricHealthMessageLabel{
 		Severity: "warning",
 	}, expvar.Func(func() any {
-		return health.OverallErrorCount()
+		return healthTracker.OverallErrorCount()
 	}))
 
 	// Parse config, if specified, to fail early if it's invalid.
@@ -927,13 +930,3 @@ func applyIntegrationTestEnvKnob() {
 		}
 	}
 }
-
-type healthMessageLabel struct {
-	Severity string
-}
-
-var metricHealthMessages = usermetric.NewMultiLabelMap[healthMessageLabel](
-	"tailscaled_health_messages",
-	"gauge",
-	"Number of health messages broken down by severity.",
-)

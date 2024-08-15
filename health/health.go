@@ -25,6 +25,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -1244,3 +1245,14 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 		f.missing = true
 	}
 }
+
+
+type MetricHealthMessageLabel struct {
+	Severity string
+}
+
+var MetricHealthMessage = usermetric.NewMultiLabelMap[MetricHealthMessageLabel](
+	"tailscaled_health_messages",
+	"gauge",
+	"Number of health messages broken down by severity.",
+)
