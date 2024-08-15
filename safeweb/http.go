@@ -300,3 +300,8 @@ func (s *Server) ServeRedirectHTTP(ln net.Listener, fqdn string) error {
 func (s *Server) Serve(ln net.Listener) error {
 	return s.h.Serve(ln)
 }
+
+// Close closes all client connections and stops accepting new ones.
+func (s *Server) Close() error {
+	return s.h.Close()
+}
