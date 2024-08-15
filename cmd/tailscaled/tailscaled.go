@@ -935,5 +935,5 @@ type healthMessageLabel struct {
 var metricHealthMessages = usermetric.NewMultiLabelMap[healthMessageLabel](
 	"tailscaled_health_messages",
 	"gauge",
-	"A gauge of health messages from control, by severity",
+	"Number of health messages broken down by severity.",
 )
