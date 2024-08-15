@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strings"
 	"syscall"
 	"time"
 
@@ -364,7 +365,7 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 	for {
 		n, src, err := pc.Recvfrom(ctx, buf[:], 0)
 		if debugRawDiscoReads() {
-			logf("read from %v = (%v, %v)", src, n, err)
+			logf("read from %s = (%v, %v)", printSockaddr(src), n, err)
 		}
 		if err != nil && (errors.Is(err, net.ErrClosed) || err.Error() == "use of closed file") {
 			// EOF; no need to print an error
@@ -417,6 +418,33 @@ func (c *Conn) receiveDisco(pc *socket.Conn, isIPV6 bool) {
 		}
 
 		c.handleDiscoMessage(pkt.Payload(), pkt.Src, key.NodePublic{}, discoRXPathRawSocket)
+	}
+}
+
+// printSockaddr is a helper function to pretty-print various sockaddr types.
+func printSockaddr(sa unix.Sockaddr) string {
+	switch sa := sa.(type) {
+	case *unix.SockaddrInet4:
+		addr := netip.AddrFrom4(sa.Addr)
+		return netip.AddrPortFrom(addr, uint16(sa.Port)).String()
+	case *unix.SockaddrInet6:
+		addr := netip.AddrFrom16(sa.Addr)
+		return netip.AddrPortFrom(addr, uint16(sa.Port)).String()
+	case *unix.SockaddrLinklayer:
+		hwaddr := sa.Addr[:sa.Halen]
+
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "link(%d):[", sa.Protocol)
+		for i, b := range hwaddr {
+			if i > 0 {
+				buf.WriteByte(':')
+			}
+			fmt.Fprintf(&buf, "%02x", b)
+		}
+		buf.WriteByte(']')
+		return buf.String()
+	default:
+		return fmt.Sprintf("unknown(%T)", sa)
 	}
 }
 
