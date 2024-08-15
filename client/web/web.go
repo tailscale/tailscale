@@ -41,6 +41,10 @@ import (
 	"tailscale.com/version/distro"
 )
 
+// TODO(kradalby): Remove this once we have landed on a final set of
+// metrics to export to clients and consider the metrics stable.
+var debugUsermetricsEndpoint = envknob.RegisterBool("TS_DEBUG_USER_METRICS")
+
 // ListenPort is the static port used for the web client when run inside tailscaled.
 // (5252 are the numbers above the letters "TSTS" on a qwerty keyboard.)
 const ListenPort = 5252
@@ -284,7 +288,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if strings.HasPrefix(r.URL.Path, "/metrics") {
+	if debugUsermetricsEndpoint() && strings.HasPrefix(r.URL.Path, "/metrics") {
 		usermetric.Handler(w, r)
 		return
 	}
