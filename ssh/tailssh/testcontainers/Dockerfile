@@ -25,7 +25,7 @@ COPY tailssh.test .
 
 RUN chmod 755 tailscaled
 
-# RUN echo "First run tests normally."
+RUN echo "First run tests normally."
 RUN eval `ssh-agent -s` && TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestSSHAgentForwarding
 RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSFTP
@@ -35,9 +35,14 @@ RUN if echo "$BASE" | grep "ubuntu:"; then rm -Rf /home/testuser; fi
 RUN TAILSCALED_PATH=`pwd`tailscaled ./tailssh.test -test.v -test.run TestIntegrationSSH
 
 RUN echo "Then run tests as non-root user testuser and make sure tests still pass."
+RUN touch /tmp/tailscalessh.log
 RUN chown testuser:groupone /tmp/tailscalessh.log
 RUN TAILSCALED_PATH=`pwd`tailscaled eval `su -m testuser -c ssh-agent -s` && su -m testuser -c "./tailssh.test -test.v -test.run TestSSHAgentForwarding"
 RUN TAILSCALED_PATH=`pwd`tailscaled su -m testuser -c "./tailssh.test -test.v -test.run TestIntegration TestDoDropPrivileges"
+RUN echo "Also, deny everyone access to the user's home directory and make sure non file-related tests still pass."
+RUN mkdir -p /home/testuser && chown testuser:groupone /home/testuser && chmod 0000 /home/testuser
+RUN TAILSCALED_PATH=`pwd`tailscaled SKIP_FILE_OPS=1 su -m testuser -c "./tailssh.test -test.v -test.run TestIntegrationSSH"
+RUN chmod 0755 /home/testuser
 RUN chown root:root /tmp/tailscalessh.log
 
 RUN if echo "$BASE" | grep "ubuntu:"; then \

@@ -115,6 +115,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		"--gid=" + lu.Gid,
 		"--groups=" + groups,
 		"--local-user=" + lu.Username,
+		"--home-dir=" + lu.HomeDir,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.Addr().String(),
 		"--has-tty=false", // updated in-place by startWithPTY
@@ -179,6 +180,7 @@ type incubatorArgs struct {
 	gid                int
 	gids               []int
 	localUser          string
+	homeDir            string
 	remoteUser         string
 	remoteIP           string
 	ttyName            string
@@ -201,6 +203,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.IntVar(&ia.gid, "gid", 0, "the gid of local-user")
 	flags.StringVar(&groups, "groups", "", "comma-separated list of gids of local-user")
 	flags.StringVar(&ia.localUser, "local-user", "", "the user to run as")
+	flags.StringVar(&ia.homeDir, "home-dir", "/", "the user's home directory")
 	flags.StringVar(&ia.remoteUser, "remote-user", "", "the remote user/tags")
 	flags.StringVar(&ia.remoteIP, "remote-ip", "", "the remote Tailscale IP")
 	flags.StringVar(&ia.ttyName, "tty-name", "", "the tty name (pts/3)")
@@ -565,7 +568,7 @@ const (
 // dropPrivileges calls doDropPrivileges with uid, gid, and gids from the given
 // incubatorArgs.
 func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
-	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids)
+	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids, ia.homeDir)
 }
 
 // doDropPrivileges contains all the logic for dropping privileges to a different
@@ -578,7 +581,7 @@ func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
 // be done by running:
 //
 //	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDoDropPrivileges
-func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int, homeDir string) error {
 	dlogf("dropping privileges")
 	fatalf := func(format string, args ...any) {
 		dlogf("[unexpected] error dropping privileges: "+format, args...)
@@ -664,6 +667,13 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 		// TODO(andrew-d): assert that our supplementary groups are correct
 	}
 
+	// Prefer to run in user's homedir if possible. We ignore a failure to Chdir,
+	// which just leaves us at "/" where we launched in the first place.
+	dlogf("attempting to chdir to user's home directory %q", homeDir)
+	if err := os.Chdir(homeDir); err != nil {
+		dlogf("failed to chdir to user's home directory %q, continuing in current directory", homeDir)
+	}
+
 	return nil
 }
 
@@ -680,16 +690,7 @@ func (ss *sshSession) launchProcess() error {
 	}
 
 	cmd := ss.cmd
-	homeDir := ss.conn.localUser.HomeDir
-	if _, err := os.Stat(homeDir); err == nil {
-		cmd.Dir = homeDir
-	} else if os.IsNotExist(err) {
-		// If the home directory doesn't exist, we can't chdir to it.
-		// Instead, we'll chdir to the root directory.
-		cmd.Dir = "/"
-	} else {
-		return err
-	}
+	cmd.Dir = "/"
 	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
