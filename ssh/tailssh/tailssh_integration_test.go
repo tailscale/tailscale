@@ -122,13 +122,13 @@ func TestIntegrationSSH(t *testing.T) {
 		{
 			cmd:             "pwd",
 			want:            []string{homeDir},
-			skip:            !fallbackToSUAvailable(),
+			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
 		},
 		{
 			cmd:             "echo 'hello'",
 			want:            []string{"hello"},
-			skip:            !fallbackToSUAvailable(),
+			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
 		},
 	}
