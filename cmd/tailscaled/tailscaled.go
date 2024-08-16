@@ -35,11 +35,8 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
-<<<<<<< HEAD
-	"tailscale.com/hostinfo"
-=======
 	"tailscale.com/health"
->>>>>>> 4a8cbaec4 (move metrics to health package)
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnlocal"
