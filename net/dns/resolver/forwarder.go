@@ -177,7 +177,7 @@ func clampEDNSSize(packet []byte, maxSize uint16) {
 var dnsForwarderFailing = health.Register(&health.Warnable{
 	Code:                "dns-forward-failing",
 	Title:               "DNS unavailable",
-	Severity:            health.SeverityHigh,
+	Severity:            health.SeverityMedium,
 	DependsOn:           []*health.Warnable{health.NetworkStatusWarnable},
 	Text:                health.StaticMessage("Tailscale can't reach the configured DNS servers. Internet connectivity may be affected."),
 	ImpactsConnectivity: true,
