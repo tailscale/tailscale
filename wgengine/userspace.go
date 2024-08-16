@@ -54,6 +54,7 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/netlog"
+	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -519,7 +520,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if p.IsEchoRequest() {
 		header := p.ICMP4Header()
 		header.ToResponse()
@@ -531,9 +532,9 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 		// it away. If this ever gets run in non-fake mode, you'll
 		// get double responses to pings, which is an indicator you
 		// shouldn't be doing that I guess.)
-		return filter.Accept
+		return filter.Accept, gro
 	}
-	return filter.Accept
+	return filter.Accept, gro
 }
 
 // handleLocalPackets inspects packets coming from the local network
