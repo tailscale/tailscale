@@ -642,6 +642,14 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Out.URL.RawPath = rp.url.RawPath
 		}
 
+		// ReverseProxy.ServeHTTP strips out unparseable query parameters
+		// as it could be a security concern. To preserve downstream use
+		// of query parameters, we copy them back if the input and output
+		// do not match
+		if r.In.URL.RawQuery != r.Out.URL.RawQuery {
+			r.Out.URL.RawQuery = r.In.URL.RawQuery
+		}
+
 		r.Out.Host = r.In.Host
 		addProxyForwardedHeaders(r)
 		rp.lb.addTailscaleIdentityHeaders(r)
