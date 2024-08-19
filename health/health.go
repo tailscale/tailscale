@@ -1246,7 +1246,6 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 	}
 }
 
-
 type MetricHealthMessageLabel struct {
 	Severity string
 }
