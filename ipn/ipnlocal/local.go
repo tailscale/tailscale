@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"expvar"
 	"fmt"
 	"io"
 	"log"
@@ -119,11 +118,8 @@ import (
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
 
-var metricAdvertisedRoutes expvar.Int
-
-func init() {
-	usermetric.Publish("tailscaled_advertised_routes", &metricAdvertisedRoutes)
-}
+var metricAdvertisedRoutes = usermetric.NewGauge(
+	"tailscaled_advertised_routes", "Number of routes advertised by tailscaled")
 
 var controlDebugFlags = getControlDebugFlags()
 
@@ -4633,11 +4629,13 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
 	// count routes without exit node routes
+	var routes int64
 	for _, route := range hi.RoutableIPs {
 		if route.Bits() != 0 {
-			metricAdvertisedRoutes.Add(1)
+			routes++
 		}
 	}
+	metricAdvertisedRoutes.Set(float64(routes))
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {

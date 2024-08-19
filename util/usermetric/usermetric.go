@@ -7,6 +7,8 @@ package usermetric
 
 import (
 	"expvar"
+	"fmt"
+	"io"
 	"net/http"
 
 	"tailscale.com/metrics"
@@ -33,14 +35,40 @@ func NewMultiLabelMap[T comparable](name string, promType, helpText string) *met
 	return m
 }
 
-// Publish declares a named exported variable. This should be called from a
-// package's init function when it creates its Vars.
-//
-// Note that usermetric are not protected against duplicate
-// metrics name. It is the caller's responsibility to ensure that
-// the name is unique.
-func Publish(name string, v expvar.Var) {
-	vars.Set(name, v)
+// Gauge is a gauge metric with no labels.
+type Gauge struct {
+	m    *expvar.Float
+	help string
+}
+
+// NewGauge creates and register a new gauge metric with the given name and help text.
+func NewGauge(name, help string) *Gauge {
+	m := &expvar.Float{}
+	vars.Set(name, m)
+	return &Gauge{m, help}
+}
+
+// Set sets the gauge to the given value.
+func (g *Gauge) Set(v float64) {
+	g.m.Set(v)
+}
+
+// WritePrometheus writes the gauge metric in Prometheus format to the given writer.
+// This satisfies the varz.PrometheusWriter interface.
+func (g *Gauge) WritePrometheus(w io.Writer, name string) {
+	io.WriteString(w, "# TYPE ")
+	io.WriteString(w, name)
+	io.WriteString(w, " gauge\n")
+	if g.help != "" {
+		io.WriteString(w, "# HELP ")
+		io.WriteString(w, name)
+		io.WriteString(w, " ")
+		io.WriteString(w, g.help)
+		io.WriteString(w, "\n")
+	}
+
+	io.WriteString(w, name)
+	fmt.Fprintf(w, " %v\n", g.m.Value())
 }
 
 // Handler returns a varz.Handler that serves the userfacing expvar contained
