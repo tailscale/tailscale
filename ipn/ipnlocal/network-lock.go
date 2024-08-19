@@ -175,23 +175,24 @@ func (r *rotationTracker) addRotationDetails(np key.NodePublic, d *tka.RotationD
 // obsoleteKeys returns the set of node keys that are obsolete due to key rotation.
 func (r *rotationTracker) obsoleteKeys() set.Set[key.NodePublic] {
 	for _, v := range r.byWrappingKey {
+		// Do not consider signatures for keys that have been marked as obsolete
+		// by another signature.
+		v = slices.DeleteFunc(v, func(rd sigRotationDetails) bool {
+			return r.obsolete.Contains(rd.np)
+		})
+		if len(v) == 0 {
+			continue
+		}
+
 		// If there are multiple rotation signatures with the same wrapping
 		// pubkey, we need to decide which one is the "latest", and keep it.
 		// The signature with the largest number of previous keys is likely to
-		// be the latest, unless it has been marked as obsolete (rotated out) by
-		// another signature (which might happen in the future if we start
-		// compacting long rotated signature chains).
+		// be the latest.
 		slices.SortStableFunc(v, func(a, b sigRotationDetails) int {
-			// Group all obsolete keys after non-obsolete keys.
-			if ao, bo := r.obsolete.Contains(a.np), r.obsolete.Contains(b.np); ao != bo {
-				if ao {
-					return 1
-				}
-				return -1
-			}
 			// Sort by decreasing number of previous keys.
 			return b.numPrevKeys - a.numPrevKeys
 		})
+
 		// If there are several signatures with the same number of previous
 		// keys, we cannot determine which one is the latest, so all of them are
 		// rejected for safety.
