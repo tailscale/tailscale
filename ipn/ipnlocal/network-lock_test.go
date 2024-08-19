@@ -667,6 +667,31 @@ func TestTKAFilterNetmap(t *testing.T) {
 	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
 		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
 	}
+
+	// Confirm that repeated rotation works correctly.
+	for range 100 {
+		n5Rotated, n5RotatedSig = resign(n5nl, n5RotatedSig)
+	}
+
+	n51, n51Sig := resign(n5nl, n5RotatedSig)
+
+	nm = &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{
+			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
+			{ID: 5, Key: n5Rotated.Public(), KeySignature: n5RotatedSig}, // rotated
+			{ID: 51, Key: n51.Public(), KeySignature: n51Sig},
+		}),
+	}
+
+	b.tkaFilterNetmapLocked(nm)
+
+	want = nodeViews([]*tailcfg.Node{
+		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
+		{ID: 51, Key: n51.Public(), KeySignature: n51Sig},
+	})
+	if diff := cmp.Diff(want, nm.Peers, nodePubComparer); diff != "" {
+		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
+	}
 }
 
 func TestTKADisable(t *testing.T) {
