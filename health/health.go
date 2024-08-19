@@ -8,6 +8,7 @@ package health
 import (
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"maps"
 	"net/http"
@@ -898,18 +899,6 @@ func (t *Tracker) OverallError() error {
 	return t.multiErrLocked()
 }
 
-// OverallErrorCount returns the number of errors currently known to the
-// Tracker.
-func (t *Tracker) OverallErrorCount() int64 {
-	if t.nil() {
-		return 0
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.updateBuiltinWarnablesLocked()
-	return int64(len(t.stringsLocked()))
-}
-
 // Strings() returns a string array containing the Text of all Warnings
 // currently known to the Tracker. These strings can be presented to the
 // user, although ideally you would use the Code property on each Warning
@@ -1215,6 +1204,18 @@ func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
 }
 
 func (t *Tracker) doOnceInit() {
+	metricHealthMessage.Set(metricHealthMessageLabel{
+		Type: "warning",
+	}, expvar.Func(func() any {
+		if t.nil() {
+			return 0
+		}
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.updateBuiltinWarnablesLocked()
+		return int64(len(t.stringsLocked()))
+	}))
+
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
 		f.name = (ReceiveFunc(i)).String()
@@ -1246,11 +1247,12 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 	}
 }
 
-type MetricHealthMessageLabel struct {
-	Severity string
+type metricHealthMessageLabel struct {
+	// TODO: break down by warnable.severity as well?
+	Type string
 }
 
-var MetricHealthMessage = usermetric.NewMultiLabelMap[MetricHealthMessageLabel](
+var metricHealthMessage = usermetric.NewMultiLabelMap[metricHealthMessageLabel](
 	"tailscaled_health_messages",
 	"gauge",
 	"Number of health messages broken down by severity.",

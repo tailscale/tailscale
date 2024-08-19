@@ -35,7 +35,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
-	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
@@ -340,13 +339,6 @@ func run() (err error) {
 	var logf logger.Logf = log.Printf
 
 	sys := new(tsd.System)
-
-	healthTracker := sys.HealthTracker()
-	health.MetricHealthMessage.Set(health.MetricHealthMessageLabel{
-		Severity: "warning",
-	}, expvar.Func(func() any {
-		return healthTracker.OverallErrorCount()
-	}))
 
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
