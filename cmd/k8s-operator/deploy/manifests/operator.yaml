@@ -2428,14 +2428,28 @@ rules:
         - services
         - services/status
       verbs:
-        - '*'
+        - create
+        - delete
+        - deletecollection
+        - get
+        - list
+        - patch
+        - update
+        - watch
     - apiGroups:
         - networking.k8s.io
       resources:
         - ingresses
         - ingresses/status
       verbs:
-        - '*'
+        - create
+        - delete
+        - deletecollection
+        - get
+        - list
+        - patch
+        - update
+        - watch
     - apiGroups:
         - networking.k8s.io
       resources:
@@ -2493,14 +2507,28 @@ rules:
         - serviceaccounts
         - configmaps
       verbs:
-        - '*'
+        - create
+        - delete
+        - deletecollection
+        - get
+        - list
+        - patch
+        - update
+        - watch
     - apiGroups:
         - apps
       resources:
         - statefulsets
         - deployments
       verbs:
-        - '*'
+        - create
+        - delete
+        - deletecollection
+        - get
+        - list
+        - patch
+        - update
+        - watch
     - apiGroups:
         - discovery.k8s.io
       resources:
@@ -2521,7 +2549,14 @@ rules:
       resources:
         - secrets
       verbs:
-        - '*'
+        - create
+        - delete
+        - deletecollection
+        - get
+        - list
+        - patch
+        - update
+        - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
