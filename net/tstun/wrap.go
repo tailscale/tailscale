@@ -36,6 +36,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -73,6 +74,15 @@ var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 // FilterFunc is a packet-filtering function with access to the Wrapper device.
 // It must not hold onto the packet struct, as its backing storage will be reused.
 type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
+
+// GROFilterFunc is a FilterFunc extended with a *gro.GRO, enabling increased
+// throughput where GRO is supported by a packet.Parsed interceptor, e.g.
+// netstack/gVisor, and we are handling a vector of packets. Callers must pass a
+// nil g for the first packet in a given vector, and continue passing the
+// returned *gro.GRO for all remaining packets in said vector. If g is non-nil
+// after the last packet for a given vector is passed through the GROFilterFunc,
+// the caller must also call g.Flush().
+type GROFilterFunc func(p *packet.Parsed, w *Wrapper, g *gro.GRO) (filter.Response, *gro.GRO)
 
 // Wrapper augments a tun.Device with packet filtering and injection.
 //
@@ -161,11 +171,7 @@ type Wrapper struct {
 	// and therefore sees the packets that may be later dropped by it.
 	PreFilterPacketInboundFromWireGuard FilterFunc
 	// PostFilterPacketInboundFromWireGuard is the inbound filter function that runs after the main filter.
-	PostFilterPacketInboundFromWireGuard FilterFunc
-	// EndPacketVectorInboundFromWireGuardFlush is a function that runs after all packets in a given vector
-	// have been handled by all filters. Filters may queue packets for the purposes of GRO, requiring an
-	// explicit flush.
-	EndPacketVectorInboundFromWireGuardFlush func()
+	PostFilterPacketInboundFromWireGuard GROFilterFunc
 	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by netstack to hook
 	// packets that should be handled by netstack. If set, this filter runs before
@@ -1061,7 +1067,7 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	return n, err
 }
 
-func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback, pc *peerConfigTable) filter.Response {
+func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if captHook != nil {
 		captHook(capture.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
 	}
@@ -1070,7 +1076,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 		if pingReq, ok := p.AsTSMPPing(); ok {
 			t.noteActivity()
 			t.injectOutboundPong(p, pingReq)
-			return filter.DropSilently
+			return filter.DropSilently, gro
 		} else if data, ok := p.AsTSMPPong(); ok {
 			if f := t.OnTSMPPongReceived; f != nil {
 				f(data)
@@ -1082,7 +1088,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 		if f := t.OnICMPEchoResponseReceived; f != nil && f(p) {
 			// Note: this looks dropped in metrics, even though it was
 			// handled internally.
-			return filter.DropSilently
+			return filter.DropSilently, gro
 		}
 	}
 
@@ -1094,12 +1100,12 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 		t.isSelfDisco(p) {
 		t.limitedLogf("[unexpected] received self disco in packet over tstun; dropping")
 		metricPacketInDropSelfDisco.Add(1)
-		return filter.DropSilently
+		return filter.DropSilently, gro
 	}
 
 	if t.PreFilterPacketInboundFromWireGuard != nil {
 		if res := t.PreFilterPacketInboundFromWireGuard(p, t); res.IsDrop() {
-			return res
+			return res, gro
 		}
 	}
 
@@ -1110,7 +1116,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 		filt = t.filter.Load()
 	}
 	if filt == nil {
-		return filter.Drop
+		return filter.Drop, gro
 	}
 	outcome := filt.RunIn(p, t.filterFlags)
 
@@ -1150,20 +1156,24 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 			// TODO(bradfitz): also send a TCP RST, after the TSMP message.
 		}
 
-		return filter.Drop
+		return filter.Drop, gro
 	}
 
 	if t.PostFilterPacketInboundFromWireGuard != nil {
-		if res := t.PostFilterPacketInboundFromWireGuard(p, t); res.IsDrop() {
-			return res
+		var res filter.Response
+		res, gro = t.PostFilterPacketInboundFromWireGuard(p, t, gro)
+		if res.IsDrop() {
+			return res, gro
 		}
 	}
 
-	return filter.Accept
+	return filter.Accept, gro
 }
 
-// Write accepts incoming packets. The packets begins at buffs[:][offset:],
-// like wireguard-go/tun.Device.Write.
+// Write accepts incoming packets. The packets begin at buffs[:][offset:],
+// like wireguard-go/tun.Device.Write. Write is called per-peer via
+// wireguard-go/device.Peer.RoutineSequentialReceiver, so it MUST be
+// thread-safe.
 func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	metricPacketIn.Add(int64(len(buffs)))
 	i := 0
@@ -1171,11 +1181,17 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
+	var buffsGRO *gro.GRO
 	for _, buff := range buffs {
 		p.Decode(buff[offset:])
 		pc.dnat(p)
 		if !t.disableFilter {
-			if t.filterPacketInboundFromWireGuard(p, captHook, pc) != filter.Accept {
+			var res filter.Response
+			// TODO(jwhited): name and document this filter code path
+			//  appropriately. It is not only responsible for filtering, it
+			//  also routes packets towards gVisor/netstack.
+			res, buffsGRO = t.filterPacketInboundFromWireGuard(p, captHook, pc, buffsGRO)
+			if res != filter.Accept {
 				metricPacketInDrop.Add(1)
 			} else {
 				buffs[i] = buff
@@ -1183,8 +1199,8 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 			}
 		}
 	}
-	if t.EndPacketVectorInboundFromWireGuardFlush != nil {
-		t.EndPacketVectorInboundFromWireGuardFlush()
+	if buffsGRO != nil {
+		buffsGRO.Flush()
 	}
 	if t.disableFilter {
 		i = len(buffs)

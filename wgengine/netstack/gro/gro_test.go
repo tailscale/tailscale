@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package netstack
+package gro
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"tailscale.com/net/packet"
 )
 
-func Test_rxChecksumOffload(t *testing.T) {
+func Test_RXChecksumOffload(t *testing.T) {
 	payloadLen := 100
 
 	tcpFields := &header.TCPFields{
@@ -97,7 +97,7 @@ func Test_rxChecksumOffload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &packet.Parsed{}
 			p.Decode(tt.input)
-			got := rxChecksumOffload(p)
+			got := RXChecksumOffload(p)
 			if tt.wantPB != (got != nil) {
 				t.Fatalf("wantPB = %v != (got != nil): %v", tt.wantPB, got != nil)
 			}

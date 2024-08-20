@@ -54,6 +54,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/netstack/gro"
 )
 
 const debugPackets = false
@@ -324,15 +325,15 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if err != nil {
 		return nil, err
 	}
-	var linkEP *linkEndpoint
+	var supportedGSOKind stack.SupportedGSO
+	var supportedGROKind supportedGRO
 	if runtime.GOOS == "linux" {
-		// TODO(jwhited): add Windows GSO support https://github.com/tailscale/corp/issues/21874
-		// TODO(jwhited): exercise enableGRO in relation to https://github.com/tailscale/corp/issues/22353
-		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
-		linkEP.SupportedGSOKind = stack.HostGSOSupported
-	} else {
-		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
+		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
+		supportedGSOKind = stack.HostGSOSupported
+		supportedGROKind = tcpGROSupported
 	}
+	linkEP := newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", supportedGROKind)
+	linkEP.SupportedGSOKind = supportedGSOKind
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
@@ -380,7 +381,6 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
-	ns.tundev.EndPacketVectorInboundFromWireGuardFlush = linkEP.flushGRO
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
 	return ns, nil
@@ -1039,14 +1039,14 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte, direction userPing
 // continue normally (typically being delivered to the host networking stack),
 // whereas returning filter.DropSilently is done when netstack intercepts the
 // packet and no further processing towards to host should be done.
-func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if ns.ctx.Err() != nil {
-		return filter.DropSilently
+		return filter.DropSilently, gro
 	}
 
 	if !ns.shouldProcessInbound(p, t) {
 		// Let the host network stack (if any) deal with it.
-		return filter.Accept
+		return filter.Accept, gro
 	}
 
 	destIP := p.Dst.Addr()
@@ -1066,13 +1066,13 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 			pong = packet.Generate(&h, p.Payload())
 		}
 		go ns.userPing(pingIP, pong, userPingDirectionOutbound)
-		return filter.DropSilently
+		return filter.DropSilently, gro
 	}
 
 	if debugPackets {
 		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
 	}
-	ns.linkEP.enqueueGRO(p)
+	gro = ns.linkEP.gro(p, gro)
 
 	// We've now delivered this to netstack, so we're done.
 	// Instead of returning a filter.Accept here (which would also
@@ -1080,7 +1080,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	// filter.Drop (which would log about rejected traffic),
 	// instead return filter.DropSilently which just quietly stops
 	// processing it in the tstun TUN wrapper.
-	return filter.DropSilently
+	return filter.DropSilently, gro
 }
 
 // shouldHandlePing returns whether or not netstack should handle an incoming
