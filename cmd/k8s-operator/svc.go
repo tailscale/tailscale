@@ -62,6 +62,8 @@ type ServiceReconciler struct {
 	tsNamespace string
 
 	clock tstime.Clock
+
+	proxyDefaultClass string
 }
 
 var (
@@ -208,7 +210,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	proxyClass := proxyClassForObject(svc)
+	proxyClass := proxyClassForObject(svc, a.proxyDefaultClass)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			errMsg := fmt.Errorf("error verifying ProxyClass for Service: %w", err)
@@ -404,8 +406,14 @@ func tailnetTargetAnnotation(svc *corev1.Service) string {
 	return svc.Annotations[annotationTailnetTargetIPOld]
 }
 
-func proxyClassForObject(o client.Object) string {
-	return o.GetLabels()[LabelProxyClass]
+// proxyClassForObject returns the proxy class for the given object. If the
+// object does not have a proxy class label, it returns the default proxy class
+func proxyClassForObject(o client.Object, proxyDefaultClass string) string {
+	proxyClass, exists := o.GetLabels()[LabelProxyClass]
+	if !exists {
+		proxyClass = proxyDefaultClass
+	}
+	return proxyClass
 }
 
 func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool, error) {
