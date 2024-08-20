@@ -19,6 +19,8 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=NodeKeySignature
+
 // SigKind describes valid NodeKeySignature types.
 type SigKind uint8
 
