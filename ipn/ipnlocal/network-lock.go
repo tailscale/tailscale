@@ -53,7 +53,7 @@ type tkaState struct {
 	profile   ipn.ProfileID
 	authority *tka.Authority
 	storage   *tka.FS
-	filtered  []ipnstate.TKAFilteredPeer
+	filtered  []ipnstate.TKAPeer
 }
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
@@ -99,7 +99,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	// nm.Peers is ordered, so deletion must be order-preserving.
 	if len(toDelete) > 0 || len(obsoleteByRotation) > 0 {
 		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
-		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete)+len(obsoleteByRotation))
+		filtered := make([]ipnstate.TKAPeer, 0, len(toDelete)+len(obsoleteByRotation))
 		for i, p := range nm.Peers {
 			if !toDelete[i] && !obsoleteByRotation.Contains(p.Key()) {
 				peers = append(peers, p)
@@ -108,20 +108,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 					b.logf("Network lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
 				}
 				// Record information about the node we filtered out.
-				fp := ipnstate.TKAFilteredPeer{
-					Name:         p.Name(),
-					ID:           p.ID(),
-					StableID:     p.StableID(),
-					TailscaleIPs: make([]netip.Addr, p.Addresses().Len()),
-					NodeKey:      p.Key(),
-				}
-				for i := range p.Addresses().Len() {
-					addr := p.Addresses().At(i)
-					if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
-						fp.TailscaleIPs[i] = addr.Addr()
-					}
-				}
-				filtered = append(filtered, fp)
+				filtered = append(filtered, tkaStateFromPeer(p))
 			}
 		}
 		nm.Peers = peers
@@ -546,9 +533,15 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		}
 	}
 
-	filtered := make([]*ipnstate.TKAFilteredPeer, len(b.tka.filtered))
+	filtered := make([]*ipnstate.TKAPeer, len(b.tka.filtered))
 	for i := range len(filtered) {
 		filtered[i] = b.tka.filtered[i].Clone()
+	}
+
+	visible := make([]*ipnstate.TKAPeer, len(b.netMap.Peers))
+	for i, p := range b.netMap.Peers {
+		s := tkaStateFromPeer(p)
+		visible[i] = &s
 	}
 
 	stateID1, _ := b.tka.authority.StateIDs()
@@ -562,8 +555,30 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		NodeKeySignature: nodeKeySignature,
 		TrustedKeys:      outKeys,
 		FilteredPeers:    filtered,
+		VisiblePeers:     visible,
 		StateID:          stateID1,
 	}
+}
+
+func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
+	fp := ipnstate.TKAPeer{
+		Name:         p.Name(),
+		ID:           p.ID(),
+		StableID:     p.StableID(),
+		TailscaleIPs: make([]netip.Addr, 0, p.Addresses().Len()),
+		NodeKey:      p.Key(),
+	}
+	for i := range p.Addresses().Len() {
+		addr := p.Addresses().At(i)
+		if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
+			fp.TailscaleIPs = append(fp.TailscaleIPs, addr.Addr())
+		}
+	}
+	var decoded tka.NodeKeySignature
+	if err := decoded.Unserialize(p.KeySignature().AsSlice()); err == nil {
+		fp.NodeKeySignature = decoded
+	}
+	return fp
 }
 
 // NetworkLockInit enables network-lock for the tailnet, with the tailnets'
