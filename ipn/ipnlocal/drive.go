@@ -252,6 +252,7 @@ func (b *LocalBackend) driveNotifyShares(shares views.SliceView[*drive.Share, dr
 	// Ensures shares is not nil to distinguish "no shares" from "not notifying shares"
 	if shares.IsNil() {
 		shares = views.SliceOfViews(make([]*drive.Share, 0))
+		b.lastNotifiedDriveShares.Store(&shares)
 	}
 	b.send(ipn.Notify{DriveShares: shares})
 }
