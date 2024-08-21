@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -42,6 +43,7 @@ var sslKeyLogFile = os.Getenv("SSLKEYLOGFILE")
 var (
 	debug              = envknob.RegisterBool("TS_DEBUG_TLS_DIAL")
 	insecureSkipVerify = envknob.RegisterBool("TS_DEBUG_TLS_DIAL_INSECURE_SKIP_VERIFY")
+	additionalCA       = envknob.RegisterString("TS_DEBUG_TLS_DIAL_ADDITIONAL_CA_B64")
 )
 
 // tlsdialWarningPrinted tracks whether we've printed a warning about a given
@@ -154,6 +156,19 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		}
 		for _, cert := range cs.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(cert)
+		}
+		if ca := additionalCA(); len(ca) > 0 {
+			if caBytes, err := base64.StdEncoding.DecodeString(ca); err != nil {
+				log.Printf("cannot decode %v", err)
+			} else {
+				pool := x509.NewCertPool()
+
+				if ok := pool.AppendCertsFromPEM(caBytes); !ok {
+					log.Print("cannot append certs from PEM")
+				} else {
+					opts.Roots = pool
+				}
+			}
 		}
 		_, errSys := cs.PeerCertificates[0].Verify(opts)
 		if debug() {
