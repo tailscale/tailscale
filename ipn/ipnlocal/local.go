@@ -332,9 +332,12 @@ type LocalBackend struct {
 	// Last ClientVersion received in MapResponse, guarded by mu.
 	lastClientVersion *tailcfg.ClientVersion
 
+	// lastNotifiedDriveSharesMu guards lastNotifiedDriveShares
+	lastNotifiedDriveSharesMu sync.Mutex
+
 	// lastNotifiedDriveShares keeps track of the last set of shares that we
 	// notified about.
-	lastNotifiedDriveShares atomic.Pointer[views.SliceView[*drive.Share, drive.ShareView]]
+	lastNotifiedDriveShares *views.SliceView[*drive.Share, drive.ShareView]
 
 	// outgoingFiles keeps track of Taildrop outgoing files keyed to their OutgoingFile.ID
 	outgoingFiles map[string]*ipn.OutgoingFile
