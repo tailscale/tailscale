@@ -352,7 +352,7 @@ const (
 )
 
 // Note that wsaProtocolInfo needs to be identical to windows.WSAProtocolInfo;
-// the purpose of this type is to have the ability to use it as a reciever in
+// the purpose of this type is to have the ability to use it as a receiver in
 // the path and categoryFlags funcs defined below.
 type wsaProtocolInfo windows.WSAProtocolInfo
 

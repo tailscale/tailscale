@@ -269,7 +269,7 @@ func moduleInfo[entryType moduleInfoConstraint](entry *entryType, proc *windows.
 		// GetOwnerModuleFromTcp*Entry can apparently return ERROR_SUCCESS
 		// (NO_ERROR) on the first call without the usual first
 		// ERROR_INSUFFICIENT_BUFFER result. Windows said success, so interpret
-		// that was sucessfully not having data.
+		// that was successfully not having data.
 		return "", nil
 	}
 	basicInfo := (*_TCPIP_OWNER_MODULE_BASIC_INFO)(addr)
