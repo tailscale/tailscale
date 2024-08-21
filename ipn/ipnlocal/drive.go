@@ -247,8 +247,17 @@ func (b *LocalBackend) driveSetSharesLocked(shares []*drive.Share) error {
 }
 
 // driveNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
-// about the latest list of shares.
+// about the latest list of shares, if and only if the shares have changed since
+// the last time we notified.
 func (b *LocalBackend) driveNotifyShares(shares views.SliceView[*drive.Share, drive.ShareView]) {
+	b.lastNotifiedDriveSharesMu.Lock()
+	defer b.lastNotifiedDriveSharesMu.Unlock()
+	if b.lastNotifiedDriveShares != nil && driveShareViewsEqual(b.lastNotifiedDriveShares, shares) {
+		// shares are unchanged since last notification, don't bother notifying
+		return
+	}
+	b.lastNotifiedDriveShares = &shares
+
 	// Ensures shares is not nil to distinguish "no shares" from "not notifying shares"
 	if shares.IsNil() {
 		shares = views.SliceOfViews(make([]*drive.Share, 0))
@@ -265,11 +274,8 @@ func (b *LocalBackend) driveNotifyCurrentSharesLocked() {
 		shares = b.pm.prefs.DriveShares()
 	}
 
-	lastNotified := b.lastNotifiedDriveShares.Load()
-	if lastNotified == nil || !driveShareViewsEqual(lastNotified, shares) {
-		// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
-		go b.driveNotifyShares(shares)
-	}
+	// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
+	go b.driveNotifyShares(shares)
 }
 
 func driveShareViewsEqual(a *views.SliceView[*drive.Share, drive.ShareView], b views.SliceView[*drive.Share, drive.ShareView]) bool {
