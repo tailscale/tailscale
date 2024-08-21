@@ -329,7 +329,8 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		// TODO(jwhited): add Windows GSO support https://github.com/tailscale/corp/issues/21874
 		// TODO(jwhited): exercise enableGRO in relation to https://github.com/tailscale/corp/issues/22353
 		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
-		linkEP.SupportedGSOKind = stack.HostGSOSupported
+		// TODO(jwhited): re-enable GSO https://github.com/tailscale/corp/issues/22511
+		linkEP.SupportedGSOKind = stack.GSONotSupported
 	} else {
 		linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", disableGRO)
 	}
