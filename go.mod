@@ -78,7 +78,7 @@ require (
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20240628074852-17ca944da6ba
-	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
+	github.com/tailscale/netlink v1.1.1-0.20240822194855-b00a94770237
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
@@ -88,7 +88,6 @@ require (
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	github.com/u-root/u-root v0.12.0
-	github.com/vishvananda/netlink v1.2.1-beta.2
 	github.com/vishvananda/netns v0.0.4
 	go.uber.org/zap v1.27.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
