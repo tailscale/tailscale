@@ -319,6 +319,17 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:       "resolve",
+			ShortUsage: "tailscale debug resolve <hostname>",
+			Exec:       runDebugResolve,
+			ShortHelp:  "Does a DNS lookup",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("resolve")
+				fs.StringVar(&resolveArgs.net, "net", "ip", "network type to resolve (ip, ip4, ip6)")
+				return fs
+			})(),
+		},
 	},
 }
 
@@ -1165,5 +1176,28 @@ func runDebugDialTypes(ctx context.Context, args []string) error {
 	}
 
 	fmt.Printf("%s", body)
+	return nil
+}
+
+var resolveArgs struct {
+	net string // "ip", "ip4", "ip6""
+}
+
+func runDebugResolve(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: tailscale debug resolve <hostname>")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	host := args[0]
+	ips, err := net.DefaultResolver.LookupIP(ctx, resolveArgs.net, host)
+	if err != nil {
+		return err
+	}
+	for _, ip := range ips {
+		fmt.Printf("%s\n", ip)
+	}
 	return nil
 }
