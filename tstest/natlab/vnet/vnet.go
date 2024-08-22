@@ -222,8 +222,8 @@ func (n *network) initStack() error {
 				log.Printf("Serialize error: %v", err)
 				continue
 			}
-			if writeFunc, ok := n.writeFunc.Load(node.mac); ok {
-				writeFunc(buffer.Bytes())
+			if nw, ok := n.writers.Load(node.mac); ok {
+				nw.write(buffer.Bytes())
 			} else {
 				log.Printf("No writeFunc for %v", node.mac)
 			}
@@ -465,6 +465,20 @@ type portMapping struct {
 	expiry time.Time
 }
 
+type writerFunc func([]byte, *net.UnixAddr, int)
+
+// Encapsulates both a write function, an optional outbound socket address
+// for dgram mode and an interfaceID for packet captures.
+type networkWriter struct {
+	writer      writerFunc    // Function to write packets to the network
+	addr        *net.UnixAddr // Outbound socket address for dgram mode
+	interfaceID int           // The interface ID of the src node (for writing pcaps)
+}
+
+func (nw *networkWriter) write(b []byte) {
+	nw.writer(b, nw.addr, nw.interfaceID)
+}
+
 type network struct {
 	s              *Server
 	mac            MAC
@@ -485,16 +499,23 @@ type network struct {
 	portMap     map[netip.AddrPort]portMapping    // WAN ip:port -> LAN ip:port
 	portMapFlow map[portmapFlowKey]netip.AddrPort // (lanAP, peerWANAP) -> portmapped wanAP
 
-	// writeFunc is a map of MAC -> func to write to that MAC.
+	// writers is a map of MAC -> networkWriters to write packets to that MAC.
 	// It contains entries for connected nodes only.
-	writeFunc syncs.Map[MAC, func([]byte)] // MAC -> func to write to that MAC
+	writers syncs.Map[MAC, networkWriter] // MAC -> to networkWriter for that MAC
 }
 
-func (n *network) registerWriter(mac MAC, f func([]byte)) {
-	if f != nil {
-		n.writeFunc.Store(mac, f)
+// Regsiters a writerFunc for a MAC address.
+// raddr is and optional outbound socket address of the client interface for dgram mode.
+// Pass nil for the writerFunc to deregister the writer.
+func (n *network) registerWriter(mac MAC, raddr *net.UnixAddr, interfaceID int, wf writerFunc) {
+	if wf != nil {
+		n.writers.Store(mac, networkWriter{
+			writer:      wf,
+			addr:        raddr,
+			interfaceID: interfaceID,
+		})
 	} else {
-		n.writeFunc.Delete(mac)
+		n.writers.Delete(mac)
 	}
 }
 
@@ -684,10 +705,10 @@ type Protocol int
 
 const (
 	ProtocolQEMU      = Protocol(iota + 1)
-	ProtocolUnixDGRAM // for macOS Hypervisor.Framework and VZFileHandleNetworkDeviceAttachment
+	ProtocolUnixDGRAM // for macOS Virtualization.Framework and VZFileHandleNetworkDeviceAttachment
 )
 
-// serveConn serves a single connection from a client.
+// Handles a single connection from a QEMU-style client or muxd connections for dgram mode
 func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 	if s.shuttingDown.Load() {
 		return
@@ -702,24 +723,37 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 
 	bw := bufio.NewWriterSize(uc, 2<<10)
 	var writeMu sync.Mutex
-	var srcNode *node
-	writePkt := func(pkt []byte) {
+	writePkt := func(pkt []byte, raddr *net.UnixAddr, interfaceID int) {
 		if pkt == nil {
 			return
 		}
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		if proto == ProtocolQEMU {
+		switch proto {
+		case ProtocolQEMU:
 			hdr := binary.BigEndian.AppendUint32(bw.AvailableBuffer()[:0], uint32(len(pkt)))
 			if _, err := bw.Write(hdr); err != nil {
 				log.Printf("Write hdr: %v", err)
 				return
 			}
+
+			if _, err := bw.Write(pkt); err != nil {
+				log.Printf("Write pkt: %v", err)
+				return
+
+			}
+		case ProtocolUnixDGRAM:
+			if raddr == nil {
+				log.Printf("Write pkt: dgram mode write failure, no outbound socket address")
+				return
+			}
+
+			if _, err := uc.WriteToUnix(pkt, raddr); err != nil {
+				log.Printf("Write pkt : %v", err)
+				return
+			}
 		}
-		if _, err := bw.Write(pkt); err != nil {
-			log.Printf("Write pkt: %v", err)
-			return
-		}
+
 		if err := bw.Flush(); err != nil {
 			log.Printf("Flush: %v", err)
 		}
@@ -727,22 +761,25 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			Timestamp:      time.Now(),
 			CaptureLength:  len(pkt),
 			Length:         len(pkt),
-			InterfaceIndex: srcNode.interfaceID,
+			InterfaceIndex: interfaceID,
 		}, pkt))
 	}
 
 	buf := make([]byte, 16<<10)
-	var netw *network // non-nil after first packet
 	for {
 		var packetRaw []byte
-		if proto == ProtocolUnixDGRAM {
-			n, _, err := uc.ReadFromUnix(buf)
+		var raddr *net.UnixAddr
+
+		switch proto {
+		case ProtocolUnixDGRAM:
+			n, addr, err := uc.ReadFromUnix(buf)
+			raddr = addr
 			if err != nil {
 				log.Printf("ReadFromUnix: %v", err)
 				continue
 			}
 			packetRaw = buf[:n]
-		} else if proto == ProtocolQEMU {
+		case ProtocolQEMU:
 			if _, err := io.ReadFull(uc, buf[:4]); err != nil {
 				if s.shutdownCtx.Err() != nil {
 					// Return without logging.
@@ -772,29 +809,29 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		ep := EthernetPacket{le, packet}
 
 		srcMAC := ep.SrcMAC()
-		if srcNode == nil {
-			srcNode, ok = s.nodeByMAC[srcMAC]
-			if !ok {
-				log.Printf("[conn %p] ignoring frame from unknown MAC %v", uc, srcMAC)
-				continue
-			}
-			log.Printf("[conn %p] MAC %v is node %v", uc, srcMAC, srcNode.lanIP)
-			netw = srcNode.net
-			netw.registerWriter(srcMAC, writePkt)
-			defer netw.registerWriter(srcMAC, nil)
-		} else {
-			if srcMAC != srcNode.mac {
-				log.Printf("[conn %p] ignoring frame from MAC %v, expected %v", uc, srcMAC, srcNode.mac)
-				continue
-			}
+		srcNode, ok := s.nodeByMAC[srcMAC]
+		if !ok {
+			log.Printf("[conn %p] got frame from unknown MAC %v", uc, srcMAC)
+			continue
 		}
+
+		// Register a writer for the source MAC address if one doesn't exist.
+		if _, ok := srcNode.net.writers.Load(srcMAC); !ok {
+			log.Printf("[conn %p] Registering writer for MAC %v is node %v", uc, srcMAC, srcNode.lanIP)
+			srcNode.net.registerWriter(srcMAC, raddr, srcNode.interfaceID, writePkt)
+			defer func() {
+				srcNode.net.registerWriter(srcMAC, nil, 0, nil)
+			}()
+			continue
+		}
+
 		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
 			Timestamp:      time.Now(),
 			CaptureLength:  len(packetRaw),
 			Length:         len(packetRaw),
 			InterfaceIndex: srcNode.interfaceID,
 		}, packetRaw))
-		netw.HandleEthernetPacket(ep)
+		srcNode.net.HandleEthernetPacket(ep)
 	}
 }
 
@@ -839,8 +876,8 @@ func (n *network) writeEth(res []byte) {
 	dstMAC := MAC(res[0:6])
 	srcMAC := MAC(res[6:12])
 	if dstMAC.IsBroadcast() {
-		n.writeFunc.Range(func(mac MAC, writeFunc func([]byte)) bool {
-			writeFunc(res)
+		n.writers.Range(func(mac MAC, nw networkWriter) bool {
+			nw.write(res)
 			return true
 		})
 		return
@@ -849,8 +886,8 @@ func (n *network) writeEth(res []byte) {
 		n.logf("dropping write of packet from %v to itself", srcMAC)
 		return
 	}
-	if writeFunc, ok := n.writeFunc.Load(dstMAC); ok {
-		writeFunc(res)
+	if nw, ok := n.writers.Load(dstMAC); ok {
+		nw.write(res)
 		return
 	}
 }
