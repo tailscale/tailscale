@@ -14,7 +14,7 @@ env:
   # This variable toggles the fuzz job between two modes:
   #  - false: we expect fuzzing to be happy, and should report failure if it's not.
   #  - true: we expect fuzzing is broken, and should report failure if it start working.
-  TS_FUZZ_CURRENTLY_BROKEN: false
+  TS_FUZZ_CURRENTLY_BROKEN: true
 
 on:
   push:
