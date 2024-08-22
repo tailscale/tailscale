@@ -4,10 +4,11 @@
 package codegen
 
 import (
+	"cmp"
 	"go/types"
-	"log"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"unsafe"
 
@@ -162,14 +163,9 @@ func TestGenericContainsPointers(t *testing.T) {
 		},
 	}
 
-	_, namedTypes, err := LoadTypes("test", ".")
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	for _, tt := range tests {
 		t.Run(tt.typ, func(t *testing.T) {
-			typ := namedTypes[tt.typ]
+			typ := lookupTestType(t, tt.typ)
 			if isPointer := ContainsPointers(typ); isPointer != tt.wantPointer {
 				t.Fatalf("ContainsPointers: got %v, want: %v", isPointer, tt.wantPointer)
 			}
@@ -251,4 +247,200 @@ func TestAssertStructUnchanged(t *testing.T) {
 			}
 		})
 	}
+}
+
+type NamedType struct{}
+
+func (NamedType) Method() {}
+
+type NamedTypeAlias = NamedType
+
+type NamedInterface interface {
+	Method()
+}
+
+type NamedInterfaceAlias = NamedInterface
+
+type GenericType[T NamedInterface] struct {
+	TypeParamField    T
+	TypeParamPtrField *T
+}
+
+type GenericTypeWithAliasConstraint[T NamedInterfaceAlias] struct {
+	TypeParamField    T
+	TypeParamPtrField *T
+}
+
+func TestLookupMethod(t *testing.T) {
+	tests := []struct {
+		name          string
+		typ           types.Type
+		methodName    string
+		wantHasMethod bool
+		wantReceiver  types.Type
+	}{
+		{
+			name:          "NamedType/HasMethod",
+			typ:           lookupTestType(t, "NamedType"),
+			methodName:    "Method",
+			wantHasMethod: true,
+		},
+		{
+			name:          "NamedType/NoMethod",
+			typ:           lookupTestType(t, "NamedType"),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "NamedTypeAlias/HasMethod",
+			typ:           lookupTestType(t, "NamedTypeAlias"),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedType"),
+		},
+		{
+			name:          "NamedTypeAlias/NoMethod",
+			typ:           lookupTestType(t, "NamedTypeAlias"),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "PtrToNamedType/HasMethod",
+			typ:           types.NewPointer(lookupTestType(t, "NamedType")),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedType"),
+		},
+		{
+			name:          "PtrToNamedType/NoMethod",
+			typ:           types.NewPointer(lookupTestType(t, "NamedType")),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "PtrToNamedTypeAlias/HasMethod",
+			typ:           types.NewPointer(lookupTestType(t, "NamedTypeAlias")),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedType"),
+		},
+		{
+			name:          "PtrToNamedTypeAlias/NoMethod",
+			typ:           types.NewPointer(lookupTestType(t, "NamedTypeAlias")),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "NamedInterface/HasMethod",
+			typ:           lookupTestType(t, "NamedInterface"),
+			methodName:    "Method",
+			wantHasMethod: true,
+		},
+		{
+			name:          "NamedInterface/NoMethod",
+			typ:           lookupTestType(t, "NamedInterface"),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "Interface/HasMethod",
+			typ:           types.NewInterfaceType([]*types.Func{types.NewFunc(0, nil, "Method", types.NewSignatureType(nil, nil, nil, nil, nil, false))}, nil),
+			methodName:    "Method",
+			wantHasMethod: true,
+		},
+		{
+			name:          "Interface/NoMethod",
+			typ:           types.NewInterfaceType(nil, nil),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "TypeParam/HasMethod",
+			typ:           lookupTestType(t, "GenericType").Underlying().(*types.Struct).Field(0).Type(),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedInterface"),
+		},
+		{
+			name:          "TypeParam/NoMethod",
+			typ:           lookupTestType(t, "GenericType").Underlying().(*types.Struct).Field(0).Type(),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "TypeParamPtr/HasMethod",
+			typ:           lookupTestType(t, "GenericType").Underlying().(*types.Struct).Field(1).Type(),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedInterface"),
+		},
+		{
+			name:          "TypeParamPtr/NoMethod",
+			typ:           lookupTestType(t, "GenericType").Underlying().(*types.Struct).Field(1).Type(),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "TypeParamWithAlias/HasMethod",
+			typ:           lookupTestType(t, "GenericTypeWithAliasConstraint").Underlying().(*types.Struct).Field(0).Type(),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedInterface"),
+		},
+		{
+			name:          "TypeParamWithAlias/NoMethod",
+			typ:           lookupTestType(t, "GenericTypeWithAliasConstraint").Underlying().(*types.Struct).Field(0).Type(),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+		{
+			name:          "TypeParamWithAliasPtr/HasMethod",
+			typ:           lookupTestType(t, "GenericTypeWithAliasConstraint").Underlying().(*types.Struct).Field(1).Type(),
+			methodName:    "Method",
+			wantHasMethod: true,
+			wantReceiver:  lookupTestType(t, "NamedInterface"),
+		},
+		{
+			name:          "TypeParamWithAliasPtr/NoMethod",
+			typ:           lookupTestType(t, "GenericTypeWithAliasConstraint").Underlying().(*types.Struct).Field(1).Type(),
+			methodName:    "NoMethod",
+			wantHasMethod: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMethod := LookupMethod(tt.typ, tt.methodName)
+			if gotHasMethod := gotMethod != nil; gotHasMethod != tt.wantHasMethod {
+				t.Fatalf("HasMethod: got %v; want %v", gotMethod, tt.wantHasMethod)
+			}
+			if gotMethod == nil {
+				return
+			}
+			if gotMethod.Name() != tt.methodName {
+				t.Errorf("Name: got %v; want %v", gotMethod.Name(), tt.methodName)
+			}
+			if gotRecv, wantRecv := gotMethod.Signature().Recv().Type(), cmp.Or(tt.wantReceiver, tt.typ); !types.Identical(gotRecv, wantRecv) {
+				t.Errorf("Recv: got %v; want %v", gotRecv, wantRecv)
+			}
+		})
+	}
+}
+
+var namedTestTypes = sync.OnceValues(func() (map[string]types.Type, error) {
+	_, namedTypes, err := LoadTypes("test", ".")
+	return namedTypes, err
+})
+
+func lookupTestType(t *testing.T, name string) types.Type {
+	t.Helper()
+	types, err := namedTestTypes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ, ok := types[name]
+	if !ok {
+		t.Fatalf("type %q is not declared in the current package", name)
+	}
+	return typ
 }

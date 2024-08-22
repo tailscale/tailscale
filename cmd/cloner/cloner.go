@@ -47,7 +47,7 @@ func main() {
 	it := codegen.NewImportTracker(pkg.Types)
 	buf := new(bytes.Buffer)
 	for _, typeName := range typeNames {
-		typ, ok := namedTypes[typeName]
+		typ, ok := namedTypes[typeName].(*types.Named)
 		if !ok {
 			log.Fatalf("could not find type %s", typeName)
 		}

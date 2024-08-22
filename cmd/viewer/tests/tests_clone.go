@@ -441,3 +441,41 @@ var _StructWithContainersCloneNeedsRegeneration = StructWithContainers(struct {
 	CloneableMap              MapContainer[int, *StructWithPtrs]
 	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
 }{})
+
+// Clone makes a deep copy of StructWithTypeAliasFields.
+// The result aliases no memory with the original.
+func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithTypeAliasFields)
+	*dst = *src
+	panic("TODO: WithPtr (*types.Struct)")
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithTypeAliasFieldsCloneNeedsRegeneration = StructWithTypeAliasFields(struct {
+	WithPtr    StructWithPtrsAlias
+	WithoutPtr StructWithoutPtrsAlias
+}{})
+
+// Clone makes a deep copy of GenericTypeAliasStruct.
+// The result aliases no memory with the original.
+func (src *GenericTypeAliasStruct[T, T2, V2]) Clone() *GenericTypeAliasStruct[T, T2, V2] {
+	if src == nil {
+		return nil
+	}
+	dst := new(GenericTypeAliasStruct[T, T2, V2])
+	*dst = *src
+	dst.Cloneable = src.Cloneable.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericTypeAliasStructCloneNeedsRegeneration[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]](GenericTypeAliasStruct[T, T2, V2]) {
+	_GenericTypeAliasStructCloneNeedsRegeneration(struct {
+		NonCloneable T
+		Cloneable    T2
+	}{})
+}
