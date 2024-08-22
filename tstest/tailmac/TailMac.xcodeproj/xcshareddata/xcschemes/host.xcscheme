@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "8F87D51C26C34111000EADA4"
-               BuildableName = "TailMac.app"
+               BuildableName = "Host.app"
                BlueprintName = "host"
                ReferencedContainer = "container:TailMac.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "8F87D51C26C34111000EADA4"
-            BuildableName = "TailMac.app"
+            BuildableName = "Host.app"
             BlueprintName = "host"
             ReferencedContainer = "container:TailMac.xcodeproj">
          </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "8F87D51C26C34111000EADA4"
-            BuildableName = "TailMac.app"
+            BuildableName = "Host.app"
             BlueprintName = "host"
             ReferencedContainer = "container:TailMac.xcodeproj">
          </BuildableReference>
