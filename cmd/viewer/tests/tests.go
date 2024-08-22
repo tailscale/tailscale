@@ -204,13 +204,27 @@ type StructWithContainers struct {
 }
 
 type (
-	StructWithPtrsAlias    = StructWithPtrs
-	StructWithoutPtrsAlias = StructWithoutPtrs
+	StructWithPtrsAlias        = StructWithPtrs
+	StructWithoutPtrsAlias     = StructWithoutPtrs
+	StructWithPtrsAliasView    = StructWithPtrsView
+	StructWithoutPtrsAliasView = StructWithoutPtrsView
 )
 
 type StructWithTypeAliasFields struct {
 	WithPtr    StructWithPtrsAlias
 	WithoutPtr StructWithoutPtrsAlias
+
+	WithPtrByPtr    *StructWithPtrsAlias
+	WithoutPtrByPtr *StructWithoutPtrsAlias
+
+	SliceWithPtrs    []*StructWithPtrsAlias
+	SliceWithoutPtrs []*StructWithoutPtrsAlias
+
+	MapWithPtrs    map[string]*StructWithPtrsAlias
+	MapWithoutPtrs map[string]*StructWithoutPtrsAlias
+
+	MapOfSlicesWithPtrs    map[string][]*StructWithPtrsAlias
+	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
 }
 
 type integer = constraints.Integer
