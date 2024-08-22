@@ -1,10 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !go1.21
+//go:build !go1.23
 
 package main
 
 func init() {
-	you_need_Go_1_21_to_compile_Tailscale()
+	you_need_Go_1_23_to_compile_Tailscale()
 }
