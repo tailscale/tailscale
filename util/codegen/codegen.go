@@ -382,3 +382,12 @@ func LookupMethod(t types.Type, name string) *types.Func {
 	}
 	return nil
 }
+
+// NamedTypeOf is like t.(*types.Named), but also works with type aliases.
+func NamedTypeOf(t types.Type) (named *types.Named, ok bool) {
+	if a, ok := t.(*types.Alias); ok {
+		return NamedTypeOf(types.Unalias(a))
+	}
+	named, ok = t.(*types.Named)
+	return
+}

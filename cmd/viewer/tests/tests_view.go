@@ -724,11 +724,60 @@ func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
 
 func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsView        { return v.ж.WithPtr.View() }
 func (v StructWithTypeAliasFieldsView) WithoutPtr() StructWithoutPtrsAlias { return v.ж.WithoutPtr }
+func (v StructWithTypeAliasFieldsView) WithPtrByPtr() StructWithPtrsAliasView {
+	return v.ж.WithPtrByPtr.View()
+}
+func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() *StructWithoutPtrsAlias {
+	if v.ж.WithoutPtrByPtr == nil {
+		return nil
+	}
+	x := *v.ж.WithoutPtrByPtr
+	return &x
+}
+
+func (v StructWithTypeAliasFieldsView) SliceWithPtrs() views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
+	return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](v.ж.SliceWithPtrs)
+}
+func (v StructWithTypeAliasFieldsView) SliceWithoutPtrs() views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
+	return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](v.ж.SliceWithoutPtrs)
+}
+
+func (v StructWithTypeAliasFieldsView) MapWithPtrs() views.MapFn[string, *StructWithPtrsAlias, StructWithPtrsAliasView] {
+	return views.MapFnOf(v.ж.MapWithPtrs, func(t *StructWithPtrsAlias) StructWithPtrsAliasView {
+		return t.View()
+	})
+}
+
+func (v StructWithTypeAliasFieldsView) MapWithoutPtrs() views.MapFn[string, *StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
+	return views.MapFnOf(v.ж.MapWithoutPtrs, func(t *StructWithoutPtrsAlias) StructWithoutPtrsAliasView {
+		return t.View()
+	})
+}
+
+func (v StructWithTypeAliasFieldsView) MapOfSlicesWithPtrs() views.MapFn[string, []*StructWithPtrsAlias, views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView]] {
+	return views.MapFnOf(v.ж.MapOfSlicesWithPtrs, func(t []*StructWithPtrsAlias) views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
+		return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](t)
+	})
+}
+
+func (v StructWithTypeAliasFieldsView) MapOfSlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrsAlias, views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView]] {
+	return views.MapFnOf(v.ж.MapOfSlicesWithoutPtrs, func(t []*StructWithoutPtrsAlias) views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
+		return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](t)
+	})
+}
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithTypeAliasFieldsViewNeedsRegeneration = StructWithTypeAliasFields(struct {
-	WithPtr    StructWithPtrsAlias
-	WithoutPtr StructWithoutPtrsAlias
+	WithPtr                StructWithPtrsAlias
+	WithoutPtr             StructWithoutPtrsAlias
+	WithPtrByPtr           *StructWithPtrsAlias
+	WithoutPtrByPtr        *StructWithoutPtrsAlias
+	SliceWithPtrs          []*StructWithPtrsAlias
+	SliceWithoutPtrs       []*StructWithoutPtrsAlias
+	MapWithPtrs            map[string]*StructWithPtrsAlias
+	MapWithoutPtrs         map[string]*StructWithoutPtrsAlias
+	MapOfSlicesWithPtrs    map[string][]*StructWithPtrsAlias
+	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
 }{})
 
 // View returns a readonly view of GenericTypeAliasStruct.
