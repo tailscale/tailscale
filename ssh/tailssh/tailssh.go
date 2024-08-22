@@ -1731,6 +1731,7 @@ func envValFromList(env []string, wantKey string) (v string) {
 // envEq reports whether environment variable a == b for the current
 // operating system.
 func envEq(a, b string) bool {
+	//lint:ignore SA4032 in case this func moves elsewhere, permit the GOOS check
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
 	}

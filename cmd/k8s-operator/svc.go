@@ -327,7 +327,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	if err != nil {
 		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
 		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
-		return fmt.Errorf(msg)
+		return errors.New(msg)
 	}
 	for _, ip := range tsIPs {
 		addr, err := netip.ParseAddr(ip)
