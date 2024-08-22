@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -46,6 +48,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
@@ -1116,6 +1119,89 @@ func TestAutoUpdateDefaults(t *testing.T) {
 			tt.run(t, n)
 		})
 	}
+}
+
+// TestDNSOverTCPIntervalResolver tests that the quad-100 resolver successfully
+// serves TCP queries. It exercises the host's TCP stack, a TUN device, and
+// gVisor/netstack.
+// https://github.com/tailscale/corp/issues/22511
+func TestDNSOverTCPIntervalResolver(t *testing.T) {
+	tstest.Shard(t)
+	if os.Getuid() != 0 {
+		t.Skip("skipping when not root")
+	}
+	env := newTestEnv(t)
+	env.tunMode = true
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	wantIP4 := n1.AwaitIP4()
+	n1.AwaitRunning()
+
+	status, err := n1.Status()
+	if err != nil {
+		t.Fatalf("failed to get node status: %v", err)
+	}
+	selfDNSName, err := dnsname.ToFQDN(status.Self.DNSName)
+	if err != nil {
+		t.Fatalf("error converting self dns name to fqdn: %v", err)
+	}
+
+	cases := []struct {
+		network     string
+		serviceAddr netip.Addr
+	}{
+		{
+			"tcp4",
+			tsaddr.TailscaleServiceIP(),
+		},
+		{
+			"tcp6",
+			tsaddr.TailscaleServiceIPv6(),
+		},
+	}
+	for _, c := range cases {
+		err = tstest.WaitFor(time.Second*5, func() error {
+			m := new(dns.Msg)
+			m.SetQuestion(selfDNSName.WithTrailingDot(), dns.TypeA)
+			conn, err := net.DialTimeout(c.network, net.JoinHostPort(c.serviceAddr.String(), "53"), time.Second*1)
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+			dnsConn := &dns.Conn{
+				Conn: conn,
+			}
+			dnsClient := &dns.Client{}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			resp, _, err := dnsClient.ExchangeWithConnContext(ctx, m, dnsConn)
+			if err != nil {
+				return err
+			}
+			if len(resp.Answer) != 1 {
+				return fmt.Errorf("unexpected DNS resp: %s", resp)
+			}
+			var gotAddr net.IP
+			answer, ok := resp.Answer[0].(*dns.A)
+			if !ok {
+				return fmt.Errorf("unexpected answer type: %s", resp.Answer[0])
+			}
+			gotAddr = answer.A
+			if !bytes.Equal(gotAddr, wantIP4.AsSlice()) {
+				return fmt.Errorf("got (%s) != want (%s)", gotAddr, wantIP4)
+			}
+			return nil
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	d1.MustCleanShutdown(t)
 }
 
 // testEnv contains the test environment (set of servers) used by one
