@@ -276,27 +276,6 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 124 {
-		node, ok := n.nodesByIP[clientRemoteIP]
-		if !ok {
-			log.Printf("no node for TCP 124 connection from %v", clientRemoteIP)
-			r.Complete(true)
-			return
-		}
-		r.Complete(false)
-		tc := gonet.NewTCPConn(&wq, ep)
-
-		go func() {
-			defer tc.Close()
-			bs := bufio.NewScanner(tc)
-			for bs.Scan() {
-				line := bs.Text()
-				log.Printf("LOG from %v: %s", node, line)
-			}
-		}()
-		return
-	}
-
 	if destPort == 8008 && destIP == fakeTestAgentIP {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
@@ -1278,7 +1257,9 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	if !ok {
 		return false
 	}
-	if tcp.DstPort == 123 || tcp.DstPort == 124 {
+	if tcp.DstPort == 123 {
+		// Test port for TCP interception. Not really useful, but cute for
+		// demos.
 		return true
 	}
 	dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
