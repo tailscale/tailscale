@@ -281,7 +281,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 8008 && destIP == fakeTestAgentIP {
+	if destPort == 8008 && fakeTestAgent.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		node := n.nodesByIP[clientRemoteIP]
@@ -290,7 +290,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 80 && destIP == fakeControlIP {
+	if destPort == 80 && fakeControl.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		hs := &http.Server{Handler: n.s.control}
@@ -298,28 +298,29 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 443 && (destIP == fakeDERP1IP || destIP == fakeDERP2IP) {
-		ds := n.s.derps[0]
-		if destIP == fakeDERP2IP {
-			ds = n.s.derps[1]
+	if fakeDERP1.Match(destIP) || fakeDERP2.Match(destIP) {
+		if destPort == 443 {
+			ds := n.s.derps[0]
+			if fakeDERP2.Match(destIP) {
+				ds = n.s.derps[1]
+			}
+
+			r.Complete(false)
+			tc := gonet.NewTCPConn(&wq, ep)
+			tlsConn := tls.Server(tc, ds.tlsConfig)
+			hs := &http.Server{Handler: ds.handler}
+			go hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+			return
 		}
-
-		r.Complete(false)
-		tc := gonet.NewTCPConn(&wq, ep)
-		tlsConn := tls.Server(tc, ds.tlsConfig)
-		hs := &http.Server{Handler: ds.handler}
-		go hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
-		return
+		if destPort == 80 {
+			r.Complete(false)
+			tc := gonet.NewTCPConn(&wq, ep)
+			hs := &http.Server{Handler: n.s.derps[0].handler}
+			go hs.Serve(netutil.NewOneConnListener(tc, nil))
+			return
+		}
 	}
-	if destPort == 80 && (destIP == fakeDERP1IP || destIP == fakeDERP2IP) {
-		r.Complete(false)
-		tc := gonet.NewTCPConn(&wq, ep)
-		hs := &http.Server{Handler: n.s.derps[0].handler}
-		go hs.Serve(netutil.NewOneConnListener(tc, nil))
-		return
-	}
-	if destPort == 443 && destIP == fakeLogCatcherIP {
-
+	if destPort == 443 && fakeLogCatcher.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		go n.serveLogCatcherConn(clientRemoteIP, tc)
@@ -331,7 +332,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	var targetDial string
 	if n.s.derpIPs.Contains(destIP) {
 		targetDial = destIP.String() + ":" + strconv.Itoa(int(destPort))
-	} else if destIP == fakeProxyControlplaneIP {
+	} else if fakeProxyControlplane.Match(destIP) {
 		targetDial = "controlplane.tailscale.com:" + strconv.Itoa(int(destPort))
 	}
 	if targetDial != "" {
@@ -398,17 +399,6 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 	hs := &http.Server{Handler: handler}
 	hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
 }
-
-var (
-	fakeDNSIP               = netip.AddrFrom4([4]byte{4, 11, 4, 11})
-	fakeProxyControlplaneIP = netip.AddrFrom4([4]byte{52, 52, 0, 1}) // real controlplane.tailscale.com proxy
-	fakeTestAgentIP         = netip.AddrFrom4([4]byte{52, 52, 0, 2})
-	fakeControlIP           = netip.AddrFrom4([4]byte{52, 52, 0, 3}) // 3=C for "Control"
-	fakeDERP1IP             = netip.AddrFrom4([4]byte{33, 4, 0, 1})  // 3340=DERP; 1=derp 1
-	fakeDERP2IP             = netip.AddrFrom4([4]byte{33, 4, 0, 2})  // 3340=DERP; 1=derp 1
-	fakeLogCatcherIP        = netip.AddrFrom4([4]byte{52, 52, 0, 4})
-	fakeSyslogIP            = netip.AddrFrom4([4]byte{52, 52, 0, 9})
-)
 
 type EthernetPacket struct {
 	le *layers.Ethernet
@@ -594,7 +584,8 @@ var derpMap = &tailcfg.DERPMap{
 					Name:             "1a",
 					RegionID:         1,
 					HostName:         "derp1.tailscale",
-					IPv4:             fakeDERP1IP.String(),
+					IPv4:             fakeDERP1.v4.String(),
+					IPv6:             fakeDERP1.v6.String(),
 					InsecureForTests: true,
 					CanPort80:        true,
 				},
@@ -609,7 +600,8 @@ var derpMap = &tailcfg.DERPMap{
 					Name:             "2a",
 					RegionID:         2,
 					HostName:         "derp2.tailscale",
-					IPv4:             fakeDERP2IP.String(),
+					IPv4:             fakeDERP2.v4.String(),
+					IPv6:             fakeDERP2.v6.String(),
 					InsecureForTests: true,
 					CanPort80:        true,
 				},
@@ -666,21 +658,8 @@ func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
 // IPv4ForDNS returns the IP address for the given DNS query name (for IPv4 A
 // queries only).
 func (s *Server) IPv4ForDNS(qname string) (netip.Addr, bool) {
-	switch qname {
-	case "dns":
-		return fakeDNSIP, true
-	case "log.tailscale.io":
-		return fakeLogCatcherIP, true
-	case "test-driver.tailscale":
-		return fakeTestAgentIP, true
-	case "controlplane.tailscale.com":
-		return fakeProxyControlplaneIP, true
-	case "control.tailscale":
-		return fakeControlIP, true
-	case "derp1.tailscale":
-		return fakeDERP1IP, true
-	case "derp2.tailscale":
-		return fakeDERP2IP, true
+	if v, ok := vips[qname]; ok {
+		return v.v4, v.v4.IsValid()
 	}
 	return netip.Addr{}, false
 }
@@ -1049,7 +1028,7 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if isUDP && dstIP == fakeSyslogIP {
+	if isUDP && fakeSyslog.Match(dstIP) {
 		node, ok := n.nodesByIP[srcIP]
 		if !ok {
 			return
@@ -1196,7 +1175,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 			},
 			layers.DHCPOption{
 				Type:   layers.DHCPOptDNS,
-				Data:   fakeDNSIP.AsSlice(),
+				Data:   fakeDNS.v4.AsSlice(),
 				Length: 4,
 			},
 			layers.DHCPOption{
@@ -1276,18 +1255,19 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	}
 	dstIP, _ := netip.AddrFromSlice(ipv4.DstIP.To4())
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
-		switch dstIP {
-		case fakeControlIP, fakeDERP1IP, fakeDERP2IP, fakeLogCatcherIP:
-			return true
+		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher} {
+			if v.Match(dstIP) {
+				return true
+			}
 		}
-		if dstIP == fakeProxyControlplaneIP {
+		if fakeProxyControlplane.Match(dstIP) {
 			return s.blendReality
 		}
 		if s.derpIPs.Contains(dstIP) {
 			return true
 		}
 	}
-	if tcp.DstPort == 8008 && dstIP == fakeTestAgentIP {
+	if tcp.DstPort == 8008 && fakeTestAgent.Match(dstIP) {
 		// Connection from cmd/tta.
 		return true
 	}
@@ -1305,7 +1285,7 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 		return false
 	}
 	dstIP, ok := netip.AddrFromSlice(ip.DstIP)
-	if !ok || dstIP != fakeDNSIP {
+	if !ok || !fakeDNS.Match(dstIP) {
 		return false
 	}
 	dns, ok := pkt.Layer(layers.LayerTypeDNS).(*layers.DNS)
