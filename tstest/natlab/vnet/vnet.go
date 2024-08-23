@@ -66,7 +66,12 @@ import (
 )
 
 const nicID = 1
-const stunPort = 3478
+
+const (
+	stunPort = 3478
+	pcpPort  = 5351
+	ssdpPort = 1900
+)
 
 func (s *Server) PopulateDERPMapIPs() error {
 	out, err := exec.Command("tailscale", "debug", "derp-map").Output()
@@ -1112,6 +1117,13 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 		})
 		n.linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
 		packetBuf.DecRef()
+		return
+	}
+
+	if isUDP && (udp.DstPort == pcpPort || udp.DstPort == ssdpPort) {
+		// We handle NAT-PMP, but not these yet.
+		// TODO(bradfitz): handle? marginal utility so far.
+		// Don't log about them being unknown.
 		return
 	}
 
