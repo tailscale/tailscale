@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -70,6 +71,9 @@ func (rt *localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 }
 
 func main() {
+	var logBuf logBuffer
+	log.SetOutput(io.MultiWriter(os.Stderr, &logBuf))
+
 	if distro.Get() == distro.Gokrazy {
 		if !hostinfo.IsNATLabGuestVM() {
 			// "Exiting immediately with status code 0 when the
@@ -88,11 +92,6 @@ func main() {
 				break
 			}
 		}
-	}
-
-	logc, err := net.Dial("tcp", "9.9.9.9:124")
-	if err == nil {
-		log.SetOutput(logc)
 	}
 
 	log.Printf("Tailscale Test Agent running.")
@@ -163,11 +162,17 @@ func main() {
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
 	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
-
+	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
+		logBuf.mu.Lock()
+		defer logBuf.mu.Unlock()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(logBuf.buf.Bytes())
+	})
 	go hs.Serve(chanListener(conns))
 
 	// For doing agent operations locally from gokrazy:
-	// (e.g. with "wget -O - localhost:8123/fw")
+	// (e.g. with "wget -O - localhost:8123/fw" or "wget -O - localhost:8123/logs"
+	// to get early tta logs before the port 124 connection is established)
 	go func() {
 		err := http.ListenAndServe("127.0.0.1:8123", &ttaMux)
 		if err != nil {
@@ -236,3 +241,24 @@ func addFirewallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var addFirewall func() error // set by fw_linux.go
+
+// logBuffer is a bytes.Buffer that is safe for concurrent use
+// intended to capture early logs from the process, even if
+// gokrazy's syslog streaming isn't working or yet working.
+// It only captures the first 1MB of logs, as that's considered
+// plenty for early debugging. At runtime, it's assumed that
+// syslog log streaming is working.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (lb *logBuffer) Write(p []byte) (n int, err error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	const maxSize = 1 << 20 // more than plenty; see type comment
+	if lb.buf.Len() > maxSize {
+		return len(p), nil
+	}
+	return lb.buf.Write(p)
+}
