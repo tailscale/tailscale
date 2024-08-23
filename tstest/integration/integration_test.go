@@ -1197,7 +1197,7 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 			return nil
 		})
 		if err != nil {
-			log.Fatal(err)
+			t.Fatal(err)
 		}
 	}
 
