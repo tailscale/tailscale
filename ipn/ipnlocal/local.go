@@ -4604,6 +4604,9 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
 		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32))
 	}
+	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs6) {
+		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIPv6(), 128))
+	}
 
 	return rs
 }
