@@ -29,19 +29,31 @@ import (
 // values to modify the config before calling NewServer.
 // Once the NewServer is called, Config is no longer used.
 type Config struct {
-	nodes    []*Node
-	networks []*Network
-	pcapFile string
+	nodes        []*Node
+	networks     []*Network
+	pcapFile     string
+	blendReality bool
 }
 
+// SetPCAPFile sets the filename to write a pcap file to,
+// or empty to disable pcap file writing.
 func (c *Config) SetPCAPFile(file string) {
 	c.pcapFile = file
 }
 
+// NumNodes returns the number of nodes in the configuration.
 func (c *Config) NumNodes() int {
 	return len(c.nodes)
 }
 
+// SetBlendReality sets whether to blend the real controlplane.tailscale.com and
+// DERP servers into the virtual network. This is mostly useful for interactive
+// testing when working on natlab.
+func (c *Config) SetBlendReality(v bool) {
+	c.blendReality = v
+}
+
+// FirstNetwork returns the first network in the config, or nil if none.
 func (c *Config) FirstNetwork() *Network {
 	if len(c.networks) == 0 {
 		return nil
