@@ -89,6 +89,7 @@ func main() {
 		http.ListenAndServe(":8080", rp)
 	}()
 	go func() {
+		var last string
 		getStatus := func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -97,7 +98,10 @@ func main() {
 				log.Printf("NodeStatus: %v", err)
 				return
 			}
-			log.Printf("NodeStatus: %v", logger.AsJSON(st))
+			if st.BackendState != last {
+				last = st.BackendState
+				log.Printf("NodeStatus: %v", logger.AsJSON(st))
+			}
 		}
 		for {
 			time.Sleep(5 * time.Second)
