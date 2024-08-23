@@ -180,7 +180,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 // watchIPNBus subscribes to the tailscale event bus and sends state updates to chState.
 // This method does not return.
 func watchIPNBus(ctx context.Context) {
-	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialState)
+	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
 	if err != nil {
 		log.Printf("watching ipn bus: %v", err)
 	}
