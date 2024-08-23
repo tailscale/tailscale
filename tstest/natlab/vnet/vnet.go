@@ -1065,7 +1065,12 @@ func (n *network) HandleEthernetIPv4PacketForRouter(ep EthernetPacket) {
 			InterfaceIndex: n.lanInterfaceID,
 		}, buf)
 
+		lanSrc := src // the original src, before NAT (for logging only)
 		src = n.doNATOut(src, dst)
+		if !src.IsValid() {
+			n.logf("warning: NAT dropped packet; no NAT out mapping for %v=>%v", lanSrc, dst)
+			return
+		}
 		buf, err = n.serializedUDPPacket(src, dst, udp.Payload, nil)
 		if err != nil {
 			n.logf("serializing UDP packet: %v", err)
@@ -1401,6 +1406,8 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 // src is a LAN IP and dst is a WAN IP.
 //
 // It returns the source WAN ip:port to use.
+//
+// If newSrc is invalid, the packet should be dropped.
 func (n *network) doNATOut(src, dst netip.AddrPort) (newSrc netip.AddrPort) {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
@@ -1423,6 +1430,8 @@ type portmapFlowKey struct {
 
 // doNATIn performs NAT on an incoming packet from WAN src to WAN dst, returning
 // a new destination LAN ip:port to use.
+//
+// If newDst is invalid, the packet should be dropped.
 func (n *network) doNATIn(src, dst netip.AddrPort) (newDst netip.AddrPort) {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
