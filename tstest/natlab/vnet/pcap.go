@@ -21,6 +21,15 @@ type pcapWriter struct {
 	w  *pcapgo.NgWriter
 }
 
+func do(fs ...func() error) error {
+	for _, f := range fs {
+		if err := f(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *pcapWriter) WritePacket(ci gopacket.CaptureInfo, data []byte) error {
 	if p == nil {
 		return nil
@@ -30,7 +39,11 @@ func (p *pcapWriter) WritePacket(ci gopacket.CaptureInfo, data []byte) error {
 	if p.w == nil {
 		return io.ErrClosedPipe
 	}
-	return p.w.WritePacket(ci, data)
+	return do(
+		func() error { return p.w.WritePacket(ci, data) },
+		p.w.Flush,
+		p.f.Sync,
+	)
 }
 
 func (p *pcapWriter) AddInterface(i pcapgo.NgInterface) (int, error) {
