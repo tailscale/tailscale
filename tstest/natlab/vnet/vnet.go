@@ -832,9 +832,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		if _, ok := srcNode.net.writers.Load(srcMAC); !ok {
 			log.Printf("[conn %p] Registering writer for MAC %v is node %v", uc, srcMAC, srcNode.lanIP)
 			srcNode.net.registerWriter(srcMAC, raddr, srcNode.interfaceID, writePkt)
-			defer func() {
-				srcNode.net.registerWriter(srcMAC, nil, 0, nil)
-			}()
+			defer srcNode.net.registerWriter(srcMAC, nil, 0, nil)
 			continue
 		}
 
