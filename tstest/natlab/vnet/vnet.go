@@ -234,7 +234,7 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 			ipRaw,
 			layers.LayerTypeIPv6, gopacket.Lazy)
 	default:
-		return
+		panic(fmt.Sprintf("unexpected IP packet version %v", ipVer))
 	}
 	flow, ok := flow(goPkt)
 	if !ok {
