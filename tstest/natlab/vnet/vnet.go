@@ -1129,7 +1129,7 @@ func (n *network) serializedUDPPacket(src, dst netip.AddrPort, payload []byte, e
 	return buffer.Bytes(), nil
 }
 
-// HandleEthernetPacketForRouter handles an IPv4 packet that is
+// HandleEthernetPacketForRouter handles a packet that is
 // directed to the router/gateway itself. The packet may be to the
 // broadcast MAC address, or to the router's MAC address. The target
 // IP may be the router's IP, or an internet (routed) IP.
@@ -1140,17 +1140,49 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		n.logf("dropping non-IP packet: %v", packet)
 		return
 	}
-	srcIP, dstIP := flow.src, flow.dst
-
+	dstIP := flow.dst
 	toForward := dstIP != n.lanIP4.Addr() && dstIP != netip.IPv4Unspecified() && !dstIP.IsLinkLocalUnicast()
-	udp, isUDP := packet.Layer(layers.LayerTypeUDP).(*layers.UDP)
 
 	// Pre-NAT mapping, for DNS/etc responses:
-	if srcIP.Is6() {
+	if flow.src.Is6() {
 		n.macMu.Lock()
-		mak.Set(&n.macOfIPv6, srcIP, ep.SrcMAC())
+		mak.Set(&n.macOfIPv6, flow.src, ep.SrcMAC())
 		n.macMu.Unlock()
 	}
+
+	if udp, ok := packet.Layer(layers.LayerTypeUDP).(*layers.UDP); ok {
+		n.handleUDPPacketForRouter(ep, udp, toForward, flow)
+		return
+	}
+
+	if toForward && n.s.shouldInterceptTCP(packet) {
+		var base *layers.BaseLayer
+		proto := header.IPv4ProtocolNumber
+		if v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {
+			base = &v4.BaseLayer
+		} else if v6, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6); ok {
+			base = &v6.BaseLayer
+			proto = header.IPv6ProtocolNumber
+		} else {
+			panic("not v4, not v6")
+		}
+		pktCopy := make([]byte, 0, len(base.Contents)+len(base.Payload))
+		pktCopy = append(pktCopy, base.Contents...)
+		pktCopy = append(pktCopy, base.Payload...)
+		packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+			Payload: buffer.MakeWithData(pktCopy),
+		})
+		n.linkEP.InjectInbound(proto, packetBuf)
+		packetBuf.DecRef()
+		return
+	}
+
+	n.logf("router got unknown packet: %v", packet)
+}
+
+func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, toForward bool, flow ipSrcDst) {
+	packet := ep.gp
+	srcIP, dstIP := flow.src, flow.dst
 
 	if isDHCPRequest(packet) {
 		res, err := n.s.createDHCPResponse(packet)
@@ -1177,7 +1209,7 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if isUDP && fakeSyslog.Match(dstIP) {
+	if fakeSyslog.Match(dstIP) {
 		node, ok := n.nodeForDestIP(srcIP)
 		if !ok {
 			return
@@ -1190,7 +1222,7 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if !toForward && isNATPMP(packet) {
+	if dstIP == n.lanIP4.Addr() && isNATPMP(udp) {
 		n.handleNATPMPRequest(UDPPacket{
 			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
 			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
@@ -1199,7 +1231,7 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if toForward && isUDP {
+	if toForward {
 		src := netip.AddrPortFrom(srcIP, uint16(udp.SrcPort))
 		dst := netip.AddrPortFrom(dstIP, uint16(udp.DstPort))
 		buf, err := n.serializedUDPPacket(src, dst, udp.Payload, nil)
@@ -1246,36 +1278,14 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if toForward && n.s.shouldInterceptTCP(packet) {
-		var base *layers.BaseLayer
-		proto := header.IPv4ProtocolNumber
-		if v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {
-			base = &v4.BaseLayer
-		} else if v6, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6); ok {
-			base = &v6.BaseLayer
-			proto = header.IPv6ProtocolNumber
-		} else {
-			panic("not v4, not v6")
-		}
-		pktCopy := make([]byte, 0, len(base.Contents)+len(base.Payload))
-		pktCopy = append(pktCopy, base.Contents...)
-		pktCopy = append(pktCopy, base.Payload...)
-		packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-			Payload: buffer.MakeWithData(pktCopy),
-		})
-		n.linkEP.InjectInbound(proto, packetBuf)
-		packetBuf.DecRef()
-		return
-	}
-
-	if isUDP && (udp.DstPort == pcpPort || udp.DstPort == ssdpPort) {
+	if udp.DstPort == pcpPort || udp.DstPort == ssdpPort {
 		// We handle NAT-PMP, but not these yet.
 		// TODO(bradfitz): handle? marginal utility so far.
 		// Don't log about them being unknown.
 		return
 	}
 
-	n.logf("router got unknown packet: %v", packet)
+	n.logf("router got unknown UDP packet: %v", packet)
 }
 
 func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICMPv6RouterSolicitation) {
@@ -1600,9 +1610,8 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	return ok && dns.QR == false && len(dns.Questions) > 0
 }
 
-func isNATPMP(pkt gopacket.Packet) bool {
-	udp, ok := pkt.Layer(layers.LayerTypeUDP).(*layers.UDP)
-	return ok && udp.DstPort == 5351 && len(udp.Payload) > 0 && udp.Payload[0] == 0 // version 0, not 2 for PCP
+func isNATPMP(udp *layers.UDP) bool {
+	return udp.DstPort == 5351 && len(udp.Payload) > 0 && udp.Payload[0] == 0 // version 0, not 2 for PCP
 }
 
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
