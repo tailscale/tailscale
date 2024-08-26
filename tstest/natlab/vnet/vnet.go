@@ -327,9 +327,14 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	if destPort == 8008 && fakeTestAgent.Match(destIP) {
+		node, ok := n.nodeForDestIP(clientRemoteIP)
+		if !ok {
+			n.logf("unknown client IP %v trying to connect to test driver", clientRemoteIP)
+			r.Complete(true)
+			return
+		}
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		node := n.nodesByIP[clientRemoteIP]
 		ac := &agentConn{node, tc}
 		n.s.addIdleAgentConn(ac)
 		return
@@ -1177,6 +1182,11 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
+	if flow.src.Is6() && flow.src.IsLinkLocalUnicast() && !flow.dst.IsLinkLocalUnicast() {
+		// Don't log.
+		return
+	}
+
 	n.logf("router got unknown packet: %v", packet)
 }
 
@@ -1539,6 +1549,10 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	if !ok {
 		return false
 	}
+	if flow.src.Is6() && flow.src.IsLinkLocalUnicast() {
+		return false
+	}
+
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
 		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher} {
 			if v.Match(flow.dst) {
@@ -1989,10 +2003,13 @@ func (s *Server) addIdleAgentConn(ac *agentConn) {
 }
 
 func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok bool) {
+	const debug = false
 	for {
 		ac, ok := s.takeAgentConnOne(n)
 		if ok {
-			//log.Printf("got agent conn for %v", n.mac)
+			if debug {
+				log.Printf("takeAgentConn: got agent conn for %v", n.mac)
+			}
 			return ac, true
 		}
 		s.mu.Lock()
@@ -2000,7 +2017,9 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 		mak.Set(&s.agentConnWaiter, n, ready)
 		s.mu.Unlock()
 
-		//log.Printf("waiting for agent conn for %v", n.mac)
+		if debug {
+			log.Printf("takeAgentConn: waiting for agent conn for %v", n.mac)
+		}
 		select {
 		case <-ctx.Done():
 			return nil, false
@@ -2016,11 +2035,16 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	miss := 0
 	for ac := range s.agentConns {
 		if ac.node == n {
 			s.agentConns.Delete(ac)
 			return ac, true
 		}
+		miss++
+	}
+	if miss > 0 {
+		log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
 	}
 	return nil, false
 }
