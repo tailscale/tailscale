@@ -210,21 +210,24 @@ func hardPMP(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("10.7.%d.1/24", n), vnet.HardNAT, vnet.NATPMP))
 }
 
-func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
+func (nt *natTest) runTest(addNode ...addNodeFunc) pingRoute {
+	if len(addNode) < 1 || len(addNode) > 2 {
+		nt.tb.Fatalf("runTest: invalid number of nodes %v; want 1 or 2", len(addNode))
+	}
 	t := nt.tb
 
 	var c vnet.Config
 	c.SetPCAPFile(*pcapFile)
-	nodes := []*vnet.Node{
-		node1(&c),
-		node2(&c),
-	}
-	if nodes[0] == nil || nodes[1] == nil {
-		t.Skip("skipping test; not applicable combination")
-	}
-	if *logTailscaled {
-		nodes[0].SetVerboseSyslog(true)
-		nodes[1].SetVerboseSyslog(true)
+	nodes := []*vnet.Node{}
+	for _, fn := range addNode {
+		node := fn(&c)
+		if node == nil {
+			t.Skip("skipping test; not applicable combination")
+		}
+		nodes = append(nodes, node)
+		if *logTailscaled {
+			node.SetVerboseSyslog(true)
+		}
 	}
 
 	var err error
@@ -310,16 +313,18 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	lc1 := nt.vnet.NodeAgentClient(nodes[0])
-	lc2 := nt.vnet.NodeAgentClient(nodes[1])
-	clients := []*vnet.NodeAgentClient{lc1, lc2}
+	var clients []*vnet.NodeAgentClient
+	for _, n := range nodes {
+		clients = append(clients, nt.vnet.NodeAgentClient(n))
+	}
+	sts := make([]*ipnstate.Status, len(nodes))
 
 	var eg errgroup.Group
-	var sts [2]*ipnstate.Status
 	for i, c := range clients {
 		i, c := i, c
 		eg.Go(func() error {
 			node := nodes[i]
+			t.Logf("%v calling Status...", node)
 			st, err := c.Status(ctx)
 			if err != nil {
 				return fmt.Errorf("%v status: %w", node, err)
@@ -357,7 +362,11 @@ func (nt *natTest) runTest(node1, node2 addNodeFunc) pingRoute {
 
 	defer nt.vnet.Close()
 
-	pingRes, err := ping(ctx, lc1, sts[1].Self.TailscaleIPs[0])
+	if len(nodes) < 2 {
+		return ""
+	}
+
+	pingRes, err := ping(ctx, clients[0], sts[1].Self.TailscaleIPs[0])
 	if err != nil {
 		t.Fatalf("ping failure: %v", err)
 	}
@@ -468,15 +477,18 @@ func TestEasyEasy(t *testing.T) {
 	nt.want(routeDirect)
 }
 
+func TestSingleJustIPv6(t *testing.T) {
+	nt := newNatTest(t)
+	nt.runTest(just6)
+}
+
 func TestJustIPv6(t *testing.T) {
-	t.Skip("TODO: get this working")
 	nt := newNatTest(t)
 	nt.runTest(just6, just6)
 	nt.want(routeDirect)
 }
 
 func TestEasy4AndJust6(t *testing.T) {
-	t.Skip("TODO: get this working")
 	nt := newNatTest(t)
 	nt.runTest(easyAnd6, just6)
 	nt.want(routeDirect)
