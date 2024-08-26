@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -835,7 +836,19 @@ func awaitGokrazyNetwork() {
 		// Before DHCP finishes, the /etc/resolv.conf file has just "#MANUAL".
 		all, _ := os.ReadFile("/etc/resolv.conf")
 		if bytes.Contains(all, []byte("nameserver ")) {
-			return
+			good := true
+			firstLine, _, ok := strings.Cut(string(all), "\n")
+			if ok {
+				ns, ok := strings.CutPrefix(firstLine, "nameserver ")
+				if ok {
+					if ip, err := netip.ParseAddr(ns); err == nil && ip.Is6() && !ip.IsLinkLocalUnicast() {
+						good = haveGlobalUnicastIPv6()
+					}
+				}
+			}
+			if good {
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -843,4 +856,28 @@ func awaitGokrazyNetwork() {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// haveGlobalUnicastIPv6 reports whether the machine has a IPv6 non-private
+// (non-ULA) global unicast address.
+//
+// It's only intended for use in natlab integration tests so only works on
+// Linux/macOS now and not environments (such as Android) where net.Interfaces
+// doesn't work directly.
+func haveGlobalUnicastIPv6() bool {
+	ifs, _ := net.Interfaces()
+	for _, ni := range ifs {
+		aa, _ := ni.Addrs()
+		for _, a := range aa {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip, _ := netip.AddrFromSlice(ipn.IP)
+			if ip.Is6() && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+				return true
+			}
+		}
+	}
+	return false
 }
