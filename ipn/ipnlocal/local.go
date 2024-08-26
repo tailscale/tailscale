@@ -1342,19 +1342,25 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			prefs.Persist = st.Persist.AsStruct()
 		}
 	}
+	if st.LoginFinished() {
+		if b.authURL != "" {
+			b.resetAuthURLLocked()
+			// Interactive login finished successfully (URL visited).
+			// After an interactive login, the user always wants
+			// WantRunning.
+			if !prefs.WantRunning {
+				prefs.WantRunning = true
+				prefsChanged = true
+			}
+		}
+		if prefs.LoggedOut {
+			prefs.LoggedOut = false
+			prefsChanged = true
+		}
+	}
 	if st.URL != "" {
 		b.authURL = st.URL
 		b.authURLTime = b.clock.Now()
-	}
-	if (wasBlocked || b.seamlessRenewalEnabled()) && st.LoginFinished() {
-		// Interactive login finished successfully (URL visited).
-		// After an interactive login, the user always wants
-		// WantRunning.
-		if !prefs.WantRunning || prefs.LoggedOut {
-			prefsChanged = true
-		}
-		prefs.WantRunning = true
-		prefs.LoggedOut = false
 	}
 	if shouldAutoExitNode() {
 		// Re-evaluate exit node suggestion in case circumstances have changed.
@@ -4704,8 +4710,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State, unlock unlock
 	activeLogin := b.activeLogin
 	authURL := b.authURL
 	if newState == ipn.Running {
-		b.authURL = ""
-		b.authURLTime = time.Time{}
+		b.resetAuthURLLocked()
 
 		// Start a captive portal detection loop if none has been
 		// started. Create a new context if none is present, since it
@@ -4987,7 +4992,7 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 		return nil
 	}
 
-	b.authURL = ""
+	b.resetAuthURLLocked()
 
 	// When we clear the control client, stop any outstanding netmap expiry
 	// timer; synthesizing a new netmap while we don't have a control
@@ -5005,6 +5010,11 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	prev := b.cc
 	b.setControlClientLocked(nil)
 	return prev
+}
+
+func (b *LocalBackend) resetAuthURLLocked() {
+	b.authURL = ""
+	b.authURLTime = time.Time{}
 }
 
 // ResetForClientDisconnect resets the backend for GUI clients running
@@ -5034,8 +5044,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 		b.currentUser = nil
 	}
 	b.keyExpired = false
-	b.authURL = ""
-	b.authURLTime = time.Time{}
+	b.resetAuthURLLocked()
 	b.activeLogin = ""
 	b.resetDialPlan()
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
