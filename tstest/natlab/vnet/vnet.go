@@ -116,10 +116,10 @@ func (n *network) setNATTable(nt NATTable) {
 
 // SoleLANIP implements [IPPool].
 func (n *network) SoleLANIP() (netip.Addr, bool) {
-	if len(n.nodesByIP) != 1 {
+	if len(n.nodesByIP4) != 1 {
 		return netip.Addr{}, false
 	}
-	for ip := range n.nodesByIP {
+	for ip := range n.nodesByIP4 {
 		return ip, true
 	}
 	return netip.Addr{}, false
@@ -240,7 +240,7 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 	if !ok {
 		panic("unexpected gvisor packet")
 	}
-	node, ok := n.nodeForDestIP(flow.dst)
+	node, ok := n.nodeByIP(flow.dst)
 	if !ok {
 		n.logf("no node for netstack dest IP %v", flow.dst)
 		return
@@ -327,7 +327,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	if destPort == 8008 && fakeTestAgent.Match(destIP) {
-		node, ok := n.nodeForDestIP(clientRemoteIP)
+		node, ok := n.nodeByIP(clientRemoteIP)
 		if !ok {
 			n.logf("unknown client IP %v trying to connect to test driver", clientRemoteIP)
 			r.Complete(true)
@@ -433,7 +433,7 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 			log.Printf("Logs decode error: %v", err)
 			return
 		}
-		node := n.nodesByIP[clientRemoteIP]
+		node := n.nodesByIP4[clientRemoteIP]
 		if node != nil {
 			node.logMu.Lock()
 			defer node.logMu.Unlock()
@@ -519,7 +519,7 @@ type network struct {
 	wanIP6         netip.Prefix         // router's WAN IPv6, if any, as a /64.
 	wanIP4         netip.Addr           // router's LAN IPv4, if any
 	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
-	nodesByIP      map[netip.Addr]*node // by LAN IPv4
+	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC     map[MAC]*node
 	logf           func(format string, args ...any)
 
@@ -559,7 +559,7 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 	if n.lanIP4.Addr() == ip {
 		return n.mac, true
 	}
-	if n, ok := n.nodesByIP[ip]; ok {
+	if n, ok := n.nodesByIP4[ip]; ok {
 		return n.mac, true
 	}
 	return MAC{}, false
@@ -1036,20 +1036,22 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 	n.WriteUDPPacketNoNAT(p)
 }
 
-func (n *network) nodeForDestIP(ip netip.Addr) (node *node, ok bool) {
-	node, ok = n.nodesByIP[ip]
+func (n *network) nodeByIP(ip netip.Addr) (node *node, ok bool) {
+	if ip.Is4() {
+		node, ok = n.nodesByIP4[ip]
+	}
 	if !ok && ip.Is6() {
 		var mac MAC
 		n.macMu.Lock()
 		mac, ok = n.macOfIPv6[ip]
 		n.macMu.Unlock()
 		if !ok {
-			log.Printf("XXX no MAC for IPv6 %v", ip)
+			log.Printf("warning: no known MAC for IPv6 %v", ip)
 			return nil, false
 		}
 		node, ok = n.nodesByMAC[mac]
 		if !ok {
-			log.Printf("XXX no node for MAC %v", mac)
+			log.Printf("warning: no known node for MAC %v (IP %v)", mac, ip)
 		}
 	}
 	return node, ok
@@ -1063,7 +1065,7 @@ func (n *network) nodeForDestIP(ip netip.Addr) (node *node, ok bool) {
 // same ethernet segment.
 func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	src, dst := p.Src, p.Dst
-	node, ok := n.nodeForDestIP(dst.Addr())
+	node, ok := n.nodeByIP(dst.Addr())
 	if !ok {
 		n.logf("no node for dest IP %v in UDP packet %v=>%v", dst.Addr(), p.Src, p.Dst)
 		return
@@ -1220,7 +1222,7 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 	}
 
 	if fakeSyslog.Match(dstIP) {
-		node, ok := n.nodeForDestIP(srcIP)
+		node, ok := n.nodeByIP(srcIP)
 		if !ok {
 			return
 		}

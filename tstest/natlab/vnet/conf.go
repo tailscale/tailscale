@@ -328,7 +328,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			v6:         conf.wanIP6.IsValid(),
 			wanIP4:     conf.wanIP4,
 			lanIP4:     conf.lanIP4,
-			nodesByIP:  map[netip.Addr]*node{},
+			nodesByIP4: map[netip.Addr]*node{},
 			nodesByMAC: map[MAC]*node{},
 			logf:       logger.WithPrefix(log.Printf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
@@ -389,7 +389,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			ip4 := n.net.lanIP4.Addr().As4()
 			ip4[3] = 100 + n.mac[5]
 			n.lanIP = netip.AddrFrom4(ip4)
-			n.net.nodesByIP[n.lanIP] = n
+			n.net.nodesByIP4[n.lanIP] = n
 		}
 		n.net.nodesByMAC[n.mac] = n
 	}
