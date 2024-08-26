@@ -10,7 +10,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net"
 	"net/netip"
@@ -849,12 +848,12 @@ func (ns *Impl) inject() {
 		// ownership of one count and will decrement on completion.
 		if sendToHost {
 			if err := ns.tundev.InjectInboundPacketBuffer(pkt); err != nil {
-				log.Printf("netstack inject inbound: %v", err)
+				ns.logf("netstack inject inbound: %v", err)
 				return
 			}
 		} else {
 			if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
-				log.Printf("netstack inject outbound: %v", err)
+				ns.logf("netstack inject outbound: %v", err)
 				return
 			}
 		}
