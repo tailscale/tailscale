@@ -291,7 +291,7 @@ type LocalBackend struct {
 	componentLogUntil map[string]componentLogState
 	// c2nUpdateStatus is the status of c2n-triggered client update.
 	c2nUpdateStatus     updateStatus
-	currentUser         ipnauth.WindowsToken
+	currentUser         ipnauth.Actor
 	selfUpdateProgress  []ipnstate.UpdateProgress
 	lastSelfUpdateState ipnstate.SelfUpdateStatus
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
@@ -3101,13 +3101,13 @@ func (b *LocalBackend) InServerMode() bool {
 	return b.pm.CurrentPrefs().ForceDaemon()
 }
 
-// CheckIPNConnectionAllowed returns an error if the identity in ci should not
+// CheckIPNConnectionAllowed returns an error if the specified actor should not
 // be allowed to connect or make requests to the LocalAPI currently.
 //
-// Currently (as of 2022-11-23), this is only used on Windows to check if
-// we started in server mode and ci is from an identity other than the one
-// that started the server.
-func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error {
+// Currently (as of 2024-08-26), this is only used on Windows.
+// We plan to remove it as part of the multi-user and unattended mode improvements
+// as we progress on tailscale/corp#18342.
+func (b *LocalBackend) CheckIPNConnectionAllowed(actor ipnauth.Actor) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	serverModeUid := b.pm.CurrentUserID()
@@ -3122,14 +3122,11 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error
 
 	// Always allow Windows SYSTEM user to connect,
 	// even if Tailscale is currently being used by another user.
-	if tok, err := ci.WindowsToken(); err == nil {
-		defer tok.Close()
-		if tok.IsLocalSystem() {
-			return nil
-		}
+	if actor.IsLocalSystem() {
+		return nil
 	}
 
-	uid := ci.WindowsUserID()
+	uid := actor.UserID()
 	if uid == "" {
 		return errors.New("empty user uid in connection identity")
 	}
@@ -3308,18 +3305,14 @@ func (b *LocalBackend) shouldUploadServices() bool {
 // unattended mode. The user must disable unattended mode before the user can be
 // changed.
 //
-// On non-multi-user systems, the token should be set to nil.
+// On non-multi-user systems, the user should be set to nil.
 //
-// SetCurrentUser returns the ipn.WindowsUserID associated with token
+// SetCurrentUser returns the ipn.WindowsUserID associated with the user
 // when successful.
-func (b *LocalBackend) SetCurrentUser(token ipnauth.WindowsToken) (ipn.WindowsUserID, error) {
+func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) (ipn.WindowsUserID, error) {
 	var uid ipn.WindowsUserID
-	if token != nil {
-		var err error
-		uid, err = token.UID()
-		if err != nil {
-			return "", err
-		}
+	if actor != nil {
+		uid = actor.UserID()
 	}
 
 	unlock := b.lockAndGetUnlock()
@@ -3331,10 +3324,10 @@ func (b *LocalBackend) SetCurrentUser(token ipnauth.WindowsToken) (ipn.WindowsUs
 	if err := b.pm.SetCurrentUserID(uid); err != nil {
 		return uid, nil
 	}
-	if b.currentUser != nil {
-		b.currentUser.Close()
+	if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
+		c.Close()
 	}
-	b.currentUser = token
+	b.currentUser = actor
 	b.resetForProfileChangeLockedOnEntry(unlock)
 	return uid, nil
 }
@@ -5037,7 +5030,9 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
 	if b.currentUser != nil {
-		b.currentUser.Close()
+		if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
+			c.Close()
+		}
 		b.currentUser = nil
 	}
 	b.keyExpired = false
