@@ -21,15 +21,15 @@ import (
 
 type State int
 
-//go:generate go run github.com/nikolaydubina/go-enum-encoding@v1.6.0 -type=State -string
+//go:generate go run github.com/nikolaydubina/go-enum-encoding@v1.6.1 -type=State -string
 const (
-	NoState          State = iota // json:"NoState"
-	InUseOtherUser                // json:"InUseOtherUser"
-	NeedsLogin                    // json:"NeedsLogin"
-	NeedsMachineAuth              // json:"NeedsMachineAuth"
-	Stopped                       // json:"Stopped"
-	Starting                      // json:"Starting"
-	Running                       // json:"Running"
+	NoState          State = 0 // json:"NoState"
+	InUseOtherUser   State = 1 // json:"InUseOtherUser"
+	NeedsLogin       State = 2 // json:"NeedsLogin"
+	NeedsMachineAuth State = 3 // json:"NeedsMachineAuth"
+	Stopped          State = 4 // json:"Stopped"
+	Starting         State = 5 // json:"Starting"
+	Running          State = 6 // json:"Running"
 )
 
 // GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
