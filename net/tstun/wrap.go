@@ -994,6 +994,13 @@ func stackGSOToTunGSO(pkt []byte, gso stack.GSO) (tun.GSOOptions, error) {
 	return options, nil
 }
 
+// invertGSOChecksum inverts the transport layer checksum in pkt if gVisor
+// handed us a segment with a partial checksum. A partial checksum is not a
+// ones' complement of the sum, and incremental checksum updating is not yet
+// partial checksum aware. This may be called twice for a single packet,
+// both before and after partial checksum updates where later checksum
+// offloading still expects a partial checksum.
+// TODO(jwhited): plumb partial checksum awareness into net/packet/checksum.
 func invertGSOChecksum(pkt []byte, gso stack.GSO) {
 	if gso.NeedsCsum != true {
 		return
@@ -1030,13 +1037,6 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	defer parsedPacketPool.Put(p)
 	p.Decode(pkt)
 
-	// We invert the transport layer checksum before and after snat() if gVisor
-	// handed us a segment with a partial checksum. A partial checksum is not a
-	// ones' complement of the sum, and incremental checksum updating that could
-	// occur as a result of snat() is not aware of this. Alternatively we could
-	// plumb partial transport layer checksum awareness down through snat(),
-	// but the surface area of such a change is much larger, and not yet
-	// justified by this singular case.
 	invertGSOChecksum(pkt, gso)
 	pc.snat(p)
 	invertGSOChecksum(pkt, gso)
@@ -1241,36 +1241,73 @@ func (t *Wrapper) SetJailedFilter(filt *filter.Filter) {
 }
 
 // InjectInboundPacketBuffer makes the Wrapper device behave as if a packet
-// with the given contents was received from the network.
-// It takes ownership of one reference count on the packet. The injected
+// (pkt) with the given contents was received from the network.
+// It takes ownership of one reference count on pkt. The injected
 // packet will not pass through inbound filters.
+//
+// pkt will be copied into buffs before writing to the underlying tun.Device.
+// Therefore, callers must allocate and pass a buffs slice that is sized
+// appropriately for holding pkt.Size() + PacketStartOffset as either a single
+// element (buffs[0]), or split across multiple elements if the originating
+// stack supports GSO. sizes must be sized with similar consideration,
+// len(buffs) should be equal to len(sizes). If any len(buffs[<index>]) was
+// mutated by InjectInboundPacketBuffer it will be reset to cap(buffs[<index>])
+// before returning.
 //
 // This path is typically used to deliver synthesized packets to the
 // host networking stack.
-func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
-	buf := make([]byte, PacketStartOffset+pkt.Size())
+func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer, buffs [][]byte, sizes []int) error {
+	buf := buffs[0][PacketStartOffset:]
 
-	n := copy(buf[PacketStartOffset:], pkt.NetworkHeader().Slice())
-	n += copy(buf[PacketStartOffset+n:], pkt.TransportHeader().Slice())
-	n += copy(buf[PacketStartOffset+n:], pkt.Data().AsRange().ToSlice())
-	if n != pkt.Size() {
+	bufN := copy(buf, pkt.NetworkHeader().Slice())
+	bufN += copy(buf[bufN:], pkt.TransportHeader().Slice())
+	bufN += copy(buf[bufN:], pkt.Data().AsRange().ToSlice())
+	if bufN != pkt.Size() {
 		panic("unexpected packet size after copy")
 	}
-	pkt.DecRef()
+	buf = buf[:bufN]
+	defer pkt.DecRef()
 
 	pc := t.peerConfig.Load()
 
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
-	p.Decode(buf[PacketStartOffset:])
+	p.Decode(buf)
 	captHook := t.captureHook.Load()
 	if captHook != nil {
 		captHook(capture.SynthesizedToLocal, t.now(), p.Buffer(), p.CaptureMeta)
 	}
 
+	invertGSOChecksum(buf, pkt.GSOOptions)
 	pc.dnat(p)
+	invertGSOChecksum(buf, pkt.GSOOptions)
 
-	return t.InjectInboundDirect(buf, PacketStartOffset)
+	gso, err := stackGSOToTunGSO(buf, pkt.GSOOptions)
+	if err != nil {
+		return err
+	}
+
+	// TODO(jwhited): support GSO passthrough to t.tdev. If t.tdev supports
+	//  GSO we don't need to split here and coalesce inside wireguard-go,
+	//  we can pass a coalesced segment all the way through.
+	n, err := tun.GSOSplit(buf, gso, buffs, sizes, PacketStartOffset)
+	if err != nil {
+		if errors.Is(err, tun.ErrTooManySegments) {
+			t.limitedLogf("InjectInboundPacketBuffer: GSO split overflows buffs")
+		} else {
+			return err
+		}
+	}
+	for i := 0; i < n; i++ {
+		buffs[i] = buffs[i][:PacketStartOffset+sizes[i]]
+	}
+	defer func() {
+		for i := 0; i < n; i++ {
+			buffs[i] = buffs[i][:cap(buffs[i])]
+		}
+	}()
+	_, err = t.tdevWrite(buffs[:n], PacketStartOffset)
+	return err
 }
 
 // InjectInboundDirect makes the Wrapper device behave as if a packet

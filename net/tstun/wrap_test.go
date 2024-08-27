@@ -882,7 +882,10 @@ func TestCaptureHook(t *testing.T) {
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectInboundPacketBuffer")),
 	})
-	w.InjectInboundPacketBuffer(packetBuf)
+	buffs := make([][]byte, 1)
+	buffs[0] = make([]byte, PacketStartOffset+packetBuf.Size())
+	sizes := make([]int, 1)
+	w.InjectInboundPacketBuffer(packetBuf, buffs, sizes)
 
 	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectOutboundPacketBuffer")),
