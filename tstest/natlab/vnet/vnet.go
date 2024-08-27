@@ -9,12 +9,9 @@
 package vnet
 
 // TODO:
-// - [ ] port mapping actually working
-// - [ ] conf to let you firewall things
 // - [ ] tests for NAT tables
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -23,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -493,18 +492,22 @@ type portMapping struct {
 	expiry time.Time
 }
 
-type writerFunc func([]byte, *net.UnixAddr, int)
+// writerFunc is a function that writes an Ethernet frame to a connected client.
+//
+// ethFrame is the Ethernet frame to write.
+//
+// interfaceIndexID is the interface ID for the pcap file.
+type writerFunc func(dst vmClient, ethFrame []byte, interfaceIndexID int)
 
-// Encapsulates both a write function, an optional outbound socket address
-// for dgram mode and an interfaceID for packet captures.
+// networkWriter are the arguments to a writerFunc and the writerFunc.
 type networkWriter struct {
-	writer      writerFunc    // Function to write packets to the network
-	addr        *net.UnixAddr // Outbound socket address for dgram mode
-	interfaceID int           // The interface ID of the src node (for writing pcaps)
+	writer      writerFunc // Function to write packets to the network
+	c           vmClient
+	interfaceID int // The interface ID of the src node (for writing pcaps)
 }
 
-func (nw *networkWriter) write(b []byte) {
-	nw.writer(b, nw.addr, nw.interfaceID)
+func (nw networkWriter) write(b []byte) {
+	nw.writer(nw.c, b, nw.interfaceID)
 }
 
 type network struct {
@@ -540,19 +543,20 @@ type network struct {
 	writers syncs.Map[MAC, networkWriter] // MAC -> to networkWriter for that MAC
 }
 
-// Regsiters a writerFunc for a MAC address.
-// raddr is and optional outbound socket address of the client interface for dgram mode.
-// Pass nil for the writerFunc to deregister the writer.
-func (n *network) registerWriter(mac MAC, raddr *net.UnixAddr, interfaceID int, wf writerFunc) {
-	if wf != nil {
-		n.writers.Store(mac, networkWriter{
-			writer:      wf,
-			addr:        raddr,
-			interfaceID: interfaceID,
-		})
-	} else {
-		n.writers.Delete(mac)
+// registerWriter registers a client address with a MAC address.
+func (n *network) registerWriter(mac MAC, c vmClient) {
+	nw := networkWriter{
+		writer: n.s.writeEthernetFrameToVM,
+		c:      c,
 	}
+	if node, ok := n.s.nodeByMAC[mac]; ok {
+		nw.interfaceID = node.interfaceID
+	}
+	n.writers.Store(mac, nw)
+}
+
+func (n *network) unregisterWriter(mac MAC) {
+	n.writers.Delete(mac)
 }
 
 func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
@@ -616,6 +620,8 @@ type Server struct {
 	wg             sync.WaitGroup
 	blendReality   bool
 
+	optLogf func(format string, args ...any) // or nil to use log.Printf
+
 	derpIPs set.Set[netip.Addr]
 
 	nodes        []*node
@@ -627,10 +633,26 @@ type Server struct {
 	derps      []*derpServer
 	pcapWriter *pcapWriter
 
+	// writeMu serializes all writes to VM clients.
+	writeMu sync.Mutex
+	scratch []byte
+
 	mu              sync.Mutex
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
 	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
 	agentDialer     map[*node]DialFunc
+}
+
+func (s *Server) logf(format string, args ...any) {
+	if s.optLogf != nil {
+		s.optLogf(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
+}
+
+func (s *Server) SetLoggerForTest(logf func(format string, args ...any)) {
+	s.optLogf = logf
 }
 
 type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
@@ -713,6 +735,23 @@ func (s *Server) Close() {
 	s.wg.Wait()
 }
 
+// MACs returns the MAC addresses of the configured nodes.
+func (s *Server) MACs() iter.Seq[MAC] {
+	return maps.Keys(s.nodeByMAC)
+}
+
+func (s *Server) RegisterSinkForTest(mac MAC, fn func(eth []byte)) {
+	n, ok := s.nodeByMAC[mac]
+	if !ok {
+		log.Fatalf("RegisterSinkForTest: unknown MAC %v", mac)
+	}
+	n.net.writers.Store(mac, networkWriter{
+		writer: func(_ vmClient, eth []byte, _ int) {
+			fn(eth)
+		},
+	})
+}
+
 func (s *Server) HWAddr(mac MAC) net.HardwareAddr {
 	// TODO: cache
 	return net.HardwareAddr(mac[:])
@@ -724,6 +763,53 @@ const (
 	ProtocolQEMU      = Protocol(iota + 1)
 	ProtocolUnixDGRAM // for macOS Virtualization.Framework and VZFileHandleNetworkDeviceAttachment
 )
+
+func (s *Server) writeEthernetFrameToVM(c vmClient, ethPkt []byte, interfaceID int) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if ethPkt == nil {
+		return
+	}
+	switch c.proto() {
+	case ProtocolQEMU:
+		s.scratch = binary.BigEndian.AppendUint32(s.scratch[:0], uint32(len(ethPkt)))
+		s.scratch = append(s.scratch, ethPkt...)
+		if _, err := c.uc.Write(s.scratch); err != nil {
+			log.Printf("Write pkt: %v", err)
+		}
+
+	case ProtocolUnixDGRAM:
+		if _, err := c.uc.WriteToUnix(ethPkt, c.raddr); err != nil {
+			log.Printf("Write pkt : %v", err)
+			return
+		}
+	}
+
+	must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(ethPkt),
+		Length:         len(ethPkt),
+		InterfaceIndex: interfaceID,
+	}, ethPkt))
+}
+
+// vmClient is a comparable value representing a connection from a VM, either a
+// QEMU-style client (with streams over a Unix socket) or a datagram based
+// client (such as macOS Virtualization.framework clients).
+type vmClient struct {
+	uc    *net.UnixConn
+	raddr *net.UnixAddr // nil for QEMU-style clients using streams; else datagram source
+}
+
+func (c vmClient) proto() Protocol {
+	if c.raddr == nil {
+		return ProtocolQEMU
+	}
+	return ProtocolUnixDGRAM
+}
+
+const ethernetHeaderLen = 14
 
 // Handles a single connection from a QEMU-style client or muxd connections for dgram mode
 func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
@@ -738,51 +824,8 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 	log.Printf("Got conn %T %p", uc, uc)
 	defer uc.Close()
 
-	bw := bufio.NewWriterSize(uc, 2<<10)
-	var writeMu sync.Mutex
-	writePkt := func(pkt []byte, raddr *net.UnixAddr, interfaceID int) {
-		if pkt == nil {
-			return
-		}
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		switch proto {
-		case ProtocolQEMU:
-			hdr := binary.BigEndian.AppendUint32(bw.AvailableBuffer()[:0], uint32(len(pkt)))
-			if _, err := bw.Write(hdr); err != nil {
-				log.Printf("Write hdr: %v", err)
-				return
-			}
-
-			if _, err := bw.Write(pkt); err != nil {
-				log.Printf("Write pkt: %v", err)
-				return
-
-			}
-		case ProtocolUnixDGRAM:
-			if raddr == nil {
-				log.Printf("Write pkt: dgram mode write failure, no outbound socket address")
-				return
-			}
-
-			if _, err := uc.WriteToUnix(pkt, raddr); err != nil {
-				log.Printf("Write pkt : %v", err)
-				return
-			}
-		}
-
-		if err := bw.Flush(); err != nil {
-			log.Printf("Flush: %v", err)
-		}
-		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
-			Timestamp:      time.Now(),
-			CaptureLength:  len(pkt),
-			Length:         len(pkt),
-			InterfaceIndex: interfaceID,
-		}, pkt))
-	}
-
 	buf := make([]byte, 16<<10)
+	didReg := map[MAC]bool{}
 	for {
 		var packetRaw []byte
 		var raddr *net.UnixAddr
@@ -817,38 +860,53 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			}
 			packetRaw = buf[4 : 4+n] // raw ethernet frame
 		}
+		c := vmClient{uc, raddr}
 
-		packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
-		le, ok := packet.LinkLayer().(*layers.Ethernet)
-		if !ok || len(le.SrcMAC) != 6 || len(le.DstMAC) != 6 {
-			log.Printf("ignoring non-Ethernet packet: % 02x", packetRaw)
+		// For the first packet from a MAC, register a writerFunc to write to the VM.
+		if len(packetRaw) < ethernetHeaderLen {
 			continue
 		}
-		ep := EthernetPacket{le, packet}
-
-		srcMAC := ep.SrcMAC()
+		srcMAC := MAC(packetRaw[6:12])
 		srcNode, ok := s.nodeByMAC[srcMAC]
 		if !ok {
-			log.Printf("[conn %p] got frame from unknown MAC %v", uc, srcMAC)
+			log.Printf("[conn %p] got frame from unknown MAC %v", c.uc, srcMAC)
 			continue
 		}
-
-		// Register a writer for the source MAC address if one doesn't exist.
-		if _, ok := srcNode.net.writers.Load(srcMAC); !ok {
-			log.Printf("[conn %p] Registering writer for MAC %v is node %v", uc, srcMAC, srcNode.lanIP)
-			srcNode.net.registerWriter(srcMAC, raddr, srcNode.interfaceID, writePkt)
-			defer srcNode.net.registerWriter(srcMAC, nil, 0, nil)
-			continue
+		if !didReg[srcMAC] {
+			didReg[srcMAC] = true
+			log.Printf("[conn %p] Registering writer for MAC %v, node %v", c.uc, srcMAC, srcNode.lanIP)
+			srcNode.net.registerWriter(srcMAC, c)
+			defer srcNode.net.unregisterWriter(srcMAC)
 		}
 
-		must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
-			Timestamp:      time.Now(),
-			CaptureLength:  len(packetRaw),
-			Length:         len(packetRaw),
-			InterfaceIndex: srcNode.interfaceID,
-		}, packetRaw))
-		srcNode.net.HandleEthernetPacket(ep)
+		if err := s.handleEthernetFrameFromVM(packetRaw); err != nil {
+			srcNode.net.logf("handleEthernetFrameFromVM: [conn %p], %v", c.uc, err)
+		}
 	}
+}
+
+func (s *Server) handleEthernetFrameFromVM(packetRaw []byte) error {
+	packet := gopacket.NewPacket(packetRaw, layers.LayerTypeEthernet, gopacket.Lazy)
+	le, ok := packet.LinkLayer().(*layers.Ethernet)
+	if !ok || len(le.SrcMAC) != 6 || len(le.DstMAC) != 6 {
+		return fmt.Errorf("ignoring non-Ethernet packet: % 02x", packetRaw)
+	}
+	ep := EthernetPacket{le, packet}
+
+	srcMAC := ep.SrcMAC()
+	srcNode, ok := s.nodeByMAC[srcMAC]
+	if !ok {
+		return fmt.Errorf("got frame from unknown MAC %v", srcMAC)
+	}
+
+	must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(packetRaw),
+		Length:         len(packetRaw),
+		InterfaceIndex: srcNode.interfaceID,
+	}, packetRaw))
+	srcNode.net.HandleEthernetPacket(ep)
+	return nil
 }
 
 func (s *Server) routeUDPPacket(up UDPPacket) {
@@ -896,8 +954,10 @@ func (n *network) writeEth(res []byte) bool {
 	if dstMAC.IsBroadcast() {
 		num := 0
 		n.writers.Range(func(mac MAC, nw networkWriter) bool {
-			num++
-			nw.write(res)
+			if mac != srcMAC {
+				num++
+				nw.write(res)
+			}
 			return true
 		})
 		return num > 0
@@ -922,6 +982,11 @@ func (n *network) writeEth(res []byte) bool {
 
 var (
 	macAllRouters = MAC{0: 0x33, 1: 0x33, 5: 0x02}
+	macBroadcast  = MAC{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+)
+
+const (
+	testingEthertype layers.EthernetType = 0x1234
 )
 
 func (n *network) HandleEthernetPacket(ep EthernetPacket) {
@@ -943,6 +1008,8 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	default:
 		n.logf("Dropping non-IP packet: %v", ep.le.EthernetType)
 		return
+	case 0x1234:
+		// Permitted for testing. Not a real ethertype.
 	case layers.EthernetTypeARP:
 		res, err := n.createARPResponse(packet)
 		if err != nil {
@@ -1309,7 +1376,7 @@ func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICM
 		DstMAC:       ep.SrcMAC().HWAddr(),
 		EthernetType: layers.EthernetTypeIPv6,
 	}
-	n.logf("sending IPv6 router advertisement to %v from %v", eth.SrcMAC, eth.DstMAC)
+	n.logf("sending IPv6 router advertisement to %v from %v", eth.DstMAC, eth.SrcMAC)
 	ip := &layers.IPv6{
 		Version:    6,
 		HopLimit:   255,
