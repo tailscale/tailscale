@@ -6,7 +6,7 @@ import "errors"
 
 var ErrUnknownState = errors.New("unknown State")
 
-func (s *State) UnmarshalText(text []byte) error {
+func (s *State) UnmarshalTextName(text []byte) error {
 	switch string(text) {
 	case "NoState":
 		*s = NoState
@@ -30,7 +30,7 @@ func (s *State) UnmarshalText(text []byte) error {
 
 var seq_bytes_State = [...][]byte{[]byte("NoState"), []byte("InUseOtherUser"), []byte("NeedsLogin"), []byte("NeedsMachineAuth"), []byte("Stopped"), []byte("Starting"), []byte("Running")}
 
-func (s State) MarshalText() ([]byte, error) {
+func (s State) MarshalTextName() ([]byte, error) {
 	switch s {
 	case NoState:
 		return seq_bytes_State[0], nil

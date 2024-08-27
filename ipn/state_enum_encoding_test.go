@@ -3,42 +3,31 @@
 package ipn
 
 import (
-	"encoding/json"
 	"errors"
-	"slices"
 	"testing"
 )
 
-func TestJSON_State(t *testing.T) {
-	type V struct {
-		Values []State `json:"values"`
-	}
+func TestState_MarshalTextName_UnmarshalTextName(t *testing.T) {
+	for _, v := range []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running} {
+		b, err := v.MarshalTextName()
+		if err != nil {
+			t.Errorf("cannot encode: %s", err)
+		}
 
-	values := []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running}
+		var d State
+		if err := (&d).UnmarshalTextName(b); err != nil {
+			t.Errorf("cannot decode: %s", err)
+		}
 
-	var v V
-	s := `{"values":["NoState","InUseOtherUser","NeedsLogin","NeedsMachineAuth","Stopped","Starting","Running"]}`
-	json.Unmarshal([]byte(s), &v)
-
-	if len(v.Values) != len(values) {
-		t.Errorf("cannot decode: %d", len(v.Values))
-	}
-	if !slices.Equal(v.Values, values) {
-		t.Errorf("wrong decoded: %v", v.Values)
-	}
-
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("cannot encode: %s", err)
-	}
-	if string(b) != s {
-		t.Errorf("wrong encoded: %s != %s", string(b), s)
+		if d != v {
+			t.Errorf("exp(%v) != got(%v)", v, d)
+		}
 	}
 
 	t.Run("when unknown value, then error", func(t *testing.T) {
-		s := `{"values":["something"]}`
-		var v V
-		err := json.Unmarshal([]byte(s), &v)
+		s := `something`
+		var v State
+		err := (&v).UnmarshalTextName([]byte(s))
 		if err == nil {
 			t.Errorf("must be error")
 		}
@@ -48,12 +37,12 @@ func TestJSON_State(t *testing.T) {
 	})
 }
 
-func BenchmarkMarshalText_State(b *testing.B) {
+func BenchmarkState_MarshalTextName(b *testing.B) {
 	var v []byte
 	var err error
 	for i := 0; i < b.N; i++ {
 		for _, c := range []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running} {
-			if v, err = c.MarshalText(); err != nil {
+			if v, err = c.MarshalTextName(); err != nil {
 				b.Fatal("empty")
 			}
 		}
@@ -63,36 +52,13 @@ func BenchmarkMarshalText_State(b *testing.B) {
 	}
 }
 
-func BenchmarkUnmarshalText_State(b *testing.B) {
+func BenchmarkState_UnmarshalTextName(b *testing.B) {
 	var x State
 	for i := 0; i < b.N; i++ {
 		for _, c := range []string{"NoState", "InUseOtherUser", "NeedsLogin", "NeedsMachineAuth", "Stopped", "Starting", "Running"} {
-			if err := x.UnmarshalText([]byte(c)); err != nil {
+			if err := x.UnmarshalTextName([]byte(c)); err != nil {
 				b.Fatal("cannot decode")
 			}
 		}
-	}
-}
-
-func TestState_String(t *testing.T) {
-	values := []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running}
-	tags := []string{"NoState", "InUseOtherUser", "NeedsLogin", "NeedsMachineAuth", "Stopped", "Starting", "Running"}
-
-	for i := range values {
-		if values[i].String() != tags[i] {
-			t.Errorf("got(%s) != exp(%s)", values[i].String(), tags[i])
-		}
-	}
-}
-
-func BenchmarkState_String(b *testing.B) {
-	var v string
-	for i := 0; i < b.N; i++ {
-		for _, c := range []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running} {
-			v = c.String()
-		}
-	}
-	if len(v) > 1000 {
-		b.Fatal("noop")
 	}
 }
