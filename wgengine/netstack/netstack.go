@@ -724,7 +724,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		// 80, and 8080.
 		switch p.IPProto {
 		case ipproto.TCP:
-			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 {
+			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 && port != 5201 {
 				return filter.Accept
 			}
 		case ipproto.UDP:
@@ -1300,7 +1300,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
-	if isTailscaleIP {
+	if isTailscaleIP || (hittingServiceIP && reqDetails.LocalPort == 5201) {
 		dialIP = netaddr.IPv4(127, 0, 0, 1)
 	}
 	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
