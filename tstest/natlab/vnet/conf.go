@@ -6,7 +6,6 @@ package vnet
 import (
 	"cmp"
 	"fmt"
-	"log"
 	"net/netip"
 	"os"
 	"slices"
@@ -61,6 +60,11 @@ func (c *Config) FirstNetwork() *Network {
 	return c.networks[0]
 }
 
+func nodeMac(n int) MAC {
+	// 52=TS then 0xcc for cccclient
+	return MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(n)}
+}
+
 // AddNode creates a new node in the world.
 //
 // The opts may be of the following types:
@@ -70,10 +74,10 @@ func (c *Config) FirstNetwork() *Network {
 // On an error or unknown opt type, AddNode returns a
 // node with a carried error that gets returned later.
 func (c *Config) AddNode(opts ...any) *Node {
-	num := len(c.nodes)
+	num := len(c.nodes) + 1
 	n := &Node{
-		num: num + 1,
-		mac: MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(num) + 1}, // 52=TS then 0xcc for ccclient
+		num: num,
+		mac: nodeMac(num),
 	}
 	c.nodes = append(c.nodes, n)
 	for _, o := range opts {
@@ -130,10 +134,10 @@ type TailscaledEnv struct {
 // On an error or unknown opt type, AddNetwork returns a
 // network with a carried error that gets returned later.
 func (c *Config) AddNetwork(opts ...any) *Network {
-	num := len(c.networks)
+	num := len(c.networks) + 1
 	n := &Network{
-		num: num + 1,
-		mac: MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(num) + 1}, // 52=TS then 0xee for 'etwork
+		num: num,
+		mac: MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(num)}, // 52=TS then 0xee for 'etwork
 	}
 	c.networks = append(c.networks, n)
 	for _, o := range opts {
@@ -330,7 +334,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			lanIP4:     conf.lanIP4,
 			nodesByIP4: map[netip.Addr]*node{},
 			nodesByMAC: map[MAC]*node{},
-			logf:       logger.WithPrefix(log.Printf, fmt.Sprintf("[net-%v] ", conf.mac)),
+			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)
