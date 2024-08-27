@@ -4,8 +4,26 @@ package ipn
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
+
+func ExampleState_MarshalTextName() {
+	for _, v := range []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running} {
+		b, _ := v.MarshalTextName()
+		fmt.Printf("%s ", string(b))
+	}
+	// Output: NoState InUseOtherUser NeedsLogin NeedsMachineAuth Stopped Starting Running
+}
+
+func ExampleState_UnmarshalTextName() {
+	for _, s := range []string{"NoState", "InUseOtherUser", "NeedsLogin", "NeedsMachineAuth", "Stopped", "Starting", "Running"} {
+		var v State
+		if err := (&v).UnmarshalTextName([]byte(s)); err != nil {
+			fmt.Println(err)
+		}
+	}
+}
 
 func TestState_MarshalTextName_UnmarshalTextName(t *testing.T) {
 	for _, v := range []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running} {
