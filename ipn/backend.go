@@ -21,7 +21,7 @@ import (
 
 type State int
 
-//go:generate go run github.com/nikolaydubina/go-enum-encoding@v1.6.1 -type=State -string
+//go:generate go run github.com/nikolaydubina/go-enum-encoding@v1.6.2 -type=State -string
 const (
 	NoState          State = 0 // json:"NoState"
 	InUseOtherUser   State = 1 // json:"InUseOtherUser"
