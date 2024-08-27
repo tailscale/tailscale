@@ -60,14 +60,15 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	var (
-		tsNamespace           = defaultEnv("OPERATOR_NAMESPACE", "")
-		tslogging             = defaultEnv("OPERATOR_LOGGING", "info")
-		image                 = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
-		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
-		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
-		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
-		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
+		tsNamespace            = defaultEnv("OPERATOR_NAMESPACE", "")
+		tslogging              = defaultEnv("OPERATOR_LOGGING", "info")
+		image                  = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		priorityClassName      = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
+		tags                   = defaultEnv("PROXY_TAGS", "tag:k8s")
+		tsFirewallMode         = defaultEnv("PROXY_FIREWALL_MODE", "")
+		defaultProxyClass      = defaultEnv("PROXY_DEFAULT_CLASS", "")
+		defaultTaintToleration = defaultEnv("PROXY_TAINT_TOLERATION", "")
+		isDefaultLoadBalancer  = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
 
 	var opts []kzap.Opts
@@ -108,6 +109,7 @@ func main() {
 		proxyTags:                     tags,
 		proxyFirewallMode:             tsFirewallMode,
 		proxyDefaultClass:             defaultProxyClass,
+		proxyTaintToleration:          defaultTaintToleration,
 	}
 	runReconcilers(rOpts)
 }
@@ -265,6 +267,7 @@ func runReconcilers(opts reconcilerOpts) {
 		proxyImage:             opts.proxyImage,
 		proxyPriorityClassName: opts.proxyPriorityClassName,
 		tsFirewallMode:         opts.proxyFirewallMode,
+		proxyTaintToleration:   opts.proxyTaintToleration,
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -300,10 +303,10 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&corev1.Service{}, svcHandlerForIngress).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForIngress).
 		Complete(&IngressReconciler{
-			ssr:      ssr,
-			recorder: eventRecorder,
-			Client:   mgr.GetClient(),
-			logger:   opts.log.Named("ingress-reconciler"),
+			ssr:               ssr,
+			recorder:          eventRecorder,
+			Client:            mgr.GetClient(),
+			logger:            opts.log.Named("ingress-reconciler"),
 			proxyDefaultClass: opts.proxyDefaultClass,
 		})
 	if err != nil {
@@ -432,6 +435,9 @@ type reconcilerOpts struct {
 	// class for proxies that do not have a ProxyClass set.
 	// this is defined by an operator env variable.
 	proxyDefaultClass string
+
+	// proxyTaintToleration is the taint toleration to be set on the proxy
+	proxyTaintToleration string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each

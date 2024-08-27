@@ -81,6 +81,10 @@ spec:
             - name: PROXY_DEFAULT_CLASS
               value: {{ .Values.proxyConfig.defaultProxyClass }}
             {{- end }}
+            {{- if .Values.proxyConfig.taintToleration }}
+            - name: PROXY_TAINT_TOLERATION
+              value: {{ .Values.proxyConfig.taintToleration }}
+            {{- end }}
             {{- with .Values.operatorConfig.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

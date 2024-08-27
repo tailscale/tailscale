@@ -147,6 +147,7 @@ type tailscaleSTSReconciler struct {
 	proxyImage             string
 	proxyPriorityClassName string
 	tsFirewallMode         string
+	proxyTaintToleration   string
 }
 
 func (sts tailscaleSTSReconciler) validate() error {
@@ -490,6 +491,11 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
 	}
+	tolerations, err := unmarshalTolerations(a.proxyTaintToleration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tolerations: %w", err)
+	}
+	pod.Spec.Tolerations = tolerations
 	for key, val := range sts.ChildResourceLabels {
 		mak.Set(&ss.ObjectMeta.Labels, key, val)
 	}
@@ -956,4 +962,55 @@ func nameForService(svc *corev1.Service) string {
 
 func isValidFirewallMode(m string) bool {
 	return m == "auto" || m == "nftables" || m == "iptables"
+}
+
+func unmarshalTolerations(tolerationSetting string) ([]corev1.Toleration, error) {
+	tolerations := []corev1.Toleration{}
+
+	tolerationSetting = strings.ReplaceAll(tolerationSetting, " ", "")
+	if tolerationSetting == "" {
+		return tolerations, nil
+	}
+
+	tolerationList := strings.Split(tolerationSetting, ";")
+	for _, toleration := range tolerationList {
+		toleration, err := parseToleration(toleration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse toleration: %s, err: %v", toleration, err)
+		}
+		tolerations = append(tolerations, *toleration)
+	}
+	return tolerations, nil
+}
+
+func parseToleration(taintToleration string) (*corev1.Toleration, error) {
+	// The schema should be `key=value:effect` or `key:effect`
+	parts := strings.Split(taintToleration, ":")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("missing key/value and effect pair")
+	}
+
+	// parse `key=value` or `key`
+	key, value, operator := "", "", corev1.TolerationOperator("")
+	pair := strings.Split(parts[0], "=")
+	switch len(pair) {
+	case 1:
+		key, value, operator = parts[0], "", corev1.TolerationOpExists
+	case 2:
+		key, value, operator = pair[0], pair[1], corev1.TolerationOpEqual
+	}
+
+	effect := corev1.TaintEffect(parts[1])
+	switch effect {
+	case "", corev1.TaintEffectNoExecute, corev1.TaintEffectNoSchedule, corev1.TaintEffectPreferNoSchedule:
+	default:
+		return nil, fmt.Errorf("invalid effect: %v", parts[1])
+	}
+
+	return &corev1.Toleration{
+		Key:      key,
+		Value:    value,
+		Operator: operator,
+		Effect:   effect,
+	}, nil
 }

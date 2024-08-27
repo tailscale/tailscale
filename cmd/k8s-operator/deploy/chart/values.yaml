@@ -82,6 +82,9 @@ proxyConfig:
   # service and ingress resources that do not have a proxy class defined.
   defaultProxyClass: ""
 
+  # Specify values using a semicolon-separated list in `kubectl taint` syntax (Example: key1=value1:effect; key2=value2:effect).
+  taintToleration: ""
+
 # apiServerProxyConfig allows to configure whether the operator should expose
 # Kubernetes API server.
 # https://tailscale.com/kb/1236/kubernetes-operator/#accessing-the-kubernetes-control-plane-using-an-api-server-proxy
