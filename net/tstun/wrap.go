@@ -1258,8 +1258,8 @@ func (t *Wrapper) SetJailedFilter(filt *filter.Filter) {
 //
 // pkt will be copied into buffs before writing to the underlying tun.Device.
 // Therefore, callers must allocate and pass a buffs slice that is sized
-// appropriately for holding pkt.Size() + PacketStartOffset as either a single
-// element (buffs[0]), or split across multiple elements if the originating
+// appropriately for holding pkt.Size() + PacketStartOffset as a single
+// element (buffs[0]) and split across multiple elements if the originating
 // stack supports GSO. sizes must be sized with similar consideration,
 // len(buffs) should be equal to len(sizes). If any len(buffs[<index>]) was
 // mutated by InjectInboundPacketBuffer it will be reset to cap(buffs[<index>])

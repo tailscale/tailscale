@@ -826,13 +826,18 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 // across subsequent inbound packet injection calls.
 func (ns *Impl) getInjectInboundBuffsSizes() (buffs [][]byte, sizes []int) {
 	batchSize := 1
-	if ns.linkEP.SupportedGSO() == stack.HostGSOSupported {
+	gsoEnabled := ns.linkEP.SupportedGSO() == stack.HostGSOSupported
+	if gsoEnabled {
 		batchSize = conn.IdealBatchSize
 	}
 	buffs = make([][]byte, batchSize)
 	sizes = make([]int, batchSize)
 	for i := 0; i < batchSize; i++ {
-		buffs[i] = make([]byte, tstun.PacketStartOffset+tstun.DefaultTUNMTU())
+		if i == 0 && gsoEnabled {
+			buffs[i] = make([]byte, tstun.PacketStartOffset+ns.linkEP.GSOMaxSize())
+		} else {
+			buffs[i] = make([]byte, tstun.PacketStartOffset+tstun.DefaultTUNMTU())
+		}
 	}
 	return buffs, sizes
 }
