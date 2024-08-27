@@ -72,3 +72,14 @@ func BenchmarkUnmarshalText_State(b *testing.B) {
 		}
 	}
 }
+
+func TestState_String(t *testing.T) {
+	values := []State{NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running}
+	tags := []string{"NoState", "InUseOtherUser", "NeedsLogin", "NeedsMachineAuth", "Stopped", "Starting", "Running"}
+
+	for i := range values {
+		if values[i].String() != tags[i] {
+			t.Errorf("got(%s) != exp(%s)", values[i].String(), tags[i])
+		}
+	}
+}

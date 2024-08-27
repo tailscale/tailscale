@@ -49,3 +49,8 @@ func (s State) MarshalText() ([]byte, error) {
 		return nil, ErrUnknownState
 	}
 }
+
+func (s State) String() string {
+	b, _ := s.MarshalText()
+	return string(b)
+}

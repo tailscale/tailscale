@@ -21,7 +21,7 @@ import (
 
 type State int
 
-//go:generate go run github.com/nikolaydubina/go-enum-encoding@latest -type=State
+//go:generate go run github.com/nikolaydubina/go-enum-encoding@v1.6.0 -type=State -string
 const (
 	NoState          State = iota // json:"NoState"
 	InUseOtherUser                // json:"InUseOtherUser"
@@ -35,17 +35,6 @@ const (
 // GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
 // ID tokens used by the Android client.
 const GoogleIDTokenType = "ts_android_google_login"
-
-func (s State) String() string {
-	return [...]string{
-		"NoState",
-		"InUseOtherUser",
-		"NeedsLogin",
-		"NeedsMachineAuth",
-		"Stopped",
-		"Starting",
-		"Running"}[s]
-}
 
 // EngineStatus contains WireGuard engine stats.
 type EngineStatus struct {
