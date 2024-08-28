@@ -331,7 +331,7 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 			if !has(k) {
 				for _, sess := range b.notifyWatchers {
 					if sess.sessionID == k {
-						close(sess.ch)
+						sess.cancel()
 					}
 				}
 			}
