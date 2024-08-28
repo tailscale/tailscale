@@ -559,6 +559,17 @@ func (n *network) unregisterWriter(mac MAC) {
 	n.writers.Delete(mac)
 }
 
+// RegisteredWritersForTest returns the number of registered connections (VM
+// guests with a known MAC to whom a packet can be sent) there are to the
+// server. It exists for testing.
+func (s *Server) RegisteredWritersForTest() int {
+	num := 0
+	for n := range s.networks {
+		num += n.writers.Len()
+	}
+	return num
+}
+
 func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 	if n.lanIP4.Addr() == ip {
 		return n.mac, true
@@ -776,12 +787,12 @@ func (s *Server) writeEthernetFrameToVM(c vmClient, ethPkt []byte, interfaceID i
 		s.scratch = binary.BigEndian.AppendUint32(s.scratch[:0], uint32(len(ethPkt)))
 		s.scratch = append(s.scratch, ethPkt...)
 		if _, err := c.uc.Write(s.scratch); err != nil {
-			log.Printf("Write pkt: %v", err)
+			s.logf("Write pkt: %v", err)
 		}
 
 	case ProtocolUnixDGRAM:
 		if _, err := c.uc.WriteToUnix(ethPkt, c.raddr); err != nil {
-			log.Printf("Write pkt : %v", err)
+			s.logf("Write pkt : %v", err)
 			return
 		}
 	}
@@ -821,7 +832,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 	context.AfterFunc(s.shutdownCtx, func() {
 		uc.SetDeadline(time.Now())
 	})
-	log.Printf("Got conn %T %p", uc, uc)
+	s.logf("Got conn %T %p", uc, uc)
 	defer uc.Close()
 
 	buf := make([]byte, 16<<10)
@@ -835,7 +846,11 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			n, addr, err := uc.ReadFromUnix(buf)
 			raddr = addr
 			if err != nil {
-				log.Printf("ReadFromUnix: %v", err)
+				if s.shutdownCtx.Err() != nil {
+					// Return without logging.
+					return
+				}
+				s.logf("ReadFromUnix: %#v", err)
 				continue
 			}
 			packetRaw = buf[:n]
@@ -845,7 +860,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 					// Return without logging.
 					return
 				}
-				log.Printf("ReadFull header: %v", err)
+				s.logf("ReadFull header: %v", err)
 				return
 			}
 			n := binary.BigEndian.Uint32(buf[:4])
@@ -855,7 +870,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 					// Return without logging.
 					return
 				}
-				log.Printf("ReadFull pkt: %v", err)
+				s.logf("ReadFull pkt: %v", err)
 				return
 			}
 			packetRaw = buf[4 : 4+n] // raw ethernet frame
@@ -869,12 +884,12 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		srcMAC := MAC(packetRaw[6:12])
 		srcNode, ok := s.nodeByMAC[srcMAC]
 		if !ok {
-			log.Printf("[conn %p] got frame from unknown MAC %v", c.uc, srcMAC)
+			s.logf("[conn %p] got frame from unknown MAC %v", c.uc, srcMAC)
 			continue
 		}
 		if !didReg[srcMAC] {
 			didReg[srcMAC] = true
-			log.Printf("[conn %p] Registering writer for MAC %v, node %v", c.uc, srcMAC, srcNode.lanIP)
+			s.logf("[conn %p] Registering writer for MAC %v, node %v", c.uc, srcMAC, srcNode.lanIP)
 			srcNode.net.registerWriter(srcMAC, c)
 			defer srcNode.net.unregisterWriter(srcMAC)
 		}
