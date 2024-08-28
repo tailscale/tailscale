@@ -2654,7 +2654,7 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 			b.hostinfo.Container = tt.container
 			p := ipn.NewPrefs()
 			p.AutoUpdate.Apply = tt.before
-			if err := b.pm.setPrefsLocked(p.View()); err != nil {
+			if err := b.pm.setPrefsNoPermCheck(p.View()); err != nil {
 				t.Fatal(err)
 			}
 			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)

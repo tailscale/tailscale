@@ -3321,9 +3321,7 @@ func (b *LocalBackend) SetCurrentUser(actor ipnauth.Actor) (ipn.WindowsUserID, e
 	if b.pm.CurrentUserID() == uid {
 		return uid, nil
 	}
-	if err := b.pm.SetCurrentUserID(uid); err != nil {
-		return uid, nil
-	}
+	b.pm.SetCurrentUserID(uid)
 	if c, ok := b.currentUser.(ipnauth.ActorCloser); ok {
 		c.Close()
 	}
@@ -6575,7 +6573,7 @@ func (b *LocalBackend) ResetAuth() error {
 	if err := b.clearMachineKeyLocked(); err != nil {
 		return err
 	}
-	if err := b.pm.DeleteAllProfiles(); err != nil {
+	if err := b.pm.DeleteAllProfilesForUser(); err != nil {
 		return err
 	}
 	b.resetDialPlan() // always reset if we're removing everything
