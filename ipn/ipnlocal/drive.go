@@ -243,7 +243,7 @@ func (b *LocalBackend) driveSetSharesLocked(shares []*drive.Share) error {
 		},
 		DriveSharesSet: true,
 	})
-	return b.pm.setPrefsLocked(prefs.View())
+	return b.pm.setPrefsNoPermCheck(prefs.View())
 }
 
 // driveNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
