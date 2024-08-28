@@ -65,6 +65,11 @@ func nodeMac(n int) MAC {
 	return MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(n)}
 }
 
+func routerMac(n int) MAC {
+	// 52=TS then 0xee for 'etwork
+	return MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(n)}
+}
+
 var lanSLAACBase = netip.MustParseAddr("fe80::50cc:ccff:fecc:cc01")
 
 // nodeLANIP6 returns a node number's Link Local SLAAC IPv6 address,
@@ -148,7 +153,7 @@ func (c *Config) AddNetwork(opts ...any) *Network {
 	num := len(c.networks) + 1
 	n := &Network{
 		num: num,
-		mac: MAC{0x52, 0xee, 0xee, 0xee, 0xee, byte(num)}, // 52=TS then 0xee for 'etwork
+		mac: routerMac(num),
 	}
 	c.networks = append(c.networks, n)
 	for _, o := range opts {
