@@ -251,6 +251,14 @@ func TestServeConfigForeground(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Introduce a race between [LocalBackend] sending notifications
+	// and [LocalBackend.WatchNotifications] shutting down due to
+	// setting the serve config below.
+	const N = 1000
+	for range N {
+		go b.send(ipn.Notify{})
+	}
+
 	// Setting a new serve config should shut down WatchNotifications
 	// whose session IDs are no longer found: session1 goes, session2 stays.
 	err = b.SetServeConfig(&ipn.ServeConfig{

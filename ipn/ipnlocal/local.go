@@ -161,6 +161,7 @@ func RegisterNewSSHServer(fn newSSHServerFunc) {
 type watchSession struct {
 	ch        chan *ipn.Notify
 	sessionID string
+	cancel    func() // call to signal that the session must be terminated
 }
 
 // LocalBackend is the glue between the major pieces of the Tailscale
@@ -2635,7 +2636,15 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		}
 	}
 
-	mak.Set(&b.notifyWatchers, sessionID, &watchSession{ch, sessionID})
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	session := &watchSession{
+		ch:        ch,
+		sessionID: sessionID,
+		cancel:    cancel,
+	}
+	mak.Set(&b.notifyWatchers, sessionID, session)
 	b.mu.Unlock()
 
 	defer func() {
@@ -2666,8 +2675,6 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	// request every 2 seconds.
 	// TODO(bradfitz): plumb this further and only send a Notify on change.
 	if mask&ipn.NotifyWatchEngineUpdates != 0 {
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
 		go b.pollRequestEngineStatus(ctx)
 	}
 
@@ -2680,7 +2687,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		select {
 		case <-ctx.Done():
 			return
-		case n, ok := <-ch:
+		case n := <-ch:
 			// URLs flow into Notify.BrowseToURL via two means:
 			//    1. From MapResponse.PopBrowserURL, which already says they're dup
 			//       suppressed if identical, and that's done by the controlclient,
@@ -2696,7 +2703,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 					lastURLPop = v
 				}
 			}
-			if !ok || !fn(n) {
+			if !fn(n) {
 				return
 			}
 		}
