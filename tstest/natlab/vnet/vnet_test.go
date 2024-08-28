@@ -21,6 +21,11 @@ import (
 	"tailscale.com/util/must"
 )
 
+const (
+	ethType4 = layers.EthernetTypeIPv4
+	ethType6 = layers.EthernetTypeIPv6
+)
+
 // TestPacketSideEffects tests that upon receiving certain
 // packets, other packets and/or log statements are generated.
 func TestPacketSideEffects(t *testing.T) {
@@ -36,7 +41,7 @@ func TestPacketSideEffects(t *testing.T) {
 	}{
 		{
 			netName: "basic",
-			setup:   newTwoNodesSameNetworkServer,
+			setup:   newTwoNodesSameNetwork,
 			tests: []netTest{
 				{
 					name: "drop-rando-ethertype",
@@ -63,6 +68,37 @@ func TestPacketSideEffects(t *testing.T) {
 						pktSubstr("Unable to decode EthernetType 4660"),
 					),
 				},
+				{
+					name: "dns-request-v4",
+					pkt:  mkDNSReq(4),
+					check: all(
+						numPkts(1),
+						pktSubstr("Data=[52, 52, 0, 3] IP=52.52.0.3"),
+					),
+				},
+				{
+					name: "dns-request-v6",
+					pkt:  mkDNSReq(6),
+					check: all(
+						numPkts(1),
+						pktSubstr(" IP=2052::3 "),
+					),
+				},
+			},
+		},
+		{
+			netName: "v4",
+			setup:   newTwoNodesSameV4Network,
+			tests: []netTest{
+				{
+					name: "no-v6-reply-on-v4-only",
+					pkt:  mkIPv6RouterSolicit(nodeMac(1), nodeLANIP6(1)),
+					check: all(
+						numPkts(0),
+						logSubstr("dropping IPv6 packet on v4-only network"),
+					),
+				},
+				// TODO(bradfitz): DHCP request + response
 			},
 		},
 		{
@@ -170,16 +206,7 @@ func mkIPv6RouterSolicit(srcMAC MAC, srcIP netip.Addr) []byte {
 		}},
 	}
 	icmp.SetNetworkLayerForChecksum(ip)
-	return mkEth(macAllRouters, srcMAC, layers.EthernetTypeIPv6, mkPacket(ip, icmp, ra))
-}
-
-func mkPacket(layers ...gopacket.SerializableLayer) []byte {
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buf, opts, layers...); err != nil {
-		panic(fmt.Sprintf("serializing packet: %v", err))
-	}
-	return buf.Bytes()
+	return mkEth(macAllRouters, srcMAC, ethType6, mkPacket(ip, icmp, ra))
 }
 
 func mkAllNodesPing(srcMAC MAC, srcIP netip.Addr) []byte {
@@ -194,7 +221,68 @@ func mkAllNodesPing(srcMAC MAC, srcIP netip.Addr) []byte {
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
 	}
 	icmp.SetNetworkLayerForChecksum(ip)
-	return mkEth(macAllNodes, srcMAC, layers.EthernetTypeIPv6, mkPacket(ip, icmp))
+	return mkEth(macAllNodes, srcMAC, ethType6, mkPacket(ip, icmp))
+}
+
+// mkDNSReq makes a DNS request to "control.tailscale" using the source IPs as
+// defined in this test file.
+//
+// ipVer must be 4 or 6:
+// If 4, it makes an A record request.
+// If 6, it makes a AAAA record request.
+//
+// (Yes, this is technically unrelated (you can request A records over IPv6 or
+// AAAA records over IPv4), but for test coverage reasons, assume that the ipVer
+// of 6 means to also request an AAAA record.)
+func mkDNSReq(ipVer int) []byte {
+	eth := &layers.Ethernet{
+		SrcMAC:       nodeMac(1).HWAddr(),
+		DstMAC:       routerMac(1).HWAddr(),
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	if ipVer == 6 {
+		eth.EthernetType = layers.EthernetTypeIPv6
+	}
+
+	var ip serializableNetworkLayer
+	switch ipVer {
+	case 4:
+		ip = &layers.IPv4{
+			Version:  4,
+			Protocol: layers.IPProtocolUDP,
+			SrcIP:    net.ParseIP("192.168.0.101"),
+			TTL:      64,
+			DstIP:    FakeDNSIPv4().AsSlice(),
+		}
+	case 6:
+		ip = &layers.IPv6{
+			Version:    6,
+			HopLimit:   64,
+			NextHeader: layers.IPProtocolUDP,
+			SrcIP:      net.ParseIP("2000:52::1"),
+			DstIP:      FakeDNSIPv6().AsSlice(),
+		}
+	default:
+		panic("bad ipVer")
+	}
+
+	udp := &layers.UDP{
+		SrcPort: 12345,
+		DstPort: 53,
+	}
+	udp.SetNetworkLayerForChecksum(ip)
+	dns := &layers.DNS{
+		ID: 789,
+		Questions: []layers.DNSQuestion{{
+			Name:  []byte("control.tailscale"),
+			Type:  layers.DNSTypeA,
+			Class: layers.DNSClassIN,
+		}},
+	}
+	if ipVer == 6 {
+		dns.Questions[0].Type = layers.DNSTypeAAAA
+	}
+	return mkPacket(eth, ip, udp, dns)
 }
 
 // sideEffects gathers side effects as a result of sending a packet and tests
@@ -269,7 +357,15 @@ func numPkts(want int) func(*sideEffects) error {
 	}
 }
 
-func newTwoNodesSameNetworkServer() (*Server, error) {
+func newTwoNodesSameNetwork() (*Server, error) {
+	var c Config
+	nw := c.AddNetwork("192.168.0.1/24", "2052::1/64")
+	c.AddNode(nw)
+	c.AddNode(nw)
+	return New(&c)
+}
+
+func newTwoNodesSameV4Network() (*Server, error) {
 	var c Config
 	nw := c.AddNetwork("192.168.0.1/24")
 	c.AddNode(nw)
@@ -286,7 +382,7 @@ func TestProtocolQEMU(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("skipping on %s", runtime.GOOS)
 	}
-	s := must.Get(newTwoNodesSameNetworkServer())
+	s := must.Get(newTwoNodesSameNetwork())
 	defer s.Close()
 	s.SetLoggerForTest(t.Logf)
 
@@ -329,7 +425,7 @@ func TestProtocolUnixDgram(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("skipping on %s", runtime.GOOS)
 	}
-	s := must.Get(newTwoNodesSameNetworkServer())
+	s := must.Get(newTwoNodesSameNetwork())
 	defer s.Close()
 	s.SetLoggerForTest(t.Logf)
 

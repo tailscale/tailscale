@@ -1218,18 +1218,11 @@ func (n *network) serializedUDPPacket(src, dst netip.AddrPort, payload []byte, e
 		SrcPort: layers.UDPPort(src.Port()),
 		DstPort: layers.UDPPort(dst.Port()),
 	}
-	udp.SetNetworkLayerForChecksum(ip)
-
-	buffer := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	layers := []gopacket.SerializableLayer{eth, ip, udp, gopacket.Payload(payload)}
 	if eth == nil {
-		layers = layers[1:]
+		return mkPacketErr(ip, udp, gopacket.Payload(payload))
+	} else {
+		return mkPacketErr(eth, ip, udp, gopacket.Payload(payload))
 	}
-	if err := gopacket.SerializeLayers(buffer, options, layers...); err != nil {
-		return nil, fmt.Errorf("serializing UDP from %v to %v: %v", src, dst, err)
-	}
-	return buffer.Bytes(), nil
 }
 
 // HandleEthernetPacketForRouter handles a packet that is
@@ -1434,14 +1427,12 @@ func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICM
 			},
 		},
 	}
-	icmp.SetNetworkLayerForChecksum(ip)
-	buffer := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buffer, options, eth, ip, icmp, ra); err != nil {
+	pkt, err := mkPacketErr(eth, ip, icmp, ra)
+	if err != nil {
 		n.logf("serializing ICMPv6 RA: %v", err)
 		return
 	}
-	n.writeEth(buffer.Bytes())
+	n.writeEth(pkt)
 }
 
 func (n *network) handleIPv6NeighborSolicitation(ep EthernetPacket, ns *layers.ICMPv6NeighborSolicitation) {
@@ -2202,4 +2193,36 @@ func (c *NodeAgentClient) EnableHostFirewall(ctx context.Context) error {
 		return fmt.Errorf("unexpected status code %v: %s", res.Status, all)
 	}
 	return nil
+}
+
+func mkPacket(layers ...gopacket.SerializableLayer) []byte {
+	return must.Get(mkPacketErr(layers...))
+}
+
+func mkPacketErr(ll ...gopacket.SerializableLayer) ([]byte, error) {
+	var nl gopacket.NetworkLayer
+	for _, la := range ll {
+		switch la := la.(type) {
+		case *layers.IPv4:
+			nl = la
+		case *layers.IPv6:
+			nl = la
+		}
+	}
+	for _, la := range ll {
+		switch la := la.(type) {
+		case *layers.TCP:
+			la.SetNetworkLayerForChecksum(nl)
+		case *layers.UDP:
+			la.SetNetworkLayerForChecksum(nl)
+		case *layers.ICMPv6:
+			la.SetNetworkLayerForChecksum(nl)
+		}
+	}
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buf, opts, ll...); err != nil {
+		return nil, fmt.Errorf("serializing packet: %v", err)
+	}
+	return buf.Bytes(), nil
 }
