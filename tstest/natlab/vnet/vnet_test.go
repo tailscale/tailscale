@@ -69,19 +69,31 @@ func TestPacketSideEffects(t *testing.T) {
 			netName: "v6",
 			setup: func() (*Server, error) {
 				var c Config
-				c.AddNode(c.AddNetwork("2000:52::1/64"))
+				nw := c.AddNetwork("2000:52::1/64")
+				c.AddNode(nw)
+				c.AddNode(nw)
 				return New(&c)
 			},
 			tests: []netTest{
 				{
 					name: "router-solicit",
-					pkt:  mkIPv6RouterSolicit(nodeMac(1), netip.MustParseAddr("fe80::50cc:ccff:fecc:cc01")),
+					pkt:  mkIPv6RouterSolicit(nodeMac(1), nodeLANIP6(1)),
 					check: all(
 						logSubstr("sending IPv6 router advertisement to 52:cc:cc:cc:cc:01 from 52:ee:ee:ee:ee:01"),
 						numPkts(1),
 						pktSubstr("TypeCode=RouterAdvertisement"),
 						pktSubstr("= ICMPv6RouterAdvertisement"),
 						pktSubstr("SrcMAC=52:ee:ee:ee:ee:01 DstMAC=52:cc:cc:cc:cc:01 EthernetType=IPv6"),
+					),
+				},
+				{
+					name: "all-nodes",
+					pkt:  mkAllNodesPing(nodeMac(1), nodeLANIP6(1)),
+					check: all(
+						numPkts(1),
+						pktSubstr("SrcMAC=52:cc:cc:cc:cc:01 DstMAC=33:33:00:00:00:01"),
+						pktSubstr("SrcIP=fe80::50cc:ccff:fecc:cc01 DstIP=ff02::1"),
+						pktSubstr("TypeCode=EchoRequest"),
 					),
 				},
 			},
@@ -105,7 +117,9 @@ func TestPacketSideEffects(t *testing.T) {
 						})
 					}
 
-					s.handleEthernetFrameFromVM(tt.pkt)
+					if err := s.handleEthernetFrameFromVM(tt.pkt); err != nil {
+						t.Fatal(err)
+					}
 					if tt.check != nil {
 						if err := tt.check(se); err != nil {
 							t.Fatal(err)
@@ -156,13 +170,31 @@ func mkIPv6RouterSolicit(srcMAC MAC, srcIP netip.Addr) []byte {
 		}},
 	}
 	icmp.SetNetworkLayerForChecksum(ip)
-	buf := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buf, options, ip, icmp, ra); err != nil {
-		panic(fmt.Sprintf("serializing ICMPv6 RA: %v", err))
-	}
+	return mkEth(macAllRouters, srcMAC, layers.EthernetTypeIPv6, mkPacket(ip, icmp, ra))
+}
 
-	return mkEth(macAllRouters, srcMAC, layers.EthernetTypeIPv6, buf.Bytes())
+func mkPacket(layers ...gopacket.SerializableLayer) []byte {
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	if err := gopacket.SerializeLayers(buf, opts, layers...); err != nil {
+		panic(fmt.Sprintf("serializing packet: %v", err))
+	}
+	return buf.Bytes()
+}
+
+func mkAllNodesPing(srcMAC MAC, srcIP netip.Addr) []byte {
+	ip := &layers.IPv6{
+		Version:    6,
+		HopLimit:   255,
+		NextHeader: layers.IPProtocolICMPv6,
+		SrcIP:      srcIP.AsSlice(),
+		DstIP:      net.ParseIP("ff02::1"), // all nodes
+	}
+	icmp := &layers.ICMPv6{
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
+	}
+	icmp.SetNetworkLayerForChecksum(ip)
+	return mkEth(macAllNodes, srcMAC, layers.EthernetTypeIPv6, mkPacket(ip, icmp))
 }
 
 // sideEffects gathers side effects as a result of sending a packet and tests
@@ -198,7 +230,7 @@ func logSubstr(sub string) func(*sideEffects) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("expected log substring %q not found; log statements were %q", sub, se.logs)
+		return fmt.Errorf("expected log substring %q not found; log statements were:\n%s", sub, strings.Join(se.logs, "\n"))
 	}
 }
 

@@ -820,7 +820,20 @@ func (c vmClient) proto() Protocol {
 	return ProtocolUnixDGRAM
 }
 
-const ethernetHeaderLen = 14
+func parseEthernet(pkt []byte) (dst, src MAC, ethType layers.EthernetType, payload []byte, ok bool) {
+	// headerLen is the length of an Ethernet header:
+	// 6 bytes of destination MAC, 6 bytes of source MAC, 2 bytes of EtherType.
+	const headerLen = 14
+	if len(pkt) < headerLen {
+		return
+	}
+	dst = MAC(pkt[0:6])
+	src = MAC(pkt[6:12])
+	ethType = layers.EthernetType(binary.BigEndian.Uint16(pkt[12:14]))
+	payload = pkt[headerLen:]
+	ok = true
+	return
+}
 
 // Handles a single connection from a QEMU-style client or muxd connections for dgram mode
 func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
@@ -878,10 +891,10 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		c := vmClient{uc, raddr}
 
 		// For the first packet from a MAC, register a writerFunc to write to the VM.
-		if len(packetRaw) < ethernetHeaderLen {
+		_, srcMAC, _, _, ok := parseEthernet(packetRaw)
+		if !ok {
 			continue
 		}
-		srcMAC := MAC(packetRaw[6:12])
 		srcNode, ok := s.nodeByMAC[srcMAC]
 		if !ok {
 			s.logf("[conn %p] got frame from unknown MAC %v", c.uc, srcMAC)
@@ -961,12 +974,12 @@ func (s *Server) routeUDPPacket(up UDPPacket) {
 //
 // It reports whether a packet was written to any clients.
 func (n *network) writeEth(res []byte) bool {
-	if len(res) < 12 {
+	dstMAC, srcMAC, etherType, _, ok := parseEthernet(res)
+	if !ok {
 		return false
 	}
-	dstMAC := MAC(res[0:6])
-	srcMAC := MAC(res[6:12])
-	if dstMAC.IsBroadcast() {
+
+	if dstMAC.IsBroadcast() || (n.v6 && etherType == layers.EthernetTypeIPv6 && dstMAC == macAllNodes) {
 		num := 0
 		n.writers.Range(func(mac MAC, nw networkWriter) bool {
 			if mac != srcMAC {
@@ -996,6 +1009,7 @@ func (n *network) writeEth(res []byte) bool {
 }
 
 var (
+	macAllNodes   = MAC{0: 0x33, 1: 0x33, 5: 0x01}
 	macAllRouters = MAC{0: 0x33, 1: 0x33, 5: 0x02}
 	macBroadcast  = MAC{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 )
@@ -1007,7 +1021,7 @@ const (
 func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 	packet := ep.gp
 	dstMAC := ep.DstMAC()
-	isBroadcast := dstMAC.IsBroadcast()
+	isBroadcast := dstMAC.IsBroadcast() || (n.v6 && ep.le.EthernetType == layers.EthernetTypeIPv6 && dstMAC == macAllNodes)
 	isV6SpecialMAC := dstMAC[0] == 0x33 && dstMAC[1] == 0x33
 
 	// forRouter is whether the packet is destined for the router itself
@@ -1016,7 +1030,7 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 
 	const debug = false
 	if debug {
-		n.logf("HandleEthernetPacket: %v => %v; type %v, forRouter=%v", ep.SrcMAC(), ep.DstMAC(), ep.le.EthernetType, forRouter)
+		n.logf("HandleEthernetPacket: %v => %v; type %v, bcast=%v, forRouter=%v", ep.SrcMAC(), ep.DstMAC(), ep.le.EthernetType, isBroadcast, forRouter)
 	}
 
 	switch ep.le.EthernetType {
@@ -1058,7 +1072,7 @@ func (n *network) HandleEthernetPacket(ep EthernetPacket) {
 				// log spam when verbose logging is enabled.
 				return
 			}
-			if isMcast {
+			if isMcast && !isBroadcast {
 				return
 			}
 		}

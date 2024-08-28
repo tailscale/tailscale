@@ -65,6 +65,16 @@ func nodeMac(n int) MAC {
 	return MAC{0x52, 0xcc, 0xcc, 0xcc, 0xcc, byte(n)}
 }
 
+var lanSLAACBase = netip.MustParseAddr("fe80::50cc:ccff:fecc:cc01")
+
+// nodeLANIP6 returns a node number's Link Local SLAAC IPv6 address,
+// such as fe80::50cc:ccff:fecc:cc03 for node 3.
+func nodeLANIP6(n int) netip.Addr {
+	a := lanSLAACBase.As16()
+	a[15] = byte(n)
+	return netip.AddrFrom16(a)
+}
+
 // AddNode creates a new node in the world.
 //
 // The opts may be of the following types:
@@ -128,6 +138,7 @@ type TailscaledEnv struct {
 // The opts may be of the following types:
 //   - string IP address, for the network's WAN IP (if any)
 //   - string netip.Prefix, for the network's LAN IP (defaults to 192.168.0.0/24)
+//     if IPv4, or its WAN IPv6 + CIDR (e.g. "2000:52::1/64")
 //   - NAT, the type of NAT to use
 //   - NetworkService, a service to add to the network
 //
