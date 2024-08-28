@@ -6,7 +6,7 @@ import (
 )
 
 func TestState_JSON(t *testing.T) {
-	t.Run("when json struct with fields and no values, then encoding using int", func(t *testing.T) {
+	t.Run("when json struct with fields and json tags values, then encoding using int", func(t *testing.T) {
 		type V struct {
 			S State
 		}
@@ -28,6 +28,9 @@ func TestState_JSON(t *testing.T) {
 			b, err := json.Marshal(V{S: test.S})
 			if err != nil {
 				t.Errorf("cannot encode: %s", err)
+			}
+			if string(b) != string(test.b) {
+				t.Errorf("got %s; want %s", b, test.b)
 			}
 
 			var d V
