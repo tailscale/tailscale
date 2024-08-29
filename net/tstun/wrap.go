@@ -80,9 +80,10 @@ type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 // throughput where GRO is supported by a packet.Parsed interceptor, e.g.
 // netstack/gVisor, and we are handling a vector of packets. Callers must pass a
 // nil g for the first packet in a given vector, and continue passing the
-// returned *gro.GRO for all remaining packets in said vector. If g is non-nil
-// after the last packet for a given vector is passed through the GROFilterFunc,
-// the caller must also call g.Flush().
+// returned *gro.GRO for all remaining packets in said vector. If the returned
+// *gro.GRO is non-nil after the last packet for a given vector is passed
+// through the GROFilterFunc, the caller must also call Flush() on it to deliver
+// any previously Enqueue()'d packets.
 type GROFilterFunc func(p *packet.Parsed, w *Wrapper, g *gro.GRO) (filter.Response, *gro.GRO)
 
 // Wrapper augments a tun.Device with packet filtering and injection.
