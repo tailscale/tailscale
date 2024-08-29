@@ -950,6 +950,8 @@ func (de *endpoint) send(buffs [][]byte) error {
 		return errNoUDPOrDERP
 	}
 	var err error
+	// TODO(kradalby): for paring, why is this not an if-else? Do we send to
+	// both DERP and UDP at the same time if we have both?
 	if udpAddr.IsValid() {
 		_, err = de.c.sendUDPBatch(udpAddr, buffs)
 
@@ -960,13 +962,23 @@ func (de *endpoint) send(buffs [][]byte) error {
 			de.noteBadEndpoint(udpAddr)
 		}
 
+		var txBytes int
+		for _, b := range buffs {
+			txBytes += len(b)
+		}
+
+		switch {
+		case udpAddr.Addr().Is4():
+			de.c.metricOutboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, int64(len(buffs)))
+			de.c.metricOutboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, int64(txBytes))
+		case udpAddr.Addr().Is6():
+			de.c.metricOutboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, int64(len(buffs)))
+			de.c.metricOutboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, int64(txBytes))
+		}
+
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
 		if stats := de.c.stats.Load(); err == nil && stats != nil {
-			var txBytes int
-			for _, b := range buffs {
-				txBytes += len(b)
-			}
-			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, txBytes)
+			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, len(buffs), txBytes)
 		}
 	}
 	if derpAddr.IsValid() {
@@ -974,8 +986,11 @@ func (de *endpoint) send(buffs [][]byte) error {
 		for _, buff := range buffs {
 			ok, _ := de.c.sendAddr(derpAddr, de.publicKey, buff)
 			if stats := de.c.stats.Load(); stats != nil {
-				stats.UpdateTxPhysical(de.nodeAddr, derpAddr, len(buff))
+				stats.UpdateTxPhysical(de.nodeAddr, derpAddr, 1, len(buff))
 			}
+			// TODO(kradalby): Is this the correct place for this? Do we need an Error version?
+			de.c.metricOutboundPacketsTotal.Add(pathLabel{Path: PathDERP}, 1)
+			de.c.metricOutboundBytesTotal.Add(pathLabel{Path: PathDERP}, int64(len(buff)))
 			if !ok {
 				allOk = false
 			}

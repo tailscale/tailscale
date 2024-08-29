@@ -118,9 +118,6 @@ import (
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
 
-var metricAdvertisedRoutes = usermetric.NewGauge(
-	"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)")
-
 var controlDebugFlags = getControlDebugFlags()
 
 func getControlDebugFlags() []string {
@@ -183,6 +180,7 @@ type LocalBackend struct {
 	statsLogf             logger.Logf        // for printing peers stats on change
 	sys                   *tsd.System
 	health                *health.Tracker // always non-nil
+	metrics               metrics
 	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                 ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
@@ -376,6 +374,11 @@ func (b *LocalBackend) HealthTracker() *health.Tracker {
 	return b.health
 }
 
+// UserMetricsRegistry returns the usermetrics registry for the backend
+func (b *LocalBackend) UserMetricsRegistry() *usermetric.Registry {
+	return b.sys.UserMetricsRegistry()
+}
+
 // NetMon returns the network monitor for the backend.
 func (b *LocalBackend) NetMon() *netmon.Monitor {
 	return b.sys.NetMon.Get()
@@ -383,6 +386,21 @@ func (b *LocalBackend) NetMon() *netmon.Monitor {
 
 type updateStatus struct {
 	started bool
+}
+
+type metrics struct {
+	// advertisedRoutes is a metric that counts the number of network routes that are advertised by the local node.
+	// This informs the user of how many routes are being advertised by the local node, excluding exit routes.
+	advertisedRoutes *usermetric.Gauge
+
+	// approvedRoutes is a metric that counts the number of network routes served by the local node and approved
+	// by the control server.
+	approvedRoutes *usermetric.Gauge
+
+	// primaryRoutes is a metric that counts the number of primary network routes served by the local node.
+	// A route being a primary route implies that the route is currently served by this node, and not by another
+	// subnet router in a high availability configuration.
+	primaryRoutes *usermetric.Gauge
 }
 
 // clientGen is a func that creates a control plane client.
@@ -428,6 +446,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	captiveCtx, captiveCancel := context.WithCancel(ctx)
 	captiveCancel()
 
+	m := metrics{
+		advertisedRoutes: sys.UserMetricsRegistry().NewGauge(
+			"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)"),
+		approvedRoutes: sys.UserMetricsRegistry().NewGauge(
+			"tailscaled_approved_routes", "Number of approved network routes (e.g. by a subnet router)"),
+		primaryRoutes: sys.UserMetricsRegistry().NewGauge(
+			"tailscaled_primary_routes", "Number of network routes for which this node is a primary router (in high availability configuration)"),
+	}
+
 	b := &LocalBackend{
 		ctx:                   ctx,
 		ctxCancel:             cancel,
@@ -436,6 +463,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:                   sys,
 		health:                sys.HealthTracker(),
+		metrics:               m,
 		e:                     e,
 		dialer:                dialer,
 		store:                 store,
@@ -4685,14 +4713,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
-	// count routes without exit node routes
-	var routes int64
-	for _, route := range hi.RoutableIPs {
-		if route.Bits() != 0 {
-			routes++
-		}
-	}
-	metricAdvertisedRoutes.Set(float64(routes))
+	b.metrics.advertisedRoutes.Set(float64(len(hi.RoutableIPs)))
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
@@ -5317,6 +5338,11 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if nm == nil {
 		b.nodeByAddr = nil
+
+		// If there is no netmap, the client is going into a "turned off"
+		// state so reset the metrics.
+		b.metrics.approvedRoutes.Set(0)
+		b.metrics.primaryRoutes.Set(0)
 		return
 	}
 
@@ -5337,6 +5363,14 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	if nm.SelfNode.Valid() {
 		addNode(nm.SelfNode)
+		var approved float64
+		for _, route := range nm.SelfNode.AllowedIPs().All() {
+			if !slices.Contains(nm.SelfNode.Addresses().AsSlice(), route) {
+				approved++
+			}
+		}
+		b.metrics.approvedRoutes.Set(approved)
+		b.metrics.primaryRoutes.Set(float64(nm.SelfNode.PrimaryRoutes().Len()))
 	}
 	for _, p := range nm.Peers {
 		addNode(p)

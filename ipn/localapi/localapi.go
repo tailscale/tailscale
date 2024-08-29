@@ -62,7 +62,6 @@ import (
 	"tailscale.com/util/progresstracking"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/testenv"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/magicsock"
 )
@@ -578,7 +577,7 @@ func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "usermetrics debug flag not enabled", http.StatusForbidden)
 		return
 	}
-	usermetric.Handler(w, r)
+	h.b.UserMetricsRegistry().Handler(w, r)
 }
 
 func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {

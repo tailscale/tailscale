@@ -532,18 +532,20 @@ func (s *Server) start() (reterr error) {
 
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
-		ListenPort:    s.Port,
-		NetMon:        s.netMon,
-		Dialer:        s.dialer,
-		SetSubsystem:  sys.Set,
-		ControlKnobs:  sys.ControlKnobs(),
-		HealthTracker: sys.HealthTracker(),
+		ListenPort:          s.Port,
+		NetMon:              s.netMon,
+		Dialer:              s.dialer,
+		SetSubsystem:        sys.Set,
+		ControlKnobs:        sys.ControlKnobs(),
+		HealthTracker:       sys.HealthTracker(),
+		UserMetricsRegistry: sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		return err
 	}
 	closePool.add(s.dialer)
 	sys.Set(eng)
+	sys.HealthTracker().SetMetricsRegistry(sys.UserMetricsRegistry())
 
 	// TODO(oxtoacart): do we need to support Taildrive on tsnet, and if so, how?
 	ns, err := netstack.Create(tsLogf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper(), nil)

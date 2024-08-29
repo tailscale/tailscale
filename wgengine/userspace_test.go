@@ -25,6 +25,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -100,7 +101,8 @@ func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 
 func TestUserspaceEngineReconfig(t *testing.T) {
 	ht := new(health.Tracker)
-	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,9 +169,10 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	// Keep making a wgengine until we find an unused port
 	var ue *userspaceEngine
 	ht := new(health.Tracker)
+	reg := new(usermetric.Registry)
 	for i := range 100 {
 		attempt := uint16(defaultPort + i)
-		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs, ht)
+		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs, ht, reg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -249,7 +252,8 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 	var knobs controlknobs.Knobs
 
 	ht := new(health.Tracker)
-	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs, ht)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs, ht, reg)
 	if err != nil {
 		t.Fatal(err)
 	}

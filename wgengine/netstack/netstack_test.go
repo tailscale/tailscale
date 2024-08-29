@@ -46,10 +46,11 @@ func TestInjectInboundLeak(t *testing.T) {
 	}
 	sys := new(tsd.System)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		Tun:           tunDev,
-		Dialer:        dialer,
-		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		Tun:                 tunDev,
+		Dialer:              dialer,
+		SetSubsystem:        sys.Set,
+		HealthTracker:       sys.HealthTracker(),
+		UserMetricsRegistry: sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,10 +104,11 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 	dialer := new(tsdial.Dialer)
 	logf := tstest.WhileTestRunningLogger(tb)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		Tun:           tunDev,
-		Dialer:        dialer,
-		SetSubsystem:  sys.Set,
-		HealthTracker: sys.HealthTracker(),
+		Tun:                 tunDev,
+		Dialer:              dialer,
+		SetSubsystem:        sys.Set,
+		HealthTracker:       sys.HealthTracker(),
+		UserMetricsRegistry: sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		tb.Fatal(err)

@@ -135,19 +135,19 @@ func (s *Statistics) updateVirtual(b []byte, receive bool) {
 // The src is always a Tailscale IP address, representing some remote peer.
 // The dst is a remote IP address and port that corresponds
 // with some physical peer backing the Tailscale IP address.
-func (s *Statistics) UpdateTxPhysical(src netip.Addr, dst netip.AddrPort, n int) {
-	s.updatePhysical(src, dst, n, false)
+func (s *Statistics) UpdateTxPhysical(src netip.Addr, dst netip.AddrPort, packets, n int) {
+	s.updatePhysical(src, dst, packets, n, false)
 }
 
 // UpdateRxPhysical updates the counters for a received wireguard packet.
 // The src is always a Tailscale IP address, representing some remote peer.
 // The dst is a remote IP address and port that corresponds
 // with some physical peer backing the Tailscale IP address.
-func (s *Statistics) UpdateRxPhysical(src netip.Addr, dst netip.AddrPort, n int) {
-	s.updatePhysical(src, dst, n, true)
+func (s *Statistics) UpdateRxPhysical(src netip.Addr, dst netip.AddrPort, packets, n int) {
+	s.updatePhysical(src, dst, packets, n, true)
 }
 
-func (s *Statistics) updatePhysical(src netip.Addr, dst netip.AddrPort, n int, receive bool) {
+func (s *Statistics) updatePhysical(src netip.Addr, dst netip.AddrPort, packets, n int, receive bool) {
 	conn := netlogtype.Connection{Src: netip.AddrPortFrom(src, 0), Dst: dst}
 
 	s.mu.Lock()
@@ -157,10 +157,10 @@ func (s *Statistics) updatePhysical(src netip.Addr, dst netip.AddrPort, n int, r
 		return
 	}
 	if receive {
-		cnts.RxPackets++
+		cnts.RxPackets += uint64(packets)
 		cnts.RxBytes += uint64(n)
 	} else {
-		cnts.TxPackets++
+		cnts.TxPackets += uint64(packets)
 		cnts.TxBytes += uint64(n)
 	}
 	s.physical[conn] = cnts

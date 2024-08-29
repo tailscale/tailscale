@@ -1018,6 +1018,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	res.Node.PrimaryRoutes = s.nodeSubnetRoutes[nk]
 	res.Node.AllowedIPs = append(res.Node.Addresses, s.nodeSubnetRoutes[nk]...)
 
 	// Consume a PingRequest while protected by mutex if it exists

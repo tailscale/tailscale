@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/go-cmp/cmp"
 	wgconn "github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
@@ -64,6 +66,7 @@ import (
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -156,6 +159,7 @@ type magicStack struct {
 	dev        *device.Device          // the wireguard-go Device that connects the previous things
 	wgLogger   *wglog.Logger           // wireguard-go log wrapper
 	netMon     *netmon.Monitor         // always non-nil
+	metrics    *usermetric.Registry
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -174,6 +178,8 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		t.Fatalf("netmon.New: %v", err)
 	}
 
+	var reg usermetric.Registry
+
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
@@ -183,6 +189,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
+		UserMetricsRegistry: &reg,
 	})
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
@@ -193,7 +200,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	}
 
 	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.Wrap(logf, tun.TUN())
+	tsTun := tstun.Wrap(logf, tun.TUN(), nil)
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 	tsTun.Start()
 
@@ -219,6 +226,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		dev:        dev,
 		wgLogger:   wgLogger,
 		netMon:     netMon,
+		metrics:    &reg,
 	}
 }
 
@@ -392,11 +400,12 @@ func TestNewConn(t *testing.T) {
 
 	port := pickPort(t)
 	conn, err := NewConn(Options{
-		Port:              port,
-		DisablePortMapper: true,
-		EndpointsFunc:     epFunc,
-		Logf:              t.Logf,
-		NetMon:            netMon,
+		Port:                port,
+		DisablePortMapper:   true,
+		EndpointsFunc:       epFunc,
+		Logf:                t.Logf,
+		NetMon:              netMon,
+		UserMetricsRegistry: new(usermetric.Registry),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -519,10 +528,12 @@ func TestDeviceStartStop(t *testing.T) {
 	}
 	defer netMon.Close()
 
+	reg := new(usermetric.Registry)
 	conn, err := NewConn(Options{
-		EndpointsFunc: func(eps []tailcfg.Endpoint) {},
-		Logf:          t.Logf,
-		NetMon:        netMon,
+		EndpointsFunc:       func(eps []tailcfg.Endpoint) {},
+		Logf:                t.Logf,
+		NetMon:              netMon,
+		UserMetricsRegistry: reg,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1181,6 +1192,100 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		checkStats(t, m1, m1Conns)
 		checkStats(t, m2, m2Conns)
 	})
+
+	t.Run("compare-metrics-stats", func(t *testing.T) {
+		setT(t)
+		defer setT(outerT)
+		m1.conn.resetMetricsForTest()
+		m1.stats.TestExtract()
+		m2.conn.resetMetricsForTest()
+		m2.stats.TestExtract()
+		t.Logf("Metrics before: %s\n", m1.metrics.String())
+		ping1(t)
+		ping2(t)
+		assertConnStatsAndUserMetricsEqual(t, m1)
+		assertConnStatsAndUserMetricsEqual(t, m2)
+		t.Logf("Metrics after: %s\n", m1.metrics.String())
+	})
+}
+
+func (c *Conn) resetMetricsForTest() {
+	c.metricInboundBytesTotal.ResetAllForTest()
+	c.metricInboundPacketsTotal.ResetAllForTest()
+	c.metricOutboundBytesTotal.ResetAllForTest()
+	c.metricOutboundPacketsTotal.ResetAllForTest()
+}
+
+func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
+	_, phys := ms.stats.TestExtract()
+
+	physIPv4RxBytes := int64(0)
+	physIPv4TxBytes := int64(0)
+	physDERPRxBytes := int64(0)
+	physDERPTxBytes := int64(0)
+	physIPv4RxPackets := int64(0)
+	physIPv4TxPackets := int64(0)
+	physDERPRxPackets := int64(0)
+	physDERPTxPackets := int64(0)
+	for conn, count := range phys {
+		t.Logf("physconn src: %s, dst: %s", conn.Src.String(), conn.Dst.String())
+		if conn.Dst.String() == "127.3.3.40:1" {
+			physDERPRxBytes += int64(count.RxBytes)
+			physDERPTxBytes += int64(count.TxBytes)
+			physDERPRxPackets += int64(count.RxPackets)
+			physDERPTxPackets += int64(count.TxPackets)
+		} else {
+			physIPv4RxBytes += int64(count.RxBytes)
+			physIPv4TxBytes += int64(count.TxBytes)
+			physIPv4RxPackets += int64(count.RxPackets)
+			physIPv4TxPackets += int64(count.TxPackets)
+		}
+	}
+
+	var metricIPv4RxBytes, metricIPv4TxBytes, metricDERPRxBytes, metricDERPTxBytes int64
+	var metricIPv4RxPackets, metricIPv4TxPackets, metricDERPRxPackets, metricDERPTxPackets int64
+
+	if m, ok := ms.conn.metricInboundBytesTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4RxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metricOutboundBytesTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4TxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metricInboundBytesTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPRxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metricOutboundBytesTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPTxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metricInboundPacketsTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4RxPackets = m.Value()
+	}
+	if m, ok := ms.conn.metricOutboundPacketsTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4TxPackets = m.Value()
+	}
+	if m, ok := ms.conn.metricInboundPacketsTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPRxPackets = m.Value()
+	}
+	if m, ok := ms.conn.metricOutboundPacketsTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPTxPackets = m.Value()
+	}
+
+	assertEqual(t, "derp bytes inbound", physDERPRxBytes, metricDERPRxBytes)
+	assertEqual(t, "derp bytes outbound", physDERPTxBytes, metricDERPTxBytes)
+	assertEqual(t, "ipv4 bytes inbound", physIPv4RxBytes, metricIPv4RxBytes)
+	assertEqual(t, "ipv4 bytes outbound", physIPv4TxBytes, metricIPv4TxBytes)
+	assertEqual(t, "derp packets inbound", physDERPRxPackets, metricDERPRxPackets)
+	assertEqual(t, "derp packets outbound", physDERPTxPackets, metricDERPTxPackets)
+	assertEqual(t, "ipv4 packets inbound", physIPv4RxPackets, metricIPv4RxPackets)
+	assertEqual(t, "ipv4 packets outbound", physIPv4TxPackets, metricIPv4TxPackets)
+}
+
+func assertEqual(t *testing.T, name string, a, b any) {
+	t.Helper()
+	t.Logf("assertEqual %s: %v == %v", name, a, b)
+	if diff := cmp.Diff(a, b); diff != "" {
+		t.Errorf("%s mismatch (-want +got):\n%s", name, diff)
+	}
 }
 
 func TestDiscoMessage(t *testing.T) {
@@ -1275,6 +1380,7 @@ func newTestConn(t testing.TB) *Conn {
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
 		HealthTracker:          new(health.Tracker),
+		UserMetricsRegistry:    new(usermetric.Registry),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
 		Port:                   port,

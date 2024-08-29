@@ -10,12 +10,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"tailscale.com/metrics"
 	"tailscale.com/tsweb/varz"
 )
 
-var vars expvar.Map
+// Registry tracks user-facing metrics of various Tailscale subsystems.
+type Registry struct {
+	vars expvar.Map
+}
 
 // NewMultiLabelMap creates and register a new
 // MultiLabelMap[T] variable with the given name and returns it.
@@ -24,15 +28,18 @@ var vars expvar.Map
 // Note that usermetric are not protected against duplicate
 // metrics name. It is the caller's responsibility to ensure that
 // the name is unique.
-func NewMultiLabelMap[T comparable](name string, promType, helpText string) *metrics.MultiLabelMap[T] {
-	m := &metrics.MultiLabelMap[T]{
+func NewMultiLabelMap[T comparable](m *Registry, name string, promType, helpText string) *metrics.MultiLabelMap[T] {
+	if m == nil {
+		return nil
+	}
+	ml := &metrics.MultiLabelMap[T]{
 		Type: promType,
 		Help: helpText,
 	}
 	var zero T
 	_ = metrics.LabelString(zero) // panic early if T is invalid
-	vars.Set(name, m)
-	return m
+	m.vars.Set(name, ml)
+	return ml
 }
 
 // Gauge is a gauge metric with no labels.
@@ -42,20 +49,29 @@ type Gauge struct {
 }
 
 // NewGauge creates and register a new gauge metric with the given name and help text.
-func NewGauge(name, help string) *Gauge {
+func (m *Registry) NewGauge(name, help string) *Gauge {
+	if m == nil {
+		return nil
+	}
 	g := &Gauge{&expvar.Float{}, help}
-	vars.Set(name, g)
+	m.vars.Set(name, g)
 	return g
 }
 
 // Set sets the gauge to the given value.
 func (g *Gauge) Set(v float64) {
+	if g == nil {
+		return
+	}
 	g.m.Set(v)
 }
 
 // String returns the string of the underlying expvar.Float.
 // This satisfies the expvar.Var interface.
 func (g *Gauge) String() string {
+	if g == nil {
+		return ""
+	}
 	return g.m.String()
 }
 
@@ -79,6 +95,15 @@ func (g *Gauge) WritePrometheus(w io.Writer, name string) {
 
 // Handler returns a varz.Handler that serves the userfacing expvar contained
 // in this package.
-func Handler(w http.ResponseWriter, r *http.Request) {
-	varz.ExpvarDoHandler(vars.Do)(w, r)
+func (m *Registry) Handler(w http.ResponseWriter, r *http.Request) {
+	varz.ExpvarDoHandler(m.vars.Do)(w, r)
+}
+
+func (m *Registry) String() string {
+	var sb strings.Builder
+	m.vars.Do(func(kv expvar.KeyValue) {
+		fmt.Fprintf(&sb, "%s: %v\n", kv.Key, kv.Value)
+	})
+
+	return sb.String()
 }

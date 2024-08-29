@@ -5,6 +5,7 @@ package tsnet
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -31,8 +32,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"golang.org/x/net/proxy"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -757,6 +760,10 @@ func TestUDPConn(t *testing.T) {
 	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
 	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
 
+	assertUDPConn(t, ctx, s1, s2, s1ip, s2ip)
+}
+
+func assertUDPConn(t *testing.T, ctx context.Context, s1, s2 *Server, s1ip, s2ip netip.Addr) {
 	lc2, err := s2.LocalClient()
 	if err != nil {
 		t.Fatal(err)
@@ -818,65 +825,373 @@ func TestUDPConn(t *testing.T) {
 	}
 }
 
+// sendData sends a given amount of bytes from s1 to s2.
+func sendData(logf func(format string, args ...any), ctx context.Context, bytesCount int, s1, s2 *Server, s1ip, s2ip netip.Addr) error {
+	l := must.Get(s1.Listen("tcp", fmt.Sprintf("%s:8081", s1ip)))
+	defer l.Close()
+
+	// Dial to s1 from s2
+	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	stopReceive := make(chan struct{})
+	defer close(stopReceive)
+	allReceived := make(chan error)
+	defer close(allReceived)
+
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			allReceived <- err
+			return
+		}
+		conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+
+		total := 0
+		recvStart := time.Now()
+		for {
+			got := make([]byte, bytesCount)
+			n, err := conn.Read(got)
+			if n != bytesCount {
+				logf("read %d bytes, want %d", n, bytesCount)
+			}
+
+			select {
+			case <-stopReceive:
+				return
+			default:
+			}
+
+			if err != nil {
+				allReceived <- fmt.Errorf("failed reading packet, %s", err)
+				return
+			}
+
+			total += n
+			logf("received %d/%d bytes, %.2f %%", total, bytesCount, (float64(total) / (float64(bytesCount)) * 100))
+			if total == bytesCount {
+				break
+			}
+		}
+
+		logf("all received, took: %s", time.Since(recvStart).String())
+		allReceived <- nil
+	}()
+
+	sendStart := time.Now()
+	w.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	if _, err := w.Write(bytes.Repeat([]byte("A"), bytesCount)); err != nil {
+		stopReceive <- struct{}{}
+		return err
+	}
+
+	logf("all sent (%s), waiting for all packets (%d) to be received", time.Since(sendStart).String(), bytesCount)
+	err, _ = <-allReceived
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// testWarnable is a Warnable that is used within this package for testing purposes only.
+var testWarnable = health.Register(&health.Warnable{
+	Code:     "test-warnable-tsnet",
+	Title:    "Test warnable",
+	Severity: health.SeverityLow,
+	Text: func(args health.Args) string {
+		return args[health.ArgError]
+	},
+})
+
+func parseMetrics(m []byte) (map[string]float64, error) {
+	metrics := make(map[string]float64)
+
+	var parser expfmt.TextParser
+	mf, err := parser.TextToMetricFamilies(bytes.NewReader(m))
+	if err != nil {
+		return nil, err
+	}
+
+	for _, f := range mf {
+		for _, ff := range f.Metric {
+			val := float64(0)
+
+			switch f.GetType() {
+			case dto.MetricType_COUNTER:
+				val = ff.GetCounter().GetValue()
+			case dto.MetricType_GAUGE:
+				val = ff.GetGauge().GetValue()
+			}
+
+			metrics[f.GetName()+","+promMetricLabelsStr(ff.GetLabel())] = val
+		}
+	}
+
+	return metrics, nil
+}
+
+func promMetricLabelsStr(labels []*dto.LabelPair) string {
+	var b strings.Builder
+	for _, l := range labels {
+		b.WriteString(fmt.Sprintf("%s=%s,", l.GetName(), l.GetValue()))
+	}
+	return b.String()
+}
+
+// TestUserMetrics tests the user-facing metrics exposed by tailscaled.
 func TestUserMetrics(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// testWarnable is a Warnable that is used within this package for testing purposes only.
-	var testWarnable = health.Register(&health.Warnable{
-		Code:     "test-warnable-tsnet",
-		Title:    "Test warnable",
-		Severity: health.SeverityLow,
-		Text: func(args health.Args) string {
-			return args[health.ArgError]
-		},
-	})
-
 	controlURL, c := startControl(t)
-	s1, _, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
 
 	s1.lb.EditPrefs(&ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			AdvertiseRoutes: []netip.Prefix{
 				netip.MustParsePrefix("192.0.2.0/24"),
 				netip.MustParsePrefix("192.0.3.0/24"),
+				netip.MustParsePrefix("192.0.5.1/32"),
+				netip.MustParsePrefix("0.0.0.0/0"),
 			},
 		},
 		AdvertiseRoutesSet: true,
 	})
-	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("192.0.5.1/32"),
+		netip.MustParsePrefix("0.0.0.0/0"),
+	})
 
 	lc1, err := s1.LocalClient()
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	lc2, err := s2.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ping to make sure the connection is up.
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("pinging: %s", err)
+	}
+	t.Logf("ping success: %#+v", res)
+
 	ht := s1.lb.HealthTracker()
 	ht.SetUnhealthy(testWarnable, health.Args{"Text": "Hello world 1"})
+
+	// Force an update to the netmap to ensure that the metrics are up-to-date.
+	s1.lb.DebugForceNetmapUpdate()
+	s2.lb.DebugForceNetmapUpdate()
+
+	mustDirect(t, t.Logf, lc1, lc2)
+
+	// Wait for the routes to be propagated to node 1 to ensure
+	// that the metrics are up-to-date.
+	waitForCondition(t, 30*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == 3
+	})
+
+	// 50 megabytes 50 * 1024 kilobyte packets
+	bytesToSend := 50 * 1024 * 1024
+
+	// This asserts generates some traffic, it is factored out
+	// of TestUDPConn.
+	start := time.Now()
+	err = sendData(t.Logf, ctx, bytesToSend, s1, s2, s1ip, s2ip)
+	if err != nil {
+		t.Fatalf("Failed to send packets: %v", err)
+	}
+	t.Logf("Sent %d bytes from s1 to s2 in %s", bytesToSend, time.Since(start).String())
+
+	time.Sleep(5 * time.Second)
 
 	metrics1, err := lc1.UserMetrics(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Note that this test will check for two warnings because the health
-	// tracker will have two warnings: one from the testWarnable, added in
-	// this test, and one because we are running the dev/unstable version
-	// of tailscale.
-	want := `# TYPE tailscaled_advertised_routes gauge
-# HELP tailscaled_advertised_routes Number of advertised network routes (e.g. by a subnet router)
-tailscaled_advertised_routes 2
-# TYPE tailscaled_health_messages gauge
-# HELP tailscaled_health_messages Number of health messages broken down by type.
-tailscaled_health_messages{type="warning"} 2
-# TYPE tailscaled_inbound_dropped_packets_total counter
-# HELP tailscaled_inbound_dropped_packets_total Counts the number of dropped packets received by the node from other peers
-# TYPE tailscaled_outbound_dropped_packets_total counter
-# HELP tailscaled_outbound_dropped_packets_total Counts the number of packets dropped while being sent to other peers
-`
-
-	if diff := cmp.Diff(want, string(metrics1)); diff != "" {
-		t.Fatalf("unexpected metrics (-want +got):\n%s", diff)
+	status1, err := lc1.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	parsedMetrics1, err := parseMetrics(metrics1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics1:\n%s\n", metrics1)
+
+	// The node is advertising 4 routes:
+	// - 192.0.2.0/24
+	// - 192.0.3.0/24
+	// - 192.0.5.1/32
+	// - 0.0.0.0/0
+	if got, want := parsedMetrics1["tailscaled_advertised_routes,"], 4.0; got != want {
+		t.Errorf("metrics1, tailscaled_advertised_routes: got %v, want %v", got, want)
+	}
+
+	// The control has approved 3 routes:
+	// - 192.0.2.0/24
+	// - 192.0.5.1/32
+	// - 0.0.0.0/0
+	if got, want := parsedMetrics1["tailscaled_approved_routes,"], 3.0; got != want {
+		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
+	}
+
+	// Validate the health counter metric against the status of the node
+	if got, want := parsedMetrics1["tailscaled_health_messages,type=warning,"], float64(len(status1.Health)); got != want {
+		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
+	}
+
+	// The node is the primary subnet router for 3 routes:
+	// - 192.0.2.0/24
+	// - 192.0.5.1/32
+	// - 0.0.0.0/0
+	if got, want := parsedMetrics1["tailscaled_primary_routes,"], 3.0; got != want {
+		t.Errorf("metrics1, tailscaled_primary_routes: got %v, want %v", got, want)
+	}
+
+	// Verify that the amount of data recorded in bytes is higher than the
+	// 50 megabytes sent.
+	inboundBytes1 := parsedMetrics1["tailscaled_inbound_bytes_total,path=direct_ipv4,"]
+	if inboundBytes1 < float64(bytesToSend) {
+		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", bytesToSend, inboundBytes1)
+	}
+
+	// But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	if inboundBytes1 > float64(bytesToSend)*1.2 {
+		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.2, inboundBytes1)
+	}
+
+	// // Verify that the packet count recorded is higher than the
+	// // 50 000 1KB packages we sent.
+	// inboundPackets1 := parsedMetrics1["tailscaled_inbound_packets_total,path=direct_ipv4,"]
+	// if inboundPackets1 < float64(packets) {
+	// 	t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", packets, inboundPackets1)
+	// }
+
+	// // But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	// if inboundPackets1 > float64(packets)*1.2 {
+	// 	t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(packets)*1.1, inboundPackets1)
+	// }
+
+	metrics2, err := lc2.UserMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status2, err := lc2.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedMetrics2, err := parseMetrics(metrics2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Metrics2:\n%s\n", metrics2)
+
+	// The node is advertising 0 routes
+	if got, want := parsedMetrics2["tailscaled_advertised_routes,"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_advertised_routes: got %v, want %v", got, want)
+	}
+
+	// The control has approved 0 routes
+	if got, want := parsedMetrics2["tailscaled_approved_routes,"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
+	}
+
+	// Validate the health counter metric against the status of the node
+	if got, want := parsedMetrics2["tailscaled_health_messages,type=warning,"], float64(len(status2.Health)); got != want {
+		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
+	}
+
+	// The node is the primary subnet router for 0 routes
+	if got, want := parsedMetrics2["tailscaled_primary_routes,"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_primary_routes: got %v, want %v", got, want)
+	}
+
+	// Verify that the amount of data recorded in bytes is higher than the
+	// 50 megabytes sent.
+	outboundBytes2 := parsedMetrics2["tailscaled_outbound_bytes_total,path=direct_ipv4,"]
+	if outboundBytes2 < float64(bytesToSend) {
+		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", bytesToSend, outboundBytes2)
+	}
+
+	// But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	if outboundBytes2 > float64(bytesToSend)*1.2 {
+		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.2, outboundBytes2)
+	}
+
+	// // Verify that the packet count recorded is higher than the
+	// // 50 000 1KB packages we sent.
+	// outboundPackets2 := parsedMetrics2["tailscaled_outbound_packets_total,path=direct_ipv4,"]
+	// if outboundPackets2 < float64(packets) {
+	// 	t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", packets, outboundPackets2)
+	// }
+
+	// // But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	// if outboundPackets2 > float64(packets)*1.2 {
+	// 	t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(packets)*1.1, outboundPackets2)
+	// }
+}
+
+func waitForCondition(t *testing.T, waitTime time.Duration, f func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(waitTime); time.Now().Before(deadline); time.Sleep(1 * time.Second) {
+		if f() {
+			return
+		}
+	}
+	t.Fatalf("waiting for condition")
+}
+
+// mustDirect ensures there is a direct connection between LocalClient 1 and 2
+func mustDirect(t *testing.T, logf logger.Logf, lc1, lc2 *tailscale.LocalClient) {
+	t.Helper()
+	lastLog := time.Now().Add(-time.Minute)
+	// See https://github.com/tailscale/tailscale/issues/654
+	// and https://github.com/tailscale/tailscale/issues/3247 for discussions of this deadline.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			continue
+		}
+		status2, err := lc2.Status(ctx)
+		if err != nil {
+			continue
+		}
+		pst := status1.Peer[status2.Self.PublicKey]
+		if pst.CurAddr != "" {
+			logf("direct link %s->%s found with addr %s", status1.Self.HostName, status2.Self.HostName, pst.CurAddr)
+			return
+		}
+		if now := time.Now(); now.Sub(lastLog) > time.Second {
+			logf("no direct path %s->%s yet, addrs %v", status1.Self.HostName, status2.Self.HostName, pst.Addrs)
+			lastLog = now
+		}
+	}
+	t.Error("magicsock did not find a direct path from lc1 to lc2")
 }

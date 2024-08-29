@@ -690,7 +690,9 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 			// No data read occurred. Wait for another packet.
 			continue
 		}
-		metricRecvDataDERP.Add(1)
+		metricRecvDataPacketsDERP.Add(1)
+		c.metricInboundPacketsTotal.Add(pathLabel{Path: PathDERP}, 1)
+		c.metricInboundBytesTotal.Add(pathLabel{Path: PathDERP}, int64(n))
 		sizes[0] = n
 		eps[0] = ep
 		return 1, nil
@@ -728,7 +730,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 
 	ep.noteRecvActivity(ipp, mono.Now())
 	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, dm.n)
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, dm.n)
 	}
 	return n, ep
 }

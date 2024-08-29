@@ -33,6 +33,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
@@ -60,6 +61,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/wgint"
 )
@@ -320,6 +322,11 @@ type Conn struct {
 	// responsibility to ensure that traffic from these endpoints is routed
 	// to the node.
 	staticEndpoints views.Slice[netip.AddrPort]
+
+	metricInboundPacketsTotal  *metrics.MultiLabelMap[pathLabel]
+	metricOutboundPacketsTotal *metrics.MultiLabelMap[pathLabel]
+	metricInboundBytesTotal    *metrics.MultiLabelMap[pathLabel]
+	metricOutboundBytesTotal   *metrics.MultiLabelMap[pathLabel]
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -385,6 +392,9 @@ type Options struct {
 	// HealthTracker optionally specifies the health tracker to
 	// report errors and warnings to.
 	HealthTracker *health.Tracker
+
+	// UserMetricsRegistry specifies the metrics registry to record metrics to.
+	UserMetricsRegistry *usermetric.Registry
 
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
@@ -466,6 +476,10 @@ func NewConn(opts Options) (*Conn, error) {
 		return nil, errors.New("magicsock.Options.NetMon must be non-nil")
 	}
 
+	if opts.UserMetricsRegistry == nil {
+		return nil, errors.New("magicsock.Options.UserMetrics must be non-nil")
+	}
+
 	c := newConn(opts.logf())
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
@@ -504,6 +518,32 @@ func NewConn(opts Options) (*Conn, error) {
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
 	}
+
+	// TODO(kradalby): factor out to a func
+	c.metricInboundBytesTotal = usermetric.NewMultiLabelMap[pathLabel](
+		opts.UserMetricsRegistry,
+		"tailscaled_inbound_bytes_total",
+		"counter",
+		"Counts the number of bytes received from other peers",
+	)
+	c.metricInboundPacketsTotal = usermetric.NewMultiLabelMap[pathLabel](
+		opts.UserMetricsRegistry,
+		"tailscaled_inbound_packets_total",
+		"counter",
+		"Counts the number of packets received from other peers",
+	)
+	c.metricOutboundBytesTotal = usermetric.NewMultiLabelMap[pathLabel](
+		opts.UserMetricsRegistry,
+		"tailscaled_outbound_bytes_total",
+		"counter",
+		"Counts the number of bytes sent to other peers",
+	)
+	c.metricOutboundPacketsTotal = usermetric.NewMultiLabelMap[pathLabel](
+		opts.UserMetricsRegistry,
+		"tailscaled_outbound_packets_total",
+		"counter",
+		"Counts the number of packets sent to other peers",
+	)
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
 		c.logf("[v1] using BPF disco receiver for IPv4")
@@ -1145,6 +1185,25 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	} else {
 		if sent {
 			metricSendUDP.Add(1)
+
+			// TODO(kradalby): Do we need error variants of these?
+			switch {
+			case ipp.Addr().Is4():
+				c.metricOutboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, 1)
+				c.metricOutboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, int64(len(b)))
+			case ipp.Addr().Is6():
+				c.metricOutboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, 1)
+				c.metricOutboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, int64(len(b)))
+			}
+
+			if stats := c.stats.Load(); stats != nil {
+				c.mu.Lock()
+				ep, ok := c.peerMap.endpointForIPPort(ipp)
+				c.mu.Unlock()
+				if ok {
+					stats.UpdateTxPhysical(ep.nodeAddr, ipp, 1, len(b))
+				}
+			}
 		}
 	}
 	return
@@ -1266,17 +1325,29 @@ func (c *Conn) putReceiveBatch(batch *receiveBatch) {
 
 // receiveIPv4 creates an IPv4 ReceiveFunc reading from c.pconn4.
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4), metricRecvDataIPv4)
+	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
+		func(i int64) {
+			metricRecvDataPacketsIPv4.Add(i)
+			c.metricInboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, i)
+		}, func(i int64) {
+			c.metricInboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, i)
+		})
 }
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6), metricRecvDataIPv6)
+	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
+		func(i int64) {
+			metricRecvDataPacketsIPv6.Add(i)
+			c.metricInboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, i)
+		}, func(i int64) {
+			c.metricInboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, i)
+		})
 }
 
 // mkReceiveFunc creates a ReceiveFunc reading from ruc.
-// The provided healthItem and metric are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, metric *clientmetric.Metric) conn.ReceiveFunc {
+// The provided healthItem and metrics are updated if non-nil.
+func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, packetMetricFunc, bytesMetricFunc func(int64)) conn.ReceiveFunc {
 	// epCache caches an IPPort->endpoint for hot flows.
 	var epCache ippEndpointCache
 
@@ -1313,8 +1384,11 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				}
 				ipp := msg.Addr.(*net.UDPAddr).AddrPort()
 				if ep, ok := c.receiveIP(msg.Buffers[0][:msg.N], ipp, &epCache); ok {
-					if metric != nil {
-						metric.Add(1)
+					if packetMetricFunc != nil {
+						packetMetricFunc(1)
+					}
+					if bytesMetricFunc != nil {
+						bytesMetricFunc(int64(msg.N))
 					}
 					eps[i] = ep
 					sizes[i] = msg.N
@@ -1370,7 +1444,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(ipp, now)
 	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, len(b))
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, len(b))
 	}
 	return ep, true
 }
@@ -2924,9 +2998,9 @@ var (
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
 	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvDataDERP        = clientmetric.NewCounter("magicsock_recv_data_derp")
-	metricRecvDataIPv4        = clientmetric.NewCounter("magicsock_recv_data_ipv4")
-	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
+	metricRecvDataPacketsDERP = clientmetric.NewCounter("magicsock_recv_data_derp")
+	metricRecvDataPacketsIPv4 = clientmetric.NewCounter("magicsock_recv_data_ipv4")
+	metricRecvDataPacketsIPv6 = clientmetric.NewCounter("magicsock_recv_data_ipv6")
 
 	// Disco packets
 	metricSendDiscoUDP               = clientmetric.NewCounter("magicsock_disco_send_udp")
@@ -3063,4 +3137,20 @@ func (le *lazyEndpoint) GetPeerEndpoint(peerPublicKey [32]byte) conn.Endpoint {
 	}
 	le.c.logf("magicsock: lazyEndpoint.GetPeerEndpoint(%v) found: %v", pubKey.ShortString(), ep.nodeAddr)
 	return ep
+}
+
+type Path string
+
+const (
+	PathDirectIPv4 Path = "direct_ipv4"
+	PathDirectIPv6 Path = "direct_ipv6"
+	PathDERP       Path = "derp"
+)
+
+type pathLabel struct {
+	// Path indicates the path that the packet took:
+	// - direct_ipv4
+	// - direct_ipv6
+	// - derp
+	Path Path
 }
