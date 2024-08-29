@@ -146,6 +146,13 @@ type Secret struct {
 	// +optional
 	Data map[string][]byte `json:"data,omitempty"`
 }
+type ConfigMap struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata"`
+
+	// +optional
+	Data map[string][]byte `json:"data,omitempty"`
+}
 
 // Status is a return value for calls that don't return other objects.
 type Status struct {

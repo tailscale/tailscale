@@ -102,6 +102,52 @@ func (n *nftablesRunner) ensurePreroutingChain(dst netip.Addr) (*nftables.Table,
 	return nat, preroutingCh, nil
 }
 
+// DNAT traffic from src to dst
+func (n *nftablesRunner) AddDNATRuleWithSrc(src, dst netip.Addr) error {
+	nat, preroutingCh, err := n.ensurePreroutingChain(dst)
+	if err != nil {
+		return err
+	}
+	var saddrOffset, fam, saddrLen uint32
+	if src.Is4() {
+		saddrOffset = 8
+		saddrLen = 4
+		fam = unix.NFPROTO_IPV4
+	} else {
+		saddrOffset = 8
+		saddrLen = 16
+		fam = unix.NFPROTO_IPV6
+	}
+	dnatRule := &nftables.Rule{
+		Table: nat,
+		Chain: preroutingCh,
+		Exprs: []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       saddrOffset,
+				Len:          saddrLen,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     src.AsSlice(),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeDestNAT,
+				Family:     fam,
+				RegAddrMin: 1,
+			},
+		},
+	}
+	n.conn.InsertRule(dnatRule)
+	return n.conn.Flush()
+}
+
 func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 	nat, preroutingCh, err := n.ensurePreroutingChain(dst)
 	if err != nil {
@@ -562,6 +608,9 @@ type NetfilterRunner interface {
 	// This is used to forward traffic destined for the local machine over
 	// the Tailscale interface, as used in the Kubernetes egress proxies.
 	AddSNATRuleForDst(src, dst netip.Addr) error
+
+	// DNAT traffic from src to dst
+	AddDNATRuleWithSrc(src, dst netip.Addr) error
 
 	// DNATNonTailscaleTraffic adds a rule to the nat/PREROUTING chain to DNAT
 	// all traffic inbound from any interface except exemptInterface to dst.

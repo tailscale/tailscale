@@ -40,7 +40,6 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tsnet"
-	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
@@ -240,6 +239,7 @@ func runReconcilers(opts reconcilerOpts) {
 				&appsv1.StatefulSet{}:        nsFilter,
 				&appsv1.Deployment{}:         nsFilter,
 				&discoveryv1.EndpointSlice{}: nsFilter,
+				&corev1.Pod{}:                nsFilter,
 			},
 		},
 		Scheme: tsapi.GlobalScheme,
@@ -249,13 +249,13 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create manager: %v", err)
 	}
 
-	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
-	svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
-	// If a ProxyClass changes, enqueue all Services labeled with that
-	// ProxyClass's name.
-	proxyClassFilterForSvc := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForSvc(mgr.GetClient(), startlog))
+	// svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
+	// svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
+	// // If a ProxyClass changes, enqueue all Services labeled with that
+	// // ProxyClass's name.
+	// proxyClassFilterForSvc := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForSvc(mgr.GetClient(), startlog))
 
-	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
+	// eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
 		tsnetServer:            opts.tsServer,
@@ -268,125 +268,37 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
-		Named("service-reconciler").
-		Watches(&corev1.Service{}, svcFilter).
-		Watches(&appsv1.StatefulSet{}, svcChildFilter).
-		Watches(&corev1.Secret{}, svcChildFilter).
-		Watches(&tsapi.ProxyClass{}, proxyClassFilterForSvc).
-		Complete(&ServiceReconciler{
-			ssr:                   ssr,
-			Client:                mgr.GetClient(),
-			logger:                opts.log.Named("service-reconciler"),
-			isDefaultLoadBalancer: opts.proxyActAsDefaultLoadBalancer,
-			recorder:              eventRecorder,
-			tsNamespace:           opts.tailscaleNamespace,
-			clock:                 tstime.DefaultClock{},
-			proxyDefaultClass:     opts.proxyDefaultClass,
+		Named("ha-egress-svc-reconciler").
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(egressHAServiceFilter)).
+		Complete(&EgressHAReconciler{
+			Client: mgr.GetClient(),
+			ssr:    ssr,
+			logger: opts.log.Named("egress-ha-svc-reconciler"),
 		})
 	if err != nil {
-		startlog.Fatalf("could not create service reconciler: %v", err)
+		startlog.Fatalf("could not create egress-ha service reconciler: %v", err)
 	}
-	ingressChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("ingress"))
-	// If a ProxyClassChanges, enqueue all Ingresses labeled with that
-	// ProxyClass's name.
-	proxyClassFilterForIngress := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForIngress(mgr.GetClient(), startlog))
-	// Enque Ingress if a managed Service or backend Service associated with a tailscale Ingress changes.
-	svcHandlerForIngress := handler.EnqueueRequestsFromMapFunc(serviceHandlerForIngress(mgr.GetClient(), startlog))
 	err = builder.
 		ControllerManagedBy(mgr).
-		For(&networkingv1.Ingress{}).
-		Watches(&appsv1.StatefulSet{}, ingressChildFilter).
-		Watches(&corev1.Secret{}, ingressChildFilter).
-		Watches(&corev1.Service{}, svcHandlerForIngress).
-		Watches(&tsapi.ProxyClass{}, proxyClassFilterForIngress).
-		Complete(&IngressReconciler{
-			ssr:      ssr,
-			recorder: eventRecorder,
-			Client:   mgr.GetClient(),
-			logger:   opts.log.Named("ingress-reconciler"),
-			proxyDefaultClass: opts.proxyDefaultClass,
+		Named("egress-ha-state-reconciler").
+		For(&corev1.Secret{}).
+		Complete(&EgressSvcConfigReconciler{
+			Client: mgr.GetClient(),
+			logger: opts.log.Named("egress-ha-state-reconciler"),
 		})
 	if err != nil {
-		startlog.Fatalf("could not create ingress reconciler: %v", err)
+		startlog.Fatalf("could not create egress-ha-state service reconciler: %v", err)
 	}
-
-	connectorFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("connector"))
-	// If a ProxyClassChanges, enqueue all Connectors that have
-	// .spec.proxyClass set to the name of this ProxyClass.
-	proxyClassFilterForConnector := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForConnector(mgr.GetClient(), startlog))
-	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.Connector{}).
-		Watches(&appsv1.StatefulSet{}, connectorFilter).
-		Watches(&corev1.Secret{}, connectorFilter).
-		Watches(&tsapi.ProxyClass{}, proxyClassFilterForConnector).
-		Complete(&ConnectorReconciler{
-			ssr:      ssr,
-			recorder: eventRecorder,
-			Client:   mgr.GetClient(),
-			logger:   opts.log.Named("connector-reconciler"),
-			clock:    tstime.DefaultClock{},
+	err = builder.
+		ControllerManagedBy(mgr).
+		Named("egress-fw-pods-reconciler").
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(fwegressPodFilter)).
+		Complete(&FWEgressReconciler{
+			Client: mgr.GetClient(),
+			logger: opts.log.Named("fwegress-pod-reconciler"),
 		})
 	if err != nil {
-		startlog.Fatalf("could not create connector reconciler: %v", err)
-	}
-	// TODO (irbekrm): switch to metadata-only watches for resources whose
-	// spec we don't need to inspect to reduce memory consumption.
-	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
-	nameserverFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("nameserver"))
-	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.DNSConfig{}).
-		Watches(&appsv1.Deployment{}, nameserverFilter).
-		Watches(&corev1.ConfigMap{}, nameserverFilter).
-		Watches(&corev1.Service{}, nameserverFilter).
-		Watches(&corev1.ServiceAccount{}, nameserverFilter).
-		Complete(&NameserverReconciler{
-			recorder:    eventRecorder,
-			tsNamespace: opts.tailscaleNamespace,
-			Client:      mgr.GetClient(),
-			logger:      opts.log.Named("nameserver-reconciler"),
-			clock:       tstime.DefaultClock{},
-		})
-	if err != nil {
-		startlog.Fatalf("could not create nameserver reconciler: %v", err)
-	}
-	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.ProxyClass{}).
-		Complete(&ProxyClassReconciler{
-			Client:   mgr.GetClient(),
-			recorder: eventRecorder,
-			logger:   opts.log.Named("proxyclass-reconciler"),
-			clock:    tstime.DefaultClock{},
-		})
-	if err != nil {
-		startlog.Fatal("could not create proxyclass reconciler: %v", err)
-	}
-	logger := startlog.Named("dns-records-reconciler-event-handlers")
-	// On EndpointSlice events, if it is an EndpointSlice for an
-	// ingress/egress proxy headless Service, reconcile the headless
-	// Service.
-	dnsRREpsOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerEndpointSliceHandler)
-	// On DNSConfig changes, reconcile all headless Services for
-	// ingress/egress proxies in operator namespace.
-	dnsRRDNSConfigOpts := handler.EnqueueRequestsFromMapFunc(enqueueAllIngressEgressProxySvcsInNS(opts.tailscaleNamespace, mgr.GetClient(), logger))
-	// On Service events, if it is an ingress/egress proxy headless Service, reconcile it.
-	dnsRRServiceOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerServiceHandler)
-	// On Ingress events, if it is a tailscale Ingress or if tailscale is the default ingress controller, reconcile the proxy
-	// headless Service.
-	dnsRRIngressOpts := handler.EnqueueRequestsFromMapFunc(dnsRecordsReconcilerIngressHandler(opts.tailscaleNamespace, opts.proxyActAsDefaultLoadBalancer, mgr.GetClient(), logger))
-	err = builder.ControllerManagedBy(mgr).
-		Named("dns-records-reconciler").
-		Watches(&corev1.Service{}, dnsRRServiceOpts).
-		Watches(&networkingv1.Ingress{}, dnsRRIngressOpts).
-		Watches(&discoveryv1.EndpointSlice{}, dnsRREpsOpts).
-		Watches(&tsapi.DNSConfig{}, dnsRRDNSConfigOpts).
-		Complete(&dnsRecordsReconciler{
-			Client:                mgr.GetClient(),
-			tsNamespace:           opts.tailscaleNamespace,
-			logger:                opts.log.Named("dns-records-reconciler"),
-			isDefaultLoadBalancer: opts.proxyActAsDefaultLoadBalancer,
-		})
-	if err != nil {
-		startlog.Fatalf("could not create DNS records reconciler: %v", err)
+		startlog.Fatalf("could not create fwegress-pod reconciler: %v", err)
 	}
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
@@ -657,6 +569,25 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handl
 		}
 		return reqs
 	}
+}
+
+func egressHAServiceFilter(_ context.Context, o client.Object) []reconcile.Request {
+	if o.GetAnnotations()["tailscale.com/tailnet-ip"] != "" {
+		return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(o)}}
+	}
+	return nil
+}
+func fwegressPodFilter(_ context.Context, o client.Object) []reconcile.Request {
+	if o.GetLabels()["tailscale.com/fwegress"] != "" {
+		return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(o)}}
+	}
+	return nil
+}
+func egressProxyStateSecretFilter(_ context.Context, o client.Object) []reconcile.Request {
+	if o.GetLabels()["tailscale.com/proxy-group-egress"] != "" {
+		return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(o)}}
+	}
+	return nil
 }
 
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,7 @@ type Client interface {
 	CreateSecret(context.Context, *Secret) error
 	StrategicMergePatchSecret(context.Context, string, *Secret, string) error
 	JSONPatchSecret(context.Context, string, []JSONPatch) error
+	JSONPatchConfigMap(context.Context, string, []JSONPatch) error
 	CheckSecretPermissions(context.Context, string) (bool, bool, error)
 	SetDialer(dialer func(context.Context, string, string) (net.Conn, error))
 	SetURL(string)
@@ -138,6 +140,10 @@ func (c *client) secretURL(name string) string {
 	return fmt.Sprintf("%s/api/v1/namespaces/%s/secrets/%s", c.url, c.ns, name)
 }
 
+func (c *client) configMapURL(name string) string {
+	return fmt.Sprintf("%s/api/v1/namespaces/%s/configmaps/%s", c.url, c.ns, name)
+}
+
 func getError(resp *http.Response) error {
 	if resp.StatusCode == 200 || resp.StatusCode == 201 {
 		// These are the only success codes returned by the Kubernetes API.
@@ -167,21 +173,21 @@ func setHeader(key, value string) func(*http.Request) {
 func (c *client) doRequest(ctx context.Context, method, url string, in, out any, opts ...func(*http.Request)) error {
 	req, err := c.newRequest(ctx, method, url, in)
 	if err != nil {
-		return err
+		return fmt.Errorf("error making new request url %s in %v out %v method %v: %v", url, in, out, method, err)
 	}
 	for _, opt := range opts {
 		opt(req)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("error sending request: %+#v: %v", req, err)
 	}
 	defer resp.Body.Close()
 	if err := getError(resp); err != nil {
 		if st, ok := err.(*Status); ok && st.Code == 401 {
 			c.expireToken()
 		}
-		return err
+		return fmt.Errorf("error in response: url %s in %s req \n%+#v\n %v", url, in, req, err)
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -253,11 +259,22 @@ type JSONPatch struct {
 // It currently (2023-03-02) only supports "add" and "remove" operations.
 func (c *client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
 	for _, p := range patch {
-		if p.Op != "remove" && p.Op != "add" {
+		if p.Op != "remove" && p.Op != "add" && p.Op != "replace" {
 			panic(fmt.Errorf("unsupported JSON patch operation: %q", p.Op))
 		}
 	}
 	return c.doRequest(ctx, "PATCH", c.secretURL(name), patch, nil, setHeader("Content-Type", "application/json-patch+json"))
+}
+
+// JSONPatchConfigMap updates a configmap in the Kubernetes API using a JSON patch.
+// It currently (2023-03-02) only supports "add" and "remove" operations.
+func (c *client) JSONPatchConfigMap(ctx context.Context, name string, patch []JSONPatch) error {
+	for _, p := range patch {
+		if p.Op != "replace" {
+			panic(fmt.Errorf("unsupported JSON patch operation: %q", p.Op))
+		}
+	}
+	return c.doRequest(ctx, "PATCH", c.configMapURL(name), patch, nil, setHeader("Content-Type", "application/json-patch+json"))
 }
 
 // StrategicMergePatchSecret updates a secret in the Kubernetes API using a
@@ -341,6 +358,9 @@ func (c *client) checkPermission(ctx context.Context, verb, secretName string) (
 
 func IsNotFoundErr(err error) bool {
 	if st, ok := err.(*Status); ok && st.Code == 404 {
+		return true
+	}
+	if strings.Contains(err.Error(), "not found") {
 		return true
 	}
 	return false

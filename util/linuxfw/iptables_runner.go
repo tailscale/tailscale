@@ -371,6 +371,11 @@ func (i *iptablesRunner) AddDNATRule(origDst, dst netip.Addr) error {
 	return table.Insert("nat", "PREROUTING", 1, "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dst.String())
 }
 
+func (i *iptablesRunner) AddDNATRuleWithSrc(src, dst netip.Addr) error {
+	table := i.getIPTByAddr(dst)
+	return table.Insert("nat", "PREROUTING", 1, "--source", src.String(), "-j", "DNAT", "--to-destination", dst.String())
+}
+
 func (i *iptablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
 	table := i.getIPTByAddr(dst)
 	return table.Insert("nat", "POSTROUTING", 1, "--destination", dst.String(), "-j", "SNAT", "--to-source", src.String())

@@ -1,0 +1,51 @@
+# This file is not a complete manifest, it's a skeleton that the operator embeds
+# at build time and then uses to construct Tailscale proxy pods.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: tailscale
+spec:
+  replicas: 2 # hardcoded for this prototype
+  template:
+    metadata:
+      deletionGracePeriodSeconds: 10
+    spec:
+      serviceAccountName: fwegress
+      readinessGates:
+      - conditionType: TailscaleRoutesReady
+      initContainers:
+        - name: sysctler
+          image: tailscale/alpine-base:3.18 
+          securityContext:
+            privileged: true
+          command: ["/bin/sh", "-c"]
+          args: [sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi]
+      resources:
+        requests:
+          cpu: 1m
+          memory: 1Mi
+      containers:
+        - name: tailscale
+          image: gcr.io/csi-test-290908/k8s-fwegress:v0.0.22
+          imagePullPolicy: IfNotPresent 
+          env:
+          - name: TS_DEBUG_FIREWALL_MODE
+            value: "auto"
+          - name: TS_EGRESS_SVC
+            value: "kuard"
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: POD_UID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.uid
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN

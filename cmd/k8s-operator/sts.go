@@ -31,7 +31,6 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
@@ -101,27 +100,29 @@ var (
 )
 
 type tailscaleSTSConfig struct {
-	ParentResourceName  string
-	ParentResourceUID   string
-	ChildResourceLabels map[string]string
+	// ParentResourceName  string
+	// ParentResourceUID   string
+	// ChildResourceLabels map[string]string
 
-	ServeConfig          *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
-	ClusterTargetIP      string           // ingress target IP
-	ClusterTargetDNSName string           // ingress target DNS name
-	// If set to true, operator should configure containerboot to forward
-	// cluster traffic via the proxy set up for Kubernetes Ingress.
-	ForwardClusterTrafficViaL7IngressProxy bool
+	// ServeConfig          *ipn.ServeConfig // if serve config is set, this is a proxy for Ingress
+	// ClusterTargetIP      string           // ingress target IP
+	// ClusterTargetDNSName string           // ingress target DNS name
+	// // If set to true, operator should configure containerboot to forward
+	// // cluster traffic via the proxy set up for Kubernetes Ingress.
+	// ForwardClusterTrafficViaL7IngressProxy bool
 
-	TailnetTargetIP string // egress target IP
+	// TailnetTargetIP string // egress target IP
 
-	TailnetTargetFQDN string // egress target FQDN
+	// TailnetTargetFQDN string // egress target FQDN
+	replicas int32
+	name     string
 
-	Hostname string
-	Tags     []string // if empty, use defaultTags
+	// Hostname string
+	Tags []string // if empty, use defaultTags
 
 	// Connector specifies a configuration of a Connector instance if that's
 	// what this StatefulSet should be created for.
-	Connector *connector
+	// Connector *connector
 
 	ProxyClassName string // name of ProxyClass if one needs to be applied to the proxy
 
@@ -282,17 +283,16 @@ func statefulSetNameBase(parent string) string {
 }
 
 func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
-	nameBase := statefulSetNameBase(sts.ParentResourceName)
 	hsvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: nameBase,
-			Namespace:    a.operatorNamespace,
-			Labels:       sts.ChildResourceLabels,
+			Name:      sts.name,
+			Namespace: a.operatorNamespace,
+			Labels:    map[string]string{"app": sts.name},
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
 			Selector: map[string]string{
-				"app": sts.ParentResourceUID,
+				"app": sts.name,
 			},
 			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
 		},
@@ -307,9 +307,9 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			// Hardcode a -0 suffix so that in future, if we support
 			// multiple StatefulSet replicas, we can provision -N for
 			// those.
-			Name:      hsvc.Name + "-0",
+			Name:      hsvc.Name,
 			Namespace: a.operatorNamespace,
-			Labels:    stsC.ChildResourceLabels,
+			Labels:    map[string]string{"name": stsC.name},
 		},
 	}
 	var orig *corev1.Secret // unmodified copy of secret
@@ -325,7 +325,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		// Initially it contains only tailscaled config, but when the
 		// proxy starts, it will also store there the state, certs and
 		// ACME account key.
-		sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, stsC.ChildResourceLabels)
+		sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, map[string]string{"name": stsC.name})
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -371,13 +371,13 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		}
 	}
 
-	if stsC.ServeConfig != nil {
-		j, err := json.Marshal(stsC.ServeConfig)
-		if err != nil {
-			return "", "", nil, err
-		}
-		mak.Set(&secret.StringData, "serve-config", string(j))
-	}
+	// if stsC.ServeConfig != nil {
+	// 	j, err := json.Marshal(stsC.ServeConfig)
+	// 	if err != nil {
+	// 		return "", "", nil, err
+	// 	}
+	// 	mak.Set(&secret.StringData, "serve-config", string(j))
+	// }
 
 	if orig != nil {
 		logger.Debugf("patching the existing proxy Secret with tailscaled config %s", sanitizeConfigBytes(latestConfig))
@@ -445,7 +445,7 @@ func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) 
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
 			Create: tailscale.KeyDeviceCreateCapabilities{
-				Reusable:      false,
+				Reusable:      true,
 				Preauthorized: true,
 				Tags:          tags,
 			},
@@ -467,22 +467,24 @@ var userspaceProxyYaml []byte
 
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, proxySecret, tsConfigHash string, configs map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha) (*appsv1.StatefulSet, error) {
 	ss := new(appsv1.StatefulSet)
-	if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
-		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal userspace proxy spec: %v", err)
-		}
-	} else {
-		if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
-		}
-		for i := range ss.Spec.Template.Spec.InitContainers {
-			c := &ss.Spec.Template.Spec.InitContainers[i]
-			if c.Name == "sysctler" {
-				c.Image = a.proxyImage
-				break
-			}
+	// if sts.ServeConfig != nil && sts.ForwardClusterTrafficViaL7IngressProxy != true { // If forwarding cluster traffic via is required we need non-userspace + NET_ADMIN + forwarding
+	// 	if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
+	// 		return nil, fmt.Errorf("failed to unmarshal userspace proxy spec: %v", err)
+	// 	}
+	// } else {
+	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+	}
+	for i := range ss.Spec.Template.Spec.InitContainers {
+		c := &ss.Spec.Template.Spec.InitContainers[i]
+		if c.Name == "sysctler" {
+			c.Image = a.proxyImage
+			break
 		}
 	}
+	// }
+
+	ss.Spec.Replicas = ptr.To(sts.replicas)
 	pod := &ss.Spec.Template
 	container := &pod.Spec.Containers[0]
 	container.Image = a.proxyImage
@@ -490,25 +492,29 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
 	}
-	for key, val := range sts.ChildResourceLabels {
-		mak.Set(&ss.ObjectMeta.Labels, key, val)
-	}
+	mak.Set(&ss.ObjectMeta.Labels, "tailscale.com/proxy-group", "egress-ha")
 	ss.Spec.ServiceName = headlessSvc.Name
 	ss.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: map[string]string{
-			"app": sts.ParentResourceUID,
+			"app": sts.name,
 		},
 	}
-	mak.Set(&pod.Labels, "app", sts.ParentResourceUID)
-	for key, val := range sts.ChildResourceLabels {
-		pod.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
-	}
+	mak.Set(&pod.Labels, "app", sts.name)
+	mak.Set(&pod.Labels, "name", sts.name)
+	mak.Set(&pod.Labels, "tailscale.com/proxy-group", "egress-ha")
+	// for key, val := range sts.ChildResourceLabels {
+	// 	pod.Labels[key] = val // sync StatefulSet labels to Pod to make it easier for users to select the Pod
+	// }
 
 	// Generic containerboot configuration options.
 	container.Env = append(container.Env,
 		corev1.EnvVar{
-			Name:  "TS_KUBE_SECRET",
-			Value: proxySecret,
+			Name: "TS_KUBE_SECRET",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.name",
+				},
+			},
 		},
 		corev1.EnvVar{
 			// Old tailscaled config key is still used for backwards compatibility.
@@ -520,16 +526,29 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 			Value: "/etc/tsconfig",
 		},
+		corev1.EnvVar{
+			Name: "TS_EGRESS_SERVICES_CONFIGMAP_NAME",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.name",
+				},
+			},
+		},
+		corev1.EnvVar{
+			Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
+			Value: "/etc/egress-proxies/services",
+		},
 	)
-	if sts.ForwardClusterTrafficViaL7IngressProxy {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
-			Value: "true",
-		})
-	}
+	// if sts.ForwardClusterTrafficViaL7IngressProxy {
+	// 	container.Env = append(container.Env, corev1.EnvVar{
+	// 		Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
+	// 		Value: "true",
+	// 	})
+	// }
 	// Configure containeboot to run tailscaled with a configfile read from the state Secret.
 	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash, tsConfigHash)
 
+	// Tailscaled config
 	configVolume := corev1.Volume{
 		Name: "tailscaledconfig",
 		VolumeSource: corev1.VolumeSource{
@@ -545,6 +564,22 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		MountPath: "/etc/tsconfig",
 	})
 
+	// Egress services config
+	egressSvcCfg := corev1.Volume{
+		Name: "egress-proxies",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "egress-proxies"},
+			},
+		},
+	}
+	pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, egressSvcCfg)
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      "egress-proxies",
+		ReadOnly:  true,
+		MountPath: "/etc/egress-proxies",
+	})
+
 	if a.tsFirewallMode != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEBUG_FIREWALL_MODE",
@@ -554,50 +589,50 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	pod.Spec.PriorityClassName = a.proxyPriorityClassName
 
 	// Ingress/egress proxy configuration options.
-	if sts.ClusterTargetIP != "" {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_DEST_IP",
-			Value: sts.ClusterTargetIP,
-		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
-	} else if sts.ClusterTargetDNSName != "" {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
-			Value: sts.ClusterTargetDNSName,
-		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterDNSName, sts.ClusterTargetDNSName)
-	} else if sts.TailnetTargetIP != "" {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_TAILNET_TARGET_IP",
-			Value: sts.TailnetTargetIP,
-		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetTailnetTargetIP, sts.TailnetTargetIP)
-	} else if sts.TailnetTargetFQDN != "" {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_TAILNET_TARGET_FQDN",
-			Value: sts.TailnetTargetFQDN,
-		})
-		mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetTailnetTargetFQDN, sts.TailnetTargetFQDN)
-	} else if sts.ServeConfig != nil {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "TS_SERVE_CONFIG",
-			Value: "/etc/tailscaled/serve-config",
-		})
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      "serve-config",
-			ReadOnly:  true,
-			MountPath: "/etc/tailscaled",
-		})
-		pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
-			Name: "serve-config",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: proxySecret,
-					Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
-				},
-			},
-		})
-	}
+	// if sts.ClusterTargetIP != "" {
+	// 	container.Env = append(container.Env, corev1.EnvVar{
+	// 		Name:  "TS_DEST_IP",
+	// 		Value: sts.ClusterTargetIP,
+	// 	})
+	// 	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterIP, sts.ClusterTargetIP)
+	// } else if sts.ClusterTargetDNSName != "" {
+	// 	container.Env = append(container.Env, corev1.EnvVar{
+	// 		Name:  "TS_EXPERIMENTAL_DEST_DNS_NAME",
+	// 		Value: sts.ClusterTargetDNSName,
+	// 	})
+	// 	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetClusterDNSName, sts.ClusterTargetDNSName)
+	// } else if sts.TailnetTargetIP != "" {
+	// 	container.Env = append(container.Env, corev1.EnvVar{
+	// 		Name:  "TS_TAILNET_TARGET_IP",
+	// 		Value: sts.TailnetTargetIP,
+	// 	})
+	// 	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetTailnetTargetIP, sts.TailnetTargetIP)
+	// } else if sts.TailnetTargetFQDN != "" {
+	// 	container.Env = append(container.Env, corev1.EnvVar{
+	// 		Name:  "TS_TAILNET_TARGET_FQDN",
+	// 		Value: sts.TailnetTargetFQDN,
+	// 	})
+	// 	mak.Set(&ss.Spec.Template.Annotations, podAnnotationLastSetTailnetTargetFQDN, sts.TailnetTargetFQDN)
+	// } else if sts.ServeConfig != nil {
+	// 	container.Env = append(container.Env, corev1.EnvVar{
+	// 		Name:  "TS_SERVE_CONFIG",
+	// 		Value: "/etc/tailscaled/serve-config",
+	// 	})
+	// 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+	// 		Name:      "serve-config",
+	// 		ReadOnly:  true,
+	// 		MountPath: "/etc/tailscaled",
+	// 	})
+	// 	pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+	// 		Name: "serve-config",
+	// 		VolumeSource: corev1.VolumeSource{
+	// 			Secret: &corev1.SecretVolumeSource{
+	// 				SecretName: proxySecret,
+	// 				Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
+	// 			},
+	// 		},
+	// 	})
+	// }
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	if sts.ProxyClassName != "" {
 		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClassName)
@@ -636,22 +671,22 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 	if pc == nil || ss == nil {
 		return ss
 	}
-	if pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
-		if stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "" && !stsCfg.ForwardClusterTrafficViaL7IngressProxy {
-			enableMetrics(ss, pc)
-		} else if stsCfg.ForwardClusterTrafficViaL7IngressProxy {
-			// TODO (irbekrm): fix this
-			// For Ingress proxies that have been configured with
-			// tailscale.com/experimental-forward-cluster-traffic-via-ingress
-			// annotation, all cluster traffic is forwarded to the
-			// Ingress backend(s).
-			logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
-		} else {
-			// TODO (irbekrm): fix this
-			// For egress proxies, currently all cluster traffic is forwarded to the tailnet target.
-			logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
-		}
-	}
+	// if pc.Spec.Metrics != nil && pc.Spec.Metrics.Enable {
+	// 	if stsCfg.TailnetTargetFQDN == "" && stsCfg.TailnetTargetIP == "" && !stsCfg.ForwardClusterTrafficViaL7IngressProxy {
+	// 		enableMetrics(ss, pc)
+	// 	} else if stsCfg.ForwardClusterTrafficViaL7IngressProxy {
+	// 		// TODO (irbekrm): fix this
+	// 		// For Ingress proxies that have been configured with
+	// 		// tailscale.com/experimental-forward-cluster-traffic-via-ingress
+	// 		// annotation, all cluster traffic is forwarded to the
+	// 		// Ingress backend(s).
+	// 		logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
+	// 	} else {
+	// 		// TODO (irbekrm): fix this
+	// 		// For egress proxies, currently all cluster traffic is forwarded to the tailnet target.
+	// 		logger.Info("ProxyClass specifies that metrics should be enabled, but this is currently not supported for Ingress proxies that accept cluster traffic.")
+	// 	}
+	// }
 
 	if pc.Spec.StatefulSet == nil {
 		return ss
@@ -764,23 +799,23 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		AcceptDNS:           "false",
 		AcceptRoutes:        "false", // AcceptRoutes defaults to true
 		Locked:              "false",
-		Hostname:            &stsC.Hostname,
+		Hostname:            &stsC.name,
 		NoStatefulFiltering: "false",
 	}
 
 	// For egress proxies only, we need to ensure that stateful filtering is
 	// not in place so that traffic from cluster can be forwarded via
 	// Tailscale IPs.
-	if stsC.TailnetTargetFQDN != "" || stsC.TailnetTargetIP != "" {
-		conf.NoStatefulFiltering = "true"
-	}
-	if stsC.Connector != nil {
-		routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
-		if err != nil {
-			return nil, fmt.Errorf("error calculating routes: %w", err)
-		}
-		conf.AdvertiseRoutes = routes
-	}
+	// if stsC.TailnetTargetFQDN != "" || stsC.TailnetTargetIP != "" {
+	// 	conf.NoStatefulFiltering = "true"
+	// }
+	// if stsC.Connector != nil {
+	// 	routes, err := netutil.CalcAdvertiseRoutes(stsC.Connector.routes, stsC.Connector.isExitNode)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("error calculating routes: %w", err)
+	// 	}
+	// 	conf.AdvertiseRoutes = routes
+	// }
 	if shouldAcceptRoutes(stsC.ProxyClass) {
 		conf.AcceptRoutes = "true"
 	}

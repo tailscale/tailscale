@@ -34,6 +34,9 @@ depaware: ## Run depaware checks
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund
 
+publishfwegress: ## Build and publish k8s-fwegress image to location specified by ${REPO}
+	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-fwegress ./build_docker.sh
+
 buildwindows: ## Build tailscale CLI for windows/amd64
 	GOOS=windows GOARCH=amd64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 

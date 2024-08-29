@@ -77,6 +77,22 @@ case "$TARGET" in
       --target="${PLATFORM}" \
       /usr/local/bin/k8s-nameserver
     ;;
+  k8s-fwegress)
+    DEFAULT_REPOS="tailscale/k8s-fwegress"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
+    go run github.com/tailscale/mkctr \
+      --gopaths="tailscale.com/cmd/k8s-fwegress:/usr/local/bin/k8s-fwegress" \
+      --ldflags=" \
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
+      --base="${BASE}" \
+      --tags="${TAGS}" \
+      --repos="${REPOS}" \
+      --push="${PUSH}" \
+      --target="${PLATFORM}" \
+      /usr/local/bin/k8s-fwegress
+    ;;
   *)
     echo "unknown target: $TARGET"
     exit 1

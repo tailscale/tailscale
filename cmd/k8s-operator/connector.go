@@ -156,77 +156,77 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // maybeProvisionConnector ensures that any new resources required for this
 // Connector instance are deployed to the cluster.
 func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) error {
-	hostname := cn.Name + "-connector"
-	if cn.Spec.Hostname != "" {
-		hostname = string(cn.Spec.Hostname)
-	}
-	crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
+	// hostname := cn.Name + "-connector"
+	// if cn.Spec.Hostname != "" {
+	// 	hostname = string(cn.Spec.Hostname)
+	// }
+	// crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
 
-	proxyClass := cn.Spec.ProxyClass
-	if proxyClass != "" {
-		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
-			return fmt.Errorf("error verifying ProxyClass for Connector: %w", err)
-		} else if !ready {
-			logger.Infof("ProxyClass %s specified for the Connector, but is not (yet) Ready, waiting..", proxyClass)
-			return nil
-		}
-	}
+	// proxyClass := cn.Spec.ProxyClass
+	// if proxyClass != "" {
+	// 	if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
+	// 		return fmt.Errorf("error verifying ProxyClass for Connector: %w", err)
+	// 	} else if !ready {
+	// 		logger.Infof("ProxyClass %s specified for the Connector, but is not (yet) Ready, waiting..", proxyClass)
+	// 		return nil
+	// 	}
+	// }
 
-	sts := &tailscaleSTSConfig{
-		ParentResourceName:  cn.Name,
-		ParentResourceUID:   string(cn.UID),
-		Hostname:            hostname,
-		ChildResourceLabels: crl,
-		Tags:                cn.Spec.Tags.Stringify(),
-		Connector: &connector{
-			isExitNode: cn.Spec.ExitNode,
-		},
-		ProxyClassName: proxyClass,
-	}
+	// sts := &tailscaleSTSConfig{
+	// 	ParentResourceName:  cn.Name,
+	// 	ParentResourceUID:   string(cn.UID),
+	// 	Hostname:            hostname,
+	// 	ChildResourceLabels: crl,
+	// 	Tags:                cn.Spec.Tags.Stringify(),
+	// 	Connector: &connector{
+	// 		isExitNode: cn.Spec.ExitNode,
+	// 	},
+	// 	ProxyClassName: proxyClass,
+	// }
 
-	if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
-		sts.Connector.routes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
-	}
+	// if cn.Spec.SubnetRouter != nil && len(cn.Spec.SubnetRouter.AdvertiseRoutes) > 0 {
+	// 	sts.Connector.routes = cn.Spec.SubnetRouter.AdvertiseRoutes.Stringify()
+	// }
 
-	a.mu.Lock()
-	if sts.Connector.isExitNode {
-		a.exitNodes.Add(cn.UID)
-	} else {
-		a.exitNodes.Remove(cn.UID)
-	}
-	if sts.Connector.routes != "" {
-		a.subnetRouters.Add(cn.GetUID())
-	} else {
-		a.subnetRouters.Remove(cn.GetUID())
-	}
-	a.mu.Unlock()
-	gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
-	gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
-	var connectors set.Slice[types.UID]
-	connectors.AddSlice(a.exitNodes.Slice())
-	connectors.AddSlice(a.subnetRouters.Slice())
-	gaugeConnectorResources.Set(int64(connectors.Len()))
+	// a.mu.Lock()
+	// if sts.Connector.isExitNode {
+	// 	a.exitNodes.Add(cn.UID)
+	// } else {
+	// 	a.exitNodes.Remove(cn.UID)
+	// }
+	// if sts.Connector.routes != "" {
+	// 	a.subnetRouters.Add(cn.GetUID())
+	// } else {
+	// 	a.subnetRouters.Remove(cn.GetUID())
+	// }
+	// a.mu.Unlock()
+	// gaugeConnectorSubnetRouterResources.Set(int64(a.subnetRouters.Len()))
+	// gaugeConnectorExitNodeResources.Set(int64(a.exitNodes.Len()))
+	// var connectors set.Slice[types.UID]
+	// connectors.AddSlice(a.exitNodes.Slice())
+	// connectors.AddSlice(a.subnetRouters.Slice())
+	// gaugeConnectorResources.Set(int64(connectors.Len()))
 
-	_, err := a.ssr.Provision(ctx, logger, sts)
-	if err != nil {
-		return err
-	}
+	// _, err := a.ssr.Provision(ctx, logger, sts)
+	// if err != nil {
+	// 	return err
+	// }
 
-	_, tsHost, ips, err := a.ssr.DeviceInfo(ctx, crl)
-	if err != nil {
-		return err
-	}
+	// _, tsHost, ips, err := a.ssr.DeviceInfo(ctx, crl)
+	// if err != nil {
+	// 	return err
+	// }
 
-	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for connector pod to finish auth")
-		// No hostname yet. Wait for the connector pod to auth.
-		cn.Status.TailnetIPs = nil
-		cn.Status.Hostname = ""
-		return nil
-	}
+	// if tsHost == "" {
+	// 	logger.Debugf("no Tailscale hostname known yet, waiting for connector pod to finish auth")
+	// 	// No hostname yet. Wait for the connector pod to auth.
+	// 	cn.Status.TailnetIPs = nil
+	// 	cn.Status.Hostname = ""
+	// 	return nil
+	// }
 
-	cn.Status.TailnetIPs = ips
-	cn.Status.Hostname = tsHost
+	// cn.Status.TailnetIPs = ips
+	// cn.Status.Hostname = tsHost
 
 	return nil
 }

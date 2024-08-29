@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -249,63 +248,63 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
-	var tags []string
-	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
-	}
-	hostname := ing.Namespace + "-" + ing.Name + "-ingress"
-	if tlsHost != "" {
-		hostname, _, _ = strings.Cut(tlsHost, ".")
-	}
+	// crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
+	// var tags []string
+	// if tstr, ok := ing.Annotations[AnnotationTags]; ok {
+	// 	tags = strings.Split(tstr, ",")
+	// }
+	// hostname := ing.Namespace + "-" + ing.Name + "-ingress"
+	// if tlsHost != "" {
+	// 	hostname, _, _ = strings.Cut(tlsHost, ".")
+	// }
 
-	sts := &tailscaleSTSConfig{
-		Hostname:            hostname,
-		ParentResourceName:  ing.Name,
-		ParentResourceUID:   string(ing.UID),
-		ServeConfig:         sc,
-		Tags:                tags,
-		ChildResourceLabels: crl,
-		ProxyClassName:      proxyClass,
-	}
+	// sts := &tailscaleSTSConfig{
+	// 	Hostname:            hostname,
+	// 	ParentResourceName:  ing.Name,
+	// 	ParentResourceUID:   string(ing.UID),
+	// 	ServeConfig:         sc,
+	// 	Tags:                tags,
+	// 	ChildResourceLabels: crl,
+	// 	ProxyClassName:      proxyClass,
+	// }
 
-	if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
-		sts.ForwardClusterTrafficViaL7IngressProxy = true
-	}
+	// if val := ing.GetAnnotations()[AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy]; val == "true" {
+	// 	sts.ForwardClusterTrafficViaL7IngressProxy = true
+	// }
 
-	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
-		return fmt.Errorf("failed to provision: %w", err)
-	}
+	// if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
+	// 	return fmt.Errorf("failed to provision: %w", err)
+	// }
 
-	_, tsHost, _, err := a.ssr.DeviceInfo(ctx, crl)
-	if err != nil {
-		return fmt.Errorf("failed to get device ID: %w", err)
-	}
-	if tsHost == "" {
-		logger.Debugf("no Tailscale hostname known yet, waiting for proxy pod to finish auth")
-		// No hostname yet. Wait for the proxy pod to auth.
-		ing.Status.LoadBalancer.Ingress = nil
-		if err := a.Status().Update(ctx, ing); err != nil {
-			return fmt.Errorf("failed to update ingress status: %w", err)
-		}
-		return nil
-	}
+	// _, tsHost, _, err := a.ssr.DeviceInfo(ctx, crl)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to get device ID: %w", err)
+	// }
+	// if tsHost == "" {
+	// 	logger.Debugf("no Tailscale hostname known yet, waiting for proxy pod to finish auth")
+	// 	// No hostname yet. Wait for the proxy pod to auth.
+	// 	ing.Status.LoadBalancer.Ingress = nil
+	// 	if err := a.Status().Update(ctx, ing); err != nil {
+	// 		return fmt.Errorf("failed to update ingress status: %w", err)
+	// 	}
+	// 	return nil
+	// }
 
-	logger.Debugf("setting ingress hostname to %q", tsHost)
-	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
-		{
-			Hostname: tsHost,
-			Ports: []networkingv1.IngressPortStatus{
-				{
-					Protocol: "TCP",
-					Port:     443,
-				},
-			},
-		},
-	}
-	if err := a.Status().Update(ctx, ing); err != nil {
-		return fmt.Errorf("failed to update ingress status: %w", err)
-	}
+	// logger.Debugf("setting ingress hostname to %q", tsHost)
+	// ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{
+	// 	{
+	// 		Hostname: tsHost,
+	// 		Ports: []networkingv1.IngressPortStatus{
+	// 			{
+	// 				Protocol: "TCP",
+	// 				Port:     443,
+	// 			},
+	// 		},
+	// 	},
+	// }
+	// if err := a.Status().Update(ctx, ing); err != nil {
+	// 	return fmt.Errorf("failed to update ingress status: %w", err)
+	// }
 	return nil
 }
 

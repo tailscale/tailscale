@@ -48,14 +48,14 @@ metadata:
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
-  resources: ["secrets", "serviceaccounts", "configmaps"]
+  resources: ["secrets", "serviceaccounts", "configmaps", "pods"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["apps"]
   resources: ["statefulsets", "deployments"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["discovery.k8s.io"]
   resources: ["endpointslices"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "patch", "update", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

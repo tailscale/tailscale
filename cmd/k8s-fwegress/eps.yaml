@@ -1,0 +1,11 @@
+addressType: IPv4
+apiVersion: discovery.k8s.io/v1
+endpoints:
+- addresses:
+  - 10.12.0.27
+kind: EndpointSlice
+metadata:
+  labels:
+    tailscale.com/fwegress-ip: "kuard"
+  name: fwegress-2
+  namespace: tailscale

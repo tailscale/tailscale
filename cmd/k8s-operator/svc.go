@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -237,109 +236,109 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			return errMsg
 		}
 	}
-	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
-	var tags []string
-	if tstr, ok := svc.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
-	}
+	// crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
+	// var tags []string
+	// if tstr, ok := svc.Annotations[AnnotationTags]; ok {
+	// 	tags = strings.Split(tstr, ",")
+	// }
 
-	sts := &tailscaleSTSConfig{
-		ParentResourceName:  svc.Name,
-		ParentResourceUID:   string(svc.UID),
-		Hostname:            nameForService(svc),
-		Tags:                tags,
-		ChildResourceLabels: crl,
-		ProxyClassName:      proxyClass,
-	}
+	// sts := &tailscaleSTSConfig{
+	// 	ParentResourceName:  svc.Name,
+	// 	ParentResourceUID:   string(svc.UID),
+	// 	Hostname:            nameForService(svc),
+	// 	Tags:                tags,
+	// 	ChildResourceLabels: crl,
+	// 	ProxyClassName:      proxyClass,
+	// }
 
-	a.mu.Lock()
-	if a.shouldExposeClusterIP(svc) {
-		sts.ClusterTargetIP = svc.Spec.ClusterIP
-		a.managedIngressProxies.Add(svc.UID)
-		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
-	} else if a.shouldExposeDNSName(svc) {
-		sts.ClusterTargetDNSName = svc.Spec.ExternalName
-		a.managedIngressProxies.Add(svc.UID)
-		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
-	} else if ip := tailnetTargetAnnotation(svc); ip != "" {
-		sts.TailnetTargetIP = ip
-		a.managedEgressProxies.Add(svc.UID)
-		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
-	} else if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
-		fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]
-		if !strings.HasSuffix(fqdn, ".") {
-			fqdn = fqdn + "."
-		}
-		sts.TailnetTargetFQDN = fqdn
-		a.managedEgressProxies.Add(svc.UID)
-		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
-	}
-	a.mu.Unlock()
+	// a.mu.Lock()
+	// if a.shouldExposeClusterIP(svc) {
+	// 	sts.ClusterTargetIP = svc.Spec.ClusterIP
+	// 	a.managedIngressProxies.Add(svc.UID)
+	// 	gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+	// } else if a.shouldExposeDNSName(svc) {
+	// 	sts.ClusterTargetDNSName = svc.Spec.ExternalName
+	// 	a.managedIngressProxies.Add(svc.UID)
+	// 	gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+	// } else if ip := tailnetTargetAnnotation(svc); ip != "" {
+	// 	sts.TailnetTargetIP = ip
+	// 	a.managedEgressProxies.Add(svc.UID)
+	// 	gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
+	// } else if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	// 	fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]
+	// 	if !strings.HasSuffix(fqdn, ".") {
+	// 		fqdn = fqdn + "."
+	// 	}
+	// 	sts.TailnetTargetFQDN = fqdn
+	// 	a.managedEgressProxies.Add(svc.UID)
+	// 	gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
+	// }
+	// a.mu.Unlock()
 
-	var hsvc *corev1.Service
-	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
-		errMsg := fmt.Errorf("failed to provision: %w", err)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
-		return errMsg
-	}
+	// var hsvc *corev1.Service
+	// if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
+	// 	errMsg := fmt.Errorf("failed to provision: %w", err)
+	// 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+	// 	return errMsg
+	// }
 
-	if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" { // if an egress proxy
-		clusterDomain := retrieveClusterDomain(a.tsNamespace, logger)
-		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc." + clusterDomain
-		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
-			svc.Spec.ExternalName = headlessSvcName
-			svc.Spec.Selector = nil
-			svc.Spec.Type = corev1.ServiceTypeExternalName
-			if err := a.Update(ctx, svc); err != nil {
-				errMsg := fmt.Errorf("failed to update service: %w", err)
-				tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
-				return errMsg
-			}
-		}
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
-		return nil
-	}
+	// if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" { // if an egress proxy
+	// 	clusterDomain := retrieveClusterDomain(a.tsNamespace, logger)
+	// 	headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc." + clusterDomain
+	// 	if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
+	// 		svc.Spec.ExternalName = headlessSvcName
+	// 		svc.Spec.Selector = nil
+	// 		svc.Spec.Type = corev1.ServiceTypeExternalName
+	// 		if err := a.Update(ctx, svc); err != nil {
+	// 			errMsg := fmt.Errorf("failed to update service: %w", err)
+	// 			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+	// 			return errMsg
+	// 		}
+	// 	}
+	// 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
+	// 	return nil
+	// }
 
-	if !isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) {
-		logger.Debugf("service is not a LoadBalancer, so not updating ingress")
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
-		return nil
-	}
+	// if !isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) {
+	// 	logger.Debugf("service is not a LoadBalancer, so not updating ingress")
+	// 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
+	// 	return nil
+	// }
 
-	_, tsHost, tsIPs, err := a.ssr.DeviceInfo(ctx, crl)
-	if err != nil {
-		return fmt.Errorf("failed to get device ID: %w", err)
-	}
-	if tsHost == "" {
-		msg := "no Tailscale hostname known yet, waiting for proxy pod to finish auth"
-		logger.Debug(msg)
-		// No hostname yet. Wait for the proxy pod to auth.
-		svc.Status.LoadBalancer.Ingress = nil
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
-		return nil
-	}
+	// _, tsHost, tsIPs, err := a.ssr.DeviceInfo(ctx, crl)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to get device ID: %w", err)
+	// }
+	// if tsHost == "" {
+	// 	msg := "no Tailscale hostname known yet, waiting for proxy pod to finish auth"
+	// 	logger.Debug(msg)
+	// 	// No hostname yet. Wait for the proxy pod to auth.
+	// 	svc.Status.LoadBalancer.Ingress = nil
+	// 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
+	// 	return nil
+	// }
 
-	logger.Debugf("setting Service LoadBalancer status to %q, %s", tsHost, strings.Join(tsIPs, ", "))
-	ingress := []corev1.LoadBalancerIngress{
-		{Hostname: tsHost},
-	}
-	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
-	if err != nil {
-		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
-		return errors.New(msg)
-	}
-	for _, ip := range tsIPs {
-		addr, err := netip.ParseAddr(ip)
-		if err != nil {
-			continue
-		}
-		if addr.Is4() == clusterIPAddr.Is4() { // only add addresses of the same family
-			ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
-		}
-	}
-	svc.Status.LoadBalancer.Ingress = ingress
-	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
+	// logger.Debugf("setting Service LoadBalancer status to %q, %s", tsHost, strings.Join(tsIPs, ", "))
+	// ingress := []corev1.LoadBalancerIngress{
+	// 	{Hostname: tsHost},
+	// }
+	// clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
+	// if err != nil {
+	// 	msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
+	// 	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
+	// 	return errors.New(msg)
+	// }
+	// for _, ip := range tsIPs {
+	// 	addr, err := netip.ParseAddr(ip)
+	// 	if err != nil {
+	// 		continue
+	// 	}
+	// 	if addr.Is4() == clusterIPAddr.Is4() { // only add addresses of the same family
+	// 		ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
+	// 	}
+	// }
+	// svc.Status.LoadBalancer.Ingress = ingress
+	// tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 	return nil
 }
 

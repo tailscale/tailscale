@@ -58,10 +58,7 @@ func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
-		if st, ok := err.(*kube.Status); ok && st.Code == 404 {
-			return nil, ipn.ErrStateNotExist
-		}
-		return nil, err
+		return nil, ipn.ErrStateNotExist
 	}
 	b, ok := secret.Data[sanitizeKey(id)]
 	if !ok {
@@ -88,21 +85,18 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
-		if kube.IsNotFoundErr(err) {
-			return s.client.CreateSecret(ctx, &kube.Secret{
-				TypeMeta: kube.TypeMeta{
-					APIVersion: "v1",
-					Kind:       "Secret",
-				},
-				ObjectMeta: kube.ObjectMeta{
-					Name: s.secretName,
-				},
-				Data: map[string][]byte{
-					sanitizeKey(id): bs,
-				},
-			})
-		}
-		return err
+		return s.client.CreateSecret(ctx, &kube.Secret{
+			TypeMeta: kube.TypeMeta{
+				APIVersion: "v1",
+				Kind:       "Secret",
+			},
+			ObjectMeta: kube.ObjectMeta{
+				Name: s.secretName,
+			},
+			Data: map[string][]byte{
+				sanitizeKey(id): bs,
+			},
+		})
 	}
 	if s.canPatch {
 		if len(secret.Data) == 0 { // if user has pre-created a blank Secret

@@ -30,5 +30,8 @@ func (fc *FakeClient) StrategicMergePatchSecret(context.Context, string, *Secret
 func (fc *FakeClient) JSONPatchSecret(context.Context, string, []JSONPatch) error {
 	return nil
 }
+func (fc *FakeClient) JSONPatchConfigMap(context.Context, string, []JSONPatch) error {
+	return nil
+}
 func (fc *FakeClient) UpdateSecret(context.Context, *Secret) error { return nil }
 func (fc *FakeClient) CreateSecret(context.Context, *Secret) error { return nil }
