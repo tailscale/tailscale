@@ -1286,6 +1286,10 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 	srcIP, dstIP := flow.src, flow.dst
 
 	if isDHCPRequest(packet) {
+		if !n.v4 {
+			n.logf("dropping DHCPv4 packet on v6-only network")
+			return
+		}
 		res, err := n.s.createDHCPResponse(packet)
 		if err != nil {
 			n.logf("createDHCPResponse: %v", err)
@@ -1587,6 +1591,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	return mkPacketErr(eth, ip, udp, response)
 }
 
+// isDHCPRequest reports whether pkt is a DHCPv4 request.
 func isDHCPRequest(pkt gopacket.Packet) bool {
 	v4, ok := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	if !ok || v4.Protocol != layers.IPProtocolUDP {
