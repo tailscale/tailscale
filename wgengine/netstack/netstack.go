@@ -725,9 +725,9 @@ func (ns *Impl) isLoopbackPort(port uint16) bool {
 // handleLocalPackets is hooked into the tun datapath for packets leaving
 // the host and arriving at tailscaled. This method returns filter.DropSilently
 // to intercept a packet for handling, for instance traffic to quad-100.
-func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if ns.ctx.Err() != nil {
-		return filter.DropSilently
+		return filter.DropSilently, gro
 	}
 
 	// Determine if we care about this local packet.
@@ -741,11 +741,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		switch p.IPProto {
 		case ipproto.TCP:
 			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 && !ns.isLoopbackPort(port) {
-				return filter.Accept
+				return filter.Accept, gro
 			}
 		case ipproto.UDP:
 			if port := p.Dst.Port(); port != 53 && !ns.isLoopbackPort(port) {
-				return filter.Accept
+				return filter.Accept, gro
 			}
 		}
 	case viaRange.Contains(dst):
@@ -759,7 +759,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		if !shouldHandle {
 			// Unhandled means that we let the regular processing
 			// occur without doing anything ourselves.
-			return filter.Accept
+			return filter.Accept, gro
 		}
 
 		if debugNetstack() {
@@ -785,7 +785,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 			}
 
 			go ns.userPing(pingIP, pong, userPingDirectionInbound)
-			return filter.DropSilently
+			return filter.DropSilently, gro
 		}
 
 		// Fall through to writing inbound so netstack handles the
@@ -794,14 +794,14 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 	default:
 		// Not traffic to the service IP or a 4via6 IP, so we don't
 		// care about the packet; resume processing.
-		return filter.Accept
+		return filter.Accept, gro
 	}
 	if debugPackets {
 		ns.logf("[v2] service packet in (from %v): % x", p.Src, p.Buffer())
 	}
 
-	ns.linkEP.injectInbound(p)
-	return filter.DropSilently
+	gro = ns.linkEP.gro(p, gro)
+	return filter.DropSilently, gro
 }
 
 func (ns *Impl) DialContextTCP(ctx context.Context, ipp netip.AddrPort) (*gonet.TCPConn, error) {

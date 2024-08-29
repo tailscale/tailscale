@@ -177,7 +177,7 @@ type Wrapper struct {
 	// for packets from the local system. This filter is populated by netstack to hook
 	// packets that should be handled by netstack. If set, this filter runs before
 	// PreFilterFromTunToEngine.
-	PreFilterPacketOutboundToWireGuardNetstackIntercept FilterFunc
+	PreFilterPacketOutboundToWireGuardNetstackIntercept GROFilterFunc
 	// PreFilterPacketOutboundToWireGuardEngineIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by wgengine to hook
 	// packets which it handles internally. If both this and PreFilterFromTunToNetstack
@@ -811,7 +811,7 @@ var (
 	magicDNSIPPortv6 = netip.AddrPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
 )
 
-func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConfigTable) filter.Response {
+func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConfigTable, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
 	if p.IsEchoRequest() {
 		switch p.Dst {
@@ -820,13 +820,13 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 			header.ToResponse()
 			outp := packet.Generate(&header, p.Payload())
 			t.InjectInboundCopy(outp)
-			return filter.DropSilently // don't pass on to OS; already handled
+			return filter.DropSilently, gro // don't pass on to OS; already handled
 		case magicDNSIPPortv6:
 			header := p.ICMP6Header()
 			header.ToResponse()
 			outp := packet.Generate(&header, p.Payload())
 			t.InjectInboundCopy(outp)
-			return filter.DropSilently // don't pass on to OS; already handled
+			return filter.DropSilently, gro // don't pass on to OS; already handled
 		}
 	}
 
@@ -838,20 +838,22 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		t.isSelfDisco(p) {
 		t.limitedLogf("[unexpected] received self disco out packet over tstun; dropping")
 		metricPacketOutDropSelfDisco.Add(1)
-		return filter.DropSilently
+		return filter.DropSilently, gro
 	}
 
 	if t.PreFilterPacketOutboundToWireGuardNetstackIntercept != nil {
-		if res := t.PreFilterPacketOutboundToWireGuardNetstackIntercept(p, t); res.IsDrop() {
+		var res filter.Response
+		res, gro = t.PreFilterPacketOutboundToWireGuardNetstackIntercept(p, t, gro)
+		if res.IsDrop() {
 			// Handled by netstack.Impl.handleLocalPackets (quad-100 DNS primarily)
-			return res
+			return res, gro
 		}
 	}
 	if t.PreFilterPacketOutboundToWireGuardEngineIntercept != nil {
 		if res := t.PreFilterPacketOutboundToWireGuardEngineIntercept(p, t); res.IsDrop() {
 			// Handled by userspaceEngine.handleLocalPackets (primarily handles
 			// quad-100 if netstack is not installed).
-			return res
+			return res, gro
 		}
 	}
 
@@ -864,7 +866,7 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		filt = t.filter.Load()
 	}
 	if filt == nil {
-		return filter.Drop
+		return filter.Drop, gro
 	}
 
 	if filt.RunOut(p, t.filterFlags) != filter.Accept {
@@ -872,15 +874,15 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		metricOutboundDroppedPacketsTotal.Add(dropPacketLabel{
 			Reason: DropReasonACL,
 		}, 1)
-		return filter.Drop
+		return filter.Drop, gro
 	}
 
 	if t.PostFilterPacketOutboundToWireGuard != nil {
 		if res := t.PostFilterPacketOutboundToWireGuard(p, t); res.IsDrop() {
-			return res
+			return res, gro
 		}
 	}
-	return filter.Accept
+	return filter.Accept, gro
 }
 
 // noteActivity records that there was a read or write at the current time.
@@ -919,6 +921,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
+	var buffsGRO *gro.GRO
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
 
@@ -931,7 +934,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			captHook(capture.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
 		}
 		if !t.disableFilter {
-			response := t.filterPacketOutboundToWireGuard(p, pc)
+			var response filter.Response
+			response, buffsGRO = t.filterPacketOutboundToWireGuard(p, pc, buffsGRO)
 			if response != filter.Accept {
 				metricPacketOutDrop.Add(1)
 				continue
@@ -950,6 +954,9 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			stats.UpdateTxVirtual(p.Buffer())
 		}
 		buffsPos++
+	}
+	if buffsGRO != nil {
+		buffsGRO.Flush()
 	}
 
 	// t.vectorBuffer has a fixed location in memory.
