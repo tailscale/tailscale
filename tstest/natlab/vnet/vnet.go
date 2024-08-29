@@ -1481,14 +1481,11 @@ func (n *network) handleIPv6NeighborSolicitation(ep EthernetPacket, ns *layers.I
 		Type: layers.ICMPv6OptTargetAddress,
 		Data: srcMAC.HWAddr(),
 	})
-	icmp.SetNetworkLayerForChecksum(ip)
-	buffer := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buffer, options, eth, ip, icmp, na); err != nil {
-		n.logf("serializing ICMPv6 RA: %v", err)
-		return
+	pkt, err := mkPacketErr(eth, ip, icmp, na)
+	if err != nil {
+		n.logf("serializing ICMPv6 NA: %v", err)
 	}
-	if !n.writeEth(buffer.Bytes()) {
+	if !n.writeEth(pkt) {
 		n.logf("failed to writeEth for IPv6 NA reply for %v", targetIP)
 	}
 }
@@ -1576,7 +1573,6 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		DstMAC:       ethLayer.SrcMAC,
 		EthernetType: layers.EthernetTypeIPv4, // never IPv6 for DHCP
 	}
-
 	ip := &layers.IPv4{
 		Version:  4,
 		TTL:      64,
@@ -1584,25 +1580,11 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		SrcIP:    ipLayer.DstIP,
 		DstIP:    ipLayer.SrcIP,
 	}
-
 	udp := &layers.UDP{
 		SrcPort: udpLayer.DstPort,
 		DstPort: udpLayer.SrcPort,
 	}
-	udp.SetNetworkLayerForChecksum(ip)
-
-	buffer := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buffer, options,
-		eth,
-		ip,
-		udp,
-		response,
-	); err != nil {
-		return nil, err
-	}
-
-	return buffer.Bytes(), nil
+	return mkPacketErr(eth, ip, udp, response)
 }
 
 func isDHCPRequest(pkt gopacket.Packet) bool {
@@ -1800,25 +1782,23 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		SrcPort: udpLayer.DstPort,
 		DstPort: udpLayer.SrcPort,
 	}
-	udp2.SetNetworkLayerForChecksum(ip2)
 
-	buffer := gopacket.NewSerializeBuffer()
-	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	if err := gopacket.SerializeLayers(buffer, options, eth2, ip2, udp2, response); err != nil {
+	resPkt, err := mkPacketErr(eth2, ip2, udp2, response)
+	if err != nil {
 		return nil, err
 	}
 
 	const debugDNS = false
 	if debugDNS {
 		if len(response.Answers) > 0 {
-			back := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeEthernet, gopacket.Lazy)
+			back := gopacket.NewPacket(resPkt, layers.LayerTypeEthernet, gopacket.Lazy)
 			log.Printf("createDNSResponse generated answers: %v", back)
 		} else {
 			log.Printf("made empty response for %q", names)
 		}
 	}
 
-	return buffer.Bytes(), nil
+	return resPkt, nil
 }
 
 // doNATOut performs NAT on an outgoing packet from src to dst, where
