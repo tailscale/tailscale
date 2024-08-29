@@ -615,7 +615,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 	memLog.Reset()
 	pp := new(packet.Parsed)
 	pp.Decode(pkt)
-	got = tw.filterPacketOutboundToWireGuard(pp, nil)
+	got, _ = tw.filterPacketOutboundToWireGuard(pp, nil, nil)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
