@@ -181,7 +181,7 @@ var dnsForwarderFailing = health.Register(&health.Warnable{
 	DependsOn:           []*health.Warnable{health.NetworkStatusWarnable},
 	Text:                health.StaticMessage("Tailscale can't reach the configured DNS servers. Internet connectivity may be affected."),
 	ImpactsConnectivity: true,
-	TimeToVisible:       5 * time.Second,
+	TimeToVisible:       15 * time.Second,
 })
 
 type route struct {
