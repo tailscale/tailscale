@@ -187,6 +187,11 @@ type Impl struct {
 	dns           *dns.Manager
 	driveForLocal drive.FileSystemForLocal // or nil
 
+	// loopbackPort, if non-nil, will enable Impl to loop back (dnat to
+	// <address-family-loopback>:loopbackPort) TCP & UDP flows originally
+	// destined to serviceIP{v6}:loopbackPort.
+	loopbackPort *int
+
 	peerapiPort4Atomic atomic.Uint32 // uint16 port number for IPv4 peerapi
 	peerapiPort6Atomic atomic.Uint32 // uint16 port number for IPv6 peerapi
 
@@ -377,6 +382,10 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		packetsInFlight:       make(map[stack.TransportEndpointID]struct{}),
 		dns:                   dns,
 		driveForLocal:         driveForLocal,
+	}
+	loopbackPort, ok := envknob.LookupInt("TS_DEBUG_NETSTACK_LOOPBACK_PORT")
+	if ok && loopbackPort >= 0 && loopbackPort <= math.MaxUint16 {
+		ns.loopbackPort = &loopbackPort
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
@@ -706,6 +715,13 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	}
 }
 
+func (ns *Impl) isLoopbackPort(port uint16) bool {
+	if ns.loopbackPort != nil && int(port) == *ns.loopbackPort {
+		return true
+	}
+	return false
+}
+
 // handleLocalPackets is hooked into the tun datapath for packets leaving
 // the host and arriving at tailscaled. This method returns filter.DropSilently
 // to intercept a packet for handling, for instance traffic to quad-100.
@@ -724,11 +740,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 		// 80, and 8080.
 		switch p.IPProto {
 		case ipproto.TCP:
-			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 {
+			if port := p.Dst.Port(); port != 53 && port != 80 && port != 8080 && !ns.isLoopbackPort(port) {
 				return filter.Accept
 			}
 		case ipproto.UDP:
-			if port := p.Dst.Port(); port != 53 {
+			if port := p.Dst.Port(); port != 53 && !ns.isLoopbackPort(port) {
 				return filter.Accept
 			}
 		}
@@ -1169,6 +1185,11 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	return netip.Addr{}
 }
 
+var (
+	ipv4Loopback = netip.MustParseAddr("127.0.0.1")
+	ipv6Loopback = netip.MustParseAddr("::1")
+)
+
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	reqDetails := r.ID()
 	if debugNetstack() {
@@ -1305,8 +1326,15 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
-	if isTailscaleIP {
-		dialIP = netaddr.IPv4(127, 0, 0, 1)
+	switch {
+	case hittingServiceIP && ns.isLoopbackPort(reqDetails.LocalPort):
+		if dialIP == serviceIPv6 {
+			dialIP = ipv6Loopback
+		} else {
+			dialIP = ipv4Loopback
+		}
+	case isTailscaleIP:
+		dialIP = ipv4Loopback
 	}
 	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
 
@@ -1457,16 +1485,23 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 		return
 	}
 
-	// Handle magicDNS traffic (via UDP) here.
+	// Handle magicDNS and loopback traffic (via UDP) here.
 	if dst := dstAddr.Addr(); dst == serviceIP || dst == serviceIPv6 {
-		if dstAddr.Port() != 53 {
+		switch {
+		case dstAddr.Port() == 53:
+			c := gonet.NewUDPConn(&wq, ep)
+			go ns.handleMagicDNSUDP(srcAddr, c)
+			return
+		case ns.isLoopbackPort(dstAddr.Port()):
+			if dst == serviceIPv6 {
+				dstAddr = netip.AddrPortFrom(ipv6Loopback, dstAddr.Port())
+			} else {
+				dstAddr = netip.AddrPortFrom(ipv4Loopback, dstAddr.Port())
+			}
+		default:
 			ep.Close()
-			return // Only MagicDNS traffic runs on the service IPs for now.
+			return // Only MagicDNS and loopback traffic runs on the service IPs for now.
 		}
-
-		c := gonet.NewUDPConn(&wq, ep)
-		go ns.handleMagicDNSUDP(srcAddr, c)
-		return
 	}
 
 	if get := ns.GetUDPHandlerForFlow; get != nil {
@@ -1545,9 +1580,17 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	var backendListenAddr *net.UDPAddr
 	var backendRemoteAddr *net.UDPAddr
 	isLocal := ns.isLocalIP(dstAddr.Addr())
+	isLoopback := dstAddr.Addr() == ipv4Loopback || dstAddr.Addr() == ipv6Loopback
 	if isLocal {
 		backendRemoteAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(port)}
 		backendListenAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srcPort)}
+	} else if isLoopback {
+		ip := net.IP(ipv4Loopback.AsSlice())
+		if dstAddr.Addr() == ipv6Loopback {
+			ip = ipv6Loopback.AsSlice()
+		}
+		backendRemoteAddr = &net.UDPAddr{IP: ip, Port: int(port)}
+		backendListenAddr = &net.UDPAddr{IP: ip, Port: int(srcPort)}
 	} else {
 		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
 			dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
