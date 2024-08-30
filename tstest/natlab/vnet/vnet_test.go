@@ -84,6 +84,22 @@ func TestPacketSideEffects(t *testing.T) {
 						pktSubstr(" IP=2052::3 "),
 					),
 				},
+				{
+					name: "syslog-v4",
+					pkt:  mkSyslogPacket(clientIPv4(1), "<6>2024-08-30T10:36:06-07:00 natlabapp tailscaled[1]: 2024/08/30 10:36:06 some-message"),
+					check: all(
+						numPkts(0),
+						logSubstr("some-message"),
+					),
+				},
+				{
+					name: "syslog-v6",
+					pkt:  mkSyslogPacket(nodeWANIP6(1), "<6>2024-08-30T10:36:06-07:00 natlabapp tailscaled[1]: 2024/08/30 10:36:06 some-message"),
+					check: all(
+						numPkts(0),
+						logSubstr("some-message"),
+					),
+				},
 			},
 		},
 		{
@@ -288,7 +304,7 @@ func mkDNSReq(ipVer int) []byte {
 		ip = &layers.IPv4{
 			Version:  4,
 			Protocol: layers.IPProtocolUDP,
-			SrcIP:    net.ParseIP("192.168.0.101"),
+			SrcIP:    clientIPv4(1).AsSlice(),
 			TTL:      64,
 			DstIP:    FakeDNSIPv4().AsSlice(),
 		}
@@ -352,6 +368,40 @@ func mkDHCP(srcMAC MAC, typ layers.DHCPMsgType) []byte {
 		},
 	}
 	return mkPacket(eth, ip, udp, dhcp)
+}
+
+func mkSyslogPacket(srcIP netip.Addr, msg string) []byte {
+	eth := &layers.Ethernet{
+		SrcMAC:       nodeMac(1).HWAddr(),
+		DstMAC:       routerMac(1).HWAddr(),
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	if srcIP.Is6() {
+		eth.EthernetType = layers.EthernetTypeIPv6
+	}
+	var ip serializableNetworkLayer
+	if srcIP.Is4() {
+		ip = &layers.IPv4{
+			Version:  4,
+			Protocol: layers.IPProtocolUDP,
+			SrcIP:    srcIP.AsSlice(),
+			TTL:      64,
+			DstIP:    FakeSyslogIPv4().AsSlice(),
+		}
+	} else if srcIP.Is6() {
+		ip = &layers.IPv6{
+			Version:    6,
+			HopLimit:   64,
+			NextHeader: layers.IPProtocolUDP,
+			SrcIP:      srcIP.AsSlice(),
+			DstIP:      FakeSyslogIPv6().AsSlice(),
+		}
+	}
+	udp := &layers.UDP{
+		SrcPort: 123,
+		DstPort: 456, // unused; only IP matches
+	}
+	return mkPacket(eth, ip, udp, gopacket.Payload([]byte(msg)))
 }
 
 // receivedPacket is an ethernet frame that was received during a test.
@@ -439,11 +489,28 @@ func numPkts(want int) func(*sideEffects) error {
 	}
 }
 
+func clientIPv4(n int) netip.Addr {
+	return netip.AddrFrom4([4]byte{192, 168, 0, byte(100 + n)})
+}
+
+var wanSLAACBase = netip.MustParseAddr("2052::50cc:ccff:fecc:cc01")
+
+// nodeLANIP6 returns a node number's Link Local SLAAC IPv6 address,
+// such as fe80::50cc:ccff:fecc:cc03 for node 3.
+func nodeWANIP6(n int) netip.Addr {
+	a := wanSLAACBase.As16()
+	a[15] = byte(n)
+	return netip.AddrFrom16(a)
+}
+
 func newTwoNodesSameNetwork() (*Server, error) {
 	var c Config
 	nw := c.AddNetwork("192.168.0.1/24", "2052::1/64")
 	c.AddNode(nw)
 	c.AddNode(nw)
+	for _, c := range c.Nodes() {
+		c.SetVerboseSyslog(true)
+	}
 	return New(&c)
 }
 
@@ -452,6 +519,9 @@ func newTwoNodesSameV4Network() (*Server, error) {
 	nw := c.AddNetwork("192.168.0.1/24")
 	c.AddNode(nw)
 	c.AddNode(nw)
+	for _, c := range c.Nodes() {
+		c.SetVerboseSyslog(true)
+	}
 	return New(&c)
 }
 

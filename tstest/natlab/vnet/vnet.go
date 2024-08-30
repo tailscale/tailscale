@@ -1322,7 +1322,7 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		if node.verboseSyslog {
 			// TODO(bradfitz): parse this and capture it, structured, into
 			// node's log buffer.
-			log.Printf("syslog from %v: %s", node, udp.Payload)
+			n.logf("syslog from %v: %s", node, udp.Payload)
 		}
 		return
 	}
