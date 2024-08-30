@@ -6,6 +6,7 @@ package vnet
 import (
 	"cmp"
 	"fmt"
+	"iter"
 	"net/netip"
 	"os"
 	"slices"
@@ -58,6 +59,10 @@ func (c *Config) FirstNetwork() *Network {
 		return nil
 	}
 	return c.networks[0]
+}
+
+func (c *Config) Nodes() iter.Seq2[int, *Node] {
+	return slices.All(c.nodes)
 }
 
 func nodeMac(n int) MAC {
