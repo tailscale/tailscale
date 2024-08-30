@@ -437,10 +437,13 @@ func TestStateMachine(t *testing.T) {
 	// ask control to do anything. Instead backend will emit an event
 	// indicating that the UI should browse to the given URL.
 	t.Logf("\n\nLogin (interactive)")
-	notifies.expect(0)
+	notifies.expect(1)
 	b.StartLoginInteractive(context.Background())
 	{
+		nn := notifies.drain(1)
 		cc.assertCalls()
+		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
+		c.Assert(url1, qt.Equals, *nn[0].BrowseToURL)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -450,11 +453,13 @@ func TestStateMachine(t *testing.T) {
 	// the login URL expired. If they start another interactive login,
 	// we must always get a *new* login URL first.
 	t.Logf("\n\nLogin2 (interactive)")
+	b.authURLTime = time.Now().Add(-time.Hour * 24 * 7) // simulate URL expiration
 	notifies.expect(0)
 	b.StartLoginInteractive(context.Background())
 	{
+		notifies.drain(0)
 		// backend asks control for another login sequence
-		cc.assertCalls()
+		cc.assertCalls("Login")
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 

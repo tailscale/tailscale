@@ -268,6 +268,7 @@ type LocalBackend struct {
 	keyExpired       bool
 	authURL          string    // non-empty if not Running
 	authURLTime      time.Time // when the authURL was received from the control server
+	interact         bool      // indicates whether a user requested interactive login
 	egg              bool
 	prevIfState      *netmon.State
 	peerAPIServer    *peerAPIServer // or nil
@@ -1359,10 +1360,6 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			prefsChanged = true
 		}
 	}
-	if st.URL != "" {
-		b.authURL = st.URL
-		b.authURLTime = b.clock.Now()
-	}
 	if shouldAutoExitNode() {
 		// Re-evaluate exit node suggestion in case circumstances have changed.
 		_, err := b.suggestExitNodeLocked(curNetMap)
@@ -1478,7 +1475,7 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	}
 	if st.URL != "" {
 		b.logf("Received auth URL: %.20v...", st.URL)
-		b.popBrowserAuthNow()
+		b.setAuthURL(st.URL)
 	}
 	b.stateMachine()
 	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
@@ -2682,27 +2679,11 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	// TODO(marwan-at-work): streaming background logs?
 	defer b.DeleteForegroundSession(sessionID)
 
-	var lastURLPop string // to dup suppress URL popups
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case n := <-ch:
-			// URLs flow into Notify.BrowseToURL via two means:
-			//    1. From MapResponse.PopBrowserURL, which already says they're dup
-			//       suppressed if identical, and that's done by the controlclient,
-			//       so this added later adds nothing.
-			//
-			//    2. From the controlclient auth routes, on register. This makes sure
-			//       we don't tell clients (mac, windows, android) to pop the same URL
-			//       multiple times.
-			if n != nil && n.BrowseToURL != nil {
-				if v := *n.BrowseToURL; v == lastURLPop {
-					n.BrowseToURL = nil
-				} else {
-					lastURLPop = v
-				}
-			}
 			if !fn(n) {
 				return
 			}
@@ -2833,20 +2814,52 @@ func (b *LocalBackend) sendFileNotify() {
 	b.send(n)
 }
 
-// popBrowserAuthNow shuts down the data plane and sends an auth URL
-// to the connected frontend, if any.
-func (b *LocalBackend) popBrowserAuthNow() {
+// setAuthURL sets the authURL and triggers [LocalBackend.popBrowserAuthNow] if the URL has changed.
+// This method is called when a new authURL is received from the control plane, meaning that either a user
+// has started a new interactive login (e.g., by running `tailscale login` or clicking Login in the GUI),
+// or the control plane was unable to authenticate this node non-interactively (e.g., due to key expiration).
+// b.interact indicates whether an interactive login is in progress.
+// If url is "", it is equivalent to calling [LocalBackend.resetAuthURLLocked] with b.mu held.
+func (b *LocalBackend) setAuthURL(url string) {
+	var popBrowser, keyExpired bool
+
 	b.mu.Lock()
-	url := b.authURL
-	expired := b.keyExpired
+	switch {
+	case url == "":
+		b.resetAuthURLLocked()
+	case b.authURL != url:
+		b.authURL = url
+		b.authURLTime = b.clock.Now()
+		// Always open the browser if the URL has changed.
+		// This includes the transition from no URL -> some URL.
+		popBrowser = true
+	default:
+		// Otherwise, only open it if the user explicitly requests interactive login.
+		popBrowser = b.interact
+	}
+	keyExpired = b.keyExpired
+	// Consume the StartLoginInteractive call, if any, that caused the control
+	// plane to send us this URL.
+	b.interact = false
 	b.mu.Unlock()
 
-	b.logf("popBrowserAuthNow: url=%v, key-expired=%v, seamless-key-renewal=%v", url != "", expired, b.seamlessRenewalEnabled())
+	if popBrowser {
+		b.popBrowserAuthNow(url, keyExpired)
+	}
+}
+
+// popBrowserAuthNow shuts down the data plane and sends an auth URL
+// to the connected frontend, if any.
+// keyExpired is the value of b.keyExpired upon entry and indicates
+// whether the node's key has expired.
+// It must not be called with b.mu held.
+func (b *LocalBackend) popBrowserAuthNow(url string, keyExpired bool) {
+	b.logf("popBrowserAuthNow: url=%v, key-expired=%v, seamless-key-renewal=%v", url != "", keyExpired, b.seamlessRenewalEnabled())
 
 	// Deconfigure the local network data plane if:
 	// - seamless key renewal is not enabled;
 	// - key is expired (in which case tailnet connectivity is down anyway).
-	if !b.seamlessRenewalEnabled() || expired {
+	if !b.seamlessRenewalEnabled() || keyExpired {
 		b.blockEngineUpdates(true)
 		b.stopEngineAndWait()
 	}
@@ -3169,16 +3182,25 @@ func (b *LocalBackend) StartLoginInteractive(ctx context.Context) error {
 		panic("LocalBackend.assertClient: b.cc == nil")
 	}
 	url := b.authURL
+	keyExpired := b.keyExpired
 	timeSinceAuthURLCreated := b.clock.Since(b.authURLTime)
-	cc := b.cc
-	b.mu.Unlock()
-	b.logf("StartLoginInteractive: url=%v", url != "")
-
 	// Only use an authURL if it was sent down from control in the last
 	// 6 days and 23 hours. Avoids using a stale URL that is no longer valid
 	// server-side. Server-side URLs expire after 7 days.
-	if url != "" && timeSinceAuthURLCreated < ((7*24*time.Hour)-(1*time.Hour)) {
-		b.popBrowserAuthNow()
+	hasValidURL := url != "" && timeSinceAuthURLCreated < ((7*24*time.Hour)-(1*time.Hour))
+	if !hasValidURL {
+		// A user wants to log in interactively, but we don't have a valid authURL.
+		// Set a flag to indicate that interactive login is in progress, forcing
+		// a BrowseToURL notification once the authURL becomes available.
+		b.interact = true
+	}
+	cc := b.cc
+	b.mu.Unlock()
+
+	b.logf("StartLoginInteractive: url=%v", hasValidURL)
+
+	if hasValidURL {
+		b.popBrowserAuthNow(url, keyExpired)
 	} else {
 		cc.Login(b.loginFlags | controlclient.LoginInteractive)
 	}
@@ -5019,9 +5041,11 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	return prev
 }
 
+// resetAuthURLLocked resets authURL, canceling any pending interactive login.
 func (b *LocalBackend) resetAuthURLLocked() {
 	b.authURL = ""
 	b.authURLTime = time.Time{}
+	b.interact = false
 }
 
 // ResetForClientDisconnect resets the backend for GUI clients running
