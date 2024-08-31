@@ -538,10 +538,13 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		filtered[i] = b.tka.filtered[i].Clone()
 	}
 
-	visible := make([]*ipnstate.TKAPeer, len(b.netMap.Peers))
-	for i, p := range b.netMap.Peers {
-		s := tkaStateFromPeer(p)
-		visible[i] = &s
+	var visible []*ipnstate.TKAPeer
+	if b.netMap != nil {
+		visible = make([]*ipnstate.TKAPeer, len(b.netMap.Peers))
+		for i, p := range b.netMap.Peers {
+			s := tkaStateFromPeer(p)
+			visible[i] = &s
+		}
 	}
 
 	stateID1, _ := b.tka.authority.StateIDs()
