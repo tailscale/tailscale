@@ -98,6 +98,7 @@ var handler = map[string]localAPIHandler{
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"dial":                        (*Handler).serveDial,
+	"dns-osconfig":                (*Handler).serveDNSOSConfig,
 	"drive/fileserver-address":    (*Handler).serveDriveServerAddr,
 	"drive/shares":                (*Handler).serveShares,
 	"file-targets":                (*Handler).serveFileTargets,
@@ -2705,6 +2706,44 @@ func (h *Handler) serveUpdateProgress(w http.ResponseWriter, r *http.Request) {
 	ups := h.b.GetSelfUpdateProgress()
 
 	json.NewEncoder(w).Encode(ups)
+}
+
+// serveDNSOSConfig serves the current system DNS configuration as a JSON object, if
+// supported by the OS.
+func (h *Handler) serveDNSOSConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.GET {
+		http.Error(w, "only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Require write access for privacy reasons.
+	if !h.PermitWrite {
+		http.Error(w, "dns-osconfig dump access denied", http.StatusForbidden)
+		return
+	}
+	bCfg, err := h.b.GetDNSOSConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	nameservers := make([]string, 0, len(bCfg.Nameservers))
+	for _, ns := range bCfg.Nameservers {
+		nameservers = append(nameservers, ns.String())
+	}
+	searchDomains := make([]string, 0, len(bCfg.SearchDomains))
+	for _, sd := range bCfg.SearchDomains {
+		searchDomains = append(searchDomains, sd.WithoutTrailingDot())
+	}
+	matchDomains := make([]string, 0, len(bCfg.MatchDomains))
+	for _, md := range bCfg.MatchDomains {
+		matchDomains = append(matchDomains, md.WithoutTrailingDot())
+	}
+	response := apitype.DNSOSConfig{
+		Nameservers:   nameservers,
+		SearchDomains: searchDomains,
+		MatchDomains:  matchDomains,
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // serveDriveServerAddr handles updates of the Taildrive file server address.

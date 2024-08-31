@@ -813,6 +813,18 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	return decodeJSON[*ipn.Prefs](body)
 }
 
+func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/dns-osconfig")
+	if err != nil {
+		return nil, err
+	}
+	var osCfg apitype.DNSOSConfig
+	if err := json.Unmarshal(body, &osCfg); err != nil {
+		return nil, fmt.Errorf("invalid dns.OSConfig: %w", err)
+	}
+	return &osCfg, nil
+}
+
 // StartLoginInteractive starts an interactive login.
 func (lc *LocalClient) StartLoginInteractive(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/login-interactive", http.StatusNoContent, nil)

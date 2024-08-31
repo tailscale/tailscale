@@ -187,6 +187,7 @@ change in the future.
 			configureCmd,
 			netcheckCmd,
 			ipCmd,
+			dnsCmd,
 			statusCmd,
 			pingCmd,
 			ncCmd,

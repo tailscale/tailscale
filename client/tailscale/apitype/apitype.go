@@ -57,3 +57,11 @@ type ExitNodeSuggestionResponse struct {
 	Name     string
 	Location tailcfg.LocationView `json:",omitempty"`
 }
+
+// DNSOSConfig mimics dns.OSConfig without forcing us to import the entire dns package
+// into the CLI.
+type DNSOSConfig struct {
+	Nameservers   []string
+	SearchDomains []string
+	MatchDomains  []string
+}
