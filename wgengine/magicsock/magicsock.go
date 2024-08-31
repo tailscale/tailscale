@@ -1089,7 +1089,13 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) error {
 		metricSendDataNetworkDown.Add(n)
 		return errNetworkDown
 	}
-	return ep.(*endpoint).send(buffs)
+	if ep, ok := ep.(*endpoint); ok {
+		return ep.send(buffs)
+	}
+	// If it's not of type *endpoint, it's probably *lazyEndpoint, which means
+	// we don't actually know who the peer is and we're waiting for wireguard-go
+	// to switch the endpoint. See go/corp/20732.
+	return nil
 }
 
 var errConnClosed = errors.New("Conn closed")
