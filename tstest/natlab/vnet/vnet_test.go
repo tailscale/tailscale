@@ -152,6 +152,7 @@ func TestPacketSideEffects(t *testing.T) {
 						logSubstr("sending IPv6 router advertisement to 52:cc:cc:cc:cc:01 from 52:ee:ee:ee:ee:01"),
 						numPkts(1),
 						pktSubstr("TypeCode=RouterAdvertisement"),
+						pktSubstr("HopLimit=255 "), // per RFC 4861, 7.1.1 etc (all NDP messages)
 						pktSubstr("= ICMPv6RouterAdvertisement"),
 						pktSubstr("SrcMAC=52:ee:ee:ee:ee:01 DstMAC=52:cc:cc:cc:cc:01 EthernetType=IPv6"),
 					),
@@ -222,6 +223,11 @@ func TestPacketSideEffects(t *testing.T) {
 
 }
 
+// mustPacket is like mkPacket but panics on error.
+func mustPacket(layers ...gopacket.SerializableLayer) []byte {
+	return must.Get(mkPacket(layers...))
+}
+
 // mkEth encodes an ethernet frame with the given payload.
 func mkEth(dst, src MAC, ethType layers.EthernetType, payload []byte) []byte {
 	ret := make([]byte, 0, 14+len(payload))
@@ -260,7 +266,7 @@ func mkIPv6RouterSolicit(srcMAC MAC, srcIP netip.Addr) []byte {
 		}},
 	}
 	icmp.SetNetworkLayerForChecksum(ip)
-	return mkEth(macAllRouters, srcMAC, ethType6, mkPacket(ip, icmp, ra))
+	return mkEth(macAllRouters, srcMAC, ethType6, mustPacket(ip, icmp, ra))
 }
 
 func mkAllNodesPing(srcMAC MAC, srcIP netip.Addr) []byte {
@@ -275,7 +281,7 @@ func mkAllNodesPing(srcMAC MAC, srcIP netip.Addr) []byte {
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
 	}
 	icmp.SetNetworkLayerForChecksum(ip)
-	return mkEth(macAllNodes, srcMAC, ethType6, mkPacket(ip, icmp))
+	return mkEth(macAllNodes, srcMAC, ethType6, mustPacket(ip, icmp))
 }
 
 // mkDNSReq makes a DNS request to "control.tailscale" using the source IPs as
@@ -336,7 +342,7 @@ func mkDNSReq(ipVer int) []byte {
 	if ipVer == 6 {
 		dns.Questions[0].Type = layers.DNSTypeAAAA
 	}
-	return mkPacket(eth, ip, udp, dns)
+	return mustPacket(eth, ip, udp, dns)
 }
 
 func mkDHCP(srcMAC MAC, typ layers.DHCPMsgType) []byte {
@@ -367,41 +373,28 @@ func mkDHCP(srcMAC MAC, typ layers.DHCPMsgType) []byte {
 			{Type: layers.DHCPOptMessageType, Length: 1, Data: []byte{byte(typ)}},
 		},
 	}
-	return mkPacket(eth, ip, udp, dhcp)
+	return mustPacket(eth, ip, udp, dhcp)
 }
 
 func mkSyslogPacket(srcIP netip.Addr, msg string) []byte {
 	eth := &layers.Ethernet{
-		SrcMAC:       nodeMac(1).HWAddr(),
-		DstMAC:       routerMac(1).HWAddr(),
-		EthernetType: layers.EthernetTypeIPv4,
+		SrcMAC: nodeMac(1).HWAddr(),
+		DstMAC: routerMac(1).HWAddr(),
 	}
-	if srcIP.Is6() {
-		eth.EthernetType = layers.EthernetTypeIPv6
-	}
-	var ip serializableNetworkLayer
-	if srcIP.Is4() {
-		ip = &layers.IPv4{
-			Version:  4,
-			Protocol: layers.IPProtocolUDP,
-			SrcIP:    srcIP.AsSlice(),
-			TTL:      64,
-			DstIP:    FakeSyslogIPv4().AsSlice(),
-		}
-	} else if srcIP.Is6() {
-		ip = &layers.IPv6{
-			Version:    6,
-			HopLimit:   64,
-			NextHeader: layers.IPProtocolUDP,
-			SrcIP:      srcIP.AsSlice(),
-			DstIP:      FakeSyslogIPv6().AsSlice(),
-		}
-	}
+	ip := mkIPLayer(layers.IPProtocolUDP, srcIP, matchingIP(srcIP, FakeSyslogIPv4(), FakeSyslogIPv6()))
 	udp := &layers.UDP{
 		SrcPort: 123,
 		DstPort: 456, // unused; only IP matches
 	}
-	return mkPacket(eth, ip, udp, gopacket.Payload([]byte(msg)))
+	return mustPacket(eth, ip, udp, gopacket.Payload([]byte(msg)))
+}
+
+// matchingIP returns ip4 if toMatch is an IPv4 address, otherwise ip6.
+func matchingIP(toMatch, if4, if6 netip.Addr) netip.Addr {
+	if toMatch.Is4() {
+		return if4
+	}
+	return if6
 }
 
 // receivedPacket is an ethernet frame that was received during a test.
