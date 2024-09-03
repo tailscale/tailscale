@@ -126,7 +126,10 @@ func (h *Hijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn, error) {
 	const (
 		// https://docs.asciinema.org/manual/asciicast/v2/
-		asciicastv2 = 2
+		asciicastv2  = 2
+		ttyKey       = "tty"
+		commandKey   = "command"
+		containerKey = "container"
 	)
 	var (
 		wc      io.WriteCloser
@@ -153,18 +156,20 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	// TODO (irbekrm): log which recorder
 	h.log.Info("successfully connected to a session recorder")
 	cl := tstime.DefaultClock{}
-	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen)
+	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen, h.log)
 	qp := h.req.URL.Query()
+	tty := strings.Join(qp[ttyKey], "")
+	hasTerm := (tty == "true") // session has terminal attached
 	ch := sessionrecording.CastHeader{
 		Version:   asciicastv2,
 		Timestamp: cl.Now().Unix(),
-		Command:   strings.Join(qp["command"], " "),
+		Command:   strings.Join(qp[commandKey], " "),
 		SrcNode:   strings.TrimSuffix(h.who.Node.Name, "."),
 		SrcNodeID: h.who.Node.StableID,
 		Kubernetes: &sessionrecording.Kubernetes{
 			PodName:   h.pod,
 			Namespace: h.ns,
-			Container: strings.Join(qp["container"], " "),
+			Container: strings.Join(qp[containerKey], " "),
 		},
 	}
 	if !h.who.Node.IsTagged() {
@@ -177,9 +182,9 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 	var lc net.Conn
 	switch h.proto {
 	case SPDYProtocol:
-		lc = spdy.New(conn, rec, ch, h.log)
+		lc = spdy.New(conn, rec, ch, hasTerm, h.log)
 	case WSProtocol:
-		lc = ws.New(conn, rec, ch, h.log)
+		lc = ws.New(conn, rec, ch, hasTerm, h.log)
 	default:
 		return nil, fmt.Errorf("unknown protocol: %s", h.proto)
 	}

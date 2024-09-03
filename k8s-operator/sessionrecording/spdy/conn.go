@@ -28,14 +28,16 @@ import (
 // The hijacked connection is used to transmit SPDY streams between Kubernetes client ('kubectl') and the destination container.
 // Data read from the underlying network connection is data sent via one of the SPDY streams from the client to the container.
 // Data written to the underlying connection is data sent from the container to the client.
-// We parse the data and send everything for the STDOUT/STDERR streams to the configured tsrecorder as an asciinema recording with the provided header.
+// We parse the data and send everything for the stdout/stderr streams to the configured tsrecorder as an asciinema recording with the provided header.
 // https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#background-remotecommand-subprotocol
-func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, log *zap.SugaredLogger) net.Conn {
+func New(nc net.Conn, rec *tsrecorder.Client, ch sessionrecording.CastHeader, hasTerm bool, log *zap.SugaredLogger) net.Conn {
 	return &conn{
-		Conn: nc,
-		rec:  rec,
-		ch:   ch,
-		log:  log,
+		Conn:               nc,
+		rec:                rec,
+		ch:                 ch,
+		log:                log,
+		hasTerm:            hasTerm,
+		initialTermSizeSet: make(chan struct{}),
 	}
 }
 
@@ -47,7 +49,6 @@ type conn struct {
 	net.Conn
 	// rec knows how to send data written to it to a tsrecorder instance.
 	rec *tsrecorder.Client
-	ch  sessionrecording.CastHeader
 
 	stdoutStreamID atomic.Uint32
 	stderrStreamID atomic.Uint32
@@ -56,8 +57,37 @@ type conn struct {
 	wmu    sync.Mutex // sequences writes
 	closed bool
 
-	rmu                 sync.Mutex // sequences reads
+	rmu sync.Mutex // sequences reads
+
+	// The following fields are related to sending asciinema CastHeader.
+	// CastHeader must be sent before any payload. If the session has a
+	// terminal attached, the CastHeader must have '.Width' and '.Height'
+	// fields set for the tsrecorder UI to be able to play the recording.
+	// For 'kubectl exec' sessions, terminal width and height are sent as a
+	// resize message on resize stream from the client when the session
+	// starts as well as at any time the client detects a terminal change.
+	// We can intercept the resize message on Read calls. As there is no
+	// guarantee that the resize message from client will be intercepted
+	// before server writes stdout messages that we must record, we need to
+	// ensure that parsing stdout/stderr messages written to the connection
+	// waits till a resize message has been received and a CastHeader with
+	// correct terminal dimensions can be written.
+
+	// ch is the asciinema CastHeader for the current session.
+	// https://docs.asciinema.org/manual/asciicast/v2/#header
+	ch sessionrecording.CastHeader
+	// writeCastHeaderOnce is used to ensure CastHeader gets sent to tsrecorder once.
 	writeCastHeaderOnce sync.Once
+	hasTerm             bool // whether the session had TTY attached
+	// initialTermSizeSet channel gets sent a value once, when the Read has
+	// received a resize message and set the initial terminal size. It must
+	// be set to a buffered channel to prevent Reads being blocked on the
+	// first stdout/stderr write reading from the channel.
+	initialTermSizeSet chan struct{}
+	// sendInitialTermSizeSetOnce is used to ensure that a value is sent to
+	// initialTermSizeSet channel only once, when the initial resize message
+	// is received.
+	sendinitialTermSizeSetOnce sync.Once
 
 	zlibReqReader zlibReader
 	// writeBuf is used to store data written to the connection that has not
@@ -97,13 +127,28 @@ func (c *conn) Read(b []byte) (int, error) {
 	if !sf.Ctrl { // data frame
 		switch sf.StreamID {
 		case c.resizeStreamID.Load():
-			var err error
+
 			var msg spdyResizeMsg
 			if err = json.Unmarshal(sf.Payload, &msg); err != nil {
 				return 0, fmt.Errorf("error umarshalling resize msg: %w", err)
 			}
 			c.ch.Width = msg.Width
 			c.ch.Height = msg.Height
+
+			// If this is initial resize message, the width and
+			// height will be sent in the CastHeader. If this is a
+			// subsequent resize message, we need to send asciinema
+			// resize message.
+			var isInitialResize bool
+			c.sendinitialTermSizeSetOnce.Do(func() {
+				isInitialResize = true
+				close(c.initialTermSizeSet) // unblock sending of CastHeader
+			})
+			if !isInitialResize {
+				if err := c.rec.WriteResize(c.ch.Height, c.ch.Width); err != nil {
+					return 0, fmt.Errorf("error writing resize message: %w", err)
+				}
+			}
 		}
 		return n, nil
 	}
@@ -147,21 +192,21 @@ func (c *conn) Write(b []byte) (int, error) {
 		case c.stdoutStreamID.Load(), c.stderrStreamID.Load():
 			var err error
 			c.writeCastHeaderOnce.Do(func() {
-				var j []byte
-				j, err = json.Marshal(c.ch)
-				if err != nil {
-					return
+				// If this is a session with a terminal attached,
+				// we must wait for the terminal width and
+				// height to be parsed from a resize message
+				// before sending CastHeader, else tsrecorder
+				// will not be able to play this recording.
+				if c.hasTerm {
+					c.log.Debugf("write: waiting for the initial terminal size to be set before proceeding with sending the first payload")
+					<-c.initialTermSizeSet
 				}
-				j = append(j, '\n')
-				err = c.rec.WriteCastLine(j)
-				if err != nil {
-					c.log.Errorf("received error from recorder: %v", err)
-				}
+				err = c.rec.WriteCastHeader(c.ch)
 			})
 			if err != nil {
 				return 0, fmt.Errorf("error writing CastHeader: %w", err)
 			}
-			if err := c.rec.Write(sf.Payload); err != nil {
+			if err := c.rec.WriteOutput(sf.Payload); err != nil {
 				return 0, fmt.Errorf("error sending payload to session recorder: %w", err)
 			}
 		}

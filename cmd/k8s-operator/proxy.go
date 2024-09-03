@@ -31,11 +31,10 @@ import (
 	"tailscale.com/util/set"
 )
 
-var whoIsKey = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
-
 var (
 	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
 	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
+	whoIsKey                  = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 )
 
 type apiServerProxyMode int
@@ -222,6 +221,12 @@ func (ap *apiserverProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, proto ksr.Protocol) {
+	const (
+		podNameKey       = "pod"
+		namespaceNameKey = "namespace"
+		upgradeHeaderKey = "Upgrade"
+	)
+
 	who, err := ap.whoIs(r)
 	if err != nil {
 		ap.authError(w, err)
@@ -246,7 +251,7 @@ func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 	}
 
 	wantsHeader := upgradeHeaderForProto[proto]
-	if h := r.Header.Get("Upgrade"); h != wantsHeader {
+	if h := r.Header.Get(upgradeHeaderKey); h != wantsHeader {
 		msg := fmt.Sprintf("[unexpected] unable to verify that streaming protocol is %s, wants Upgrade header %q, got: %q", proto, wantsHeader, h)
 		if failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
@@ -268,8 +273,8 @@ func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, p
 		Who:       who,
 		Addrs:     addrs,
 		FailOpen:  failOpen,
-		Pod:       r.PathValue("pod"),
-		Namespace: r.PathValue("namespace"),
+		Pod:       r.PathValue(podNameKey),
+		Namespace: r.PathValue(namespaceNameKey),
 		Log:       ap.log,
 	}
 	h := ksr.New(opts)
@@ -309,9 +314,11 @@ func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 		log.Printf("failed to add impersonation headers: " + err.Error())
 	}
 }
+
 func (ap *apiserverProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {
 	return ap.lc.WhoIs(r.Context(), r.RemoteAddr)
 }
+
 func (ap *apiserverProxy) authError(w http.ResponseWriter, err error) {
 	ap.log.Errorf("failed to authenticate caller: %v", err)
 	http.Error(w, "failed to authenticate caller", http.StatusInternalServerError)

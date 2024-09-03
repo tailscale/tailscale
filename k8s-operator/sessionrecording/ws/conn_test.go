@@ -65,6 +65,7 @@ func Test_conn_Read(t *testing.T) {
 				log:  zl.Sugar(),
 			}
 			for i, input := range tt.inputs {
+				c.initialTermSizeSet = make(chan struct{})
 				if err := tc.WriteReadBufBytes(input); err != nil {
 					t.Fatalf("writing bytes to test conn: %v", err)
 				}
@@ -93,13 +94,15 @@ func Test_conn_Write(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	tests := []struct {
-		name          string
-		inputs        [][]byte
-		wantForwarded []byte
-		wantRecorded  []byte
-		firstWrite    bool
-		width         int
-		height        int
+		name              string
+		inputs            [][]byte
+		wantForwarded     []byte
+		wantRecorded      []byte
+		firstWrite        bool
+		width             int
+		height            int
+		hasTerm           bool
+		sendInitialResize bool
 	}{
 		{
 			name:          "single_write_control_frame",
@@ -144,12 +147,23 @@ func Test_conn_Write(t *testing.T) {
 			wantForwarded: []byte{0x2, 0x3, 0x1, 0x7, 0x8, 0x80, 0x6, 0x1, 0x1, 0x2, 0x3, 0x4, 0x5},
 			wantRecorded:  fakes.CastLine(t, []byte{0x7, 0x8, 0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 		},
+		{
+			name:              "three_writes_stdout_data_message_with_split_fragment_cast_header_with_terminal",
+			inputs:            [][]byte{{0x2, 0x3, 0x1, 0x7, 0x8}, {0x80, 0x6, 0x1, 0x1, 0x2, 0x3}, {0x4, 0x5}},
+			wantForwarded:     []byte{0x2, 0x3, 0x1, 0x7, 0x8, 0x80, 0x6, 0x1, 0x1, 0x2, 0x3, 0x4, 0x5},
+			wantRecorded:      append(fakes.AsciinemaResizeMsg(t, 10, 20), fakes.CastLine(t, []byte{0x7, 0x8, 0x1, 0x2, 0x3, 0x4, 0x5}, cl)...),
+			height:            20,
+			width:             10,
+			hasTerm:           true,
+			firstWrite:        true,
+			sendInitialResize: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tc := &fakes.TestConn{}
 			sr := &fakes.TestSessionRecorder{}
-			rec := tsrecorder.New(sr, cl, cl.Now(), true)
+			rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 			c := &conn{
 				Conn: tc,
 				log:  zl.Sugar(),
@@ -157,11 +171,16 @@ func Test_conn_Write(t *testing.T) {
 					Width:  tt.width,
 					Height: tt.height,
 				},
-				rec: rec,
+				rec:                rec,
+				initialTermSizeSet: make(chan struct{}),
+				hasTerm:            tt.hasTerm,
 			}
 			if !tt.firstWrite {
 				// This test case does not intend to test that cast header gets written once.
 				c.writeCastHeaderOnce.Do(func() {})
+			}
+			if tt.sendInitialResize {
+				close(c.initialTermSizeSet)
 			}
 			for i, input := range tt.inputs {
 				_, err := c.Write(input)
@@ -221,7 +240,7 @@ func Test_conn_WriteRand(t *testing.T) {
 	}
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	sr := &fakes.TestSessionRecorder{}
-	rec := tsrecorder.New(sr, cl, cl.Now(), true)
+	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
 		tc := &fakes.TestConn{}
 		c := &conn{
