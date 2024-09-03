@@ -11,6 +11,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -29,6 +30,7 @@ import (
 var (
 	app    = flag.String("app", "tsapp", "appliance name; one of the subdirectories of gokrazy/")
 	bucket = flag.String("bucket", "tskrazy-import", "S3 bucket to upload disk image to while making AMI")
+	goArch = flag.String("arch", cmp.Or(os.Getenv("GOARCH"), "amd64"), "GOARCH architecture to build for: arm64 or amd64")
 	build  = flag.Bool("build", false, "if true, just build locally and stop, without uploading")
 )
 
@@ -99,12 +101,12 @@ func buildImage() error {
 		return err
 	}
 	if fi, err := os.Stat(filepath.Join(dir, *app)); err != nil || !fi.IsDir() {
-		return fmt.Errorf("in wrong directorg %v; no %q subdirectory found", dir, *app)
+		return fmt.Errorf("in wrong directory %v; no %q subdirectory found", dir, *app)
 	}
 	// Build the tsapp.img
 	var buf bytes.Buffer
 	cmd := exec.Command("go", "run",
-		"-exec=env GOOS=linux GOARCH=amd64 ",
+		"-exec=env GOOS=linux GOARCH="+*goArch+" ",
 		"github.com/gokrazy/tools/cmd/gok",
 		"--parent_dir="+dir,
 		"--instance="+*app,
@@ -250,9 +252,18 @@ func waitForImportSnapshot(importTaskID string) (snapID string, err error) {
 }
 
 func makeAMI(name, ebsSnapID string) (ami string, err error) {
+	var arch string
+	switch *goArch {
+	case "arm64":
+		arch = "arm64"
+	case "amd64":
+		arch = "x86_64"
+	default:
+		return "", fmt.Errorf("unknown arch %q", *goArch)
+	}
 	out, err := exec.Command("aws", "ec2", "register-image",
 		"--name", name,
-		"--architecture", "x86_64",
+		"--architecture", arch,
 		"--root-device-name", "/dev/sda",
 		"--ena-support",
 		"--imds-support", "v2.0",
