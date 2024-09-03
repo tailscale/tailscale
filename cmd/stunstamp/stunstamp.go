@@ -460,7 +460,7 @@ type connAndMeasureFn struct {
 // newConnAndMeasureFn returns a connAndMeasureFn or an error. It may return
 // nil for both if some combination of the supplied timestampSource, protocol,
 // or connStability is unsupported.
-func newConnAndMeasureFn(source timestampSource, protocol protocol, stable connStability) (*connAndMeasureFn, error) {
+func newConnAndMeasureFn(forDst netip.Addr, source timestampSource, protocol protocol, stable connStability) (*connAndMeasureFn, error) {
 	info := getProtocolSupportInfo(protocol)
 	if !info.stableConn && bool(stable) {
 		return nil, nil
@@ -493,8 +493,14 @@ func newConnAndMeasureFn(source timestampSource, protocol protocol, stable connS
 			}, nil
 		}
 	case protocolICMP:
-		// TODO(jwhited): implement
-		return nil, nil
+		conn, err := getICMPConn(forDst, source)
+		if err != nil {
+			return nil, err
+		}
+		return &connAndMeasureFn{
+			conn: conn,
+			fn:   mkICMPRTTFn(source),
+		}, nil
 	case protocolHTTPS:
 		localPort := 0
 		if stable {
@@ -558,7 +564,7 @@ func getConns(
 	if !ok {
 		for _, source := range []timestampSource{timestampSourceUserspace, timestampSourceKernel} {
 			var cf *connAndMeasureFn
-			cf, err = newConnAndMeasureFn(source, protocol, stableConn)
+			cf, err = newConnAndMeasureFn(addr, source, protocol, stableConn)
 			if err != nil {
 				return
 			}
@@ -569,7 +575,7 @@ func getConns(
 
 	for _, source := range []timestampSource{timestampSourceUserspace, timestampSourceKernel} {
 		var cf *connAndMeasureFn
-		cf, err = newConnAndMeasureFn(source, protocol, unstableConn)
+		cf, err = newConnAndMeasureFn(addr, source, protocol, unstableConn)
 		if err != nil {
 			return
 		}
@@ -951,13 +957,6 @@ func main() {
 	}
 	if len(portsByProtocol) == 0 {
 		log.Fatal("nothing to probe")
-	}
-
-	// TODO(jwhited): remove protocol restriction
-	for k := range portsByProtocol {
-		if k != protocolSTUN && k != protocolHTTPS && k != protocolTCP {
-			log.Fatal("ICMP is not yet supported")
-		}
 	}
 
 	if len(*flagDERPMap) < 1 {
