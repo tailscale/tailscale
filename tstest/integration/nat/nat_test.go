@@ -115,6 +115,17 @@ func easyAnd6(c *vnet.Config) *vnet.Node {
 		vnet.EasyNAT))
 }
 
+func v6AndBlackholedIPv4(c *vnet.Config) *vnet.Node {
+	n := c.NumNodes() + 1
+	nw := c.AddNetwork(
+		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+		fmt.Sprintf("192.168.%d.1/24", n),
+		v6cidr(n),
+		vnet.EasyNAT)
+	nw.SetBlackholedIPv4(true)
+	return c.AddNode(nw)
+}
+
 func just6(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(v6cidr(n))) // public IPv6 prefix
@@ -480,6 +491,20 @@ func TestEasyEasy(t *testing.T) {
 func TestSingleJustIPv6(t *testing.T) {
 	nt := newNatTest(t)
 	nt.runTest(just6)
+}
+
+var knownBroken = flag.Bool("known-broken", false, "run known-broken tests")
+
+// TestSingleDualStackButBrokenIPv4 tests a dual-stack node with broken
+// (blackholed) IPv4.
+//
+// See https://github.com/tailscale/tailscale/issues/13346
+func TestSingleDualBrokenIPv4(t *testing.T) {
+	if !*knownBroken {
+		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/tailscale/issues/13346")
+	}
+	nt := newNatTest(t)
+	nt.runTest(v6AndBlackholedIPv4)
 }
 
 func TestJustIPv6(t *testing.T) {

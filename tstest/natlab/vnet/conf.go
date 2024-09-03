@@ -272,14 +272,21 @@ type Network struct {
 
 	wanIP6 netip.Prefix // global unicast router in host bits; CIDR is /64 delegated to LAN
 
-	wanIP4 netip.Addr // IPv4 WAN IP, if any
-	lanIP4 netip.Prefix
-	nodes  []*Node
+	wanIP4    netip.Addr // IPv4 WAN IP, if any
+	lanIP4    netip.Prefix
+	nodes     []*Node
+	breakWAN4 bool // whether to break WAN IPv4 connectivity
 
 	svcs set.Set[NetworkService]
 
 	// ...
 	err error // carried error
+}
+
+// SetBlackholedIPv4 sets whether the network should blackhole all IPv4 traffic
+// out to the Internet. (DHCP etc continues to work on the LAN.)
+func (n *Network) SetBlackholedIPv4(v bool) {
+	n.breakWAN4 = v
 }
 
 func (n *Network) CanV4() bool {
@@ -353,6 +360,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			v6:         conf.wanIP6.IsValid(),
 			wanIP4:     conf.wanIP4,
 			lanIP4:     conf.lanIP4,
+			breakWAN4:  conf.breakWAN4,
 			nodesByIP4: map[netip.Addr]*node{},
 			nodesByMAC: map[MAC]*node{},
 			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),

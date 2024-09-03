@@ -514,6 +514,7 @@ type network struct {
 	wanIP6         netip.Prefix         // router's WAN IPv6, if any, as a /64.
 	wanIP4         netip.Addr           // router's LAN IPv4, if any
 	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
+	breakWAN4      bool                 // break WAN IPv4 connectivity
 	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC     map[MAC]*node
 	logf           func(format string, args ...any)
@@ -1104,6 +1105,10 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 		Length:         len(buf),
 		InterfaceIndex: n.wanInterfaceID,
 	}, buf)
+	if p.Dst.Addr().Is4() && n.breakWAN4 {
+		// Blackhole the packet.
+		return
+	}
 	dst := n.doNATIn(p.Src, p.Dst)
 	if !dst.IsValid() {
 		n.logf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
@@ -1239,6 +1244,10 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 	}
 
 	if toForward && n.s.shouldInterceptTCP(packet) {
+		if flow.dst.Is4() && n.breakWAN4 {
+			// Blackhole the packet.
+			return
+		}
 		var base *layers.BaseLayer
 		proto := header.IPv4ProtocolNumber
 		if v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {
@@ -1324,6 +1333,10 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 	}
 
 	if toForward {
+		if dstIP.Is4() && n.breakWAN4 {
+			// Blackhole the packet.
+			return
+		}
 		src := netip.AddrPortFrom(srcIP, uint16(udp.SrcPort))
 		dst := netip.AddrPortFrom(dstIP, uint16(udp.DstPort))
 		buf, err := n.serializedUDPPacket(src, dst, udp.Payload, nil)
