@@ -4026,7 +4026,7 @@ func (b *LocalBackend) authReconfig() {
 	disableSubnetsIfPAC := nm.HasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	userDialUseRoutes := nm.HasCap(tailcfg.NodeAttrUserDialUseRoutes)
 	dohURL, dohURLOK := exitNodeCanProxyDNS(nm, b.peers, prefs.ExitNodeID())
-	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.logf, version.OS())
+	dcfg := dnsConfigForNetmap(nm, b.peers, prefs, b.keyExpired, b.logf, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm, prefs)
 	b.mu.Unlock()
@@ -4126,10 +4126,23 @@ func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, 
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, logf logger.Logf, versionOS string) *dns.Config {
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
 	if nm == nil {
 		return nil
 	}
+
+	// If the current node's key is expired, then we don't program any DNS
+	// configuration into the operating system. This ensures that if the
+	// DNS configuration specifies a DNS server that is only reachable over
+	// Tailscale, we don't break connectivity for the user.
+	//
+	// TODO(andrew-d): this also stops returning anything from quad-100; we
+	// could do the same thing as having "CorpDNS: false" and keep that but
+	// not program the OS?
+	if selfExpired {
+		return &dns.Config{}
+	}
+
 	dcfg := &dns.Config{
 		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netip.Addr{},
