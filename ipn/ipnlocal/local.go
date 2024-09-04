@@ -597,6 +597,15 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	return nil
 }
 
+// GetDNSOSConfig returns the base OS DNS configuration, as seen by the DNS manager.
+func (b *LocalBackend) GetDNSOSConfig() (dns.OSConfig, error) {
+	manager, ok := b.sys.DNSManager.GetOK()
+	if !ok {
+		return dns.OSConfig{}, errors.New("DNS manager not available")
+	}
+	return manager.GetBaseConfig()
+}
+
 // GetComponentDebugLogging gets the time that component's debug logging is
 // enabled until, or the zero time if component's time is not currently
 // enabled.
