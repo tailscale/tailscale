@@ -14,7 +14,7 @@ import (
 // MDM solution. It requires configuration via the DeviceSerialNumber system policy.
 // This is the only way to gather serial numbers on iOS and tvOS.
 func GetSerialNumbers(_ logger.Logf) ([]string, error) {
-	s, err := syspolicy.GetString("DeviceSerialNumber", "")
+	s, err := syspolicy.GetString(syspolicy.DeviceSerialNumber, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get serial number from MDM: %v", err)
 	}
