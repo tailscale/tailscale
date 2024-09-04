@@ -31,6 +31,20 @@ func TestState_String(t *testing.T) {
 			t.Error(err)
 		}
 	}
+
+	t.Run("parse unknown", func(t *testing.T) {
+		vals := [...]string{"", "unknown"}
+
+		for _, s := range vals {
+			v, err := ParseState(s)
+			if v != NoState {
+				t.Errorf("got %v; want %v", v, NoState)
+			}
+			if err == nil {
+				t.Error("exepected error")
+			}
+		}
+	})
 }
 
 func TestState_JSON(t *testing.T) {
