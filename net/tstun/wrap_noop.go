@@ -5,10 +5,4 @@
 
 package tstun
 
-import (
-	"github.com/tailscale/wireguard-go/tun"
-)
-
-func setLinkFeatures(dev tun.Device) error {
-	return nil
-}
+func (t *Wrapper) SetLinkFeaturesPostUp() {}

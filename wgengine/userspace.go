@@ -492,6 +492,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if err := e.router.Up(); err != nil {
 		return nil, fmt.Errorf("router.Up: %w", err)
 	}
+	tsTUNDev.SetLinkFeaturesPostUp()
 
 	// It's a little pointless to apply no-op settings here (they
 	// should already be empty?), but it at least exercises the
