@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -43,7 +44,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 	fmt.Println("This is the DNS configuration provided by the coordination server to this device.")
 	fmt.Print("\n")
 	if s.CurrentTailnet == nil {
-		fmt.Println("No tailnet information available; make sure you're logged into a tailnet.")
+		fmt.Println("No tailnet information available; make sure you're logged in to a tailnet.")
 		return nil
 	} else if s.CurrentTailnet.MagicDNSEnabled {
 		fmt.Printf("MagicDNS: enabled tailnet-wide (suffix = %s)", s.CurrentTailnet.MagicDNSSuffix)
@@ -76,12 +77,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 	if len(dnsConfig.Routes) == 0 {
 		fmt.Println("  (no routes configured: split DNS might not be in use)")
 	}
-	routesKeys := make([]string, 0, len(dnsConfig.Routes))
-	for k := range dnsConfig.Routes {
-		routesKeys = append(routesKeys, k)
-	}
-	slices.Sort(routesKeys)
-	for _, k := range routesKeys {
+	for _, k := range slices.Sorted(maps.Keys(dnsConfig.Routes)) {
 		v := dnsConfig.Routes[k]
 		for _, r := range v {
 			fmt.Printf("  - %-30s -> %v", k, r.Addr)
