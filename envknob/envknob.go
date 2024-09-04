@@ -20,10 +20,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,12 +77,7 @@ func LogCurrent(logf logf) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	list := make([]string, 0, len(set))
-	for k := range set {
-		list = append(list, k)
-	}
-	sort.Strings(list)
-	for _, k := range list {
+	for _, k := range slices.Sorted(maps.Keys(set)) {
 		logf("envknob: %s=%q", k, set[k])
 	}
 }

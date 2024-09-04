@@ -7,12 +7,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -593,13 +593,7 @@ func TestMakeProbePlan(t *testing.T) {
 
 func (plan probePlan) String() string {
 	var sb strings.Builder
-	keys := []string{}
-	for k := range plan {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
+	for _, key := range slices.Sorted(maps.Keys(plan)) {
 		fmt.Fprintf(&sb, "[%s]", key)
 		pv := plan[key]
 		for _, p := range pv {
