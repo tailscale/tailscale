@@ -499,7 +499,7 @@ func newConnAndMeasureFn(forDst netip.Addr, source timestampSource, protocol pro
 		}
 		return &connAndMeasureFn{
 			conn: conn,
-			fn:   mkICMPRTTFn(source),
+			fn:   mkICMPMeasureFn(source),
 		}, nil
 	case protocolHTTPS:
 		localPort := 0

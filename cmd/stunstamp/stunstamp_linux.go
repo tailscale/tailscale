@@ -62,7 +62,7 @@ func parseTimestampFromCmsgs(oob []byte) (time.Time, error) {
 	return time.Time{}, errors.New("failed to parse timestamp from cmsgs")
 }
 
-func mkICMPRTTFn(source timestampSource) func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
+func mkICMPMeasureFn(source timestampSource) measureFn {
 	return func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
 		return measureICMPRTT(source, conn, hostname, dst)
 	}

@@ -54,7 +54,7 @@ func getICMPConn(forDst netip.Addr, source timestampSource) (io.ReadWriteCloser,
 	return nil, errors.New("platform unsupported")
 }
 
-func mkICMPRTTFn(source timestampSource) func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
+func mkICMPMeasureFn(source timestampSource) measureFn {
 	return func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
 		return 0, errors.New("platform unsupported")
 	}
