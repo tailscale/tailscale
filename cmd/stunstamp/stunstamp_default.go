@@ -40,8 +40,24 @@ func getProtocolSupportInfo(p protocol) protocolSupportInfo {
 			userspaceTS: false,
 			stableConn:  true,
 		}
+	case protocolICMP:
+		return protocolSupportInfo{
+			kernelTS:    false,
+			userspaceTS: false,
+			stableConn:  false,
+		}
 	}
 	return protocolSupportInfo{}
+}
+
+func getICMPConn(forDst netip.Addr, source timestampSource) (io.ReadWriteCloser, error) {
+	return nil, errors.New("platform unsupported")
+}
+
+func mkICMPRTTFn(source timestampSource) func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
+	return func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
+		return 0, errors.New("platform unsupported")
+	}
 }
 
 func setSOReuseAddr(fd uintptr) error {
