@@ -380,7 +380,7 @@ func probe(meta nodeMeta, cf *connAndMeasureFn, dstPort int) (*time.Duration, er
 		Port: dstPort,
 	}
 
-	time.Sleep(rand.N(200 * time.Millisecond)) // jitter across tx
+	time.Sleep(rand.N(400 * time.Millisecond)) // jitter across tx
 	rtt, err := cf.fn(cf.conn, meta.hostname, netip.AddrPortFrom(meta.addr, uint16(dstPort)))
 	if err != nil {
 		if isTemporaryOrTimeoutErr(err) {
