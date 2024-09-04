@@ -1064,7 +1064,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	_ = t.lastStreamedMapResponse
 	_ = t.lastMapRequestHeard
 
-	shouldClearMagicsockWarnings := false
+	shouldClearMagicsockWarnings := true
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
 		if f.missing {
@@ -1072,6 +1072,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 				ArgMagicsockFunctionName: f.name,
 			})
 			shouldClearMagicsockWarnings = false
+			break
 		}
 	}
 	if shouldClearMagicsockWarnings {
