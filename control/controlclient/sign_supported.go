@@ -38,7 +38,7 @@ var getMachineCertificateSubjectOnce struct {
 // Example: "CN=Tailscale Inc Test Root CA,OU=Tailscale Inc Test Certificate Authority,O=Tailscale Inc,ST=ON,C=CA"
 func getMachineCertificateSubject() string {
 	getMachineCertificateSubjectOnce.Do(func() {
-		getMachineCertificateSubjectOnce.v, _ = syspolicy.GetString("MachineCertificateSubject", "")
+		getMachineCertificateSubjectOnce.v, _ = syspolicy.GetString(syspolicy.MachineCertificateSubject, "")
 	})
 
 	return getMachineCertificateSubjectOnce.v
