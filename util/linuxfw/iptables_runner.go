@@ -371,6 +371,28 @@ func (i *iptablesRunner) AddDNATRule(origDst, dst netip.Addr) error {
 	return table.Insert("nat", "PREROUTING", 1, "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dst.String())
 }
 
+// For this prototype only - for the real implementation we will probably split
+// this into custom chains to make this more readable/easier update-eable.
+func (i *iptablesRunner) AddDNATRuleForSrcPrt(origDst, dst netip.Addr, srcPrt, dstPrt uint16, proto uint8) error {
+	table := i.getIPTByAddr(dst)
+	protoS, err := protoName(proto)
+	if err != nil {
+		return err
+	}
+	return table.Insert("nat", "PREROUTING", 1, "-p", protoS, "--dport", fmt.Sprintf("%d", srcPrt), "--destination", origDst.String(), "-j", "DNAT", "--to-destination", fmt.Sprintf("%v:%v", dst, dstPrt))
+}
+
+func protoName(proto uint8) (string, error) {
+	switch proto {
+	case 6:
+		return "tcp", nil
+	case 11:
+		return "udp", nil
+	default:
+		return "", fmt.Errorf("unrecognized protocol code: %d", proto)
+	}
+}
+
 func (i *iptablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
 	table := i.getIPTByAddr(dst)
 	return table.Insert("nat", "POSTROUTING", 1, "--destination", dst.String(), "-j", "SNAT", "--to-source", src.String())

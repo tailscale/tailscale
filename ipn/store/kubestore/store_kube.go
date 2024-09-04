@@ -53,7 +53,7 @@ func (s *Store) String() string { return "kube.Store" }
 
 // ReadState implements the StateStore interface.
 func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
@@ -83,7 +83,7 @@ func sanitizeKey(k ipn.StateKey) string {
 
 // WriteState implements the StateStore interface.
 func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)

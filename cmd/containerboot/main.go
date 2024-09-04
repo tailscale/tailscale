@@ -81,6 +81,7 @@
 //     cluster using the same hostname (in this case, the MagicDNS name of the ingress proxy)
 //     as a non-cluster workload on tailnet.
 //     This is only meant to be configured by the Kubernetes operator.
+//   - TS_EGRESS_SERVICES_PATH: mounted json formatted egress service config
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -123,11 +124,13 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	kubeutils "tailscale.com/k8s-operator"
+	"tailscale.com/kube"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/linuxfw"
+	"tailscale.com/util/mak"
 )
 
 func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
@@ -166,6 +169,7 @@ func main() {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+		EgressServicesPath:                    defaultEnv("TS_EGRESS_SERVICES_PATH", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -576,7 +580,6 @@ runLoop:
 						log.Fatalf("storing device IPs and FQDN in Kubernetes Secret: %v", err)
 					}
 				}
-
 				if cfg.HealthCheckAddrPort != "" {
 					h.Lock()
 					h.hasAddrs = len(addrs) != 0
@@ -600,6 +603,11 @@ runLoop:
 					// post-auth configuration is done.
 					log.Println("Startup complete, waiting for shutdown signal")
 					startupTasksDone = true
+
+					if cfg.EgressServicesPath != "" {
+						log.Printf("ensure egress services are configured")
+						go ensureEgressServicePortMap(ctx, cfg.EgressServicesPath, nfr, addrs, cfg.PodIP, cfg.KubeSecret)
+					}
 
 					// Wait on tailscaled process. It won't
 					// be cleaned up by default when the
@@ -1172,6 +1180,183 @@ type settings struct {
 	// target.
 	PodIP               string
 	HealthCheckAddrPort string
+	EgressServicesPath  string
+}
+
+func ensureEgressServicePortMap(ctx context.Context, path string, nfr linuxfw.NetfilterRunner, addrs []netip.Prefix, podIPS, stateSecretName string) {
+	if path == "" {
+		panic("egress services config path is empty")
+	}
+	// TODO: also reconfigure if tailnet IPs have changed
+	var tickChan <-chan time.Time
+	var eventChan <-chan fsnotify.Event
+	if w, err := fsnotify.NewWatcher(); err != nil {
+		log.Printf("failed to create fsnotify watcher, timer-only mode: %v", err)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		tickChan = ticker.C
+	} else {
+		defer w.Close()
+		if err := w.Add(filepath.Dir(path)); err != nil {
+			log.Fatalf("failed to add fsnotify watch: %v", err)
+		}
+		eventChan = w.Events
+	}
+	f := func() {
+		log.Printf("running egress service reconfigure")
+		cfg, err := readEgressSvcConfig(path)
+		if err != nil {
+			log.Fatalf("error reading egress svc config: %v", err)
+		}
+		if cfg == nil || len(*cfg) == 0 {
+			log.Printf("no services configured yet")
+			return
+		}
+		// get the config from state secret
+		stateS, err := kc.GetSecret(ctx, stateSecretName)
+		if err != nil {
+			log.Fatalf("error retrieving state secret: %v", err)
+		}
+		prevCfg := &kubeutils.EgressServicesStatus{}
+		prevCfgS, ok := stateS.Data["egress-services"]
+		if ok {
+			if err := json.Unmarshal([]byte(prevCfgS), prevCfg); err != nil {
+				log.Fatalf("error unmarshalling previous config: %v", err)
+			}
+		}
+
+		hasChanges := false
+		for svcName, svc := range *cfg {
+			// produce wanted config
+			if egressSvcUpToDate(prevCfg, svcName, svc, podIPS) {
+				log.Printf("%s up to date", svcName)
+				continue
+			}
+			log.Printf("svc %s changes detected", svcName)
+			hasChanges = true
+			// only IP is supported for this prototype
+			tailnetTarget, err := netip.ParseAddr(svc.TailnetTarget.IP)
+			if err != nil {
+				log.Fatalf("error parsing tailnet ip: %v", err)
+			}
+			var local netip.Addr
+			for _, pfx := range addrs {
+				if !pfx.IsSingleIP() {
+					continue
+				}
+				if pfx.Addr().Is4() != tailnetTarget.Is4() {
+					continue
+				}
+				local = pfx.Addr()
+				break
+			}
+			if !local.IsValid() {
+				// TODO: watch tailnet IPs and retry when a new one gets allocated
+				log.Fatalf("no valid local IP: %v", local)
+			}
+			// add snat
+			if err := nfr.AddSNATRuleForDst(local, tailnetTarget); err != nil {
+				log.Fatalf("error setting up SNAT: %v", err)
+			}
+			podIP, err := netip.ParseAddr(podIPS)
+			if err != nil {
+				log.Fatalf("provided Pod IP %s cannot be parsed as IP: %v", podIPS, err)
+			}
+			for _, mapping := range svc.Ports {
+				p, err := proto(mapping.Protocol)
+				if err != nil {
+					log.Fatalf("unable to parse protocol: %v", err)
+				}
+				if err := nfr.AddDNATRuleForSrcPrt(podIP, tailnetTarget, mapping.Dst, mapping.Src, p); err != nil {
+					log.Fatalf("error setting up DNAT rule for tailnet target %v port map %v:%v : %v", tailnetTarget, mapping.Src, mapping.Dst, err)
+				}
+			}
+			svcCfg := kubeutils.EgressServiceStatus{
+				TailnetTarget: svc.TailnetTarget,
+				Ports:         svc.Ports,
+				PodIP:         podIPS,
+			}
+			mak.Set(prevCfg, svcName, svcCfg)
+		}
+		log.Printf("state Secret has changes: %t", hasChanges)
+		if hasChanges {
+			bs, err := json.Marshal(prevCfg)
+			if err != nil {
+				log.Fatalf("error marshalling service config: %v", err)
+			}
+			stateS.Data["egress-services"] = bs
+			patch := kube.JSONPatch{
+				Op:    "replace",
+				Path:  "/data/egress-services",
+				Value: bs,
+			}
+			if err := kc.JSONPatchSecret(ctx, stateSecretName, []kube.JSONPatch{patch}); err != nil {
+				log.Fatalf("error patching state Secret: %v", err)
+			}
+		}
+	}
+	f()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tickChan:
+		case <-eventChan:
+			f()
+		}
+	}
+}
+
+func proto(s string) (uint8, error) {
+	switch strings.ToLower(s) {
+	case "tcp":
+		return 6, nil
+	case "udp":
+		return 11, nil
+	default:
+		return 0, fmt.Errorf("unrecognized protocol: %s", s)
+	}
+}
+
+func egressSvcUpToDate(prevCfg *kubeutils.EgressServicesStatus, svcName string, svcCfg kubeutils.EgressService, podIP string) bool {
+	if prevCfg == nil {
+		return false
+	}
+	prev, ok := (*prevCfg)[svcName]
+	if !ok {
+		return false
+	}
+	if !strings.EqualFold(prev.TailnetTarget.IP, svcCfg.TailnetTarget.IP) {
+		return false
+	}
+	if !reflect.DeepEqual(prev.Ports, svcCfg.Ports) {
+		return false
+	}
+	if !strings.EqualFold(podIP, prev.PodIP) {
+		return false
+	}
+	return true
+}
+
+func readEgressSvcConfig(path string) (*kubeutils.EgressServices, error) {
+	if path == "" {
+		return nil, nil
+	}
+	j, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(j) == 0 || string(j) == "" {
+		return nil, nil
+	}
+	var cfg *kubeutils.EgressServices
+	if err := json.Unmarshal(j, &cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 func (s *settings) validate() error {
@@ -1351,7 +1536,7 @@ func isOneStepConfig(cfg *settings) bool {
 // as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
 func isL3Proxy(cfg *settings) bool {
-	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
+	return cfg.EgressServicesPath != "" || cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
 }
 
 // hasKubeStateStore returns true if the state must be stored in a Kubernetes

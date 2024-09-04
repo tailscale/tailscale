@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/tsaddr"
@@ -100,6 +101,72 @@ func (n *nftablesRunner) ensurePreroutingChain(dst netip.Addr) (*nftables.Table,
 		return nil, nil, fmt.Errorf("error ensuring prerouting chain: %w", err)
 	}
 	return nat, preroutingCh, nil
+}
+func (n *nftablesRunner) AddDNATRuleForSrcPrt(origDst netip.Addr, dst netip.Addr, origPrt, dstPrt uint16, proto uint8) error {
+	nat, preroutingCh, err := n.ensurePreroutingChain(dst)
+	if err != nil {
+		return err
+	}
+	var daddrOffset, fam, dadderLen uint32
+	if origDst.Is4() {
+		daddrOffset = 16
+		dadderLen = 4
+		fam = unix.NFPROTO_IPV4
+	} else {
+		daddrOffset = 24
+		dadderLen = 16
+		fam = unix.NFPROTO_IPV6
+	}
+	dnatRule := &nftables.Rule{
+		Table: nat,
+		Chain: preroutingCh,
+		Exprs: []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       daddrOffset,
+				Len:          dadderLen,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     origDst.AsSlice(),
+			},
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{proto},
+			},
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       2,
+				Len:          2,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     binaryutil.BigEndian.PutUint16(origPrt),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.Immediate{
+				Register: 2,
+				Data:     binaryutil.BigEndian.PutUint16(dstPrt),
+			},
+			&expr.NAT{
+				Type:        expr.NATTypeDestNAT,
+				Family:      fam,
+				RegAddrMin:  1,
+				RegProtoMin: 2,
+			},
+		},
+	}
+	n.conn.InsertRule(dnatRule)
+	return n.conn.Flush()
 }
 
 func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
@@ -581,6 +648,8 @@ type NetfilterRunner interface {
 	// DelMagicsockPortRule removes the rule created by AddMagicsockPortRule,
 	// if it exists.
 	DelMagicsockPortRule(port uint16, network string) error
+	// DNAT traffic to originDst:originPrt to dst:dstPort
+	AddDNATRuleForSrcPrt(origDst, dst netip.Addr, originPrt, dstPrt uint16, proto uint8) error
 }
 
 // New creates a NetfilterRunner, auto-detecting whether to use

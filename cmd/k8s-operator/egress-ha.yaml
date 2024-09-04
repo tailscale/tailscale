@@ -1,0 +1,161 @@
+# This yaml contains roughly what the operator would create for ProxyGroup resource like:
+# apiVersion: tailscale.com/v1alpha1
+# kind: ProxyGroup
+# metadata:
+#   name: egress-proxies
+# spec:
+#    replicas: 3
+#    type: egress
+#
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: egress-proxies
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: egress-proxies
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: egress-proxies
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: egress-proxies
+subjects:
+- kind: ServiceAccount
+  name: egress-proxies
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: egress-proxies
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+    app: egress-proxies
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: egress-proxies
+  serviceName: ""
+  template:
+    metadata:
+      labels:
+        app: egress-proxies
+        tailscale.com/proxy-group: egress-proxies
+    spec:
+      containers:
+      - env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: TS_USERSPACE
+          value: "false"
+        - name: TS_KUBE_SECRET
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: TS_AUTH_ONCE
+          value: "true"
+        - name: TS_AUTHKEY
+          value: <insert auth key> 
+        - name: TS_HOSTNAME
+          value: egress-proxies
+        - name: TS_DEBUG_FIREWALL_MODE
+          value: iptables
+        - name: TS_EGRESS_SERVICES_PATH
+          value: /etc/egress-services/cfg
+        image: gcr.io/csi-test-290908/proxy:v0.0.8egresshapm
+        imagePullPolicy: IfNotPresent
+        name: tailscale
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+        volumeMounts:
+        - mountPath: /etc/egress-services
+          name: egress-services
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      serviceAccount: egress-proxies
+      serviceAccountName: egress-proxies
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: egress-proxies-egress-services
+        name: egress-services
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-proxies-egress-services
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  name: egress-proxies-0
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+type: Opaque
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  name: egress-proxies-1
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+type: Opaque
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  name: egress-proxies-2
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+type: Opaque
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  name: egress-proxies-3
+  namespace: tailscale
+  labels:
+    tailscale.com/proxy-group: egress-proxies
+type: Opaque
