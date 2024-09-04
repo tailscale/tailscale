@@ -21,20 +21,41 @@ import (
 
 type State int
 
-//go:generate go run github.com/nikolaydubina/go-enum-encoding@v1.8.0 -type=State -string -encode-method=MarshalTextName -decode-method=UnmarshalTextName
 const (
-	NoState          State = 0 // json:"NoState"
-	InUseOtherUser   State = 1 // json:"InUseOtherUser"
-	NeedsLogin       State = 2 // json:"NeedsLogin"
-	NeedsMachineAuth State = 3 // json:"NeedsMachineAuth"
-	Stopped          State = 4 // json:"Stopped"
-	Starting         State = 5 // json:"Starting"
-	Running          State = 6 // json:"Running"
+	NoState          State = 0
+	InUseOtherUser   State = 1
+	NeedsLogin       State = 2
+	NeedsMachineAuth State = 3
+	Stopped          State = 4
+	Starting         State = 5
+	Running          State = 6
 )
 
 // GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
 // ID tokens used by the Android client.
 const GoogleIDTokenType = "ts_android_google_login"
+
+var stateStringValues = [...]string{
+	"NoState",
+	"InUseOtherUser",
+	"NeedsLogin",
+	"NeedsMachineAuth",
+	"Stopped",
+	"Starting",
+	"Running",
+}
+
+func (s State) String() string { return stateStringValues[s] }
+
+// ParseState from string representation.
+func ParseState(s string) (State, error) {
+	for i, v := range stateStringValues {
+		if s == v {
+			return State(i), nil
+		}
+	}
+	return NoState, fmt.Errorf("unknown State %q", s)
+}
 
 // EngineStatus contains WireGuard engine stats.
 type EngineStatus struct {

@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+func TestState_String(t *testing.T) {
+	tests := []struct {
+		s string
+		v State
+	}{
+		{s: "NoState", v: NoState},
+		{s: "InUseOtherUser", v: InUseOtherUser},
+		{s: "NeedsLogin", v: NeedsLogin},
+		{s: "NeedsMachineAuth", v: NeedsMachineAuth},
+		{s: "Stopped", v: Stopped},
+		{s: "Starting", v: Starting},
+		{s: "Running", v: Running},
+	}
+	for _, tc := range tests {
+		if tc.v.String() != tc.s {
+			t.Errorf("got %s; want %s", tc.v.String(), tc.s)
+		}
+
+		v, err := ParseState(tc.s)
+		if v != tc.v {
+			t.Errorf("got %v; want %v", v, tc.v)
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 func TestState_JSON(t *testing.T) {
 	type V struct {
 		S State
