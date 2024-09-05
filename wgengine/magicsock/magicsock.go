@@ -688,9 +688,6 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		return new(netcheck.Report), nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
 	report, err := c.netChecker.GetReport(ctx, dm, &netcheck.GetReportOpts{
 		// Pass information about the last time that we received a
 		// frame from a DERP server to our netchecker to help avoid
