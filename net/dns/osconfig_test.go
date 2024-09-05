@@ -6,8 +6,10 @@ package dns
 import (
 	"fmt"
 	"net/netip"
+	"reflect"
 	"testing"
 
+	"tailscale.com/tstest"
 	"tailscale.com/util/dnsname"
 )
 
@@ -40,4 +42,14 @@ func TestOSConfigPrintable(t *testing.T) {
 	if s != expected {
 		t.Errorf("format mismatch:\n   got: %s\n  want: %s", s, expected)
 	}
+}
+
+func TestIsZero(t *testing.T) {
+	tstest.CheckIsZero[OSConfig](t, map[reflect.Type]any{
+		reflect.TypeFor[dnsname.FQDN](): dnsname.FQDN("foo.bar."),
+		reflect.TypeFor[*HostEntry](): &HostEntry{
+			Addr:  netip.AddrFrom4([4]byte{100, 1, 2, 3}),
+			Hosts: []string{"foo", "bar"},
+		},
+	})
 }
