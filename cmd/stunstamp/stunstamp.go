@@ -53,7 +53,16 @@ var (
 )
 
 const (
-	minInterval       = time.Second
+	// maxTxJitter is the upper bounds for jitter introduced across probes
+	maxTXJitter = time.Millisecond * 400
+	// minInterval is the minimum allowed probe interval/step
+	minInterval = time.Second * 10
+	// txRxTimeout is the timeout value used for kernel timestamping loopback,
+	// and packet receive operations
+	txRxTimeout = time.Second * 2
+	// maxBufferDuration is the maximum duration (maxBufferDuration /
+	// *flagInterval steps worth) of buffered data that can be held in memory
+	// before data loss occurs around prometheus unavailability.
 	maxBufferDuration = time.Hour
 )
 
@@ -322,7 +331,7 @@ func measureSTUNRTT(conn io.ReadWriteCloser, _ string, dst netip.AddrPort) (rtt 
 	if !ok {
 		return 0, fmt.Errorf("unexpected conn type: %T", conn)
 	}
-	err = uconn.SetReadDeadline(time.Now().Add(time.Second * 2))
+	err = uconn.SetReadDeadline(time.Now().Add(txRxTimeout))
 	if err != nil {
 		return 0, fmt.Errorf("error setting read deadline: %w", err)
 	}
@@ -380,7 +389,7 @@ func probe(meta nodeMeta, cf *connAndMeasureFn, dstPort int) (*time.Duration, er
 		Port: dstPort,
 	}
 
-	time.Sleep(rand.N(400 * time.Millisecond)) // jitter across tx
+	time.Sleep(rand.N(maxTXJitter)) // jitter across tx
 	rtt, err := cf.fn(cf.conn, meta.hostname, netip.AddrPortFrom(meta.addr, uint16(dstPort)))
 	if err != nil {
 		if isTemporaryOrTimeoutErr(err) {
