@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unicode"
 
 	"tailscale.com/envknob"
@@ -505,15 +504,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return contextWithActor(ctx, s.logf, c)
 		},
-		// Localhost connections are cheap; so only do
-		// keep-alives for a short period of time, as these
-		// active connections lock the server into only serving
-		// that user. If the user has this page open, we don't
-		// want another switching user to be locked out for
-		// minutes. 5 seconds is enough to let browser hit
-		// favicon.ico and such.
-		IdleTimeout: 5 * time.Second,
-		ErrorLog:    logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
+		ErrorLog: logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
 	}
 	if err := hs.Serve(ln); err != nil {
 		if err := ctx.Err(); err != nil {
