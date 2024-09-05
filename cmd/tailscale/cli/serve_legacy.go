@@ -159,6 +159,7 @@ type serveEnv struct {
 	http             uint      // HTTP port
 	tcp              uint      // TCP port
 	tlsTerminatedTCP uint      // a TLS terminated TCP port
+	promoteHTTPS     bool      // promote HTTP to HTTPS
 	subcmd           serveMode // subcommand
 	yes              bool      // update without prompt
 

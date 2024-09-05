@@ -461,6 +461,63 @@ func TestServeHTTPProxyPath(t *testing.T) {
 		})
 	}
 }
+
+func TestServeHTTPRedirect(t *testing.T) {
+	b := newTestBackend(t)
+	tests := []struct {
+		name        string
+		requestPath string
+		wantPath    string
+	}{
+		{
+			name:        "http / -> https /",
+			requestPath: "/",
+			wantPath:    "/",
+		},
+		{
+			name:        "http /foo -> https /foo",
+			requestPath: "/foo",
+			wantPath:    "/foo",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conf := &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"example.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Redirect: "https://example.ts.net"},
+					}},
+					"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Text: "foo bar"},
+					}},
+				},
+			}
+			if err := b.SetServeConfig(conf, ""); err != nil {
+				t.Fatal(err)
+			}
+			req := &http.Request{
+				URL: &url.URL{Path: tt.requestPath},
+				TLS: &tls.ConnectionState{ServerName: "example.ts.net"},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(),
+				&serveHTTPContext{
+					DestPort: 80,
+					SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"), // random src
+				}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			// Verify what path was requested
+			p := w.Result().Header.Get("Location")
+			wantLoc := fmt.Sprintf("https://example.ts.net%s", tt.wantPath)
+			if p != wantLoc {
+				t.Errorf("wanted request path %s got %s", wantLoc, p)
+			}
+		})
+	}
+}
+
 func TestServeHTTPProxyHeaders(t *testing.T) {
 	b := newTestBackend(t)
 

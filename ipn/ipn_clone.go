@@ -158,9 +158,10 @@ func (src *HTTPHandler) Clone() *HTTPHandler {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
-	Path  string
-	Proxy string
-	Text  string
+	Path     string
+	Proxy    string
+	Text     string
+	Redirect string
 }{})
 
 // Clone makes a deep copy of WebServerConfig.

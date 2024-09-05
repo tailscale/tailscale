@@ -314,9 +314,9 @@ type LocalBackend struct {
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
 
-	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
-
+	serveListeners        map[netip.AddrPort]*localListener // listeners for local serve traffic
+	serveProxyHandlers    sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
+	serveRedirectHandlers sync.Map                          // string (HTTPHandler.Redirect) => http.Handler
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
@@ -5614,6 +5614,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		handlePorts = append(handlePorts, servePorts...)
 
 		b.setServeProxyHandlersLocked()
+		b.setServeRedirectHandlersLocked()
 
 		// don't listen on netmap addresses if we're in userspace mode
 		if !b.sys.IsNetstack() {
@@ -5672,6 +5673,51 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 			b.logf("serve: closing idle connections to %s", backend)
 			b.serveProxyHandlers.Delete(backend)
 			value.(*reverseProxy).close()
+		}
+		return true
+	})
+}
+
+// setServeRedirectHandlersLocked ensures there is an http redirect handler for
+// each redirect specified in serveConfig. It expects serveConfig to be valid
+// and up-to-date, so should be called after reloadServeConfigLocked.
+func (b *LocalBackend) setServeRedirectHandlersLocked() {
+	if !b.serveConfig.Valid() {
+		return
+	}
+	var redirects map[string]bool
+	b.serveConfig.RangeOverWebs(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
+		conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
+			redirect := h.Redirect()
+			if redirect == "" {
+				// Only create redirect handlers for servers with a redirect target.
+				return true
+			}
+
+			mak.Set(&redirects, redirect, true)
+			if _, ok := b.serveRedirectHandlers.Load(redirect); ok {
+				return true
+			}
+
+			b.logf("serve: creating a new redirect handler for %s", redirect)
+			rh, err := b.redirectHandlerForRedirect(redirect, 301)
+			if err != nil {
+				b.logf("[unexpected] could not create redirect handler for %v: %s", redirect, err)
+				return true
+			}
+			b.serveRedirectHandlers.Store(redirect, rh)
+
+			return true
+		})
+		return true
+	})
+
+	// Clean up redirect handlers that are no longer present in configuration.
+	b.serveRedirectHandlers.Range(func(key, value any) bool {
+		redirect := key.(string)
+		if !redirects[redirect] {
+			b.logf("serve: closing idle connections to %s", redirect)
+			b.serveRedirectHandlers.Delete(redirect)
 		}
 		return true
 	})
