@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -180,19 +181,36 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 // watchIPNBus subscribes to the tailscale event bus and sends state updates to chState.
 // This method does not return.
 func watchIPNBus(ctx context.Context) {
+	for {
+		if err := watchIPNBusInner(ctx); err != nil {
+			log.Println(err)
+			if errors.Is(err, context.Canceled) {
+				// If the context got canceled, we will never be able to
+				// reconnect to IPN bus, so exit the process.
+				log.Fatalf("watchIPNBus: %v", err)
+			}
+		}
+		// If our watch connection breaks, wait a bit before reconnecting. No
+		// reason to spam the logs if e.g. tailscaled is restarting or goes
+		// down.
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func watchIPNBusInner(ctx context.Context) error {
 	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
 	if err != nil {
-		log.Printf("watching ipn bus: %v", err)
+		return fmt.Errorf("watching ipn bus: %w", err)
 	}
 	defer watcher.Close()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		default:
 			n, err := watcher.Next()
 			if err != nil {
-				log.Printf("ipnbus error: %v", err)
+				return fmt.Errorf("ipnbus error: %w", err)
 			}
 			if n.State != nil {
 				chState <- *n.State
