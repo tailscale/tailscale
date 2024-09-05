@@ -56,20 +56,20 @@ var debugCmd = &ffcli.Command{
 	Subcommands: []*ffcli.Command{
 		{
 			Name:       "file",
-			ShortUsage: "tailscale debug file --name <get, delete:NAME, or NAME>",
+			ShortUsage: "tailscale debug file <file-name> [--delete]",
 			Exec:       runFile,
-			ShortHelp:  "Run taildrop file",
+			ShortHelp:  "Exercise the low-level Taildrop LocalAPI; get or delete a file",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("file")
-				fs.StringVar(&fileArgs.name, "name", "", "get, delete:NAME, or NAME")
+				fs.BoolVar(&fileArgs.delete, "delete", true, "specify whether to delete the file")
 				return fs
 			})(),
 		},
 		{
 			Name:       "mem-profile",
-			ShortUsage: "tailscale debug mem-profile --out",
+			ShortUsage: "tailscale debug mem-profile --out <file-name>",
 			Exec:       runPprofMemory,
-			ShortHelp:  "Run pprof memory",
+			ShortHelp:  "Gather Memory profiling information in Go pprof format",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("mem-profile")
 				fs.StringVar(&pprofMemoryArgs.out, "out", "", "grab a memory profile and write it to this file; - for stdout")
@@ -78,9 +78,9 @@ var debugCmd = &ffcli.Command{
 		},
 		{
 			Name:       "cpu-profile",
-			ShortUsage: "tailscale debug cpu-profile --out --profile-seconds",
+			ShortUsage: "tailscale debug cpu-profile --out <file-name> --profile-seconds",
 			Exec:       runPprofCPU,
-			ShortHelp:  "Run pprof cpu",
+			ShortHelp:  "Gather CPU profiling information in Go pprof format",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("cpu-profile")
 				fs.StringVar(&pprofCpuArgs.out, "out", "", "grab a CPU profile for --profile-seconds seconds and write it to this file; - for stdout")
@@ -1192,7 +1192,7 @@ var pprofMemoryArgs struct {
 
 func runPprofMemory(ctx context.Context, args []string) error {
 	if len(args) > 0 {
-		return errors.New("usage: tailscale debug mem-profile --out")
+		return errors.New("usage: tailscale debug mem-profile --out <file-name>")
 	}
 
 	out := pprofMemoryArgs.out
@@ -1220,7 +1220,7 @@ var pprofCpuArgs struct {
 
 func runPprofCPU(ctx context.Context, args []string) error {
 	if len(args) > 0 {
-		return errors.New("usage: tailscale debug cpu-profile --out --profile-seconds")
+		return errors.New("usage: tailscale debug cpu-profile --out <file-name> --profile-seconds")
 	}
 
 	out := pprofCpuArgs.out
@@ -1243,43 +1243,31 @@ func runPprofCPU(ctx context.Context, args []string) error {
 }
 
 var fileArgs struct {
-	name string
+	delete bool
 }
 
 func runFile(ctx context.Context, args []string) error {
-	if len(args) > 0 {
-		return errors.New("usage: tailscale debug file --name <get, delete:NAME, or NAME>")
+	if len(args) < 1 || len(args) > 2 || args[0] == "" {
+		return errors.New("usage: tailscale debug file <name> [--delete]")
 	}
 
-	name := fileArgs.name
-	if name == "" {
-		return errors.New("--name must be provided")
-	}
+	name := args[0]
+	delete := fileArgs.delete
 
-	switch {
-	case name == "get":
-		wfs, err := localClient.WaitingFiles(ctx)
-		if err != nil {
-			fatalf("%v\n", err)
-		}
-		e := json.NewEncoder(Stdout)
-		e.SetIndent("", "\t")
-		if err := e.Encode(wfs); err != nil {
-			return fmt.Errorf("failed to encode files to JSON: %v", err)
-		}
-		return nil
-	case strings.HasPrefix(name, "delete:"):
-		name, _ := strings.CutPrefix(name, "delete:")
+	if delete {
 		return localClient.DeleteWaitingFile(ctx, name)
-	default:
-		rc, size, err := localClient.GetWaitingFile(ctx, name)
-		if err != nil {
-			return fmt.Errorf("failed to get file %s: %v", name, err)
-		}
-		log.Printf("Size: %v\n", size)
-		if _, err := io.Copy(Stdout, rc); err != nil {
-			return fmt.Errorf("failed to copy file to stdout: %v", err)
-		}
-		return nil
 	}
+
+	wfs, err := localClient.WaitingFiles(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get waiting files: %v", err)
+	}
+
+	e := json.NewEncoder(Stdout)
+	e.SetIndent("", "\t")
+	if err := e.Encode(wfs); err != nil {
+		return fmt.Errorf("failed to encode files to JSON: %v", err)
+	}
+
+	return nil
 }
