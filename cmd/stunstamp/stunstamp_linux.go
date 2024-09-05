@@ -107,7 +107,7 @@ func measureICMPRTT(source timestampSource, conn io.ReadWriteCloser, _ string, d
 	}
 
 	if source == timestampSourceKernel {
-		txCtx, txCancel := context.WithTimeout(context.Background(), time.Second*2)
+		txCtx, txCancel := context.WithTimeout(context.Background(), txRxTimeout)
 		defer txCancel()
 
 		buf := make([]byte, 1024)
@@ -142,8 +142,8 @@ func measureICMPRTT(source timestampSource, conn io.ReadWriteCloser, _ string, d
 		}
 	}
 
-	rxCtx, txCancel := context.WithTimeout(context.Background(), time.Second*2)
-	defer txCancel()
+	rxCtx, rxCancel := context.WithTimeout(context.Background(), txRxTimeout)
+	defer rxCancel()
 
 	rxBuf := make([]byte, 1024)
 	oob := make([]byte, 1024)
@@ -210,7 +210,7 @@ func measureSTUNRTTKernel(conn io.ReadWriteCloser, _ string, dst netip.AddrPort)
 		return 0, fmt.Errorf("sendto error: %v", err) // don't wrap
 	}
 
-	txCtx, txCancel := context.WithTimeout(context.Background(), time.Second*2)
+	txCtx, txCancel := context.WithTimeout(context.Background(), txRxTimeout)
 	defer txCancel()
 
 	buf := make([]byte, 1024)
@@ -236,7 +236,7 @@ func measureSTUNRTTKernel(conn io.ReadWriteCloser, _ string, dst netip.AddrPort)
 		break
 	}
 
-	rxCtx, rxCancel := context.WithTimeout(context.Background(), time.Second*2)
+	rxCtx, rxCancel := context.WithTimeout(context.Background(), txRxTimeout)
 	defer rxCancel()
 
 	for {
