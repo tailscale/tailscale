@@ -48,7 +48,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
 	github.com/hdevalence/ed25519consensus v0.2.0
-	github.com/illarion/gonotify/v2 v2.0.2
+	github.com/illarion/gonotify/v2 v2.0.3
 	github.com/inetaf/tcpproxy v0.0.0-20240214030015-3ce58045626c
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2
 	github.com/jellydator/ttlcache/v3 v3.1.0
