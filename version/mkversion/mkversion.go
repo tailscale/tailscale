@@ -61,7 +61,7 @@ type VersionInfo struct {
 	// Winres is the version string that gets embedded into Windows exe
 	// metadata. It is of the form "x,y,z,0".
 	Winres string
-	// Synology is a map of Synology DSM major version to the
+	// Synology is a map of Synology DSM version to the
 	// Tailscale numeric version that gets embedded in Synology spk
 	// files.
 	Synology map[int]int64
@@ -252,12 +252,13 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 		Track:   track,
 		Synology: map[int]int64{
 			// Synology requires that version numbers be in a specific format.
-			// Builds with version numbers that don't start with "60" or "70" will fail,
+			// Builds with version numbers that don't start with "60", "70", or "72" will fail,
 			// and the full version number must be within int32 range.
 			// So, we do the following mapping from our Tailscale version to Synology version,
 			// giving major version three decimal places, minor version three, and patch two.
-			6: 6*100_000_000 + int64(v.major-1)*1_000_000 + int64(v.minor)*1_000 + int64(v.patch),
-			7: 7*100_000_000 + int64(v.major-1)*1_000_000 + int64(v.minor)*1_000 + int64(v.patch),
+			60: 60*10_000_000 + int64(v.major-1)*1_000_000 + int64(v.minor)*1_000 + int64(v.patch),
+			70: 70*10_000_000 + int64(v.major-1)*1_000_000 + int64(v.minor)*1_000 + int64(v.patch),
+			72: 72*10_000_000 + int64(v.major-1)*1_000_000 + int64(v.minor)*1_000 + int64(v.patch),
 		},
 	}
 
