@@ -78,7 +78,10 @@ func Test_Hijacker(t *testing.T) {
 			tc := &fakes.TestConn{}
 			ch := make(chan error)
 			h := &Hijacker{
-				connectToRecorder: func(context.Context, []netip.AddrPort, func(context.Context, string, string) (net.Conn, error)) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
+				connectToRecorder: func(context.Context,
+					[]netip.AddrPort,
+					func(context.Context, string, string) (net.Conn, error),
+				) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
 					if tt.failRecorderConnect {
 						err = errors.New("test")
 					}

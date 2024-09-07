@@ -105,7 +105,7 @@ func ConnectToRecorder(ctx context.Context, recs []netip.AddrPort, dial func(con
 			}
 			attempt.FailureMessage = err.Error()
 			errs = append(errs, err)
-			continue
+			continue // try the next recorder
 		}
 		return pw, attempts, errChan, nil
 	}

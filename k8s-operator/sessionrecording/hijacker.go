@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"strings"
 
@@ -137,8 +138,15 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		errChan <-chan error
 	)
 	h.log.Infof("kubectl exec session will be recorded, recorders: %v, fail open policy: %t", h.addrs, h.failOpen)
-	// TODO (irbekrm): send client a message that session will be recorded.
-	wc, _, errChan, err = h.connectToRecorder(ctx, h.addrs, h.ts.Dial)
+	qp := h.req.URL.Query()
+	container := strings.Join(qp[containerKey], "")
+	var recorderAddr net.Addr
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			recorderAddr = info.Conn.RemoteAddr()
+		},
+	}
+	wc, _, errChan, err = h.connectToRecorder(httptrace.WithClientTrace(ctx, trace), h.addrs, h.ts.Dial)
 	if err != nil {
 		msg := fmt.Sprintf("error connecting to session recorders: %v", err)
 		if h.failOpen {
@@ -151,13 +159,12 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 			return nil, multierr.New(errors.New(msg), err)
 		}
 		return nil, errors.New(msg)
+	} else {
+		h.log.Infof("exec session to container %q in Pod %q namespace %q will be recorded, the recording will be sent to a tsrecorder instance at %q", container, h.pod, h.ns, recorderAddr)
 	}
 
-	// TODO (irbekrm): log which recorder
-	h.log.Info("successfully connected to a session recorder")
 	cl := tstime.DefaultClock{}
 	rec := tsrecorder.New(wc, cl, cl.Now(), h.failOpen, h.log)
-	qp := h.req.URL.Query()
 	tty := strings.Join(qp[ttyKey], "")
 	hasTerm := (tty == "true") // session has terminal attached
 	ch := sessionrecording.CastHeader{
@@ -169,7 +176,7 @@ func (h *Hijacker) setUpRecording(ctx context.Context, conn net.Conn) (net.Conn,
 		Kubernetes: &sessionrecording.Kubernetes{
 			PodName:   h.pod,
 			Namespace: h.ns,
-			Container: strings.Join(qp[containerKey], " "),
+			Container: container,
 		},
 	}
 	if !h.who.Node.IsTagged() {
