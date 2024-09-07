@@ -31,6 +31,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -598,6 +599,18 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			},
 		})
 	}
+	app, err := appInfoForProxy(sts)
+	if err != nil {
+		// No need to error out if now or in future we end up in a
+		// situation where app info cannot be determined for one of the
+		// many proxy configurations that the operator can produce.
+		logger.Error("[unexpected] unable to determine proxy type")
+	} else {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_INTERNAL_APP",
+			Value: app,
+		})
+	}
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	if sts.ProxyClassName != "" {
 		logger.Debugf("configuring proxy resources with ProxyClass %s", sts.ProxyClassName)
@@ -609,6 +622,22 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		s.ObjectMeta.Annotations = ss.Annotations
 	}
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, ss, updateSS)
+}
+
+func appInfoForProxy(cfg *tailscaleSTSConfig) (string, error) {
+	if cfg.ClusterTargetDNSName != "" || cfg.ClusterTargetIP != "" {
+		return kube.AppIngressProxy, nil
+	}
+	if cfg.TailnetTargetFQDN != "" || cfg.TailnetTargetIP != "" {
+		return kube.AppEgressProxy, nil
+	}
+	if cfg.ServeConfig != nil {
+		return kube.AppIngressResource, nil
+	}
+	if cfg.Connector != nil {
+		return kube.AppConnector, nil
+	}
+	return "", errors.New("unable to determine proxy type")
 }
 
 // mergeStatefulSetLabelsOrAnnots returns a map that contains all keys/values

@@ -417,6 +417,10 @@ func run() (err error) {
 
 	sys.Set(driveimpl.NewFileSystemForRemote(logf))
 
+	if app := envknob.App(); app != "" {
+		hostinfo.SetApp(app)
+	}
+
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
 

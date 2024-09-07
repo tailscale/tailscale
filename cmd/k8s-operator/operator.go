@@ -39,6 +39,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -87,9 +88,9 @@ func main() {
 	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
 	mode := parseAPIProxyMode()
 	if mode == apiserverProxyModeDisabled {
-		hostinfo.SetApp("k8s-operator")
+		hostinfo.SetApp(kube.AppOperator)
 	} else {
-		hostinfo.SetApp("k8s-operator-proxy")
+		hostinfo.SetApp(kube.AppAPIServerProxy)
 	}
 
 	s, tsClient := initTSNet(zlog)
@@ -300,10 +301,10 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&corev1.Service{}, svcHandlerForIngress).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForIngress).
 		Complete(&IngressReconciler{
-			ssr:      ssr,
-			recorder: eventRecorder,
-			Client:   mgr.GetClient(),
-			logger:   opts.log.Named("ingress-reconciler"),
+			ssr:               ssr,
+			recorder:          eventRecorder,
+			Client:            mgr.GetClient(),
+			logger:            opts.log.Named("ingress-reconciler"),
 			proxyDefaultClass: opts.proxyDefaultClass,
 		})
 	if err != nil {
