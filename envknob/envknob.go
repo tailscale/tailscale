@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	kubetypes "tailscale.com/kube/types"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"

@@ -39,7 +39,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	kubetypes "tailscale.com/kube/types"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"

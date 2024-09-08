@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	kubeapi "tailscale.com/kube/api"
-	kubeclient "tailscale.com/kube/client"
+	"tailscale.com/kube/kubeapi"
+	"tailscale.com/kube/kubeclient"
 )
 
 func TestSetupKube(t *testing.T) {
