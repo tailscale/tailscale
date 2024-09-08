@@ -22,6 +22,7 @@ var ConnectorKind = "Connector"
 // +kubebuilder:resource:scope=Cluster,shortName=cn
 // +kubebuilder:printcolumn:name="SubnetRoutes",type="string",JSONPath=`.status.subnetRoutes`,description="CIDR ranges exposed to tailnet by a subnet router defined via this Connector instance."
 // +kubebuilder:printcolumn:name="IsExitNode",type="string",JSONPath=`.status.isExitNode`,description="Whether this Connector instance defines an exit node."
+// +kubebuilder:printcolumn:name="DNAT",type="string",JSONPath=`.status.dnat`,description="DNAT of the Connector if any."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "ConnectorReady")].reason`,description="Status of the deployed Connector resources."
 
 // Connector defines a Tailscale node that will be deployed in the cluster. The
@@ -55,7 +56,8 @@ type ConnectorList struct {
 }
 
 // ConnectorSpec describes a Tailscale node to be deployed in the cluster.
-// +kubebuilder:validation:XValidation:rule="has(self.subnetRouter) || self.exitNode == true",message="A Connector needs to be either an exit node or a subnet router, or both."
+// +kubebuilder:validation:XValidation:rule="(has(self.subnetRouter) || self.exitNode == true) ||  has(self.dnat)",message="A Connector needs to be either an exit node or a subnet router, or both or have .spec.dnat set."
+// +kubebuilder:validation:XValidation:rule="(has(self.subnetRouter) || (has(self.exitNode) && self.exitNode == true)) !=  has(self.dnat)",message="A Connector with .spec.dnat set must not be an exit node or subnet router."
 type ConnectorSpec struct {
 	// Tags that the Tailscale node will be tagged with.
 	// Defaults to [tag:k8s].
@@ -92,7 +94,17 @@ type ConnectorSpec struct {
 	// https://tailscale.com/kb/1103/exit-nodes
 	// +optional
 	ExitNode bool `json:"exitNode"`
+	// DNAT is an address routable from within cluster that tailnet
+	// traffic should be routed to. DNAT cannot be set together with
+	// .spec.subnetRouter or .spec.exitNode.
+	// DNAT is currently restricted to a list of a single IP address.
+	// +optional
+	DNAT dnat `json:"dnat,omitempty"`
 }
+
+// +kubebuilder:validation:MaxItems=1
+// +kubebuilder:validation:MinItems=1
+type dnat []string
 
 // SubnetRouter defines subnet routes that should be exposed to tailnet via a
 // Connector node.
@@ -153,6 +165,10 @@ type ConnectorStatus struct {
 	// Connector instance.
 	// +optional
 	SubnetRoutes string `json:"subnetRoutes"`
+	// DNAT is a cluster routable IP address that the tailnet traffic to
+	// this node is routed to.
+	// +optional
+	DNAT string `json:"dnat,omitempty"`
 	// IsExitNode is set to true if the Connector acts as an exit node.
 	// +optional
 	IsExitNode bool `json:"isExitNode"`
