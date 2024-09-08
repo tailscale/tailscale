@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
@@ -70,10 +70,10 @@ type ServiceReconciler struct {
 var (
 	// gaugeEgressProxies tracks the number of egress proxies that we're
 	// currently managing.
-	gaugeEgressProxies = clientmetric.NewGauge(kube.MetricEgressProxyCount)
+	gaugeEgressProxies = clientmetric.NewGauge(kubetypes.MetricEgressProxyCount)
 	// gaugeIngressProxies tracks the number of ingress proxies that we're
 	// currently managing.
-	gaugeIngressProxies = clientmetric.NewGauge(kube.MetricIngressProxyCount)
+	gaugeIngressProxies = clientmetric.NewGauge(kubetypes.MetricIngressProxyCount)
 )
 
 func childResourceLabels(name, ns, typ string) map[string]string {

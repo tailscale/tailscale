@@ -23,7 +23,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
-	tskube "tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
@@ -339,10 +339,10 @@ const (
 func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 	log = log.With("remote", r.RemoteAddr)
 	who := whoIsKey.Value(r.Context())
-	rules, err := tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
+	rules, err := tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if len(rules) == 0 && err == nil {
 		// Try the old capability name for backwards compatibility.
-		rules, err = tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, oldCapabilityName)
+		rules, err = tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, oldCapabilityName)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal capability: %v", err)
@@ -392,7 +392,7 @@ func determineRecorderConfig(who *apitype.WhoIsResponse) (failOpen bool, recorde
 		return false, nil, errors.New("[unexpected] cannot determine caller")
 	}
 	failOpen = true
-	rules, err := tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
+	rules, err := tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if err != nil {
 		return failOpen, nil, fmt.Errorf("failed to unmarshal Kubernetes capability: %w", err)
 	}

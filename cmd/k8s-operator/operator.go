@@ -39,7 +39,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -88,9 +88,9 @@ func main() {
 	// https://tailscale.com/kb/1236/kubernetes-operator/?q=kubernetes#accessing-the-kubernetes-control-plane-using-an-api-server-proxy.
 	mode := parseAPIProxyMode()
 	if mode == apiserverProxyModeDisabled {
-		hostinfo.SetApp(kube.AppOperator)
+		hostinfo.SetApp(kubetypes.AppOperator)
 	} else {
-		hostinfo.SetApp(kube.AppAPIServerProxy)
+		hostinfo.SetApp(kubetypes.AppAPIServerProxy)
 	}
 
 	s, tsClient := initTSNet(zlog)

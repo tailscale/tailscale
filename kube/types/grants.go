@@ -1,7 +1,12 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package kube
+// Package types contains types and constants related to the Tailscale
+// Kubernetes Operator.
+// These are split into a separate package for consumption of
+// non-Kubernetes shared libraries and binaries. Be mindful of not increasing
+// dependency size for those consumers when adding anything new here.
+package types
 
 import "net/netip"
 

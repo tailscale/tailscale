@@ -1,10 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package kube provides a client to interact with Kubernetes.
+// Package client provides a client to interact with Kubernetes.
 // This package is Tailscale-internal and not meant for external consumption.
 // Further, the API should not be considered stable.
-package kube
+// Client is split into a separate package for consumption of
+// non-Kubernetes shared libraries and binaries. Be mindful of not increasing
+// dependency size for those consumers when adding anything new here.
+package client
 
 import (
 	"bytes"
@@ -23,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	kubeapi "tailscale.com/kube/api"
 	"tailscale.com/util/multierr"
 )
 
@@ -50,10 +54,10 @@ func readFile(n string) ([]byte, error) {
 // Client handles connections to Kubernetes.
 // It expects to be run inside a cluster.
 type Client interface {
-	GetSecret(context.Context, string) (*Secret, error)
-	UpdateSecret(context.Context, *Secret) error
-	CreateSecret(context.Context, *Secret) error
-	StrategicMergePatchSecret(context.Context, string, *Secret, string) error
+	GetSecret(context.Context, string) (*kubeapi.Secret, error)
+	UpdateSecret(context.Context, *kubeapi.Secret) error
+	CreateSecret(context.Context, *kubeapi.Secret) error
+	StrategicMergePatchSecret(context.Context, string, *kubeapi.Secret, string) error
 	JSONPatchSecret(context.Context, string, []JSONPatch) error
 	CheckSecretPermissions(context.Context, string) (bool, bool, error)
 	SetDialer(dialer func(context.Context, string, string) (net.Conn, error))
@@ -144,7 +148,7 @@ func getError(resp *http.Response) error {
 		// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#http-status-codes
 		return nil
 	}
-	st := &Status{}
+	st := &kubeapi.Status{}
 	if err := json.NewDecoder(resp.Body).Decode(st); err != nil {
 		return err
 	}
@@ -178,7 +182,7 @@ func (c *client) doRequest(ctx context.Context, method, url string, in, out any,
 	}
 	defer resp.Body.Close()
 	if err := getError(resp); err != nil {
-		if st, ok := err.(*Status); ok && st.Code == 401 {
+		if st, ok := err.(*kubeapi.Status); ok && st.Code == 401 {
 			c.expireToken()
 		}
 		return err
@@ -220,8 +224,8 @@ func (c *client) newRequest(ctx context.Context, method, url string, in any) (*h
 }
 
 // GetSecret fetches the secret from the Kubernetes API.
-func (c *client) GetSecret(ctx context.Context, name string) (*Secret, error) {
-	s := &Secret{Data: make(map[string][]byte)}
+func (c *client) GetSecret(ctx context.Context, name string) (*kubeapi.Secret, error) {
+	s := &kubeapi.Secret{Data: make(map[string][]byte)}
 	if err := c.doRequest(ctx, "GET", c.secretURL(name), nil, s); err != nil {
 		return nil, err
 	}
@@ -229,13 +233,13 @@ func (c *client) GetSecret(ctx context.Context, name string) (*Secret, error) {
 }
 
 // CreateSecret creates a secret in the Kubernetes API.
-func (c *client) CreateSecret(ctx context.Context, s *Secret) error {
+func (c *client) CreateSecret(ctx context.Context, s *kubeapi.Secret) error {
 	s.Namespace = c.ns
 	return c.doRequest(ctx, "POST", c.secretURL(""), s, nil)
 }
 
 // UpdateSecret updates a secret in the Kubernetes API.
-func (c *client) UpdateSecret(ctx context.Context, s *Secret) error {
+func (c *client) UpdateSecret(ctx context.Context, s *kubeapi.Secret) error {
 	return c.doRequest(ctx, "PUT", c.secretURL(s.Name), s, nil)
 }
 
@@ -263,7 +267,7 @@ func (c *client) JSONPatchSecret(ctx context.Context, name string, patch []JSONP
 // StrategicMergePatchSecret updates a secret in the Kubernetes API using a
 // strategic merge patch.
 // If a fieldManager is provided, it will be used to track the patch.
-func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *Secret, fieldManager string) error {
+func (c *client) StrategicMergePatchSecret(ctx context.Context, name string, s *kubeapi.Secret, fieldManager string) error {
 	surl := c.secretURL(name)
 	if fieldManager != "" {
 		uv := url.Values{
@@ -340,7 +344,7 @@ func (c *client) checkPermission(ctx context.Context, verb, secretName string) (
 }
 
 func IsNotFoundErr(err error) bool {
-	if st, ok := err.(*Status); ok && st.Code == 404 {
+	if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
 		return true
 	}
 	return false

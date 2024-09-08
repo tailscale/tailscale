@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -410,7 +410,7 @@ func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION
 // Kubernetes Operator components.
 func App() string {
 	a := os.Getenv("TS_INTERNAL_APP")
-	if a == kube.AppConnector || a == kube.AppEgressProxy || a == kube.AppIngressProxy || a == kube.AppIngressResource {
+	if a == kubetypes.AppConnector || a == kubetypes.AppEgressProxy || a == kubetypes.AppIngressProxy || a == kubetypes.AppIngressResource {
 		return a
 	}
 	return ""
