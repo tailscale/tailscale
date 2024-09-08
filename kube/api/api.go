@@ -1,7 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package kube
+// Package api contains Kubernetes API types for internal consumption.
+// These types are split into a separate package for consumption of
+// non-Kubernetes shared libraries and binaries. Be mindful of not increasing
+// dependency size for those consumers when adding anything new here.
+package api
 
 import "time"
 

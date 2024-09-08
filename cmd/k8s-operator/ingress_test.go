@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )
@@ -94,7 +94,7 @@ func TestTailscaleIngress(t *testing.T) {
 		namespace:  "default",
 		parentType: "ingress",
 		hostname:   "default-test",
-		app:        kube.AppIngressResource,
+		app:        kubetypes.AppIngressResource,
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -226,7 +226,7 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 		namespace:  "default",
 		parentType: "ingress",
 		hostname:   "default-test",
-		app:        kube.AppIngressResource,
+		app:        kubetypes.AppIngressResource,
 	}
 	serveConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},

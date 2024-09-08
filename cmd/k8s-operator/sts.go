@@ -31,7 +31,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
@@ -626,16 +626,16 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 
 func appInfoForProxy(cfg *tailscaleSTSConfig) (string, error) {
 	if cfg.ClusterTargetDNSName != "" || cfg.ClusterTargetIP != "" {
-		return kube.AppIngressProxy, nil
+		return kubetypes.AppIngressProxy, nil
 	}
 	if cfg.TailnetTargetFQDN != "" || cfg.TailnetTargetIP != "" {
-		return kube.AppEgressProxy, nil
+		return kubetypes.AppEgressProxy, nil
 	}
 	if cfg.ServeConfig != nil {
-		return kube.AppIngressResource, nil
+		return kubetypes.AppIngressResource, nil
 	}
 	if cfg.Connector != nil {
-		return kube.AppConnector, nil
+		return kubetypes.AppConnector, nil
 	}
 	return "", errors.New("unable to determine proxy type")
 }

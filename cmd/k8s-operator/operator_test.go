@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube"
+	kubetypes "tailscale.com/kube/types"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
@@ -124,7 +124,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
@@ -262,7 +262,7 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 		parentType:        "svc",
 		tailnetTargetFQDN: tailnetTargetFQDN,
 		hostname:          "default-test",
-		app:               kube.AppEgressProxy,
+		app:               kubetypes.AppEgressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
@@ -374,7 +374,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 		parentType:      "svc",
 		tailnetTargetIP: tailnetTargetIP,
 		hostname:        "default-test",
-		app:             kube.AppEgressProxy,
+		app:             kubetypes.AppEgressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
@@ -483,7 +483,7 @@ func TestAnnotations(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
@@ -589,7 +589,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
@@ -719,7 +719,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
@@ -859,7 +859,7 @@ func TestCustomHostname(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "reindeer-flotilla",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, o), nil)
@@ -972,7 +972,7 @@ func TestCustomPriorityClassName(t *testing.T) {
 		hostname:          "tailscale-critical",
 		priorityClassName: "custom-priority-class-name",
 		clusterTargetIP:   "10.20.30.40",
-		app:               kube.AppIngressProxy,
+		app:               kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
@@ -1041,7 +1041,7 @@ func TestProxyClassForService(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
@@ -1135,7 +1135,7 @@ func TestDefaultLoadBalancer(t *testing.T) {
 		parentType:      "svc",
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 
@@ -1192,7 +1192,7 @@ func TestProxyFirewallMode(t *testing.T) {
 		hostname:        "default-test",
 		firewallMode:    "nftables",
 		clusterTargetIP: "10.20.30.40",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeHashAnnotation)
 }
@@ -1247,7 +1247,7 @@ func TestTailscaledConfigfileHash(t *testing.T) {
 		hostname:        "default-test",
 		clusterTargetIP: "10.20.30.40",
 		confFileHash:    "e09bededa0379920141cbd0b0dbdf9b8b66545877f9e8397423f5ce3e1ba439e",
-		app:             kube.AppIngressProxy,
+		app:             kubetypes.AppIngressProxy,
 	}
 	expectEqual(t, fc, expectedSTS(t, fc, o), nil)
 
@@ -1542,7 +1542,7 @@ func Test_externalNameService(t *testing.T) {
 		parentType:       "svc",
 		hostname:         "default-test",
 		clusterTargetDNS: "foo.com",
-		app:              kube.AppIngressProxy,
+		app:              kubetypes.AppIngressProxy,
 	}
 
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)

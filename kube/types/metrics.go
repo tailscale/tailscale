@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package kube
+package types
 
 const (
 	// Hostinfo App values for the Tailscale Kubernetes Operator components.
