@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/ipn"
+	"tailscale.com/kube"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -53,7 +54,7 @@ type IngressReconciler struct {
 var (
 	// gaugeIngressResources tracks the number of ingress resources that we're
 	// currently managing.
-	gaugeIngressResources = clientmetric.NewGauge("k8s_ingress_resources")
+	gaugeIngressResources = clientmetric.NewGauge(kube.MetricIngressResourceCount)
 )
 
 func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {

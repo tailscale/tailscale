@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/kube"
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -401,6 +402,19 @@ func SSHIgnoreTailnetPolicy() bool { return Bool("TS_DEBUG_SSH_IGNORE_TAILNET_PO
 
 // TKASkipSignatureCheck reports whether to skip node-key signature checking for development.
 func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION") }
+
+// App returns the tailscale app type of this instance, if set via
+// TS_INTERNAL_APP env var. TS_INTERNAL_APP can be used to set app type for
+// components that wrap tailscaled, such as containerboot. App type is intended
+// to only be used to set known predefined app types, such as Tailscale
+// Kubernetes Operator components.
+func App() string {
+	a := os.Getenv("TS_INTERNAL_APP")
+	if a == kube.AppConnector || a == kube.AppEgressProxy || a == kube.AppIngressProxy || a == kube.AppIngressResource {
+		return a
+	}
+	return ""
+}
 
 // CrashOnUnexpected reports whether the Tailscale client should panic
 // on unexpected conditions. If TS_DEBUG_CRASH_ON_UNEXPECTED is set, that's
