@@ -23,7 +23,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
-	kubetypes "tailscale.com/kube/types"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"

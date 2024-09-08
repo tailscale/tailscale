@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	kubetypes "tailscale.com/kube/types"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
 )

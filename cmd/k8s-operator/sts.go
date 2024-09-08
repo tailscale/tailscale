@@ -31,7 +31,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	kubetypes "tailscale.com/kube/types"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"

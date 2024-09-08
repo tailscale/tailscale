@@ -15,8 +15,8 @@ import (
 	"net/netip"
 	"os"
 
-	kubeapi "tailscale.com/kube/api"
-	kubeclient "tailscale.com/kube/client"
+	"tailscale.com/kube/kubeapi"
+	"tailscale.com/kube/kubeclient"
 	"tailscale.com/tailcfg"
 )
 

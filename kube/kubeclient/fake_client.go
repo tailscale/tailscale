@@ -1,13 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package client
+package kubeclient
 
 import (
 	"context"
 	"net"
 
-	kubeapi "tailscale.com/kube/api"
+	"tailscale.com/kube/kubeapi"
 )
 
 var _ Client = &FakeClient{}
