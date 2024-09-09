@@ -12,8 +12,9 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=rec
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "RecorderReady")].reason`,description="Status of the deployed TSRecorder resources."
+// +kubebuilder:resource:scope=Cluster,shortName=tsrec
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "TSRecorderReady")].reason`,description="Status of the deployed TSRecorder resources."
+// +kubebuilder:printcolumn:name="URL",type="string",JSONPath=`.status.devices[?(@.url != "")].url`,description="URL on which the UI is exposed if enabled."
 
 type TSRecorder struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -38,7 +39,12 @@ type TSRecorderList struct {
 }
 
 type TSRecorderSpec struct {
-	// Tags that the Tailscale node will be tagged with. Defaults to [tag:k8s-recorder].
+	// Configuration parameters for the TSRecorder's StatefulSet. The operator
+	// deploys a StatefulSet for each TSRecorder resource.
+	// +optional
+	StatefulSet TSRecorderStatefulSet `json:"statefulSet"`
+
+	// Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].
 	// If you specify custom tags here, make sure you also make the operator
 	// an owner of these tags.
 	// See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
@@ -50,52 +56,157 @@ type TSRecorderSpec struct {
 	// TODO(tomhjp): Support a hostname or hostname prefix field, depending on
 	// the plan for multiple replicas.
 
-	// TSRecorder image. Defaults to tailscale/tsrecorder, with the same tag as
-	// the operator.
-	// +optional
-	Image Image `json:"image,omitempty"`
-
 	// If enabled, TSRecorder will serve the UI with HTTPS on its MagicDNS hostname.
-	// See --ui flag for more details: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
+	// Set to true to enable the TSRecorder UI. The UI lists and plays recorded sessions.
+	// The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.
+	// Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
+	// Required if S3 storage is not set up, to ensure that recordings are accessible.
 	// +optional
 	EnableUI bool `json:"enableUI,omitempty"`
 
-	// Additional volumes for the pod spec. May be useful if you want to use a
-	// local file path for storage. For more details, see --dst flag:
-	// https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
+	// Configure where to store session recordings. By default, recordings will
+	// be stored in a local ephemeral volume, and will not be persisted past the
+	// lifetime of a specific pod.
 	// +optional
-	ExtraVolumes []corev1.Volume `json:"extraVolumes,omitempty"`
+	Storage Storage `json:"storage,omitempty"`
+}
 
-	// Additional volume mounts for the tsrecorder container. May be useful if
-	// you want to use a local file path for storage. For more details, see
-	// --dst flag: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
+type TSRecorderStatefulSet struct {
+	// Labels that will be added to the StatefulSet created for the TSRecorder.
+	// Any labels specified here will be merged with the default labels applied
+	// to the StatefulSet by the operator as well as any other labels that might
+	// have been applied by other actors.
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
-	ExtraVolumeMounts []corev1.VolumeMount `json:"extraVolumeMounts,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
 
-	// Configure where to store session recordings. Exactly one destination must
-	// be configured.
-	Storage Storage `json:"storage"`
+	// Annotations that will be added to the StatefulSet created for the TSRecorder.
+	// Any Annotations specified here will be merged with the default annotations
+	// applied to the StatefulSet by the operator as well as any other annotations
+	// that might have been applied by other actors.
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Configuration for pods created by the TSRecorder's StatefulSet.
+	// +optional
+	Pod TSRecorderPod `json:"pod,omitempty"`
+}
+
+type TSRecorderPod struct {
+	// Labels that will be added to TSRecorder Pods. Any labels specified here
+	// will be merged with the default labels applied to the Pod by the operator.
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations that will be added to TSRecorder Pods. Any annotations
+	// specified here will be merged with the default annotations applied to
+	// the Pod by the operator.
+	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Affinity rules for TSRecorder Pods. By default, the operator does not
+	// apply any affinity rules.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// Configuration for the TSRecorder container running tailscale.
+	// +optional
+	Container TSRecorderContainer `json:"container,omitempty"`
+
+	// Security context for TSRecorder Pods. By default, the operator does not
+	// apply any Pod security context.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2
+	// +optional
+	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
+
+	// Image pull Secrets for TSRecorder Pods.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// Node selector rules for TSRecorder Pods. By default, the operator does
+	// not apply any node selector rules.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations for TSRecorder Pods. By default, the operator does not apply
+	// any tolerations.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+type TSRecorderContainer struct {
+	// List of environment variables to set in the container.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables
+	// Note that environment variables provided here will take precedence
+	// over Tailscale-specific environment variables set by the operator,
+	// however running proxies with custom values for Tailscale environment
+	// variables (i.e TS_USERSPACE) is not recommended and might break in
+	// the future.
+	// +optional
+	Env []Env `json:"env,omitempty"`
+
+	// Container image name including tag. Defaults to docker.io/tailscale/tsrecorder
+	// with the same tag as the operator, but the official images are also
+	// available at ghcr.io/tailscale/tsrecorder.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// Container resource requirements.
+	// By default, the operator does not apply any resource requirements. The
+	// amount of resources required wil depend on the volume of recordings sent.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Container security context. By default, the operator does not apply any
+	// container security context.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
+	// +optional
+	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 }
 
 type Storage struct {
-	// TODO(tomhjp): S3 support
-
-	// Configure a local file system storage destination. For more details, see
-	// --dst flag: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
+	// Configure an S3-compatible API for storage. Required if the UI is not
+	// enabled, to ensure that recordings are accessible.
 	// +optional
-	File File `json:"file,omitempty"`
+	S3 *S3 `json:"s3,omitempty"`
 }
 
-// File configures a local file system storage location for writing recordings to.
-type File struct {
-	// Directory specifies the directory on disk to write recordings to.
+type S3 struct {
+	// S3-compatible endpoint, e.g. s3.us-east-1.amazonaws.com.
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// Bucket name to write to. The bucket is expected to be used solely for
+	// recordings, as there is no stable prefix for written object names.
+	Bucket string `json:"bucket,omitempty"`
+
+	// The name of a Kubernetes Secret in the operator's namespace that contains
+	// credentials for writing to the configured bucket. Each key-value pair
+	// from the secret's data will be mounted as an environment variable. It
+	// should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if
+	// using a static access key, or otherwise it will try to acquire credentials
+	// from the file system or the STS API.
 	// +optional
-	Directory string `json:"directory,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
 }
 
 type TSRecorderStatus struct {
 	// List of status conditions to indicate the status of the TSRecorder.
-	// Known condition types are `RecorderReady`.
+	// Known condition types are `TSRecorderReady`.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -118,4 +229,10 @@ type TailnetDevice struct {
 	// assigned to the device.
 	// +optional
 	TailnetIPs []string `json:"tailnetIPs,omitempty"`
+
+	// URL where the UI is available if enabled for replaying recordings. This
+	// will be an HTTPS MagicDNS URL. You must be connected to the same tailnet
+	// as the recorder to access it.
+	// +optional
+	URL string `json:"url,omitempty"`
 }

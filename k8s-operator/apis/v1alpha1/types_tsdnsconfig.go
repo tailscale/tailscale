@@ -78,9 +78,18 @@ type DNSConfigSpec struct {
 }
 
 type Nameserver struct {
-	// Nameserver image. Defaults to tailscale/k8s-nameserver.
+	// Nameserver image. Defaults to tailscale/k8s-nameserver:unstable.
 	// +optional
-	Image *Image `json:"image,omitempty"`
+	Image *NameserverImage `json:"image,omitempty"`
+}
+
+type NameserverImage struct {
+	// Repo defaults to tailscale/k8s-nameserver.
+	// +optional
+	Repo string `json:"repo,omitempty"`
+	// Tag defaults to unstable.
+	// +optional
+	Tag string `json:"tag,omitempty"`
 }
 
 type DNSConfigStatus struct {

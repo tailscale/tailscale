@@ -49,11 +49,12 @@ var gaugeTSRecorderResources = clientmetric.NewGauge("k8s_tsrecorder_resources")
 // TSRecorder CRs.
 type TSRecorderReconciler struct {
 	client.Client
-	l           *zap.SugaredLogger
-	recorder    record.EventRecorder
-	clock       tstime.Clock
-	tsNamespace string
-	tsClient    tsClient
+	l              *zap.SugaredLogger
+	recorder       record.EventRecorder
+	clock          tstime.Clock
+	tsNamespace    string
+	magicDNSSuffix string
+	tsClient       tsClient
 
 	mu          sync.Mutex           // protects following
 	tsRecorders set.Slice[types.UID] // for tsrecorders gauge
@@ -159,7 +160,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		s.ObjectMeta.Annotations = sec.ObjectMeta.Annotations
 		s.ObjectMeta.OwnerReferences = sec.ObjectMeta.OwnerReferences
 	}); err != nil {
-		return fmt.Errorf("error creating service account: %w", err)
+		return fmt.Errorf("error creating state Secret: %w", err)
 	}
 	sa := tsrServiceAccount(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sa, func(s *corev1.ServiceAccount) {
@@ -167,7 +168,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
 		s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
 	}); err != nil {
-		return fmt.Errorf("error creating service account: %w", err)
+		return fmt.Errorf("error creating ServiceAccount: %w", err)
 	}
 	role := tsrRole(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
@@ -176,7 +177,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		r.ObjectMeta.OwnerReferences = role.ObjectMeta.OwnerReferences
 		r.Rules = role.Rules
 	}); err != nil {
-		return fmt.Errorf("error creating role: %w", err)
+		return fmt.Errorf("error creating Role: %w", err)
 	}
 	roleBinding := tsrRoleBinding(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
@@ -186,7 +187,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		r.RoleRef = roleBinding.RoleRef
 		r.Subjects = roleBinding.Subjects
 	}); err != nil {
-		return fmt.Errorf("error creating role binding: %w", err)
+		return fmt.Errorf("error creating RoleBinding: %w", err)
 	}
 	ss := tsrStatefulSet(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
@@ -195,12 +196,12 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		s.ObjectMeta.OwnerReferences = ss.ObjectMeta.OwnerReferences
 		s.Spec = ss.Spec
 	}); err != nil {
-		return fmt.Errorf("error creating stateful set: %w", err)
+		return fmt.Errorf("error creating StatefulSet: %w", err)
 	}
 
 	var devices []tsapi.TailnetDevice
 
-	tsHost, ips, ok, err := r.getDeviceInfo(ctx, tsr.Name)
+	device, ok, err := r.getDeviceInfo(ctx, tsr.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get device info: %w", err)
 	}
@@ -209,10 +210,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		return nil
 	}
 
-	devices = append(devices, tsapi.TailnetDevice{
-		Hostname:   tsHost,
-		TailnetIPs: ips,
-	})
+	devices = append(devices, device)
 
 	tsr.Status.Devices = devices
 
@@ -230,7 +228,7 @@ func (r *TSRecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.TSRe
 		return false, err
 	}
 	if !ok {
-		logger.Debugf("secret %s-0 not found or does not contain node ID, continuing cleanup", tsr.Name)
+		logger.Debugf("state Secret %s-0 not found or does not contain node ID, continuing cleanup", tsr.Name)
 		r.mu.Lock()
 		r.tsRecorders.Remove(tsr.UID)
 		gaugeTSRecorderResources.Set(int64(r.tsRecorders.Len()))
@@ -270,18 +268,18 @@ func (r *TSRecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr 
 	}
 	if err := r.Get(ctx, key, &corev1.Secret{}); err == nil {
 		// No updates, already created the auth key.
-		logger.Debugf("secret %s/%s already exists", key.Namespace, key.Name)
+		logger.Debugf("auth Secret %s already exists", key.Name)
 		return nil
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
 
-	// Create API Key secret which is going to be used by the statefulset
+	// Create the auth key Secret which is going to be used by the StatefulSet
 	// to authenticate with Tailscale.
-	logger.Debugf("creating authkey for new tsrecorder")
+	logger.Debugf("creating authkey for new TSRecorder")
 	tags := tsr.Spec.Tags
 	if len(tags) == 0 {
-		tags = tsapi.Tags{"tag:k8s-recorder"}
+		tags = tsapi.Tags{"tag:k8s"}
 	}
 	authKey, err := newAuthKey(ctx, r.tsClient, tags.Stringify())
 	if err != nil {
@@ -297,9 +295,8 @@ func (r *TSRecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr 
 }
 
 func (r *TSRecorderReconciler) validate(tsr *tsapi.TSRecorder) error {
-	// TODO(tomhjp): Error if multiple storage destinations specified.
-	if tsr.Spec.Storage.File.Directory == "" {
-		return fmt.Errorf("TSRecorder CR %s must specify a storage destination for recordings", tsr.Name)
+	if !tsr.Spec.EnableUI && tsr.Spec.Storage.S3 == nil {
+		return errors.New("must either enable UI or use S3 storage to ensure recordings are accessible")
 	}
 
 	return nil
@@ -331,27 +328,31 @@ func (r *TSRecorderReconciler) getNodeID(ctx context.Context, tsrName string) (i
 	}
 	var profile profile
 	if err := json.Unmarshal(profileBytes, &profile); err != nil {
-		return "", false, fmt.Errorf("failed to extract node profile info from secret %s: %w", secret.Name, err)
+		return "", false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
 	}
 
 	ok = profile.Config.NodeID != ""
 	return tailcfg.StableNodeID(profile.Config.NodeID), ok, nil
 }
 
-func (r *TSRecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (hostname string, ips []string, ok bool, err error) {
+func (r *TSRecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.TailnetDevice, ok bool, err error) {
 	nodeID, ok, err := r.getNodeID(ctx, tsrName)
 	if !ok || err != nil {
-		return "", nil, false, err
+		return tsapi.TailnetDevice{}, false, err
 	}
 
 	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
 	// need the API. Should we instead update the profile to include addresses?
 	device, err := r.tsClient.Device(ctx, string(nodeID), nil)
 	if err != nil {
-		return "", nil, false, fmt.Errorf("failed to get device info from API: %w", err)
+		return tsapi.TailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}
 
-	return device.Hostname, device.Addresses, true, nil
+	return tsapi.TailnetDevice{
+		Hostname:   device.Hostname,
+		TailnetIPs: device.Addresses,
+		URL:        fmt.Sprintf("https://%s.%s", device.Hostname, r.magicDNSSuffix),
+	}, true, nil
 }
 
 type profile struct {

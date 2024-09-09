@@ -55,7 +55,7 @@ func TestTSRecorder(t *testing.T) {
 	t.Run("invalid spec gives an error condition", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
 
-		msg := "TSRecorder is invalid: TSRecorder CR test must specify a storage destination for recordings"
+		msg := "TSRecorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
 		tsoperator.SetTSRecorderCondition(tsr, tsapi.TSRecorderReady, metav1.ConditionFalse, reasonTSRecorderInvalid, msg, 0, cl, zl.Sugar())
 		expectEqual(t, fc, tsr, nil)
 		if expected := 0; reconciler.tsRecorders.Len() != expected {
@@ -63,12 +63,12 @@ func TestTSRecorder(t *testing.T) {
 		}
 		expectTSRecorderResources(t, fc, tsr, false)
 
-		expectedEvent := "Warning TSRecorderInvalid TSRecorder is invalid: TSRecorder CR test must specify a storage destination for recordings"
+		expectedEvent := "Warning TSRecorderInvalid TSRecorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
 		expectEvents(t, fr, []string{expectedEvent})
 	})
 
 	t.Run("observe Ready=true status condition for a valid spec", func(t *testing.T) {
-		tsr.Spec.Storage.File.Directory = "storage-directory"
+		tsr.Spec.EnableUI = true
 		mustUpdate(t, fc, "", "test", func(t *tsapi.TSRecorder) {
 			t.Spec = tsr.Spec
 		})

@@ -238,27 +238,12 @@ _Appears in:_
 
 _Appears in:_
 - [Container](#container)
+- [TSRecorderContainer](#tsrecordercontainer)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `name` _[Name](#name)_ | Name of the environment variable. Must be a C_IDENTIFIER. |  | Pattern: `^[-._a-zA-Z][-._a-zA-Z0-9]*$` <br />Type: string <br /> |
 | `value` _string_ | Variable references $(VAR_NAME) are expanded using the previously defined<br /> environment variables in the container and any service environment<br />variables. If a variable cannot be resolved, the reference in the input<br />string will be unchanged. Double $$ are reduced to a single $, which<br />allows for escaping the $(VAR_NAME) syntax: i.e. "$$(VAR_NAME)" will<br />produce the string literal "$(VAR_NAME)". Escaped references will never<br />be expanded, regardless of whether the variable exists or not. Defaults<br />to "". |  |  |
-
-
-#### File
-
-
-
-File configures a local file system storage location for writing recordings to.
-
-
-
-_Appears in:_
-- [Storage](#storage)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `directory` _string_ | Directory specifies the directory on disk to write recordings to. |  |  |
 
 
 #### Hostname
@@ -274,24 +259,6 @@ _Validation:_
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
 
-
-
-#### Image
-
-
-
-
-
-
-
-_Appears in:_
-- [Nameserver](#nameserver)
-- [TSRecorderSpec](#tsrecorderspec)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `repo` _string_ | Repo is the image repository, e.g. tailscale/k8s-nameserver. |  |  |
-| `tag` _string_ | Tag defaults to operator's own tag. |  |  |
 
 
 #### Metrics
@@ -338,7 +305,24 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `image` _[Image](#image)_ | Nameserver image. Defaults to tailscale/k8s-nameserver. |  |  |
+| `image` _[NameserverImage](#nameserverimage)_ | Nameserver image. Defaults to tailscale/k8s-nameserver:unstable. |  |  |
+
+
+#### NameserverImage
+
+
+
+
+
+
+
+_Appears in:_
+- [Nameserver](#nameserver)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
+| `tag` _string_ | Tag defaults to unstable. |  |  |
 
 
 #### NameserverStatus
@@ -497,6 +481,24 @@ _Appears in:_
 
 
 
+#### S3
+
+
+
+
+
+
+
+_Appears in:_
+- [Storage](#storage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `endpoint` _string_ | S3-compatible endpoint, e.g. s3.us-east-1.amazonaws.com. |  |  |
+| `bucket` _string_ | Bucket name to write to. The bucket is expected to be used solely for<br />recordings, as there is no stable prefix for written object names. |  |  |
+| `credentialsSecret` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key, or otherwise it will try to acquire credentials<br />from the file system or the STS API. |  |  |
+
+
 #### StatefulSet
 
 
@@ -528,7 +530,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `file` _[File](#file)_ | Configure a local file system storage destination. For more details, see<br />--dst flag: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
+| `s3` _[S3](#s3)_ | Configure an S3-compatible API for storage. Required if the UI is not<br />enabled, to ensure that recordings are accessible. |  |  |
 
 
 #### SubnetRouter
@@ -570,6 +572,26 @@ _Appears in:_
 | `status` _[TSRecorderStatus](#tsrecorderstatus)_ | TSRecorderStatus describes the status of the recorder. This is set<br />and managed by the Tailscale operator. |  |  |
 
 
+#### TSRecorderContainer
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorderPod](#tsrecorderpod)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `env` _[Env](#env) array_ | List of environment variables to set in the container.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables<br />Note that environment variables provided here will take precedence<br />over Tailscale-specific environment variables set by the operator,<br />however running proxies with custom values for Tailscale environment<br />variables (i.e TS_USERSPACE) is not recommended and might break in<br />the future. |  |  |
+| `image` _string_ | Container image name including tag. Defaults to docker.io/tailscale/tsrecorder<br />with the same tag as the operator, but the official images are also<br />available at ghcr.io/tailscale/tsrecorder.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
+| `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default, the operator does not apply any resource requirements. The<br />amount of resources required wil depend on the volume of recordings sent.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
+| `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context. By default, the operator does not apply any<br />container security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
+
+
 #### TSRecorderList
 
 
@@ -590,6 +612,29 @@ _Appears in:_
 | `items` _[TSRecorder](#tsrecorder) array_ |  |  |  |
 
 
+#### TSRecorderPod
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorderStatefulSet](#tsrecorderstatefulset)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to TSRecorder Pods. Any labels specified here<br />will be merged with the default labels applied to the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to TSRecorder Pods. Any annotations<br />specified here will be merged with the default annotations applied to<br />the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#affinity-v1-core)_ | Affinity rules for TSRecorder Pods. By default, the operator does not<br />apply any affinity rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity |  |  |
+| `container` _[TSRecorderContainer](#tsrecordercontainer)_ | Configuration for the TSRecorder container running tailscale. |  |  |
+| `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#podsecuritycontext-v1-core)_ | Security context for TSRecorder Pods. By default, the operator does not<br />apply any Pod security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2 |  |  |
+| `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Image pull Secrets for TSRecorder Pods.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
+| `nodeSelector` _object (keys:string, values:string)_ | Node selector rules for TSRecorder Pods. By default, the operator does<br />not apply any node selector rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Tolerations for TSRecorder Pods. By default, the operator does not apply<br />any tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+
+
 #### TSRecorderSpec
 
 
@@ -603,12 +648,28 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `tags` _[Tags](#tags)_ | Tags that the Tailscale node will be tagged with. Defaults to [tag:k8s-recorder].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a TSRecorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
-| `image` _[Image](#image)_ | TSRecorder image. Defaults to tailscale/tsrecorder, with the same tag as<br />the operator. |  |  |
-| `enableUI` _boolean_ | If enabled, TSRecorder will serve the UI with HTTPS on its MagicDNS hostname.<br />See --ui flag for more details: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
-| `extraVolumes` _[Volume](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#volume-v1-core) array_ | Additional volumes for the pod spec. May be useful if you want to use a<br />local file path for storage. For more details, see --dst flag:<br />https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
-| `extraVolumeMounts` _[VolumeMount](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#volumemount-v1-core) array_ | Additional volume mounts for the tsrecorder container. May be useful if<br />you want to use a local file path for storage. For more details, see<br />--dst flag: https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node. |  |  |
-| `storage` _[Storage](#storage)_ | Configure where to store session recordings. Exactly one destination must<br />be configured. |  |  |
+| `statefulSet` _[TSRecorderStatefulSet](#tsrecorderstatefulset)_ | Configuration parameters for the TSRecorder's StatefulSet. The operator<br />deploys a StatefulSet for each TSRecorder resource. |  |  |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a TSRecorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `enableUI` _boolean_ | If enabled, TSRecorder will serve the UI with HTTPS on its MagicDNS hostname.<br />Set to true to enable the TSRecorder UI. The UI lists and plays recorded sessions.<br />The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.<br />Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.<br />Required if S3 storage is not set up, to ensure that recordings are accessible. |  |  |
+| `storage` _[Storage](#storage)_ | Configure where to store session recordings. By default, recordings will<br />be stored in a local ephemeral volume, and will not be persisted past the<br />lifetime of a specific pod. |  |  |
+
+
+#### TSRecorderStatefulSet
+
+
+
+
+
+
+
+_Appears in:_
+- [TSRecorderSpec](#tsrecorderspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the TSRecorder.<br />Any labels specified here will be merged with the default labels applied<br />to the StatefulSet by the operator as well as any other labels that might<br />have been applied by other actors.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the TSRecorder.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the operator as well as any other annotations<br />that might have been applied by other actors.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `pod` _[TSRecorderPod](#tsrecorderpod)_ | Configuration for pods created by the TSRecorder's StatefulSet. |  |  |
 
 
 #### TSRecorderStatus
@@ -624,7 +685,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the TSRecorder.<br />Known condition types are `RecorderReady`. |  |  |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the TSRecorder.<br />Known condition types are `TSRecorderReady`. |  |  |
 | `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the TSRecorder statefulset. |  |  |
 
 
@@ -674,6 +735,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
+| `url` _string_ | URL where the UI is available if enabled for replaying recordings. This<br />will be an HTTPS MagicDNS URL. You must be connected to the same tailnet<br />as the recorder to access it. |  |  |
 
 
 #### TailscaleConfig
