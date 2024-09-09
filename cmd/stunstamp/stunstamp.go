@@ -380,27 +380,6 @@ type nodeMeta struct {
 
 type measureFn func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error)
 
-// probe measures round trip time for the node described by meta over cf against
-// dstPort. It may return a nil duration and nil error in the event of a
-// timeout. A non-nil error indicates an unrecoverable or non-temporary error.
-func probe(meta nodeMeta, cf *connAndMeasureFn, dstPort int) (*time.Duration, error) {
-	ua := &net.UDPAddr{
-		IP:   net.IP(meta.addr.AsSlice()),
-		Port: dstPort,
-	}
-
-	time.Sleep(rand.N(maxTXJitter)) // jitter across tx
-	rtt, err := cf.fn(cf.conn, meta.hostname, netip.AddrPortFrom(meta.addr, uint16(dstPort)))
-	if err != nil {
-		if isTemporaryOrTimeoutErr(err) {
-			log.Printf("temp error measuring RTT to %s(%s): %v", meta.hostname, ua.String(), err)
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &rtt, nil
-}
-
 // nodeMetaFromDERPMap parses the provided DERP map in order to update nodeMeta
 // in the provided nodeMetaByAddr. It returns a slice of nodeMeta containing
 // the nodes that are no longer seen in the DERP map, but were previously held
@@ -620,16 +599,24 @@ func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableCo
 			},
 			at: at,
 		}
-		rtt, err := probe(meta, cf, dstPort)
+		time.Sleep(rand.N(maxTXJitter)) // jitter across tx
+		addrPort := netip.AddrPortFrom(meta.addr, uint16(dstPort))
+		rtt, err := cf.fn(cf.conn, meta.hostname, addrPort)
 		if err != nil {
-			select {
-			case <-doneCh:
-				return
-			case errCh <- err:
-				return
+			if isTemporaryOrTimeoutErr(err) {
+				r.rtt = nil
+				log.Printf("%s: temp error measuring RTT to %s(%s): %v", protocol, meta.hostname, addrPort, err)
+			} else {
+				select {
+				case <-doneCh:
+					return
+				case errCh <- fmt.Errorf("%s: %v", protocol, err):
+					return
+				}
 			}
+		} else {
+			r.rtt = &rtt
 		}
-		r.rtt = rtt
 		select {
 		case <-doneCh:
 		case resultsCh <- r:
