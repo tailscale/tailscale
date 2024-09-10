@@ -1139,6 +1139,8 @@ func (b *LocalBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tai
 	return n, u, false
 }
 
+var debugWhoIs = envknob.RegisterBool("TS_DEBUG_WHOIS")
+
 // WhoIs reports the node and user who owns the node with the given IP:port.
 // If the IP address is a Tailscale IP, the provided port may be 0.
 //
@@ -1153,6 +1155,14 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 	var zero tailcfg.NodeView
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	failf := func(format string, args ...any) (tailcfg.NodeView, tailcfg.UserProfile, bool) {
+		if debugWhoIs() {
+			args = append([]any{proto, ipp}, args...)
+			b.logf("whois(%q, %v) :"+format, args...)
+		}
+		return zero, u, false
+	}
 
 	nid, ok := b.nodeByAddr[ipp.Addr()]
 	if !ok {
@@ -1174,15 +1184,15 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 			}
 		}
 		if !ok {
-			return zero, u, false
+			return failf("no IP found in ProxyMapper for %v", ipp)
 		}
 		nid, ok = b.nodeByAddr[ip]
 		if !ok {
-			return zero, u, false
+			return failf("no node for proxymapped IP %v", ip)
 		}
 	}
 	if b.netMap == nil {
-		return zero, u, false
+		return failf("no netmap")
 	}
 	n, ok = b.peers[nid]
 	if !ok {
@@ -1194,7 +1204,7 @@ func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVi
 	}
 	u, ok = b.netMap.UserProfiles[n.User()]
 	if !ok {
-		return zero, u, false
+		return failf("no userprofile for node %v", n.Key())
 	}
 	return n, u, true
 }

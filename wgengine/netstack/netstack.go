@@ -1378,12 +1378,23 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 		var stdDialer net.Dialer
 		dialFunc = stdDialer.DialContext
 	}
-	server, err := dialFunc(ctx, "tcp", dialAddrStr)
+
+	// TODO: this is racy, dialing before we register our local address. See
+	// https://github.com/tailscale/tailscale/issues/1616.
+	backend, err := dialFunc(ctx, "tcp", dialAddrStr)
 	if err != nil {
-		ns.logf("netstack: could not connect to local server at %s: %v", dialAddr.String(), err)
+		ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddr.String(), err)
 		return
 	}
-	defer server.Close()
+	defer backend.Close()
+
+	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
+	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
+	if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
+		ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+		return
+	}
+	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 
 	// If we get here, either the getClient call below will succeed and
 	// return something we can Close, or it will fail and will properly
@@ -1398,17 +1409,13 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}
 	defer client.Close()
 
-	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
-	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP)
-	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
 	connClosed := make(chan error, 2)
 	go func() {
-		_, err := io.Copy(server, client)
+		_, err := io.Copy(backend, client)
 		connClosed <- err
 	}()
 	go func() {
-		_, err := io.Copy(client, server)
+		_, err := io.Copy(client, backend)
 		connClosed <- err
 	}()
 	err = <-connClosed
@@ -1620,7 +1627,10 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
-		ns.pm.RegisterIPPortIdentity("udp", backendLocalIPPort, clientAddr.Addr())
+		if err := ns.pm.RegisterIPPortIdentity("udp", backendLocalIPPort, clientAddr.Addr()); err != nil {
+			ns.logf("netstack: could not register UDP mapping %s: %v", backendLocalIPPort, err)
+			return
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
