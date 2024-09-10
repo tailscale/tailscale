@@ -44,12 +44,13 @@ func TestTSRecorder(t *testing.T) {
 	fr := record.NewFakeRecorder(1)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &TSRecorderReconciler{
-		tsNamespace: tsNamespace,
-		Client:      fc,
-		tsClient:    tsClient,
-		recorder:    fr,
-		l:           zl.Sugar(),
-		clock:       cl,
+		tsNamespace:    tsNamespace,
+		Client:         fc,
+		tsClient:       tsClient,
+		recorder:       fr,
+		l:              zl.Sugar(),
+		clock:          cl,
+		magicDNSSuffix: "example.ts.net",
 	}
 
 	t.Run("invalid spec gives an error condition", func(t *testing.T) {
@@ -106,6 +107,7 @@ func TestTSRecorder(t *testing.T) {
 			{
 				Hostname:   "test-device",
 				TailnetIPs: []string{"1.2.3.4", "::1"},
+				URL:        "https://test-device.example.ts.net",
 			},
 		}
 		expectEqual(t, fc, tsr, nil)
