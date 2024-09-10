@@ -191,14 +191,21 @@ type S3 struct {
 	// recordings, as there is no stable prefix for written object names.
 	Bucket string `json:"bucket,omitempty"`
 
+	// Configure environment variable credentials for managing objects in the
+	// configured bucket. If not set, tsrecorder will try to acquire credentials
+	// first from the file system and then the STS API.
+	// +optional
+	Credentials S3Credentials `json:"credentials,omitempty"`
+}
+
+type S3Credentials struct {
 	// The name of a Kubernetes Secret in the operator's namespace that contains
 	// credentials for writing to the configured bucket. Each key-value pair
 	// from the secret's data will be mounted as an environment variable. It
 	// should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if
-	// using a static access key, or otherwise it will try to acquire credentials
-	// from the file system or the STS API.
+	// using a static access key.
 	// +optional
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+	Secret string `json:"secret,omitempty"`
 }
 
 type TSRecorderStatus struct {

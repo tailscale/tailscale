@@ -496,7 +496,23 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `endpoint` _string_ | S3-compatible endpoint, e.g. s3.us-east-1.amazonaws.com. |  |  |
 | `bucket` _string_ | Bucket name to write to. The bucket is expected to be used solely for<br />recordings, as there is no stable prefix for written object names. |  |  |
-| `credentialsSecret` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key, or otherwise it will try to acquire credentials<br />from the file system or the STS API. |  |  |
+| `credentials` _[S3Credentials](#s3credentials)_ | Configure environment variable credentials for managing objects in the<br />configured bucket. If not set, tsrecorder will try to acquire credentials<br />first from the file system and then the STS API. |  |  |
+
+
+#### S3Credentials
+
+
+
+
+
+
+
+_Appears in:_
+- [S3](#s3)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `secret` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key. |  |  |
 
 
 #### StatefulSet
