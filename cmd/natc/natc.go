@@ -489,6 +489,9 @@ type perPeerState struct {
 func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	if ps.addrToDomain == nil {
+		return "", false
+	}
 	return ps.addrToDomain.Lookup(ip)
 }
 
