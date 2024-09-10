@@ -199,13 +199,20 @@ type S3 struct {
 }
 
 type S3Credentials struct {
+	// Use a Kubernetes Secret from the operator's namespace as the source of
+	// credentials.
+	// +optional
+	Secret S3Secret `json:"secret,omitempty"`
+}
+
+type S3Secret struct {
 	// The name of a Kubernetes Secret in the operator's namespace that contains
 	// credentials for writing to the configured bucket. Each key-value pair
 	// from the secret's data will be mounted as an environment variable. It
 	// should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if
 	// using a static access key.
-	// +optional
-	Secret string `json:"secret,omitempty"`
+	//+optional
+	Name string `json:"name,omitempty"`
 }
 
 type RecorderStatus struct {

@@ -61,14 +61,14 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 							SecurityContext: tsr.Spec.StatefulSet.Pod.Container.SecurityContext,
 							Env:             env(tsr),
 							EnvFrom: func() []corev1.EnvFromSource {
-								if tsr.Spec.Storage.S3 == nil || tsr.Spec.Storage.S3.Credentials.Secret == "" {
+								if tsr.Spec.Storage.S3 == nil || tsr.Spec.Storage.S3.Credentials.Secret.Name == "" {
 									return nil
 								}
 
 								return []corev1.EnvFromSource{{
 									SecretRef: &corev1.SecretEnvSource{
 										LocalObjectReference: corev1.LocalObjectReference{
-											Name: tsr.Spec.Storage.S3.Credentials.Secret,
+											Name: tsr.Spec.Storage.S3.Credentials.Secret.Name,
 										},
 									},
 								}}

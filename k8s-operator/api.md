@@ -651,7 +651,23 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `secret` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key. |  |  |
+| `secret` _[S3Secret](#s3secret)_ | Use a Kubernetes Secret from the operator's namespace as the source of<br />credentials. |  |  |
+
+
+#### S3Secret
+
+
+
+
+
+
+
+_Appears in:_
+- [S3Credentials](#s3credentials)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key. |  |  |
 
 
 #### StatefulSet
