@@ -56,7 +56,6 @@ type TSRecorderSpec struct {
 	// TODO(tomhjp): Support a hostname or hostname prefix field, depending on
 	// the plan for multiple replicas.
 
-	// If enabled, TSRecorder will serve the UI with HTTPS on its MagicDNS hostname.
 	// Set to true to enable the TSRecorder UI. The UI lists and plays recorded sessions.
 	// The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.
 	// Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
