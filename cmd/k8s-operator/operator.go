@@ -394,14 +394,6 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	// TSRecorder reconciler.
-	lc, err := opts.tsServer.LocalClient()
-	if err != nil {
-		startlog.Errorf("failed to get local client, TSRecorders will not have a URL populated in status: %v", err)
-	}
-	status, err := lc.Status(context.Background())
-	if err != nil {
-		startlog.Errorf("failed to get status, TSRecorders will not have a URL populated in status: %v", err)
-	}
 	tsRecorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.TSRecorder{})
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.TSRecorder{}).
@@ -411,13 +403,12 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&rbacv1.Role{}, tsRecorderFilter).
 		Watches(&rbacv1.RoleBinding{}, tsRecorderFilter).
 		Complete(&TSRecorderReconciler{
-			recorder:       eventRecorder,
-			tsNamespace:    opts.tailscaleNamespace,
-			magicDNSSuffix: status.CurrentTailnet.MagicDNSSuffix,
-			Client:         mgr.GetClient(),
-			l:              opts.log.Named("tsrecorder-reconciler"),
-			clock:          tstime.DefaultClock{},
-			tsClient:       opts.tsClient,
+			recorder:    eventRecorder,
+			tsNamespace: opts.tailscaleNamespace,
+			Client:      mgr.GetClient(),
+			l:           opts.log.Named("tsrecorder-reconciler"),
+			clock:       tstime.DefaultClock{},
+			tsClient:    opts.tsClient,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create tsrecorder reconciler: %v", err)

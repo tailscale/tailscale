@@ -50,12 +50,11 @@ var gaugeTSRecorderResources = clientmetric.NewGauge(kubetypes.MetricTSRecorderC
 // TSRecorder CRs.
 type TSRecorderReconciler struct {
 	client.Client
-	l              *zap.SugaredLogger
-	recorder       record.EventRecorder
-	clock          tstime.Clock
-	tsNamespace    string
-	magicDNSSuffix string
-	tsClient       tsClient
+	l           *zap.SugaredLogger
+	recorder    record.EventRecorder
+	clock       tstime.Clock
+	tsNamespace string
+	tsClient    tsClient
 
 	mu          sync.Mutex           // protects following
 	tsRecorders set.Slice[types.UID] // for tsrecorders gauge
@@ -224,7 +223,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 func (r *TSRecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.TSRecorder) (bool, error) {
 	logger := r.logger(tsr.Name)
 
-	id, ok, err := r.getNodeID(ctx, tsr.Name)
+	id, _, ok, err := r.getNodeMetadata(ctx, tsr.Name)
 	if err != nil {
 		return false, err
 	}
@@ -303,7 +302,9 @@ func (r *TSRecorderReconciler) validate(tsr *tsapi.TSRecorder) error {
 	return nil
 }
 
-func (r *TSRecorderReconciler) getNodeID(ctx context.Context, tsrName string) (id tailcfg.StableNodeID, ok bool, err error) {
+// getNodeMetadata returns 'ok == true' iff the node ID is found. The dnsName
+// is expected to always be non-empty if the node ID is, but not required.
+func (r *TSRecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string) (id tailcfg.StableNodeID, dnsName string, ok bool, err error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: r.tsNamespace,
@@ -312,32 +313,32 @@ func (r *TSRecorderReconciler) getNodeID(ctx context.Context, tsrName string) (i
 	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", false, nil
+			return "", "", false, nil
 		}
 
-		return "", false, err
+		return "", "", false, err
 	}
 
 	// TODO(tomhjp): Should maybe use ipn to parse the following info instead.
 	currentProfile, ok := secret.Data[currentProfileKey]
 	if !ok {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	profileBytes, ok := secret.Data[string(currentProfile)]
 	if !ok {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	var profile profile
 	if err := json.Unmarshal(profileBytes, &profile); err != nil {
-		return "", false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
+		return "", "", false, fmt.Errorf("failed to extract node profile info from state Secret %s: %w", secret.Name, err)
 	}
 
 	ok = profile.Config.NodeID != ""
-	return tailcfg.StableNodeID(profile.Config.NodeID), ok, nil
+	return tailcfg.StableNodeID(profile.Config.NodeID), profile.Config.UserProfile.LoginName, ok, nil
 }
 
 func (r *TSRecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.TailnetDevice, ok bool, err error) {
-	nodeID, ok, err := r.getNodeID(ctx, tsrName)
+	nodeID, dnsName, ok, err := r.getNodeMetadata(ctx, tsrName)
 	if !ok || err != nil {
 		return tsapi.TailnetDevice{}, false, err
 	}
@@ -349,16 +350,23 @@ func (r *TSRecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string
 		return tsapi.TailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}
 
-	return tsapi.TailnetDevice{
+	d = tsapi.TailnetDevice{
 		Hostname:   device.Hostname,
 		TailnetIPs: device.Addresses,
-		URL:        fmt.Sprintf("https://%s.%s", device.Hostname, r.magicDNSSuffix),
-	}, true, nil
+	}
+	if dnsName != "" {
+		d.URL = fmt.Sprintf("https://%s", dnsName)
+	}
+
+	return d, true, nil
 }
 
 type profile struct {
 	Config struct {
-		NodeID string `json:"NodeID"`
+		NodeID      string `json:"NodeID"`
+		UserProfile struct {
+			LoginName string `json:"LoginName"`
+		} `json:"UserProfile"`
 	} `json:"Config"`
 }
 
