@@ -73,16 +73,14 @@ type TSRecorderSpec struct {
 type TSRecorderStatefulSet struct {
 	// Labels that will be added to the StatefulSet created for the TSRecorder.
 	// Any labels specified here will be merged with the default labels applied
-	// to the StatefulSet by the operator as well as any other labels that might
-	// have been applied by other actors.
+	// to the StatefulSet by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
 	// Annotations that will be added to the StatefulSet created for the TSRecorder.
 	// Any Annotations specified here will be merged with the default annotations
-	// applied to the StatefulSet by the operator as well as any other annotations
-	// that might have been applied by other actors.
+	// applied to the StatefulSet by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`

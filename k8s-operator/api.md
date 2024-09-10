@@ -667,8 +667,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the TSRecorder.<br />Any labels specified here will be merged with the default labels applied<br />to the StatefulSet by the operator as well as any other labels that might<br />have been applied by other actors.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
-| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the TSRecorder.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the operator as well as any other annotations<br />that might have been applied by other actors.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the TSRecorder.<br />Any labels specified here will be merged with the default labels applied<br />to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the TSRecorder.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
 | `pod` _[TSRecorderPod](#tsrecorderpod)_ | Configuration for pods created by the TSRecorder's StatefulSet. |  |  |
 
 
