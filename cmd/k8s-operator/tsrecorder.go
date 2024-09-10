@@ -29,6 +29,7 @@ import (
 	"tailscale.com/client/tailscale"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
@@ -43,7 +44,7 @@ const (
 	currentProfileKey = "_current-profile"
 )
 
-var gaugeTSRecorderResources = clientmetric.NewGauge("k8s_tsrecorder_resources")
+var gaugeTSRecorderResources = clientmetric.NewGauge(kubetypes.MetricTSRecorderCount)
 
 // TSRecorderReconciler syncs TSRecorder statefulsets with their definition in
 // TSRecorder CRs.
