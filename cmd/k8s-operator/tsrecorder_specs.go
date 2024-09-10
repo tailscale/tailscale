@@ -60,7 +60,20 @@ func tsrStatefulSet(tsr *tsapi.TSRecorder, namespace string) *appsv1.StatefulSet
 							Resources:       tsr.Spec.StatefulSet.Pod.Container.Resources,
 							SecurityContext: tsr.Spec.StatefulSet.Pod.Container.SecurityContext,
 							Env:             env(tsr),
-							Command:         []string{"/tsrecorder"},
+							EnvFrom: func() []corev1.EnvFromSource {
+								if tsr.Spec.Storage.S3 == nil || tsr.Spec.Storage.S3.CredentialsSecret == "" {
+									return nil
+								}
+
+								return []corev1.EnvFromSource{{
+									SecretRef: &corev1.SecretEnvSource{
+										LocalObjectReference: corev1.LocalObjectReference{
+											Name: tsr.Spec.Storage.S3.CredentialsSecret,
+										},
+									},
+								}}
+							}(),
+							Command: []string{"/tsrecorder"},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "data",
@@ -218,19 +231,6 @@ func env(tsr *tsapi.TSRecorder) []corev1.EnvVar {
 				Value: tsr.Spec.Storage.S3.Bucket,
 			},
 		)
-
-		if tsr.Spec.Storage.S3.CredentialsSecret != "" {
-			envs = append(envs, corev1.EnvVar{
-				Name: "TSRECORDER_DST",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: tsr.Spec.Storage.S3.CredentialsSecret,
-						},
-					},
-				},
-			})
-		}
 	} else {
 		envs = append(envs, corev1.EnvVar{
 			Name:  "TSRECORDER_DST",
