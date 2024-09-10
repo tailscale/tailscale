@@ -393,25 +393,25 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create DNS records reconciler: %v", err)
 	}
 
-	// TSRecorder reconciler.
-	tsRecorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.TSRecorder{})
+	// Recorder reconciler.
+	recorderFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.Recorder{})
 	err = builder.ControllerManagedBy(mgr).
-		For(&tsapi.TSRecorder{}).
-		Watches(&appsv1.StatefulSet{}, tsRecorderFilter).
-		Watches(&corev1.ServiceAccount{}, tsRecorderFilter).
-		Watches(&corev1.Secret{}, tsRecorderFilter).
-		Watches(&rbacv1.Role{}, tsRecorderFilter).
-		Watches(&rbacv1.RoleBinding{}, tsRecorderFilter).
-		Complete(&TSRecorderReconciler{
+		For(&tsapi.Recorder{}).
+		Watches(&appsv1.StatefulSet{}, recorderFilter).
+		Watches(&corev1.ServiceAccount{}, recorderFilter).
+		Watches(&corev1.Secret{}, recorderFilter).
+		Watches(&rbacv1.Role{}, recorderFilter).
+		Watches(&rbacv1.RoleBinding{}, recorderFilter).
+		Complete(&RecorderReconciler{
 			recorder:    eventRecorder,
 			tsNamespace: opts.tailscaleNamespace,
 			Client:      mgr.GetClient(),
-			l:           opts.log.Named("tsrecorder-reconciler"),
+			l:           opts.log.Named("recorder-reconciler"),
 			clock:       tstime.DefaultClock{},
 			tsClient:    opts.tsClient,
 		})
 	if err != nil {
-		startlog.Fatalf("could not create tsrecorder reconciler: %v", err)
+		startlog.Fatalf("could not create Recorder reconciler: %v", err)
 	}
 
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())

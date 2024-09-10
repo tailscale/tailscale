@@ -13,42 +13,42 @@ import (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=tsrec
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "TSRecorderReady")].reason`,description="Status of the deployed TSRecorder resources."
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "RecorderReady")].reason`,description="Status of the deployed Recorder resources."
 // +kubebuilder:printcolumn:name="URL",type="string",JSONPath=`.status.devices[?(@.url != "")].url`,description="URL on which the UI is exposed if enabled."
 
-type TSRecorder struct {
+type Recorder struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// Spec describes the desired recorder instance.
-	Spec TSRecorderSpec `json:"spec"`
+	Spec RecorderSpec `json:"spec"`
 
-	// TSRecorderStatus describes the status of the recorder. This is set
+	// RecorderStatus describes the status of the recorder. This is set
 	// and managed by the Tailscale operator.
 	// +optional
-	Status TSRecorderStatus `json:"status"`
+	Status RecorderStatus `json:"status"`
 }
 
 // +kubebuilder:object:root=true
 
-type TSRecorderList struct {
+type RecorderList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
 
-	Items []TSRecorder `json:"items"`
+	Items []Recorder `json:"items"`
 }
 
-type TSRecorderSpec struct {
-	// Configuration parameters for the TSRecorder's StatefulSet. The operator
-	// deploys a StatefulSet for each TSRecorder resource.
+type RecorderSpec struct {
+	// Configuration parameters for the Recorder's StatefulSet. The operator
+	// deploys a StatefulSet for each Recorder resource.
 	// +optional
-	StatefulSet TSRecorderStatefulSet `json:"statefulSet"`
+	StatefulSet RecorderStatefulSet `json:"statefulSet"`
 
 	// Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].
 	// If you specify custom tags here, make sure you also make the operator
 	// an owner of these tags.
 	// See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
-	// Tags cannot be changed once a TSRecorder node has been created.
+	// Tags cannot be changed once a Recorder node has been created.
 	// Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
 	// +optional
 	Tags Tags `json:"tags,omitempty"`
@@ -56,7 +56,7 @@ type TSRecorderSpec struct {
 	// TODO(tomhjp): Support a hostname or hostname prefix field, depending on
 	// the plan for multiple replicas.
 
-	// Set to true to enable the TSRecorder UI. The UI lists and plays recorded sessions.
+	// Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.
 	// The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.
 	// Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
 	// Required if S3 storage is not set up, to ensure that recordings are accessible.
@@ -70,75 +70,75 @@ type TSRecorderSpec struct {
 	Storage Storage `json:"storage,omitempty"`
 }
 
-type TSRecorderStatefulSet struct {
-	// Labels that will be added to the StatefulSet created for the TSRecorder.
+type RecorderStatefulSet struct {
+	// Labels that will be added to the StatefulSet created for the Recorder.
 	// Any labels specified here will be merged with the default labels applied
 	// to the StatefulSet by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// Annotations that will be added to the StatefulSet created for the TSRecorder.
+	// Annotations that will be added to the StatefulSet created for the Recorder.
 	// Any Annotations specified here will be merged with the default annotations
 	// applied to the StatefulSet by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 
-	// Configuration for pods created by the TSRecorder's StatefulSet.
+	// Configuration for pods created by the Recorder's StatefulSet.
 	// +optional
-	Pod TSRecorderPod `json:"pod,omitempty"`
+	Pod RecorderPod `json:"pod,omitempty"`
 }
 
-type TSRecorderPod struct {
-	// Labels that will be added to TSRecorder Pods. Any labels specified here
+type RecorderPod struct {
+	// Labels that will be added to Recorder Pods. Any labels specified here
 	// will be merged with the default labels applied to the Pod by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// Annotations that will be added to TSRecorder Pods. Any annotations
+	// Annotations that will be added to Recorder Pods. Any annotations
 	// specified here will be merged with the default annotations applied to
 	// the Pod by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 
-	// Affinity rules for TSRecorder Pods. By default, the operator does not
+	// Affinity rules for Recorder Pods. By default, the operator does not
 	// apply any affinity rules.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
 
-	// Configuration for the TSRecorder container running tailscale.
+	// Configuration for the Recorder container running tailscale.
 	// +optional
-	Container TSRecorderContainer `json:"container,omitempty"`
+	Container RecorderContainer `json:"container,omitempty"`
 
-	// Security context for TSRecorder Pods. By default, the operator does not
+	// Security context for Recorder Pods. By default, the operator does not
 	// apply any Pod security context.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2
 	// +optional
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 
-	// Image pull Secrets for TSRecorder Pods.
+	// Image pull Secrets for Recorder Pods.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
-	// Node selector rules for TSRecorder Pods. By default, the operator does
+	// Node selector rules for Recorder Pods. By default, the operator does
 	// not apply any node selector rules.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
-	// Tolerations for TSRecorder Pods. By default, the operator does not apply
+	// Tolerations for Recorder Pods. By default, the operator does not apply
 	// any tolerations.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
-type TSRecorderContainer struct {
+type RecorderContainer struct {
 	// List of environment variables to set in the container.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables
 	// Note that environment variables provided here will take precedence
@@ -208,15 +208,15 @@ type S3Credentials struct {
 	Secret string `json:"secret,omitempty"`
 }
 
-type TSRecorderStatus struct {
-	// List of status conditions to indicate the status of the TSRecorder.
-	// Known condition types are `TSRecorderReady`.
+type RecorderStatus struct {
+	// List of status conditions to indicate the status of the Recorder.
+	// Known condition types are `RecorderReady`.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// List of tailnet devices associated with the TSRecorder statefulset.
+	// List of tailnet devices associated with the Recorder statefulset.
 	// +listType=map
 	// +listMapKey=hostname
 	// +optional

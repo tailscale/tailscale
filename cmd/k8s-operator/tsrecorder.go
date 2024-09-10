@@ -37,18 +37,18 @@ import (
 )
 
 const (
-	reasonTSRecorderCreationFailed = "TSRecorderCreationFailed"
-	reasonTSRecorderCreated        = "TSRecorderCreated"
-	reasonTSRecorderInvalid        = "TSRecorderInvalid"
+	reasonRecorderCreationFailed = "RecorderCreationFailed"
+	reasonRecorderCreated        = "RecorderCreated"
+	reasonRecorderInvalid        = "RecorderInvalid"
 
 	currentProfileKey = "_current-profile"
 )
 
-var gaugeTSRecorderResources = clientmetric.NewGauge(kubetypes.MetricTSRecorderCount)
+var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount)
 
-// TSRecorderReconciler syncs TSRecorder statefulsets with their definition in
-// TSRecorder CRs.
-type TSRecorderReconciler struct {
+// RecorderReconciler syncs Recorder statefulsets with their definition in
+// Recorder CRs.
+type RecorderReconciler struct {
 	client.Client
 	l           *zap.SugaredLogger
 	recorder    record.EventRecorder
@@ -56,29 +56,29 @@ type TSRecorderReconciler struct {
 	tsNamespace string
 	tsClient    tsClient
 
-	mu          sync.Mutex           // protects following
-	tsRecorders set.Slice[types.UID] // for tsrecorders gauge
+	mu        sync.Mutex           // protects following
+	recorders set.Slice[types.UID] // for recorders gauge
 }
 
-func (r *TSRecorderReconciler) logger(name string) *zap.SugaredLogger {
-	return r.l.With("TSRecorder", name)
+func (r *RecorderReconciler) logger(name string) *zap.SugaredLogger {
+	return r.l.With("Recorder", name)
 }
 
-func (r *TSRecorderReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
+func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
 	logger := r.logger(req.Name)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
-	tsr := new(tsapi.TSRecorder)
+	tsr := new(tsapi.Recorder)
 	err = r.Get(ctx, req.NamespacedName, tsr)
 	if apierrors.IsNotFound(err) {
-		logger.Debugf("TSRecorder not found, assuming it was deleted")
+		logger.Debugf("Recorder not found, assuming it was deleted")
 		return reconcile.Result{}, nil
 	} else if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com TSRecorder: %w", err)
+		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com Recorder: %w", err)
 	}
 	if markedForDeletion(tsr) {
-		logger.Debugf("TSRecorder is being deleted, cleaning up resources")
+		logger.Debugf("Recorder is being deleted, cleaning up resources")
 		ix := xslices.Index(tsr.Finalizers, FinalizerName)
 		if ix < 0 {
 			logger.Debugf("no finalizer, nothing to do")
@@ -88,7 +88,7 @@ func (r *TSRecorderReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if done, err := r.maybeCleanup(ctx, tsr); err != nil {
 			return reconcile.Result{}, err
 		} else if !done {
-			logger.Debugf("TSRecorder resource cleanup not yet finished, will retry...")
+			logger.Debugf("Recorder resource cleanup not yet finished, will retry...")
 			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
 
@@ -100,8 +100,8 @@ func (r *TSRecorderReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	oldTSRStatus := tsr.Status.DeepCopy()
-	setStatusReady := func(tsr *tsapi.TSRecorder, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
-		tsoperator.SetTSRecorderCondition(tsr, tsapi.TSRecorderReady, status, reason, message, tsr.Generation, r.clock, logger)
+	setStatusReady := func(tsr *tsapi.Recorder, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, status, reason, message, tsr.Generation, r.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldTSRStatus, tsr.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, tsr); updateErr != nil {
@@ -116,44 +116,44 @@ func (r *TSRecorderReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		// because once the finalizer is in place this block gets skipped. So,
 		// this is a nice place to log that the high level, multi-reconcile
 		// operation is underway.
-		logger.Infof("ensuring TSRecorder is set up")
+		logger.Infof("ensuring Recorder is set up")
 		tsr.Finalizers = append(tsr.Finalizers, FinalizerName)
 		if err := r.Update(ctx, tsr); err != nil {
 			logger.Errorf("error adding finalizer: %w", err)
-			return setStatusReady(tsr, metav1.ConditionFalse, reasonTSRecorderCreationFailed, reasonTSRecorderCreationFailed)
+			return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, reasonRecorderCreationFailed)
 		}
 	}
 
 	if err := r.validate(tsr); err != nil {
-		logger.Errorf("error validating TSRecorder spec: %w", err)
-		message := fmt.Sprintf("TSRecorder is invalid: %s", err)
-		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonTSRecorderInvalid, message)
-		return setStatusReady(tsr, metav1.ConditionFalse, reasonTSRecorderInvalid, message)
+		logger.Errorf("error validating Recorder spec: %w", err)
+		message := fmt.Sprintf("Recorder is invalid: %s", err)
+		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderInvalid, message)
+		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
 	}
 
 	if err = r.maybeProvision(ctx, tsr); err != nil {
-		logger.Errorf("error creating TSRecorder resources: %w", err)
-		message := fmt.Sprintf("failed creating TSRecorder: %s", err)
-		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonTSRecorderCreationFailed, message)
-		return setStatusReady(tsr, metav1.ConditionFalse, reasonTSRecorderCreationFailed, message)
+		logger.Errorf("error creating Recorder resources: %w", err)
+		message := fmt.Sprintf("failed creating Recorder: %s", err)
+		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
+		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderCreationFailed, message)
 	}
 
-	logger.Info("TSRecorder resources synced")
-	return setStatusReady(tsr, metav1.ConditionTrue, reasonTSRecorderCreated, reasonTSRecorderCreated)
+	logger.Info("Recorder resources synced")
+	return setStatusReady(tsr, metav1.ConditionTrue, reasonRecorderCreated, reasonRecorderCreated)
 }
 
-func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TSRecorder) error {
+func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Recorder) error {
 	logger := r.logger(tsr.Name)
 
 	r.mu.Lock()
-	r.tsRecorders.Add(tsr.UID)
-	gaugeTSRecorderResources.Set(int64(r.tsRecorders.Len()))
+	r.recorders.Add(tsr.UID)
+	gaugeRecorderResources.Set(int64(r.recorders.Len()))
 	r.mu.Unlock()
 
 	if err := r.ensureAuthSecretCreated(ctx, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
 	}
-	// State secret is precreated so we can use the TSRecorder CR as its owner ref.
+	// State secret is precreated so we can use the Recorder CR as its owner ref.
 	sec := tsrStateSecret(tsr, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, sec, func(s *corev1.Secret) {
 		s.ObjectMeta.Labels = sec.ObjectMeta.Labels
@@ -206,7 +206,7 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 		return fmt.Errorf("failed to get device info: %w", err)
 	}
 	if !ok {
-		logger.Debugf("no Tailscale hostname known yet, waiting for tsrecorder pod to finish auth")
+		logger.Debugf("no Tailscale hostname known yet, waiting for Recorder pod to finish auth")
 		return nil
 	}
 
@@ -218,9 +218,9 @@ func (r *TSRecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.TS
 }
 
 // maybeCleanup just deletes the device from the tailnet. All the kubernetes
-// resources linked to a TSRecorder will get cleaned up via owner references
+// resources linked to a Recorder will get cleaned up via owner references
 // (which we can use because they are all in the same namespace).
-func (r *TSRecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.TSRecorder) (bool, error) {
+func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Recorder) (bool, error) {
 	logger := r.logger(tsr.Name)
 
 	id, _, ok, err := r.getNodeMetadata(ctx, tsr.Name)
@@ -230,8 +230,8 @@ func (r *TSRecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.TSRe
 	if !ok {
 		logger.Debugf("state Secret %s-0 not found or does not contain node ID, continuing cleanup", tsr.Name)
 		r.mu.Lock()
-		r.tsRecorders.Remove(tsr.UID)
-		gaugeTSRecorderResources.Set(int64(r.tsRecorders.Len()))
+		r.recorders.Remove(tsr.UID)
+		gaugeRecorderResources.Set(int64(r.recorders.Len()))
 		r.mu.Unlock()
 		return true, nil
 	}
@@ -252,15 +252,15 @@ func (r *TSRecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.TSRe
 	// exactly once at the very end of cleanup, because the final step of
 	// cleanup removes the tailscale finalizer, which will make all future
 	// reconciles exit early.
-	logger.Infof("cleaned up TSRecorder resources")
+	logger.Infof("cleaned up Recorder resources")
 	r.mu.Lock()
-	r.tsRecorders.Remove(tsr.UID)
-	gaugeTSRecorderResources.Set(int64(r.tsRecorders.Len()))
+	r.recorders.Remove(tsr.UID)
+	gaugeRecorderResources.Set(int64(r.recorders.Len()))
 	r.mu.Unlock()
 	return true, nil
 }
 
-func (r *TSRecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr *tsapi.TSRecorder) error {
+func (r *RecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr *tsapi.Recorder) error {
 	logger := r.logger(tsr.Name)
 	key := types.NamespacedName{
 		Namespace: r.tsNamespace,
@@ -276,7 +276,7 @@ func (r *TSRecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr 
 
 	// Create the auth key Secret which is going to be used by the StatefulSet
 	// to authenticate with Tailscale.
-	logger.Debugf("creating authkey for new TSRecorder")
+	logger.Debugf("creating authkey for new Recorder")
 	tags := tsr.Spec.Tags
 	if len(tags) == 0 {
 		tags = tsapi.Tags{"tag:k8s"}
@@ -286,7 +286,7 @@ func (r *TSRecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr 
 		return err
 	}
 
-	logger.Debug("creating a new Secret for the TSRecorder")
+	logger.Debug("creating a new Secret for the Recorder")
 	if err := r.Create(ctx, tsrAuthSecret(tsr, r.tsNamespace, authKey)); err != nil {
 		return err
 	}
@@ -294,7 +294,7 @@ func (r *TSRecorderReconciler) ensureAuthSecretCreated(ctx context.Context, tsr 
 	return nil
 }
 
-func (r *TSRecorderReconciler) validate(tsr *tsapi.TSRecorder) error {
+func (r *RecorderReconciler) validate(tsr *tsapi.Recorder) error {
 	if !tsr.Spec.EnableUI && tsr.Spec.Storage.S3 == nil {
 		return errors.New("must either enable UI or use S3 storage to ensure recordings are accessible")
 	}
@@ -304,7 +304,7 @@ func (r *TSRecorderReconciler) validate(tsr *tsapi.TSRecorder) error {
 
 // getNodeMetadata returns 'ok == true' iff the node ID is found. The dnsName
 // is expected to always be non-empty if the node ID is, but not required.
-func (r *TSRecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string) (id tailcfg.StableNodeID, dnsName string, ok bool, err error) {
+func (r *RecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string) (id tailcfg.StableNodeID, dnsName string, ok bool, err error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: r.tsNamespace,
@@ -337,7 +337,7 @@ func (r *TSRecorderReconciler) getNodeMetadata(ctx context.Context, tsrName stri
 	return tailcfg.StableNodeID(profile.Config.NodeID), profile.Config.UserProfile.LoginName, ok, nil
 }
 
-func (r *TSRecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.TailnetDevice, ok bool, err error) {
+func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.TailnetDevice, ok bool, err error) {
 	nodeID, dnsName, ok, err := r.getNodeMetadata(ctx, tsrName)
 	if !ok || err != nil {
 		return tsapi.TailnetDevice{}, false, err
@@ -370,6 +370,6 @@ type profile struct {
 	} `json:"Config"`
 }
 
-func markedForDeletion(tsr *tsapi.TSRecorder) bool {
+func markedForDeletion(tsr *tsapi.Recorder) bool {
 	return !tsr.DeletionTimestamp.IsZero()
 }

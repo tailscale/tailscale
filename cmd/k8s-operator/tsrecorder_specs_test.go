@@ -16,21 +16,21 @@ import (
 	"tailscale.com/types/ptr"
 )
 
-func TestTSRecorderSpecs(t *testing.T) {
+func TestRecorderSpecs(t *testing.T) {
 	t.Run("ensure spec fields are passed through correctly", func(t *testing.T) {
-		tsr := &tsapi.TSRecorder{
+		tsr := &tsapi.Recorder{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test",
 			},
-			Spec: tsapi.TSRecorderSpec{
-				StatefulSet: tsapi.TSRecorderStatefulSet{
+			Spec: tsapi.RecorderSpec{
+				StatefulSet: tsapi.RecorderStatefulSet{
 					Labels: map[string]string{
 						"ss-label-key": "ss-label-value",
 					},
 					Annotations: map[string]string{
 						"ss-annotation-key": "ss-annotation-value",
 					},
-					Pod: tsapi.TSRecorderPod{
+					Pod: tsapi.RecorderPod{
 						Labels: map[string]string{
 							"pod-label-key": "pod-label-value",
 						},
@@ -62,7 +62,7 @@ func TestTSRecorderSpecs(t *testing.T) {
 							Value:             "value",
 							TolerationSeconds: ptr.To[int64](60),
 						}},
-						Container: tsapi.TSRecorderContainer{
+						Container: tsapi.RecorderContainer{
 							Env: []tsapi.Env{{
 								Name:  "some_env",
 								Value: "env_value",
@@ -101,10 +101,10 @@ func TestTSRecorderSpecs(t *testing.T) {
 		}
 
 		// Pod-level.
-		if diff := cmp.Diff(ss.Labels, labels("tsrecorder", "test", tsr.Spec.StatefulSet.Labels)); diff != "" {
+		if diff := cmp.Diff(ss.Labels, labels("recorder", "test", tsr.Spec.StatefulSet.Labels)); diff != "" {
 			t.Errorf("(-got +want):\n%s", diff)
 		}
-		if diff := cmp.Diff(ss.Spec.Template.Labels, labels("tsrecorder", "test", tsr.Spec.StatefulSet.Pod.Labels)); diff != "" {
+		if diff := cmp.Diff(ss.Spec.Template.Labels, labels("recorder", "test", tsr.Spec.StatefulSet.Pod.Labels)); diff != "" {
 			t.Errorf("(-got +want):\n%s", diff)
 		}
 		if diff := cmp.Diff(ss.Spec.Template.Spec.Affinity, tsr.Spec.StatefulSet.Pod.Affinity); diff != "" {

@@ -3,21 +3,21 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.15.1-0.20240618033008-7824932b0cab
-  name: tsrecorders.tailscale.com
+  name: recorders.tailscale.com
 spec:
   group: tailscale.com
   names:
-    kind: TSRecorder
-    listKind: TSRecorderList
-    plural: tsrecorders
+    kind: Recorder
+    listKind: RecorderList
+    plural: recorders
     shortNames:
       - tsrec
-    singular: tsrecorder
+    singular: recorder
   scope: Cluster
   versions:
     - additionalPrinterColumns:
-        - description: Status of the deployed TSRecorder resources.
-          jsonPath: .status.conditions[?(@.type == "TSRecorderReady")].reason
+        - description: Status of the deployed Recorder resources.
+          jsonPath: .status.conditions[?(@.type == "RecorderReady")].reason
           name: Status
           type: string
         - description: URL on which the UI is exposed if enabled.
@@ -54,20 +54,20 @@ spec:
               properties:
                 enableUI:
                   description: |-
-                    Set to true to enable the TSRecorder UI. The UI lists and plays recorded sessions.
+                    Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.
                     The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.
                     Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.
                     Required if S3 storage is not set up, to ensure that recordings are accessible.
                   type: boolean
                 statefulSet:
                   description: |-
-                    Configuration parameters for the TSRecorder's StatefulSet. The operator
-                    deploys a StatefulSet for each TSRecorder resource.
+                    Configuration parameters for the Recorder's StatefulSet. The operator
+                    deploys a StatefulSet for each Recorder resource.
                   type: object
                   properties:
                     annotations:
                       description: |-
-                        Annotations that will be added to the StatefulSet created for the TSRecorder.
+                        Annotations that will be added to the StatefulSet created for the Recorder.
                         Any Annotations specified here will be merged with the default annotations
                         applied to the StatefulSet by the operator.
                         https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
@@ -76,7 +76,7 @@ spec:
                         type: string
                     labels:
                       description: |-
-                        Labels that will be added to the StatefulSet created for the TSRecorder.
+                        Labels that will be added to the StatefulSet created for the Recorder.
                         Any labels specified here will be merged with the default labels applied
                         to the StatefulSet by the operator.
                         https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
@@ -84,12 +84,12 @@ spec:
                       additionalProperties:
                         type: string
                     pod:
-                      description: Configuration for pods created by the TSRecorder's StatefulSet.
+                      description: Configuration for pods created by the Recorder's StatefulSet.
                       type: object
                       properties:
                         affinity:
                           description: |-
-                            Affinity rules for TSRecorder Pods. By default, the operator does not
+                            Affinity rules for Recorder Pods. By default, the operator does not
                             apply any affinity rules.
                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
                           type: object
@@ -973,7 +973,7 @@ spec:
                                   x-kubernetes-list-type: atomic
                         annotations:
                           description: |-
-                            Annotations that will be added to TSRecorder Pods. Any annotations
+                            Annotations that will be added to Recorder Pods. Any annotations
                             specified here will be merged with the default annotations applied to
                             the Pod by the operator.
                             https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
@@ -981,7 +981,7 @@ spec:
                           additionalProperties:
                             type: string
                         container:
-                          description: Configuration for the TSRecorder container running tailscale.
+                          description: Configuration for the Recorder container running tailscale.
                           type: object
                           properties:
                             env:
@@ -1277,7 +1277,7 @@ spec:
                                       type: string
                         imagePullSecrets:
                           description: |-
-                            Image pull Secrets for TSRecorder Pods.
+                            Image pull Secrets for Recorder Pods.
                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
                           type: array
                           items:
@@ -1298,7 +1298,7 @@ spec:
                             x-kubernetes-map-type: atomic
                         labels:
                           description: |-
-                            Labels that will be added to TSRecorder Pods. Any labels specified here
+                            Labels that will be added to Recorder Pods. Any labels specified here
                             will be merged with the default labels applied to the Pod by the operator.
                             https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
                           type: object
@@ -1306,7 +1306,7 @@ spec:
                             type: string
                         nodeSelector:
                           description: |-
-                            Node selector rules for TSRecorder Pods. By default, the operator does
+                            Node selector rules for Recorder Pods. By default, the operator does
                             not apply any node selector rules.
                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
                           type: object
@@ -1314,7 +1314,7 @@ spec:
                             type: string
                         securityContext:
                           description: |-
-                            Security context for TSRecorder Pods. By default, the operator does not
+                            Security context for Recorder Pods. By default, the operator does not
                             apply any Pod security context.
                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2
                           type: object
@@ -1508,7 +1508,7 @@ spec:
                                   type: string
                         tolerations:
                           description: |-
-                            Tolerations for TSRecorder Pods. By default, the operator does not apply
+                            Tolerations for Recorder Pods. By default, the operator does not apply
                             any tolerations.
                             https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
                           type: array
@@ -1590,7 +1590,7 @@ spec:
                     If you specify custom tags here, make sure you also make the operator
                     an owner of these tags.
                     See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
-                    Tags cannot be changed once a TSRecorder node has been created.
+                    Tags cannot be changed once a Recorder node has been created.
                     Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
                   type: array
                   items:
@@ -1598,14 +1598,14 @@ spec:
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
             status:
               description: |-
-                TSRecorderStatus describes the status of the recorder. This is set
+                RecorderStatus describes the status of the recorder. This is set
                 and managed by the Tailscale operator.
               type: object
               properties:
                 conditions:
                   description: |-
-                    List of status conditions to indicate the status of the TSRecorder.
-                    Known condition types are `TSRecorderReady`.
+                    List of status conditions to indicate the status of the Recorder.
+                    Known condition types are `RecorderReady`.
                   type: array
                   items:
                     description: Condition contains details for one aspect of the current state of this API Resource.
@@ -1664,7 +1664,7 @@ spec:
                     - type
                   x-kubernetes-list-type: map
                 devices:
-                  description: List of tailnet devices associated with the TSRecorder statefulset.
+                  description: List of tailnet devices associated with the Recorder statefulset.
                   type: array
                   items:
                     type: object

@@ -26,8 +26,8 @@ import (
 
 const tsNamespace = "tailscale"
 
-func TestTSRecorder(t *testing.T) {
-	tsr := &tsapi.TSRecorder{
+func TestRecorder(t *testing.T) {
+	tsr := &tsapi.Recorder{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
 			Finalizers: []string{"tailscale.com/finalizer"},
@@ -43,7 +43,7 @@ func TestTSRecorder(t *testing.T) {
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(1)
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	reconciler := &TSRecorderReconciler{
+	reconciler := &RecorderReconciler{
 		tsNamespace: tsNamespace,
 		Client:      fc,
 		tsClient:    tsClient,
@@ -55,32 +55,32 @@ func TestTSRecorder(t *testing.T) {
 	t.Run("invalid spec gives an error condition", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", tsr.Name)
 
-		msg := "TSRecorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
-		tsoperator.SetTSRecorderCondition(tsr, tsapi.TSRecorderReady, metav1.ConditionFalse, reasonTSRecorderInvalid, msg, 0, cl, zl.Sugar())
+		msg := "Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
+		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, metav1.ConditionFalse, reasonRecorderInvalid, msg, 0, cl, zl.Sugar())
 		expectEqual(t, fc, tsr, nil)
-		if expected := 0; reconciler.tsRecorders.Len() != expected {
-			t.Fatalf("expected %d recorders, got %d", expected, reconciler.tsRecorders.Len())
+		if expected := 0; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
-		expectTSRecorderResources(t, fc, tsr, false)
+		expectRecorderResources(t, fc, tsr, false)
 
-		expectedEvent := "Warning TSRecorderInvalid TSRecorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
+		expectedEvent := "Warning RecorderInvalid Recorder is invalid: must either enable UI or use S3 storage to ensure recordings are accessible"
 		expectEvents(t, fr, []string{expectedEvent})
 	})
 
 	t.Run("observe Ready=true status condition for a valid spec", func(t *testing.T) {
 		tsr.Spec.EnableUI = true
-		mustUpdate(t, fc, "", "test", func(t *tsapi.TSRecorder) {
+		mustUpdate(t, fc, "", "test", func(t *tsapi.Recorder) {
 			t.Spec = tsr.Spec
 		})
 
 		expectReconciled(t, reconciler, "", tsr.Name)
 
-		tsoperator.SetTSRecorderCondition(tsr, tsapi.TSRecorderReady, metav1.ConditionTrue, reasonTSRecorderCreated, reasonTSRecorderCreated, 0, cl, zl.Sugar())
+		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, metav1.ConditionTrue, reasonRecorderCreated, reasonRecorderCreated, 0, cl, zl.Sugar())
 		expectEqual(t, fc, tsr, nil)
-		if expected := 1; reconciler.tsRecorders.Len() != expected {
-			t.Fatalf("expected %d recorders, got %d", expected, reconciler.tsRecorders.Len())
+		if expected := 1; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
-		expectTSRecorderResources(t, fc, tsr, true)
+		expectRecorderResources(t, fc, tsr, true)
 	})
 
 	t.Run("populate node info in state secret, and see it appear in status", func(t *testing.T) {
@@ -115,16 +115,16 @@ func TestTSRecorder(t *testing.T) {
 		expectEqual(t, fc, tsr, nil)
 	})
 
-	t.Run("delete the TSRecorder and observe cleanup", func(t *testing.T) {
+	t.Run("delete the Recorder and observe cleanup", func(t *testing.T) {
 		if err := fc.Delete(context.Background(), tsr); err != nil {
 			t.Fatal(err)
 		}
 
 		expectReconciled(t, reconciler, "", tsr.Name)
 
-		expectMissing[tsapi.TSRecorder](t, fc, "", tsr.Name)
-		if expected := 0; reconciler.tsRecorders.Len() != expected {
-			t.Fatalf("expected %d recorders, got %d", expected, reconciler.tsRecorders.Len())
+		expectMissing[tsapi.Recorder](t, fc, "", tsr.Name)
+		if expected := 0; reconciler.recorders.Len() != expected {
+			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
 		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-123"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
@@ -134,7 +134,7 @@ func TestTSRecorder(t *testing.T) {
 	})
 }
 
-func expectTSRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.TSRecorder, shouldExist bool) {
+func expectRecorderResources(t *testing.T, fc client.WithWatch, tsr *tsapi.Recorder, shouldExist bool) {
 	t.Helper()
 
 	auth := tsrAuthSecret(tsr, tsNamespace, "secret-authkey")

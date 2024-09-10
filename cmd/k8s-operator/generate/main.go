@@ -24,12 +24,12 @@ const (
 	connectorCRDPath              = operatorDeploymentFilesPath + "/crds/tailscale.com_connectors.yaml"
 	proxyClassCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_proxyclasses.yaml"
 	dnsConfigCRDPath              = operatorDeploymentFilesPath + "/crds/tailscale.com_dnsconfigs.yaml"
-	tsRecorderCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_tsrecorders.yaml"
+	recorderCRDPath               = operatorDeploymentFilesPath + "/crds/tailscale.com_recorders.yaml"
 	helmTemplatesPath             = operatorDeploymentFilesPath + "/chart/templates"
 	connectorCRDHelmTemplatePath  = helmTemplatesPath + "/connector.yaml"
 	proxyClassCRDHelmTemplatePath = helmTemplatesPath + "/proxyclass.yaml"
 	dnsConfigCRDHelmTemplatePath  = helmTemplatesPath + "/dnsconfig.yaml"
-	tsRecorderCRDHelmTemplatePath = helmTemplatesPath + "/tsrecorder.yaml"
+	recorderCRDHelmTemplatePath   = helmTemplatesPath + "/recorder.yaml"
 
 	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
 	helmConditionalEnd   = "{{- end -}}"
@@ -113,7 +113,7 @@ func main() {
 	}
 }
 
-// generate places tailscale.com CRDs (currently Connector, ProxyClass, DNSConfig, TSRecorder) into
+// generate places tailscale.com CRDs (currently Connector, ProxyClass, DNSConfig, Recorder) into
 // the Helm chart templates behind .Values.installCRDs=true condition (true by
 // default).
 func generate(baseDir string) error {
@@ -145,7 +145,7 @@ func generate(baseDir string) error {
 		{connectorCRDPath, connectorCRDHelmTemplatePath},
 		{proxyClassCRDPath, proxyClassCRDHelmTemplatePath},
 		{dnsConfigCRDPath, dnsConfigCRDHelmTemplatePath},
-		{tsRecorderCRDPath, tsRecorderCRDHelmTemplatePath},
+		{recorderCRDPath, recorderCRDHelmTemplatePath},
 	} {
 		if err := addCRDToHelm(crd.crdPath, crd.templatePath); err != nil {
 			return fmt.Errorf("error adding %s CRD to Helm templates: %w", crd.crdPath, err)
@@ -160,7 +160,7 @@ func cleanup(baseDir string) error {
 		connectorCRDHelmTemplatePath,
 		proxyClassCRDHelmTemplatePath,
 		dnsConfigCRDHelmTemplatePath,
-		tsRecorderCRDHelmTemplatePath,
+		recorderCRDHelmTemplatePath,
 	} {
 		if err := os.Remove(filepath.Join(baseDir, path)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("error cleaning up %s: %w", path, err)

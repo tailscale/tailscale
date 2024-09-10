@@ -173,5 +173,5 @@ const (
 	ConnectorReady  ConditionType = `ConnectorReady`
 	ProxyClassready ConditionType = `ProxyClassReady`
 	ProxyReady      ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
-	TSRecorderReady ConditionType = `TSRecorderReady`
+	RecorderReady   ConditionType = `RecorderReady`
 )

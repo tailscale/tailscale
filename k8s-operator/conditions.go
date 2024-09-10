@@ -63,10 +63,10 @@ func RemoveServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionTy
 	})
 }
 
-// SetTSRecorderCondition ensures that TSRecorder status has a condition with the
+// SetRecorderCondition ensures that Recorder status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.
-func SetTSRecorderCondition(tsr *tsapi.TSRecorder, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
+func SetRecorderCondition(tsr *tsapi.Recorder, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
 	conds := updateCondition(tsr.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
 	tsr.Status.Conditions = conds
 }

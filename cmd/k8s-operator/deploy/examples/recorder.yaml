@@ -1,5 +1,5 @@
 apiVersion: tailscale.com/v1alpha1
-kind: TSRecorder
+kind: Recorder
 metadata:
   name: recorder
 spec:

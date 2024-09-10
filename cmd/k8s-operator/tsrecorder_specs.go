@@ -17,25 +17,25 @@ import (
 	"tailscale.com/version"
 )
 
-func tsrStatefulSet(tsr *tsapi.TSRecorder, namespace string) *appsv1.StatefulSet {
+func tsrStatefulSet(tsr *tsapi.Recorder, namespace string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("tsrecorder", tsr.Name, tsr.Spec.StatefulSet.Labels),
+			Labels:          labels("recorder", tsr.Name, tsr.Spec.StatefulSet.Labels),
 			OwnerReferences: tsrOwnerReference(tsr),
 			Annotations:     tsr.Spec.StatefulSet.Annotations,
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: ptr.To[int32](1),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels("tsrecorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
+				MatchLabels: labels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        tsr.Name,
 					Namespace:   namespace,
-					Labels:      labels("tsrecorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
+					Labels:      labels("recorder", tsr.Name, tsr.Spec.StatefulSet.Pod.Labels),
 					Annotations: tsr.Spec.StatefulSet.Pod.Annotations,
 				},
 				Spec: corev1.PodSpec{
@@ -47,7 +47,7 @@ func tsrStatefulSet(tsr *tsapi.TSRecorder, namespace string) *appsv1.StatefulSet
 					Tolerations:        tsr.Spec.StatefulSet.Pod.Tolerations,
 					Containers: []corev1.Container{
 						{
-							Name: "tsrecorder",
+							Name: "recorder",
 							Image: func() string {
 								image := tsr.Spec.StatefulSet.Pod.Container.Image
 								if image == "" {
@@ -97,23 +97,23 @@ func tsrStatefulSet(tsr *tsapi.TSRecorder, namespace string) *appsv1.StatefulSet
 	}
 }
 
-func tsrServiceAccount(tsr *tsapi.TSRecorder, namespace string) *corev1.ServiceAccount {
+func tsrServiceAccount(tsr *tsapi.Recorder, namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("tsrecorder", tsr.Name, nil),
+			Labels:          labels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 	}
 }
 
-func tsrRole(tsr *tsapi.TSRecorder, namespace string) *rbacv1.Role {
+func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("tsrecorder", tsr.Name, nil),
+			Labels:          labels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -134,12 +134,12 @@ func tsrRole(tsr *tsapi.TSRecorder, namespace string) *rbacv1.Role {
 	}
 }
 
-func tsrRoleBinding(tsr *tsapi.TSRecorder, namespace string) *rbacv1.RoleBinding {
+func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            tsr.Name,
 			Namespace:       namespace,
-			Labels:          labels("tsrecorder", tsr.Name, nil),
+			Labels:          labels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		Subjects: []rbacv1.Subject{
@@ -156,12 +156,12 @@ func tsrRoleBinding(tsr *tsapi.TSRecorder, namespace string) *rbacv1.RoleBinding
 	}
 }
 
-func tsrAuthSecret(tsr *tsapi.TSRecorder, namespace string, authKey string) *corev1.Secret {
+func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       namespace,
 			Name:            tsr.Name,
-			Labels:          labels("tsrecorder", tsr.Name, nil),
+			Labels:          labels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		StringData: map[string]string{
@@ -170,18 +170,18 @@ func tsrAuthSecret(tsr *tsapi.TSRecorder, namespace string, authKey string) *cor
 	}
 }
 
-func tsrStateSecret(tsr *tsapi.TSRecorder, namespace string) *corev1.Secret {
+func tsrStateSecret(tsr *tsapi.Recorder, namespace string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fmt.Sprintf("%s-0", tsr.Name),
 			Namespace:       namespace,
-			Labels:          labels("tsrecorder", tsr.Name, nil),
+			Labels:          labels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 	}
 }
 
-func env(tsr *tsapi.TSRecorder) []corev1.EnvVar {
+func env(tsr *tsapi.Recorder) []corev1.EnvVar {
 	envs := []corev1.EnvVar{
 		{
 			Name: "TS_AUTHKEY",
@@ -263,7 +263,7 @@ func labels(app, instance string, customLabels map[string]string) map[string]str
 }
 
 func tsrOwnerReference(owner metav1.Object) []metav1.OwnerReference {
-	return []metav1.OwnerReference{*metav1.NewControllerRef(owner, tsapi.SchemeGroupVersion.WithKind("TSRecorder"))}
+	return []metav1.OwnerReference{*metav1.NewControllerRef(owner, tsapi.SchemeGroupVersion.WithKind("Recorder"))}
 }
 
 // selfVersionImageTag returns the container image tag of the running operator
