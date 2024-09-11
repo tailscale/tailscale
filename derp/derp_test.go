@@ -731,7 +731,7 @@ func pubAll(b byte) (ret key.NodePublic) {
 
 func TestForwarderRegistration(t *testing.T) {
 	s := &Server{
-		clients:     make(map[key.NodePublic]clientSet),
+		clients:     make(map[key.NodePublic]*clientSet),
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 	}
 	want := func(want map[key.NodePublic]PacketForwarder) {
@@ -745,6 +745,11 @@ func TestForwarderRegistration(t *testing.T) {
 		if got := c.Value(); got != int64(want) {
 			t.Errorf("counter = %v; want %v", got, want)
 		}
+	}
+	singleClient := func(c *sclient) *clientSet {
+		cs := &clientSet{}
+		cs.activeClient.Store(c)
+		return cs
 	}
 
 	u1 := pubAll(1)
@@ -808,7 +813,7 @@ func TestForwarderRegistration(t *testing.T) {
 		key:  u1,
 		logf: logger.Discard,
 	}
-	s.clients[u1] = singleClient{u1c}
+	s.clients[u1] = singleClient(u1c)
 	s.RemovePacketForwarder(u1, testFwd(100))
 	want(map[key.NodePublic]PacketForwarder{
 		u1: nil,
@@ -828,7 +833,7 @@ func TestForwarderRegistration(t *testing.T) {
 	// Now pretend u1 was already connected locally (so clientsMesh[u1] is nil), and then we heard
 	// that they're also connected to a peer of ours. That shouldn't transition the forwarder
 	// from nil to the new one, not a multiForwarder.
-	s.clients[u1] = singleClient{u1c}
+	s.clients[u1] = singleClient(u1c)
 	s.clientsMesh[u1] = nil
 	want(map[key.NodePublic]PacketForwarder{
 		u1: nil,
@@ -860,7 +865,7 @@ func TestMultiForwarder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		clients:     make(map[key.NodePublic]clientSet),
+		clients:     make(map[key.NodePublic]*clientSet),
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 	}
 	u := pubAll(1)
@@ -1078,43 +1083,48 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantSingleClient := func(t *testing.T, want *sclient) {
 		t.Helper()
-		switch s := s.clients[want.key].(type) {
-		case singleClient:
-			if s.c != want {
-				t.Error("wrong single client")
-				return
-			}
-			if want.isDup.Load() {
+		got, ok := s.clients[want.key]
+		if !ok {
+			t.Error("no clients for key")
+			return
+		}
+		if got.dup != nil {
+			t.Errorf("unexpected dup set for single client")
+		}
+		cur := got.activeClient.Load()
+		if cur != want {
+			t.Errorf("active client = %q; want %q", clientName[cur], clientName[want])
+		}
+		if cur != nil {
+			if cur.isDup.Load() {
 				t.Errorf("unexpected isDup on singleClient")
 			}
-			if want.isDisabled.Load() {
+			if cur.isDisabled.Load() {
 				t.Errorf("unexpected isDisabled on singleClient")
 			}
-		case nil:
-			t.Error("no clients for key")
-		case *dupClientSet:
-			t.Error("unexpected multiple clients for key")
 		}
 	}
 	wantNoClient := func(t *testing.T) {
 		t.Helper()
-		switch s := s.clients[clientPub].(type) {
-		case nil:
-			// Good.
+		_, ok := s.clients[clientPub]
+		if !ok {
+			// Good
 			return
-		default:
-			t.Errorf("got %T; want empty", s)
 		}
+		t.Errorf("got client; want empty")
 	}
 	wantDupSet := func(t *testing.T) *dupClientSet {
 		t.Helper()
-		switch s := s.clients[clientPub].(type) {
-		case *dupClientSet:
-			return s
-		default:
-			t.Fatalf("wanted dup set; got %T", s)
+		cs, ok := s.clients[clientPub]
+		if !ok {
+			t.Fatal("no set for key; want dup set")
 			return nil
 		}
+		if cs.dup != nil {
+			return cs.dup
+		}
+		t.Fatalf("no dup set for key; want dup set")
+		return nil
 	}
 	wantActive := func(t *testing.T, want *sclient) {
 		t.Helper()
@@ -1123,7 +1133,7 @@ func TestServerDupClients(t *testing.T) {
 			t.Error("no set for key")
 			return
 		}
-		got := set.ActiveClient()
+		got := set.activeClient.Load()
 		if got != want {
 			t.Errorf("active client = %q; want %q", clientName[got], clientName[want])
 		}
