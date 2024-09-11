@@ -47,6 +47,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
 
@@ -1323,7 +1324,7 @@ func (s *Server) noteClientActivity(c *sclient) {
 		cs.activeClient.Store(c)
 	}
 
-	if sh := dup.sendHistory; len(sh) != 0 && sh[len(sh)-1] == c {
+	if slicesx.LastEqual(dup.sendHistory, c) {
 		// The client c was the last client to make activity
 		// in this set and it was already recorded. Nothing to
 		// do.

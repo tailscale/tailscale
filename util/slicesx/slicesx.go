@@ -136,3 +136,15 @@ func CutSuffix[E comparable](s, suffix []E) (after []E, found bool) {
 	}
 	return s[:len(s)-len(suffix)], true
 }
+
+// FirstEqual reports whether len(s) > 0 and
+// its first element == v.
+func FirstEqual[T comparable](s []T, v T) bool {
+	return len(s) > 0 && s[0] == v
+}
+
+// LastEqual reports whether len(s) > 0 and
+// its last element == v.
+func LastEqual[T comparable](s []T, v T) bool {
+	return len(s) > 0 && s[len(s)-1] == v
+}

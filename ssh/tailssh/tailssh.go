@@ -45,6 +45,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/slicesx"
 )
 
 var (
@@ -330,7 +331,7 @@ func (c *conn) nextAuthMethodCallback(cm gossh.ConnMetadata, prevErrors []error)
 	switch {
 	case c.anyPasswordIsOkay:
 		nextMethod = append(nextMethod, "password")
-	case len(prevErrors) > 0 && prevErrors[len(prevErrors)-1] == errPubKeyRequired:
+	case slicesx.LastEqual(prevErrors, errPubKeyRequired):
 		nextMethod = append(nextMethod, "publickey")
 	}
 
