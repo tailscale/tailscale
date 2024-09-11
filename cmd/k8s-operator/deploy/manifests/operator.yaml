@@ -2429,7 +2429,7 @@ spec:
         listKind: RecorderList
         plural: recorders
         shortNames:
-            - tsrec
+            - rec
         singular: recorder
     scope: Cluster
     versions:
