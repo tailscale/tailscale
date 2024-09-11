@@ -33,7 +33,7 @@ func TestNameserverReconciler(t *testing.T) {
 		},
 		Spec: tsapi.DNSConfigSpec{
 			Nameserver: &tsapi.Nameserver{
-				Image: &tsapi.Image{
+				Image: &tsapi.NameserverImage{
 					Repo: "test",
 					Tag:  "v0.0.1",
 				},

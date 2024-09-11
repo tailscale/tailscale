@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -487,7 +488,7 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 		modifier(got)
 	}
 	if diff := cmp.Diff(got, want); diff != "" {
-		t.Fatalf("unexpected object (-got +want):\n%s", diff)
+		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
 	}
 }
 
@@ -498,7 +499,7 @@ func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns
 		Name:      name,
 		Namespace: ns,
 	}, obj); !apierrors.IsNotFound(err) {
-		t.Fatalf("object %s/%s unexpectedly present, wanted missing", ns, name)
+		t.Fatalf("%s %s/%s unexpectedly present, wanted missing", reflect.TypeOf(obj).Elem().Name(), ns, name)
 	}
 }
 
@@ -590,6 +591,17 @@ func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabili
 		Capabilities: caps,
 	}
 	return "secret-authkey", k, nil
+}
+
+func (c *fakeTSClient) Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error) {
+	return &tailscale.Device{
+		DeviceID: deviceID,
+		Hostname: "test-device",
+		Addresses: []string{
+			"1.2.3.4",
+			"::1",
+		},
+	}, nil
 }
 
 func (c *fakeTSClient) DeleteDevice(ctx context.Context, deviceID string) error {

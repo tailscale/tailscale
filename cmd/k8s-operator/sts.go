@@ -343,7 +343,7 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		if len(tags) == 0 {
 			tags = a.defaultTags
 		}
-		authKey, err = a.newAuthKey(ctx, tags)
+		authKey, err = newAuthKey(ctx, a.tsClient, tags)
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -419,6 +419,11 @@ func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map
 	if sec == nil {
 		return "", "", nil, nil
 	}
+
+	return deviceInfo(sec)
+}
+
+func deviceInfo(sec *corev1.Secret) (id tailcfg.StableNodeID, hostname string, ips []string, err error) {
 	id = tailcfg.StableNodeID(sec.Data["device_id"])
 	if id == "" {
 		return "", "", nil, nil
@@ -442,7 +447,7 @@ func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map
 	return id, hostname, ips, nil
 }
 
-func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) (string, error) {
+func newAuthKey(ctx context.Context, tsClient tsClient, tags []string) (string, error) {
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
 			Create: tailscale.KeyDeviceCreateCapabilities{
@@ -453,7 +458,7 @@ func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) 
 		},
 	}
 
-	key, _, err := a.tsClient.CreateKey(ctx, caps)
+	key, _, err := tsClient.CreateKey(ctx, caps)
 	if err != nil {
 		return "", err
 	}

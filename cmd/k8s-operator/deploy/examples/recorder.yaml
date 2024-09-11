@@ -1,0 +1,6 @@
+apiVersion: tailscale.com/v1alpha1
+kind: Recorder
+metadata:
+  name: recorder
+spec:
+  enableUI: true
