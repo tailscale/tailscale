@@ -121,6 +121,8 @@ func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 	return c, nil
 }
 
+func (c *Client) PublicKey() key.NodePublic { return c.publicKey }
+
 func (c *Client) recvServerKey() error {
 	var buf [40]byte
 	t, flen, err := readFrame(c.br, 1<<10, buf[:])
