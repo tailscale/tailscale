@@ -2342,6 +2342,10 @@ const (
 	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
 	// automatically when the network state changes.
 	NodeAttrDisableCaptivePortalDetection NodeCapability = "disable-captive-portal-detection"
+
+	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
+	// via SendEnv in the SSH server and applying them to the SSH session.
+	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
 )
 
 // SetDNSRequest is a request to add a DNS record.
