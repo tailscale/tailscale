@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
@@ -279,8 +280,26 @@ type Network struct {
 
 	svcs set.Set[NetworkService]
 
+	latency  time.Duration // latency applied to interface writes
+	lossRate float64       // chance of packet loss (0.0 to 1.0)
+
 	// ...
 	err error // carried error
+}
+
+// SetLatency sets the simulated network latency for this network.
+func (n *Network) SetLatency(d time.Duration) {
+	n.latency = d
+}
+
+// SetPacketLoss sets the packet loss rate for this network 0.0 (no loss) to 1.0 (total loss).
+func (n *Network) SetPacketLoss(rate float64) {
+	if rate < 0 {
+		rate = 0
+	} else if rate > 1 {
+		rate = 1
+	}
+	n.lossRate = rate
 }
 
 // SetBlackholedIPv4 sets whether the network should blackhole all IPv4 traffic
@@ -361,6 +380,8 @@ func (s *Server) initFromConfig(c *Config) error {
 			wanIP4:     conf.wanIP4,
 			lanIP4:     conf.lanIP4,
 			breakWAN4:  conf.breakWAN4,
+			latency:    conf.latency,
+			lossRate:   conf.lossRate,
 			nodesByIP4: map[netip.Addr]*node{},
 			nodesByMAC: map[MAC]*node{},
 			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
