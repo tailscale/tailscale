@@ -52,9 +52,9 @@ var (
 
 // The various default timeouts for things.
 const (
-	// overallProbeTimeout is the maximum amount of time netcheck will
+	// ReportTimeout is the maximum amount of time netcheck will
 	// spend gathering a single report.
-	overallProbeTimeout = 5 * time.Second
+	ReportTimeout = 5 * time.Second
 	// stunTimeout is the maximum amount of time netcheck will spend
 	// probing with STUN packets without getting a reply before
 	// switching to HTTP probing, on the assumption that outbound UDP
@@ -63,6 +63,11 @@ const (
 	// icmpProbeTimeout is the maximum amount of time netcheck will spend
 	// probing with ICMP packets.
 	icmpProbeTimeout = 1 * time.Second
+	// httpsProbeTimeout is the maximum amount of time netcheck will spend
+	// probing over HTTPS. This is set equal to ReportTimeout to allow HTTPS
+	// whatever time is left following STUN, which precedes it in a netcheck
+	// report.
+	httpsProbeTimeout = ReportTimeout
 	// defaultActiveRetransmitTime is the retransmit interval we use
 	// for STUN probes when we're in steady state (not in start-up),
 	// but don't have previous latency information for a DERP
@@ -731,6 +736,10 @@ func (o *GetReportOpts) getLastDERPActivity(region int) time.Time {
 }
 
 // GetReport gets a report. The 'opts' argument is optional and can be nil.
+// Callers are discouraged from passing a ctx with an arbitrary deadline as this
+// may cause GetReport to return prematurely before all reporting methods have
+// executed. ReportTimeout is the maximum amount of time GetReport will spend
+// gathering a report.
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetReportOpts) (_ *Report, reterr error) {
@@ -743,7 +752,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
-	ctx, cancel := context.WithTimeout(ctx, overallProbeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, ReportTimeout)
 	defer cancel()
 
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelNetcheckClient, c.logf)
@@ -1044,7 +1053,7 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netip.Addr, error) {
 	metricHTTPSend.Add(1)
 	var result httpstat.Result
-	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), overallProbeTimeout)
+	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), httpsProbeTimeout)
 	defer cancel()
 
 	var ip netip.Addr

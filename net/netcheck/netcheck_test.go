@@ -860,3 +860,15 @@ func TestNodeAddrResolve(t *testing.T) {
 		})
 	}
 }
+
+func TestReportTimeouts(t *testing.T) {
+	if ReportTimeout < stunProbeTimeout {
+		t.Errorf("ReportTimeout (%v) cannot be less than stunProbeTimeout (%v)", ReportTimeout, stunProbeTimeout)
+	}
+	if ReportTimeout < icmpProbeTimeout {
+		t.Errorf("ReportTimeout (%v) cannot be less than icmpProbeTimeout (%v)", ReportTimeout, icmpProbeTimeout)
+	}
+	if ReportTimeout < httpsProbeTimeout {
+		t.Errorf("ReportTimeout (%v) cannot be less than httpsProbeTimeout (%v)", ReportTimeout, httpsProbeTimeout)
+	}
+}
