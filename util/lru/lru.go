@@ -133,6 +133,15 @@ func (c *Cache[K, V]) DeleteOldest() {
 	}
 }
 
+// OldestKey returns the oldest key, without bumping it to the head.
+// If the cache is empty, it returns ok false.
+func (c *Cache[K, V]) OldestKey() (key K, ok bool) {
+	if c.head == nil {
+		return key, false
+	}
+	return c.head.prev.key, true
+}
+
 // Len returns the number of items in the cache.
 func (c *Cache[K, V]) Len() int { return len(c.lookup) }
 
