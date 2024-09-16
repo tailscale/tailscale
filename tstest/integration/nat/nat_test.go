@@ -171,11 +171,15 @@ func easyPMP(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
 }
 
-// easy + port mapping + host firewall
-func easyPMPFW(c *vnet.Config) *vnet.Node {
+// easy + port mapping + host firewall + BPF
+func easyPMPFWPlusBPF(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(
 		vnet.HostFirewall,
+		vnet.TailscaledEnv{
+			Key:   "TS_ENABLE_RAW_DISCO",
+			Value: "true",
+		},
 		vnet.TailscaledEnv{
 			Key:   "TS_DEBUG_RAW_DISCO",
 			Value: "1",
@@ -199,8 +203,8 @@ func easyPMPFWNoBPF(c *vnet.Config) *vnet.Node {
 	return c.AddNode(
 		vnet.HostFirewall,
 		vnet.TailscaledEnv{
-			Key:   "TS_DEBUG_DISABLE_RAW_DISCO",
-			Value: "1",
+			Key:   "TS_ENABLE_RAW_DISCO",
+			Value: "false",
 		},
 		c.AddNetwork(
 			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
@@ -531,7 +535,7 @@ func TestSameLAN(t *testing.T) {
 // * client machine has a stateful host firewall (e.g. ufw)
 func TestBPFDisco(t *testing.T) {
 	nt := newNatTest(t)
-	nt.runTest(easyPMPFW, hard)
+	nt.runTest(easyPMPFWPlusBPF, hard)
 	nt.want(routeDirect)
 }
 
