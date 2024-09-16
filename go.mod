@@ -1,6 +1,6 @@
 module tailscale.com
 
-go 1.23
+go 1.23.1
 
 require (
 	filippo.io/mkcert v1.4.4
