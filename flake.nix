@@ -120,6 +120,10 @@
           perl
           go_1_23
           yarn
+
+          # qemu and e2fsprogs are needed for natlab
+          qemu
+          e2fsprogs
         ];
       };
     };

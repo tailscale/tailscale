@@ -1,6 +1,6 @@
 module tailscale.com/gokrazy
 
-go 1.23.0
+go 1.23.1
 
 require github.com/gokrazy/tools v0.0.0-20240730192548-9f81add3a91e
 

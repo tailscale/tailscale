@@ -1,6 +1,6 @@
 module gokrazy/build/tsapp
 
-go 1.23
+go 1.23.1
 
 replace tailscale.com => ../../../..
 
