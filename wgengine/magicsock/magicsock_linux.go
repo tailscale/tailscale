@@ -38,8 +38,11 @@ const (
 	discoMinHeaderSize = len(disco.Magic) + 32 /* key length */ + disco.NonceLen
 )
 
-// Enable/disable using raw sockets to receive disco traffic.
-var debugDisableRawDisco = envknob.RegisterBool("TS_DEBUG_DISABLE_RAW_DISCO")
+var (
+	// Opt-in for using raw sockets to receive disco traffic; added for
+	// #13140 and replaces the older "TS_DEBUG_DISABLE_RAW_DISCO".
+	envknobEnableRawDisco = envknob.RegisterBool("TS_ENABLE_RAW_DISCO")
+)
 
 // debugRawDiscoReads enables logging of raw disco reads.
 var debugRawDiscoReads = envknob.RegisterBool("TS_DEBUG_RAW_DISCO")
@@ -166,8 +169,12 @@ var (
 // and BPF filter.
 // https://github.com/tailscale/tailscale/issues/3824
 func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
-	if debugDisableRawDisco() {
-		return nil, errors.New("raw disco listening disabled by debug flag")
+	if !envknobEnableRawDisco() {
+		// Return an 'errors.ErrUnsupported' to prevent the callee from
+		// logging; when we switch this to an opt-out (vs. an opt-in),
+		// drop the ErrUnsupported so that the callee logs that it was
+		// disabled.
+		return nil, fmt.Errorf("raw disco not enabled: %w", errors.ErrUnsupported)
 	}
 
 	// https://github.com/tailscale/tailscale/issues/5607
