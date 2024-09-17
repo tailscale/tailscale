@@ -55,8 +55,13 @@ func readRevFile(path string) (string, error) {
 }
 
 func getToolchain() (toolchainDir, gorootDir string, err error) {
+	rev, err := toolchainRev()
+	if err != nil {
+		return "", "", err
+	}
+
 	cache := filepath.Join(os.Getenv("HOME"), ".cache")
-	toolchainDir = filepath.Join(cache, "tailscale-go")
+	toolchainDir = filepath.Join(cache, "tsgo", rev)
 	gorootDir = filepath.Join(toolchainDir, "gocross-goroot")
 
 	// You might wonder why getting the toolchain also provisions and returns a
