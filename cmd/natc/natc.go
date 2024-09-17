@@ -456,6 +456,11 @@ func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
 }
 
 func proxyTCPConn(c net.Conn, dest string) {
+	if c.RemoteAddr() == nil {
+		log.Printf("proxyTCPConn: nil RemoteAddr")
+		c.Close()
+		return
+	}
 	addrPortStr := c.LocalAddr().String()
 	_, port, err := net.SplitHostPort(addrPortStr)
 	if err != nil {
