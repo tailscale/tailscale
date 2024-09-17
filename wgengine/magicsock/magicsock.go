@@ -692,6 +692,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		// health package here, but I'd rather do that and not store
 		// the exact same state in two different places.
 		GetLastDERPActivity: c.health.GetDERPRegionReceivedTime,
+		OnlyTCP443:          c.onlyTCP443.Load(),
 	})
 	if err != nil {
 		return nil, err
