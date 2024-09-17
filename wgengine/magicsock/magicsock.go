@@ -1187,7 +1187,7 @@ func (c *Conn) sendUDPNetcheck(b []byte, addr netip.AddrPort) (int, error) {
 	}
 }
 
-// sendUDP sends UDP packet b to addr.
+// sendUDPStd sends UDP packet b to addr.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) {
 	if c.onlyTCP443.Load() {
