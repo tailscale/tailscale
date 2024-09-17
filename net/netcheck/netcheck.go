@@ -724,6 +724,9 @@ type GetReportOpts struct {
 	// If no communication with that region has occurred, or it occurred
 	// too far in the past, this function should return the zero time.
 	GetLastDERPActivity func(int) time.Time
+	// OnlyTCP443 constrains netcheck reporting to measurements over TCP port
+	// 443.
+	OnlyTCP443 bool
 }
 
 // getLastDERPActivity calls o.GetLastDERPActivity if both o and
@@ -838,7 +841,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		go rs.probePortMapServices()
 	}
 
-	plan := makeProbePlan(dm, ifState, last)
+	var plan probePlan
+	if opts == nil || !opts.OnlyTCP443 {
+		plan = makeProbePlan(dm, ifState, last)
+	}
 
 	// If we're doing a full probe, also check for a captive portal. We
 	// delay by a bit to wait for UDP STUN to finish, to avoid the probe if
@@ -930,19 +936,20 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 			}
 		}
 		if len(need) > 0 {
-			// Kick off ICMP in parallel to HTTPS checks; we don't
-			// reuse the same WaitGroup for those probes because we
-			// need to close the underlying Pinger after a timeout
-			// or when all ICMP probes are done, regardless of
-			// whether the HTTPS probes have finished.
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := c.measureAllICMPLatency(ctx, rs, need); err != nil {
-					c.logf("[v1] measureAllICMPLatency: %v", err)
-				}
-			}()
-
+			if !opts.OnlyTCP443 {
+				// Kick off ICMP in parallel to HTTPS checks; we don't
+				// reuse the same WaitGroup for those probes because we
+				// need to close the underlying Pinger after a timeout
+				// or when all ICMP probes are done, regardless of
+				// whether the HTTPS probes have finished.
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := c.measureAllICMPLatency(ctx, rs, need); err != nil {
+						c.logf("[v1] measureAllICMPLatency: %v", err)
+					}
+				}()
+			}
 			wg.Add(len(need))
 			c.logf("netcheck: UDP is blocked, trying HTTPS")
 		}
