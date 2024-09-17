@@ -301,6 +301,19 @@ func (s *Server) Serve(ln net.Listener) error {
 	return s.h.Serve(ln)
 }
 
+// ListenAndServe listens on the TCP network address addr and then calls Serve
+// to handle requests on incoming connections. If addr == "", ":http" is used.
+func (s *Server) ListenAndServe(addr string) error {
+	if addr == "" {
+		addr = ":http"
+	}
+	lst, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(lst)
+}
+
 // Close closes all client connections and stops accepting new ones.
 func (s *Server) Close() error {
 	return s.h.Close()
