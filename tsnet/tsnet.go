@@ -162,6 +162,20 @@ type Server struct {
 // over the TCP conn.
 type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
 
+// ForwardTCPHandler returns a handler that forwards TCP connections to the
+// provided destination address. The handler can be used to implement a
+// [FallbackTCPHandler]. It returns an error if the destination cannot be
+// reached.
+func (s *Server) ForwardTCPHandler(dialCtx context.Context, dst string) (func(net.Conn), error) {
+	h, err := s.netstack.ForwardTCPHandler(dialCtx, dst)
+	if err != nil {
+		return nil, err
+	}
+	return func(c net.Conn) {
+		h(c)
+	}, nil
+}
+
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
 func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, error) {
