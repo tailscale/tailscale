@@ -92,6 +92,7 @@ var handler = map[string]localAPIHandler{
 	"debug-capture":               (*Handler).serveDebugCapture,
 	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
 	"debug-dial-types":            (*Handler).serveDebugDialTypes,
+	"debug-envknob":               (*Handler).serveDebugEnvKnob,
 	"debug-log":                   (*Handler).serveDebugLog,
 	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
 	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
@@ -582,6 +583,30 @@ func (h *Handler) serveUserMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	usermetric.Handler(w, r)
+}
+
+// serveDebugEnvKnob allows the remote LocalAPI user to set the value of an envknob.
+func (h *Handler) serveDebugEnvKnob(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug-envknob access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if k := r.FormValue("key"); k != "" {
+		if kv := r.FormValue("value"); kv != "" {
+			envknob.Setenv(k, kv)
+			io.WriteString(w, fmt.Sprintf("set %q to %q\n", k, kv))
+		} else {
+			http.Error(w, fmt.Sprintf("missing envknob value for envknob key %q", k), http.StatusBadRequest)
+			return
+		}
+	} else {
+		http.Error(w, "must provide an envknob key", http.StatusBadRequest)
+		return
+	}
 }
 
 func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {

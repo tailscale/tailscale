@@ -486,8 +486,9 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 }
 
 var (
-	verboseDNSForward = envknob.RegisterBool("TS_DEBUG_DNS_FORWARD_SEND")
-	skipTCPRetry      = envknob.RegisterBool("TS_DNS_FORWARD_SKIP_TCP_RETRY")
+	verboseDNSForward      = envknob.RegisterBool("TS_DEBUG_DNS_FORWARD_SEND")
+	verboseDNSIncludeNames = envknob.RegisterBool("TS_DEBUG_DNS_INCLUDE_NAMES")
+	skipTCPRetry           = envknob.RegisterBool("TS_DNS_FORWARD_SKIP_TCP_RETRY")
 
 	// For correlating log messages in the send() function; only used when
 	// verboseDNSForward() is true.
@@ -501,9 +502,17 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	if verboseDNSForward() {
 		id := forwarderCount.Add(1)
 		domain, typ, _ := nameFromQuery(fq.packet)
-		f.logf("forwarder.send(%q, %d, %v, %d) [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), id)
+		if verboseDNSIncludeNames() {
+			f.logf("forwarder.send(%q, %d, %v, %q) [%d] ...", rr.name.Addr, fq.txid, typ, domain.WithoutTrailingDot(), id)
+		} else {
+			f.logf("forwarder.send(%q, %d, %v, %d) [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), id)
+		}
 		defer func() {
-			f.logf("forwarder.send(%q, %d, %v, %d) [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), id, len(ret), err)
+			if verboseDNSIncludeNames() {
+				f.logf("forwarder.send(%q, %d, %v, %q) [%d] = %v, %v", rr.name.Addr, fq.txid, typ, domain.WithoutTrailingDot(), id, len(ret), err)
+			} else {
+				f.logf("forwarder.send(%q, %d, %v, %d) [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), id, len(ret), err)
+			}
 		}()
 	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
@@ -1003,7 +1012,11 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 				return fmt.Errorf("waiting to send response: %w", ctx.Err())
 			case responseChan <- packet{v, query.family, query.addr}:
 				if verboseDNSForward() {
-					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+					if verboseDNSIncludeNames() {
+						f.logf("forwarder.response(%d, %v, %q) = %d, nil", fq.txid, typ, domain.WithTrailingDot(), len(v))
+					} else {
+						f.logf("forwarder.response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+					}
 				}
 				metricDNSFwdSuccess.Add(1)
 				f.health.SetHealthy(dnsForwarderFailing)
