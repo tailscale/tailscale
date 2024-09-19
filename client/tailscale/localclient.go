@@ -1470,6 +1470,13 @@ func (lc *LocalClient) DebugDERPRegion(ctx context.Context, regionIDOrCode strin
 	return decodeJSON[*ipnstate.DebugDERPRegionReport](body)
 }
 
+// DebugEnvknob sets a envknob for debugging purposes.
+func (lc *LocalClient) DebugEnvknob(ctx context.Context, key, value string) error {
+	v := url.Values{"key": {key}, "value": {value}}
+	_, err := lc.send(ctx, "POST", "/localapi/v0/debug-envknob?"+v.Encode(), 200, nil)
+	return err
+}
+
 // DebugPacketFilterRules returns the packet filter rules for the current device.
 func (lc *LocalClient) DebugPacketFilterRules(ctx context.Context) ([]tailcfg.FilterRule, error) {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-packet-filter-rules", 200, nil)
