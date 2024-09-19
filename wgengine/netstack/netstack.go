@@ -1217,21 +1217,21 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	clientRemotePort := reqDetails.RemotePort
 	clientRemoteAddrPort := netip.AddrPortFrom(clientRemoteIP, clientRemotePort)
 
-	dialIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
-	isTailscaleIP := tsaddr.IsTailscaleIP(dialIP)
+	dstAddr := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
+	isTailscaleIP := tsaddr.IsTailscaleIP(dstAddr)
 
-	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
+	dstAddrPort := netip.AddrPortFrom(dstAddr, reqDetails.LocalPort)
 
-	if viaRange.Contains(dialIP) {
+	if viaRange.Contains(dstAddr) {
 		isTailscaleIP = false
-		dialIP = tsaddr.UnmapVia(dialIP)
+		dstAddr = tsaddr.UnmapVia(dstAddr)
 	}
 
 	defer func() {
 		if !isTailscaleIP {
 			// if this is a subnet IP, we added this in before the TCP handshake
 			// so netstack is happy TCP-handshaking as a subnet IP
-			ns.removeSubnetAddress(dialIP)
+			ns.removeSubnetAddress(dstAddr)
 		}
 	}()
 
@@ -1287,7 +1287,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	// Local Services (DNS and WebDAV)
-	hittingServiceIP := dialIP == serviceIP || dialIP == serviceIPv6
+	hittingServiceIP := dstAddr == serviceIP || dstAddr == serviceIPv6
 	hittingDNS := hittingServiceIP && reqDetails.LocalPort == 53
 	if hittingDNS {
 		c := getConnOrReset()
@@ -1326,8 +1326,10 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
+
+	var dialIP netip.Addr
 	switch {
-	case hittingServiceIP && ns.isLoopbackPort(reqDetails.LocalPort):
+	case hittingServiceIP && ns.isLoopbackPort(dstAddrPort.Port()):
 		if dialIP == serviceIPv6 {
 			dialIP = ipv6Loopback
 		} else {
@@ -1336,20 +1338,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	case isTailscaleIP:
 		dialIP = ipv4Loopback
 	}
-	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
 
-	if !ns.forwardTCP(getConnOrReset, clientRemoteIP, &wq, dialAddr) {
+	if !ns.forwardTCP(getConnOrReset, fmt.Sprintf("%v:%d", dialIP, dstAddrPort.Port()), &wq) {
 		r.Complete(true) // sends a RST
 	}
 }
 
-func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
-	dialAddrStr := dialAddr.String()
-	if debugNetstack() {
-		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
+func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, dialAddr string, wq *waiter.Queue) (handled bool) {
+	dialCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	waitEntry, notifyCh := waiter.NewChannelEntry(waiter.EventHUp) // TODO(bradfitz): right EventMask?
@@ -1363,12 +1359,46 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 		select {
 		case <-notifyCh:
 			if debugNetstack() {
-				ns.logf("[v2] netstack: forwardTCP notifyCh fired; canceling context for %s", dialAddrStr)
+				ns.logf("[v2] netstack: forwardTCP notifyCh fired; canceling context for %s", dialAddr)
 			}
 		case <-done:
 		}
 		cancel()
 	}()
+
+	h, err := ns.ForwardTCPHandler(dialCtx, dialAddr)
+	if err != nil {
+		return false
+	}
+	cancel()
+	// If we get here, either the getClient call below will succeed and
+	// return something we can Close, or it will fail and will properly
+	// respond to the client with a RST. Either way, the caller no longer
+	// needs to clean up the client connection.
+	handled = true
+	client := getClient()
+	if client == nil {
+		return
+	}
+	if err := h(client); err != nil {
+		ns.logf("forwardTCP: %v", err)
+	}
+	return
+}
+
+// ForwardTCPHandler returns a function that forwards an incoming TCP connection
+// to the given dialAddr. The returned function should be called immediately
+// after the client connection is accepted. The returned function will block
+// until the connection is closed. It returns an error if the connection could
+// not be established.
+//
+// It also registers the mapping between the local and remote IP:port pairs with
+// the portmapper such that the connection can be identified using calls to
+// [ipnlocal.LocalBackend.WhoIs].
+func (ns *Impl) ForwardTCPHandler(dialCtx context.Context, dialAddrStr string) (func(net.Conn) error, error) {
+	if debugNetstack() {
+		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
+	}
 
 	// Attempt to dial the outbound connection before we accept the inbound one.
 	var dialFunc func(context.Context, string, string) (net.Conn, error)
@@ -1381,49 +1411,40 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	// TODO: this is racy, dialing before we register our local address. See
 	// https://github.com/tailscale/tailscale/issues/1616.
-	backend, err := dialFunc(ctx, "tcp", dialAddrStr)
+	backend, err := dialFunc(dialCtx, "tcp", dialAddrStr)
 	if err != nil {
-		ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddr.String(), err)
-		return
+		ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddrStr, err)
+		return nil, err
 	}
-	defer backend.Close()
-
-	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
-	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
-		ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
-		return
-	}
-	defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
-
-	// If we get here, either the getClient call below will succeed and
-	// return something we can Close, or it will fail and will properly
-	// respond to the client with a RST. Either way, the caller no longer
-	// needs to clean up the client connection.
-	handled = true
 
 	// We dialed the connection; we can complete the client's TCP handshake.
-	client := getClient()
-	if client == nil {
-		return
-	}
-	defer client.Close()
-
-	connClosed := make(chan error, 2)
-	go func() {
-		_, err := io.Copy(backend, client)
-		connClosed <- err
-	}()
-	go func() {
-		_, err := io.Copy(client, backend)
-		connClosed <- err
-	}()
-	err = <-connClosed
-	if err != nil {
-		ns.logf("proxy connection closed with error: %v", err)
-	}
-	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
-	return
+	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
+	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
+	return func(client net.Conn) error {
+		defer backend.Close()
+		defer client.Close()
+		caller := netaddr.Unmap(client.RemoteAddr().(*net.TCPAddr).AddrPort())
+		if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, caller.Addr()); err != nil {
+			ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+			return err
+		}
+		defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
+		connClosed := make(chan error, 2)
+		go func() {
+			_, err := io.Copy(backend, client)
+			connClosed <- err
+		}()
+		go func() {
+			_, err := io.Copy(client, backend)
+			connClosed <- err
+		}()
+		err = <-connClosed
+		if err != nil {
+			ns.logf("proxy connection closed with error: %v", err)
+		}
+		ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
+		return err
+	}, nil
 }
 
 // ListenPacket listens for incoming packets for the given network and address.

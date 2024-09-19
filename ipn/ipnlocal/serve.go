@@ -479,14 +479,6 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 	if backDst := tcph.TCPForward(); backDst != "" {
 		return func(conn net.Conn) error {
 			defer conn.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
-			cancel()
-			if err != nil {
-				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
-				return nil
-			}
-			defer backConn.Close()
 			if sni := tcph.TerminateTLS(); sni != "" {
 				conn = tls.Server(conn, &tls.Config{
 					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -505,18 +497,17 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 				})
 			}
 
-			// TODO(bradfitz): do the RegisterIPPortIdentity and
-			// UnregisterIPPortIdentity stuff that netstack does
-			errc := make(chan error, 1)
-			go func() {
-				_, err := io.Copy(backConn, conn)
-				errc <- err
-			}()
-			go func() {
-				_, err := io.Copy(conn, backConn)
-				errc <- err
-			}()
-			return <-errc
+			ns, ok := b.sys.Netstack.GetOK()
+			if !ok {
+				return errors.New("netstack not available")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			h, err := ns.ForwardTCPHandler(ctx, backDst)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("ForwardTCPHandler(%q): %w", backDst, err)
+			}
+			return h(conn)
 		}
 	}
 
