@@ -2451,6 +2451,13 @@ type SSHRule struct {
 	// Action is the outcome to task.
 	// A nil or invalid action means to deny.
 	Action *SSHAction `json:"action"`
+
+	// AcceptEnv is a slice of environment variable names that are allowlisted
+	// for the SSH rule in the policy file.
+	//
+	// AcceptEnv values may contain * and ? wildcard characters which match against
+	// an arbitrary number of characters or a single character respectively.
+	AcceptEnv []string `json:"acceptEnv,omitempty"`
 }
 
 // SSHPrincipal is either a particular node or a user on any node.

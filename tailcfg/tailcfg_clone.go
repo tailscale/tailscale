@@ -505,6 +505,7 @@ func (src *SSHRule) Clone() *SSHRule {
 	}
 	dst.SSHUsers = maps.Clone(src.SSHUsers)
 	dst.Action = src.Action.Clone()
+	dst.AcceptEnv = append(src.AcceptEnv[:0:0], src.AcceptEnv...)
 	return dst
 }
 
@@ -514,6 +515,7 @@ var _SSHRuleCloneNeedsRegeneration = SSHRule(struct {
 	Principals  []*SSHPrincipal
 	SSHUsers    map[string]string
 	Action      *SSHAction
+	AcceptEnv   []string
 }{})
 
 // Clone makes a deep copy of SSHAction.
