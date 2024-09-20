@@ -511,8 +511,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		currentShares := b.pm.prefs.DriveShares()
 		if currentShares.Len() > 0 {
 			var shares []*drive.Share
-			for i := range currentShares.Len() {
-				shares = append(shares, currentShares.At(i).AsStruct())
+			for _, share := range currentShares.All() {
+				shares = append(shares, share.AsStruct())
 			}
 			fs.SetShares(shares)
 		}
@@ -6184,8 +6184,8 @@ func wireguardExitNodeDNSResolvers(nm *netmap.NetworkMap, peers map[tailcfg.Node
 				resolvers := p.ExitNodeDNSResolvers()
 				if !resolvers.IsNil() && resolvers.Len() > 0 {
 					copies := make([]*dnstype.Resolver, resolvers.Len())
-					for i := range resolvers.Len() {
-						copies[i] = resolvers.At(i).AsStruct()
+					for i, r := range resolvers.All() {
+						copies[i] = r.AsStruct()
 					}
 					return copies, true
 				}
