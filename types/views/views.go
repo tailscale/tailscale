@@ -147,6 +147,17 @@ type SliceView[T ViewCloner[T, V], V StructView[T]] struct {
 	ж []T
 }
 
+// All returns an iterator over v.
+func (v SliceView[T, V]) All() iter.Seq2[int, V] {
+	return func(yield func(int, V) bool) {
+		for i := range v.ж {
+			if !yield(i, v.ж[i].View()) {
+				return
+			}
+		}
+	}
+}
+
 // MarshalJSON implements json.Marshaler.
 func (v SliceView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
