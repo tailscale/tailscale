@@ -569,6 +569,12 @@ type NetfilterRunner interface {
 	// the Tailscale interface, as used in the Kubernetes egress proxies.
 	DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error
 
+	EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
+
+	DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error
+
+	DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []PortMap) error
+
 	// ClampMSSToPMTU adds a rule to the mangle/FORWARD chain to clamp MSS for
 	// traffic destined for the provided tun interface.
 	ClampMSSToPMTU(tun string, addr netip.Addr) error

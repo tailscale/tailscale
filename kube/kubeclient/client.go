@@ -257,7 +257,7 @@ type JSONPatch struct {
 // It currently (2023-03-02) only supports "add" and "remove" operations.
 func (c *client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
 	for _, p := range patch {
-		if p.Op != "remove" && p.Op != "add" {
+		if p.Op != "remove" && p.Op != "add" && p.Op != "replace" {
 			panic(fmt.Errorf("unsupported JSON patch operation: %q", p.Op))
 		}
 	}

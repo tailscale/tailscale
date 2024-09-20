@@ -537,6 +537,17 @@ func (n *fakeIPTablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
 func (n *fakeIPTablesRunner) DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error {
 	return errors.New("not implemented")
 }
+func (n *fakeIPTablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm linuxfw.PortMap) error {
+	return errors.New("not implemented")
+}
+
+func (n *fakeIPTablesRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm linuxfw.PortMap) error {
+	return errors.New("not implemented")
+}
+
+func (n *fakeIPTablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []linuxfw.PortMap) error {
+	return errors.New("not implemented")
+}
 
 func (n *fakeIPTablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	return errors.New("not implemented")

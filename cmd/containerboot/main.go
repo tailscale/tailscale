@@ -158,6 +158,7 @@ func main() {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+		EgressServicesPath:                    defaultEnv("TS_EGRESS_SERVICES_PATH", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -401,6 +402,7 @@ authLoop:
 		failedResolveAttempts++
 	}
 
+	var egressSvcsNotify chan ipn.Notify
 	notifyChan := make(chan ipn.Notify)
 	errChan := make(chan error)
 	go func() {
@@ -575,12 +577,15 @@ runLoop:
 					h.Unlock()
 					healthzRunner()
 				}
+				if egressSvcsNotify != nil {
+					egressSvcsNotify <- n
+				}
 			}
 			if !startupTasksDone {
 				// For containerboot instances that act as TCP
 				// proxies (proxying traffic to an endpoint
 				// passed via one of the env vars that
-				// containerbot reads) and store state in a
+				// containerboot reads) and store state in a
 				// Kubernetes Secret, we consider startup tasks
 				// done at the point when device info has been
 				// successfully stored to state Secret.
@@ -592,6 +597,30 @@ runLoop:
 					// post-auth configuration is done.
 					log.Println("Startup complete, waiting for shutdown signal")
 					startupTasksDone = true
+
+					// Configure egress proxy. Egress proxy
+					// will set up firewall rules to proxy
+					// traffic to tailnet targets configured
+					// in the provided configuration file.
+					// It will then continuously monitor the
+					// config file and netmap updates and
+					// reconfigure the firewall rules as
+					// needed. If any of its operations
+					// fail, it will crash this node.
+					if cfg.EgressServicesPath != "" {
+						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressServicesPath)
+						egressSvcsNotify = make(chan ipn.Notify)
+						ep := egressProxy{
+							cfgPath:      cfg.EgressServicesPath,
+							nfr:          nfr,
+							kc:           kc,
+							stateSecret:  cfg.KubeSecret,
+							netmapChan:   egressSvcsNotify,
+							podIP:        cfg.PodIP,
+							tailnetAddrs: addrs,
+						}
+						go ep.run(ctx, n)
+					}
 
 					// Wait on tailscaled process. It won't
 					// be cleaned up by default when the
