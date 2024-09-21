@@ -7,12 +7,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -593,13 +593,7 @@ func TestMakeProbePlan(t *testing.T) {
 
 func (plan probePlan) String() string {
 	var sb strings.Builder
-	keys := []string{}
-	for k := range plan {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
+	for _, key := range slices.Sorted(maps.Keys(plan)) {
 		fmt.Fprintf(&sb, "[%s]", key)
 		pv := plan[key]
 		for _, p := range pv {
@@ -864,5 +858,17 @@ func TestNodeAddrResolve(t *testing.T) {
 				t.Logf("correctly got invalid addr")
 			})
 		})
+	}
+}
+
+func TestReportTimeouts(t *testing.T) {
+	if ReportTimeout < stunProbeTimeout {
+		t.Errorf("ReportTimeout (%v) cannot be less than stunProbeTimeout (%v)", ReportTimeout, stunProbeTimeout)
+	}
+	if ReportTimeout < icmpProbeTimeout {
+		t.Errorf("ReportTimeout (%v) cannot be less than icmpProbeTimeout (%v)", ReportTimeout, icmpProbeTimeout)
+	}
+	if ReportTimeout < httpsProbeTimeout {
+		t.Errorf("ReportTimeout (%v) cannot be less than httpsProbeTimeout (%v)", ReportTimeout, httpsProbeTimeout)
 	}
 }

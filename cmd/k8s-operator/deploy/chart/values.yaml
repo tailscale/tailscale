@@ -78,6 +78,9 @@ proxyConfig:
   # Note that if you pass multiple tags to this field via `--set` flag to helm upgrade/install commands you must escape the comma (for example, "tag:k8s-proxies\,tag:prod"). See https://github.com/helm/helm/issues/1556
   defaultTags: "tag:k8s"
   firewallMode: auto
+  # If defined, this proxy class will be used as the default proxy class for
+  # service and ingress resources that do not have a proxy class defined.
+  defaultProxyClass: ""
 
 # apiServerProxyConfig allows to configure whether the operator should expose
 # Kubernetes API server.

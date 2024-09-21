@@ -5,7 +5,9 @@ package opt
 
 import (
 	"encoding/json"
+	"flag"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -125,5 +127,40 @@ func TestUnmarshalAlloc(t *testing.T) {
 	n := testing.AllocsPerRun(10, func() { b.UnmarshalJSON(trueBytes) })
 	if n > 0 {
 		t.Errorf("got %v allocs, want 0", n)
+	}
+}
+
+func TestBoolFlag(t *testing.T) {
+	tests := []struct {
+		arguments      string
+		wantParseError bool // expect flag.Parse to error
+		want           Bool
+	}{
+		{"", false, Bool("")},
+		{"-test", true, Bool("")},
+		{`-test=""`, true, Bool("")},
+		{"-test invalid", true, Bool("")},
+
+		{"-test true", false, NewBool(true)},
+		{"-test 1", false, NewBool(true)},
+
+		{"-test false", false, NewBool(false)},
+		{"-test 0", false, NewBool(false)},
+	}
+
+	for _, tt := range tests {
+		var got Bool
+		fs := flag.NewFlagSet(t.Name(), flag.ContinueOnError)
+		fs.Var(&BoolFlag{&got}, "test", "test flag")
+
+		arguments := strings.Split(tt.arguments, " ")
+		err := fs.Parse(arguments)
+		if (err != nil) != tt.wantParseError {
+			t.Errorf("flag.Parse(%q) returned error %v, want %v", arguments, err, tt.wantParseError)
+		}
+
+		if got != tt.want {
+			t.Errorf("flag.Parse(%q) got %q, want %q", arguments, got, tt.want)
+		}
 	}
 }

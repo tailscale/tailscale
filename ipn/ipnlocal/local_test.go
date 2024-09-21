@@ -1283,7 +1283,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			}
 
 			prefs := &ipn.Prefs{ExitNodeID: tc.exitNode, CorpDNS: true}
-			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), t.Logf, "")
+			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), false, t.Logf, "")
 			if !resolversEqual(t, got.DefaultResolvers, tc.wantDefaultResolvers) {
 				t.Errorf("DefaultResolvers: got %#v, want %#v", got.DefaultResolvers, tc.wantDefaultResolvers)
 			}
@@ -2654,7 +2654,7 @@ func TestOnTailnetDefaultAutoUpdate(t *testing.T) {
 			b.hostinfo.Container = tt.container
 			p := ipn.NewPrefs()
 			p.AutoUpdate.Apply = tt.before
-			if err := b.pm.setPrefsLocked(p.View()); err != nil {
+			if err := b.pm.setPrefsNoPermCheck(p.View()); err != nil {
 				t.Fatal(err)
 			}
 			b.onTailnetDefaultAutoUpdate(tt.tailnetDefault)

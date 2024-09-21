@@ -45,6 +45,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/slicesx"
 )
 
 var (
@@ -330,7 +331,7 @@ func (c *conn) nextAuthMethodCallback(cm gossh.ConnMetadata, prevErrors []error)
 	switch {
 	case c.anyPasswordIsOkay:
 		nextMethod = append(nextMethod, "password")
-	case len(prevErrors) > 0 && prevErrors[len(prevErrors)-1] == errPubKeyRequired:
+	case slicesx.LastEqual(prevErrors, errPubKeyRequired):
 		nextMethod = append(nextMethod, "publickey")
 	}
 
@@ -1731,6 +1732,7 @@ func envValFromList(env []string, wantKey string) (v string) {
 // envEq reports whether environment variable a == b for the current
 // operating system.
 func envEq(a, b string) bool {
+	//lint:ignore SA4032 in case this func moves elsewhere, permit the GOOS check
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
 	}

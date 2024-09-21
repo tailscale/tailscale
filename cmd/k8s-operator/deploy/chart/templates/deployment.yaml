@@ -77,6 +77,10 @@ spec:
               value: "{{ .Values.apiServerProxyConfig.mode }}"
             - name: PROXY_FIREWALL_MODE
               value: {{ .Values.proxyConfig.firewallMode }}
+            {{- if .Values.proxyConfig.defaultProxyClass }}
+            - name: PROXY_DEFAULT_CLASS
+              value: {{ .Values.proxyConfig.defaultProxyClass }}
+            {{- end }}
             {{- with .Values.operatorConfig.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

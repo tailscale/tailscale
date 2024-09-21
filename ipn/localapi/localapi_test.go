@@ -26,6 +26,7 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -37,6 +38,23 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine"
 )
+
+var _ ipnauth.Actor = (*testActor)(nil)
+
+type testActor struct {
+	uid           ipn.WindowsUserID
+	name          string
+	isLocalSystem bool
+	isLocalAdmin  bool
+}
+
+func (u *testActor) UserID() ipn.WindowsUserID { return u.uid }
+
+func (u *testActor) Username() (string, error) { return u.name, nil }
+
+func (u *testActor) IsLocalSystem() bool { return u.isLocalSystem }
+
+func (u *testActor) IsLocalAdmin(operatorUID string) bool { return u.isLocalAdmin }
 
 func TestValidHost(t *testing.T) {
 	tests := []struct {
@@ -189,7 +207,7 @@ func TestWhoIsArgTypes(t *testing.T) {
 
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	newHandler := func(connIsLocalAdmin bool) *Handler {
-		return &Handler{testConnIsLocalAdmin: &connIsLocalAdmin}
+		return &Handler{Actor: &testActor{isLocalAdmin: connIsLocalAdmin}, b: newTestLocalBackend(t)}
 	}
 	tests := []struct {
 		name     string

@@ -14,7 +14,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct
 
 // View returns a readonly view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
@@ -657,14 +657,183 @@ func (v StructWithContainersView) CloneableContainer() ContainerView[*StructWith
 func (v StructWithContainersView) BasicGenericContainer() Container[GenericBasicStruct[int]] {
 	return v.ж.BasicGenericContainer
 }
-func (v StructWithContainersView) ClonableGenericContainer() ContainerView[*GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
-	return ContainerViewOf(&v.ж.ClonableGenericContainer)
+func (v StructWithContainersView) CloneableGenericContainer() ContainerView[*GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
+	return ContainerViewOf(&v.ж.CloneableGenericContainer)
+}
+func (v StructWithContainersView) CloneableMap() MapContainerView[int, *StructWithPtrs, StructWithPtrsView] {
+	return MapContainerViewOf(&v.ж.CloneableMap)
+}
+func (v StructWithContainersView) CloneableGenericMap() MapContainerView[int, *GenericNoPtrsStruct[int], GenericNoPtrsStructView[int]] {
+	return MapContainerViewOf(&v.ж.CloneableGenericMap)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithContainersViewNeedsRegeneration = StructWithContainers(struct {
-	IntContainer             Container[int]
-	CloneableContainer       Container[*StructWithPtrs]
-	BasicGenericContainer    Container[GenericBasicStruct[int]]
-	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	IntContainer              Container[int]
+	CloneableContainer        Container[*StructWithPtrs]
+	BasicGenericContainer     Container[GenericBasicStruct[int]]
+	CloneableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	CloneableMap              MapContainer[int, *StructWithPtrs]
+	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
 }{})
+
+// View returns a readonly view of StructWithTypeAliasFields.
+func (p *StructWithTypeAliasFields) View() StructWithTypeAliasFieldsView {
+	return StructWithTypeAliasFieldsView{ж: p}
+}
+
+// StructWithTypeAliasFieldsView provides a read-only view over StructWithTypeAliasFields.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithTypeAliasFieldsView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithTypeAliasFields
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v StructWithTypeAliasFieldsView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithTypeAliasFieldsView) AsStruct() *StructWithTypeAliasFields {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v StructWithTypeAliasFieldsView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *StructWithTypeAliasFieldsView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithTypeAliasFields
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithTypeAliasFieldsView) WithPtr() StructWithPtrsView        { return v.ж.WithPtr.View() }
+func (v StructWithTypeAliasFieldsView) WithoutPtr() StructWithoutPtrsAlias { return v.ж.WithoutPtr }
+func (v StructWithTypeAliasFieldsView) WithPtrByPtr() StructWithPtrsAliasView {
+	return v.ж.WithPtrByPtr.View()
+}
+func (v StructWithTypeAliasFieldsView) WithoutPtrByPtr() *StructWithoutPtrsAlias {
+	if v.ж.WithoutPtrByPtr == nil {
+		return nil
+	}
+	x := *v.ж.WithoutPtrByPtr
+	return &x
+}
+
+func (v StructWithTypeAliasFieldsView) SliceWithPtrs() views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
+	return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](v.ж.SliceWithPtrs)
+}
+func (v StructWithTypeAliasFieldsView) SliceWithoutPtrs() views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
+	return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](v.ж.SliceWithoutPtrs)
+}
+
+func (v StructWithTypeAliasFieldsView) MapWithPtrs() views.MapFn[string, *StructWithPtrsAlias, StructWithPtrsAliasView] {
+	return views.MapFnOf(v.ж.MapWithPtrs, func(t *StructWithPtrsAlias) StructWithPtrsAliasView {
+		return t.View()
+	})
+}
+
+func (v StructWithTypeAliasFieldsView) MapWithoutPtrs() views.MapFn[string, *StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
+	return views.MapFnOf(v.ж.MapWithoutPtrs, func(t *StructWithoutPtrsAlias) StructWithoutPtrsAliasView {
+		return t.View()
+	})
+}
+
+func (v StructWithTypeAliasFieldsView) MapOfSlicesWithPtrs() views.MapFn[string, []*StructWithPtrsAlias, views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView]] {
+	return views.MapFnOf(v.ж.MapOfSlicesWithPtrs, func(t []*StructWithPtrsAlias) views.SliceView[*StructWithPtrsAlias, StructWithPtrsAliasView] {
+		return views.SliceOfViews[*StructWithPtrsAlias, StructWithPtrsAliasView](t)
+	})
+}
+
+func (v StructWithTypeAliasFieldsView) MapOfSlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrsAlias, views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView]] {
+	return views.MapFnOf(v.ж.MapOfSlicesWithoutPtrs, func(t []*StructWithoutPtrsAlias) views.SliceView[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView] {
+		return views.SliceOfViews[*StructWithoutPtrsAlias, StructWithoutPtrsAliasView](t)
+	})
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithTypeAliasFieldsViewNeedsRegeneration = StructWithTypeAliasFields(struct {
+	WithPtr                StructWithPtrsAlias
+	WithoutPtr             StructWithoutPtrsAlias
+	WithPtrByPtr           *StructWithPtrsAlias
+	WithoutPtrByPtr        *StructWithoutPtrsAlias
+	SliceWithPtrs          []*StructWithPtrsAlias
+	SliceWithoutPtrs       []*StructWithoutPtrsAlias
+	MapWithPtrs            map[string]*StructWithPtrsAlias
+	MapWithoutPtrs         map[string]*StructWithoutPtrsAlias
+	MapOfSlicesWithPtrs    map[string][]*StructWithPtrsAlias
+	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
+}{})
+
+// View returns a readonly view of GenericTypeAliasStruct.
+func (p *GenericTypeAliasStruct[T, T2, V2]) View() GenericTypeAliasStructView[T, T2, V2] {
+	return GenericTypeAliasStructView[T, T2, V2]{ж: p}
+}
+
+// GenericTypeAliasStructView[T, T2, V2] provides a read-only view over GenericTypeAliasStruct[T, T2, V2].
+//
+// Its methods should only be called if `Valid()` returns true.
+type GenericTypeAliasStructView[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *GenericTypeAliasStruct[T, T2, V2]
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v GenericTypeAliasStructView[T, T2, V2]) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v GenericTypeAliasStructView[T, T2, V2]) AsStruct() *GenericTypeAliasStruct[T, T2, V2] {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v GenericTypeAliasStructView[T, T2, V2]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.ж)
+}
+
+func (v *GenericTypeAliasStructView[T, T2, V2]) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x GenericTypeAliasStruct[T, T2, V2]
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v GenericTypeAliasStructView[T, T2, V2]) NonCloneable() T { return v.ж.NonCloneable }
+func (v GenericTypeAliasStructView[T, T2, V2]) Cloneable() V2   { return v.ж.Cloneable.View() }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericTypeAliasStructViewNeedsRegeneration[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]](GenericTypeAliasStruct[T, T2, V2]) {
+	_GenericTypeAliasStructViewNeedsRegeneration(struct {
+		NonCloneable T
+		Cloneable    T2
+	}{})
+}

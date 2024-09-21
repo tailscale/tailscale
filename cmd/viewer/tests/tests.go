@@ -13,7 +13,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers --clone-only-type=OnlyGetClone
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded,GenericIntStruct,GenericNoPtrsStruct,GenericCloneableStruct,StructWithContainers,StructWithTypeAliasFields,GenericTypeAliasStruct --clone-only-type=OnlyGetClone
 
 type StructWithoutPtrs struct {
 	Int int
@@ -152,13 +152,84 @@ func ContainerViewOf[T views.ViewCloner[T, V], V views.StructView[T]](c *Contain
 	return ContainerView[T, V]{c}
 }
 
+// MapContainer is a predefined map-like container type.
+// Unlike [Container], it has two type parameters, where the value
+// is the second parameter.
+type MapContainer[K comparable, V views.Cloner[V]] struct {
+	Items map[K]V
+}
+
+func (c *MapContainer[K, V]) Clone() *MapContainer[K, V] {
+	if c == nil {
+		return nil
+	}
+	var m map[K]V
+	if c.Items != nil {
+		m = make(map[K]V, len(c.Items))
+		for i := range m {
+			m[i] = c.Items[i].Clone()
+		}
+	}
+	return &MapContainer[K, V]{m}
+}
+
+// MapContainerView is a pre-defined readonly view of a [MapContainer][K, T].
+type MapContainerView[K comparable, T views.ViewCloner[T, V], V views.StructView[T]] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *MapContainer[K, T]
+}
+
+func (cv MapContainerView[K, T, V]) Items() views.MapFn[K, T, V] {
+	return views.MapFnOf(cv.ж.Items, func(t T) V { return t.View() })
+}
+
+func MapContainerViewOf[K comparable, T views.ViewCloner[T, V], V views.StructView[T]](c *MapContainer[K, T]) MapContainerView[K, T, V] {
+	return MapContainerView[K, T, V]{c}
+}
+
 type GenericBasicStruct[T BasicType] struct {
 	Value T
 }
 
 type StructWithContainers struct {
-	IntContainer             Container[int]
-	CloneableContainer       Container[*StructWithPtrs]
-	BasicGenericContainer    Container[GenericBasicStruct[int]]
-	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	IntContainer              Container[int]
+	CloneableContainer        Container[*StructWithPtrs]
+	BasicGenericContainer     Container[GenericBasicStruct[int]]
+	CloneableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	CloneableMap              MapContainer[int, *StructWithPtrs]
+	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
+}
+
+type (
+	StructWithPtrsAlias        = StructWithPtrs
+	StructWithoutPtrsAlias     = StructWithoutPtrs
+	StructWithPtrsAliasView    = StructWithPtrsView
+	StructWithoutPtrsAliasView = StructWithoutPtrsView
+)
+
+type StructWithTypeAliasFields struct {
+	WithPtr    StructWithPtrsAlias
+	WithoutPtr StructWithoutPtrsAlias
+
+	WithPtrByPtr    *StructWithPtrsAlias
+	WithoutPtrByPtr *StructWithoutPtrsAlias
+
+	SliceWithPtrs    []*StructWithPtrsAlias
+	SliceWithoutPtrs []*StructWithoutPtrsAlias
+
+	MapWithPtrs    map[string]*StructWithPtrsAlias
+	MapWithoutPtrs map[string]*StructWithoutPtrsAlias
+
+	MapOfSlicesWithPtrs    map[string][]*StructWithPtrsAlias
+	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
+}
+
+type integer = constraints.Integer
+
+type GenericTypeAliasStruct[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]] struct {
+	NonCloneable T
+	Cloneable    T2
 }

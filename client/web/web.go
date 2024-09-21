@@ -283,6 +283,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if r.URL.Path == "/metrics" {
+		r.URL.Path = "/api/local/v0/usermetrics"
+		s.proxyRequestToLocalAPI(w, r)
+		return
+	}
+
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		switch {
 		case r.URL.Path == "/api/auth" && r.Method == httpm.GET:

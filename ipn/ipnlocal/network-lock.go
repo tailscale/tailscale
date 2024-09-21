@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -52,7 +53,7 @@ type tkaState struct {
 	profile   ipn.ProfileID
 	authority *tka.Authority
 	storage   *tka.FS
-	filtered  []ipnstate.TKAFilteredPeer
+	filtered  []ipnstate.TKAPeer
 }
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
@@ -98,7 +99,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	// nm.Peers is ordered, so deletion must be order-preserving.
 	if len(toDelete) > 0 || len(obsoleteByRotation) > 0 {
 		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
-		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete)+len(obsoleteByRotation))
+		filtered := make([]ipnstate.TKAPeer, 0, len(toDelete)+len(obsoleteByRotation))
 		for i, p := range nm.Peers {
 			if !toDelete[i] && !obsoleteByRotation.Contains(p.Key()) {
 				peers = append(peers, p)
@@ -107,20 +108,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 					b.logf("Network lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
 				}
 				// Record information about the node we filtered out.
-				fp := ipnstate.TKAFilteredPeer{
-					Name:         p.Name(),
-					ID:           p.ID(),
-					StableID:     p.StableID(),
-					TailscaleIPs: make([]netip.Addr, p.Addresses().Len()),
-					NodeKey:      p.Key(),
-				}
-				for i := range p.Addresses().Len() {
-					addr := p.Addresses().At(i)
-					if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
-						fp.TailscaleIPs[i] = addr.Addr()
-					}
-				}
-				filtered = append(filtered, fp)
+				filtered = append(filtered, tkaStateFromPeer(p))
 			}
 		}
 		nm.Peers = peers
@@ -187,23 +175,24 @@ func (r *rotationTracker) addRotationDetails(np key.NodePublic, d *tka.RotationD
 // obsoleteKeys returns the set of node keys that are obsolete due to key rotation.
 func (r *rotationTracker) obsoleteKeys() set.Set[key.NodePublic] {
 	for _, v := range r.byWrappingKey {
+		// Do not consider signatures for keys that have been marked as obsolete
+		// by another signature.
+		v = slices.DeleteFunc(v, func(rd sigRotationDetails) bool {
+			return r.obsolete.Contains(rd.np)
+		})
+		if len(v) == 0 {
+			continue
+		}
+
 		// If there are multiple rotation signatures with the same wrapping
 		// pubkey, we need to decide which one is the "latest", and keep it.
 		// The signature with the largest number of previous keys is likely to
-		// be the latest, unless it has been marked as obsolete (rotated out) by
-		// another signature (which might happen in the future if we start
-		// compacting long rotated signature chains).
+		// be the latest.
 		slices.SortStableFunc(v, func(a, b sigRotationDetails) int {
-			// Group all obsolete keys after non-obsolete keys.
-			if ao, bo := r.obsolete.Contains(a.np), r.obsolete.Contains(b.np); ao != bo {
-				if ao {
-					return 1
-				}
-				return -1
-			}
 			// Sort by decreasing number of previous keys.
 			return b.numPrevKeys - a.numPrevKeys
 		})
+
 		// If there are several signatures with the same number of previous
 		// keys, we cannot determine which one is the latest, so all of them are
 		// rejected for safety.
@@ -254,7 +243,10 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
 	}
 
-	ourNodeKey := prefs.Persist().PublicNodeKey()
+	ourNodeKey, ok := prefs.Persist().PublicNodeKeyOK()
+	if !ok {
+		return errors.New("tkaSyncIfNeeded: no node key in prefs")
+	}
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
@@ -542,9 +534,18 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		}
 	}
 
-	filtered := make([]*ipnstate.TKAFilteredPeer, len(b.tka.filtered))
+	filtered := make([]*ipnstate.TKAPeer, len(b.tka.filtered))
 	for i := range len(filtered) {
 		filtered[i] = b.tka.filtered[i].Clone()
+	}
+
+	var visible []*ipnstate.TKAPeer
+	if b.netMap != nil {
+		visible = make([]*ipnstate.TKAPeer, len(b.netMap.Peers))
+		for i, p := range b.netMap.Peers {
+			s := tkaStateFromPeer(p)
+			visible[i] = &s
+		}
 	}
 
 	stateID1, _ := b.tka.authority.StateIDs()
@@ -558,8 +559,30 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		NodeKeySignature: nodeKeySignature,
 		TrustedKeys:      outKeys,
 		FilteredPeers:    filtered,
+		VisiblePeers:     visible,
 		StateID:          stateID1,
 	}
+}
+
+func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
+	fp := ipnstate.TKAPeer{
+		Name:         p.Name(),
+		ID:           p.ID(),
+		StableID:     p.StableID(),
+		TailscaleIPs: make([]netip.Addr, 0, p.Addresses().Len()),
+		NodeKey:      p.Key(),
+	}
+	for i := range p.Addresses().Len() {
+		addr := p.Addresses().At(i)
+		if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
+			fp.TailscaleIPs = append(fp.TailscaleIPs, addr.Addr())
+		}
+	}
+	var decoded tka.NodeKeySignature
+	if err := decoded.Unserialize(p.KeySignature().AsSlice()); err == nil {
+		fp.NodeKeySignature = decoded
+	}
+	return fp
 }
 
 // NetworkLockInit enables network-lock for the tailnet, with the tailnets'
@@ -716,7 +739,7 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 			return key.NodePublic{}, tka.NodeKeySignature{}, errNetworkLockNotActive
 		}
 		if !b.tka.authority.KeyTrusted(nlPriv.KeyID()) {
-			return key.NodePublic{}, tka.NodeKeySignature{}, errors.New("this node is not trusted by network lock")
+			return key.NodePublic{}, tka.NodeKeySignature{}, errors.New(tsconst.TailnetLockNotTrustedMsg)
 		}
 
 		p, err := nodeKey.MarshalBinary()

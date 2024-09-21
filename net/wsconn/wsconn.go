@@ -3,7 +3,7 @@
 
 // Package wsconn contains an adapter type that turns
 // a websocket connection into a net.Conn. It a temporary fork of the
-// netconn.go file from the nhooyr.io/websocket package while we wait for
+// netconn.go file from the github.com/coder/websocket package while we wait for
 // https://github.com/nhooyr/websocket/pull/350 to be merged.
 package wsconn
 
@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // NetConn converts a *websocket.Conn into a net.Conn.

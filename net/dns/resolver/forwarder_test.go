@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -406,7 +407,7 @@ func enableDebug(tb testing.TB) {
 func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) {
 	name := dns.MustNewName(domain)
 
-	builder := dns.NewBuilder(nil, dns.Header{})
+	builder := dns.NewBuilder(nil, dns.Header{Response: true})
 	builder.StartQuestions()
 	builder.Question(dns.Question{
 		Name:  name,
@@ -463,19 +464,26 @@ func runTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwa
 		modify(fwd)
 	}
 
-	fq := &forwardQuery{
-		txid:           getTxID(request),
-		packet:         request,
-		closeOnCtxDone: new(closePool),
-		family:         "tcp",
-	}
-	defer fq.closeOnCtxDone.Close()
-
 	rr := resolverAndDelay{
 		name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)},
 	}
 
-	return fwd.send(context.Background(), fq, rr)
+	rpkt := packet{
+		bs:     request,
+		family: "tcp",
+		addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+	}
+
+	rchan := make(chan packet, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	tb.Cleanup(cancel)
+	err = fwd.forwardWithDestChan(ctx, rpkt, rchan, rr)
+	select {
+	case res := <-rchan:
+		return res.bs, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func mustRunTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwarder)) []byte {
@@ -609,7 +617,8 @@ func TestForwarderTCPFallbackError(t *testing.T) {
 		name := dns.MustNewName(domain)
 
 		builder := dns.NewBuilder(nil, dns.Header{
-			RCode: dns.RCodeServerFailure,
+			Response: true,
+			RCode:    dns.RCodeServerFailure,
 		})
 		builder.StartQuestions()
 		builder.Question(dns.Question{
@@ -656,5 +665,60 @@ func TestForwarderTCPFallbackError(t *testing.T) {
 		t.Error("wanted error, got nil")
 	} else if !errors.Is(err, errServerFailure) {
 		t.Errorf("wanted errServerFailure, got: %v", err)
+	}
+}
+
+// mdnsResponder at minimum has an expectation that NXDOMAIN must include the
+// question, otherwise it will penalize our server (#13511).
+func TestNXDOMAINIncludesQuestion(t *testing.T) {
+	var domain = "lb._dns-sd._udp.example.org."
+
+	// Our response is a NXDOMAIN
+	response := func() []byte {
+		name := dns.MustNewName(domain)
+
+		builder := dns.NewBuilder(nil, dns.Header{
+			Response: true,
+			RCode:    dns.RCodeNameError,
+		})
+		builder.StartQuestions()
+		builder.Question(dns.Question{
+			Name:  name,
+			Type:  dns.TypePTR,
+			Class: dns.ClassINET,
+		})
+		response, err := builder.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}()
+
+	// Our request is a single PTR query for the domain in the answer, above.
+	request := func() []byte {
+		builder := dns.NewBuilder(nil, dns.Header{})
+		builder.StartQuestions()
+		builder.Question(dns.Question{
+			Name:  dns.MustNewName(domain),
+			Type:  dns.TypePTR,
+			Class: dns.ClassINET,
+		})
+		request, err := builder.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}()
+
+	port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+	})
+
+	res, err := runTestQuery(t, port, request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(res, response) {
+		t.Errorf("invalid response\ngot: %+v\nwant: %+v", res, response)
 	}
 }

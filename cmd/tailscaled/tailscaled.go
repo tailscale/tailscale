@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build go1.21
+//go:build go1.23
 
 // The tailscaled program is the Tailscale client daemon. It's configured
 // and controlled via the tailscale CLI program.
@@ -157,8 +157,9 @@ func main() {
 	envknob.ApplyDiskConfig()
 	applyIntegrationTestEnvKnob()
 
+	defaultVerbosity := envknob.RegisterInt("TS_LOG_VERBOSITY")
 	printVersion := false
-	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
+	flag.IntVar(&args.verbose, "verbose", defaultVerbosity(), "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanUp, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
@@ -415,6 +416,10 @@ func run() (err error) {
 	}
 
 	sys.Set(driveimpl.NewFileSystemForRemote(logf))
+
+	if app := envknob.App(); app != "" {
+		hostinfo.SetApp(app)
+	}
 
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }

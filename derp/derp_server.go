@@ -46,7 +46,9 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
+	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
 
@@ -155,7 +157,7 @@ type Server struct {
 	mu       sync.Mutex
 	closed   bool
 	netConns map[Conn]chan struct{} // chan is closed when conn closes
-	clients  map[key.NodePublic]clientSet
+	clients  map[key.NodePublic]*clientSet
 	watchers set.Set[*sclient] // mesh peers
 	// clientsMesh tracks all clients in the cluster, both locally
 	// and to mesh peers.  If the value is nil, that means the
@@ -163,11 +165,11 @@ type Server struct {
 	// remote). If the value is non-nil, it's remote (+ maybe also
 	// local).
 	clientsMesh map[key.NodePublic]PacketForwarder
-	// sentTo tracks which peers have sent to which other peers,
-	// and at which connection number. This isn't on sclient
-	// because it includes intra-region forwarded packets as the
-	// src.
-	sentTo map[key.NodePublic]map[key.NodePublic]int64 // src => dst => dst's latest sclient.connNum
+	// peerGoneWatchers is the set of watchers that subscribed to a
+	// peer disconnecting from the region overall. When a peer
+	// is gone from the region, we notify all of these watchers,
+	// calling their funcs in a new goroutine.
+	peerGoneWatchers map[key.NodePublic]set.HandleSet[func(key.NodePublic)]
 
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr map[netip.AddrPort]key.NodePublic
@@ -176,8 +178,6 @@ type Server struct {
 }
 
 // clientSet represents 1 or more *sclients.
-//
-// The two implementations are singleClient and *dupClientSet.
 //
 // In the common case, client should only have one connection to the
 // DERP server for a given key. When they're connected multiple times,
@@ -194,26 +194,49 @@ type Server struct {
 // "health_error" frame to them that'll communicate to the end users
 // that they cloned a device key, and we'll also surface it in the
 // admin panel, etc.
-type clientSet interface {
-	// ActiveClient returns the most recently added client to
-	// the set, as long as it hasn't been disabled, in which
-	// case it returns nil.
-	ActiveClient() *sclient
+type clientSet struct {
+	// activeClient holds the currently active connection for the set. It's nil
+	// if there are no connections or the connection is disabled.
+	//
+	// A pointer to a clientSet can be held by peers for long periods of time
+	// without holding Server.mu to avoid mutex contention on Server.mu, only
+	// re-acquiring the mutex and checking the clients map if activeClient is
+	// nil.
+	activeClient atomic.Pointer[sclient]
 
-	// Len returns the number of clients in the set.
-	Len() int
-
-	// ForeachClient calls f for each client in the set.
-	ForeachClient(f func(*sclient))
+	// dup is non-nil if there are multiple connections for the
+	// public key. It's nil in the common case of only one
+	// client being connected.
+	//
+	// dup is guarded by Server.mu.
+	dup *dupClientSet
 }
 
-// singleClient is a clientSet of a single connection.
-// This is the common case.
-type singleClient struct{ c *sclient }
+// Len returns the number of clients in s, which can be
+// 0, 1 (the common case), or more (for buggy or transiently
+// reconnecting clients).
+func (s *clientSet) Len() int {
+	if s.dup != nil {
+		return len(s.dup.set)
+	}
+	if s.activeClient.Load() != nil {
+		return 1
+	}
+	return 0
+}
 
-func (s singleClient) ActiveClient() *sclient         { return s.c }
-func (s singleClient) Len() int                       { return 1 }
-func (s singleClient) ForeachClient(f func(*sclient)) { f(s.c) }
+// ForeachClient calls f for each client in the set.
+//
+// The Server.mu must be held.
+func (s *clientSet) ForeachClient(f func(*sclient)) {
+	if s.dup != nil {
+		for c := range s.dup.set {
+			f(c)
+		}
+	} else if c := s.activeClient.Load(); c != nil {
+		f(c)
+	}
+}
 
 // A dupClientSet is a clientSet of more than 1 connection.
 //
@@ -224,11 +247,12 @@ func (s singleClient) ForeachClient(f func(*sclient)) { f(s.c) }
 //
 // All fields are guarded by Server.mu.
 type dupClientSet struct {
-	// set is the set of connected clients for sclient.key.
+	// set is the set of connected clients for sclient.key,
+	// including the clientSet's active one.
 	set set.Set[*sclient]
 
 	// last is the most recent addition to set, or nil if the most
-	// recent one has since disconnected and nobody else has send
+	// recent one has since disconnected and nobody else has sent
 	// data since.
 	last *sclient
 
@@ -239,17 +263,15 @@ type dupClientSet struct {
 	sendHistory []*sclient
 }
 
-func (s *dupClientSet) ActiveClient() *sclient {
-	if s.last != nil && !s.last.isDisabled.Load() {
-		return s.last
+func (s *clientSet) pickActiveClient() *sclient {
+	d := s.dup
+	if d == nil {
+		return s.activeClient.Load()
+	}
+	if d.last != nil && !d.last.isDisabled.Load() {
+		return d.last
 	}
 	return nil
-}
-func (s *dupClientSet) Len() int { return len(s.set) }
-func (s *dupClientSet) ForeachClient(f func(*sclient)) {
-	for c := range s.set {
-		f(c)
-	}
 }
 
 // removeClient removes c from s and reports whether it was in s
@@ -317,12 +339,12 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		packetsRecvByKind:    metrics.LabelMap{Label: "kind"},
 		packetsDroppedReason: metrics.LabelMap{Label: "reason"},
 		packetsDroppedType:   metrics.LabelMap{Label: "type"},
-		clients:              map[key.NodePublic]clientSet{},
+		clients:              map[key.NodePublic]*clientSet{},
 		clientsMesh:          map[key.NodePublic]PacketForwarder{},
 		netConns:             map[Conn]chan struct{}{},
 		memSys0:              ms.Sys,
 		watchers:             set.Set[*sclient]{},
-		sentTo:               map[key.NodePublic]map[key.NodePublic]int64{},
+		peerGoneWatchers:     map[key.NodePublic]set.HandleSet[func(key.NodePublic)]{},
 		avgQueueDuration:     new(uint64),
 		tcpRtt:               metrics.LabelMap{Label: "le"},
 		meshUpdateBatchSize:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
@@ -444,7 +466,7 @@ func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 	if !ok {
 		return false
 	}
-	return x.ActiveClient() != nil
+	return x.activeClient.Load() != nil
 }
 
 // Accept adds a new connection to the server and serves it.
@@ -534,36 +556,42 @@ func (s *Server) registerClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	curSet := s.clients[c.key]
-	switch curSet := curSet.(type) {
-	case nil:
-		s.clients[c.key] = singleClient{c}
+	cs, ok := s.clients[c.key]
+	if !ok {
 		c.debugLogf("register single client")
-	case singleClient:
+		cs = &clientSet{}
+		s.clients[c.key] = cs
+	}
+	was := cs.activeClient.Load()
+	if was == nil {
+		// Common case.
+	} else {
+		was.isDup.Store(true)
+		c.isDup.Store(true)
+	}
+
+	dup := cs.dup
+	if dup == nil && was != nil {
 		s.dupClientKeys.Add(1)
 		s.dupClientConns.Add(2) // both old and new count
 		s.dupClientConnTotal.Add(1)
-		old := curSet.ActiveClient()
-		old.isDup.Store(true)
-		c.isDup.Store(true)
-		s.clients[c.key] = &dupClientSet{
-			last: c,
-			set: set.Set[*sclient]{
-				old: struct{}{},
-				c:   struct{}{},
-			},
-			sendHistory: []*sclient{old},
+		dup = &dupClientSet{
+			set:         set.Of(c, was),
+			last:        c,
+			sendHistory: []*sclient{was},
 		}
+		cs.dup = dup
 		c.debugLogf("register duplicate client")
-	case *dupClientSet:
+	} else if dup != nil {
 		s.dupClientConns.Add(1)     // the gauge
 		s.dupClientConnTotal.Add(1) // the counter
-		c.isDup.Store(true)
-		curSet.set.Add(c)
-		curSet.last = c
-		curSet.sendHistory = append(curSet.sendHistory, c)
+		dup.set.Add(c)
+		dup.last = c
+		dup.sendHistory = append(dup.sendHistory, c)
 		c.debugLogf("register another duplicate client")
 	}
+
+	cs.activeClient.Store(c)
 
 	if _, ok := s.clientsMesh[c.key]; !ok {
 		s.clientsMesh[c.key] = nil // just for varz of total users in cluster
@@ -595,30 +623,47 @@ func (s *Server) unregisterClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	set := s.clients[c.key]
-	switch set := set.(type) {
-	case nil:
+	set, ok := s.clients[c.key]
+	if !ok {
 		c.logf("[unexpected]; clients map is empty")
-	case singleClient:
+		return
+	}
+
+	dup := set.dup
+	if dup == nil {
+		// The common case.
+		cur := set.activeClient.Load()
+		if cur == nil {
+			c.logf("[unexpected]; active client is nil")
+			return
+		}
+		if cur != c {
+			c.logf("[unexpected]; active client is not c")
+			return
+		}
 		c.debugLogf("removed connection")
+		set.activeClient.Store(nil)
 		delete(s.clients, c.key)
 		if v, ok := s.clientsMesh[c.key]; ok && v == nil {
 			delete(s.clientsMesh, c.key)
 			s.notePeerGoneFromRegionLocked(c.key)
 		}
 		s.broadcastPeerStateChangeLocked(c.key, netip.AddrPort{}, 0, false)
-	case *dupClientSet:
+	} else {
 		c.debugLogf("removed duplicate client")
-		if set.removeClient(c) {
+		if dup.removeClient(c) {
 			s.dupClientConns.Add(-1)
 		} else {
 			c.logf("[unexpected]; dup client set didn't shrink")
 		}
-		if set.Len() == 1 {
+		if dup.set.Len() == 1 {
+			// If we drop down to one connection, demote it down
+			// to a regular single client (a nil dup set).
+			set.dup = nil
 			s.dupClientConns.Add(-1) // again; for the original one's
 			s.dupClientKeys.Add(-1)
 			var remain *sclient
-			for remain = range set.set {
+			for remain = range dup.set {
 				break
 			}
 			if remain == nil {
@@ -626,7 +671,10 @@ func (s *Server) unregisterClient(c *sclient) {
 			}
 			remain.isDisabled.Store(false)
 			remain.isDup.Store(false)
-			s.clients[c.key] = singleClient{remain}
+			set.activeClient.Store(remain)
+		} else {
+			// Still a duplicate. Pick a winner.
+			set.activeClient.Store(set.pickActiveClient())
 		}
 	}
 
@@ -639,6 +687,40 @@ func (s *Server) unregisterClient(c *sclient) {
 	s.curClients.Add(-1)
 	if c.preferred {
 		s.curHomeClients.Add(-1)
+	}
+}
+
+// addPeerGoneFromRegionWatcher adds a function to be called when peer is gone
+// from the region overall. It returns a handle that can be used to remove the
+// watcher later.
+//
+// The provided f func is usually [sclient.onPeerGoneFromRegion], added by
+// [sclient.noteSendFromSrc]; this func doesn't take a whole *sclient to make it
+// clear what has access to what.
+func (s *Server) addPeerGoneFromRegionWatcher(peer key.NodePublic, f func(key.NodePublic)) set.Handle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hset, ok := s.peerGoneWatchers[peer]
+	if !ok {
+		hset = set.HandleSet[func(key.NodePublic)]{}
+		s.peerGoneWatchers[peer] = hset
+	}
+	return hset.Add(f)
+}
+
+// removePeerGoneFromRegionWatcher removes a peer watcher previously added by
+// addPeerGoneFromRegionWatcher, using the handle returned by
+// addPeerGoneFromRegionWatcher.
+func (s *Server) removePeerGoneFromRegionWatcher(peer key.NodePublic, h set.Handle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hset, ok := s.peerGoneWatchers[peer]
+	if !ok {
+		return
+	}
+	delete(hset, h)
+	if len(hset) == 0 {
+		delete(s.peerGoneWatchers, peer)
 	}
 }
 
@@ -655,18 +737,11 @@ func (s *Server) notePeerGoneFromRegionLocked(key key.NodePublic) {
 	// so they can drop their route entries to us (issue 150)
 	// or move them over to the active client (in case a replaced client
 	// connection is being unregistered).
-	for pubKey, connNum := range s.sentTo[key] {
-		set, ok := s.clients[pubKey]
-		if !ok {
-			continue
-		}
-		set.ForeachClient(func(peer *sclient) {
-			if peer.connNum == connNum {
-				go peer.requestPeerGoneWrite(key, PeerGoneReasonDisconnected)
-			}
-		})
+	set := s.peerGoneWatchers[key]
+	for _, f := range set {
+		go f(key)
 	}
-	delete(s.sentTo, key)
+	delete(s.peerGoneWatchers, key)
 }
 
 // requestPeerGoneWriteLimited sends a request to write a "peer gone"
@@ -697,7 +772,7 @@ func (s *Server) addWatcher(c *sclient) {
 
 	// Queue messages for each already-connected client.
 	for peer, clientSet := range s.clients {
-		ac := clientSet.ActiveClient()
+		ac := clientSet.activeClient.Load()
 		if ac == nil {
 			continue
 		}
@@ -955,10 +1030,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 	s.mu.Lock()
 	if set, ok := s.clients[dstKey]; ok {
 		dstLen = set.Len()
-		dst = set.ActiveClient()
-	}
-	if dst != nil {
-		s.notePeerSendLocked(srcKey, dst)
+		dst = set.activeClient.Load()
 	}
 	s.mu.Unlock()
 
@@ -982,18 +1054,6 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 	})
 }
 
-// notePeerSendLocked records that src sent to dst.  We keep track of
-// that so when src disconnects, we can tell dst (if it's still
-// around) that src is gone (a peerGone frame).
-func (s *Server) notePeerSendLocked(src key.NodePublic, dst *sclient) {
-	m, ok := s.sentTo[src]
-	if !ok {
-		m = map[key.NodePublic]int64{}
-		s.sentTo[src] = m
-	}
-	m[dst.key] = dst.connNum
-}
-
 // handleFrameSendPacket reads a "send packet" frame from the client.
 func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	s := c.s
@@ -1010,11 +1070,9 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	s.mu.Lock()
 	if set, ok := s.clients[dstKey]; ok {
 		dstLen = set.Len()
-		dst = set.ActiveClient()
+		dst = set.activeClient.Load()
 	}
-	if dst != nil {
-		s.notePeerSendLocked(c.key, dst)
-	} else if dstLen < 1 {
+	if dst == nil && dstLen < 1 {
 		fwd = s.clientsMesh[dstKey]
 	}
 	s.mu.Unlock()
@@ -1132,6 +1190,13 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	dst.debugLogf("sendPkt attempt %d dropped, queue full")
 
 	return nil
+}
+
+// onPeerGoneFromRegion is the callback registered with the Server to be
+// notified (in a new goroutine) whenever a peer has disconnected from all DERP
+// nodes in the current region.
+func (c *sclient) onPeerGoneFromRegion(peer key.NodePublic) {
+	c.requestPeerGoneWrite(peer, PeerGoneReasonDisconnected)
 }
 
 // requestPeerGoneWrite sends a request to write a "peer gone" frame
@@ -1256,22 +1321,28 @@ func (s *Server) noteClientActivity(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ds, ok := s.clients[c.key].(*dupClientSet)
+	cs, ok := s.clients[c.key]
 	if !ok {
+		return
+	}
+	dup := cs.dup
+	if dup == nil {
 		// It became unduped in between the isDup fast path check above
 		// and the mutex check. Nothing to do.
 		return
 	}
 
 	if s.dupPolicy == lastWriterIsActive {
-		ds.last = c
-	} else if ds.last == nil {
+		dup.last = c
+		cs.activeClient.Store(c)
+	} else if dup.last == nil {
 		// If we didn't have a primary, let the current
 		// speaker be the primary.
-		ds.last = c
+		dup.last = c
+		cs.activeClient.Store(c)
 	}
 
-	if sh := ds.sendHistory; len(sh) != 0 && sh[len(sh)-1] == c {
+	if slicesx.LastEqual(dup.sendHistory, c) {
 		// The client c was the last client to make activity
 		// in this set and it was already recorded. Nothing to
 		// do.
@@ -1281,10 +1352,13 @@ func (s *Server) noteClientActivity(c *sclient) {
 	// If we saw this connection send previously, then consider
 	// the group fighting and disable them all.
 	if s.dupPolicy == disableFighters {
-		for _, prior := range ds.sendHistory {
+		for _, prior := range dup.sendHistory {
 			if prior == c {
-				ds.ForeachClient(func(c *sclient) {
+				cs.ForeachClient(func(c *sclient) {
 					c.isDisabled.Store(true)
+					if cs.activeClient.Load() == c {
+						cs.activeClient.Store(nil)
+					}
 				})
 				break
 			}
@@ -1292,7 +1366,7 @@ func (s *Server) noteClientActivity(c *sclient) {
 	}
 
 	// Append this client to the list of clients who spoke last.
-	ds.sendHistory = append(ds.sendHistory, c)
+	dup.sendHistory = append(dup.sendHistory, c)
 }
 
 type serverInfo struct {
@@ -1407,6 +1481,11 @@ func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, d
 
 // sclient is a client connection to the server.
 //
+// A node (a wireguard public key) can be connected multiple times to a DERP server
+// and thus have multiple sclient instances. An sclient represents
+// only one of these possibly multiple connections. See clientSet for the
+// type that represents the set of all connections for a given key.
+//
 // (The "s" prefix is to more explicitly distinguish it from Client in derp_client.go)
 type sclient struct {
 	// Static after construction.
@@ -1433,8 +1512,9 @@ type sclient struct {
 	connectedAt time.Time
 	preferred   bool
 
-	// Owned by sender, not thread-safe.
-	bw *lazyBufioWriter
+	// Owned by sendLoop, not thread-safe.
+	sawSrc map[key.NodePublic]set.Handle
+	bw     *lazyBufioWriter
 
 	// Guarded by s.mu
 	//
@@ -1537,24 +1617,36 @@ func (c *sclient) recordQueueTime(enqueuedAt time.Time) {
 	}
 }
 
-func (c *sclient) sendLoop(ctx context.Context) error {
-	defer func() {
-		// If the sender shuts down unilaterally due to an error, close so
-		// that the receive loop unblocks and cleans up the rest.
-		c.nc.Close()
+// onSendLoopDone is called when the send loop is done
+// to clean up.
+//
+// It must only be called from the sendLoop goroutine.
+func (c *sclient) onSendLoopDone() {
+	// If the sender shuts down unilaterally due to an error, close so
+	// that the receive loop unblocks and cleans up the rest.
+	c.nc.Close()
 
-		// Drain the send queue to count dropped packets
-		for {
-			select {
-			case pkt := <-c.sendQueue:
-				c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGoneDisconnected)
-			case pkt := <-c.discoSendQueue:
-				c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGoneDisconnected)
-			default:
-				return
-			}
+	// Clean up watches.
+	for peer, h := range c.sawSrc {
+		c.s.removePeerGoneFromRegionWatcher(peer, h)
+	}
+
+	// Drain the send queue to count dropped packets
+	for {
+		select {
+		case pkt := <-c.sendQueue:
+			c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGoneDisconnected)
+		case pkt := <-c.discoSendQueue:
+			c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGoneDisconnected)
+		default:
+			return
 		}
-	}()
+	}
+
+}
+
+func (c *sclient) sendLoop(ctx context.Context) error {
+	defer c.onSendLoopDone()
 
 	jitter := rand.N(5 * time.Second)
 	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(keepAlive + jitter)
@@ -1750,6 +1842,7 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 	pktLen := len(contents)
 	if withKey {
 		pktLen += key.NodePublicRawLen
+		c.noteSendFromSrc(srcKey)
 	}
 	if err = writeFrameHeader(c.bw.bw(), frameRecvPacket, uint32(pktLen)); err != nil {
 		return err
@@ -1761,6 +1854,18 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 	}
 	_, err = c.bw.Write(contents)
 	return err
+}
+
+// noteSendFromSrc notes that we are about to write a packet
+// from src to sclient.
+//
+// It must only be called from the sendLoop goroutine.
+func (c *sclient) noteSendFromSrc(src key.NodePublic) {
+	if _, ok := c.sawSrc[src]; ok {
+		return
+	}
+	h := c.s.addPeerGoneFromRegionWatcher(src, c.onPeerGoneFromRegion)
+	mak.Set(&c.sawSrc, src, h)
 }
 
 // AddPacketForwarder registers fwd as a packet forwarder for dst.

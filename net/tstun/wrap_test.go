@@ -315,6 +315,12 @@ func mustHexDecode(s string) []byte {
 }
 
 func TestFilter(t *testing.T) {
+	// Reset the metrics before test. These are global
+	// so the different tests might have affected them.
+	metricInboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonACL}, 0)
+	metricInboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonError}, 0)
+	metricOutboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonACL}, 0)
+
 	chtun, tun := newChannelTUN(t.Logf, true)
 	defer tun.Close()
 
@@ -428,6 +434,22 @@ func TestFilter(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	inACL := metricInboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL})
+	inError := metricInboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonError})
+	outACL := metricOutboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL})
+
+	assertMetricPackets(t, "inACL", "3", inACL.String())
+	assertMetricPackets(t, "inError", "0", inError.String())
+	assertMetricPackets(t, "outACL", "1", outACL.String())
+
+}
+
+func assertMetricPackets(t *testing.T, metricName, want, got string) {
+	t.Helper()
+	if want != got {
+		t.Errorf("%s got unexpected value, got %s, want %s", metricName, got, want)
 	}
 }
 
@@ -552,7 +574,7 @@ func TestPeerAPIBypass(t *testing.T) {
 			tt.w.SetFilter(tt.filter)
 			tt.w.disableTSMPRejected = true
 			tt.w.logf = t.Logf
-			if got := tt.w.filterPacketInboundFromWireGuard(p, nil, nil); got != tt.want {
+			if got, _ := tt.w.filterPacketInboundFromWireGuard(p, nil, nil, nil); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
 		})
@@ -582,7 +604,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 
 	p := new(packet.Parsed)
 	p.Decode(pkt)
-	got := tw.filterPacketInboundFromWireGuard(p, nil, nil)
+	got, _ := tw.filterPacketInboundFromWireGuard(p, nil, nil, nil)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
@@ -593,7 +615,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 	memLog.Reset()
 	pp := new(packet.Parsed)
 	pp.Decode(pkt)
-	got = tw.filterPacketOutboundToWireGuard(pp, nil)
+	got, _ = tw.filterPacketOutboundToWireGuard(pp, nil, nil)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
@@ -882,7 +904,10 @@ func TestCaptureHook(t *testing.T) {
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectInboundPacketBuffer")),
 	})
-	w.InjectInboundPacketBuffer(packetBuf)
+	buffs := make([][]byte, 1)
+	buffs[0] = make([]byte, PacketStartOffset+packetBuf.Size())
+	sizes := make([]int, 1)
+	w.InjectInboundPacketBuffer(packetBuf, buffs, sizes)
 
 	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectOutboundPacketBuffer")),

@@ -37,30 +37,40 @@ func Test_Hijacker(t *testing.T) {
 		failRecorderConnPostConnect bool // send error down the error channel
 		wantsConnClosed             bool
 		wantsSetupErr               bool
+		proto                       Protocol
 	}{
 		{
-			name: "setup succeeds, conn stays open",
+			name:  "setup_succeeds_conn_stays_open",
+			proto: SPDYProtocol,
 		},
 		{
-			name:                "setup fails, policy is to fail open, conn stays open",
+			name:  "setup_succeeds_conn_stays_open_ws",
+			proto: WSProtocol,
+		},
+		{
+			name:                "setup_fails_policy_is_to_fail_open_conn_stays_open",
 			failOpen:            true,
 			failRecorderConnect: true,
+			proto:               SPDYProtocol,
 		},
 		{
-			name:                "setup fails, policy is to fail closed, conn is closed",
+			name:                "setup_fails_policy_is_to_fail_closed_conn_is_closed",
 			failRecorderConnect: true,
 			wantsSetupErr:       true,
 			wantsConnClosed:     true,
+			proto:               SPDYProtocol,
 		},
 		{
-			name:                        "connection fails post-initial connect, policy is to fail open, conn stays open",
+			name:                        "connection_fails_post-initial_connect_policy_is_to_fail_open_conn_stays_open",
 			failRecorderConnPostConnect: true,
 			failOpen:                    true,
+			proto:                       SPDYProtocol,
 		},
 		{
-			name:                        "connection fails post-initial connect, policy is to fail closed, conn is closed",
+			name:                        "connection_fails_post-initial_connect,_policy_is_to_fail_closed_conn_is_closed",
 			failRecorderConnPostConnect: true,
 			wantsConnClosed:             true,
+			proto:                       SPDYProtocol,
 		},
 	}
 	for _, tt := range tests {
@@ -68,7 +78,10 @@ func Test_Hijacker(t *testing.T) {
 			tc := &fakes.TestConn{}
 			ch := make(chan error)
 			h := &Hijacker{
-				connectToRecorder: func(context.Context, []netip.AddrPort, func(context.Context, string, string) (net.Conn, error)) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
+				connectToRecorder: func(context.Context,
+					[]netip.AddrPort,
+					func(context.Context, string, string) (net.Conn, error),
+				) (wc io.WriteCloser, rec []*tailcfg.SSHRecordingAttempt, _ <-chan error, err error) {
 					if tt.failRecorderConnect {
 						err = errors.New("test")
 					}
@@ -79,6 +92,7 @@ func Test_Hijacker(t *testing.T) {
 				log:      zl.Sugar(),
 				ts:       &tsnet.Server{},
 				req:      &http.Request{URL: &url.URL{}},
+				proto:    tt.proto,
 			}
 			ctx := context.Background()
 			_, err := h.setUpRecording(ctx, tc)

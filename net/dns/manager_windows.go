@@ -469,6 +469,9 @@ func (m *windowsManager) disableDynamicUpdates() error {
 		}
 		defer k.Close()
 
+		if err := k.SetDWordValue("RegistrationEnabled", 0); err != nil {
+			return err
+		}
 		if err := k.SetDWordValue("DisableDynamicUpdate", 1); err != nil {
 			return err
 		}

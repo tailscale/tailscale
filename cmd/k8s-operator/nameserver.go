@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/yaml"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -62,9 +63,7 @@ type NameserverReconciler struct {
 	managedNameservers set.Slice[types.UID] // one or none
 }
 
-var (
-	gaugeNameserverResources = clientmetric.NewGauge("k8s_nameserver_resources")
-)
+var gaugeNameserverResources = clientmetric.NewGauge(kubetypes.MetricNameserverCount)
 
 func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	logger := a.logger.With("dnsConfig", req.Name)

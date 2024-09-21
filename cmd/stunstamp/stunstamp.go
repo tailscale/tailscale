@@ -1,13 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The stunstamp binary measures STUN round-trip latency with DERPs.
+// The stunstamp binary measures round-trip latency with DERPs.
 package main
 
 import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,8 +33,10 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/prometheus/prometheus/prompb"
+	"github.com/tcnksm/go-httpstat"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/tcpinfo"
 	"tailscale.com/tailcfg"
 )
 
@@ -44,11 +48,21 @@ var (
 	flagInstance       = flag.String("instance", "", "instance label value; defaults to hostname if unspecified")
 	flagSTUNDstPorts   = flag.String("stun-dst-ports", "", "comma-separated list of STUN destination ports to monitor")
 	flagHTTPSDstPorts  = flag.String("https-dst-ports", "", "comma-separated list of HTTPS destination ports to monitor")
+	flagTCPDstPorts    = flag.String("tcp-dst-ports", "", "comma-separated list of TCP destination ports to monitor")
 	flagICMP           = flag.Bool("icmp", false, "probe ICMP")
 )
 
 const (
-	minInterval       = time.Second
+	// maxTxJitter is the upper bounds for jitter introduced across probes
+	maxTXJitter = time.Millisecond * 400
+	// minInterval is the minimum allowed probe interval/step
+	minInterval = time.Second * 10
+	// txRxTimeout is the timeout value used for kernel timestamping loopback,
+	// and packet receive operations
+	txRxTimeout = time.Second * 2
+	// maxBufferDuration is the maximum duration (maxBufferDuration /
+	// *flagInterval steps worth) of buffered data that can be held in memory
+	// before data loss occurs around prometheus unavailability.
 	maxBufferDuration = time.Hour
 )
 
@@ -97,6 +111,7 @@ const (
 	protocolSTUN  protocol = "stun"
 	protocolICMP  protocol = "icmp"
 	protocolHTTPS protocol = "https"
+	protocolTCP   protocol = "tcp"
 )
 
 // resultKey contains the stable dimensions and their values for a given
@@ -115,12 +130,208 @@ type result struct {
 	rtt *time.Duration // nil signifies failure, e.g. timeout
 }
 
-func measureSTUNRTT(conn io.ReadWriteCloser, dst netip.AddrPort) (rtt time.Duration, err error) {
+type lportsPool struct {
+	sync.Mutex
+	ports []int
+}
+
+func (l *lportsPool) get() int {
+	l.Lock()
+	defer l.Unlock()
+	ret := l.ports[0]
+	l.ports = append(l.ports[:0], l.ports[1:]...)
+	return ret
+}
+
+func (l *lportsPool) put(i int) {
+	l.Lock()
+	defer l.Unlock()
+	l.ports = append(l.ports, int(i))
+}
+
+var (
+	lports *lportsPool
+)
+
+const (
+	lportPoolSize = 16000
+	lportBase     = 2048
+)
+
+func init() {
+	lports = &lportsPool{
+		ports: make([]int, 0, lportPoolSize),
+	}
+	for i := lportBase; i < lportBase+lportPoolSize; i++ {
+		lports.ports = append(lports.ports, i)
+	}
+}
+
+// lportForTCPConn satisfies io.ReadWriteCloser, but is really just used to pass
+// around a persistent laddr for stableConn purposes. The underlying TCP
+// connection is not created until measurement time as in some cases we need to
+// measure dial time.
+type lportForTCPConn int
+
+func (l *lportForTCPConn) Close() error {
+	if *l == 0 {
+		return nil
+	}
+	lports.put(int(*l))
+	return nil
+}
+
+func (l *lportForTCPConn) Write([]byte) (int, error) {
+	return 0, errors.New("unimplemented")
+}
+
+func (l *lportForTCPConn) Read([]byte) (int, error) {
+	return 0, errors.New("unimplemented")
+}
+
+func addrInUse(err error, lport *lportForTCPConn) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		old := int(*lport)
+		// abandon port, don't return it to pool
+		*lport = lportForTCPConn(lports.get()) // get a new port
+		log.Printf("EADDRINUSE: %v old: %d new: %d", err, old, *lport)
+		return true
+	}
+	return false
+}
+
+func tcpDial(ctx context.Context, lport *lportForTCPConn, dst netip.AddrPort) (net.Conn, error) {
+	for {
+		var opErr error
+		dialer := &net.Dialer{
+			LocalAddr: &net.TCPAddr{
+				Port: int(*lport),
+			},
+			Control: func(network, address string, c syscall.RawConn) error {
+				return c.Control(func(fd uintptr) {
+					// we may restart faster than TIME_WAIT can clear
+					opErr = setSOReuseAddr(fd)
+				})
+			},
+		}
+		if opErr != nil {
+			panic(opErr)
+		}
+		tcpConn, err := dialer.DialContext(ctx, "tcp", dst.String())
+		if err != nil {
+			if addrInUse(err, lport) {
+				continue
+			}
+			return nil, err
+		}
+		return tcpConn, nil
+	}
+}
+
+type tempError struct {
+	error
+}
+
+func (t tempError) Temporary() bool {
+	return true
+}
+
+func measureTCPRTT(conn io.ReadWriteCloser, _ string, dst netip.AddrPort) (rtt time.Duration, err error) {
+	lport, ok := conn.(*lportForTCPConn)
+	if !ok {
+		return 0, fmt.Errorf("unexpected conn type: %T", conn)
+	}
+	// Set a dial timeout < 1s (TCP_TIMEOUT_INIT on Linux) as a means to avoid
+	// SYN retries, which can contribute to tcpi->rtt below. This simply limits
+	// retries from the initiator, but SYN+ACK on the reverse path can also
+	// time out and be retransmitted.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*750)
+	defer cancel()
+	tcpConn, err := tcpDial(ctx, lport, dst)
+	if err != nil {
+		return 0, tempError{err}
+	}
+	defer tcpConn.Close()
+	// This is an unreliable method to measure TCP RTT. The Linux kernel
+	// describes it as such in tcp_rtt_estimator(). We take some care in how we
+	// hold tcp_info->rtt here, e.g. clamping dial timeout, but if we are to
+	// actually use this elsewhere as an input to some decision it warrants a
+	// deeper study and consideration for alternative methods. Its usefulness
+	// here is as a point of comparison against the other methods.
+	rtt, err = tcpinfo.RTT(tcpConn)
+	if err != nil {
+		return 0, tempError{err}
+	}
+	return rtt, nil
+}
+
+func measureHTTPSRTT(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error) {
+	lport, ok := conn.(*lportForTCPConn)
+	if !ok {
+		return 0, fmt.Errorf("unexpected conn type: %T", conn)
+	}
+	var httpResult httpstat.Result
+	// 5s mirrors net/netcheck.overallProbeTimeout used in net/netcheck.Client.measureHTTPSLatency.
+	reqCtx, cancel := context.WithTimeout(httpstat.WithHTTPStat(context.Background(), &httpResult), time.Second*5)
+	defer cancel()
+	reqURL := "https://" + dst.String() + "/derp/latency-check"
+	req, err := http.NewRequestWithContext(reqCtx, "GET", reqURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	client := &http.Client{}
+	// 1.5s mirrors derp/derphttp.dialnodeTimeout used in derp/derphttp.DialNode().
+	dialCtx, dialCancel := context.WithTimeout(reqCtx, time.Millisecond*1500)
+	defer dialCancel()
+	tcpConn, err := tcpDial(dialCtx, lport, dst)
+	if err != nil {
+		return 0, tempError{err}
+	}
+	defer tcpConn.Close()
+	tlsConn := tls.Client(tcpConn, &tls.Config{
+		ServerName: hostname,
+	})
+	// Mirror client/netcheck behavior, which handshakes before handing the
+	// tlsConn over to the http.Client via http.Transport
+	err = tlsConn.Handshake()
+	if err != nil {
+		return 0, tempError{err}
+	}
+	tlsConnCh := make(chan net.Conn, 1)
+	tlsConnCh <- tlsConn
+	tr := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			select {
+			case tlsConn := <-tlsConnCh:
+				return tlsConn, nil
+			default:
+				return nil, errors.New("unexpected second call of DialTLSContext")
+			}
+		},
+	}
+	client.Transport = tr
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, tempError{err}
+	}
+	if resp.StatusCode/100 != 2 {
+		return 0, tempError{fmt.Errorf("unexpected status code: %d", resp.StatusCode)}
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+	if err != nil {
+		return 0, tempError{err}
+	}
+	httpResult.End(time.Now())
+	return httpResult.ServerProcessing, nil
+}
+
+func measureSTUNRTT(conn io.ReadWriteCloser, _ string, dst netip.AddrPort) (rtt time.Duration, err error) {
 	uconn, ok := conn.(*net.UDPConn)
 	if !ok {
 		return 0, fmt.Errorf("unexpected conn type: %T", conn)
 	}
-	err = uconn.SetReadDeadline(time.Now().Add(time.Second * 2))
+	err = uconn.SetReadDeadline(time.Now().Add(txRxTimeout))
 	if err != nil {
 		return 0, fmt.Errorf("error setting read deadline: %w", err)
 	}
@@ -167,29 +378,7 @@ type nodeMeta struct {
 	addr       netip.Addr
 }
 
-type measureFn func(conn io.ReadWriteCloser, dst netip.AddrPort) (rtt time.Duration, err error)
-
-// probe measures round trip time for the node described by meta over
-// conn against dstPort using fn. It may return a nil duration and nil error in
-// the event of a timeout. A non-nil error indicates an unrecoverable or
-// non-temporary error.
-func probe(meta nodeMeta, conn io.ReadWriteCloser, fn measureFn, dstPort int) (*time.Duration, error) {
-	ua := &net.UDPAddr{
-		IP:   net.IP(meta.addr.AsSlice()),
-		Port: dstPort,
-	}
-
-	time.Sleep(rand.N(200 * time.Millisecond)) // jitter across tx
-	rtt, err := fn(conn, netip.AddrPortFrom(meta.addr, uint16(dstPort)))
-	if err != nil {
-		if isTemporaryOrTimeoutErr(err) {
-			log.Printf("temp error measuring RTT to %s(%s): %v", meta.hostname, ua.String(), err)
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &rtt, nil
-}
+type measureFn func(conn io.ReadWriteCloser, hostname string, dst netip.AddrPort) (rtt time.Duration, err error)
 
 // nodeMetaFromDERPMap parses the provided DERP map in order to update nodeMeta
 // in the provided nodeMetaByAddr. It returns a slice of nodeMeta containing
@@ -251,20 +440,75 @@ func nodeMetaFromDERPMap(dm *tailcfg.DERPMap, nodeMetaByAddr map[netip.Addr]node
 	return stale, nil
 }
 
-func newConn(source timestampSource, protocol protocol) (io.ReadWriteCloser, error) {
+type connAndMeasureFn struct {
+	conn io.ReadWriteCloser
+	fn   measureFn
+}
+
+// newConnAndMeasureFn returns a connAndMeasureFn or an error. It may return
+// nil for both if some combination of the supplied timestampSource, protocol,
+// or connStability is unsupported.
+func newConnAndMeasureFn(forDst netip.Addr, source timestampSource, protocol protocol, stable connStability) (*connAndMeasureFn, error) {
+	info := getProtocolSupportInfo(protocol)
+	if !info.stableConn && bool(stable) {
+		return nil, nil
+	}
+	if !info.userspaceTS && source == timestampSourceUserspace {
+		return nil, nil
+	}
+	if !info.kernelTS && source == timestampSourceKernel {
+		return nil, nil
+	}
 	switch protocol {
 	case protocolSTUN:
 		if source == timestampSourceKernel {
-			return getUDPConnKernelTimestamp()
+			conn, err := getUDPConnKernelTimestamp()
+			if err != nil {
+				return nil, err
+			}
+			return &connAndMeasureFn{
+				conn: conn,
+				fn:   measureSTUNRTTKernel,
+			}, nil
 		} else {
-			return net.ListenUDP("udp", &net.UDPAddr{})
+			conn, err := net.ListenUDP("udp", &net.UDPAddr{})
+			if err != nil {
+				return nil, err
+			}
+			return &connAndMeasureFn{
+				conn: conn,
+				fn:   measureSTUNRTT,
+			}, nil
 		}
 	case protocolICMP:
-		// TODO(jwhited): implement
-		return nil, errors.New("unimplemented protocol")
+		conn, err := getICMPConn(forDst, source)
+		if err != nil {
+			return nil, err
+		}
+		return &connAndMeasureFn{
+			conn: conn,
+			fn:   mkICMPMeasureFn(source),
+		}, nil
 	case protocolHTTPS:
-		// TODO(jwhited): implement
-		return nil, errors.New("unimplemented protocol")
+		localPort := 0
+		if stable {
+			localPort = lports.get()
+		}
+		conn := lportForTCPConn(localPort)
+		return &connAndMeasureFn{
+			conn: &conn,
+			fn:   measureHTTPSRTT,
+		}, nil
+	case protocolTCP:
+		localPort := 0
+		if stable {
+			localPort = lports.get()
+		}
+		conn := lportForTCPConn(localPort)
+		return &connAndMeasureFn{
+			conn: &conn,
+			fn:   measureTCPRTT,
+		}, nil
 	}
 	return nil, errors.New("unknown protocol")
 }
@@ -275,39 +519,57 @@ type stableConnKey struct {
 	port     int
 }
 
-func getStableConns(stableConns map[stableConnKey][2]io.ReadWriteCloser, addr netip.Addr, protocol protocol, dstPort int) ([2]io.ReadWriteCloser, error) {
-	if !protocolSupportsStableConn(protocol) {
-		return [2]io.ReadWriteCloser{}, nil
-	}
-	conns, ok := stableConns[stableConnKey{addr, protocol, dstPort}]
-	if ok {
-		return conns, nil
-	}
-
-	if protocolSupportsKernelTS(protocol) {
-		kconn, err := newConn(timestampSourceKernel, protocol)
-		if err != nil {
-			return conns, err
-		}
-		conns[timestampSourceKernel] = kconn
-	}
-	uconn, err := newConn(timestampSourceUserspace, protocol)
-	if err != nil {
-		if protocolSupportsKernelTS(protocol) {
-			conns[timestampSourceKernel].Close()
-		}
-		return conns, err
-	}
-	conns[timestampSourceUserspace] = uconn
-	return conns, nil
+type protocolSupportInfo struct {
+	kernelTS    bool
+	userspaceTS bool
+	stableConn  bool
 }
 
-func protocolSupportsStableConn(p protocol) bool {
-	if p == protocolICMP {
-		// no value for ICMP
-		return false
+func getConns(
+	stableConns map[stableConnKey][2]*connAndMeasureFn,
+	addr netip.Addr,
+	protocol protocol,
+	dstPort int,
+) (stable, unstable [2]*connAndMeasureFn, err error) {
+	key := stableConnKey{addr, protocol, dstPort}
+	defer func() {
+		if err != nil {
+			for _, source := range []timestampSource{timestampSourceUserspace, timestampSourceKernel} {
+				c := stable[source]
+				if c != nil {
+					c.conn.Close()
+				}
+				c = unstable[source]
+				if c != nil {
+					c.conn.Close()
+				}
+			}
+		}
+	}()
+
+	var ok bool
+	stable, ok = stableConns[key]
+	if !ok {
+		for _, source := range []timestampSource{timestampSourceUserspace, timestampSourceKernel} {
+			var cf *connAndMeasureFn
+			cf, err = newConnAndMeasureFn(addr, source, protocol, stableConn)
+			if err != nil {
+				return
+			}
+			stable[source] = cf
+		}
+		stableConns[key] = stable
 	}
-	return true
+
+	for _, source := range []timestampSource{timestampSourceUserspace, timestampSourceKernel} {
+		var cf *connAndMeasureFn
+		cf, err = newConnAndMeasureFn(addr, source, protocol, unstableConn)
+		if err != nil {
+			return
+		}
+		unstable[source] = cf
+	}
+	return stable, unstable, nil
 }
 
 // probeNodes measures the round-trip time for the protocols and ports described
@@ -315,7 +577,7 @@ func protocolSupportsStableConn(p protocol) bool {
 // stableConns are used to recycle connections across calls to probeNodes.
 // probeNodes is also responsible for trimming stableConns based on node
 // lifetime in nodeMetaByAddr. It returns the results or an error if one occurs.
-func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableConnKey][2]io.ReadWriteCloser, portsByProtocol map[protocol][]int) ([]result, error) {
+func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableConnKey][2]*connAndMeasureFn, portsByProtocol map[protocol][]int) ([]result, error) {
 	wg := sync.WaitGroup{}
 	results := make([]result, 0)
 	resultsCh := make(chan result)
@@ -325,54 +587,36 @@ func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableCo
 	at := time.Now()
 	addrsToProbe := make(map[netip.Addr]bool)
 
-	doProbe := func(conn io.ReadWriteCloser, meta nodeMeta, source timestampSource, protocol protocol, dstPort int) {
+	doProbe := func(cf *connAndMeasureFn, meta nodeMeta, source timestampSource, stable connStability, protocol protocol, dstPort int) {
 		defer wg.Done()
 		r := result{
 			key: resultKey{
 				meta:            meta,
 				timestampSource: source,
+				connStability:   stable,
 				dstPort:         dstPort,
 				protocol:        protocol,
 			},
 			at: at,
 		}
-		if conn == nil {
-			var err error
-			conn, err = newConn(source, protocol)
-			if err != nil {
+		time.Sleep(rand.N(maxTXJitter)) // jitter across tx
+		addrPort := netip.AddrPortFrom(meta.addr, uint16(dstPort))
+		rtt, err := cf.fn(cf.conn, meta.hostname, addrPort)
+		if err != nil {
+			if isTemporaryOrTimeoutErr(err) {
+				r.rtt = nil
+				log.Printf("%s: temp error measuring RTT to %s(%s): %v", protocol, meta.hostname, addrPort, err)
+			} else {
 				select {
 				case <-doneCh:
 					return
-				case errCh <- err:
+				case errCh <- fmt.Errorf("%s: %v", protocol, err):
 					return
 				}
 			}
-			defer conn.Close()
 		} else {
-			r.key.connStability = stableConn
+			r.rtt = &rtt
 		}
-		var fn measureFn
-		switch protocol {
-		case protocolSTUN:
-			fn = measureSTUNRTT
-			if source == timestampSourceKernel {
-				fn = measureSTUNRTTKernel
-			}
-		case protocolICMP:
-			// TODO(jwhited): implement
-		case protocolHTTPS:
-			// TODO(jwhited): implement
-		}
-		rtt, err := probe(meta, conn, fn, dstPort)
-		if err != nil {
-			select {
-			case <-doneCh:
-				return
-			case errCh <- err:
-				return
-			}
-		}
-		r.rtt = rtt
 		select {
 		case <-doneCh:
 		case resultsCh <- r:
@@ -383,44 +627,39 @@ func probeNodes(nodeMetaByAddr map[netip.Addr]nodeMeta, stableConns map[stableCo
 		addrsToProbe[meta.addr] = true
 		for p, ports := range portsByProtocol {
 			for _, port := range ports {
-				stable, err := getStableConns(stableConns, meta.addr, p, port)
+				stable, unstable, err := getConns(stableConns, meta.addr, p, port)
 				if err != nil {
 					close(doneCh)
 					wg.Wait()
 					return nil, err
 				}
 
-				if protocolSupportsStableConn(p) {
-					wg.Add(1)
-					numProbes++
-					go doProbe(stable[timestampSourceUserspace], meta, timestampSourceUserspace, p, port)
-				}
-				wg.Add(1)
-				numProbes++
-				go doProbe(nil, meta, timestampSourceUserspace, p, port)
-
-				if protocolSupportsKernelTS(p) {
-					if protocolSupportsStableConn(p) {
+				for i, cf := range stable {
+					if cf != nil {
 						wg.Add(1)
 						numProbes++
-						go doProbe(stable[timestampSourceKernel], meta, timestampSourceKernel, p, port)
+						go doProbe(cf, meta, timestampSource(i), stableConn, p, port)
 					}
+				}
 
-					wg.Add(1)
-					numProbes++
-					go doProbe(nil, meta, timestampSourceKernel, p, port)
+				for i, cf := range unstable {
+					if cf != nil {
+						wg.Add(1)
+						numProbes++
+						go doProbe(cf, meta, timestampSource(i), unstableConn, p, port)
+					}
 				}
 			}
 		}
 	}
 
 	// cleanup conns we no longer need
-	for k, conns := range stableConns {
+	for k, cf := range stableConns {
 		if !addrsToProbe[k.node] {
-			if conns[timestampSourceKernel] != nil {
-				conns[timestampSourceKernel].Close()
+			if cf[timestampSourceKernel] != nil {
+				cf[timestampSourceKernel].conn.Close()
 			}
-			conns[timestampSourceUserspace].Close()
+			cf[timestampSourceUserspace].conn.Close()
 			delete(stableConns, k)
 		}
 	}
@@ -527,42 +766,16 @@ func staleMarkersFromNodeMeta(stale []nodeMeta, instance string, portsByProtocol
 						Value:     math.Float64frombits(staleNaN),
 					},
 				}
-				staleMarkers = append(staleMarkers, prompb.TimeSeries{
-					Labels:  timeSeriesLabels(rttMetricName, s, instance, timestampSourceUserspace, unstableConn, p, port),
-					Samples: samples,
-				})
-				staleMarkers = append(staleMarkers, prompb.TimeSeries{
-					Labels:  timeSeriesLabels(timeoutsMetricName, s, instance, timestampSourceUserspace, unstableConn, p, port),
-					Samples: samples,
-				})
-				if protocolSupportsStableConn(p) {
-					staleMarkers = append(staleMarkers, prompb.TimeSeries{
-						Labels:  timeSeriesLabels(rttMetricName, s, instance, timestampSourceUserspace, stableConn, p, port),
-						Samples: samples,
-					})
-					staleMarkers = append(staleMarkers, prompb.TimeSeries{
-						Labels:  timeSeriesLabels(timeoutsMetricName, s, instance, timestampSourceUserspace, stableConn, p, port),
-						Samples: samples,
-					})
-				}
-				if protocolSupportsKernelTS(p) {
-					staleMarkers = append(staleMarkers, prompb.TimeSeries{
-						Labels:  timeSeriesLabels(rttMetricName, s, instance, timestampSourceKernel, unstableConn, p, port),
-						Samples: samples,
-					})
-					staleMarkers = append(staleMarkers, prompb.TimeSeries{
-						Labels:  timeSeriesLabels(timeoutsMetricName, s, instance, timestampSourceKernel, unstableConn, p, port),
-						Samples: samples,
-					})
-					if protocolSupportsStableConn(p) {
-						staleMarkers = append(staleMarkers, prompb.TimeSeries{
-							Labels:  timeSeriesLabels(rttMetricName, s, instance, timestampSourceKernel, stableConn, p, port),
-							Samples: samples,
-						})
-						staleMarkers = append(staleMarkers, prompb.TimeSeries{
-							Labels:  timeSeriesLabels(timeoutsMetricName, s, instance, timestampSourceKernel, stableConn, p, port),
-							Samples: samples,
-						})
+				// We send stale markers for all combinations in the interest
+				// of simplicity.
+				for _, name := range []string{rttMetricName, timeoutsMetricName} {
+					for _, source := range []timestampSource{timestampSourceUserspace, timestampSourceKernel} {
+						for _, stable := range []connStability{unstableConn, stableConn} {
+							staleMarkers = append(staleMarkers, prompb.TimeSeries{
+								Labels:  timeSeriesLabels(name, s, instance, source, stable, p, port),
+								Samples: samples,
+							})
+						}
 					}
 				}
 			}
@@ -708,6 +921,9 @@ func getPortsFromFlag(f string) ([]int, error) {
 }
 
 func main() {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		log.Fatal("unsupported platform")
+	}
 	flag.Parse()
 
 	portsByProtocol := make(map[protocol][]int)
@@ -725,18 +941,18 @@ func main() {
 	if len(httpsPorts) > 0 {
 		portsByProtocol[protocolHTTPS] = httpsPorts
 	}
+	tcpPorts, err := getPortsFromFlag(*flagTCPDstPorts)
+	if err != nil {
+		log.Fatalf("invalid tcp-dst-ports flag value: %v", err)
+	}
+	if len(tcpPorts) > 0 {
+		portsByProtocol[protocolTCP] = tcpPorts
+	}
 	if *flagICMP {
 		portsByProtocol[protocolICMP] = []int{0}
 	}
 	if len(portsByProtocol) == 0 {
 		log.Fatal("nothing to probe")
-	}
-
-	// TODO(jwhited): remove protocol restriction
-	for k := range portsByProtocol {
-		if k != protocolSTUN {
-			log.Fatal("HTTPS & ICMP are not yet supported")
-		}
 	}
 
 	if len(*flagDERPMap) < 1 {
@@ -827,7 +1043,7 @@ func main() {
 	// Comparison of stable and unstable 5-tuple results can shed light on
 	// differences between paths where hashing (multipathing/load balancing)
 	// comes into play. The inner 2 element array index is timestampSource.
-	stableConns := make(map[stableConnKey][2]io.ReadWriteCloser)
+	stableConns := make(map[stableConnKey][2]*connAndMeasureFn)
 
 	// timeouts holds counts of timeout events. Values are persisted for the
 	// lifetime of the related node in the DERP map.
@@ -883,7 +1099,7 @@ func main() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 				defer cancel()
 				updatedDM, err := getDERPMap(ctx, *flagDERPMap)
-				if err != nil {
+				if err == nil {
 					dmCh <- updatedDM
 				}
 			}()

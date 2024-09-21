@@ -18,12 +18,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unicode"
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/netmon"
@@ -52,7 +50,7 @@ type Server struct {
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
 	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
-	activeReqs    map[*http.Request]*ipnauth.ConnIdentity
+	activeReqs    map[*http.Request]*actor
 	backendWaiter waiterSet // of LocalBackend waiters
 	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
 }
@@ -75,7 +73,7 @@ func (s *Server) mustBackend() *ipnlocal.LocalBackend {
 type waiterSet set.HandleSet[context.CancelFunc]
 
 // add registers a new waiter in the set.
-// It aquires mu to add the waiter, and does so again when cleanup is called to remove it.
+// It acquires mu to add the waiter, and does so again when cleanup is called to remove it.
 // ready is closed when the waiter is ready (or ctx is done).
 func (s *waiterSet) add(mu *sync.Mutex, ctx context.Context) (ready <-chan struct{}, cleanup func()) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -173,15 +171,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var ci *ipnauth.ConnIdentity
-	switch v := r.Context().Value(connIdentityContextKey{}).(type) {
-	case *ipnauth.ConnIdentity:
-		ci = v
-	case error:
-		http.Error(w, v.Error(), http.StatusUnauthorized)
-		return
-	case nil:
-		http.Error(w, "internal error: no connIdentityContextKey", http.StatusInternalServerError)
+	ci, err := actorFromContext(r.Context())
+	if err != nil {
+		if errors.Is(err, errNoActor) {
+			http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
 		return
 	}
 
@@ -199,9 +195,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
 		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
-		lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
-		lah.PermitCert = s.connCanFetchCerts(ci)
-		lah.ConnIdentity = ci
+		lah.PermitRead, lah.PermitWrite = ci.Permissions(lb.OperatorUserID())
+		lah.PermitCert = ci.CanFetchCerts()
+		lah.Actor = ci
 		lah.ServeHTTP(w, r)
 		return
 	}
@@ -234,42 +230,28 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
+func (s *Server) checkConnIdentityLocked(ci *actor) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.activeReqs) > 0 {
-		var active *ipnauth.ConnIdentity
+		var active *actor
 		for _, active = range s.activeReqs {
 			break
 		}
 		if active != nil {
-			chkTok, err := ci.WindowsToken()
-			if err == nil {
-				defer chkTok.Close()
-			} else if !errors.Is(err, ipnauth.ErrNotImplemented) {
-				return err
-			}
-
 			// Always allow Windows SYSTEM user to connect,
 			// even if Tailscale is currently being used by another user.
-			if chkTok != nil && chkTok.IsLocalSystem() {
+			if ci.IsLocalSystem() {
 				return nil
 			}
 
-			activeTok, err := active.WindowsToken()
-			if err == nil {
-				defer activeTok.Close()
-			} else if !errors.Is(err, ipnauth.ErrNotImplemented) {
-				return err
-			}
-
-			if chkTok != nil && !chkTok.EqualUIDs(activeTok) {
+			if ci.UserID() != active.UserID() {
 				var b strings.Builder
 				b.WriteString("Tailscale already in use")
-				if username, err := activeTok.Username(); err == nil {
+				if username, err := active.Username(); err == nil {
 					fmt.Fprintf(&b, " by %s", username)
 				}
-				fmt.Fprintf(&b, ", pid %d", active.Pid())
+				fmt.Fprintf(&b, ", pid %d", active.pid())
 				return inUseOtherUserError{errors.New(b.String())}
 			}
 		}
@@ -285,11 +267,11 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 //
 // This is primarily used for the Windows GUI, to block until one user's done
 // controlling the tailscaled process.
-func (s *Server) blockWhileIdentityInUse(ctx context.Context, ci *ipnauth.ConnIdentity) error {
+func (s *Server) blockWhileIdentityInUse(ctx context.Context, actor *actor) error {
 	inUse := func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_, ok := s.checkConnIdentityLocked(ci).(inUseOtherUserError)
+		_, ok := s.checkConnIdentityLocked(actor).(inUseOtherUserError)
 		return ok
 	}
 	for inUse() {
@@ -304,24 +286,28 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, ci *ipnauth.ConnId
 	return nil
 }
 
-// localAPIPermissions returns the permissions for the given identity accessing
-// the Tailscale local daemon API.
-//
-// s.mu must not be held.
-func (s *Server) localAPIPermissions(ci *ipnauth.ConnIdentity) (read, write bool) {
+// Permissions returns the actor's permissions for accessing
+// the Tailscale local daemon API. The operatorUID is only used on
+// Unix-like platforms and specifies the ID of a local user
+// (in the os/user.User.Uid string form) who is allowed
+// to operate tailscaled without being root or using sudo.
+func (a *actor) Permissions(operatorUID string) (read, write bool) {
 	switch envknob.GOOS() {
 	case "windows":
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.checkConnIdentityLocked(ci) == nil {
-			return true, true
-		}
-		return false, false
+		// As of 2024-08-27, according to the current permission model,
+		// Windows users always have read/write access to the local API if
+		// they're allowed to connect. Whether a user is allowed to connect
+		// is determined by [Server.checkConnIdentityLocked] when adding a
+		// new connection in [Server.addActiveHTTPRequest]. Therefore, it's
+		// acceptable to permit read and write access without any additional
+		// checks here. Note that this permission model is being changed in
+		// tailscale/corp#18342.
+		return true, true
 	case "js":
 		return true, true
 	}
-	if ci.IsUnixSock() {
-		return true, !ci.IsReadonlyConn(s.mustBackend().OperatorUserID(), logger.Discard)
+	if a.ci.IsUnixSock() {
+		return true, !a.ci.IsReadonlyConn(operatorUID, logger.Discard)
 	}
 	return false, false
 }
@@ -349,19 +335,19 @@ func isAllDigit(s string) bool {
 	return true
 }
 
-// connCanFetchCerts reports whether ci is allowed to fetch HTTPS
+// CanFetchCerts reports whether the actor is allowed to fetch HTTPS
 // certs from this server when it wouldn't otherwise be able to.
 //
-// That is, this reports whether ci should grant additional
-// capabilities over what the conn would otherwise be able to do.
+// That is, this reports whether the actor should grant additional
+// capabilities over what the actor would otherwise be able to do.
 //
 // For now this only returns true on Unix machines when
 // TS_PERMIT_CERT_UID is set the to the userid of the peer
 // connection. It's intended to give your non-root webserver access
 // (www-data, caddy, nginx, etc) to certs.
-func (s *Server) connCanFetchCerts(ci *ipnauth.ConnIdentity) bool {
-	if ci.IsUnixSock() && ci.Creds() != nil {
-		connUID, ok := ci.Creds().UserID()
+func (a *actor) CanFetchCerts() bool {
+	if a.ci.IsUnixSock() && a.ci.Creds() != nil {
+		connUID, ok := a.ci.Creds().UserID()
 		if ok && connUID == userIDFromString(envknob.String("TS_PERMIT_CERT_UID")) {
 			return true
 		}
@@ -371,12 +357,13 @@ func (s *Server) connCanFetchCerts(ci *ipnauth.ConnIdentity) bool {
 
 // addActiveHTTPRequest adds c to the server's list of active HTTP requests.
 //
-// If the returned error may be of type inUseOtherUserError.
+// It returns an error if the specified actor is not allowed to connect.
+// The returned error may be of type [inUseOtherUserError].
 //
 // onDone must be called when the HTTP request is done.
-func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentity) (onDone func(), err error) {
-	if ci == nil {
-		return nil, errors.New("internal error: nil connIdentity")
+func (s *Server) addActiveHTTPRequest(req *http.Request, actor *actor) (onDone func(), err error) {
+	if actor == nil {
+		return nil, errors.New("internal error: nil actor")
 	}
 
 	lb := s.mustBackend()
@@ -394,25 +381,19 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.checkConnIdentityLocked(ci); err != nil {
+	if err := s.checkConnIdentityLocked(actor); err != nil {
 		return nil, err
 	}
 
-	mak.Set(&s.activeReqs, req, ci)
+	mak.Set(&s.activeReqs, req, actor)
 
 	if len(s.activeReqs) == 1 {
-		token, err := ci.WindowsToken()
-		if err != nil {
-			if !errors.Is(err, ipnauth.ErrNotImplemented) {
-				s.logf("error obtaining access token: %v", err)
-			}
-		} else if !token.IsLocalSystem() {
+		if envknob.GOOS() == "windows" && !actor.IsLocalSystem() {
 			// Tell the LocalBackend about the identity we're now running as,
 			// unless its the SYSTEM user. That user is not a real account and
 			// doesn't have a home directory.
-			uid, err := lb.SetCurrentUser(token)
+			uid, err := lb.SetCurrentUser(actor)
 			if err != nil {
-				token.Close()
 				return nil, err
 			}
 			if s.lastUserID != uid {
@@ -488,10 +469,6 @@ func (s *Server) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 	// https://github.com/tailscale/tailscale/issues/6522
 }
 
-// connIdentityContextKey is the http.Request.Context's context.Value key for either an
-// *ipnauth.ConnIdentity or an error.
-type connIdentityContextKey struct{}
-
 // Run runs the server, accepting connections from ln forever.
 //
 // If the context is done, the listener is closed. It is also the base context
@@ -525,21 +502,9 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		Handler:     http.HandlerFunc(s.serveHTTP),
 		BaseContext: func(_ net.Listener) context.Context { return ctx },
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			ci, err := ipnauth.GetConnIdentity(s.logf, c)
-			if err != nil {
-				return context.WithValue(ctx, connIdentityContextKey{}, err)
-			}
-			return context.WithValue(ctx, connIdentityContextKey{}, ci)
+			return contextWithActor(ctx, s.logf, c)
 		},
-		// Localhost connections are cheap; so only do
-		// keep-alives for a short period of time, as these
-		// active connections lock the server into only serving
-		// that user. If the user has this page open, we don't
-		// want another switching user to be locked out for
-		// minutes. 5 seconds is enough to let browser hit
-		// favicon.ico and such.
-		IdleTimeout: 5 * time.Second,
-		ErrorLog:    logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
+		ErrorLog: logger.StdLogger(logger.WithPrefix(s.logf, "ipnserver: ")),
 	}
 	if err := hs.Serve(ln); err != nil {
 		if err := ctx.Err(); err != nil {

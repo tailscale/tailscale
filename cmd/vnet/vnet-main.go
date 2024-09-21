@@ -22,11 +22,15 @@ import (
 )
 
 var (
-	listen  = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
-	nat     = flag.String("nat", "easy", "type of NAT to use")
-	nat2    = flag.String("nat2", "hard", "type of NAT to use for second network")
-	portmap = flag.Bool("portmap", false, "enable portmapping")
-	dgram   = flag.Bool("dgram", false, "enable datagram mode; for use with macOS Hypervisor.Framework and VZFileHandleNetworkDeviceAttachment")
+	listen   = flag.String("listen", "/tmp/qemu.sock", "path to listen on")
+	nat      = flag.String("nat", "easy", "type of NAT to use")
+	nat2     = flag.String("nat2", "hard", "type of NAT to use for second network")
+	portmap  = flag.Bool("portmap", false, "enable portmapping; requires --v4")
+	dgram    = flag.Bool("dgram", false, "enable datagram mode; for use with macOS Hypervisor.Framework and VZFileHandleNetworkDeviceAttachment")
+	blend    = flag.Bool("blend", true, "blend reality (controlplane.tailscale.com and DERPs) into the virtual network")
+	pcapFile = flag.String("pcap", "", "if non-empty, filename to write pcap")
+	v4       = flag.Bool("v4", true, "enable IPv4")
+	v6       = flag.Bool("v6", true, "enable IPv6")
 )
 
 func main() {
@@ -57,9 +61,20 @@ func main() {
 	}
 
 	var c vnet.Config
-	node1 := c.AddNode(c.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.NAT(*nat)))
+	c.SetPCAPFile(*pcapFile)
+	c.SetBlendReality(*blend)
+
+	var net1opt = []any{vnet.NAT(*nat)}
+	if *v4 {
+		net1opt = append(net1opt, "2.1.1.1", "192.168.1.1/24")
+	}
+	if *v6 {
+		net1opt = append(net1opt, "2000:52::1/64")
+	}
+
+	node1 := c.AddNode(c.AddNetwork(net1opt...))
 	c.AddNode(c.AddNetwork("2.2.2.2", "10.2.0.1/16", vnet.NAT(*nat2)))
-	if *portmap {
+	if *portmap && *v4 {
 		node1.Network().AddService(vnet.NATPMP)
 	}
 
@@ -68,8 +83,10 @@ func main() {
 		log.Fatalf("newServer: %v", err)
 	}
 
-	if err := s.PopulateDERPMapIPs(); err != nil {
-		log.Printf("warning: ignoring failure to populate DERP map: %v", err)
+	if *blend {
+		if err := s.PopulateDERPMapIPs(); err != nil {
+			log.Printf("warning: ignoring failure to populate DERP map: %v", err)
+		}
 	}
 
 	s.WriteStartingBanner(os.Stdout)
@@ -85,6 +102,7 @@ func main() {
 		http.ListenAndServe(":8080", rp)
 	}()
 	go func() {
+		var last string
 		getStatus := func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -93,7 +111,10 @@ func main() {
 				log.Printf("NodeStatus: %v", err)
 				return
 			}
-			log.Printf("NodeStatus: %v", logger.AsJSON(st))
+			if st.BackendState != last {
+				last = st.BackendState
+				log.Printf("NodeStatus: %v", logger.AsJSON(st))
+			}
 		}
 		for {
 			time.Sleep(5 * time.Second)

@@ -49,7 +49,7 @@ func TestDoDropPrivileges(t *testing.T) {
 		f := os.NewFile(3, "out.json")
 
 		// We're in our subprocess; actually drop privileges now.
-		doDropPrivileges(t.Logf, input.UID, input.GID, input.AdditionalGroups)
+		doDropPrivileges(t.Logf, input.UID, input.GID, input.AdditionalGroups, "/")
 
 		additional, _ := syscall.Getgroups()
 

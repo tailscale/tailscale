@@ -22,5 +22,5 @@ func GetHardwareAddrs() (hwaddrs []string, err error) {
 		}
 	})
 	slices.Sort(hwaddrs)
-	return
+	return slices.Compact(hwaddrs), err
 }

@@ -197,3 +197,28 @@ func TestCutSuffix(t *testing.T) {
 		})
 	}
 }
+
+func TestFirstLastEqual(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		v    byte
+		f    func([]byte, byte) bool
+		want bool
+	}{
+		{"first-empty", "", 'f', FirstEqual[byte], false},
+		{"first-true", "foo", 'f', FirstEqual[byte], true},
+		{"first-false", "foo", 'b', FirstEqual[byte], false},
+		{"last-empty", "", 'f', LastEqual[byte], false},
+		{"last-true", "bar", 'r', LastEqual[byte], true},
+		{"last-false", "bar", 'o', LastEqual[byte], false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.f([]byte(tt.in), tt.v); got != tt.want {
+				t.Errorf("got %v; want %v", got, tt.want)
+			}
+		})
+	}
+
+}

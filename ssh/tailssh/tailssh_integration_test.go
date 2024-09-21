@@ -122,13 +122,13 @@ func TestIntegrationSSH(t *testing.T) {
 		{
 			cmd:             "pwd",
 			want:            []string{homeDir},
-			skip:            !fallbackToSUAvailable(),
+			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
 		},
 		{
 			cmd:             "echo 'hello'",
 			want:            []string{"hello"},
-			skip:            !fallbackToSUAvailable(),
+			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
 		},
 	}
@@ -349,7 +349,7 @@ func TestSSHAgentForwarding(t *testing.T) {
 
 	// Run tailscale SSH server and connect to it
 	username := "testuser"
-	tailscaleAddr := testServer(t, username, false) // TODO: make this false to use V2 behavior
+	tailscaleAddr := testServer(t, username, false)
 	tcl, err := ssh.Dial("tcp", tailscaleAddr, &ssh.ClientConfig{
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	})
@@ -387,7 +387,7 @@ func TestSSHAgentForwarding(t *testing.T) {
 
 	o, err := s.CombinedOutput(fmt.Sprintf(`ssh -T -o StrictHostKeyChecking=no -p %s upstreamuser@%s "true"`, upstreamPort, upstreamHost))
 	if err != nil {
-		t.Fatalf("unable to call true command: %s\n%s", err, o)
+		t.Fatalf("unable to call true command: %s\n%s\n-------------------------", err, o)
 	}
 }
 

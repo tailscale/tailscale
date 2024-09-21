@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
@@ -74,6 +75,7 @@ func TestConnector(t *testing.T) {
 		hostname:     "test-connector",
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
+		app:          kubetypes.AppConnector,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
@@ -169,6 +171,7 @@ func TestConnector(t *testing.T) {
 		parentType:   "connector",
 		subnetRoutes: "10.40.0.0/14",
 		hostname:     "test-connector",
+		app:          kubetypes.AppConnector,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
@@ -254,6 +257,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		hostname:     "test-connector",
 		isExitNode:   true,
 		subnetRoutes: "10.40.0.0/14",
+		app:          kubetypes.AppConnector,
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)

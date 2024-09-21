@@ -115,6 +115,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		"--gid=" + lu.Gid,
 		"--groups=" + groups,
 		"--local-user=" + lu.Username,
+		"--home-dir=" + lu.HomeDir,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.Addr().String(),
 		"--has-tty=false", // updated in-place by startWithPTY
@@ -128,7 +129,8 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		incubatorArgs = append(incubatorArgs, "--is-selinux-enforcing")
 	}
 
-	forceV1Behavior := ss.conn.srv.lb.NetMap().HasCap(tailcfg.NodeAttrSSHBehaviorV1)
+	nm := ss.conn.srv.lb.NetMap()
+	forceV1Behavior := nm.HasCap(tailcfg.NodeAttrSSHBehaviorV1) && !nm.HasCap(tailcfg.NodeAttrSSHBehaviorV2)
 	if forceV1Behavior {
 		incubatorArgs = append(incubatorArgs, "--force-v1-behavior")
 	}
@@ -179,6 +181,7 @@ type incubatorArgs struct {
 	gid                int
 	gids               []int
 	localUser          string
+	homeDir            string
 	remoteUser         string
 	remoteIP           string
 	ttyName            string
@@ -201,6 +204,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.IntVar(&ia.gid, "gid", 0, "the gid of local-user")
 	flags.StringVar(&groups, "groups", "", "comma-separated list of gids of local-user")
 	flags.StringVar(&ia.localUser, "local-user", "", "the user to run as")
+	flags.StringVar(&ia.homeDir, "home-dir", "/", "the user's home directory")
 	flags.StringVar(&ia.remoteUser, "remote-user", "", "the remote user/tags")
 	flags.StringVar(&ia.remoteIP, "remote-ip", "", "the remote Tailscale IP")
 	flags.StringVar(&ia.ttyName, "tty-name", "", "the tty name (pts/3)")
@@ -399,7 +403,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 		return nil
 	}
 	loginArgs := ia.loginArgs(loginCmdPath)
-	dlogf("logging in with %s %+v", loginCmdPath, loginArgs)
+	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
 	err = unix.Exec(loginCmdPath, loginArgs, os.Environ())
@@ -435,13 +439,18 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
-	loginArgs := []string{"-l", ia.localUser}
+	loginArgs := []string{
+		su,
+		"-w", "SSH_AUTH_SOCK", // pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
+		"-l",
+		ia.localUser,
+	}
 	if ia.cmd != "" {
 		// Note - unlike the login command, su allows using both -l and -c.
 		loginArgs = append(loginArgs, "-c", ia.cmd)
 	}
 
-	dlogf("logging in with %s %q", su, loginArgs)
+	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
 	err = unix.Exec(su, loginArgs, os.Environ())
@@ -473,9 +482,15 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
-	// First try to execute su -l <user> -c true to make sure su supports the
-	// necessary arguments.
-	err = exec.Command(su, "-l", ia.localUser, "-c", "true").Run()
+	// First try to execute su -w SSH_AUTH_SOCK -l <user> -c true
+	// to make sure su supports the necessary arguments.
+	err = exec.Command(
+		su,
+		"-w", "SSH_AUTH_SOCK",
+		"-l",
+		ia.localUser,
+		"-c", "true",
+	).Run()
 	if err != nil {
 		dlogf("su check failed: %s", err)
 		return ""
@@ -554,7 +569,7 @@ const (
 // dropPrivileges calls doDropPrivileges with uid, gid, and gids from the given
 // incubatorArgs.
 func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
-	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids)
+	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids, ia.homeDir)
 }
 
 // doDropPrivileges contains all the logic for dropping privileges to a different
@@ -567,7 +582,7 @@ func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
 // be done by running:
 //
 //	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDoDropPrivileges
-func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int, homeDir string) error {
 	dlogf("dropping privileges")
 	fatalf := func(format string, args ...any) {
 		dlogf("[unexpected] error dropping privileges: "+format, args...)
@@ -653,6 +668,13 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 		// TODO(andrew-d): assert that our supplementary groups are correct
 	}
 
+	// Prefer to run in user's homedir if possible. We ignore a failure to Chdir,
+	// which just leaves us at "/" where we launched in the first place.
+	dlogf("attempting to chdir to user's home directory %q", homeDir)
+	if err := os.Chdir(homeDir); err != nil {
+		dlogf("failed to chdir to user's home directory %q, continuing in current directory", homeDir)
+	}
+
 	return nil
 }
 
@@ -669,16 +691,7 @@ func (ss *sshSession) launchProcess() error {
 	}
 
 	cmd := ss.cmd
-	homeDir := ss.conn.localUser.HomeDir
-	if _, err := os.Stat(homeDir); err == nil {
-		cmd.Dir = homeDir
-	} else if os.IsNotExist(err) {
-		// If the home directory doesn't exist, we can't chdir to it.
-		// Instead, we'll chdir to the root directory.
-		cmd.Dir = "/"
-	} else {
-		return err
-	}
+	cmd.Dir = "/"
 	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {

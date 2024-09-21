@@ -47,7 +47,7 @@ func main() {
 	it := codegen.NewImportTracker(pkg.Types)
 	buf := new(bytes.Buffer)
 	for _, typeName := range typeNames {
-		typ, ok := namedTypes[typeName]
+		typ, ok := namedTypes[typeName].(*types.Named)
 		if !ok {
 			log.Fatalf("could not find type %s", typeName)
 		}
@@ -115,7 +115,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 		if !codegen.ContainsPointers(ft) || codegen.HasNoClone(t.Tag(i)) {
 			continue
 		}
-		if named, _ := ft.(*types.Named); named != nil {
+		if named, _ := codegen.NamedTypeOf(ft); named != nil {
 			if codegen.IsViewType(ft) {
 				writef("dst.%s = src.%s", fname, fname)
 				continue
@@ -161,7 +161,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 		case *types.Pointer:
 			base := ft.Elem()
 			hasPtrs := codegen.ContainsPointers(base)
-			if named, _ := base.(*types.Named); named != nil && hasPtrs {
+			if named, _ := codegen.NamedTypeOf(base); named != nil && hasPtrs {
 				writef("dst.%s = src.%s.Clone()", fname, fname)
 				continue
 			}

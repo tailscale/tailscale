@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"go.uber.org/zap"
+	"tailscale.com/sessionrecording"
 	"tailscale.com/tstime"
 )
 
-func New(conn io.WriteCloser, clock tstime.Clock, start time.Time, failOpen bool) *Client {
+func New(conn io.WriteCloser, clock tstime.Clock, start time.Time, failOpen bool, logger *zap.SugaredLogger) *Client {
 	return &Client{
 		start:    start,
 		clock:    clock,
@@ -35,38 +37,66 @@ type Client struct {
 	// failOpen specifies whether the session should be allowed to
 	// continue if writing to the recording fails.
 	failOpen bool
+	// failedOpen is set to true if the recording of this session failed and
+	// we should not attempt to send any more data.
+	failedOpen bool
 
-	// backOff is set to true if  we've failed open and should stop
-	// attempting to write to tsrecorder.
-	backOff bool
+	logger *zap.SugaredLogger
 
 	mu   sync.Mutex     // guards writes to conn
 	conn io.WriteCloser // connection to a tsrecorder instance
 }
 
-// Write appends timestamp to the provided bytes and sends them to the
-// configured tsrecorder.
-func (rec *Client) Write(p []byte) (err error) {
+// WriteOutput sends terminal stdout and stderr to the tsrecorder.
+// https://docs.asciinema.org/manual/asciicast/v2/#o-output-data-written-to-a-terminal
+func (rec *Client) WriteOutput(p []byte) (err error) {
+	const outputEventCode = "o"
 	if len(p) == 0 {
 		return nil
 	}
-	if rec.backOff {
+	return rec.write([]any{
+		rec.clock.Now().Sub(rec.start).Seconds(),
+		outputEventCode,
+		string(p)})
+}
+
+// WriteResize writes an asciinema resize message. This can be called if
+// terminal size has changed.
+// https://docs.asciinema.org/manual/asciicast/v2/#r-resize
+func (rec *Client) WriteResize(height, width int) (err error) {
+	const resizeEventCode = "r"
+	p := fmt.Sprintf("%dx%d", height, width)
+	return rec.write([]any{
+		rec.clock.Now().Sub(rec.start).Seconds(),
+		resizeEventCode,
+		string(p)})
+}
+
+// WriteCastHeaders writes asciinema CastHeader. This must be called once,
+// before any payload is sent to the tsrecorder.
+// https://docs.asciinema.org/manual/asciicast/v2/#header
+func (rec *Client) WriteCastHeader(ch sessionrecording.CastHeader) error {
+	return rec.write(ch)
+}
+
+// write writes the data to session recorder. If recording fails and policy is
+// 'fail open', sets the state to failed and does not attempt to write any more
+// data during this session.
+func (rec *Client) write(data any) error {
+	if rec.failedOpen {
 		return nil
 	}
-	j, err := json.Marshal([]any{
-		rec.clock.Now().Sub(rec.start).Seconds(),
-		"o",
-		string(p),
-	})
+	j, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("error marhalling payload: %w", err)
+		return fmt.Errorf("error marshalling data as json: %v", err)
 	}
 	j = append(j, '\n')
-	if err := rec.WriteCastLine(j); err != nil {
+	if err := rec.writeCastLine(j); err != nil {
 		if !rec.failOpen {
 			return fmt.Errorf("error writing payload to recorder: %w", err)
 		}
-		rec.backOff = true
+		rec.logger.Infof("error writing to tsrecorder: %v. Failure policy is to fail open, so rest of session contents will not be recorded.", err)
+		rec.failedOpen = true
 	}
 	return nil
 }
@@ -82,9 +112,9 @@ func (rec *Client) Close() error {
 	return err
 }
 
-// writeCastLine sends bytes to the tsrecorder. The bytes should be in
+// writeToRecorder sends bytes to the tsrecorder. The bytes should be in
 // asciinema format.
-func (c *Client) WriteCastLine(j []byte) error {
+func (c *Client) writeCastLine(j []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {

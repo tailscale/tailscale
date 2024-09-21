@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/ipn"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -46,12 +47,14 @@ type IngressReconciler struct {
 	// managedIngresses is a set of all ingress resources that we're currently
 	// managing. This is only used for metrics.
 	managedIngresses set.Slice[types.UID]
+
+	proxyDefaultClass string
 }
 
 var (
 	// gaugeIngressResources tracks the number of ingress resources that we're
 	// currently managing.
-	gaugeIngressResources = clientmetric.NewGauge("k8s_ingress_resources")
+	gaugeIngressResources = clientmetric.NewGauge(kubetypes.MetricIngressResourceCount)
 )
 
 func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
@@ -133,7 +136,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 
-	proxyClass := proxyClassForObject(ing)
+	proxyClass := proxyClassForObject(ing, a.proxyDefaultClass)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			return fmt.Errorf("error verifying ProxyClass for Ingress: %w", err)

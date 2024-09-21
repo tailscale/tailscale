@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -23,12 +24,15 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"tailscale.com/atomicfile"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 	"tailscale.com/version/distro"
@@ -70,6 +74,9 @@ func (rt *localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 }
 
 func main() {
+	var logBuf logBuffer
+	log.SetOutput(io.MultiWriter(os.Stderr, &logBuf))
+
 	if distro.Get() == distro.Gokrazy {
 		if !hostinfo.IsNATLabGuestVM() {
 			// "Exiting immediately with status code 0 when the
@@ -80,19 +87,31 @@ func main() {
 	}
 	flag.Parse()
 
+	debug := false
 	if distro.Get() == distro.Gokrazy {
-		nsRx := regexp.MustCompile(`(?m)^nameserver (.*)`)
-		for t := time.Now(); time.Since(t) < 10*time.Second; time.Sleep(10 * time.Millisecond) {
-			all, _ := os.ReadFile("/etc/resolv.conf")
-			if nsRx.Match(all) {
-				break
+		cmdLine, _ := os.ReadFile("/proc/cmdline")
+		explicitNS := false
+		for _, s := range strings.Fields(string(cmdLine)) {
+			if ns, ok := strings.CutPrefix(s, "tta.nameserver="); ok {
+				err := atomicfile.WriteFile("/tmp/resolv.conf", []byte("nameserver "+ns+"\n"), 0644)
+				log.Printf("Wrote /tmp/resolv.conf: %v", err)
+				explicitNS = true
+				continue
+			}
+			if v, ok := strings.CutPrefix(s, "tta.debug="); ok {
+				debug, _ = strconv.ParseBool(v)
+				continue
 			}
 		}
-	}
-
-	logc, err := net.Dial("tcp", "9.9.9.9:124")
-	if err == nil {
-		log.SetOutput(logc)
+		if !explicitNS {
+			nsRx := regexp.MustCompile(`(?m)^nameserver (.*)`)
+			for t := time.Now(); time.Since(t) < 10*time.Second; time.Sleep(10 * time.Millisecond) {
+				all, _ := os.ReadFile("/etc/resolv.conf")
+				if nsRx.Match(all) {
+					break
+				}
+			}
+		}
 	}
 
 	log.Printf("Tailscale Test Agent running.")
@@ -122,32 +141,21 @@ func main() {
 	})
 	var hs http.Server
 	hs.Handler = &serveMux
-	var (
-		stMu   sync.Mutex
-		newSet = set.Set[net.Conn]{} // conns in StateNew
-	)
-	needConnCh := make(chan bool, 1)
-	hs.ConnState = func(c net.Conn, s http.ConnState) {
-		stMu.Lock()
-		defer stMu.Unlock()
-		switch s {
-		case http.StateNew:
-			newSet.Add(c)
-		default:
-			newSet.Delete(c)
-		}
-		if len(newSet) == 0 {
-			select {
-			case needConnCh <- true:
-			default:
-			}
-		}
+	revSt := revDialState{
+		needConnCh: make(chan bool, 1),
+		debug:      debug,
 	}
+	hs.ConnState = revSt.connState
 	conns := make(chan net.Conn, 1)
 
 	lcRP := httputil.NewSingleHostReverseProxy(must.Get(url.Parse("http://local-tailscaled.sock")))
 	lcRP.Transport = new(localClientRoundTripper)
-	ttaMux.Handle("/localapi/", lcRP)
+	ttaMux.HandleFunc("/localapi/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Got localapi request: %v", r.URL)
+		t0 := time.Now()
+		lcRP.ServeHTTP(w, r)
+		log.Printf("Did localapi request in %v: %v", time.Since(t0).Round(time.Millisecond), r.URL)
+	})
 
 	ttaMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "TTA\n")
@@ -156,28 +164,33 @@ func main() {
 	ttaMux.HandleFunc("/up", func(w http.ResponseWriter, r *http.Request) {
 		serveCmd(w, "tailscale", "up", "--login-server=http://control.tailscale")
 	})
+	ttaMux.HandleFunc("/fw", addFirewallHandler)
+	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
+		logBuf.mu.Lock()
+		defer logBuf.mu.Unlock()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(logBuf.buf.Bytes())
+	})
 	go hs.Serve(chanListener(conns))
 
-	var lastErr string
-	needConnCh <- true
-	for {
-		<-needConnCh
-		c, err := connect()
+	// For doing agent operations locally from gokrazy:
+	// (e.g. with "wget -O - localhost:8123/fw" or "wget -O - localhost:8123/logs"
+	// to get early tta logs before the port 124 connection is established)
+	go func() {
+		err := http.ListenAndServe("127.0.0.1:8123", &ttaMux)
 		if err != nil {
-			s := err.Error()
-			if s != lastErr {
-				log.Printf("Connect failure: %v", s)
-			}
-			lastErr = s
-			time.Sleep(time.Second)
-			continue
+			log.Fatalf("ListenAndServe: %v", err)
 		}
-		conns <- c
-	}
+	}()
+
+	revSt.runDialOutLoop(conns)
 }
 
 func connect() (net.Conn, error) {
-	c, err := net.Dial("tcp", *driverAddr)
+	var d net.Dialer
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := d.DialContext(ctx, "tcp", *driverAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -203,4 +216,134 @@ func (cl chanListener) Addr() net.Addr {
 		IP:   net.ParseIP("52.0.0.34"), // TS..DR(iver)
 		Port: 123,
 	}
+}
+
+type revDialState struct {
+	needConnCh chan bool
+	debug      bool
+
+	mu     sync.Mutex
+	newSet set.Set[net.Conn] // conns in StateNew
+	onNew  map[net.Conn]func()
+}
+
+func (s *revDialState) connState(c net.Conn, cs http.ConnState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	oldLen := len(s.newSet)
+	switch cs {
+	case http.StateNew:
+		if f, ok := s.onNew[c]; ok {
+			f()
+			delete(s.onNew, c)
+		}
+		s.newSet.Make()
+		s.newSet.Add(c)
+	default:
+		s.newSet.Delete(c)
+	}
+	s.vlogf("ConnState: %p now %v; newSet %v=>%v", c, s, oldLen, len(s.newSet))
+	if len(s.newSet) < 2 {
+		select {
+		case s.needConnCh <- true:
+		default:
+		}
+	}
+}
+
+func (s *revDialState) waitNeedConnect() {
+	for {
+		s.mu.Lock()
+		need := len(s.newSet) < 2
+		s.mu.Unlock()
+		if need {
+			return
+		}
+		<-s.needConnCh
+	}
+}
+
+func (s *revDialState) vlogf(format string, arg ...any) {
+	if !s.debug {
+		return
+	}
+	log.Printf(format, arg...)
+}
+
+func (s *revDialState) runDialOutLoop(conns chan<- net.Conn) {
+	var lastErr string
+	connected := false
+
+	for {
+		s.vlogf("[dial-driver] waiting need connect...")
+		s.waitNeedConnect()
+		s.vlogf("[dial-driver] connecting...")
+		t0 := time.Now()
+		c, err := connect()
+		if err != nil {
+			s := err.Error()
+			if s != lastErr {
+				log.Printf("[dial-driver] connect failure: %v", s)
+			}
+			lastErr = s
+			time.Sleep(time.Second)
+			continue
+		}
+		if !connected {
+			connected = true
+			log.Printf("Connected to %v", *driverAddr)
+		}
+		s.vlogf("[dial-driver] connected %v => %v after %v", c.LocalAddr(), c.RemoteAddr(), time.Since(t0))
+
+		inHTTP := make(chan struct{})
+		s.mu.Lock()
+		mak.Set(&s.onNew, c, func() { close(inHTTP) })
+		s.mu.Unlock()
+
+		s.vlogf("[dial-driver] sending...")
+		conns <- c
+		s.vlogf("[dial-driver] sent; waiting")
+		select {
+		case <-inHTTP:
+			s.vlogf("[dial-driver] conn in HTTP")
+		case <-time.After(2 * time.Second):
+			s.vlogf("[dial-driver] timeout waiting for conn to be accepted into HTTP")
+		}
+	}
+}
+
+func addFirewallHandler(w http.ResponseWriter, r *http.Request) {
+	if addFirewall == nil {
+		http.Error(w, "firewall not supported", 500)
+		return
+	}
+	err := addFirewall()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	io.WriteString(w, "OK\n")
+}
+
+var addFirewall func() error // set by fw_linux.go
+
+// logBuffer is a bytes.Buffer that is safe for concurrent use
+// intended to capture early logs from the process, even if
+// gokrazy's syslog streaming isn't working or yet working.
+// It only captures the first 1MB of logs, as that's considered
+// plenty for early debugging. At runtime, it's assumed that
+// syslog log streaming is working.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (lb *logBuffer) Write(p []byte) (n int, err error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	const maxSize = 1 << 20 // more than plenty; see type comment
+	if lb.buf.Len() > maxSize {
+		return len(p), nil
+	}
+	return lb.buf.Write(p)
 }

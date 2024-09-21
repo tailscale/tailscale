@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/crypto/poly1305"
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -1067,9 +1066,14 @@ func (de *endpoint) removeSentDiscoPingLocked(txid stun.TxID, sp sentPing, resul
 	delete(de.sentPing, txid)
 }
 
+// poly1305AuthenticatorSize is the size, in bytes, of a poly1305 authenticator.
+// It's the same as golang.org/x/crypto/poly1305.TagSize, but that
+// page is deprecated and we only need this one constant, so we copy it.
+const poly1305AuthenticatorSize = 16
+
 // discoPingSize is the size of a complete disco ping packet, without any padding.
 const discoPingSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen +
-	poly1305.TagSize + disco.MessageHeaderLen + disco.PingLen
+	poly1305AuthenticatorSize + disco.MessageHeaderLen + disco.PingLen
 
 // sendDiscoPing sends a ping with the provided txid to ep using de's discoKey. size
 // is the desired disco message size, including all disco headers but excluding IP/UDP

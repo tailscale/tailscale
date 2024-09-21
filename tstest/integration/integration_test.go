@@ -23,12 +23,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/clientupdate"
@@ -37,6 +39,8 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
+	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -46,6 +50,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/must"
 	"tailscale.com/util/rands"
 	"tailscale.com/version"
@@ -1118,13 +1123,386 @@ func TestAutoUpdateDefaults(t *testing.T) {
 	}
 }
 
+// TestDNSOverTCPIntervalResolver tests that the quad-100 resolver successfully
+// serves TCP queries. It exercises the host's TCP stack, a TUN device, and
+// gVisor/netstack.
+// https://github.com/tailscale/corp/issues/22511
+func TestDNSOverTCPIntervalResolver(t *testing.T) {
+	tstest.Shard(t)
+	if os.Getuid() != 0 {
+		t.Skip("skipping when not root")
+	}
+	env := newTestEnv(t)
+	env.tunMode = true
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	wantIP4 := n1.AwaitIP4()
+	n1.AwaitRunning()
+
+	status, err := n1.Status()
+	if err != nil {
+		t.Fatalf("failed to get node status: %v", err)
+	}
+	selfDNSName, err := dnsname.ToFQDN(status.Self.DNSName)
+	if err != nil {
+		t.Fatalf("error converting self dns name to fqdn: %v", err)
+	}
+
+	cases := []struct {
+		network     string
+		serviceAddr netip.Addr
+	}{
+		{
+			"tcp4",
+			tsaddr.TailscaleServiceIP(),
+		},
+		{
+			"tcp6",
+			tsaddr.TailscaleServiceIPv6(),
+		},
+	}
+	for _, c := range cases {
+		err = tstest.WaitFor(time.Second*5, func() error {
+			m := new(dns.Msg)
+			m.SetQuestion(selfDNSName.WithTrailingDot(), dns.TypeA)
+			conn, err := net.DialTimeout(c.network, net.JoinHostPort(c.serviceAddr.String(), "53"), time.Second*1)
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+			dnsConn := &dns.Conn{
+				Conn: conn,
+			}
+			dnsClient := &dns.Client{}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			resp, _, err := dnsClient.ExchangeWithConnContext(ctx, m, dnsConn)
+			if err != nil {
+				return err
+			}
+			if len(resp.Answer) != 1 {
+				return fmt.Errorf("unexpected DNS resp: %s", resp)
+			}
+			var gotAddr net.IP
+			answer, ok := resp.Answer[0].(*dns.A)
+			if !ok {
+				return fmt.Errorf("unexpected answer type: %s", resp.Answer[0])
+			}
+			gotAddr = answer.A
+			if !bytes.Equal(gotAddr, wantIP4.AsSlice()) {
+				return fmt.Errorf("got (%s) != want (%s)", gotAddr, wantIP4)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
+// TestNetstackTCPLoopback tests netstack loopback of a TCP stream, in both
+// directions.
+func TestNetstackTCPLoopback(t *testing.T) {
+	tstest.Shard(t)
+	if os.Getuid() != 0 {
+		t.Skip("skipping when not root")
+	}
+
+	env := newTestEnv(t)
+	env.tunMode = true
+	loopbackPort := 5201
+	env.loopbackPort = &loopbackPort
+	loopbackPortStr := strconv.Itoa(loopbackPort)
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	n1.AwaitIP4()
+	n1.AwaitRunning()
+
+	cases := []struct {
+		lisAddr  string
+		network  string
+		dialAddr string
+	}{
+		{
+			lisAddr:  net.JoinHostPort("127.0.0.1", loopbackPortStr),
+			network:  "tcp4",
+			dialAddr: net.JoinHostPort(tsaddr.TailscaleServiceIPString, loopbackPortStr),
+		},
+		{
+			lisAddr:  net.JoinHostPort("::1", loopbackPortStr),
+			network:  "tcp6",
+			dialAddr: net.JoinHostPort(tsaddr.TailscaleServiceIPv6String, loopbackPortStr),
+		},
+	}
+
+	writeBufSize := 128 << 10 // 128KiB, exercise GSO if enabled
+	writeBufIterations := 100 // allow TCP send window to open up
+	wantTotal := writeBufSize * writeBufIterations
+
+	for _, c := range cases {
+		lis, err := net.Listen(c.network, c.lisAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lis.Close()
+
+		writeFn := func(conn net.Conn) error {
+			for i := 0; i < writeBufIterations; i++ {
+				toWrite := make([]byte, writeBufSize)
+				var wrote int
+				for {
+					n, err := conn.Write(toWrite)
+					if err != nil {
+						return err
+					}
+					wrote += n
+					if wrote == len(toWrite) {
+						break
+					}
+				}
+			}
+			return nil
+		}
+
+		readFn := func(conn net.Conn) error {
+			var read int
+			for {
+				b := make([]byte, writeBufSize)
+				n, err := conn.Read(b)
+				if err != nil {
+					return err
+				}
+				read += n
+				if read == wantTotal {
+					return nil
+				}
+			}
+		}
+
+		lisStepCh := make(chan error)
+		go func() {
+			conn, err := lis.Accept()
+			if err != nil {
+				lisStepCh <- err
+				return
+			}
+			lisStepCh <- readFn(conn)
+			lisStepCh <- writeFn(conn)
+		}()
+
+		var conn net.Conn
+		err = tstest.WaitFor(time.Second*5, func() error {
+			conn, err = net.DialTimeout(c.network, c.dialAddr, time.Second*1)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		dialerStepCh := make(chan error)
+		go func() {
+			dialerStepCh <- writeFn(conn)
+			dialerStepCh <- readFn(conn)
+		}()
+
+		var (
+			dialerSteps int
+			lisSteps    int
+		)
+		for {
+			select {
+			case lisErr := <-lisStepCh:
+				if lisErr != nil {
+					t.Fatal(err)
+				}
+				lisSteps++
+				if dialerSteps == 2 && lisSteps == 2 {
+					return
+				}
+			case dialerErr := <-dialerStepCh:
+				if dialerErr != nil {
+					t.Fatal(err)
+				}
+				dialerSteps++
+				if dialerSteps == 2 && lisSteps == 2 {
+					return
+				}
+			}
+		}
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
+// TestNetstackUDPLoopback tests netstack loopback of UDP packets, in both
+// directions.
+func TestNetstackUDPLoopback(t *testing.T) {
+	tstest.Shard(t)
+	if os.Getuid() != 0 {
+		t.Skip("skipping when not root")
+	}
+
+	env := newTestEnv(t)
+	env.tunMode = true
+	loopbackPort := 5201
+	env.loopbackPort = &loopbackPort
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	ip4 := n1.AwaitIP4()
+	ip6 := n1.AwaitIP6()
+	n1.AwaitRunning()
+
+	cases := []struct {
+		pingerLAddr *net.UDPAddr
+		pongerLAddr *net.UDPAddr
+		network     string
+		dialAddr    *net.UDPAddr
+	}{
+		{
+			pingerLAddr: &net.UDPAddr{IP: ip4.AsSlice(), Port: loopbackPort + 1},
+			pongerLAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: loopbackPort},
+			network:     "udp4",
+			dialAddr:    &net.UDPAddr{IP: tsaddr.TailscaleServiceIP().AsSlice(), Port: loopbackPort},
+		},
+		{
+			pingerLAddr: &net.UDPAddr{IP: ip6.AsSlice(), Port: loopbackPort + 1},
+			pongerLAddr: &net.UDPAddr{IP: net.ParseIP("::1"), Port: loopbackPort},
+			network:     "udp6",
+			dialAddr:    &net.UDPAddr{IP: tsaddr.TailscaleServiceIPv6().AsSlice(), Port: loopbackPort},
+		},
+	}
+
+	writeBufSize := int(tstun.DefaultTUNMTU()) - 40 - 8 // mtu - ipv6 header - udp header
+	wantPongs := 100
+
+	for _, c := range cases {
+		pongerConn, err := net.ListenUDP(c.network, c.pongerLAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pongerConn.Close()
+
+		var pingerConn *net.UDPConn
+		err = tstest.WaitFor(time.Second*5, func() error {
+			pingerConn, err = net.DialUDP(c.network, c.pingerLAddr, c.dialAddr)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pingerConn.Close()
+
+		pingerFn := func(conn *net.UDPConn) error {
+			b := make([]byte, writeBufSize)
+			n, err := conn.Write(b)
+			if err != nil {
+				return err
+			}
+			if n != len(b) {
+				return fmt.Errorf("bad write size: %d", n)
+			}
+			err = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
+			if err != nil {
+				return err
+			}
+			n, err = conn.Read(b)
+			if err != nil {
+				return err
+			}
+			if n != len(b) {
+				return fmt.Errorf("bad read size: %d", n)
+			}
+			return nil
+		}
+
+		pongerFn := func(conn *net.UDPConn) error {
+			for {
+				b := make([]byte, writeBufSize)
+				n, from, err := conn.ReadFromUDP(b)
+				if err != nil {
+					return err
+				}
+				if n != len(b) {
+					return fmt.Errorf("bad read size: %d", n)
+				}
+				n, err = conn.WriteToUDP(b, from)
+				if err != nil {
+					return err
+				}
+				if n != len(b) {
+					return fmt.Errorf("bad write size: %d", n)
+				}
+			}
+		}
+
+		pongerErrCh := make(chan error, 1)
+		go func() {
+			pongerErrCh <- pongerFn(pongerConn)
+		}()
+
+		err = tstest.WaitFor(time.Second*5, func() error {
+			err = pingerFn(pingerConn)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var pongsRX int
+		for {
+			pingerErrCh := make(chan error)
+			go func() {
+				pingerErrCh <- pingerFn(pingerConn)
+			}()
+
+			select {
+			case err := <-pongerErrCh:
+				t.Fatal(err)
+			case err := <-pingerErrCh:
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			pongsRX++
+			if pongsRX == wantPongs {
+				break
+			}
+		}
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
-	t       testing.TB
-	tunMode bool
-	cli     string
-	daemon  string
+	t            testing.TB
+	tunMode      bool
+	cli          string
+	daemon       string
+	loopbackPort *int
 
 	LogCatcher       *LogCatcher
 	LogCatcherServer *httptest.Server
@@ -1425,6 +1803,9 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
 		"TS_DEBUG_LOG_RATE=all",
 	)
+	if n.env.loopbackPort != nil {
+		cmd.Env = append(cmd.Env, "TS_DEBUG_NETSTACK_LOOPBACK_PORT="+strconv.Itoa(*n.env.loopbackPort))
+	}
 	if version.IsRace() {
 		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
 	}

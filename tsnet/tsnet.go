@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tsnet provides Tailscale as a library.
-//
-// It is an experimental work in progress.
 package tsnet
 
 import (

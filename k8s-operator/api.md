@@ -14,6 +14,8 @@
 - [DNSConfigList](#dnsconfiglist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
+- [Recorder](#recorder)
+- [RecorderList](#recorderlist)
 
 
 
@@ -236,6 +238,7 @@ _Appears in:_
 
 _Appears in:_
 - [Container](#container)
+- [RecorderContainer](#recordercontainer)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -256,23 +259,6 @@ _Validation:_
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
 
-
-
-#### Image
-
-
-
-
-
-
-
-_Appears in:_
-- [Nameserver](#nameserver)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
-| `tag` _string_ | Tag defaults to operator's own tag. |  |  |
 
 
 #### Metrics
@@ -319,7 +305,24 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `image` _[Image](#image)_ | Nameserver image. |  |  |
+| `image` _[NameserverImage](#nameserverimage)_ | Nameserver image. Defaults to tailscale/k8s-nameserver:unstable. |  |  |
+
+
+#### NameserverImage
+
+
+
+
+
+
+
+_Appears in:_
+- [Nameserver](#nameserver)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `repo` _string_ | Repo defaults to tailscale/k8s-nameserver. |  |  |
+| `tag` _string_ | Tag defaults to unstable. |  |  |
 
 
 #### NameserverStatus
@@ -447,6 +450,145 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyClass.<br />Known condition types are `ProxyClassReady`. |  |  |
 
 
+#### Recorder
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderList](#recorderlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `Recorder` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[RecorderSpec](#recorderspec)_ | Spec describes the desired recorder instance. |  |  |
+| `status` _[RecorderStatus](#recorderstatus)_ | RecorderStatus describes the status of the recorder. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### RecorderContainer
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderPod](#recorderpod)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `env` _[Env](#env) array_ | List of environment variables to set in the container.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#environment-variables<br />Note that environment variables provided here will take precedence<br />over Tailscale-specific environment variables set by the operator,<br />however running proxies with custom values for Tailscale environment<br />variables (i.e TS_USERSPACE) is not recommended and might break in<br />the future. |  |  |
+| `image` _string_ | Container image name including tag. Defaults to docker.io/tailscale/tsrecorder<br />with the same tag as the operator, but the official images are also<br />available at ghcr.io/tailscale/tsrecorder.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  |  |
+| `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#pullpolicy-v1-core)_ | Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#image |  | Enum: [Always Never IfNotPresent] <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default, the operator does not apply any resource requirements. The<br />amount of resources required wil depend on the volume of recordings sent.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  |  |
+| `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context. By default, the operator does not apply any<br />container security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  |  |
+
+
+#### RecorderList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `RecorderList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[Recorder](#recorder) array_ |  |  |  |
+
+
+#### RecorderPod
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderStatefulSet](#recorderstatefulset)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to Recorder Pods. Any labels specified here<br />will be merged with the default labels applied to the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to Recorder Pods. Any annotations<br />specified here will be merged with the default annotations applied to<br />the Pod by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#affinity-v1-core)_ | Affinity rules for Recorder Pods. By default, the operator does not<br />apply any affinity rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity |  |  |
+| `container` _[RecorderContainer](#recordercontainer)_ | Configuration for the Recorder container running tailscale. |  |  |
+| `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#podsecuritycontext-v1-core)_ | Security context for Recorder Pods. By default, the operator does not<br />apply any Pod security context.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2 |  |  |
+| `imagePullSecrets` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#localobjectreference-v1-core) array_ | Image pull Secrets for Recorder Pods.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec |  |  |
+| `nodeSelector` _object (keys:string, values:string)_ | Node selector rules for Recorder Pods. By default, the operator does<br />not apply any node selector rules.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+| `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#toleration-v1-core) array_ | Tolerations for Recorder Pods. By default, the operator does not apply<br />any tolerations.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling |  |  |
+
+
+#### RecorderSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [Recorder](#recorder)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `statefulSet` _[RecorderStatefulSet](#recorderstatefulset)_ | Configuration parameters for the Recorder's StatefulSet. The operator<br />deploys a StatefulSet for each Recorder resource. |  |  |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale device will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a Recorder node has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `enableUI` _boolean_ | Set to true to enable the Recorder UI. The UI lists and plays recorded sessions.<br />The UI will be served at <MagicDNS name of the recorder>:443. Defaults to false.<br />Corresponds to --ui tsrecorder flag https://tailscale.com/kb/1246/tailscale-ssh-session-recording#deploy-a-recorder-node.<br />Required if S3 storage is not set up, to ensure that recordings are accessible. |  |  |
+| `storage` _[Storage](#storage)_ | Configure where to store session recordings. By default, recordings will<br />be stored in a local ephemeral volume, and will not be persisted past the<br />lifetime of a specific pod. |  |  |
+
+
+#### RecorderStatefulSet
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderSpec](#recorderspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the Recorder.<br />Any labels specified here will be merged with the default labels applied<br />to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the Recorder.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the operator.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
+| `pod` _[RecorderPod](#recorderpod)_ | Configuration for pods created by the Recorder's StatefulSet. |  |  |
+
+
+#### RecorderStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [Recorder](#recorder)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Recorder.<br />Known condition types are `RecorderReady`. |  |  |
+| `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the Recorder statefulset. |  |  |
+
+
 #### Route
 
 _Underlying type:_ _string_
@@ -478,6 +620,56 @@ _Appears in:_
 
 
 
+#### S3
+
+
+
+
+
+
+
+_Appears in:_
+- [Storage](#storage)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `endpoint` _string_ | S3-compatible endpoint, e.g. s3.us-east-1.amazonaws.com. |  |  |
+| `bucket` _string_ | Bucket name to write to. The bucket is expected to be used solely for<br />recordings, as there is no stable prefix for written object names. |  |  |
+| `credentials` _[S3Credentials](#s3credentials)_ | Configure environment variable credentials for managing objects in the<br />configured bucket. If not set, tsrecorder will try to acquire credentials<br />first from the file system and then the STS API. |  |  |
+
+
+#### S3Credentials
+
+
+
+
+
+
+
+_Appears in:_
+- [S3](#s3)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `secret` _[S3Secret](#s3secret)_ | Use a Kubernetes Secret from the operator's namespace as the source of<br />credentials. |  |  |
+
+
+#### S3Secret
+
+
+
+
+
+
+
+_Appears in:_
+- [S3Credentials](#s3credentials)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | The name of a Kubernetes Secret in the operator's namespace that contains<br />credentials for writing to the configured bucket. Each key-value pair<br />from the secret's data will be mounted as an environment variable. It<br />should include keys for AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY if<br />using a static access key. |  |  |
+
+
 #### StatefulSet
 
 
@@ -494,6 +686,22 @@ _Appears in:_
 | `labels` _object (keys:string, values:string)_ | Labels that will be added to the StatefulSet created for the proxy.<br />Any labels specified here will be merged with the default labels<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other labels that might have been applied by other<br />actors.<br />Label keys and values must be valid Kubernetes label keys and values.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set |  |  |
 | `annotations` _object (keys:string, values:string)_ | Annotations that will be added to the StatefulSet created for the proxy.<br />Any Annotations specified here will be merged with the default annotations<br />applied to the StatefulSet by the Tailscale Kubernetes operator as<br />well as any other annotations that might have been applied by other<br />actors.<br />Annotations must be valid Kubernetes annotations.<br />https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set |  |  |
 | `pod` _[Pod](#pod)_ | Configuration for the proxy Pod. |  |  |
+
+
+#### Storage
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderSpec](#recorderspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `s3` _[S3](#s3)_ | Configure an S3-compatible API for storage. Required if the UI is not<br />enabled, to ensure that recordings are accessible. |  |  |
 
 
 #### SubnetRouter
@@ -540,7 +748,26 @@ _Validation:_
 
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
+- [RecorderSpec](#recorderspec)
 
+
+
+#### TailnetDevice
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderStatus](#recorderstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
+| `url` _string_ | URL where the UI is available if enabled for replaying recordings. This<br />will be an HTTPS MagicDNS URL. You must be connected to the same tailnet<br />as the recorder to access it. |  |  |
 
 
 #### TailscaleConfig

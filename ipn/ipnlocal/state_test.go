@@ -437,10 +437,13 @@ func TestStateMachine(t *testing.T) {
 	// ask control to do anything. Instead backend will emit an event
 	// indicating that the UI should browse to the given URL.
 	t.Logf("\n\nLogin (interactive)")
-	notifies.expect(0)
+	notifies.expect(1)
 	b.StartLoginInteractive(context.Background())
 	{
+		nn := notifies.drain(1)
 		cc.assertCalls()
+		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
+		c.Assert(url1, qt.Equals, *nn[0].BrowseToURL)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -450,11 +453,13 @@ func TestStateMachine(t *testing.T) {
 	// the login URL expired. If they start another interactive login,
 	// we must always get a *new* login URL first.
 	t.Logf("\n\nLogin2 (interactive)")
+	b.authURLTime = time.Now().Add(-time.Hour * 24 * 7) // simulate URL expiration
 	notifies.expect(0)
 	b.StartLoginInteractive(context.Background())
 	{
+		notifies.drain(0)
 		// backend asks control for another login sequence
-		cc.assertCalls()
+		cc.assertCalls("Login")
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -651,25 +656,55 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
+	// Explicitly set the ControlURL to avoid defaulting to [ipn.DefaultControlURL].
+	// This prevents [LocalBackend] from using the production control server during tests
+	// and ensures that [LocalBackend.validPopBrowserURL] returns true for the
+	// fake interactive login URLs used below. Otherwise, we won't be receiving
+	// BrowseToURL notifications as expected.
+	// See tailscale/tailscale#11393.
+	notifies.expect(1)
+	b.EditPrefs(&ipn.MaskedPrefs{
+		ControlURLSet: true,
+		Prefs: ipn.Prefs{
+			ControlURL: "https://localhost:1/",
+		},
+	})
+	notifies.drain(1)
+
+	t.Logf("\n\nStartLoginInteractive3")
 	b.StartLoginInteractive(context.Background())
-	t.Logf("\n\nLoginFinished3")
+	// We've been logged out, and the previously created profile is now deleted.
+	// We're attempting an interactive login for the first time with the new profile,
+	// this should result in a call to the control server, which in turn should provide
+	// an interactive login URL to visit.
+	notifies.expect(2)
+	url3 := "https://localhost:1/3"
+	cc.send(nil, url3, false, nil)
+	{
+		nn := notifies.drain(2)
+		cc.assertCalls("Login")
+		c.Assert(nn[1].BrowseToURL, qt.IsNotNil)
+		c.Assert(*nn[1].BrowseToURL, qt.Equals, url3)
+	}
+	t.Logf("%q visited", url3)
 	notifies.expect(3)
 	cc.persist.UserProfile.LoginName = "user2"
 	cc.persist.NodeID = "node2"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
+	t.Logf("\n\nLoginFinished3")
 	{
 		nn := notifies.drain(3)
-		cc.assertCalls("Login")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].Prefs.Persist(), qt.IsNotNil)
-		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
 		c.Assert(nn[1].Prefs.Persist().UserProfile().LoginName, qt.Equals, "user2")
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
+		// If a user initiates an interactive login, they also expect WantRunning to become true.
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
+		c.Assert(nn[2].State, qt.IsNotNil)
 		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
 	}
 
@@ -767,18 +802,12 @@ func TestStateMachine(t *testing.T) {
 	// We want to try logging in as a different user, while Stopped.
 	// First, start the login process (without logging out first).
 	t.Logf("\n\nLoginDifferent")
-	notifies.expect(2)
-	b.EditPrefs(&ipn.MaskedPrefs{
-		ControlURLSet: true,
-		Prefs: ipn.Prefs{
-			ControlURL: "https://localhost:1/",
-		},
-	})
+	notifies.expect(1)
 	b.StartLoginInteractive(context.Background())
-	url3 := "https://localhost:1/3"
-	cc.send(nil, url3, false, nil)
+	url4 := "https://localhost:1/4"
+	cc.send(nil, url4, false, nil)
 	{
-		nn := notifies.drain(2)
+		nn := notifies.drain(1)
 		// It might seem like WantRunning should switch to true here,
 		// but that would be risky since we already have a valid
 		// user account. It might try to reconnect to the old account
@@ -787,8 +816,8 @@ func TestStateMachine(t *testing.T) {
 		// Because the login hasn't yet completed, the old login
 		// is still valid, so it's correct that we stay paused.
 		cc.assertCalls("Login")
-		c.Assert(nn[1].BrowseToURL, qt.IsNotNil)
-		c.Assert(*nn[1].BrowseToURL, qt.Equals, url3)
+		c.Assert(nn[0].BrowseToURL, qt.IsNotNil)
+		c.Assert(*nn[0].BrowseToURL, qt.Equals, url4)
 	}
 
 	// Now, let's complete the interactive login, using a different

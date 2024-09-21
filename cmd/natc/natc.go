@@ -456,6 +456,11 @@ func (c *connector) ignoreDestination(dstAddrs []netip.Addr) bool {
 }
 
 func proxyTCPConn(c net.Conn, dest string) {
+	if c.RemoteAddr() == nil {
+		log.Printf("proxyTCPConn: nil RemoteAddr")
+		c.Close()
+		return
+	}
 	addrPortStr := c.LocalAddr().String()
 	_, port, err := net.SplitHostPort(addrPortStr)
 	if err != nil {
@@ -489,6 +494,9 @@ type perPeerState struct {
 func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	if ps.addrToDomain == nil {
+		return "", false
+	}
 	return ps.addrToDomain.Lookup(ip)
 }
 

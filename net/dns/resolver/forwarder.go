@@ -177,11 +177,11 @@ func clampEDNSSize(packet []byte, maxSize uint16) {
 var dnsForwarderFailing = health.Register(&health.Warnable{
 	Code:                "dns-forward-failing",
 	Title:               "DNS unavailable",
-	Severity:            health.SeverityHigh,
+	Severity:            health.SeverityMedium,
 	DependsOn:           []*health.Warnable{health.NetworkStatusWarnable},
 	Text:                health.StaticMessage("Tailscale can't reach the configured DNS servers. Internet connectivity may be affected."),
 	ImpactsConnectivity: true,
-	TimeToVisible:       5 * time.Second,
+	TimeToVisible:       15 * time.Second,
 })
 
 type route struct {
@@ -1093,6 +1093,8 @@ func nxDomainResponse(req packet) (res packet, err error) {
 	// TODO(bradfitz): should we add an SOA record in the Authority
 	// section too? (for the nxdomain negative caching TTL)
 	// For which zone? Does iOS care?
+	b.StartQuestions()
+	b.Question(p.Question)
 	res.bs, err = b.Finish()
 	res.addr = req.addr
 	return res, err

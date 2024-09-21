@@ -6,8 +6,10 @@ package views
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -410,5 +412,49 @@ func TestContainsPointers(t *testing.T) {
 				t.Errorf("got %v; want %v", gotPtrs, tt.wantPtrs)
 			}
 		})
+	}
+}
+
+func TestSliceRange(t *testing.T) {
+	sv := SliceOf([]string{"foo", "bar"})
+	var got []string
+	for i, v := range sv.All() {
+		got = append(got, fmt.Sprintf("%d-%s", i, v))
+	}
+	want := []string{"0-foo", "1-bar"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+type testStruct struct{ value string }
+
+func (p *testStruct) Clone() *testStruct {
+	if p == nil {
+		return p
+	}
+	return &testStruct{p.value}
+}
+func (p *testStruct) View() testStructView { return testStructView{p} }
+
+type testStructView struct{ p *testStruct }
+
+func (v testStructView) Valid() bool { return v.p != nil }
+func (v testStructView) AsStruct() *testStruct {
+	if v.p == nil {
+		return nil
+	}
+	return v.p.Clone()
+}
+
+func TestSliceViewRange(t *testing.T) {
+	vs := SliceOfViews([]*testStruct{{value: "foo"}, {value: "bar"}})
+	var got []string
+	for i, v := range vs.All() {
+		got = append(got, fmt.Sprintf("%d-%s", i, v.AsStruct().value))
+	}
+	want := []string{"0-foo", "1-bar"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q; want %q", got, want)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -464,6 +465,11 @@ func New(collection string, netMon *netmon.Monitor, health *health.Tracker, logf
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
 func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) *Policy {
+	if hostinfo.IsNATLabGuestVM() {
+		// In NATLab Gokrazy instances, tailscaled comes up concurently with
+		// DHCP and the doesn't have DNS for a while. Wait for DHCP first.
+		awaitGokrazyNetwork()
+	}
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -567,7 +573,7 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || testenv.InTest() || hostinfo.IsNATLabGuestVM() {
+	if envknob.NoLogsNoSupport() || testenv.InTest() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else if val := getLogTarget(); val != "" {
@@ -816,4 +822,62 @@ func (noopPretendSuccessTransport) RoundTrip(req *http.Request) (*http.Response,
 		StatusCode: 200,
 		Status:     "200 OK",
 	}, nil
+}
+
+func awaitGokrazyNetwork() {
+	if runtime.GOOS != "linux" || distro.Get() != distro.Gokrazy {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for {
+		// Before DHCP finishes, the /etc/resolv.conf file has just "#MANUAL".
+		all, _ := os.ReadFile("/etc/resolv.conf")
+		if bytes.Contains(all, []byte("nameserver ")) {
+			good := true
+			firstLine, _, ok := strings.Cut(string(all), "\n")
+			if ok {
+				ns, ok := strings.CutPrefix(firstLine, "nameserver ")
+				if ok {
+					if ip, err := netip.ParseAddr(ns); err == nil && ip.Is6() && !ip.IsLinkLocalUnicast() {
+						good = haveGlobalUnicastIPv6()
+					}
+				}
+			}
+			if good {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// haveGlobalUnicastIPv6 reports whether the machine has a IPv6 non-private
+// (non-ULA) global unicast address.
+//
+// It's only intended for use in natlab integration tests so only works on
+// Linux/macOS now and not environments (such as Android) where net.Interfaces
+// doesn't work directly.
+func haveGlobalUnicastIPv6() bool {
+	ifs, _ := net.Interfaces()
+	for _, ni := range ifs {
+		aa, _ := ni.Addrs()
+		for _, a := range aa {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip, _ := netip.AddrFromSlice(ipn.IP)
+			if ip.Is6() && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+				return true
+			}
+		}
+	}
+	return false
 }

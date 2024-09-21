@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/wsconn"

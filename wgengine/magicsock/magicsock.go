@@ -491,15 +491,9 @@ func NewConn(opts Options) (*Conn, error) {
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
 	c.donec = c.connCtx.Done()
 	c.netChecker = &netcheck.Client{
-		Logf:   logger.WithPrefix(c.logf, "netcheck: "),
-		NetMon: c.netMon,
-		SendPacket: func(b []byte, ap netip.AddrPort) (int, error) {
-			ok, err := c.sendUDP(ap, b)
-			if !ok {
-				return 0, err
-			}
-			return len(b), err
-		},
+		Logf:                logger.WithPrefix(c.logf, "netcheck: "),
+		NetMon:              c.netMon,
+		SendPacket:          c.sendUDPNetcheck,
 		SkipExternalNetwork: inTest(),
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
@@ -508,13 +502,13 @@ func NewConn(opts Options) (*Conn, error) {
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
 		c.logf("[v1] using BPF disco receiver for IPv4")
 		c.closeDisco4 = d4
-	} else {
+	} else if !errors.Is(err, errors.ErrUnsupported) {
 		c.logf("[v1] couldn't create raw v4 disco listener, using regular listener instead: %v", err)
 	}
 	if d6, err := c.listenRawDisco("ip6"); err == nil {
 		c.logf("[v1] using BPF disco receiver for IPv6")
 		c.closeDisco6 = d6
-	} else {
+	} else if !errors.Is(err, errors.ErrUnsupported) {
 		c.logf("[v1] couldn't create raw v6 disco listener, using regular listener instead: %v", err)
 	}
 
@@ -582,7 +576,7 @@ func (c *Conn) updateEndpoints(why string) {
 		c.muCond.Broadcast()
 	}()
 	c.dlogf("[v1] magicsock: starting endpoint update (%s)", why)
-	if c.noV4Send.Load() && runtime.GOOS != "js" {
+	if c.noV4Send.Load() && runtime.GOOS != "js" && !c.onlyTCP443.Load() {
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()
@@ -688,9 +682,6 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		return new(netcheck.Report), nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
 	report, err := c.netChecker.GetReport(ctx, dm, &netcheck.GetReportOpts{
 		// Pass information about the last time that we received a
 		// frame from a DERP server to our netchecker to help avoid
@@ -701,6 +692,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		// health package here, but I'd rather do that and not store
 		// the exact same state in two different places.
 		GetLastDERPActivity: c.health.GetDERPRegionReceivedTime,
+		OnlyTCP443:          c.onlyTCP443.Load(),
 	})
 	if err != nil {
 		return nil, err
@@ -1089,7 +1081,13 @@ func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) error {
 		metricSendDataNetworkDown.Add(n)
 		return errNetworkDown
 	}
-	return ep.(*endpoint).send(buffs)
+	if ep, ok := ep.(*endpoint); ok {
+		return ep.send(buffs)
+	}
+	// If it's not of type *endpoint, it's probably *lazyEndpoint, which means
+	// we don't actually know who the peer is and we're waiting for wireguard-go
+	// to switch the endpoint. See go/corp/20732.
+	return nil
 }
 
 var errConnClosed = errors.New("Conn closed")
@@ -1172,7 +1170,25 @@ func (c *Conn) maybeRebindOnError(os string, err error) bool {
 	return false
 }
 
-// sendUDP sends UDP packet b to addr.
+// sendUDPNetcheck sends b via UDP to addr. It is used exclusively by netcheck.
+// It returns the number of bytes sent along with any error encountered. It
+// returns errors.ErrUnsupported if the client is explicitly configured to only
+// send data over TCP port 443 and/or we're running on wasm.
+func (c *Conn) sendUDPNetcheck(b []byte, addr netip.AddrPort) (int, error) {
+	if c.onlyTCP443.Load() || runtime.GOOS == "js" {
+		return 0, errors.ErrUnsupported
+	}
+	switch {
+	case addr.Addr().Is4():
+		return c.pconn4.WriteToUDPAddrPort(b, addr)
+	case addr.Addr().Is6():
+		return c.pconn6.WriteToUDPAddrPort(b, addr)
+	default:
+		panic("bogus sendUDPNetcheck addr type")
+	}
+}
+
+// sendUDPStd sends UDP packet b to addr.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) {
 	if c.onlyTCP443.Load() {
@@ -1274,10 +1290,15 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 	// epCache caches an IPPort->endpoint for hot flows.
 	var epCache ippEndpointCache
 
-	return func(buffs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+	return func(buffs [][]byte, sizes []int, eps []conn.Endpoint) (_ int, retErr error) {
 		if healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
+			defer func() {
+				if retErr != nil {
+					c.logf("Receive func %s exiting with error: %T, %v", healthItem.Name(), retErr, retErr)
+				}
+			}()
 		}
 		if ruc == nil {
 			panic("nil RebindingUDPConn")
@@ -2533,6 +2554,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			}
 		}
 		trySetSocketBuffer(pconn, c.logf)
+		trySetUDPSocketOptions(pconn, c.logf)
 
 		// Success.
 		if debugBindSocket() {

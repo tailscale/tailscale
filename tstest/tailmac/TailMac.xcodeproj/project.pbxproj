@@ -1,0 +1,581 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 55;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		8F87D52126C34111000EADA4 /* HostCli.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F87D52026C34111000EADA4 /* HostCli.swift */; };
+		8F87D52326C34111000EADA4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F87D52226C34111000EADA4 /* Assets.xcassets */; };
+		8F87D52626C34111000EADA4 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 8F87D52426C34111000EADA4 /* MainMenu.xib */; };
+		8F87D53426C341AC000EADA4 /* TailMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F87D53326C341AC000EADA4 /* TailMac.swift */; };
+		8F87D54026C34259000EADA4 /* TailMacConfigHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F87D53D26C34259000EADA4 /* TailMacConfigHelper.swift */; };
+		8F87D54426C34269000EADA4 /* TailMacConfigHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F87D53D26C34259000EADA4 /* TailMacConfigHelper.swift */; };
+		8F87D54726C3427C000EADA4 /* Virtualization.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8F87D54626C3427C000EADA4 /* Virtualization.framework */; };
+		8F87D54826C34286000EADA4 /* Virtualization.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8F87D54626C3427C000EADA4 /* Virtualization.framework */; };
+		C266EA7F2C5D2AD800DC57E3 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = C266EA7E2C5D2AD800DC57E3 /* Config.swift */; };
+		C266EA802C5D2AE700DC57E3 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = C266EA7E2C5D2AD800DC57E3 /* Config.swift */; };
+		C28759A42C6BB68D0032283D /* VMInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28759A32C6BB68D0032283D /* VMInstaller.swift */; };
+		C28759A72C6BB7F90032283D /* RestoreImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28759A62C6BB7F90032283D /* RestoreImage.swift */; };
+		C28759AC2C6C00840032283D /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = C28759AB2C6C00840032283D /* ArgumentParser */; };
+		C28759AE2C6D0FC10032283D /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = C28759AD2C6D0FC10032283D /* ArgumentParser */; };
+		C28759BC2C6D19D40032283D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28759BB2C6D19D40032283D /* AppDelegate.swift */; };
+		C28759BE2C6D1A0F0032283D /* VMController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28759BD2C6D1A0F0032283D /* VMController.swift */; };
+		C28759C02C6D1E980032283D /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28759BF2C6D1E980032283D /* Notifications.swift */; };
+		C28759C12C6D1E980032283D /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28759BF2C6D1E980032283D /* Notifications.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		8F87D52F26C341AC000EADA4 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		8F87D51D26C34111000EADA4 /* Host.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Host.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8F87D52026C34111000EADA4 /* HostCli.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostCli.swift; sourceTree = "<group>"; };
+		8F87D52226C34111000EADA4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		8F87D52526C34111000EADA4 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
+		8F87D53126C341AC000EADA4 /* TailMac */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = TailMac; sourceTree = BUILT_PRODUCTS_DIR; };
+		8F87D53326C341AC000EADA4 /* TailMac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailMac.swift; sourceTree = "<group>"; };
+		8F87D53826C3423F000EADA4 /* TailMac.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = TailMac.entitlements; sourceTree = "<group>"; };
+		8F87D53B26C34250000EADA4 /* Host.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Host.entitlements; sourceTree = "<group>"; };
+		8F87D53D26C34259000EADA4 /* TailMacConfigHelper.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TailMacConfigHelper.swift; sourceTree = "<group>"; };
+		8F87D54626C3427C000EADA4 /* Virtualization.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Virtualization.framework; path = System/Library/Frameworks/Virtualization.framework; sourceTree = SDKROOT; };
+		8FB90BE826D422FD00988F51 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B0E246092DFBF28FAEA2709F /* LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; path = LICENSE.txt; sourceTree = "<group>"; };
+		C266EA7E2C5D2AD800DC57E3 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		C28759A32C6BB68D0032283D /* VMInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMInstaller.swift; sourceTree = "<group>"; };
+		C28759A62C6BB7F90032283D /* RestoreImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreImage.swift; sourceTree = "<group>"; };
+		C28759A92C6BF8800032283D /* Makefile */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
+		C28759AF2C6D10060032283D /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		C28759BB2C6D19D40032283D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		C28759BD2C6D1A0F0032283D /* VMController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMController.swift; sourceTree = "<group>"; };
+		C28759BF2C6D1E980032283D /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		8F87D51A26C34111000EADA4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C28759AE2C6D0FC10032283D /* ArgumentParser in Frameworks */,
+				8F87D54826C34286000EADA4 /* Virtualization.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8F87D52E26C341AC000EADA4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C28759AC2C6C00840032283D /* ArgumentParser in Frameworks */,
+				8F87D54726C3427C000EADA4 /* Virtualization.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		09E329497FB7E44895839D88 /* LICENSE */ = {
+			isa = PBXGroup;
+			children = (
+				B0E246092DFBF28FAEA2709F /* LICENSE.txt */,
+			);
+			path = LICENSE;
+			sourceTree = "<group>";
+		};
+		8F87D51426C34111000EADA4 = {
+			isa = PBXGroup;
+			children = (
+				C28759AF2C6D10060032283D /* README.md */,
+				C28759A92C6BF8800032283D /* Makefile */,
+				8F87D53B26C34250000EADA4 /* Host.entitlements */,
+				8F87D53826C3423F000EADA4 /* TailMac.entitlements */,
+				8FDABC17270D0F9100D7FC60 /* Swift */,
+				8F87D51E26C34111000EADA4 /* Products */,
+				8F87D54526C3427C000EADA4 /* Frameworks */,
+				09E329497FB7E44895839D88 /* LICENSE */,
+			);
+			sourceTree = "<group>";
+		};
+		8F87D51E26C34111000EADA4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				8F87D51D26C34111000EADA4 /* Host.app */,
+				8F87D53126C341AC000EADA4 /* TailMac */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8F87D51F26C34111000EADA4 /* Host */ = {
+			isa = PBXGroup;
+			children = (
+				8F87D52026C34111000EADA4 /* HostCli.swift */,
+				C28759BD2C6D1A0F0032283D /* VMController.swift */,
+				C28759BB2C6D19D40032283D /* AppDelegate.swift */,
+				8F87D52226C34111000EADA4 /* Assets.xcassets */,
+				8F87D52426C34111000EADA4 /* MainMenu.xib */,
+				8FB90BE826D422FD00988F51 /* Info.plist */,
+			);
+			path = Host;
+			sourceTree = "<group>";
+		};
+		8F87D52C26C3418F000EADA4 /* Common */ = {
+			isa = PBXGroup;
+			children = (
+				C266EA7E2C5D2AD800DC57E3 /* Config.swift */,
+				8F87D53D26C34259000EADA4 /* TailMacConfigHelper.swift */,
+				C28759BF2C6D1E980032283D /* Notifications.swift */,
+			);
+			path = Common;
+			sourceTree = "<group>";
+		};
+		8F87D53226C341AC000EADA4 /* TailMac */ = {
+			isa = PBXGroup;
+			children = (
+				8F87D53326C341AC000EADA4 /* TailMac.swift */,
+				C28759A62C6BB7F90032283D /* RestoreImage.swift */,
+				C28759A32C6BB68D0032283D /* VMInstaller.swift */,
+			);
+			path = TailMac;
+			sourceTree = "<group>";
+		};
+		8F87D54526C3427C000EADA4 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				8F87D54626C3427C000EADA4 /* Virtualization.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		8FDABC17270D0F9100D7FC60 /* Swift */ = {
+			isa = PBXGroup;
+			children = (
+				8F87D52C26C3418F000EADA4 /* Common */,
+				8F87D51F26C34111000EADA4 /* Host */,
+				8F87D53226C341AC000EADA4 /* TailMac */,
+			);
+			path = Swift;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8F87D51C26C34111000EADA4 /* host */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8F87D52926C34111000EADA4 /* Build configuration list for PBXNativeTarget "host" */;
+			buildPhases = (
+				8F87D51926C34111000EADA4 /* Sources */,
+				8F87D51A26C34111000EADA4 /* Frameworks */,
+				8F87D51B26C34111000EADA4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = host;
+			packageProductDependencies = (
+				C28759AD2C6D0FC10032283D /* ArgumentParser */,
+			);
+			productName = macOSVirtualMachineSampleApp;
+			productReference = 8F87D51D26C34111000EADA4 /* Host.app */;
+			productType = "com.apple.product-type.application";
+		};
+		8F87D53026C341AC000EADA4 /* tailmac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8F87D53526C341AC000EADA4 /* Build configuration list for PBXNativeTarget "tailmac" */;
+			buildPhases = (
+				8F87D52D26C341AC000EADA4 /* Sources */,
+				8F87D52E26C341AC000EADA4 /* Frameworks */,
+				8F87D52F26C341AC000EADA4 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = tailmac;
+			packageProductDependencies = (
+				C28759AB2C6C00840032283D /* ArgumentParser */,
+			);
+			productName = InstallationTool;
+			productReference = 8F87D53126C341AC000EADA4 /* TailMac */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8F87D51526C34111000EADA4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				DefaultBuildSystemTypeForWorkspace = Latest;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 1300;
+				ORGANIZATIONNAME = Apple;
+				TargetAttributes = {
+					8F87D51C26C34111000EADA4 = {
+						CreatedOnToolsVersion = 13.0;
+					};
+					8F87D53026C341AC000EADA4 = {
+						CreatedOnToolsVersion = 13.0;
+					};
+				};
+			};
+			buildConfigurationList = 8F87D51826C34111000EADA4 /* Build configuration list for PBXProject "TailMac" */;
+			compatibilityVersion = "Xcode 13.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 8F87D51426C34111000EADA4;
+			packageReferences = (
+				C28759AA2C6BFF0F0032283D /* XCRemoteSwiftPackageReference "swift-argument-parser" */,
+			);
+			productRefGroup = 8F87D51E26C34111000EADA4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8F87D51C26C34111000EADA4 /* host */,
+				8F87D53026C341AC000EADA4 /* tailmac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8F87D51B26C34111000EADA4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F87D52326C34111000EADA4 /* Assets.xcassets in Resources */,
+				8F87D52626C34111000EADA4 /* MainMenu.xib in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8F87D51926C34111000EADA4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F87D52126C34111000EADA4 /* HostCli.swift in Sources */,
+				C28759C02C6D1E980032283D /* Notifications.swift in Sources */,
+				C266EA7F2C5D2AD800DC57E3 /* Config.swift in Sources */,
+				C28759BC2C6D19D40032283D /* AppDelegate.swift in Sources */,
+				C28759BE2C6D1A0F0032283D /* VMController.swift in Sources */,
+				8F87D54026C34259000EADA4 /* TailMacConfigHelper.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8F87D52D26C341AC000EADA4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F87D54426C34269000EADA4 /* TailMacConfigHelper.swift in Sources */,
+				C28759C12C6D1E980032283D /* Notifications.swift in Sources */,
+				C28759A72C6BB7F90032283D /* RestoreImage.swift in Sources */,
+				C266EA802C5D2AE700DC57E3 /* Config.swift in Sources */,
+				C28759A42C6BB68D0032283D /* VMInstaller.swift in Sources */,
+				8F87D53426C341AC000EADA4 /* TailMac.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		8F87D52426C34111000EADA4 /* MainMenu.xib */ = {
+			isa = PBXVariantGroup;
+			children = (
+				8F87D52526C34111000EADA4 /* Base */,
+			);
+			name = MainMenu.xib;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		8F87D52726C34111000EADA4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		8F87D52826C34111000EADA4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		8F87D52A26C34111000EADA4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Host.entitlements;
+				CODE_SIGN_IDENTITY = "Mac Developer";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = W5364U7YZB;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Swift/Host/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMainNibFile = MainMenu;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow for using audio input devices.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tailscale.vnetMacHost;
+				PRODUCT_NAME = Host;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8F87D52B26C34111000EADA4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Host.entitlements;
+				CODE_SIGN_IDENTITY = "Mac Developer";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = W5364U7YZB;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Swift/Host/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMainNibFile = MainMenu;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow for using audio input devices.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tailscale.vnetMacHost;
+				PRODUCT_NAME = Host;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		8F87D53626C341AC000EADA4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = TailMac.entitlements;
+				CODE_SIGN_IDENTITY = "Mac Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = W5364U7YZB;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tailscale.vnetMacHostSetupTool;
+				PRODUCT_NAME = TailMac;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8F87D53726C341AC000EADA4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = TailMac.entitlements;
+				CODE_SIGN_IDENTITY = "Mac Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = W5364U7YZB;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tailscale.vnetMacHostSetupTool;
+				PRODUCT_NAME = TailMac;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		8F87D51826C34111000EADA4 /* Build configuration list for PBXProject "TailMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8F87D52726C34111000EADA4 /* Debug */,
+				8F87D52826C34111000EADA4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8F87D52926C34111000EADA4 /* Build configuration list for PBXNativeTarget "host" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8F87D52A26C34111000EADA4 /* Debug */,
+				8F87D52B26C34111000EADA4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8F87D53526C341AC000EADA4 /* Build configuration list for PBXNativeTarget "tailmac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8F87D53626C341AC000EADA4 /* Debug */,
+				8F87D53726C341AC000EADA4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C28759AA2C6BFF0F0032283D /* XCRemoteSwiftPackageReference "swift-argument-parser" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-argument-parser.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C28759AB2C6C00840032283D /* ArgumentParser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C28759AA2C6BFF0F0032283D /* XCRemoteSwiftPackageReference "swift-argument-parser" */;
+			productName = ArgumentParser;
+		};
+		C28759AD2C6D0FC10032283D /* ArgumentParser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C28759AA2C6BFF0F0032283D /* XCRemoteSwiftPackageReference "swift-argument-parser" */;
+			productName = ArgumentParser;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 8F87D51526C34111000EADA4 /* Project object */;
+}

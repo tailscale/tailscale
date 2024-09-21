@@ -24,7 +24,7 @@ import (
 var flagCopyright = flag.Bool("copyright", true, "add Tailscale copyright to generated file headers")
 
 // LoadTypes returns all named types in pkgName, keyed by their type name.
-func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]*types.Named, error) {
+func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]types.Type, error) {
 	cfg := &packages.Config{
 		Mode:  packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedName,
 		Tests: buildTags == "test",
@@ -181,8 +181,8 @@ func writeFormatted(code []byte, path string) error {
 }
 
 // namedTypes returns all named types in pkg, keyed by their type name.
-func namedTypes(pkg *packages.Package) map[string]*types.Named {
-	nt := make(map[string]*types.Named)
+func namedTypes(pkg *packages.Package) map[string]types.Type {
+	nt := make(map[string]types.Type)
 	for _, file := range pkg.Syntax {
 		for _, d := range file.Decls {
 			decl, ok := d.(*ast.GenDecl)
@@ -198,11 +198,10 @@ func namedTypes(pkg *packages.Package) map[string]*types.Named {
 				if !ok {
 					continue
 				}
-				typ, ok := typeNameObj.Type().(*types.Named)
-				if !ok {
-					continue
+				switch typ := typeNameObj.Type(); typ.(type) {
+				case *types.Alias, *types.Named:
+					nt[spec.Name.Name] = typ
 				}
-				nt[spec.Name.Name] = typ
 			}
 		}
 	}
@@ -247,7 +246,7 @@ func AssertStructUnchanged(t *types.Struct, tname string, params *types.TypePara
 			}
 		}
 		if st.Anonymous() {
-			w("\t%s %s", fname, tag)
+			w("\t%s %s", qname, tag)
 		} else {
 			w("\t%s %s %s", fname, qname, tag)
 		}
@@ -356,14 +355,25 @@ func FormatTypeParams(params *types.TypeParamList, it *ImportTracker) (constrain
 
 // LookupMethod returns the method with the specified name in t, or nil if the method does not exist.
 func LookupMethod(t types.Type, name string) *types.Func {
-	if t, ok := t.(*types.Named); ok {
-		for i := 0; i < t.NumMethods(); i++ {
-			if method := t.Method(i); method.Name() == name {
-				return method
+	switch t := t.(type) {
+	case *types.Alias:
+		return LookupMethod(t.Rhs(), name)
+	case *types.TypeParam:
+		return LookupMethod(t.Constraint(), name)
+	case *types.Pointer:
+		return LookupMethod(t.Elem(), name)
+	case *types.Named:
+		switch u := t.Underlying().(type) {
+		case *types.Interface:
+			return LookupMethod(u, name)
+		default:
+			for i := 0; i < t.NumMethods(); i++ {
+				if method := t.Method(i); method.Name() == name {
+					return method
+				}
 			}
 		}
-	}
-	if t, ok := t.Underlying().(*types.Interface); ok {
+	case *types.Interface:
 		for i := 0; i < t.NumMethods(); i++ {
 			if method := t.Method(i); method.Name() == name {
 				return method
@@ -371,4 +381,13 @@ func LookupMethod(t types.Type, name string) *types.Func {
 		}
 	}
 	return nil
+}
+
+// NamedTypeOf is like t.(*types.Named), but also works with type aliases.
+func NamedTypeOf(t types.Type) (named *types.Named, ok bool) {
+	if a, ok := t.(*types.Alias); ok {
+		return NamedTypeOf(types.Unalias(a))
+	}
+	named, ok = t.(*types.Named)
+	return
 }

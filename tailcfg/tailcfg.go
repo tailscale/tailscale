@@ -147,7 +147,9 @@ type CapabilityVersion int
 //   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
 //   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
 //   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
-const CurrentCapabilityVersion CapabilityVersion = 104
+//   - 105: 2024-08-05: Fixed SSH behavior on systems that use busybox (issue #12849)
+//   - 106: 2024-09-03: fix panic regression from cryptokey routing change (65fe0ba7b5)
+const CurrentCapabilityVersion CapabilityVersion = 106
 
 type StableID string
 
@@ -2306,6 +2308,13 @@ const (
 	// Added 2024-05-29 in Tailscale version 1.68.
 	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
 
+	// NodeAttrSSHBehaviorV2 forces SSH to use the V2 behavior (use su, run SFTP in child process).
+	// This overrides NodeAttrSSHBehaviorV1 if set.
+	// See forceV1Behavior in ssh/tailssh/incubator.go for distinction between
+	// V1 and V2 behavior.
+	// Added 2024-08-06 in Tailscale version 1.72.
+	NodeAttrSSHBehaviorV2 NodeCapability = "ssh-behavior-v2"
+
 	// NodeAttrDisableSplitDNSWhenNoCustomResolvers indicates that the node's
 	// DNS manager should not adopt a split DNS configuration even though the
 	// Config of the resolver only contains routes that do not specify custom
@@ -2333,6 +2342,10 @@ const (
 	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
 	// automatically when the network state changes.
 	NodeAttrDisableCaptivePortalDetection NodeCapability = "disable-captive-portal-detection"
+
+	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
+	// via SendEnv in the SSH server and applying them to the SSH session.
+	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
 )
 
 // SetDNSRequest is a request to add a DNS record.

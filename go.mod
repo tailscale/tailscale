@@ -1,13 +1,15 @@
 module tailscale.com
 
-go 1.22.0
+go 1.23.1
 
 require (
 	filippo.io/mkcert v1.4.4
+	fyne.io/systray v1.11.0
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa
 	github.com/andybalholm/brotli v1.1.0
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
+	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.24.1
 	github.com/aws/aws-sdk-go-v2/config v1.26.5
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.11.64
@@ -15,9 +17,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.44.7
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/cilium/ebpf v0.15.0
+	github.com/coder/websocket v1.8.12
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
-	github.com/creack/pty v1.1.21
+	github.com/creack/pty v1.1.23
 	github.com/dave/courtney v0.4.0
 	github.com/dave/patsy v0.0.0-20210517141501-957256f50cba
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
@@ -27,6 +30,7 @@ require (
 	github.com/dsnet/try v0.0.3
 	github.com/elastic/crd-ref-docs v0.0.12
 	github.com/evanw/esbuild v0.19.11
+	github.com/fogleman/gg v1.3.0
 	github.com/frankban/quicktest v1.14.6
 	github.com/fxamacker/cbor/v2 v2.6.0
 	github.com/gaissmai/bart v0.11.1
@@ -44,7 +48,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/goreleaser/nfpm/v2 v2.33.1
 	github.com/hdevalence/ed25519consensus v0.2.0
-	github.com/illarion/gonotify v1.0.1
+	github.com/illarion/gonotify/v2 v2.0.3
 	github.com/inetaf/tcpproxy v0.0.0-20240214030015-3ce58045626c
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2
 	github.com/jellydator/ttlcache/v3 v3.1.0
@@ -77,17 +81,16 @@ require (
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20240628074852-17ca944da6ba
-	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
+	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20240731203015-71393c576b98
+	github.com/tailscale/wireguard-go v0.0.0-20240905161824-799c1978fafc
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	github.com/u-root/u-root v0.12.0
-	github.com/vishvananda/netlink v1.2.1-beta.2
 	github.com/vishvananda/netns v0.0.4
 	go.uber.org/zap v1.27.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
@@ -106,12 +109,11 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gopkg.in/square/go-jose.v2 v2.6.0
 	gvisor.dev/gvisor v0.0.0-20240722211153-64c016c92987
-	honnef.co/go/tools v0.4.6
+	honnef.co/go/tools v0.5.1
 	k8s.io/api v0.30.3
 	k8s.io/apimachinery v0.30.3
 	k8s.io/apiserver v0.30.3
 	k8s.io/client-go v0.30.3
-	nhooyr.io/websocket v1.8.10
 	sigs.k8s.io/controller-runtime v0.18.4
 	sigs.k8s.io/controller-tools v0.15.1-0.20240618033008-7824932b0cab
 	sigs.k8s.io/yaml v1.4.0
@@ -131,6 +133,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gobuffalo/flect v1.0.2 // indirect
 	github.com/goccy/go-yaml v1.12.0 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
 	github.com/google/pprof v0.0.0-20240409012703-83162a5b38cd // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
@@ -151,7 +154,7 @@ require (
 	github.com/AlekSi/pointer v1.2.0 // indirect
 	github.com/Antonboom/errname v0.1.9 // indirect
 	github.com/Antonboom/nilnil v0.1.4 // indirect
-	github.com/BurntSushi/toml v1.3.2 // indirect
+	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/Djarvur/go-err113 v0.1.0 // indirect
 	github.com/GaijinEntertainment/go-exhaustruct/v2 v2.3.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect

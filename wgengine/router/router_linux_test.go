@@ -19,8 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/tailscale/netlink"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/vishvananda/netlink"
 	"go4.org/netipx"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"

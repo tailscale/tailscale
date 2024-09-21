@@ -11,6 +11,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,11 +23,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 )
 
 var (
+	app    = flag.String("app", "tsapp", "appliance name; one of the subdirectories of gokrazy/")
 	bucket = flag.String("bucket", "tskrazy-import", "S3 bucket to upload disk image to while making AMI")
+	goArch = flag.String("arch", cmp.Or(os.Getenv("GOARCH"), "amd64"), "GOARCH architecture to build for: arm64 or amd64")
 	build  = flag.Bool("build", false, "if true, just build locally and stop, without uploading")
 )
 
@@ -53,6 +57,10 @@ func findMkfsExt4() (string, error) {
 func main() {
 	flag.Parse()
 
+	if *app == "" || strings.Contains(*app, "/") {
+		log.Fatalf("--app must be non-empty name such as 'tsapp' or 'natlabapp'")
+	}
+
 	if err := buildImage(); err != nil {
 		log.Fatalf("build image: %v", err)
 	}
@@ -75,7 +83,7 @@ func main() {
 	}
 	log.Printf("snap ID: %v", snapID)
 
-	ami, err := makeAMI(fmt.Sprintf("tsapp-%d", time.Now().Unix()), snapID)
+	ami, err := makeAMI(fmt.Sprintf(*app+"-%d", time.Now().Unix()), snapID)
 	if err != nil {
 		log.Fatalf("makeAMI: %v", err)
 	}
@@ -92,18 +100,18 @@ func buildImage() error {
 	if err != nil {
 		return err
 	}
-	if fi, err := os.Stat(filepath.Join(dir, "tsapp")); err != nil || !fi.IsDir() {
-		return fmt.Errorf("in wrong directorg %v; no tsapp subdirectory found", dir)
+	if fi, err := os.Stat(filepath.Join(dir, *app)); err != nil || !fi.IsDir() {
+		return fmt.Errorf("in wrong directory %v; no %q subdirectory found", dir, *app)
 	}
 	// Build the tsapp.img
 	var buf bytes.Buffer
 	cmd := exec.Command("go", "run",
-		"-exec=env GOOS=linux GOARCH=amd64 ",
+		"-exec=env GOOS=linux GOARCH="+*goArch+" ",
 		"github.com/gokrazy/tools/cmd/gok",
 		"--parent_dir="+dir,
-		"--instance=tsapp",
+		"--instance="+*app,
 		"overwrite",
-		"--full", "tsapp.img",
+		"--full", *app+".img",
 		"--target_storage_bytes=1258299392")
 	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
 	cmd.Stderr = os.Stderr
@@ -135,14 +143,14 @@ func buildImage() error {
 }
 
 func copyToS3() error {
-	cmd := exec.Command("aws", "s3", "cp", "tsapp.img", "s3://"+*bucket+"/")
+	cmd := exec.Command("aws", "s3", "cp", *app+".img", "s3://"+*bucket+"/")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func startImportSnapshot() (importTaskID string, err error) {
-	out, err := exec.Command("aws", "ec2", "import-snapshot", "--disk-container", "Url=s3://"+*bucket+"/tsappp.img").CombinedOutput()
+	out, err := exec.Command("aws", "ec2", "import-snapshot", "--disk-container", "Url=s3://"+*bucket+"/"+*app+".img").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("import snapshot: %v: %s", err, out)
 	}
@@ -244,9 +252,18 @@ func waitForImportSnapshot(importTaskID string) (snapID string, err error) {
 }
 
 func makeAMI(name, ebsSnapID string) (ami string, err error) {
+	var arch string
+	switch *goArch {
+	case "arm64":
+		arch = "arm64"
+	case "amd64":
+		arch = "x86_64"
+	default:
+		return "", fmt.Errorf("unknown arch %q", *goArch)
+	}
 	out, err := exec.Command("aws", "ec2", "register-image",
 		"--name", name,
-		"--architecture", "x86_64",
+		"--architecture", arch,
 		"--root-device-name", "/dev/sda",
 		"--ena-support",
 		"--imds-support", "v2.0",

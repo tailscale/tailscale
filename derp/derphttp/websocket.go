@@ -10,7 +10,7 @@ import (
 	"log"
 	"net"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 	"tailscale.com/net/wsconn"
 )
 

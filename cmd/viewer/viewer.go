@@ -230,7 +230,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				writeTemplate("sliceField")
 			}
 			continue
-		case *types.Struct, *types.Named:
+		case *types.Struct:
 			strucT := underlying
 			args.FieldType = it.QualifiedName(fieldType)
 			if codegen.ContainsPointers(strucT) {
@@ -262,7 +262,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			mElem := m.Elem()
 			var template string
 			switch u := mElem.(type) {
-			case *types.Struct, *types.Named:
+			case *types.Struct, *types.Named, *types.Alias:
 				strucT := u
 				args.FieldType = it.QualifiedName(fieldType)
 				if codegen.ContainsPointers(strucT) {
@@ -281,7 +281,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				slice := u
 				sElem := slice.Elem()
 				switch x := sElem.(type) {
-				case *types.Basic, *types.Named:
+				case *types.Basic, *types.Named, *types.Alias:
 					sElem := it.QualifiedName(sElem)
 					args.MapValueView = fmt.Sprintf("views.Slice[%v]", sElem)
 					args.MapValueType = sElem
@@ -292,7 +292,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 					template = "unsupportedField"
 					if _, isIface := pElem.Underlying().(*types.Interface); !isIface {
 						switch pElem.(type) {
-						case *types.Struct, *types.Named:
+						case *types.Struct, *types.Named, *types.Alias:
 							ptrType := it.QualifiedName(ptr)
 							viewType := appendNameSuffix(it.QualifiedName(pElem), "View")
 							args.MapFn = fmt.Sprintf("views.SliceOfViews[%v,%v](t)", ptrType, viewType)
@@ -313,7 +313,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				pElem := ptr.Elem()
 				if _, isIface := pElem.Underlying().(*types.Interface); !isIface {
 					switch pElem.(type) {
-					case *types.Struct, *types.Named:
+					case *types.Struct, *types.Named, *types.Alias:
 						args.MapValueType = it.QualifiedName(ptr)
 						args.MapValueView = appendNameSuffix(it.QualifiedName(pElem), "View")
 						args.MapFn = "t.View()"
@@ -422,7 +422,7 @@ func viewTypeForValueType(typ types.Type) types.Type {
 func viewTypeForContainerType(typ types.Type) (*types.Named, *types.Func) {
 	// The container type should be an instantiated generic type,
 	// with its first type parameter specifying the element type.
-	containerType, ok := typ.(*types.Named)
+	containerType, ok := codegen.NamedTypeOf(typ)
 	if !ok || containerType.TypeArgs().Len() == 0 {
 		return nil, nil
 	}
@@ -435,7 +435,7 @@ func viewTypeForContainerType(typ types.Type) (*types.Named, *types.Func) {
 	if !ok {
 		return nil, nil
 	}
-	containerViewGenericType, ok := containerViewTypeObj.Type().(*types.Named)
+	containerViewGenericType, ok := codegen.NamedTypeOf(containerViewTypeObj.Type())
 	if !ok || containerViewGenericType.TypeParams().Len() != containerType.TypeArgs().Len()+1 {
 		return nil, nil
 	}
@@ -448,7 +448,7 @@ func viewTypeForContainerType(typ types.Type) (*types.Named, *types.Func) {
 	}
 	// ...and add the element view type.
 	// For that, we need to first determine the named elem type...
-	elemType, ok := baseType(containerType.TypeArgs().At(0)).(*types.Named)
+	elemType, ok := codegen.NamedTypeOf(baseType(containerType.TypeArgs().At(containerType.TypeArgs().Len() - 1)))
 	if !ok {
 		return nil, nil
 	}
@@ -473,7 +473,7 @@ func viewTypeForContainerType(typ types.Type) (*types.Named, *types.Func) {
 	}
 	// If elemType is an instantiated generic type, instantiate the elemViewType as well.
 	if elemTypeArgs := elemType.TypeArgs(); elemTypeArgs != nil {
-		elemViewType = must.Get(types.Instantiate(nil, elemViewType, collectTypes(elemTypeArgs), false)).(*types.Named)
+		elemViewType, _ = codegen.NamedTypeOf(must.Get(types.Instantiate(nil, elemViewType, collectTypes(elemTypeArgs), false)))
 	}
 	// And finally set the elemViewType as the last type argument.
 	containerViewTypeArgs[len(containerViewTypeArgs)-1] = elemViewType
@@ -567,7 +567,7 @@ func main() {
 		if cloneOnlyType[typeName] {
 			continue
 		}
-		typ, ok := namedTypes[typeName]
+		typ, ok := namedTypes[typeName].(*types.Named)
 		if !ok {
 			log.Fatalf("could not find type %s", typeName)
 		}

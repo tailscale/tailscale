@@ -31,10 +31,10 @@ jobs:
           cache: false
 
       - name: golangci-lint
-        # Note: this is the 'v3' tag as of 2023-08-14
-        uses: golangci/golangci-lint-action@639cd343e1d3b897ff35927a75193d57cfcba299
+        # Note: this is the 'v6.1.0' tag as of 2024-08-21
+        uses: golangci/golangci-lint-action@aaa42aa0628b4ae2578232a66b541047968fac86
         with:
-          version: v1.56
+          version: v1.60
 
           # Show only new issues if it's a pull request.
           only-new-issues: true

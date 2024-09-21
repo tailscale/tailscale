@@ -13,7 +13,7 @@ import (
 	"tailscale.com/version"
 )
 
-func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
+func (pm *profileManager) loadLegacyPrefs(ipn.WindowsUserID) (string, ipn.PrefsView, error) {
 	k := ipn.LegacyGlobalDaemonStateKey
 	switch {
 	case runtime.GOOS == "ios", version.IsSandboxedMacOS():

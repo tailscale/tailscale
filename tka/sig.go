@@ -19,6 +19,8 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=NodeKeySignature
+
 // SigKind describes valid NodeKeySignature types.
 type SigKind uint8
 
@@ -370,16 +372,66 @@ func ResignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.Marsha
 		return oldNKS, nil
 	}
 
+	nested, err := maybeTrimRotationSignatureChain(oldSig, priv)
+	if err != nil {
+		return nil, fmt.Errorf("trimming rotation signature chain: %w", err)
+	}
+
 	newSig := NodeKeySignature{
 		SigKind: SigRotation,
 		Pubkey:  nk,
-		Nested:  &oldSig,
+		Nested:  &nested,
 	}
 	if newSig.Signature, err = priv.SignNKS(newSig.SigHash()); err != nil {
 		return nil, fmt.Errorf("signing NKS: %w", err)
 	}
 
 	return newSig.Serialize(), nil
+}
+
+// maybeTrimRotationSignatureChain truncates rotation signature chain to ensure
+// it contains no more than 15 node keys.
+func maybeTrimRotationSignatureChain(sig NodeKeySignature, priv key.NLPrivate) (NodeKeySignature, error) {
+	if sig.SigKind != SigRotation {
+		return sig, nil
+	}
+
+	// Collect all the previous node keys, ordered from newest to oldest.
+	prevPubkeys := [][]byte{sig.Pubkey}
+	nested := sig.Nested
+	for nested != nil {
+		if len(nested.Pubkey) > 0 {
+			prevPubkeys = append(prevPubkeys, nested.Pubkey)
+		}
+		if nested.SigKind != SigRotation {
+			break
+		}
+		nested = nested.Nested
+	}
+
+	// Existing rotation signature with 15 keys is the maximum we can wrap in a
+	// new signature without hitting the CBOR nesting limit of 16 (see
+	// MaxNestedLevels in tka.go).
+	const maxPrevKeys = 15
+	if len(prevPubkeys) <= maxPrevKeys {
+		return sig, nil
+	}
+
+	// Create a new rotation signature chain, starting with the original
+	// direct signature.
+	var err error
+	result := nested // original direct signature
+	for i := maxPrevKeys - 2; i >= 0; i-- {
+		result = &NodeKeySignature{
+			SigKind: SigRotation,
+			Pubkey:  prevPubkeys[i],
+			Nested:  result,
+		}
+		if result.Signature, err = priv.SignNKS(result.SigHash()); err != nil {
+			return sig, fmt.Errorf("signing NKS: %w", err)
+		}
+	}
+	return *result, nil
 }
 
 // SignByCredential signs a node public key by a private key which has its

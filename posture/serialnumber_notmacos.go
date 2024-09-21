@@ -98,8 +98,5 @@ func GetSerialNumbers(logf logger.Logf) ([]string, error) {
 			}
 		}
 	}
-
-	logf("got serial numbers %v", serials)
-
 	return serials, nil
 }

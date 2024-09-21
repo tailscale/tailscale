@@ -8,6 +8,7 @@ package health
 import (
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"maps"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -64,6 +66,11 @@ type Tracker struct {
 	// MagicSockReceiveFuncs tracks the state of the three
 	// magicsock receive functions: IPv4, IPv6, and DERP.
 	MagicSockReceiveFuncs [3]ReceiveFuncStats // indexed by ReceiveFunc values
+
+	// initOnce guards the initialization of the Tracker.
+	// Notably, it initializes the MagicSockReceiveFuncs names.
+	// mu should not be held during init.
+	initOnce sync.Once
 
 	// mu guards everything that follows.
 	mu sync.Mutex
@@ -433,6 +440,7 @@ func (t *Tracker) RegisterWatcher(cb func(w *Warnable, r *UnhealthyState)) (unre
 	if t.nil() {
 		return func() {}
 	}
+	t.initOnce.Do(t.doOnceInit)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.watchers == nil {
@@ -859,6 +867,7 @@ func (t *Tracker) timerSelfCheck() {
 	if t.nil() {
 		return
 	}
+	t.initOnce.Do(t.doOnceInit)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.checkReceiveFuncsLocked()
@@ -1055,7 +1064,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	_ = t.lastStreamedMapResponse
 	_ = t.lastMapRequestHeard
 
-	shouldClearMagicsockWarnings := false
+	shouldClearMagicsockWarnings := true
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
 		if f.missing {
@@ -1063,6 +1072,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 				ArgMagicsockFunctionName: f.name,
 			})
 			shouldClearMagicsockWarnings = false
+			break
 		}
 	}
 	if shouldClearMagicsockWarnings {
@@ -1168,6 +1178,11 @@ type ReceiveFuncStats struct {
 	missing bool
 }
 
+// Name returns the name of the receive func ("ReceiveIPv4", "ReceiveIPv6", etc).
+func (s *ReceiveFuncStats) Name() string {
+	return s.name
+}
+
 func (s *ReceiveFuncStats) Enter() {
 	s.numCalls.Add(1)
 	s.inCall.Store(true)
@@ -1185,15 +1200,32 @@ func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
 	if t == nil {
 		return nil
 	}
+	t.initOnce.Do(t.doOnceInit)
 	return &t.MagicSockReceiveFuncs[which]
+}
+
+func (t *Tracker) doOnceInit() {
+	metricHealthMessage.Set(metricHealthMessageLabel{
+		Type: "warning",
+	}, expvar.Func(func() any {
+		if t.nil() {
+			return 0
+		}
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.updateBuiltinWarnablesLocked()
+		return int64(len(t.stringsLocked()))
+	}))
+
+	for i := range t.MagicSockReceiveFuncs {
+		f := &t.MagicSockReceiveFuncs[i]
+		f.name = (ReceiveFunc(i)).String()
+	}
 }
 
 func (t *Tracker) checkReceiveFuncsLocked() {
 	for i := range t.MagicSockReceiveFuncs {
 		f := &t.MagicSockReceiveFuncs[i]
-		if f.name == "" {
-			f.name = (ReceiveFunc(i)).String()
-		}
 		if runtime.GOOS == "js" && i < 2 {
 			// Skip IPv4 and IPv6 on js.
 			continue
@@ -1215,3 +1247,14 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 		f.missing = true
 	}
 }
+
+type metricHealthMessageLabel struct {
+	// TODO: break down by warnable.severity as well?
+	Type string
+}
+
+var metricHealthMessage = usermetric.NewMultiLabelMap[metricHealthMessageLabel](
+	"tailscaled_health_messages",
+	"gauge",
+	"Number of health messages broken down by type.",
+)

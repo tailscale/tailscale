@@ -426,14 +426,120 @@ func (src *StructWithContainers) Clone() *StructWithContainers {
 	dst := new(StructWithContainers)
 	*dst = *src
 	dst.CloneableContainer = *src.CloneableContainer.Clone()
-	dst.ClonableGenericContainer = *src.ClonableGenericContainer.Clone()
+	dst.CloneableGenericContainer = *src.CloneableGenericContainer.Clone()
+	dst.CloneableMap = *src.CloneableMap.Clone()
+	dst.CloneableGenericMap = *src.CloneableGenericMap.Clone()
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithContainersCloneNeedsRegeneration = StructWithContainers(struct {
-	IntContainer             Container[int]
-	CloneableContainer       Container[*StructWithPtrs]
-	BasicGenericContainer    Container[GenericBasicStruct[int]]
-	ClonableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	IntContainer              Container[int]
+	CloneableContainer        Container[*StructWithPtrs]
+	BasicGenericContainer     Container[GenericBasicStruct[int]]
+	CloneableGenericContainer Container[*GenericNoPtrsStruct[int]]
+	CloneableMap              MapContainer[int, *StructWithPtrs]
+	CloneableGenericMap       MapContainer[int, *GenericNoPtrsStruct[int]]
 }{})
+
+// Clone makes a deep copy of StructWithTypeAliasFields.
+// The result aliases no memory with the original.
+func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithTypeAliasFields)
+	*dst = *src
+	dst.WithPtr = *src.WithPtr.Clone()
+	dst.WithPtrByPtr = src.WithPtrByPtr.Clone()
+	if dst.WithoutPtrByPtr != nil {
+		dst.WithoutPtrByPtr = ptr.To(*src.WithoutPtrByPtr)
+	}
+	if src.SliceWithPtrs != nil {
+		dst.SliceWithPtrs = make([]*StructWithPtrsAlias, len(src.SliceWithPtrs))
+		for i := range dst.SliceWithPtrs {
+			if src.SliceWithPtrs[i] == nil {
+				dst.SliceWithPtrs[i] = nil
+			} else {
+				dst.SliceWithPtrs[i] = src.SliceWithPtrs[i].Clone()
+			}
+		}
+	}
+	if src.SliceWithoutPtrs != nil {
+		dst.SliceWithoutPtrs = make([]*StructWithoutPtrsAlias, len(src.SliceWithoutPtrs))
+		for i := range dst.SliceWithoutPtrs {
+			if src.SliceWithoutPtrs[i] == nil {
+				dst.SliceWithoutPtrs[i] = nil
+			} else {
+				dst.SliceWithoutPtrs[i] = ptr.To(*src.SliceWithoutPtrs[i])
+			}
+		}
+	}
+	if dst.MapWithPtrs != nil {
+		dst.MapWithPtrs = map[string]*StructWithPtrsAlias{}
+		for k, v := range src.MapWithPtrs {
+			if v == nil {
+				dst.MapWithPtrs[k] = nil
+			} else {
+				dst.MapWithPtrs[k] = v.Clone()
+			}
+		}
+	}
+	if dst.MapWithoutPtrs != nil {
+		dst.MapWithoutPtrs = map[string]*StructWithoutPtrsAlias{}
+		for k, v := range src.MapWithoutPtrs {
+			if v == nil {
+				dst.MapWithoutPtrs[k] = nil
+			} else {
+				dst.MapWithoutPtrs[k] = ptr.To(*v)
+			}
+		}
+	}
+	if dst.MapOfSlicesWithPtrs != nil {
+		dst.MapOfSlicesWithPtrs = map[string][]*StructWithPtrsAlias{}
+		for k := range src.MapOfSlicesWithPtrs {
+			dst.MapOfSlicesWithPtrs[k] = append([]*StructWithPtrsAlias{}, src.MapOfSlicesWithPtrs[k]...)
+		}
+	}
+	if dst.MapOfSlicesWithoutPtrs != nil {
+		dst.MapOfSlicesWithoutPtrs = map[string][]*StructWithoutPtrsAlias{}
+		for k := range src.MapOfSlicesWithoutPtrs {
+			dst.MapOfSlicesWithoutPtrs[k] = append([]*StructWithoutPtrsAlias{}, src.MapOfSlicesWithoutPtrs[k]...)
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithTypeAliasFieldsCloneNeedsRegeneration = StructWithTypeAliasFields(struct {
+	WithPtr                StructWithPtrsAlias
+	WithoutPtr             StructWithoutPtrsAlias
+	WithPtrByPtr           *StructWithPtrsAlias
+	WithoutPtrByPtr        *StructWithoutPtrsAlias
+	SliceWithPtrs          []*StructWithPtrsAlias
+	SliceWithoutPtrs       []*StructWithoutPtrsAlias
+	MapWithPtrs            map[string]*StructWithPtrsAlias
+	MapWithoutPtrs         map[string]*StructWithoutPtrsAlias
+	MapOfSlicesWithPtrs    map[string][]*StructWithPtrsAlias
+	MapOfSlicesWithoutPtrs map[string][]*StructWithoutPtrsAlias
+}{})
+
+// Clone makes a deep copy of GenericTypeAliasStruct.
+// The result aliases no memory with the original.
+func (src *GenericTypeAliasStruct[T, T2, V2]) Clone() *GenericTypeAliasStruct[T, T2, V2] {
+	if src == nil {
+		return nil
+	}
+	dst := new(GenericTypeAliasStruct[T, T2, V2])
+	*dst = *src
+	dst.Cloneable = src.Cloneable.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+func _GenericTypeAliasStructCloneNeedsRegeneration[T integer, T2 views.ViewCloner[T2, V2], V2 views.StructView[T2]](GenericTypeAliasStruct[T, T2, V2]) {
+	_GenericTypeAliasStructCloneNeedsRegeneration(struct {
+		NonCloneable T
+		Cloneable    T2
+	}{})
+}

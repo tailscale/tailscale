@@ -7,11 +7,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"reflect"
 	"runtime"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 	"unsafe"
@@ -907,12 +908,7 @@ func (c *Conn) foreachActiveDerpSortedLocked(fn func(regionID int, ad activeDerp
 		}
 		return
 	}
-	ids := make([]int, 0, len(c.activeDerp))
-	for id := range c.activeDerp {
-		ids = append(ids, id)
-	}
-	sort.Ints(ids)
-	for _, id := range ids {
+	for _, id := range slices.Sorted(maps.Keys(c.activeDerp)) {
 		fn(id, c.activeDerp[id])
 	}
 }

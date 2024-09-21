@@ -22,9 +22,8 @@ import (
 	"k8s.io/client-go/transport"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
-	kubesessionrecording "tailscale.com/k8s-operator/sessionrecording"
-	tskube "tailscale.com/kube"
-	"tailscale.com/sessionrecording"
+	ksr "tailscale.com/k8s-operator/sessionrecording"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/clientmetric"
@@ -32,11 +31,10 @@ import (
 	"tailscale.com/util/set"
 )
 
-var whoIsKey = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
-
 var (
 	// counterNumRequestsproxies counts the number of API server requests proxied via this proxy.
 	counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
+	whoIsKey                  = ctxkey.New("", (*apitype.WhoIsResponse)(nil))
 )
 
 type apiServerProxyMode int
@@ -168,7 +166,8 @@ func runAPIServerProxy(ts *tsnet.Server, rt http.RoundTripper, log *zap.SugaredL
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ap.serveDefault)
-	mux.HandleFunc("/api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExec)
+	mux.HandleFunc("POST /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecSPDY)
+	mux.HandleFunc("GET /api/v1/namespaces/{namespace}/pods/{pod}/exec", ap.serveExecWS)
 
 	hs := &http.Server{
 		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
@@ -209,9 +208,25 @@ func (ap *apiserverProxy) serveDefault(w http.ResponseWriter, r *http.Request) {
 	ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
-// serveExec serves 'kubectl exec' requests, optionally configuring the kubectl
-// exec sessions to be recorded.
-func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
+// serveExecSPDY serves 'kubectl exec' requests for sessions streamed over SPDY,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveExecSPDY(w http.ResponseWriter, r *http.Request) {
+	ap.execForProto(w, r, ksr.SPDYProtocol)
+}
+
+// serveExecWS serves 'kubectl exec' requests for sessions streamed over WebSocket,
+// optionally configuring the kubectl exec sessions to be recorded.
+func (ap *apiserverProxy) serveExecWS(w http.ResponseWriter, r *http.Request) {
+	ap.execForProto(w, r, ksr.WSProtocol)
+}
+
+func (ap *apiserverProxy) execForProto(w http.ResponseWriter, r *http.Request, proto ksr.Protocol) {
+	const (
+		podNameKey       = "pod"
+		namespaceNameKey = "namespace"
+		upgradeHeaderKey = "Upgrade"
+	)
+
 	who, err := ap.whoIs(r)
 	if err != nil {
 		ap.authError(w, err)
@@ -227,15 +242,17 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		ap.rp.ServeHTTP(w, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 		return
 	}
-	kubesessionrecording.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
+	ksr.CounterSessionRecordingsAttempted.Add(1) // at this point we know that users intended for this session to be recorded
 	if !failOpen && len(addrs) == 0 {
 		msg := "forbidden: 'kubectl exec' session must be recorded, but no recorders are available."
 		ap.log.Error(msg)
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	if r.Method != "POST" || r.Header.Get("Upgrade") != "SPDY/3.1" {
-		msg := "'kubectl exec' session recording is configured, but the request is not over SPDY. Session recording is currently only supported for SPDY based clients"
+
+	wantsHeader := upgradeHeaderForProto[proto]
+	if h := r.Header.Get(upgradeHeaderKey); h != wantsHeader {
+		msg := fmt.Sprintf("[unexpected] unable to verify that streaming protocol is %s, wants Upgrade header %q, got: %q", proto, wantsHeader, h)
 		if failOpen {
 			msg = msg + "; failure mode is 'fail open'; continuing session without recording."
 			ap.log.Warn(msg)
@@ -247,9 +264,22 @@ func (ap *apiserverProxy) serveExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
-	spdyH := kubesessionrecording.New(ap.ts, r, who, w, r.PathValue("pod"), r.PathValue("namespace"), kubesessionrecording.SPDYProtocol, addrs, failOpen, sessionrecording.ConnectToRecorder, ap.log)
 
-	ap.rp.ServeHTTP(spdyH, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
+	opts := ksr.HijackerOpts{
+		Req:       r,
+		W:         w,
+		Proto:     proto,
+		TS:        ap.ts,
+		Who:       who,
+		Addrs:     addrs,
+		FailOpen:  failOpen,
+		Pod:       r.PathValue(podNameKey),
+		Namespace: r.PathValue(namespaceNameKey),
+		Log:       ap.log,
+	}
+	h := ksr.New(opts)
+
+	ap.rp.ServeHTTP(h, r.WithContext(whoIsKey.WithValue(r.Context(), who)))
 }
 
 func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
@@ -284,9 +314,11 @@ func (h *apiserverProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 		log.Printf("failed to add impersonation headers: " + err.Error())
 	}
 }
+
 func (ap *apiserverProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {
 	return ap.lc.WhoIs(r.Context(), r.RemoteAddr)
 }
+
 func (ap *apiserverProxy) authError(w http.ResponseWriter, err error) {
 	ap.log.Errorf("failed to authenticate caller: %v", err)
 	http.Error(w, "failed to authenticate caller", http.StatusInternalServerError)
@@ -307,10 +339,10 @@ const (
 func addImpersonationHeaders(r *http.Request, log *zap.SugaredLogger) error {
 	log = log.With("remote", r.RemoteAddr)
 	who := whoIsKey.Value(r.Context())
-	rules, err := tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
+	rules, err := tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if len(rules) == 0 && err == nil {
 		// Try the old capability name for backwards compatibility.
-		rules, err = tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, oldCapabilityName)
+		rules, err = tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, oldCapabilityName)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal capability: %v", err)
@@ -360,7 +392,7 @@ func determineRecorderConfig(who *apitype.WhoIsResponse) (failOpen bool, recorde
 		return false, nil, errors.New("[unexpected] cannot determine caller")
 	}
 	failOpen = true
-	rules, err := tailcfg.UnmarshalCapJSON[tskube.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
+	rules, err := tailcfg.UnmarshalCapJSON[kubetypes.KubernetesCapRule](who.CapMap, tailcfg.PeerCapabilityKubernetes)
 	if err != nil {
 		return failOpen, nil, fmt.Errorf("failed to unmarshal Kubernetes capability: %w", err)
 	}
@@ -381,4 +413,9 @@ func determineRecorderConfig(who *apitype.WhoIsResponse) (failOpen bool, recorde
 		}
 	}
 	return failOpen, recorderAddresses, nil
+}
+
+var upgradeHeaderForProto = map[ksr.Protocol]string{
+	ksr.SPDYProtocol: "SPDY/3.1",
+	ksr.WSProtocol:   "websocket",
 }

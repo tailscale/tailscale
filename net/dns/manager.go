@@ -122,6 +122,11 @@ func (m *Manager) Set(cfg Config) error {
 	return m.setLocked(cfg)
 }
 
+// GetBaseConfig returns the current base OS DNS configuration as provided by the OSConfigurator.
+func (m *Manager) GetBaseConfig() (OSConfig, error) {
+	return m.os.GetBaseConfig()
+}
+
 // setLocked sets the DNS configuration.
 //
 // m.mu must be held.

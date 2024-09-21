@@ -135,7 +135,7 @@ func TestFilterFormatAndSortExitNodes(t *testing.T) {
 		result := filterFormatAndSortExitNodes(ps, "")
 
 		if res := cmp.Diff(result.Countries, want.Countries, cmpopts.IgnoreUnexported(key.NodePublic{})); res != "" {
-			t.Fatalf(res)
+			t.Fatal(res)
 		}
 	})
 
@@ -230,7 +230,7 @@ func TestFilterFormatAndSortExitNodes(t *testing.T) {
 		result := filterFormatAndSortExitNodes(ps, "Pacific")
 
 		if res := cmp.Diff(result.Countries, want.Countries, cmpopts.IgnoreUnexported(key.NodePublic{})); res != "" {
-			t.Fatalf(res)
+			t.Fatal(res)
 		}
 	})
 }

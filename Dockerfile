@@ -27,7 +27,7 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.22-alpine AS build-env
+FROM golang:1.23-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
@@ -42,7 +42,7 @@ RUN go install \
     gvisor.dev/gvisor/pkg/tcpip/stack \
     golang.org/x/crypto/ssh \
     golang.org/x/crypto/acme \
-    nhooyr.io/websocket \
+    github.com/coder/websocket \
     github.com/mdlayher/netlink
 
 COPY . .

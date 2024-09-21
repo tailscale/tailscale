@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
@@ -313,10 +312,8 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		}
 	}
 	if packetFilterChanged {
-		keys := xmaps.Keys(ms.namedPacketFilters)
-		sort.Strings(keys)
 		var concat []tailcfg.FilterRule
-		for _, v := range keys {
+		for _, v := range slices.Sorted(maps.Keys(ms.namedPacketFilters)) {
 			concat = ms.namedPacketFilters[v].AppendTo(concat)
 		}
 		ms.lastPacketFilterRules = views.SliceOf(concat)

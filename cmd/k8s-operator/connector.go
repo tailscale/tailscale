@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -61,11 +62,11 @@ type ConnectorReconciler struct {
 
 var (
 	// gaugeConnectorResources tracks the overall number of Connectors currently managed by this operator instance.
-	gaugeConnectorResources = clientmetric.NewGauge("k8s_connector_resources")
+	gaugeConnectorResources = clientmetric.NewGauge(kubetypes.MetricConnectorResourceCount)
 	// gaugeConnectorSubnetRouterResources tracks the number of Connectors managed by this operator instance that are subnet routers.
-	gaugeConnectorSubnetRouterResources = clientmetric.NewGauge("k8s_connector_subnetrouter_resources")
+	gaugeConnectorSubnetRouterResources = clientmetric.NewGauge(kubetypes.MetricConnectorWithSubnetRouterCount)
 	// gaugeConnectorExitNodeResources tracks the number of Connectors currently managed by this operator instance that are exit nodes.
-	gaugeConnectorExitNodeResources = clientmetric.NewGauge("k8s_connector_exitnode_resources")
+	gaugeConnectorExitNodeResources = clientmetric.NewGauge(kubetypes.MetricConnectorWithExitNodeCount)
 )
 
 func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {

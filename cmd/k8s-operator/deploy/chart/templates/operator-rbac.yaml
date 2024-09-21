@@ -14,10 +14,10 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["events", "services", "services/status"]
-  verbs: ["*"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingresses", "ingresses/status"]
-  verbs: ["*"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingressclasses"]
   verbs: ["get", "list", "watch"]
@@ -26,6 +26,9 @@ rules:
   verbs: ["get", "list", "watch", "update"]
 - apiGroups: ["tailscale.com"]
   resources: ["dnsconfigs", "dnsconfigs/status"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["tailscale.com"]
+  resources: ["recorders", "recorders/status"]
   verbs: ["get", "list", "watch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -49,13 +52,16 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["secrets", "serviceaccounts", "configmaps"]
-  verbs: ["*"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["apps"]
   resources: ["statefulsets", "deployments"]
-  verbs: ["*"]
+  verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["discovery.k8s.io"]
   resources: ["endpointslices"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "create", "patch", "update", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

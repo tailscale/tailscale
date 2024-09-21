@@ -79,7 +79,7 @@ func TestInjectInboundLeak(t *testing.T) {
 	const N = 10_000
 	ms0 := getMemStats()
 	for range N {
-		outcome := ns.injectInbound(pkt, tunWrap)
+		outcome, _ := ns.injectInbound(pkt, tunWrap, nil)
 		if outcome != filter.DropSilently {
 			t.Fatalf("got outcome %v; want DropSilently", outcome)
 		}
@@ -569,7 +569,7 @@ func TestTCPForwardLimits(t *testing.T) {
 	// When injecting this packet, we want the outcome to be "drop
 	// silently", which indicates that netstack is processing the
 	// packet and not delivering it to the host system.
-	if resp := impl.injectInbound(&parsed, impl.tundev); resp != filter.DropSilently {
+	if resp, _ := impl.injectInbound(&parsed, impl.tundev, nil); resp != filter.DropSilently {
 		t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
 	}
 
@@ -587,7 +587,7 @@ func TestTCPForwardLimits(t *testing.T) {
 	// Inject another packet, which will be deduplicated and thus not
 	// increment our counter.
 	parsed.Decode(pkt)
-	if resp := impl.injectInbound(&parsed, impl.tundev); resp != filter.DropSilently {
+	if resp, _ := impl.injectInbound(&parsed, impl.tundev, nil); resp != filter.DropSilently {
 		t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
 	}
 
@@ -655,7 +655,7 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 		// When injecting this packet, we want the outcome to be "drop
 		// silently", which indicates that netstack is processing the
 		// packet and not delivering it to the host system.
-		if resp := impl.injectInbound(&parsed, impl.tundev); resp != filter.DropSilently {
+		if resp, _ := impl.injectInbound(&parsed, impl.tundev, nil); resp != filter.DropSilently {
 			t.Fatalf("got filter outcome %v, want filter.DropSilently", resp)
 		}
 	}
@@ -750,7 +750,7 @@ func TestHandleLocalPackets(t *testing.T) {
 			Dst:       netip.MustParseAddrPort("100.100.100.100:53"),
 			TCPFlags:  packet.TCPSyn,
 		}
-		resp := impl.handleLocalPackets(pkt, impl.tundev)
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
 		if resp != filter.DropSilently {
 			t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
 		}
@@ -767,7 +767,7 @@ func TestHandleLocalPackets(t *testing.T) {
 			Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
 			TCPFlags: packet.TCPSyn,
 		}
-		resp := impl.handleLocalPackets(pkt, impl.tundev)
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
 
 		// DropSilently is the outcome we expected, since we actually
 		// handled this packet by injecting it into netstack, which
@@ -789,7 +789,7 @@ func TestHandleLocalPackets(t *testing.T) {
 			Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:63:a01:109]:5678"),
 			TCPFlags: packet.TCPSyn,
 		}
-		resp := impl.handleLocalPackets(pkt, impl.tundev)
+		resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil)
 
 		// Accept means that handleLocalPackets does not handle this
 		// packet, we "accept" it to continue further processing,
