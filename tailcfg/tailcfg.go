@@ -2005,6 +2005,8 @@ type ControlIPCandidate struct {
 	IP netip.Addr
 
 	// Port is the port to try requests on.
+	// This value is optional and was added with the SRV dialplan feature
+	// omitting this value is the normal way to use default 80/443 logic
 	Port string `json:",omitempty"`
 	
 	// DialStartSec is the number of seconds after the beginning of the

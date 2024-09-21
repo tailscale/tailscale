@@ -97,14 +97,21 @@ func (a *Dialer) httpsFallbackDelay() time.Duration {
 }
 
 var _ = envknob.RegisterBool("TS_USE_CONTROL_DIAL_PLAN") // to record at init time whether it's in use
-var _ = envknob.RegisterBool("TS_USE_SRV_DIAL_PLAN")
+func (a *Dialer) useCtrlDialPlan() bool {
+	return envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
+}
+
+func (a *Dialer) useSRVDialPlan()  bool {
+	parsedURL, err := url.Parse(a.Hostname)
+	if err == nil {
+		return parsedURL.Fragment == "srv"
+	}
+	return false
+}
 
 func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
-	useCtrlDialPlan := envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
-	useSRVDialPlan := envknob.BoolDefaultTrue("TS_USE_SRV_DIAL_PLAN")
-
 	candidates := []tailcfg.ControlIPCandidate{}
-	if useCtrlDialPlan && a.DialPlan != nil && len(a.DialPlan.Candidates) > 0 {
+	if a.useCtrlDialPlan() && a.DialPlan != nil && len(a.DialPlan.Candidates) > 0 {
 		candidates = a.DialPlan.Candidates
 	} else {
 		candidates = []tailcfg.ControlIPCandidate{
@@ -112,28 +119,27 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 		}
 	}
 
-	if useSRVDialPlan {
+	if a.useSRVDialPlan() {
 		resolver := &net.Resolver{
-			PreferGo: true, // Use the Go resolver implementation
+			PreferGo: true,
 		}
-		// Perform a DNS lookup using the custom resolver
 		_, srvRecords, err := resolver.LookupSRV(ctx, "ts2021", "tcp", a.Hostname)
 		if err != nil {
 			srvRecords = []*net.SRV{}
 		}
 
-		for _, srv := range srvRecords {
-			records, err := resolver.LookupIPAddr(ctx, srv.Target)
+		for _, srvRecord := range srvRecords {
+			aRecords, err := resolver.LookupIPAddr(ctx, srvRecord.Target)
 			if err == nil {
-				for _, record := range records {
+				for _, aRecord := range aRecords {
 					// TODO(austin): make sure that the resolver is caching these nearby
 					// TODO(austin): use goroutines if there are too many
-					ip, ok := netip.AddrFromSlice(record.IP)
+					ip, ok := netip.AddrFromSlice(aRecord.IP)
 					if ok {
 						candidates = append(candidates, tailcfg.ControlIPCandidate {
 							IP: ip,
-							Port: strconv.FormatUint(uint64(srv.Port), 10),
-							Priority: int(srv.Priority),
+							Port: strconv.FormatUint(uint64(srvRecord.Port), 10),
+							Priority: int(srvRecord.Priority),
 						})
 					}	
 				}	
