@@ -81,6 +81,23 @@ const (
 	socketBufferSize = 7 << 20
 )
 
+// Path is a label indicating the type of path a packet took.
+type Path string
+
+const (
+	PathDirectIPv4 Path = "direct_ipv4"
+	PathDirectIPv6 Path = "direct_ipv6"
+	PathDERP       Path = "derp"
+)
+
+type pathLabel struct {
+	// Path indicates the path that the packet took:
+	// - direct_ipv4
+	// - direct_ipv6
+	// - derp
+	Path Path
+}
+
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 type Conn struct {
 	// This block mirrors the contents and field order of the Options
@@ -3137,20 +3154,4 @@ func (le *lazyEndpoint) GetPeerEndpoint(peerPublicKey [32]byte) conn.Endpoint {
 	}
 	le.c.logf("magicsock: lazyEndpoint.GetPeerEndpoint(%v) found: %v", pubKey.ShortString(), ep.nodeAddr)
 	return ep
-}
-
-type Path string
-
-const (
-	PathDirectIPv4 Path = "direct_ipv4"
-	PathDirectIPv6 Path = "direct_ipv6"
-	PathDERP       Path = "derp"
-)
-
-type pathLabel struct {
-	// Path indicates the path that the packet took:
-	// - direct_ipv4
-	// - direct_ipv6
-	// - derp
-	Path Path
 }
