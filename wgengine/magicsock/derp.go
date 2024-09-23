@@ -730,7 +730,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 
 	ep.noteRecvActivity(ipp, mono.Now())
 	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, dm.n)
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, dm.n)
 	}
 	return n, ep
 }

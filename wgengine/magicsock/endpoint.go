@@ -976,7 +976,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
 		if stats := de.c.stats.Load(); err == nil && stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, txBytes)
+			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, len(buffs), txBytes)
 		}
 	}
 	if derpAddr.IsValid() {
@@ -991,7 +991,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 		}
 
 		if stats := de.c.stats.Load(); stats != nil {
-			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, txBytes)
+			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, 1, txBytes)
 		}
 		if allOk {
 			return nil
