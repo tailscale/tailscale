@@ -1523,7 +1523,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 	ep.lastRecvUDPAny.StoreAtomic(now)
 	ep.noteRecvActivity(ipp, now)
 	if stats := c.stats.Load(); stats != nil {
-		stats.UpdateRxPhysical(ep.nodeAddr, ipp, len(b))
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, 1, len(b))
 	}
 	return ep, true
 }
