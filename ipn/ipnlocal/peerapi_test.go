@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/must"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -643,7 +644,8 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 	ht := new(health.Tracker)
-	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht)
+	reg := new(usermetric.Registry)
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 	h.ps = &peerAPIServer{
 		b: &LocalBackend{
@@ -694,7 +696,8 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 		ht := new(health.Tracker)
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht)
+		reg := new(usermetric.Registry)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {
@@ -767,7 +770,8 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 
 		rc := &appctest.RouteCollector{}
 		ht := new(health.Tracker)
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht)
+		reg := new(usermetric.Registry)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {
@@ -830,8 +834,9 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 		ht := new(health.Tracker)
+		reg := new(usermetric.Registry)
 		rc := &appctest.RouteCollector{}
-		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht)
+		eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg)
 		pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 		var a *appc.AppConnector
 		if shouldStore {

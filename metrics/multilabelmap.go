@@ -97,7 +97,12 @@ type KeyValue[T comparable] struct {
 }
 
 func (v *MultiLabelMap[T]) String() string {
-	return `"MultiLabelMap"`
+	var sb strings.Builder
+	sb.WriteString("MultiLabelMap:\n")
+	v.Do(func(kv KeyValue[T]) {
+		fmt.Fprintf(&sb, "\t%v: %v\n", kv.Key, kv.Value)
+	})
+	return sb.String()
 }
 
 // WritePrometheus writes v to w in Prometheus exposition format.
@@ -280,4 +285,17 @@ func (v *MultiLabelMap[T]) Do(f func(KeyValue[T])) {
 	for _, e := range v.sorted {
 		f(KeyValue[T]{e.key, e.val})
 	}
+}
+
+// ResetAllForTest resets all values for metrics to zero.
+// Should only be used in tests.
+func (v *MultiLabelMap[T]) ResetAllForTest() {
+	v.Do(func(kv KeyValue[T]) {
+		switch v := kv.Value.(type) {
+		case *expvar.Int:
+			v.Set(0)
+		case *expvar.Float:
+			v.Set(0)
+		}
+	})
 }

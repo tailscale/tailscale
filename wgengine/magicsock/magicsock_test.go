@@ -64,6 +64,7 @@ import (
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -156,6 +157,7 @@ type magicStack struct {
 	dev        *device.Device          // the wireguard-go Device that connects the previous things
 	wgLogger   *wglog.Logger           // wireguard-go log wrapper
 	netMon     *netmon.Monitor         // always non-nil
+	metrics    *usermetric.Registry
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -174,9 +176,11 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		t.Fatalf("netmon.New: %v", err)
 	}
 
+	var reg usermetric.Registry
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
+		Metrics:                &reg,
 		Logf:                   logf,
 		DisablePortMapper:      true,
 		TestOnlyPacketListener: l,
@@ -193,7 +197,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	}
 
 	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.Wrap(logf, tun.TUN())
+	tsTun := tstun.Wrap(logf, tun.TUN(), &reg)
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 	tsTun.Start()
 
@@ -219,6 +223,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		dev:        dev,
 		wgLogger:   wgLogger,
 		netMon:     netMon,
+		metrics:    &reg,
 	}
 }
 
@@ -397,6 +402,7 @@ func TestNewConn(t *testing.T) {
 		EndpointsFunc:     epFunc,
 		Logf:              t.Logf,
 		NetMon:            netMon,
+		Metrics:           new(usermetric.Registry),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -523,6 +529,7 @@ func TestDeviceStartStop(t *testing.T) {
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {},
 		Logf:          t.Logf,
 		NetMon:        netMon,
+		Metrics:       new(usermetric.Registry),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1275,6 +1282,7 @@ func newTestConn(t testing.TB) *Conn {
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
 		HealthTracker:          new(health.Tracker),
+		Metrics:                new(usermetric.Registry),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
 		Port:                   port,

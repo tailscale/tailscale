@@ -684,6 +684,7 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		t.Fatal(err)

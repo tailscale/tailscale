@@ -9,7 +9,8 @@ import (
 )
 
 func TestGauge(t *testing.T) {
-	g := NewGauge("test_gauge", "This is a test gauge")
+	var reg Registry
+	g := reg.NewGauge("test_gauge", "This is a test gauge")
 	g.Set(15)
 
 	var buf bytes.Buffer

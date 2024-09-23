@@ -432,7 +432,7 @@ func newTestLocalBackend(t testing.TB) *LocalBackend {
 	sys := new(tsd.System)
 	store := new(mem.Store)
 	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
