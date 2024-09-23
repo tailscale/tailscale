@@ -366,6 +366,7 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.logf("Setting subnet routes for %s: %v", nodeKey.ShortString(), routes)
 	mak.Set(&s.nodeSubnetRoutes, nodeKey, routes)
 }
 
