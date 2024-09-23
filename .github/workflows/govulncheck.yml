@@ -24,7 +24,7 @@ jobs:
 
       - name: Post to slack
         if: failure() && github.event_name == 'schedule'
-        uses: slackapi/slack-github-action@v1.24.0
+        uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
         env:
           SLACK_BOT_TOKEN: ${{ secrets.GOVULNCHECK_BOT_TOKEN }}
         with:

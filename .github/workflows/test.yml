@@ -559,7 +559,7 @@ jobs:
       # By having the job always run, but skipping its only step as needed, we
       # let the CI output collapse nicely in PRs.
       if: failure() && github.event_name == 'push'
-      uses: ruby/action-slack@v3.2.1
+      uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
       with:
         payload: |
           {
@@ -574,6 +574,7 @@ jobs:
           }
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
   check_mergeability:
     if: always()
