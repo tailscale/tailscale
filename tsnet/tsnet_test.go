@@ -943,6 +943,17 @@ func promMetricLabelsStr(labels []*dto.LabelPair) string {
 }
 
 // TestUserMetrics tests the user-facing metrics exposed by tailscaled.
+// Metrics for the following is validated in this test:
+// - Advertised routes
+// - Approved routes
+// - Primary routes
+// - Inbound bytes over direct connection (ipv4)
+// - Outbound bytes over direct connection (ipv4)
+// - Tailscale health messages
+//
+// Inbound and outbound packets are not tested as it varies based on
+// the platform the test is run on based on different network
+// configuration windows.
 func TestUserMetrics(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/13420")
 	tstest.ResourceCheck(t)
@@ -1011,6 +1022,7 @@ func TestUserMetrics(t *testing.T) {
 		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == 3
 	})
 
+	// 10 megabytes
 	bytesToSend := 10 * 1024 * 1024
 
 	// This asserts generates some traffic, it is factored out
@@ -1078,22 +1090,10 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", bytesToSend, inboundBytes1)
 	}
 
-	// But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
-	if inboundBytes1 > float64(bytesToSend)*1.2 {
-		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.2, inboundBytes1)
+	// But ensure that it is not too much higher than the 10 megabytes sent, given 10% wiggle room.
+	if inboundBytes1 > float64(bytesToSend)*1.1 {
+		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.1, inboundBytes1)
 	}
-
-	// // Verify that the packet count recorded is higher than the
-	// // 10 000 1KB packages we sent.
-	// inboundPackets1 := parsedMetrics1["tailscaled_inbound_packets_total,path=direct_ipv4,"]
-	// if inboundPackets1 < float64(packets) {
-	// 	t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", packets, inboundPackets1)
-	// }
-
-	// // But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
-	// if inboundPackets1 > float64(packets)*1.2 {
-	// 	t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(packets)*1.1, inboundPackets1)
-	// }
 
 	metrics2, err := lc2.UserMetrics(ctx)
 	if err != nil {
@@ -1139,22 +1139,10 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", bytesToSend, outboundBytes2)
 	}
 
-	// But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
-	if outboundBytes2 > float64(bytesToSend)*1.2 {
-		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.2, outboundBytes2)
+	// But ensure that it is not too much higher than the 10 megabytes sent, given 10% wiggle room.
+	if outboundBytes2 > float64(bytesToSend)*1.1 {
+		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.1, outboundBytes2)
 	}
-
-	// // Verify that the packet count recorded is higher than the
-	// // 10 000 1KB packages we sent.
-	// outboundPackets2 := parsedMetrics2["tailscaled_outbound_packets_total,path=direct_ipv4,"]
-	// if outboundPackets2 < float64(packets) {
-	// 	t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", packets, outboundPackets2)
-	// }
-
-	// // But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
-	// if outboundPackets2 > float64(packets)*1.2 {
-	// 	t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(packets)*1.1, outboundPackets2)
-	// }
 }
 
 func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func() bool) {
