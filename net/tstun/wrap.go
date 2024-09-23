@@ -24,6 +24,7 @@ import (
 	"go4.org/mem"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -209,6 +210,30 @@ type Wrapper struct {
 	stats atomic.Pointer[connstats.Statistics]
 
 	captureHook syncs.AtomicValue[capture.Callback]
+
+	metrics *metrics
+}
+
+type metrics struct {
+	inboundDroppedPacketsTotal  *tsmetrics.MultiLabelMap[dropPacketLabel]
+	outboundDroppedPacketsTotal *tsmetrics.MultiLabelMap[dropPacketLabel]
+}
+
+func registerMetrics(reg *usermetric.Registry) *metrics {
+	return &metrics{
+		inboundDroppedPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[dropPacketLabel](
+			reg,
+			"tailscaled_inbound_dropped_packets_total",
+			"counter",
+			"Counts the number of dropped packets received by the node from other peers",
+		),
+		outboundDroppedPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[dropPacketLabel](
+			reg,
+			"tailscaled_outbound_dropped_packets_total",
+			"counter",
+			"Counts the number of packets dropped while being sent to other peers",
+		),
+	}
 }
 
 // tunInjectedRead is an injected packet pretending to be a tun.Read().
@@ -248,15 +273,15 @@ func (w *Wrapper) Start() {
 	close(w.startCh)
 }
 
-func WrapTAP(logf logger.Logf, tdev tun.Device) *Wrapper {
-	return wrap(logf, tdev, true)
+func WrapTAP(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
+	return wrap(logf, tdev, true, m)
 }
 
-func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
-	return wrap(logf, tdev, false)
+func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry) *Wrapper {
+	return wrap(logf, tdev, false, m)
 }
 
-func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
+func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry) *Wrapper {
 	logf = logger.WithPrefix(logf, "tstun: ")
 	w := &Wrapper{
 		logf:        logf,
@@ -274,6 +299,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 		startCh:     make(chan struct{}),
+		metrics:     registerMetrics(m),
 	}
 
 	w.vectorBuffer = make([][]byte, tdev.BatchSize())
@@ -872,7 +898,7 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 
 	if filt.RunOut(p, t.filterFlags) != filter.Accept {
 		metricPacketOutDropFilter.Add(1)
-		metricOutboundDroppedPacketsTotal.Add(dropPacketLabel{
+		t.metrics.outboundDroppedPacketsTotal.Add(dropPacketLabel{
 			Reason: DropReasonACL,
 		}, 1)
 		return filter.Drop, gro
@@ -1144,7 +1170,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook ca
 
 	if outcome != filter.Accept {
 		metricPacketInDropFilter.Add(1)
-		metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+		t.metrics.inboundDroppedPacketsTotal.Add(dropPacketLabel{
 			Reason: DropReasonACL,
 		}, 1)
 
@@ -1225,7 +1251,7 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		t.noteActivity()
 		_, err := t.tdevWrite(buffs, offset)
 		if err != nil {
-			metricInboundDroppedPacketsTotal.Add(dropPacketLabel{
+			t.metrics.inboundDroppedPacketsTotal.Add(dropPacketLabel{
 				Reason: DropReasonError,
 			}, int64(len(buffs)))
 		}
@@ -1481,19 +1507,6 @@ type dropPacketLabel struct {
 	// - error (rejected packets because of an error)
 	Reason DropReason
 }
-
-var (
-	metricInboundDroppedPacketsTotal = usermetric.NewMultiLabelMap[dropPacketLabel](
-		"tailscaled_inbound_dropped_packets_total",
-		"counter",
-		"Counts the number of dropped packets received by the node from other peers",
-	)
-	metricOutboundDroppedPacketsTotal = usermetric.NewMultiLabelMap[dropPacketLabel](
-		"tailscaled_outbound_dropped_packets_total",
-		"counter",
-		"Counts the number of packets dropped while being sent to other peers",
-	)
-)
 
 func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {
 	t.captureHook.Store(cb)

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"expvar"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -38,6 +39,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/must"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -173,7 +175,8 @@ func setfilter(logf logger.Logf, tun *Wrapper) {
 
 func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *Wrapper) {
 	chtun := tuntest.NewChannelTUN()
-	tun := Wrap(logf, chtun.TUN())
+	reg := new(usermetric.Registry)
+	tun := Wrap(logf, chtun.TUN(), reg)
 	if secure {
 		setfilter(logf, tun)
 	} else {
@@ -185,7 +188,8 @@ func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *Wrapper
 
 func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *Wrapper) {
 	ftun := NewFake()
-	tun := Wrap(logf, ftun)
+	reg := new(usermetric.Registry)
+	tun := Wrap(logf, ftun, reg)
 	if secure {
 		setfilter(logf, tun)
 	} else {
@@ -315,14 +319,14 @@ func mustHexDecode(s string) []byte {
 }
 
 func TestFilter(t *testing.T) {
-	// Reset the metrics before test. These are global
-	// so the different tests might have affected them.
-	metricInboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonACL}, 0)
-	metricInboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonError}, 0)
-	metricOutboundDroppedPacketsTotal.SetInt(dropPacketLabel{Reason: DropReasonACL}, 0)
 
 	chtun, tun := newChannelTUN(t.Logf, true)
 	defer tun.Close()
+
+	// Reset the metrics before test. These are global
+	// so the different tests might have affected them.
+	tun.metrics.inboundDroppedPacketsTotal.ResetAllForTest()
+	tun.metrics.outboundDroppedPacketsTotal.ResetAllForTest()
 
 	type direction int
 
@@ -436,20 +440,26 @@ func TestFilter(t *testing.T) {
 		})
 	}
 
-	inACL := metricInboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL})
-	inError := metricInboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonError})
-	outACL := metricOutboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL})
+	var metricInboundDroppedPacketsACL, metricInboundDroppedPacketsErr, metricOutboundDroppedPacketsACL int64
+	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL}).(*expvar.Int); ok {
+		metricInboundDroppedPacketsACL = m.Value()
+	}
+	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonError}).(*expvar.Int); ok {
+		metricInboundDroppedPacketsErr = m.Value()
+	}
+	if m, ok := tun.metrics.outboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL}).(*expvar.Int); ok {
+		metricOutboundDroppedPacketsACL = m.Value()
+	}
 
-	assertMetricPackets(t, "inACL", "3", inACL.String())
-	assertMetricPackets(t, "inError", "0", inError.String())
-	assertMetricPackets(t, "outACL", "1", outACL.String())
-
+	assertMetricPackets(t, "inACL", 3, metricInboundDroppedPacketsACL)
+	assertMetricPackets(t, "inError", 0, metricInboundDroppedPacketsErr)
+	assertMetricPackets(t, "outACL", 1, metricOutboundDroppedPacketsACL)
 }
 
-func assertMetricPackets(t *testing.T, metricName, want, got string) {
+func assertMetricPackets(t *testing.T, metricName string, want, got int64) {
 	t.Helper()
 	if want != got {
-		t.Errorf("%s got unexpected value, got %s, want %s", metricName, got, want)
+		t.Errorf("%s got unexpected value, got %d, want %d", metricName, got, want)
 	}
 }
 
@@ -512,6 +522,7 @@ func TestAtomic64Alignment(t *testing.T) {
 }
 
 func TestPeerAPIBypass(t *testing.T) {
+	reg := new(usermetric.Registry)
 	wrapperWithPeerAPI := &Wrapper{
 		PeerAPIPort: func(ip netip.Addr) (port uint16, ok bool) {
 			if ip == netip.MustParseAddr("100.64.1.2") {
@@ -519,6 +530,7 @@ func TestPeerAPIBypass(t *testing.T) {
 			}
 			return
 		},
+		metrics: registerMetrics(reg),
 	}
 
 	tests := []struct {
@@ -534,13 +546,16 @@ func TestPeerAPIBypass(t *testing.T) {
 				PeerAPIPort: func(netip.Addr) (port uint16, ok bool) {
 					return 60000, true
 				},
+				metrics: registerMetrics(reg),
 			},
 			pkt:  tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
 			want: filter.Drop,
 		},
 		{
-			name:   "reject_with_filter",
-			w:      &Wrapper{},
+			name: "reject_with_filter",
+			w: &Wrapper{
+				metrics: registerMetrics(reg),
+			},
 			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
 			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
 			want:   filter.Drop,

@@ -50,6 +50,7 @@ func TestInjectInboundLeak(t *testing.T) {
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +108,7 @@ func makeNetstack(tb testing.TB, config func(*Impl)) *Impl {
 		Dialer:        dialer,
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		tb.Fatal(err)

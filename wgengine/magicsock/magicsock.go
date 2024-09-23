@@ -60,6 +60,7 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/wgint"
 )
@@ -385,6 +386,9 @@ type Options struct {
 	// HealthTracker optionally specifies the health tracker to
 	// report errors and warnings to.
 	HealthTracker *health.Tracker
+
+	// Metrics specifies the metrics registry to record metrics to.
+	Metrics *usermetric.Registry
 
 	// ControlKnobs are the set of control knobs to use.
 	// If nil, they're ignored and not updated.
