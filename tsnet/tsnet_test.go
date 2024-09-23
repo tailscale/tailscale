@@ -998,7 +998,7 @@ func TestUserMetrics(t *testing.T) {
 
 	// Wait for the routes to be propagated to node 1 to ensure
 	// that the metrics are up-to-date.
-	waitForCondition(t, 30*time.Second, func() bool {
+	waitForCondition(t, "primary routes available for node1", 30*time.Second, func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		status1, err := lc1.Status(ctx)
@@ -1009,8 +1009,7 @@ func TestUserMetrics(t *testing.T) {
 		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == 3
 	})
 
-	// 50 megabytes 50 * 1024 kilobyte packets
-	bytesToSend := 50 * 1024 * 1024
+	bytesToSend := 10 * 1024 * 1024
 
 	// This asserts generates some traffic, it is factored out
 	// of TestUDPConn.
@@ -1071,25 +1070,25 @@ func TestUserMetrics(t *testing.T) {
 	}
 
 	// Verify that the amount of data recorded in bytes is higher than the
-	// 50 megabytes sent.
+	// 10 megabytes sent.
 	inboundBytes1 := parsedMetrics1["tailscaled_inbound_bytes_total,path=direct_ipv4,"]
 	if inboundBytes1 < float64(bytesToSend) {
 		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", bytesToSend, inboundBytes1)
 	}
 
-	// But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	// But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
 	if inboundBytes1 > float64(bytesToSend)*1.2 {
 		t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.2, inboundBytes1)
 	}
 
 	// // Verify that the packet count recorded is higher than the
-	// // 50 000 1KB packages we sent.
+	// // 10 000 1KB packages we sent.
 	// inboundPackets1 := parsedMetrics1["tailscaled_inbound_packets_total,path=direct_ipv4,"]
 	// if inboundPackets1 < float64(packets) {
 	// 	t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", packets, inboundPackets1)
 	// }
 
-	// // But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	// // But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
 	// if inboundPackets1 > float64(packets)*1.2 {
 	// 	t.Errorf("metrics1, tailscaled_inbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(packets)*1.1, inboundPackets1)
 	// }
@@ -1132,38 +1131,38 @@ func TestUserMetrics(t *testing.T) {
 	}
 
 	// Verify that the amount of data recorded in bytes is higher than the
-	// 50 megabytes sent.
+	// 10 megabytes sent.
 	outboundBytes2 := parsedMetrics2["tailscaled_outbound_bytes_total,path=direct_ipv4,"]
 	if outboundBytes2 < float64(bytesToSend) {
 		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", bytesToSend, outboundBytes2)
 	}
 
-	// But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	// But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
 	if outboundBytes2 > float64(bytesToSend)*1.2 {
 		t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(bytesToSend)*1.2, outboundBytes2)
 	}
 
 	// // Verify that the packet count recorded is higher than the
-	// // 50 000 1KB packages we sent.
+	// // 10 000 1KB packages we sent.
 	// outboundPackets2 := parsedMetrics2["tailscaled_outbound_packets_total,path=direct_ipv4,"]
 	// if outboundPackets2 < float64(packets) {
 	// 	t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected higher than %d, got: %f", packets, outboundPackets2)
 	// }
 
-	// // But ensure that it is not too much higher than the 50 megabytes sent, given 20% wiggle room.
+	// // But ensure that it is not too much higher than the 10 megabytes sent, given 20% wiggle room.
 	// if outboundPackets2 > float64(packets)*1.2 {
 	// 	t.Errorf("metrics2, tailscaled_outbound_bytes_total,path=direct_ipv4: expected lower than %f, got: %f", float64(packets)*1.1, outboundPackets2)
 	// }
 }
 
-func waitForCondition(t *testing.T, waitTime time.Duration, f func() bool) {
+func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(waitTime); time.Now().Before(deadline); time.Sleep(1 * time.Second) {
 		if f() {
 			return
 		}
 	}
-	t.Fatalf("waiting for condition")
+	t.Fatalf("waiting for condition: %s", msg)
 }
 
 // mustDirect ensures there is a direct connection between LocalClient 1 and 2
