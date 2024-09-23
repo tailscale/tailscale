@@ -1126,6 +1126,7 @@ func (v SSHRuleView) Principals() views.SliceView[*SSHPrincipal, SSHPrincipalVie
 
 func (v SSHRuleView) SSHUsers() views.Map[string, string] { return views.MapOf(v.ж.SSHUsers) }
 func (v SSHRuleView) Action() SSHActionView               { return v.ж.Action.View() }
+func (v SSHRuleView) AcceptEnv() views.Slice[string]      { return views.SliceOf(v.ж.AcceptEnv) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
@@ -1133,6 +1134,7 @@ var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
 	Principals  []*SSHPrincipal
 	SSHUsers    map[string]string
 	Action      *SSHAction
+	AcceptEnv   []string
 }{})
 
 // View returns a readonly view of SSHAction.
