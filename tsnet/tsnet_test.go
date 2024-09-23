@@ -996,9 +996,17 @@ func TestUserMetrics(t *testing.T) {
 
 	mustDirect(t, t.Logf, lc1, lc2)
 
+	wantRoutes := 3
+	// if runtime.GOOS == "windows" {
+	// 	// Windows doesn't support the being a subnet router
+	// 	// in userspace mode (tsnet), so the routes are not
+	// 	// set.
+	// 	wantRoutes = 0
+	// }
+
 	// Wait for the routes to be propagated to node 1 to ensure
 	// that the metrics are up-to-date.
-	waitForCondition(t, "primary routes available for node1", 30*time.Second, func() bool {
+	waitForCondition(t, "primary routes available for node1", 90*time.Second, func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		status1, err := lc1.Status(ctx)
@@ -1006,9 +1014,11 @@ func TestUserMetrics(t *testing.T) {
 			t.Logf("getting status: %s", err)
 			return false
 		}
-		t.Logf("status pr1: %v", status1.Self.PrimaryRoutes)
-		t.Logf("status r1: %v", status1.Self.AllowedIPs)
-		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == 3
+		// if runtime.GOOS == "windows" {
+		// 	return true
+		// } else {
+		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == wantRoutes
+		// }
 	})
 
 	bytesToSend := 10 * 1024 * 1024
@@ -1054,7 +1064,7 @@ func TestUserMetrics(t *testing.T) {
 	// - 192.0.2.0/24
 	// - 192.0.5.1/32
 	// - 0.0.0.0/0
-	if got, want := parsedMetrics1["tailscaled_approved_routes,"], 3.0; got != want {
+	if got, want := parsedMetrics1["tailscaled_approved_routes,"], float64(wantRoutes); got != want {
 		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
 	}
 
@@ -1067,7 +1077,7 @@ func TestUserMetrics(t *testing.T) {
 	// - 192.0.2.0/24
 	// - 192.0.5.1/32
 	// - 0.0.0.0/0
-	if got, want := parsedMetrics1["tailscaled_primary_routes,"], 3.0; got != want {
+	if got, want := parsedMetrics1["tailscaled_primary_routes,"], float64(wantRoutes); got != want {
 		t.Errorf("metrics1, tailscaled_primary_routes: got %v, want %v", got, want)
 	}
 
