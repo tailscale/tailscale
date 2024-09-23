@@ -1006,7 +1006,8 @@ func TestUserMetrics(t *testing.T) {
 			t.Logf("getting status: %s", err)
 			return false
 		}
-		t.Logf("status1: %v", status1.Self)
+		t.Logf("status pr1: %v", status1.Self.PrimaryRoutes)
+		t.Logf("status r1: %v", status1.Self.AllowedIPs)
 		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == 3
 	})
 
