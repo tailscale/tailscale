@@ -1068,7 +1068,7 @@ func TestUserMetrics(t *testing.T) {
 	// - 192.0.3.0/24
 	// - 192.0.5.1/32
 	// - 0.0.0.0/0
-	if got, want := parsedMetrics1["tailscaled_advertised_routes,"], wantRoutes+1; got != want {
+	if got, want := parsedMetrics1["tailscaled_advertised_routes,"], 4.0; got != want {
 		t.Errorf("metrics1, tailscaled_advertised_routes: got %v, want %v", got, want)
 	}
 
