@@ -337,6 +337,10 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	return out, err
 }
 
+var (
+	ignoreSystemResolver = envknob.RegisterBool("TS_IGNORE_SYSTEM_DNS_RESOLVER")
+)
+
 // parseExitNodeQuery parses a DNS request packet.
 // It returns nil if it's malformed or lacking a question.
 func parseExitNodeQuery(q []byte) *response {
@@ -405,9 +409,11 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		case netip.Addr{}:
 			// Likewise, if the platform has no resolv.conf, just use our defaults.
 		default:
-			resolvers = []resolverAndDelay{{
-				name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
-			}}
+			if !ignoreSystemResolver() {
+				resolvers = []resolverAndDelay{{
+					name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
+				}}
+			}
 		}
 
 		err = r.forwarder.forwardWithDestChan(ctx, packet{q, "tcp", from}, ch, resolvers...)

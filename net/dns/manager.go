@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"tailscale.com/envknob"
 	"time"
 
 	xmaps "golang.org/x/exp/maps"
@@ -122,6 +123,10 @@ func (m *Manager) Set(cfg Config) error {
 	return m.setLocked(cfg)
 }
 
+var (
+	ignoreSystemResolver = envknob.RegisterBool("TS_IGNORE_SYSTEM_DNS_RESOLVER")
+)
+
 // GetBaseConfig returns the current base OS DNS configuration as provided by the OSConfigurator.
 func (m *Manager) GetBaseConfig() (OSConfig, error) {
 	return m.os.GetBaseConfig()
@@ -155,9 +160,12 @@ func (m *Manager) setLocked(cfg Config) error {
 	if err := m.resolver.SetConfig(rcfg); err != nil {
 		return err
 	}
-	if err := m.os.SetDNS(ocfg); err != nil {
-		m.health.SetDNSOSHealth(err)
-		return err
+
+	if !ignoreSystemResolver() {
+		if err := m.os.SetDNS(ocfg); err != nil {
+			m.health.SetDNSOSHealth(err)
+			return err
+		}
 	}
 
 	m.health.SetDNSOSHealth(nil)
