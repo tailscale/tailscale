@@ -37,6 +37,7 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
@@ -813,6 +814,8 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	return decodeJSON[*ipn.Prefs](body)
 }
 
+// GetDNSOSConfig returns the system DNS configuration for the current device.
+// That is, it returns the DNS configuration that the system would use if Tailscale weren't being used.
 func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/dns-osconfig")
 	if err != nil {
@@ -823,6 +826,21 @@ func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig
 		return nil, fmt.Errorf("invalid dns.OSConfig: %w", err)
 	}
 	return &osCfg, nil
+}
+
+// QueryDNS executes a DNS query for a name (`google.com.`) and query type (`CNAME`).
+// It returns the raw DNS response bytes and the resolvers that were used to answer the query
+// (often just one, but can be more if we raced multiple resolvers).
+func (lc *LocalClient) QueryDNS(ctx context.Context, name string, queryType string) (bytes []byte, resolvers []*dnstype.Resolver, err error) {
+	body, err := lc.get200(ctx, fmt.Sprintf("/localapi/v0/dns-query?name=%s&type=%s", url.QueryEscape(name), queryType))
+	if err != nil {
+		return nil, nil, err
+	}
+	var res apitype.DNSQueryResponse
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, nil, fmt.Errorf("invalid query response: %w", err)
+	}
+	return res.Bytes, res.Resolvers, nil
 }
 
 // StartLoginInteractive starts an interactive login.

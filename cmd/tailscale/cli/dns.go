@@ -28,8 +28,13 @@ var dnsCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
-
-		// TODO: implement `tailscale query` here
+		{
+			Name:       "query",
+			ShortUsage: "tailscale dns query <name> [a|aaaa|cname|mx|ns|opt|ptr|srv|txt]",
+			Exec:       runDNSQuery,
+			ShortHelp:  "Perform a DNS query",
+			LongHelp:   "The 'tailscale dns query' subcommand performs a DNS query for the specified name using the internal DNS forwarder (100.100.100.100).\n\nIt also provides information about the resolver(s) used to resolve the query.",
+		},
 
 		// TODO: implement `tailscale log` here
 

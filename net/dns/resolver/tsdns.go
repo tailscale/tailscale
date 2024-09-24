@@ -337,6 +337,12 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	return out, err
 }
 
+// GetUpstreamResolvers returns the resolvers that would be used to resolve
+// the given FQDN.
+func (r *Resolver) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {
+	return r.forwarder.GetUpstreamResolvers(name)
+}
+
 // parseExitNodeQuery parses a DNS request packet.
 // It returns nil if it's malformed or lacking a question.
 func parseExitNodeQuery(q []byte) *response {

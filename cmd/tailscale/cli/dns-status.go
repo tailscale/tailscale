@@ -75,7 +75,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 	fmt.Print("\n")
 	fmt.Println("Split DNS Routes:")
 	if len(dnsConfig.Routes) == 0 {
-		fmt.Println("  (no routes configured: split DNS might not be in use)")
+		fmt.Println("  (no routes configured: split DNS disabled)")
 	}
 	for _, k := range slices.Sorted(maps.Keys(dnsConfig.Routes)) {
 		v := dnsConfig.Routes[k]
