@@ -24,6 +24,7 @@ import (
 	"os/user"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,11 +57,12 @@ import (
 func TestMatchRule(t *testing.T) {
 	someAction := new(tailcfg.SSHAction)
 	tests := []struct {
-		name     string
-		rule     *tailcfg.SSHRule
-		ci       *sshConnInfo
-		wantErr  error
-		wantUser string
+		name          string
+		rule          *tailcfg.SSHRule
+		ci            *sshConnInfo
+		wantErr       error
+		wantUser      string
+		wantAcceptEnv []string
 	}{
 		{
 			name: "invalid-conn",
@@ -154,6 +156,21 @@ func TestMatchRule(t *testing.T) {
 			wantUser: "thealice",
 		},
 		{
+			name: "ok-with-accept-env",
+			rule: &tailcfg.SSHRule{
+				Action:     someAction,
+				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+				SSHUsers: map[string]string{
+					"*":     "ubuntu",
+					"alice": "thealice",
+				},
+				AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "thealice",
+			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+		},
+		{
 			name: "no-users-for-reject",
 			rule: &tailcfg.SSHRule{
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
@@ -210,7 +227,7 @@ func TestMatchRule(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: t.Logf},
 			}
-			got, gotUser, err := c.matchRule(tt.rule, nil)
+			got, gotUser, gotAcceptEnv, err := c.matchRule(tt.rule, nil)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
@@ -219,6 +236,128 @@ func TestMatchRule(t *testing.T) {
 			}
 			if err == nil && got == nil {
 				t.Errorf("expected non-nil action on success")
+			}
+			if !slices.Equal(gotAcceptEnv, tt.wantAcceptEnv) {
+				t.Errorf("acceptEnv = %v; want %v", gotAcceptEnv, tt.wantAcceptEnv)
+			}
+		})
+	}
+}
+
+func TestEvalSSHPolicy(t *testing.T) {
+	someAction := new(tailcfg.SSHAction)
+	tests := []struct {
+		name          string
+		policy        *tailcfg.SSHPolicy
+		ci            *sshConnInfo
+		wantMatch     bool
+		wantUser      string
+		wantAcceptEnv []string
+	}{
+		{
+			name: "multiple-matches-picks-first-match",
+			policy: &tailcfg.SSHPolicy{
+				Rules: []*tailcfg.SSHRule{
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other": "other1",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"*":     "ubuntu",
+							"alice": "thealice",
+						},
+						AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other2": "other3",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"*":     "ubuntu",
+							"alice": "thealice",
+							"mark":  "markthe",
+						},
+						AcceptEnv: []string{"*"},
+					},
+				},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "thealice",
+			wantAcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+			wantMatch:     true,
+		},
+		{
+			name: "no-matches-returns-failure",
+			policy: &tailcfg.SSHPolicy{
+				Rules: []*tailcfg.SSHRule{
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other": "other1",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"fedora": "ubuntu",
+						},
+						AcceptEnv: []string{"EXAMPLE", "?_?", "TEST_*"},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"other2": "other3",
+						},
+					},
+					{
+						Action:     someAction,
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						SSHUsers: map[string]string{
+							"mark": "markthe",
+						},
+						AcceptEnv: []string{"*"},
+					},
+				},
+			},
+			ci:            &sshConnInfo{sshUser: "alice"},
+			wantUser:      "",
+			wantAcceptEnv: nil,
+			wantMatch:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &conn{
+				info: tt.ci,
+				srv:  &server{logf: t.Logf},
+			}
+			got, gotUser, gotAcceptEnv, match := c.evalSSHPolicy(tt.policy, nil)
+			if match != tt.wantMatch {
+				t.Errorf("match = %v; want %v", match, tt.wantMatch)
+			}
+			if gotUser != tt.wantUser {
+				t.Errorf("user = %q; want %q", gotUser, tt.wantUser)
+			}
+			if tt.wantMatch == true && got == nil {
+				t.Errorf("expected non-nil action on success")
+			}
+			if !slices.Equal(gotAcceptEnv, tt.wantAcceptEnv) {
+				t.Errorf("acceptEnv = %v; want %v", gotAcceptEnv, tt.wantAcceptEnv)
 			}
 		})
 	}

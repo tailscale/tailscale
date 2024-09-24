@@ -108,6 +108,7 @@ func TestFilterEnv(t *testing.T) {
 		acceptEnv        []string
 		environ          []string
 		expectedFiltered []string
+		wantErrMessage   string
 	}{
 		{
 			name:             "simple direct matches",
@@ -127,11 +128,26 @@ func TestFilterEnv(t *testing.T) {
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG", "FO1-kmndGamc79567=ABC", "FO57=BAR2"},
 			expectedFiltered: []string{"FOO=BAR", "FOOOO4-2=AbCdEfG", "FO1-kmndGamc79567=ABC"},
 		},
+		{
+			name:             "environ format invalid",
+			acceptEnv:        []string{"FO?", "FOOO*", "FO*5?7"},
+			environ:          []string{"FOOBAR"},
+			expectedFiltered: nil,
+			wantErrMessage:   `invalid environment variable: "FOOBAR". Variables must be in "KEY=VALUE" format`,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			filtered := filterEnv(tc.acceptEnv, tc.environ)
+			filtered, err := filterEnv(tc.acceptEnv, tc.environ)
+			if err == nil && tc.wantErrMessage != "" {
+				t.Errorf("wanted error with message %q but error was nil", tc.wantErrMessage)
+			}
+
+			if err != nil && err.Error() != tc.wantErrMessage {
+				t.Errorf("err = %v; want %v", err, tc.wantErrMessage)
+			}
+
 			if diff := cmp.Diff(tc.expectedFiltered, filtered); diff != "" {
 				t.Errorf("unexpected filter result (-got,+want): \n%s", diff)
 			}

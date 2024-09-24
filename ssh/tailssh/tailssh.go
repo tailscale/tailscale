@@ -238,6 +238,7 @@ type conn struct {
 	localUser    *userMeta       // set by doPolicyAuth
 	userGroupIDs []string        // set by doPolicyAuth
 	pubKey       gossh.PublicKey // set by doPolicyAuth
+	acceptEnv    []string
 
 	// mu protects the following fields.
 	//
@@ -377,7 +378,7 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 		c.logf("failed to get conninfo: %v", err)
 		return errDenied
 	}
-	a, localUser, err := c.evaluatePolicy(pubKey)
+	a, localUser, acceptEnv, err := c.evaluatePolicy(pubKey)
 	if err != nil {
 		if pubKey == nil && c.havePubKeyPolicy() {
 			return errPubKeyRequired
@@ -387,6 +388,7 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	c.action0 = a
 	c.currentAction = a
 	c.pubKey = pubKey
+	c.acceptEnv = acceptEnv
 	if a.Message != "" {
 		if err := ctx.SendAuthBanner(a.Message); err != nil {
 			return fmt.Errorf("SendBanner: %w", err)
@@ -619,16 +621,16 @@ func (c *conn) setInfo(ctx ssh.Context) error {
 
 // evaluatePolicy returns the SSHAction and localUser after evaluating
 // the SSHPolicy for this conn. The pubKey may be nil for "none" auth.
-func (c *conn) evaluatePolicy(pubKey gossh.PublicKey) (_ *tailcfg.SSHAction, localUser string, _ error) {
+func (c *conn) evaluatePolicy(pubKey gossh.PublicKey) (_ *tailcfg.SSHAction, localUser string, acceptEnv []string, _ error) {
 	pol, ok := c.sshPolicy()
 	if !ok {
-		return nil, "", fmt.Errorf("tailssh: rejecting connection; no SSH policy")
+		return nil, "", nil, fmt.Errorf("tailssh: rejecting connection; no SSH policy")
 	}
-	a, localUser, ok := c.evalSSHPolicy(pol, pubKey)
+	a, localUser, acceptEnv, ok := c.evalSSHPolicy(pol, pubKey)
 	if !ok {
-		return nil, "", fmt.Errorf("tailssh: rejecting connection; no matching policy")
+		return nil, "", nil, fmt.Errorf("tailssh: rejecting connection; no matching policy")
 	}
-	return a, localUser, nil
+	return a, localUser, acceptEnv, nil
 }
 
 // pubKeyCacheEntry is the cache value for an HTTPS URL of public keys (like
@@ -892,7 +894,7 @@ func (c *conn) newSSHSession(s ssh.Session) *sshSession {
 
 // isStillValid reports whether the conn is still valid.
 func (c *conn) isStillValid() bool {
-	a, localUser, err := c.evaluatePolicy(c.pubKey)
+	a, localUser, _, err := c.evaluatePolicy(c.pubKey)
 	c.vlogf("stillValid: %+v %v %v", a, localUser, err)
 	if err != nil {
 		return false
@@ -1275,13 +1277,13 @@ func (c *conn) ruleExpired(r *tailcfg.SSHRule) bool {
 	return r.RuleExpires.Before(c.srv.now())
 }
 
-func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy, pubKey gossh.PublicKey) (a *tailcfg.SSHAction, localUser string, ok bool) {
+func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy, pubKey gossh.PublicKey) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, ok bool) {
 	for _, r := range pol.Rules {
-		if a, localUser, err := c.matchRule(r, pubKey); err == nil {
-			return a, localUser, true
+		if a, localUser, acceptEnv, err := c.matchRule(r, pubKey); err == nil {
+			return a, localUser, acceptEnv, true
 		}
 	}
-	return nil, "", false
+	return nil, "", nil, false
 }
 
 // internal errors for testing; they don't escape to callers or logs.
@@ -1294,26 +1296,26 @@ var (
 	errInvalidConn    = errors.New("invalid connection state")
 )
 
-func (c *conn) matchRule(r *tailcfg.SSHRule, pubKey gossh.PublicKey) (a *tailcfg.SSHAction, localUser string, err error) {
+func (c *conn) matchRule(r *tailcfg.SSHRule, pubKey gossh.PublicKey) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, err error) {
 	defer func() {
 		c.vlogf("matchRule(%+v): %v", r, err)
 	}()
 
 	if c == nil {
-		return nil, "", errInvalidConn
+		return nil, "", nil, errInvalidConn
 	}
 	if c.info == nil {
 		c.logf("invalid connection state")
-		return nil, "", errInvalidConn
+		return nil, "", nil, errInvalidConn
 	}
 	if r == nil {
-		return nil, "", errNilRule
+		return nil, "", nil, errNilRule
 	}
 	if r.Action == nil {
-		return nil, "", errNilAction
+		return nil, "", nil, errNilAction
 	}
 	if c.ruleExpired(r) {
-		return nil, "", errRuleExpired
+		return nil, "", nil, errRuleExpired
 	}
 	if !r.Action.Reject {
 		// For all but Reject rules, SSHUsers is required.
@@ -1321,15 +1323,15 @@ func (c *conn) matchRule(r *tailcfg.SSHRule, pubKey gossh.PublicKey) (a *tailcfg
 		// empty string anyway.
 		localUser = mapLocalUser(r.SSHUsers, c.info.sshUser)
 		if localUser == "" {
-			return nil, "", errUserMatch
+			return nil, "", nil, errUserMatch
 		}
 	}
 	if ok, err := c.anyPrincipalMatches(r.Principals, pubKey); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	} else if !ok {
-		return nil, "", errPrincipalMatch
+		return nil, "", nil, errPrincipalMatch
 	}
-	return r.Action, localUser, nil
+	return r.Action, localUser, r.AcceptEnv, nil
 }
 
 func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser string) {

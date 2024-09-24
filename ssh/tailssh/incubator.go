@@ -12,6 +12,7 @@
 package tailssh
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -154,6 +155,22 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		incubatorArgs = append(incubatorArgs, "--cmd="+ss.RawCommand())
 	}
 
+	allowSendEnv := nm.HasCap(tailcfg.NodeAttrSSHEnvironmentVariables)
+	if allowSendEnv {
+		env, err := filterEnv(ss.conn.acceptEnv, ss.Session.Environ())
+		if err != nil {
+			return nil, err
+		}
+
+		if len(env) > 0 {
+			encoded, err := json.Marshal(env)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode environment: %w", err)
+			}
+			incubatorArgs = append(incubatorArgs, fmt.Sprintf("--encoded-env=%q", encoded))
+		}
+	}
+
 	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), nil
 }
 
@@ -192,6 +209,9 @@ type incubatorArgs struct {
 	forceV1Behavior    bool
 	debugTest          bool
 	isSELinuxEnforcing bool
+	encodedEnv         string
+	allowListEnvKeys   string
+	forwardedEnviron   []string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -215,6 +235,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
+	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "JSON encoded array of environment variables in '['key=value']' format")
 	flags.Parse(args)
 
 	for _, g := range strings.Split(groups, ",") {
@@ -223,6 +244,30 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 			return ia, fmt.Errorf("unable to parse group id %q: %w", g, err)
 		}
 		ia.gids = append(ia.gids, gid)
+	}
+
+	ia.forwardedEnviron = os.Environ()
+	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
+	ia.allowListEnvKeys = "SSH_AUTH_SOCK"
+
+	if ia.encodedEnv != "" {
+		unquoted, err := strconv.Unquote(ia.encodedEnv)
+		if err != nil {
+			return ia, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+
+		var extraEnviron []string
+
+		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
+		if err != nil {
+			return ia, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+
+		ia.forwardedEnviron = append(ia.forwardedEnviron, extraEnviron...)
+
+		for _, v := range extraEnviron {
+			ia.allowListEnvKeys = fmt.Sprintf("%s,%s", ia.allowListEnvKeys, strings.Split(v, "=")[0])
+		}
 	}
 
 	return ia, nil
@@ -406,7 +451,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
-	err = unix.Exec(loginCmdPath, loginArgs, os.Environ())
+	err = unix.Exec(loginCmdPath, loginArgs, ia.forwardedEnviron)
 
 	// If we made it here, Exec failed.
 	return err
@@ -441,7 +486,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 
 	loginArgs := []string{
 		su,
-		"-w", "SSH_AUTH_SOCK", // pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
+		"-w", ia.allowListEnvKeys,
 		"-l",
 		ia.localUser,
 	}
@@ -453,7 +498,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
-	err = unix.Exec(su, loginArgs, os.Environ())
+	err = unix.Exec(su, loginArgs, ia.forwardedEnviron)
 
 	// If we made it here, Exec failed.
 	return true, err
@@ -482,11 +527,11 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
-	// First try to execute su -w SSH_AUTH_SOCK -l <user> -c true
+	// First try to execute su -w <allow listed env> -l <user> -c true
 	// to make sure su supports the necessary arguments.
 	err = exec.Command(
 		su,
-		"-w", "SSH_AUTH_SOCK",
+		"-w", ia.allowListEnvKeys,
 		"-l",
 		ia.localUser,
 		"-c", "true",
@@ -515,7 +560,7 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
-	cmd := newCommand(ia.hasTTY, ia.loginShell, args)
+	cmd := newCommand(ia.hasTTY, ia.loginShell, ia.forwardedEnviron, args)
 	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
@@ -532,12 +577,12 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	return err
 }
 
-func newCommand(hasTTY bool, cmdPath string, cmdArgs []string) *exec.Cmd {
+func newCommand(hasTTY bool, cmdPath string, cmdEnviron []string, cmdArgs []string) *exec.Cmd {
 	cmd := exec.Command(cmdPath, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = cmdEnviron
 
 	if hasTTY {
 		// If we were launched with a tty then we should mark that as the ctty

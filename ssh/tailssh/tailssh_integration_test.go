@@ -108,6 +108,7 @@ func TestIntegrationSSH(t *testing.T) {
 		want            []string
 		forceV1Behavior bool
 		skip            bool
+		allowSendEnv    bool
 	}{
 		{
 			cmd:             "id",
@@ -131,6 +132,18 @@ func TestIntegrationSSH(t *testing.T) {
 			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
 		},
+		{
+			cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
+			want:            []string{"working1 working2 working3 unset4"},
+			forceV1Behavior: false,
+			allowSendEnv:    true,
+		},
+		{
+			cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
+			want:            []string{"unset1 unset2 unset3 unset4"},
+			forceV1Behavior: false,
+			allowSendEnv:    false,
+		},
 	}
 
 	for _, test := range tests {
@@ -151,7 +164,13 @@ func TestIntegrationSSH(t *testing.T) {
 			}
 
 			t.Run(fmt.Sprintf("%s_%s_%s", test.cmd, shellQualifier, versionQualifier), func(t *testing.T) {
-				s := testSession(t, test.forceV1Behavior)
+				sendEnv := map[string]string{
+					"GIT_ENV_VAR": "working1",
+					"EXACT_MATCH": "working2",
+					"TESTING":     "working3",
+					"NOT_ALLOWED": "working4",
+				}
+				s := testSession(t, test.forceV1Behavior, test.allowSendEnv, sendEnv)
 
 				if shell {
 					err := s.RequestPty("xterm", 40, 80, ssh.TerminalModes{
@@ -201,7 +220,7 @@ func TestIntegrationSFTP(t *testing.T) {
 			}
 			wantText := "hello world"
 
-			cl := testClient(t, forceV1Behavior)
+			cl := testClient(t, forceV1Behavior, false)
 			scl, err := sftp.NewClient(cl)
 			if err != nil {
 				t.Fatalf("can't get sftp client: %s", err)
@@ -233,7 +252,7 @@ func TestIntegrationSFTP(t *testing.T) {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
-			s := testSessionFor(t, cl)
+			s := testSessionFor(t, cl, nil)
 			got := s.run(t, "ls -l "+filePath, false)
 			if !strings.Contains(got, "testuser") {
 				t.Fatalf("unexpected file owner user: %s", got)
@@ -262,7 +281,7 @@ func TestIntegrationSCP(t *testing.T) {
 			}
 			wantText := "hello world"
 
-			cl := testClient(t, forceV1Behavior)
+			cl := testClient(t, forceV1Behavior, false)
 			scl, err := scp.NewClientBySSH(cl)
 			if err != nil {
 				t.Fatalf("can't get sftp client: %s", err)
@@ -291,7 +310,7 @@ func TestIntegrationSCP(t *testing.T) {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
-			s := testSessionFor(t, cl)
+			s := testSessionFor(t, cl, nil)
 			got := s.run(t, "ls -l "+filePath, false)
 			if !strings.Contains(got, "testuser") {
 				t.Fatalf("unexpected file owner user: %s", got)
@@ -349,7 +368,7 @@ func TestSSHAgentForwarding(t *testing.T) {
 
 	// Run tailscale SSH server and connect to it
 	username := "testuser"
-	tailscaleAddr := testServer(t, username, false)
+	tailscaleAddr := testServer(t, username, false, false)
 	tcl, err := ssh.Dial("tcp", tailscaleAddr, &ssh.ClientConfig{
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	})
@@ -465,11 +484,11 @@ readLoop:
 	return string(_got)
 }
 
-func testClient(t *testing.T, forceV1Behavior bool, authMethods ...ssh.AuthMethod) *ssh.Client {
+func testClient(t *testing.T, forceV1Behavior bool, allowSendEnv bool, authMethods ...ssh.AuthMethod) *ssh.Client {
 	t.Helper()
 
 	username := "testuser"
-	addr := testServer(t, username, forceV1Behavior)
+	addr := testServer(t, username, forceV1Behavior, allowSendEnv)
 
 	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
@@ -483,9 +502,9 @@ func testClient(t *testing.T, forceV1Behavior bool, authMethods ...ssh.AuthMetho
 	return cl
 }
 
-func testServer(t *testing.T, username string, forceV1Behavior bool) string {
+func testServer(t *testing.T, username string, forceV1Behavior bool, allowSendEnv bool) string {
 	srv := &server{
-		lb:             &testBackend{localUser: username, forceV1Behavior: forceV1Behavior},
+		lb:             &testBackend{localUser: username, forceV1Behavior: forceV1Behavior, allowSendEnv: allowSendEnv},
 		logf:           log.Printf,
 		tailscaledPath: os.Getenv("TAILSCALED_PATH"),
 		timeNow:        time.Now,
@@ -509,16 +528,20 @@ func testServer(t *testing.T, username string, forceV1Behavior bool) string {
 	return l.Addr().String()
 }
 
-func testSession(t *testing.T, forceV1Behavior bool) *session {
-	cl := testClient(t, forceV1Behavior)
-	return testSessionFor(t, cl)
+func testSession(t *testing.T, forceV1Behavior bool, allowSendEnv bool, sendEnv map[string]string) *session {
+	cl := testClient(t, forceV1Behavior, allowSendEnv)
+	return testSessionFor(t, cl, sendEnv)
 }
 
-func testSessionFor(t *testing.T, cl *ssh.Client) *session {
+func testSessionFor(t *testing.T, cl *ssh.Client, sendEnv map[string]string) *session {
 	s, err := cl.NewSession()
 	if err != nil {
 		t.Fatal(err)
 	}
+	for k, v := range sendEnv {
+		s.Setenv(k, v)
+	}
+
 	t.Cleanup(func() { s.Close() })
 
 	stdinReader, stdinWriter := io.Pipe()
@@ -564,6 +587,7 @@ func generateClientKey(t *testing.T, privateKeyFile string) (ssh.Signer, *rsa.Pr
 type testBackend struct {
 	localUser       string
 	forceV1Behavior bool
+	allowSendEnv    bool
 }
 
 func (tb *testBackend) GetSSH_HostKeys() ([]gossh.Signer, error) {
@@ -597,6 +621,9 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 	if tb.forceV1Behavior {
 		capMap[tailcfg.NodeAttrSSHBehaviorV1] = struct{}{}
 	}
+	if tb.allowSendEnv {
+		capMap[tailcfg.NodeAttrSSHEnvironmentVariables] = struct{}{}
+	}
 	return &netmap.NetworkMap{
 		SSHPolicy: &tailcfg.SSHPolicy{
 			Rules: []*tailcfg.SSHRule{
@@ -604,6 +631,7 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 					Principals: []*tailcfg.SSHPrincipal{{Any: true}},
 					Action:     &tailcfg.SSHAction{Accept: true, AllowAgentForwarding: true},
 					SSHUsers:   map[string]string{"*": tb.localUser},
+					AcceptEnv:  []string{"GIT_*", "EXACT_MATCH", "TEST?NG"},
 				},
 			},
 		},
