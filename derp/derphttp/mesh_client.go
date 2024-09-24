@@ -26,6 +26,10 @@ var testHookWatchLookConnectResult func(connectError error, wasSelfConnect bool)
 // returns.
 //
 // Otherwise, the add and remove funcs are called as clients come & go.
+// Note that add is called for every new connection and remove is only
+// called for the final disconnection. See https://github.com/tailscale/tailscale/issues/13566.
+// This behavior will likely change. Callers should do their own accounting
+// and dup suppression as needed.
 //
 // infoLogf, if non-nil, is the logger to write periodic status updates about
 // how many peers are on the server. Error log output is set to the c's logger,
