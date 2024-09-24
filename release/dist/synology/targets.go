@@ -28,11 +28,22 @@ var v7Models = []string{
 
 func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 	var ret []dist.Target
-	for _, dsmVersion := range []int{6, 7} {
+	for _, dsmVersion := range []struct {
+		major int
+		minor int
+	}{
+		// DSM6
+		{major: 6},
+		// DSM7
+		{major: 7},
+		// DSM7.2
+		{major: 7, minor: 2},
+	} {
 		ret = append(ret,
 			&target{
 				filenameArch:    "x86_64",
-				dsmMajorVersion: dsmVersion,
+				dsmMajorVersion: dsmVersion.major,
+				dsmMinorVersion: dsmVersion.minor,
 				goenv: map[string]string{
 					"GOOS":   "linux",
 					"GOARCH": "amd64",
@@ -42,7 +53,8 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 			},
 			&target{
 				filenameArch:    "i686",
-				dsmMajorVersion: dsmVersion,
+				dsmMajorVersion: dsmVersion.major,
+				dsmMinorVersion: dsmVersion.minor,
 				goenv: map[string]string{
 					"GOOS":   "linux",
 					"GOARCH": "386",
@@ -52,7 +64,8 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 			},
 			&target{
 				filenameArch:    "armv8",
-				dsmMajorVersion: dsmVersion,
+				dsmMajorVersion: dsmVersion.major,
+				dsmMinorVersion: dsmVersion.minor,
 				goenv: map[string]string{
 					"GOOS":   "linux",
 					"GOARCH": "arm64",
@@ -67,7 +80,8 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 		for _, v5Arch := range v5Models {
 			ret = append(ret, &target{
 				filenameArch:    v5Arch,
-				dsmMajorVersion: dsmVersion,
+				dsmMajorVersion: dsmVersion.major,
+				dsmMinorVersion: dsmVersion.minor,
 				goenv: map[string]string{
 					"GOOS":   "linux",
 					"GOARCH": "arm",
@@ -80,7 +94,8 @@ func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 		for _, v7Arch := range v7Models {
 			ret = append(ret, &target{
 				filenameArch:    v7Arch,
-				dsmMajorVersion: dsmVersion,
+				dsmMajorVersion: dsmVersion.major,
+				dsmMinorVersion: dsmVersion.minor,
 				goenv: map[string]string{
 					"GOOS":   "linux",
 					"GOARCH": "arm",
