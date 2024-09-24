@@ -550,13 +550,28 @@ type testClient struct {
 	closed bool
 }
 
-func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net.Conn, key.NodePrivate, logger.Logf) (*Client, error)) *testClient {
+// testClientOpt can be one of:
+//
+//   - key.NodePrivate, to set an explicit private key
+type testClientOpt any
+
+func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net.Conn, key.NodePrivate, logger.Logf) (*Client, error), opts ...testClientOpt) *testClient {
 	t.Helper()
+
+	k := key.NewNode()
+	for _, opt := range opts {
+		switch opt := opt.(type) {
+		case key.NodePrivate:
+			k = opt
+		default:
+			t.Fatalf("unknown option type %T", opt)
+		}
+	}
+
 	nc, err := net.Dial("tcp", ts.ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	k := key.NewNode()
 	ts.addKeyName(k.Public(), name)
 	c, err := newClient(nc, k, logger.WithPrefix(t.Logf, "client-"+name+": "))
 	if err != nil {
@@ -573,7 +588,7 @@ func newTestClient(t *testing.T, ts *testServer, name string, newClient func(net
 	return tc
 }
 
-func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
+func newRegularClient(t *testing.T, ts *testServer, name string, opts ...testClientOpt) *testClient {
 	return newTestClient(t, ts, name, func(nc net.Conn, priv key.NodePrivate, logf logger.Logf) (*Client, error) {
 		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
 		c, err := NewClient(priv, nc, brw, logf)
@@ -582,8 +597,7 @@ func newRegularClient(t *testing.T, ts *testServer, name string) *testClient {
 		}
 		waitConnect(t, c)
 		return c, nil
-
-	})
+	}, opts...)
 }
 
 func newTestWatcher(t *testing.T, ts *testServer, name string) *testClient {
@@ -683,11 +697,14 @@ func TestWatch(t *testing.T) {
 	w1 := newTestWatcher(t, ts, "w1")
 	w1.wantPresent(t, w1.pub)
 
-	c1 := newRegularClient(t, ts, "c1")
+	c1Priv := key.NewNode()
+	c1 := newRegularClient(t, ts, "c1", c1Priv)
+	c1dup := newRegularClient(t, ts, "c1-dup", c1Priv)
 	w1.wantPresent(t, c1.pub)
 
 	c2 := newRegularClient(t, ts, "c2")
-	w1.wantPresent(t, c2.pub)
+	w1.wantPresent(t, c2.pub) // and not c1 again from c1dup
+	c1dup.close(t)
 
 	w2 := newTestWatcher(t, ts, "w2")
 	w1.wantPresent(t, w2.pub)

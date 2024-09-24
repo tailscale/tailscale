@@ -557,6 +557,7 @@ func (s *Server) registerClient(c *sclient) {
 	defer s.mu.Unlock()
 
 	cs, ok := s.clients[c.key]
+	isFirstConnInSet := !ok
 	if !ok {
 		c.debugLogf("register single client")
 		cs = &clientSet{}
@@ -598,7 +599,9 @@ func (s *Server) registerClient(c *sclient) {
 	}
 	s.keyOfAddr[c.remoteIPPort] = c.key
 	s.curClients.Add(1)
-	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, c.presentFlags(), true)
+	if isFirstConnInSet {
+		s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, c.presentFlags(), true)
+	}
 }
 
 // broadcastPeerStateChangeLocked enqueues a message to all watchers
