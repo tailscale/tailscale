@@ -25,11 +25,13 @@ const (
 	proxyClassCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_proxyclasses.yaml"
 	dnsConfigCRDPath              = operatorDeploymentFilesPath + "/crds/tailscale.com_dnsconfigs.yaml"
 	recorderCRDPath               = operatorDeploymentFilesPath + "/crds/tailscale.com_recorders.yaml"
+	proxyGroupCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_proxygroups.yaml"
 	helmTemplatesPath             = operatorDeploymentFilesPath + "/chart/templates"
 	connectorCRDHelmTemplatePath  = helmTemplatesPath + "/connector.yaml"
 	proxyClassCRDHelmTemplatePath = helmTemplatesPath + "/proxyclass.yaml"
 	dnsConfigCRDHelmTemplatePath  = helmTemplatesPath + "/dnsconfig.yaml"
 	recorderCRDHelmTemplatePath   = helmTemplatesPath + "/recorder.yaml"
+	proxyGroupCRDHelmTemplatePath = helmTemplatesPath + "/proxygroup.yaml"
 
 	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
 	helmConditionalEnd   = "{{- end -}}"
@@ -146,6 +148,7 @@ func generate(baseDir string) error {
 		{proxyClassCRDPath, proxyClassCRDHelmTemplatePath},
 		{dnsConfigCRDPath, dnsConfigCRDHelmTemplatePath},
 		{recorderCRDPath, recorderCRDHelmTemplatePath},
+		{proxyGroupCRDPath, proxyGroupCRDHelmTemplatePath},
 	} {
 		if err := addCRDToHelm(crd.crdPath, crd.templatePath); err != nil {
 			return fmt.Errorf("error adding %s CRD to Helm templates: %w", crd.crdPath, err)
@@ -161,6 +164,7 @@ func cleanup(baseDir string) error {
 		proxyClassCRDHelmTemplatePath,
 		dnsConfigCRDHelmTemplatePath,
 		recorderCRDHelmTemplatePath,
+		proxyGroupCRDHelmTemplatePath,
 	} {
 		if err := os.Remove(filepath.Join(baseDir, path)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("error cleaning up %s: %w", path, err)

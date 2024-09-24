@@ -14,6 +14,8 @@
 - [DNSConfigList](#dnsconfiglist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
+- [ProxyGroup](#proxygroup)
+- [ProxyGroupList](#proxygrouplist)
 - [Recorder](#recorder)
 - [RecorderList](#recorderlist)
 
@@ -450,6 +452,83 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyClass.<br />Known condition types are `ProxyClassReady`. |  |  |
 
 
+#### ProxyGroup
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupList](#proxygrouplist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroup` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[ProxyGroupSpec](#proxygroupspec)_ | Spec describes the desired ProxyGroup instances. |  |  |
+| `status` _[ProxyGroupStatus](#proxygroupstatus)_ | ProxyGroupStatus describes the status of the ProxyGroup pods. This is<br />set and managed by the Tailscale operator. |  |  |
+
+
+#### ProxyGroupList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroupList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[ProxyGroup](#proxygroup) array_ |  |  |  |
+
+
+#### ProxyGroupSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroup](#proxygroup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a ProxyGroup device has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `replicas` _integer_ | Replicas specifies how many replicas to create the StatefulSet with.<br />Defaults to 2. |  |  |
+| `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this ProxyGroup. If unset, the operator will<br />create resources with the default configuration. |  |  |
+
+
+#### ProxyGroupStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroup](#proxygroup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup pods.<br />Known condition types are `ProxyGroupReady`. |  |  |
+| `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup statefulset. |  |  |
+
+
 #### Recorder
 
 
@@ -748,6 +827,7 @@ _Validation:_
 
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
+- [ProxyGroupSpec](#proxygroupspec)
 - [RecorderSpec](#recorderspec)
 
 
@@ -761,6 +841,7 @@ _Appears in:_
 
 
 _Appears in:_
+- [ProxyGroupStatus](#proxygroupstatus)
 - [RecorderStatus](#recorderstatus)
 
 | Field | Description | Default | Validation |
