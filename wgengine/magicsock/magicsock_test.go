@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/go-cmp/cmp"
 	wgconn "github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
@@ -1188,6 +1190,99 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		checkStats(t, m1, m1Conns)
 		checkStats(t, m2, m2Conns)
 	})
+	t.Run("compare-metrics-stats", func(t *testing.T) {
+		setT(t)
+		defer setT(outerT)
+		m1.conn.resetMetricsForTest()
+		m1.stats.TestExtract()
+		m2.conn.resetMetricsForTest()
+		m2.stats.TestExtract()
+		t.Logf("Metrics before: %s\n", m1.metrics.String())
+		ping1(t)
+		ping2(t)
+		assertConnStatsAndUserMetricsEqual(t, m1)
+		assertConnStatsAndUserMetricsEqual(t, m2)
+		t.Logf("Metrics after: %s\n", m1.metrics.String())
+	})
+}
+
+func (c *Conn) resetMetricsForTest() {
+	c.metrics.inboundBytesTotal.ResetAllForTest()
+	c.metrics.inboundPacketsTotal.ResetAllForTest()
+	c.metrics.outboundBytesTotal.ResetAllForTest()
+	c.metrics.outboundPacketsTotal.ResetAllForTest()
+}
+
+func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
+	_, phys := ms.stats.TestExtract()
+
+	physIPv4RxBytes := int64(0)
+	physIPv4TxBytes := int64(0)
+	physDERPRxBytes := int64(0)
+	physDERPTxBytes := int64(0)
+	physIPv4RxPackets := int64(0)
+	physIPv4TxPackets := int64(0)
+	physDERPRxPackets := int64(0)
+	physDERPTxPackets := int64(0)
+	for conn, count := range phys {
+		t.Logf("physconn src: %s, dst: %s", conn.Src.String(), conn.Dst.String())
+		if conn.Dst.String() == "127.3.3.40:1" {
+			physDERPRxBytes += int64(count.RxBytes)
+			physDERPTxBytes += int64(count.TxBytes)
+			physDERPRxPackets += int64(count.RxPackets)
+			physDERPTxPackets += int64(count.TxPackets)
+		} else {
+			physIPv4RxBytes += int64(count.RxBytes)
+			physIPv4TxBytes += int64(count.TxBytes)
+			physIPv4RxPackets += int64(count.RxPackets)
+			physIPv4TxPackets += int64(count.TxPackets)
+		}
+	}
+
+	var metricIPv4RxBytes, metricIPv4TxBytes, metricDERPRxBytes, metricDERPTxBytes int64
+	var metricIPv4RxPackets, metricIPv4TxPackets, metricDERPRxPackets, metricDERPTxPackets int64
+
+	if m, ok := ms.conn.metrics.inboundBytesTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4RxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metrics.outboundBytesTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4TxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metrics.inboundBytesTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPRxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metrics.outboundBytesTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPTxBytes = m.Value()
+	}
+	if m, ok := ms.conn.metrics.inboundPacketsTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4RxPackets = m.Value()
+	}
+	if m, ok := ms.conn.metrics.outboundPacketsTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
+		metricIPv4TxPackets = m.Value()
+	}
+	if m, ok := ms.conn.metrics.inboundPacketsTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPRxPackets = m.Value()
+	}
+	if m, ok := ms.conn.metrics.outboundPacketsTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
+		metricDERPTxPackets = m.Value()
+	}
+
+	assertEqual(t, "derp bytes inbound", physDERPRxBytes, metricDERPRxBytes)
+	assertEqual(t, "derp bytes outbound", physDERPTxBytes, metricDERPTxBytes)
+	assertEqual(t, "ipv4 bytes inbound", physIPv4RxBytes, metricIPv4RxBytes)
+	assertEqual(t, "ipv4 bytes outbound", physIPv4TxBytes, metricIPv4TxBytes)
+	assertEqual(t, "derp packets inbound", physDERPRxPackets, metricDERPRxPackets)
+	assertEqual(t, "derp packets outbound", physDERPTxPackets, metricDERPTxPackets)
+	assertEqual(t, "ipv4 packets inbound", physIPv4RxPackets, metricIPv4RxPackets)
+	assertEqual(t, "ipv4 packets outbound", physIPv4TxPackets, metricIPv4TxPackets)
+}
+
+func assertEqual(t *testing.T, name string, a, b any) {
+	t.Helper()
+	t.Logf("assertEqual %s: %v == %v", name, a, b)
+	if diff := cmp.Diff(a, b); diff != "" {
+		t.Errorf("%s mismatch (-want +got):\n%s", name, diff)
+	}
 }
 
 func TestDiscoMessage(t *testing.T) {

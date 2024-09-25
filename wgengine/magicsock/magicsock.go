@@ -33,6 +33,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
@@ -79,6 +80,41 @@ const (
 	// will silently clamp the value.
 	socketBufferSize = 7 << 20
 )
+
+// Path is a label indicating the type of path a packet took.
+type Path string
+
+const (
+	PathDirectIPv4 Path = "direct_ipv4"
+	PathDirectIPv6 Path = "direct_ipv6"
+	PathDERP       Path = "derp"
+)
+
+type pathLabel struct {
+	// Path indicates the path that the packet took:
+	// - direct_ipv4
+	// - direct_ipv6
+	// - derp
+	Path Path
+}
+
+type metrics struct {
+	// inboundPacketsTotal is the total number of inbound packets received,
+	// labeled by the path the packet took.
+	inboundPacketsTotal *tsmetrics.MultiLabelMap[pathLabel]
+
+	// outboundPacketsTotal is the total number of outbound packets sent,
+	// labeled by the path the packet took.
+	outboundPacketsTotal *tsmetrics.MultiLabelMap[pathLabel]
+
+	// inboundBytesTotal is the total number of inbound bytes received,
+	// labeled by the path the packet took.
+	inboundBytesTotal *tsmetrics.MultiLabelMap[pathLabel]
+
+	// outboundBytesTotal is the total number of outbound bytes sent,
+	// labeled by the path the packet took.
+	outboundBytesTotal *tsmetrics.MultiLabelMap[pathLabel]
+}
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 type Conn struct {
@@ -321,6 +357,9 @@ type Conn struct {
 	// responsibility to ensure that traffic from these endpoints is routed
 	// to the node.
 	staticEndpoints views.Slice[netip.AddrPort]
+
+	// metrics contains the metrics for the magicsock instance.
+	metrics *metrics
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -501,6 +540,33 @@ func NewConn(opts Options) (*Conn, error) {
 		SkipExternalNetwork: inTest(),
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
+	}
+
+	c.metrics = &metrics{
+		inboundBytesTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+			opts.Metrics,
+			"tailscaled_inbound_bytes_total",
+			"counter",
+			"Counts the number of bytes received from other peers",
+		),
+		inboundPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+			opts.Metrics,
+			"tailscaled_inbound_packets_total",
+			"counter",
+			"Counts the number of packets received from other peers",
+		),
+		outboundBytesTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+			opts.Metrics,
+			"tailscaled_outbound_bytes_total",
+			"counter",
+			"Counts the number of bytes sent to other peers",
+		),
+		outboundPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+			opts.Metrics,
+			"tailscaled_outbound_packets_total",
+			"counter",
+			"Counts the number of packets sent to other peers",
+		),
 	}
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
@@ -1141,6 +1207,15 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	} else {
 		if sent {
 			metricSendUDP.Add(1)
+
+			switch {
+			case ipp.Addr().Is4():
+				c.metrics.outboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, 1)
+				c.metrics.outboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, int64(len(b)))
+			case ipp.Addr().Is6():
+				c.metrics.outboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, 1)
+				c.metrics.outboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, int64(len(b)))
+			}
 		}
 	}
 	return
@@ -1278,19 +1353,30 @@ func (c *Conn) putReceiveBatch(batch *receiveBatch) {
 	c.receiveBatchPool.Put(batch)
 }
 
-// receiveIPv4 creates an IPv4 ReceiveFunc reading from c.pconn4.
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4), metricRecvDataIPv4)
+	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
+		func(i int64) {
+			metricRecvDataPacketsIPv4.Add(i)
+			c.metrics.inboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, i)
+		}, func(i int64) {
+			c.metrics.inboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, i)
+		})
 }
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6), metricRecvDataIPv6)
+	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
+		func(i int64) {
+			metricRecvDataPacketsIPv6.Add(i)
+			c.metrics.inboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, i)
+		}, func(i int64) {
+			c.metrics.inboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, i)
+		})
 }
 
 // mkReceiveFunc creates a ReceiveFunc reading from ruc.
-// The provided healthItem and metric are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, metric *clientmetric.Metric) conn.ReceiveFunc {
+// The provided healthItem and metrics are updated if non-nil.
+func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, packetMetricFunc, bytesMetricFunc func(int64)) conn.ReceiveFunc {
 	// epCache caches an IPPort->endpoint for hot flows.
 	var epCache ippEndpointCache
 
@@ -1327,8 +1413,11 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				}
 				ipp := msg.Addr.(*net.UDPAddr).AddrPort()
 				if ep, ok := c.receiveIP(msg.Buffers[0][:msg.N], ipp, &epCache); ok {
-					if metric != nil {
-						metric.Add(1)
+					if packetMetricFunc != nil {
+						packetMetricFunc(1)
+					}
+					if bytesMetricFunc != nil {
+						bytesMetricFunc(int64(msg.N))
 					}
 					eps[i] = ep
 					sizes[i] = msg.N
@@ -2938,9 +3027,9 @@ var (
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
 	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvDataDERP        = clientmetric.NewCounter("magicsock_recv_data_derp")
-	metricRecvDataIPv4        = clientmetric.NewCounter("magicsock_recv_data_ipv4")
-	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
+	metricRecvDataPacketsDERP = clientmetric.NewCounter("magicsock_recv_data_derp")
+	metricRecvDataPacketsIPv4 = clientmetric.NewCounter("magicsock_recv_data_ipv4")
+	metricRecvDataPacketsIPv6 = clientmetric.NewCounter("magicsock_recv_data_ipv6")
 
 	// Disco packets
 	metricSendDiscoUDP               = clientmetric.NewCounter("magicsock_disco_send_udp")
