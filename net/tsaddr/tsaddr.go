@@ -191,6 +191,17 @@ func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 	return v4 && v6
 }
 
+// ContainsExitRoute reports whether rr contains at least one of IPv4 or
+// IPv6 /0 (exit) routes.
+func ContainsExitRoute(rr views.Slice[netip.Prefix]) bool {
+	for i := range rr.Len() {
+		if rr.At(i).Bits() == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ContainsNonExitSubnetRoutes reports whether v contains Subnet
 // Routes other than ExitNode Routes.
 func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
@@ -200,6 +211,38 @@ func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
 		}
 	}
 	return false
+}
+
+// WithoutExitRoutes returns rr unchanged if it has only 1 or 0 /0
+// routes. If it has both IPv4 and IPv6 /0 routes, then it returns
+// a copy with all /0 routes removed.
+func WithoutExitRoutes(rr views.Slice[netip.Prefix]) views.Slice[netip.Prefix] {
+	if !ContainsExitRoutes(rr) {
+		return rr
+	}
+	var out []netip.Prefix
+	for _, r := range rr.All() {
+		if r.Bits() > 0 {
+			out = append(out, r)
+		}
+	}
+	return views.SliceOf(out)
+}
+
+// WithoutExitRoute returns rr unchanged if it has 0 /0
+// routes. If it has a IPv4 or IPv6 /0 routes, then it returns
+// a copy with all /0 routes removed.
+func WithoutExitRoute(rr views.Slice[netip.Prefix]) views.Slice[netip.Prefix] {
+	if !ContainsExitRoute(rr) {
+		return rr
+	}
+	var out []netip.Prefix
+	for _, r := range rr.All() {
+		if r.Bits() > 0 {
+			out = append(out, r)
+		}
+	}
+	return views.SliceOf(out)
 }
 
 var (
@@ -215,6 +258,11 @@ func AllIPv6() netip.Prefix { return allIPv6 }
 
 // ExitRoutes returns a slice containing AllIPv4 and AllIPv6.
 func ExitRoutes() []netip.Prefix { return []netip.Prefix{allIPv4, allIPv6} }
+
+// IsExitRoute reports whether p is an exit node route.
+func IsExitRoute(p netip.Prefix) bool {
+	return p == allIPv4 || p == allIPv6
+}
 
 // SortPrefixes sorts the prefixes in place.
 func SortPrefixes(p []netip.Prefix) {

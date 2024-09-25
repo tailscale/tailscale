@@ -7,7 +7,10 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/types/views"
 )
 
 func TestInCrostiniRange(t *testing.T) {
@@ -86,6 +89,136 @@ func TestUnmapVia(t *testing.T) {
 	for _, tt := range tests {
 		if got := UnmapVia(netip.MustParseAddr(tt.ip)).String(); got != tt.want {
 			t.Errorf("for %q: got %q, want %q", tt.ip, got, tt.want)
+		}
+	}
+}
+
+func TestIsExitNodeRoute(t *testing.T) {
+	tests := []struct {
+		pref netip.Prefix
+		want bool
+	}{
+		{
+			pref: AllIPv4(),
+			want: true,
+		},
+		{
+			pref: AllIPv6(),
+			want: true,
+		},
+		{
+			pref: netip.MustParsePrefix("1.1.1.1/0"),
+			want: false,
+		},
+		{
+			pref: netip.MustParsePrefix("1.1.1.1/1"),
+			want: false,
+		},
+		{
+			pref: netip.MustParsePrefix("192.168.0.0/24"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		if got := IsExitRoute(tt.pref); got != tt.want {
+			t.Errorf("for %q: got %v, want %v", tt.pref, got, tt.want)
+		}
+	}
+}
+
+func TestWithoutExitRoutes(t *testing.T) {
+	tests := []struct {
+		prefs []netip.Prefix
+		want  []netip.Prefix
+	}{
+		{
+			prefs: []netip.Prefix{AllIPv4(), AllIPv6()},
+			want:  []netip.Prefix{},
+		},
+		{
+			prefs: []netip.Prefix{AllIPv4()},
+			want:  []netip.Prefix{AllIPv4()},
+		},
+		{
+			prefs: []netip.Prefix{AllIPv4(), AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+			want:  []netip.Prefix{netip.MustParsePrefix("10.0.0.0/10")},
+		},
+		{
+			prefs: []netip.Prefix{AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+			want:  []netip.Prefix{AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+		},
+	}
+
+	for _, tt := range tests {
+		got := WithoutExitRoutes(views.SliceOf(tt.prefs))
+		if diff := cmp.Diff(tt.want, got.AsSlice(), cmpopts.EquateEmpty(), cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
+			t.Errorf("unexpected route difference (-want +got):\n%s", diff)
+		}
+	}
+}
+
+func TestWithoutExitRoute(t *testing.T) {
+	tests := []struct {
+		prefs []netip.Prefix
+		want  []netip.Prefix
+	}{
+		{
+			prefs: []netip.Prefix{AllIPv4(), AllIPv6()},
+			want:  []netip.Prefix{},
+		},
+		{
+			prefs: []netip.Prefix{AllIPv4()},
+			want:  []netip.Prefix{},
+		},
+		{
+			prefs: []netip.Prefix{AllIPv4(), AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+			want:  []netip.Prefix{netip.MustParsePrefix("10.0.0.0/10")},
+		},
+		{
+			prefs: []netip.Prefix{AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+			want:  []netip.Prefix{netip.MustParsePrefix("10.0.0.0/10")},
+		},
+	}
+
+	for _, tt := range tests {
+		got := WithoutExitRoute(views.SliceOf(tt.prefs))
+		if diff := cmp.Diff(tt.want, got.AsSlice(), cmpopts.EquateEmpty(), cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
+			t.Errorf("unexpected route difference (-want +got):\n%s", diff)
+		}
+	}
+}
+
+func TestContainsExitRoute(t *testing.T) {
+	tests := []struct {
+		prefs []netip.Prefix
+		want  bool
+	}{
+		{
+			prefs: []netip.Prefix{AllIPv4(), AllIPv6()},
+			want:  true,
+		},
+		{
+			prefs: []netip.Prefix{AllIPv4()},
+			want:  true,
+		},
+		{
+			prefs: []netip.Prefix{AllIPv4(), AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+			want:  true,
+		},
+		{
+			prefs: []netip.Prefix{AllIPv6(), netip.MustParsePrefix("10.0.0.0/10")},
+			want:  true,
+		},
+		{
+			prefs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/10")},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		if got := ContainsExitRoute(views.SliceOf(tt.prefs)); got != tt.want {
+			t.Errorf("for %q: got %v, want %v", tt.prefs, got, tt.want)
 		}
 	}
 }
