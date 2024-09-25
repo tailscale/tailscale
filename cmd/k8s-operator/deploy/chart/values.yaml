@@ -57,12 +57,12 @@ operatorConfig:
 
 # proxyConfig contains configuraton that will be applied to any ingress/egress
 # proxies created by the operator.
-# https://tailscale.com/kb/1236/kubernetes-operator/#cluster-ingress
-# https://tailscale.com/kb/1236/kubernetes-operator/#cluster-egress
+# https://tailscale.com/kb/1439/kubernetes-operator-cluster-ingress
+# https://tailscale.com/kb/1438/kubernetes-operator-cluster-egress
 # Note that this section contains only a few global configuration options and
 # will not be updated with more configuration options in the future.
 # If you need more configuration options, take a look at ProxyClass:
-# https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource
+# https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
 proxyConfig:
   image:
     # Repository defaults to DockerHub, but images are also synced to ghcr.io/tailscale/tailscale.
@@ -84,7 +84,7 @@ proxyConfig:
 
 # apiServerProxyConfig allows to configure whether the operator should expose
 # Kubernetes API server.
-# https://tailscale.com/kb/1236/kubernetes-operator/#accessing-the-kubernetes-control-plane-using-an-api-server-proxy
+# https://tailscale.com/kb/1437/kubernetes-operator-api-server-proxy
 apiServerProxyConfig:
   mode: "false" # "true", "false", "noauth"
 
