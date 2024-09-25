@@ -613,7 +613,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		// Only do PCP mapping in the case when PMP did not appear to be available recently.
 		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP)
 		if _, err := uc.WriteToUDPAddrPort(pkt, pxpAddr); err != nil {
-			if neterror.TreatAsLostUDP(err) {
+			if neterror.IsEPERM(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
 			}
 			return netip.AddrPort{}, err
@@ -622,7 +622,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		// Ask for our external address if needed.
 		if !m.external.Addr().IsValid() {
 			if _, err := uc.WriteToUDPAddrPort(pmpReqExternalAddrPacket, pxpAddr); err != nil {
-				if neterror.TreatAsLostUDP(err) {
+				if neterror.IsEPERM(err) {
 					err = NoMappingError{ErrNoPortMappingServices}
 				}
 				return netip.AddrPort{}, err
@@ -631,7 +631,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 
 		pkt := buildPMPRequestMappingPacket(localPort, prevPort, pmpMapLifetimeSec)
 		if _, err := uc.WriteToUDPAddrPort(pkt, pxpAddr); err != nil {
-			if neterror.TreatAsLostUDP(err) {
+			if neterror.IsEPERM(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
 			}
 			return netip.AddrPort{}, err
