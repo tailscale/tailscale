@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"net"
@@ -33,7 +34,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
-	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
@@ -98,22 +98,35 @@ type pathLabel struct {
 	Path Path
 }
 
+// metrics in wgengine contains the usermetrics counters for magicsock, it
+// is however a bit special. All them metrics are labeled, but looking up
+// the metric everytime we need to record it has an overhead, and includes
+// a lock in MultiLabelMap. The metrics are therefore instead created with
+// wgengine and the underlying expvar.Int is stored to be used directly.
 type metrics struct {
 	// inboundPacketsTotal is the total number of inbound packets received,
 	// labeled by the path the packet took.
-	inboundPacketsTotal *tsmetrics.MultiLabelMap[pathLabel]
-
-	// outboundPacketsTotal is the total number of outbound packets sent,
-	// labeled by the path the packet took.
-	outboundPacketsTotal *tsmetrics.MultiLabelMap[pathLabel]
+	inboundPacketsIPv4Total *expvar.Int
+	inboundPacketsIPv6Total *expvar.Int
+	inboundPacketsDERPTotal *expvar.Int
 
 	// inboundBytesTotal is the total number of inbound bytes received,
 	// labeled by the path the packet took.
-	inboundBytesTotal *tsmetrics.MultiLabelMap[pathLabel]
+	inboundBytesIPv4Total *expvar.Int
+	inboundBytesIPv6Total *expvar.Int
+	inboundBytesDERPTotal *expvar.Int
+
+	// outboundPacketsTotal is the total number of outbound packets sent,
+	// labeled by the path the packet took.
+	outboundPacketsIPv4Total *expvar.Int
+	outboundPacketsIPv6Total *expvar.Int
+	outboundPacketsDERPTotal *expvar.Int
 
 	// outboundBytesTotal is the total number of outbound bytes sent,
 	// labeled by the path the packet took.
-	outboundBytesTotal *tsmetrics.MultiLabelMap[pathLabel]
+	outboundBytesIPv4Total *expvar.Int
+	outboundBytesIPv6Total *expvar.Int
+	outboundBytesDERPTotal *expvar.Int
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -542,32 +555,7 @@ func NewConn(opts Options) (*Conn, error) {
 		UseDNSCache:         true,
 	}
 
-	c.metrics = &metrics{
-		inboundBytesTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-			opts.Metrics,
-			"tailscaled_inbound_bytes_total",
-			"counter",
-			"Counts the number of bytes received from other peers",
-		),
-		inboundPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-			opts.Metrics,
-			"tailscaled_inbound_packets_total",
-			"counter",
-			"Counts the number of packets received from other peers",
-		),
-		outboundBytesTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-			opts.Metrics,
-			"tailscaled_outbound_bytes_total",
-			"counter",
-			"Counts the number of bytes sent to other peers",
-		),
-		outboundPacketsTotal: usermetric.NewMultiLabelMapWithRegistry[pathLabel](
-			opts.Metrics,
-			"tailscaled_outbound_packets_total",
-			"counter",
-			"Counts the number of packets sent to other peers",
-		),
-	}
+	c.metrics = registerMetrics(opts.Metrics)
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
 		c.logf("[v1] using BPF disco receiver for IPv4")
@@ -584,6 +572,74 @@ func NewConn(opts Options) (*Conn, error) {
 
 	c.logf("magicsock: disco key = %v", c.discoShort)
 	return c, nil
+}
+
+// registerMetrics wires up the metrics for wgengine, instead of
+// registering the label metric directly, the underlying expvar is exposed.
+// See metrics for more info.
+func registerMetrics(reg *usermetric.Registry) *metrics {
+	pathDirectV4 := pathLabel{Path: PathDirectIPv4}
+	pathDirectV6 := pathLabel{Path: PathDirectIPv6}
+	pathDERP := pathLabel{Path: PathDERP}
+	inboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+		reg,
+		"tailscaled_inbound_packets_total",
+		"counter",
+		"Counts the number of packets received from other peers",
+	)
+	inboundBytesTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+		reg,
+		"tailscaled_inbound_bytes_total",
+		"counter",
+		"Counts the number of bytes received from other peers",
+	)
+	outboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+		reg,
+		"tailscaled_outbound_packets_total",
+		"counter",
+		"Counts the number of packets sent to other peers",
+	)
+	outboundBytesTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
+		reg,
+		"tailscaled_outbound_bytes_total",
+		"counter",
+		"Counts the number of bytes sent to other peers",
+	)
+	m := metrics{
+		inboundPacketsIPv4Total: &expvar.Int{},
+		inboundPacketsIPv6Total: &expvar.Int{},
+		inboundPacketsDERPTotal: &expvar.Int{},
+
+		inboundBytesIPv4Total: &expvar.Int{},
+		inboundBytesIPv6Total: &expvar.Int{},
+		inboundBytesDERPTotal: &expvar.Int{},
+
+		outboundPacketsIPv4Total: &expvar.Int{},
+		outboundPacketsIPv6Total: &expvar.Int{},
+		outboundPacketsDERPTotal: &expvar.Int{},
+
+		outboundBytesIPv4Total: &expvar.Int{},
+		outboundBytesIPv6Total: &expvar.Int{},
+		outboundBytesDERPTotal: &expvar.Int{},
+	}
+
+	inboundPacketsTotal.Set(pathDirectV4, m.inboundPacketsIPv4Total)
+	inboundPacketsTotal.Set(pathDirectV6, m.inboundPacketsIPv6Total)
+	inboundPacketsTotal.Set(pathDERP, m.inboundPacketsDERPTotal)
+
+	inboundBytesTotal.Set(pathDirectV4, m.inboundBytesIPv4Total)
+	inboundBytesTotal.Set(pathDirectV6, m.inboundBytesIPv6Total)
+	inboundBytesTotal.Set(pathDERP, m.inboundBytesDERPTotal)
+
+	outboundPacketsTotal.Set(pathDirectV4, m.outboundPacketsIPv4Total)
+	outboundPacketsTotal.Set(pathDirectV6, m.outboundPacketsIPv6Total)
+	outboundPacketsTotal.Set(pathDERP, m.outboundPacketsDERPTotal)
+
+	outboundBytesTotal.Set(pathDirectV4, m.outboundBytesIPv4Total)
+	outboundBytesTotal.Set(pathDirectV6, m.outboundBytesIPv6Total)
+	outboundBytesTotal.Set(pathDERP, m.outboundBytesDERPTotal)
+
+	return &m
 }
 
 // InstallCaptureHook installs a callback which is called to
@@ -1210,11 +1266,11 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 
 			switch {
 			case ipp.Addr().Is4():
-				c.metrics.outboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, 1)
-				c.metrics.outboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, int64(len(b)))
+				c.metrics.outboundPacketsIPv4Total.Add(1)
+				c.metrics.outboundBytesIPv4Total.Add(int64(len(b)))
 			case ipp.Addr().Is6():
-				c.metrics.outboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, 1)
-				c.metrics.outboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, int64(len(b)))
+				c.metrics.outboundPacketsIPv6Total.Add(1)
+				c.metrics.outboundBytesIPv6Total.Add(int64(len(b)))
 			}
 		}
 	}
@@ -1357,9 +1413,9 @@ func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
 		func(i int64) {
 			metricRecvDataPacketsIPv4.Add(i)
-			c.metrics.inboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv4}, i)
+			c.metrics.inboundPacketsIPv4Total.Add(i)
 		}, func(i int64) {
-			c.metrics.inboundBytesTotal.Add(pathLabel{Path: PathDirectIPv4}, i)
+			c.metrics.inboundBytesIPv4Total.Add(i)
 		})
 }
 
@@ -1368,9 +1424,9 @@ func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
 		func(i int64) {
 			metricRecvDataPacketsIPv6.Add(i)
-			c.metrics.inboundPacketsTotal.Add(pathLabel{Path: PathDirectIPv6}, i)
+			c.metrics.inboundPacketsIPv6Total.Add(i)
 		}, func(i int64) {
-			c.metrics.inboundBytesTotal.Add(pathLabel{Path: PathDirectIPv6}, i)
+			c.metrics.inboundBytesIPv6Total.Add(i)
 		})
 }
 

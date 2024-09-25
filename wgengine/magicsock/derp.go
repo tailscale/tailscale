@@ -691,8 +691,8 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 			continue
 		}
 		metricRecvDataPacketsDERP.Add(1)
-		c.metrics.inboundPacketsTotal.Add(pathLabel{Path: PathDERP}, 1)
-		c.metrics.inboundBytesTotal.Add(pathLabel{Path: PathDERP}, int64(n))
+		c.metrics.inboundPacketsDERPTotal.Add(1)
+		c.metrics.inboundBytesDERPTotal.Add(int64(n))
 		sizes[0] = n
 		eps[0] = ep
 		return 1, nil

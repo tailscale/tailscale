@@ -965,16 +965,14 @@ func (de *endpoint) send(buffs [][]byte) error {
 			txBytes += len(b)
 		}
 
-		var label pathLabel
 		switch {
 		case udpAddr.Addr().Is4():
-			label = pathLabel{Path: PathDirectIPv4}
+			de.c.metrics.outboundPacketsIPv4Total.Add(int64(len(buffs)))
+			de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
 		case udpAddr.Addr().Is6():
-			label = pathLabel{Path: PathDirectIPv6}
+			de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
+			de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
 		}
-
-		de.c.metrics.outboundPacketsTotal.Add(label, int64(len(buffs)))
-		de.c.metrics.outboundBytesTotal.Add(label, int64(txBytes))
 
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
 		if stats := de.c.stats.Load(); err == nil && stats != nil {
@@ -995,8 +993,8 @@ func (de *endpoint) send(buffs [][]byte) error {
 		if stats := de.c.stats.Load(); stats != nil {
 			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, txBytes)
 		}
-		de.c.metrics.outboundPacketsTotal.Add(pathLabel{Path: PathDERP}, int64(len(buffs)))
-		de.c.metrics.outboundBytesTotal.Add(pathLabel{Path: PathDERP}, int64(txBytes))
+		de.c.metrics.outboundPacketsDERPTotal.Add(int64(len(buffs)))
+		de.c.metrics.outboundBytesDERPTotal.Add(int64(txBytes))
 		if allOk {
 			return nil
 		}

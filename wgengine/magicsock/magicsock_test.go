@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
-	"expvar"
 	"fmt"
 	"io"
 	"math/rand"
@@ -1207,10 +1206,18 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 }
 
 func (c *Conn) resetMetricsForTest() {
-	c.metrics.inboundBytesTotal.ResetAllForTest()
-	c.metrics.inboundPacketsTotal.ResetAllForTest()
-	c.metrics.outboundBytesTotal.ResetAllForTest()
-	c.metrics.outboundPacketsTotal.ResetAllForTest()
+	c.metrics.inboundBytesIPv4Total.Set(0)
+	c.metrics.inboundPacketsIPv4Total.Set(0)
+	c.metrics.outboundBytesIPv4Total.Set(0)
+	c.metrics.outboundPacketsIPv4Total.Set(0)
+	c.metrics.inboundBytesIPv6Total.Set(0)
+	c.metrics.inboundPacketsIPv6Total.Set(0)
+	c.metrics.outboundBytesIPv6Total.Set(0)
+	c.metrics.outboundPacketsIPv6Total.Set(0)
+	c.metrics.inboundBytesDERPTotal.Set(0)
+	c.metrics.inboundPacketsDERPTotal.Set(0)
+	c.metrics.outboundBytesDERPTotal.Set(0)
+	c.metrics.outboundPacketsDERPTotal.Set(0)
 }
 
 func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
@@ -1239,33 +1246,15 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 		}
 	}
 
-	var metricIPv4RxBytes, metricIPv4TxBytes, metricDERPRxBytes, metricDERPTxBytes int64
-	var metricIPv4RxPackets, metricIPv4TxPackets, metricDERPRxPackets, metricDERPTxPackets int64
+	metricIPv4RxBytes := ms.conn.metrics.inboundBytesIPv4Total.Value()
+	metricIPv4RxPackets := ms.conn.metrics.inboundPacketsIPv4Total.Value()
+	metricIPv4TxBytes := ms.conn.metrics.outboundBytesIPv4Total.Value()
+	metricIPv4TxPackets := ms.conn.metrics.outboundPacketsIPv4Total.Value()
 
-	if m, ok := ms.conn.metrics.inboundBytesTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
-		metricIPv4RxBytes = m.Value()
-	}
-	if m, ok := ms.conn.metrics.outboundBytesTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
-		metricIPv4TxBytes = m.Value()
-	}
-	if m, ok := ms.conn.metrics.inboundBytesTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
-		metricDERPRxBytes = m.Value()
-	}
-	if m, ok := ms.conn.metrics.outboundBytesTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
-		metricDERPTxBytes = m.Value()
-	}
-	if m, ok := ms.conn.metrics.inboundPacketsTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
-		metricIPv4RxPackets = m.Value()
-	}
-	if m, ok := ms.conn.metrics.outboundPacketsTotal.Get(pathLabel{Path: PathDirectIPv4}).(*expvar.Int); ok {
-		metricIPv4TxPackets = m.Value()
-	}
-	if m, ok := ms.conn.metrics.inboundPacketsTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
-		metricDERPRxPackets = m.Value()
-	}
-	if m, ok := ms.conn.metrics.outboundPacketsTotal.Get(pathLabel{Path: PathDERP}).(*expvar.Int); ok {
-		metricDERPTxPackets = m.Value()
-	}
+	metricDERPRxBytes := ms.conn.metrics.inboundBytesDERPTotal.Value()
+	metricDERPRxPackets := ms.conn.metrics.inboundPacketsDERPTotal.Value()
+	metricDERPTxBytes := ms.conn.metrics.outboundBytesDERPTotal.Value()
+	metricDERPTxPackets := ms.conn.metrics.outboundPacketsDERPTotal.Value()
 
 	assertEqual(t, "derp bytes inbound", physDERPRxBytes, metricDERPRxBytes)
 	assertEqual(t, "derp bytes outbound", physDERPTxBytes, metricDERPTxBytes)
