@@ -960,25 +960,38 @@ func (de *endpoint) send(buffs [][]byte) error {
 			de.noteBadEndpoint(udpAddr)
 		}
 
+		var txBytes int
+		for _, b := range buffs {
+			txBytes += len(b)
+		}
+
+		switch {
+		case udpAddr.Addr().Is4():
+			de.c.metrics.outboundPacketsIPv4Total.Add(int64(len(buffs)))
+			de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
+		case udpAddr.Addr().Is6():
+			de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
+			de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
+		}
+
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
 		if stats := de.c.stats.Load(); err == nil && stats != nil {
-			var txBytes int
-			for _, b := range buffs {
-				txBytes += len(b)
-			}
 			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, txBytes)
 		}
 	}
 	if derpAddr.IsValid() {
 		allOk := true
+		var txBytes int
 		for _, buff := range buffs {
 			ok, _ := de.c.sendAddr(derpAddr, de.publicKey, buff)
-			if stats := de.c.stats.Load(); stats != nil {
-				stats.UpdateTxPhysical(de.nodeAddr, derpAddr, len(buff))
-			}
+			txBytes += len(buff)
 			if !ok {
 				allOk = false
 			}
+		}
+
+		if stats := de.c.stats.Load(); stats != nil {
+			stats.UpdateTxPhysical(de.nodeAddr, derpAddr, txBytes)
 		}
 		if allOk {
 			return nil

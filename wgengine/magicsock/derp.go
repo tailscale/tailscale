@@ -669,7 +669,8 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
 				metricSendDERPError.Add(1)
 			} else {
-				metricSendDERP.Add(1)
+				c.metrics.outboundPacketsDERPTotal.Add(1)
+				c.metrics.outboundBytesDERPTotal.Add(int64(len(wr.b)))
 			}
 		}
 	}
@@ -690,7 +691,8 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 			// No data read occurred. Wait for another packet.
 			continue
 		}
-		metricRecvDataDERP.Add(1)
+		c.metrics.inboundPacketsDERPTotal.Add(1)
+		c.metrics.inboundBytesDERPTotal.Add(int64(n))
 		sizes[0] = n
 		eps[0] = ep
 		return 1, nil
