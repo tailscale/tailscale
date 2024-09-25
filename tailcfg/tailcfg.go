@@ -1957,9 +1957,6 @@ type MapResponse struct {
 	// MaxKeyDuration describes the MaxKeyDuration setting for the tailnet.
 	// If zero, the value is unchanged.
 	MaxKeyDuration time.Duration `json:",omitempty"`
-
-	// TODO all the delta stuff
-	ClusterPeers ClusterInfo `json:",omitempty"`
 }
 
 // ClientVersion is information about the latest client version that's available

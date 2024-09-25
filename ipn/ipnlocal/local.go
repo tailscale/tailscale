@@ -371,8 +371,6 @@ type LocalBackend struct {
 	// backend is healthy and captive portal detection is not required
 	// (sending false).
 	needsCaptiveDetection chan bool
-
-	natcOnce sync.Once
 }
 
 // HealthTracker returns the health tracker for the backend.
@@ -3969,27 +3967,76 @@ func (b *LocalBackend) NatcHandlerForFlow() (func(src, dst netip.AddrPort) (hand
 }
 
 func (b *LocalBackend) natc(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
-	// when we get reconfigured how do we cope with that? like if all nodes get removed and then
-	// fresh nodes added, does that work? or do we have to remove and re-add one by one?
-	// Is there a time when we would need to cancel the goroutine we start here (presumably there is)?
-	if !prefs.NatConnector().Advertise {
+	if nm == nil || !nm.SelfNode.Valid() || b.natConnector == nil {
+		// not got enough info to do anything yet
+		return
+	}
+	if b.natConnector.ConsensusClient != nil {
+		// we're already in the cluster
+		return
+	}
+
+	// TODO these are also in corp
+	type NatConnectorAttr struct {
+		Name       string   `json:"name,omitempty"`
+		Connectors []string `json:"connectors,omitempty"`
+		Domains    []string `json:"domains,omitempty"`
+	}
+	const natConnectorCapName = "tailscale.com/nat-connectors"
+
+	sn := nm.SelfNode.AsStruct()
+	attrs, err := tailcfg.UnmarshalNodeCapJSON[NatConnectorAttr](sn.CapMap, natConnectorCapName)
+	if err != nil {
+		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
+		return
+	}
+	if len(attrs) == 0 || len(attrs[0].Connectors) == 0 {
+		// there's no control config (or invalid config, is that possible? TODO)
+		return
+	}
+	if len(attrs) > 1 || len(attrs[0].Connectors) > 1 {
+		// TODO what do we do with multiples?
+		fmt.Println("NAT CONNECTOR NOT PROPERLY HANDLING MULTIPLE STANZAS OR TAGS IN POLICY")
+		fmt.Println("len(attrs)", len(attrs), "attrs[0].Connectors", attrs[0].Connectors)
+	}
+	tagName := attrs[0].Connectors[0]
+	domains := attrs[0].Domains
+	slices.Sort(domains)
+	domains = slices.Compact(domains)
+	// TODO tell nat connector about domains so that it can handle its side properly
+
+	if !views.SliceContains(nm.SelfNode.Tags(), tagName) {
+		// we're not trying to join the cluster
 		if b.natConnector != nil {
 			b.natConnector.Stop()
 			b.natConnector = nil
 		}
 		return
 	}
-	if nm == nil || !nm.ClusterPeers.Addr.IsValid() {
-		return // TODO log?
-	}
 
-	id := string(nm.SelfNode.StableID())
-	// TODO handle access before StartConsensusMember
-	// start a goroutine for this node to be a member of the consensus protocol for
-	// determining which ip addresses are available for natc.
-	if b.natConnector.ConsensusClient == nil {
-		b.natConnector.StartConsensusMember(id, nm.ClusterPeers, b.varRoot)
+	// TODO this is surely not right
+	ipAddrForNodeView := func(nv tailcfg.NodeView) netip.Addr {
+		return nv.Addresses().AsSlice()[0].Addr()
 	}
+	// we are trying to be in the natc cluster
+	id := string(nm.SelfNode.StableID())
+	// let's look for a peer to join
+	for key, peer := range b.peers {
+		if views.SliceContains(peer.Tags(), tagName) {
+			log.Printf("nat-connector: trying to join cluster peer tag=%s, %s, %v", tagName, key, peer)
+			b.natConnector.JoinConsensus(id, ipAddrForNodeView(nm.SelfNode), ipAddrForNodeView(peer), b.varRoot)
+			// TODO how do we know if we joined ok?
+			return
+		}
+	}
+	// no joinable peer found? I will be the leader
+	log.Printf("nat-connector: leading cluster tag=%s", tagName)
+	b.natConnector.LeadConsensus(id, ipAddrForNodeView(nm.SelfNode), b.varRoot)
+
+	// TODO do i need a whois step? what was that for?
+	// when we get reconfigured how do we cope with that? like if all nodes get removed and then
+	// fresh nodes added, does that work? or do we have to remove and re-add one by one?
+	// Is there a time when we would need to cancel the goroutine we start here (presumably there is)?
 }
 
 // reconfigAppConnectorLocked updates the app connector state based on the

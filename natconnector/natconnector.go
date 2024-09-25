@@ -190,17 +190,20 @@ func (n *NatConnector) Start() {
 
 }
 
-func (n *NatConnector) StartConsensusMember(id string, clusterPeers tailcfg.ClusterInfo, varRoot string) {
-	var leaderAddress string
-	if clusterPeers.Leader.IsValid() {
-		leaderAddress = clusterPeers.Leader.String()
-	}
-	// TODO something to do with channels to stop this?
+func (n *NatConnector) JoinConsensus(id string, myAddr, joinAddr netip.Addr, varRoot string) {
 	go func() {
 		n.logf("Starting ippool consensus membership for natc")
-		ippool.StartConsensusMember(id, clusterPeers.Addr.String(), leaderAddress, varRoot)
+		ippool.JoinConsensus(id, myAddr, joinAddr, varRoot)
 	}()
-	n.ConsensusClient = ippool.NewConsensusClient(clusterPeers.Addr.String(), leaderAddress, n.logf)
+	n.ConsensusClient = ippool.NewConsensusClient(myAddr, joinAddr, n.logf)
+}
+
+func (n *NatConnector) LeadConsensus(id string, myAddr netip.Addr, varRoot string) {
+	go func() {
+		n.logf("Starting ippool consensus membership for natc")
+		ippool.LeadConsensus(id, myAddr, varRoot)
+	}()
+	n.ConsensusClient = ippool.NewConsensusClient(myAddr, myAddr, n.logf)
 }
 
 func NewNatConnector(l logger.Logf, whoIs func(string, netip.AddrPort) (tailcfg.NodeView, tailcfg.UserProfile, bool)) NatConnector {

@@ -9,6 +9,20 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+var specialPort uint16 = 61820
+
+func makeAddrForConsensus(a netip.Addr) string {
+	return netip.AddrPortFrom(a, specialPort).String()
+}
+
+func JoinConsensus(nodeID string, addr, joinAddr netip.Addr, varRoot string) {
+	StartConsensusMember(nodeID, makeAddrForConsensus(addr), makeAddrForConsensus(joinAddr), varRoot)
+}
+
+func LeadConsensus(nodeID string, addr netip.Addr, varRoot string) {
+	StartConsensusMember(nodeID, makeAddrForConsensus(addr), "", varRoot)
+}
+
 // StartConsensusMember has this node join the consensus protocol for handing out ip addresses
 func StartConsensusMember(nodeID, addr, joinAddr, varRoot string) {
 	var conf uhaha.Config
@@ -28,7 +42,7 @@ func StartConsensusMember(nodeID, addr, joinAddr, varRoot string) {
 
 	conf.NodeID = nodeID
 	conf.Addr = addr
-	if joinAddr != "" && joinAddr != addr {
+	if joinAddr != "" {
 		conf.JoinAddr = joinAddr
 	}
 	conf.Flag.Custom = true

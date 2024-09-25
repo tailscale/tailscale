@@ -329,6 +329,7 @@ type MaskedPrefs struct {
 	ProfileNameSet            bool                `json:",omitempty"`
 	AutoUpdateSet             AutoUpdatePrefsMask `json:",omitempty"`
 	AppConnectorSet           bool                `json:",omitempty"`
+	NatConnectorSet           bool                `json:",omitempty"`
 	PostureCheckingSet        bool                `json:",omitempty"`
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`

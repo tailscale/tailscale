@@ -92,8 +92,6 @@ type mapSession struct {
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
 	lastMaxExpiry          time.Duration
-
-	clusterPeers tailcfg.ClusterInfo
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -350,8 +348,6 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	if resp.MaxKeyDuration > 0 {
 		ms.lastMaxExpiry = resp.MaxKeyDuration
 	}
-	//TODO delta stuff
-	ms.clusterPeers = resp.ClusterPeers
 }
 
 var (
@@ -808,7 +804,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 		MaxKeyDuration:    ms.lastMaxExpiry,
-		ClusterPeers:      ms.clusterPeers,
 	}
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {

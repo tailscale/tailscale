@@ -19,18 +19,12 @@ type ConsensusClient struct {
 	rdb        *redis.Client
 }
 
-func NewConsensusClient(addr, joinAddr string, logf logger.Logf) *ConsensusClient {
+func NewConsensusClient(addr, joinAddr netip.Addr, logf logger.Logf) *ConsensusClient {
 	cc := ConsensusClient{
-		MyAddr: addr,
+		MyAddr: makeAddrForConsensus(addr),
 		logf:   logf,
 	}
-	if joinAddr == "" {
-		// initially i am the leader
-		cc.newRedisClient(addr)
-	} else {
-		// initially i am a follower
-		cc.newRedisClient(joinAddr)
-	}
+	cc.newRedisClient(makeAddrForConsensus(joinAddr))
 	return &cc
 }
 
