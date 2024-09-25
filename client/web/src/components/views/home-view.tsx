@@ -5,13 +5,15 @@ import cx from "classnames"
 import React, { useMemo } from "react"
 import { apiFetch } from "src/api"
 import ArrowRight from "src/assets/icons/arrow-right.svg?react"
+import Globe from "src/assets/icons/globe.svg?react"
 import Machine from "src/assets/icons/machine.svg?react"
 import AddressCard from "src/components/address-copy-card"
 import ExitNodeSelector from "src/components/exit-node-selector"
 import { AuthResponse, canEdit } from "src/hooks/auth"
-import { NodeData } from "src/types"
+import { NodeData, ServeData } from "src/types"
 import Card from "src/ui/card"
 import { pluralize } from "src/utils/util"
+import useSWR from "swr"
 import { Link, useLocation } from "wouter"
 
 export default function HomeView({
@@ -21,10 +23,18 @@ export default function HomeView({
   node: NodeData
   auth: AuthResponse
 }) {
+  const { data: serveData } = useSWR<ServeData[]>("/serve/items")
+  const [allServeAndFunnel, onlyFunnel] = useMemo(
+    () => [
+      serveData?.length || 0,
+      serveData?.filter((d) => d.shareType === "funnel").length || 0,
+    ],
+    [serveData]
+  )
   const [allSubnetRoutes, pendingSubnetRoutes] = useMemo(
     () => [
-      node.AdvertisedRoutes?.length,
-      node.AdvertisedRoutes?.filter((r) => !r.Approved).length,
+      node.AdvertisedRoutes?.length || 0,
+      node.AdvertisedRoutes?.filter((r) => !r.Approved).length || 0,
     ],
     [node.AdvertisedRoutes]
   )
@@ -98,11 +108,13 @@ export default function HomeView({
             }
             footer={
               pendingSubnetRoutes
-                ? `${pendingSubnetRoutes} ${pluralize(
-                    "route",
-                    "routes",
-                    pendingSubnetRoutes
-                  )} pending approval`
+                ? {
+                    text: `${pendingSubnetRoutes} ${pluralize(
+                      "route",
+                      "routes",
+                      pendingSubnetRoutes
+                    )} pending approval`,
+                  }
                 : undefined
             }
           />
@@ -122,12 +134,26 @@ export default function HomeView({
             }
           />
         )}
-        {/* TODO(sonia,will): hiding unimplemented settings pages until implemented */}
-        {/* <SettingsCard
-        link="/serve"
-        title="Share local content"
-        body="Share local ports, services, and content to your Tailscale network or to the broader internet."
-      /> */}
+        {node.Features["serve"] && (
+          <SettingsCard
+            link="/serve"
+            title="Share local content"
+            body="Share local ports, services, and content to your Tailscale network or to the broader internet."
+            badge={
+              allServeAndFunnel > 0
+                ? { text: `${allServeAndFunnel} shared` }
+                : undefined
+            }
+            footer={
+              onlyFunnel
+                ? {
+                    text: `${onlyFunnel} shared on the internet`,
+                    icon: <Globe className="w-4 h-4 stroke-gray-500" />,
+                  }
+                : undefined
+            }
+          />
+        )}
       </div>
     </div>
   )
@@ -148,7 +174,10 @@ function SettingsCard({
     text: string
     icon?: JSX.Element
   }
-  footer?: string
+  footer?: {
+    text: string
+    icon?: JSX.Element
+  }
   className?: string
 }) {
   const [, setLocation] = useLocation()
@@ -180,7 +209,10 @@ function SettingsCard({
         {footer && (
           <>
             <hr className="my-3" />
-            <div className="text-gray-500 text-sm leading-tight">{footer}</div>
+            <div className="flex items-center gap-[6px] text-gray-500 text-sm leading-tight">
+              {footer.text}
+              {footer.icon}
+            </div>
           </>
         )}
       </Card>

@@ -3,7 +3,7 @@
 
 import { useCallback } from "react"
 import useToaster from "src/hooks/toaster"
-import { ExitNode, NodeData, SubnetRoute } from "src/types"
+import { ExitNode, NodeData, ServeData, SubnetRoute } from "src/types"
 import { assertNever } from "src/utils/util"
 import { MutatorOptions, SWRConfiguration, useSWRConfig } from "swr"
 import { noExitNode, runAsExitNode } from "./hooks/exit-nodes"
@@ -20,6 +20,8 @@ type APIType =
   | { action: "update-prefs"; data: LocalPrefsData }
   | { action: "update-routes"; data: SubnetRoute[] }
   | { action: "update-exit-node"; data: ExitNode }
+  | { action: "patch-serve-item"; data: ServeData } // add or update
+  | { action: "delete-serve-item"; data: ServeData }
 
 /**
  * POST /api/up data
@@ -239,6 +241,28 @@ export function useAPI() {
             .catch(handlePostError("Failed to update exit node"))
         }
 
+        /**
+         * "patch-serve-item" handles adding or updating an item in the
+         * node's serve config.
+         */
+        case "patch-serve-item": {
+          // todo: report metric?
+          return apiFetch("/serve/items", "PATCH", t.data).catch(
+            handlePostError("Failed to update item")
+          )
+        }
+
+        /**
+         * "delete-serve-item" handles deleting an item in the node's
+         * serve config.
+         */
+        case "delete-serve-item": {
+          // todo: report metric?
+          return apiFetch("/serve/items", "DELETE", t.data).catch(
+            handlePostError("Failed to delete item")
+          )
+        }
+
         default:
           assertNever(t)
       }
@@ -263,7 +287,7 @@ let unraidCsrfToken: string | undefined // required for unraid POST requests (#8
  */
 export function apiFetch<T>(
   endpoint: string,
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   body?: any
 ): Promise<T> {
   const urlParams = new URLSearchParams(window.location.search)

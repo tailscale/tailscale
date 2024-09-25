@@ -394,6 +394,15 @@ func CheckFunnelAccess(port uint16, node *ipnstate.PeerStatus) error {
 	return CheckFunnelPort(port, node)
 }
 
+// NodeCanServe returns an error if the given node is not configured to allow
+// for Tailscale Serve usage.
+func NodeCanServe(node *ipnstate.PeerStatus) error {
+	if !node.HasCap(tailcfg.CapabilityHTTPS) {
+		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
+	}
+	return nil
+}
+
 // NodeCanFunnel returns an error if the given node is not configured to allow
 // for Tailscale Funnel usage.
 func NodeCanFunnel(node *ipnstate.PeerStatus) error {

@@ -22,6 +22,16 @@ export function isObject(val: unknown): val is object {
 }
 
 /**
+ * capitalize returns the given string with the first letter capitalized.
+ */
+export function capitalize(str: string): string {
+  if (!str) {
+    return str // don't do anything to empty strings
+  }
+  return str.charAt(0).toUpperCase() + str.slice(1)
+}
+
+/**
  * pluralize is a very simple function that returns either
  * the singular or plural form of a string based on the given
  * quantity.
