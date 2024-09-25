@@ -65,7 +65,7 @@ var NetworkStatusWarnable = Register(&Warnable{
 // IPNStateWarnable is a Warnable that warns the user that Tailscale is stopped.
 var IPNStateWarnable = Register(&Warnable{
 	Code:     "wantrunning-false",
-	Title:    "Not connected to Tailscale",
+	Title:    "Tailscale off",
 	Severity: SeverityLow,
 	Text:     StaticMessage("Tailscale is stopped."),
 })
@@ -93,6 +93,7 @@ var LoginStateWarnable = Register(&Warnable{
 			return "You are logged out."
 		}
 	},
+	DependsOn: []*Warnable{IPNStateWarnable},
 })
 
 // notInMapPollWarnable is a Warnable that warns the user that we are using a stale network map.
@@ -100,7 +101,7 @@ var notInMapPollWarnable = Register(&Warnable{
 	Code:      "not-in-map-poll",
 	Title:     "Out of sync",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
 	Text:      StaticMessage("Unable to connect to the Tailscale coordination server to synchronize the state of your tailnet. Peer reachability might degrade over time."),
 	// 8 minutes reflects a maximum maintenance window for the coordination server.
 	TimeToVisible: 8 * time.Minute,
@@ -119,10 +120,20 @@ var noDERPHomeWarnable = Register(&Warnable{
 
 // noDERPConnectionWarnable is a Warnable that warns the user that Tailscale couldn't connect to a specific DERP server.
 var noDERPConnectionWarnable = Register(&Warnable{
-	Code:      "no-derp-connection",
-	Title:     "Relay server unavailable",
-	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	Code:     "no-derp-connection",
+	Title:    "Relay server unavailable",
+	Severity: SeverityMedium,
+	DependsOn: []*Warnable{
+		NetworkStatusWarnable,
+
+		// Technically noDERPConnectionWarnable could be used to warn about
+		// failure to connect to a specific DERP server (e.g. your home is derp1
+		// but you're trying to connect to a peer's derp4 and are unable) but as
+		// of 2024-09-25 we only use this for connecting to your home DERP, so
+		// we depend on noDERPHomeWarnable which is the ability to figure out
+		// what your DERP home even is.
+		noDERPHomeWarnable,
+	},
 	Text: func(args Args) string {
 		if n := args[ArgDERPRegionName]; n != "" {
 			return fmt.Sprintf("Tailscale could not connect to the '%s' relay server. Your Internet connection might be down, or the server might be temporarily unavailable.", n)
@@ -134,12 +145,17 @@ var noDERPConnectionWarnable = Register(&Warnable{
 	TimeToVisible:       10 * time.Second,
 })
 
-// derpTimeoutWarnable is a Warnable that warns the user that Tailscale hasn't heard from the home DERP region for a while.
+// derpTimeoutWarnable is a Warnable that warns the user that Tailscale hasn't
+// heard from the home DERP region for a while.
 var derpTimeoutWarnable = Register(&Warnable{
-	Code:      "derp-timed-out",
-	Title:     "Relay server timed out",
-	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	Code:     "derp-timed-out",
+	Title:    "Relay server timed out",
+	Severity: SeverityMedium,
+	DependsOn: []*Warnable{
+		NetworkStatusWarnable,
+		noDERPConnectionWarnable, // don't warn about it being stalled if we're not connected
+		noDERPHomeWarnable,       // same reason as noDERPConnectionWarnable's dependency
+	},
 	Text: func(args Args) string {
 		if n := args[ArgDERPRegionName]; n != "" {
 			return fmt.Sprintf("Tailscale hasn't heard from the '%s' relay server in %v. The server might be temporarily unavailable, or your Internet connection might be down.", n, args[ArgDuration])
@@ -163,9 +179,9 @@ var derpRegionErrorWarnable = Register(&Warnable{
 // noUDP4BindWarnable is a Warnable that warns the user that Tailscale couldn't listen for incoming UDP connections.
 var noUDP4BindWarnable = Register(&Warnable{
 	Code:                "no-udp4-bind",
-	Title:               "Incoming connections may fail",
+	Title:               "NAT traversal setup failure",
 	Severity:            SeverityMedium,
-	DependsOn:           []*Warnable{NetworkStatusWarnable},
+	DependsOn:           []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
 	Text:                StaticMessage("Tailscale couldn't listen for incoming UDP connections."),
 	ImpactsConnectivity: true,
 })
@@ -175,7 +191,7 @@ var mapResponseTimeoutWarnable = Register(&Warnable{
 	Code:      "mapresponse-timeout",
 	Title:     "Network map response timeout",
 	Severity:  SeverityMedium,
-	DependsOn: []*Warnable{NetworkStatusWarnable},
+	DependsOn: []*Warnable{NetworkStatusWarnable, IPNStateWarnable},
 	Text: func(args Args) string {
 		return fmt.Sprintf("Tailscale hasn't received a network map from the coordination server in %s.", args[ArgDuration])
 	},

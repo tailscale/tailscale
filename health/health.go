@@ -107,7 +107,6 @@ type Tracker struct {
 	ipnWantRunning          bool
 	ipnWantRunningLastTrue  time.Time // when ipnWantRunning last changed false -> true
 	anyInterfaceUp          opt.Bool  // empty means unknown (assume true)
-	udp4Unbound             bool
 	controlHealth           []string
 	lastLoginErr            error
 	localLogConfigErr       error
@@ -843,8 +842,12 @@ func (t *Tracker) SetUDP4Unbound(unbound bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.udp4Unbound = unbound
-	t.selfCheckLocked()
+
+	if unbound {
+		t.setUnhealthyLocked(noUDP4BindWarnable, nil)
+	} else {
+		t.setHealthyLocked(noUDP4BindWarnable)
+	}
 }
 
 // SetAuthRoutineInError records the latest error encountered as a result of a
@@ -1002,7 +1005,6 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 
 	if v, ok := t.anyInterfaceUp.Get(); ok && !v {
 		t.setUnhealthyLocked(NetworkStatusWarnable, nil)
-		return
 	} else {
 		t.setHealthyLocked(NetworkStatusWarnable)
 	}
@@ -1011,9 +1013,48 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setUnhealthyLocked(localLogWarnable, Args{
 			ArgError: t.localLogConfigErr.Error(),
 		})
-		return
 	} else {
 		t.setHealthyLocked(localLogWarnable)
+	}
+
+	now := time.Now()
+
+	// How long we assume we'll have heard a DERP frame or a MapResponse
+	// KeepAlive by.
+	const tooIdle = 2*time.Minute + 5*time.Second
+
+	// Whether user recently turned on Tailscale.
+	recentlyOn := now.Sub(t.ipnWantRunningLastTrue) < 5*time.Second
+
+	homeDERP := t.derpHomeRegion
+	if recentlyOn {
+		// If user just turned Tailscale on, don't warn for a bit.
+		t.setHealthyLocked(noDERPHomeWarnable)
+		t.setHealthyLocked(noDERPConnectionWarnable)
+		t.setHealthyLocked(derpTimeoutWarnable)
+	} else if !t.ipnWantRunning || t.derpHomeless || homeDERP != 0 {
+		t.setHealthyLocked(noDERPHomeWarnable)
+	} else {
+		t.setUnhealthyLocked(noDERPHomeWarnable, nil)
+	}
+
+	if homeDERP != 0 && t.derpRegionConnected[homeDERP] {
+		t.setHealthyLocked(noDERPConnectionWarnable)
+
+		if d := now.Sub(t.derpRegionLastFrame[homeDERP]); d < tooIdle {
+			t.setHealthyLocked(derpTimeoutWarnable)
+		} else {
+			t.setUnhealthyLocked(derpTimeoutWarnable, Args{
+				ArgDERPRegionID:   fmt.Sprint(homeDERP),
+				ArgDERPRegionName: t.derpRegionNameLocked(homeDERP),
+				ArgDuration:       d.Round(time.Second).String(),
+			})
+		}
+	} else {
+		t.setUnhealthyLocked(noDERPConnectionWarnable, Args{
+			ArgDERPRegionID:   fmt.Sprint(homeDERP),
+			ArgDERPRegionName: t.derpRegionNameLocked(homeDERP),
+		})
 	}
 
 	if !t.ipnWantRunning {
@@ -1038,7 +1079,6 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(LoginStateWarnable)
 	}
 
-	now := time.Now()
 	if !t.inMapPoll && (t.lastMapPollEndedAt.IsZero() || now.Sub(t.lastMapPollEndedAt) > 10*time.Second) {
 		t.setUnhealthyLocked(notInMapPollWarnable, nil)
 		return
@@ -1046,7 +1086,6 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(notInMapPollWarnable)
 	}
 
-	const tooIdle = 2*time.Minute + 5*time.Second
 	if d := now.Sub(t.lastStreamedMapResponse).Round(time.Second); d > tooIdle {
 		t.setUnhealthyLocked(mapResponseTimeoutWarnable, Args{
 			ArgDuration: d.String(),
@@ -1054,37 +1093,6 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		return
 	} else {
 		t.setHealthyLocked(mapResponseTimeoutWarnable)
-	}
-
-	if !t.derpHomeless {
-		rid := t.derpHomeRegion
-		if rid == 0 {
-			t.setUnhealthyLocked(noDERPHomeWarnable, nil)
-			return
-		} else if !t.derpRegionConnected[rid] {
-			t.setUnhealthyLocked(noDERPConnectionWarnable, Args{
-				ArgDERPRegionID:   fmt.Sprint(rid),
-				ArgDERPRegionName: t.derpRegionNameLocked(rid),
-			})
-			return
-		} else if d := now.Sub(t.derpRegionLastFrame[rid]).Round(time.Second); d > tooIdle {
-			t.setUnhealthyLocked(derpTimeoutWarnable, Args{
-				ArgDERPRegionID:   fmt.Sprint(rid),
-				ArgDERPRegionName: t.derpRegionNameLocked(rid),
-				ArgDuration:       d.String(),
-			})
-			return
-		}
-	}
-	t.setHealthyLocked(noDERPHomeWarnable)
-	t.setHealthyLocked(noDERPConnectionWarnable)
-	t.setHealthyLocked(derpTimeoutWarnable)
-
-	if t.udp4Unbound {
-		t.setUnhealthyLocked(noUDP4BindWarnable, nil)
-		return
-	} else {
-		t.setHealthyLocked(noUDP4BindWarnable)
 	}
 
 	// TODO: use
