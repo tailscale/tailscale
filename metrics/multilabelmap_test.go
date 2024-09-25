@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"bytes"
+	"encoding/json"
 	"expvar"
 	"fmt"
 	"io"
@@ -128,4 +129,22 @@ func BenchmarkMultiLabelWriteAllocs(b *testing.B) {
 	for range b.N {
 		m.WritePrometheus(w, "test")
 	}
+}
+
+func TestMultiLabelMapExpvar(t *testing.T) {
+	m := new(MultiLabelMap[L2])
+	m.Add(L2{"a", "b"}, 2)
+	m.Add(L2{"b", "c"}, 4)
+
+	em := new(expvar.Map)
+	em.Set("multi", m)
+
+	// Ensure that the String method is valid JSON to ensure that it can be
+	// used by expvar.
+	encoded := []byte(em.String())
+	if !json.Valid(encoded) {
+		t.Fatalf("invalid JSON: %s", encoded)
+	}
+
+	t.Logf("em = %+v", em)
 }
