@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -924,6 +925,32 @@ func TestUserMetrics(t *testing.T) {
 	s1.lb.DebugForceNetmapUpdate()
 	s2.lb.DebugForceNetmapUpdate()
 
+	wantRoutes := float64(2)
+	if runtime.GOOS == "windows" {
+		wantRoutes = 0
+	}
+
+	// Wait for the routes to be propagated to node 1 to ensure
+	// that the metrics are up-to-date.
+	waitForCondition(t, "primary routes available for node1", 90*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status1, err := lc1.Status(ctx)
+		if err != nil {
+			t.Logf("getting status: %s", err)
+			return false
+		}
+		if runtime.GOOS == "windows" {
+			// Windows does not seem to support or report back routes when running in
+			// userspace via tsnet. So, we skip this check on Windows.
+			// TODO(kradalby): Figure out if this is correct.
+			return true
+		}
+		// Wait for the primary routes to reach our desired routes, which is wantRoutes + 1, because
+		// the PrimaryRoutes list will contain a exit node route, which the metric does not count.
+		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
+	})
+
 	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelLc()
 	metrics1, err := lc1.UserMetrics(ctxLc)
@@ -951,9 +978,23 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics1, tailscaled_advertised_routes: got %v, want %v", got, want)
 	}
 
+	// The control has approved 2 routes:
+	// - 192.0.2.0/24
+	// - 192.0.5.1/32
+	if got, want := parsedMetrics1["tailscaled_approved_routes"], wantRoutes; got != want {
+		t.Errorf("metrics1, tailscaled_approved_routes: got %v, want %v", got, want)
+	}
+
 	// Validate the health counter metric against the status of the node
 	if got, want := parsedMetrics1[`tailscaled_health_messages{type="warning"}`], float64(len(status1.Health)); got != want {
 		t.Errorf("metrics1, tailscaled_health_messages: got %v, want %v", got, want)
+	}
+
+	// The node is the primary subnet router for 2 routes:
+	// - 192.0.2.0/24
+	// - 192.0.5.1/32
+	if got, want := parsedMetrics1["tailscaled_primary_routes"], wantRoutes; got != want {
+		t.Errorf("metrics1, tailscaled_primary_routes: got %v, want %v", got, want)
 	}
 
 	metrics2, err := lc2.UserMetrics(ctx)
@@ -978,8 +1019,28 @@ func TestUserMetrics(t *testing.T) {
 		t.Errorf("metrics2, tailscaled_advertised_routes: got %v, want %v", got, want)
 	}
 
+	// The control has approved 0 routes
+	if got, want := parsedMetrics2["tailscaled_approved_routes"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_approved_routes: got %v, want %v", got, want)
+	}
+
 	// Validate the health counter metric against the status of the node
 	if got, want := parsedMetrics2[`tailscaled_health_messages{type="warning"}`], float64(len(status2.Health)); got != want {
 		t.Errorf("metrics2, tailscaled_health_messages: got %v, want %v", got, want)
 	}
+
+	// The node is the primary subnet router for 0 routes
+	if got, want := parsedMetrics2["tailscaled_primary_routes"], 0.0; got != want {
+		t.Errorf("metrics2, tailscaled_primary_routes: got %v, want %v", got, want)
+	}
+}
+
+func waitForCondition(t *testing.T, msg string, waitTime time.Duration, f func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(waitTime); time.Now().Before(deadline); time.Sleep(1 * time.Second) {
+		if f() {
+			return
+		}
+	}
+	t.Fatalf("waiting for condition: %s", msg)
 }

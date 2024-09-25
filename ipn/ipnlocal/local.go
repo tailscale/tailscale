@@ -390,9 +390,18 @@ type updateStatus struct {
 }
 
 type metrics struct {
-	// advertisedRoutes is a metric that counts the number of network routes that are advertised by the local node.
+	// advertisedRoutes is a metric that reports the number of network routes that are advertised by the local node.
 	// This informs the user of how many routes are being advertised by the local node, excluding exit routes.
 	advertisedRoutes *usermetric.Gauge
+
+	// approvedRoutes is a metric that reports the number of network routes served by the local node and approved
+	// by the control server.
+	approvedRoutes *usermetric.Gauge
+
+	// primaryRoutes is a metric that reports the number of primary network routes served by the local node.
+	// A route being a primary route implies that the route is currently served by this node, and not by another
+	// subnet router in a high availability configuration.
+	primaryRoutes *usermetric.Gauge
 }
 
 // clientGen is a func that creates a control plane client.
@@ -441,6 +450,10 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	m := metrics{
 		advertisedRoutes: sys.UserMetricsRegistry().NewGauge(
 			"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)"),
+		approvedRoutes: sys.UserMetricsRegistry().NewGauge(
+			"tailscaled_approved_routes", "Number of approved network routes (e.g. by a subnet router)"),
+		primaryRoutes: sys.UserMetricsRegistry().NewGauge(
+			"tailscaled_primary_routes", "Number of network routes for which this node is a primary router (in high availability configuration)"),
 	}
 
 	b := &LocalBackend{
@@ -5388,6 +5401,11 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if nm == nil {
 		b.nodeByAddr = nil
+
+		// If there is no netmap, the client is going into a "turned off"
+		// state so reset the metrics.
+		b.metrics.approvedRoutes.Set(0)
+		b.metrics.primaryRoutes.Set(0)
 		return
 	}
 
@@ -5408,6 +5426,15 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	if nm.SelfNode.Valid() {
 		addNode(nm.SelfNode)
+
+		var approved float64
+		for _, route := range nm.SelfNode.AllowedIPs().All() {
+			if !views.SliceContains(nm.SelfNode.Addresses(), route) && !tsaddr.IsExitRoute(route) {
+				approved++
+			}
+		}
+		b.metrics.approvedRoutes.Set(approved)
+		b.metrics.primaryRoutes.Set(float64(tsaddr.WithoutExitRoute(nm.SelfNode.PrimaryRoutes()).Len()))
 	}
 	for _, p := range nm.Peers {
 		addNode(p)
