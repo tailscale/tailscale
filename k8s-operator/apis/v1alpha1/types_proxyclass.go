@@ -25,7 +25,7 @@ var ProxyClassKind = "ProxyClass"
 // connector.spec.proxyClass field.
 // ProxyClass is a cluster scoped resource.
 // More info:
-// https://tailscale.com/kb/1236/kubernetes-operator#cluster-resource-customization-using-proxyclass-custom-resource.
+// https://tailscale.com/kb/1445/kubernetes-operator-customization#cluster-resource-customization-using-proxyclass-custom-resource
 type ProxyClass struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -73,7 +73,7 @@ type TailscaleConfig struct {
 	// routes advertized by other nodes on the tailnet, such as subnet
 	// routes.
 	// This is equivalent of passing --accept-routes flag to a tailscale Linux client.
-	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-machines
+	// https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
 	// Defaults to false.
 	AcceptRoutes bool `json:"acceptRoutes,omitempty"`
 }
