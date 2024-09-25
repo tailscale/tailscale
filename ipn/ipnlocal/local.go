@@ -4593,11 +4593,6 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 	return nil
 }
 
-var (
-	ipv4Default = netip.MustParsePrefix("0.0.0.0/0")
-	ipv6Default = netip.MustParsePrefix("::/0")
-)
-
 // peerRoutes returns the routerConfig.Routes to access peers.
 // If there are over cgnatThreshold CGNAT routes, one big CGNAT route
 // is used instead.
@@ -4698,9 +4693,9 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		var default4, default6 bool
 		for _, route := range rs.Routes {
 			switch route {
-			case ipv4Default:
+			case tsaddr.AllIPv4():
 				default4 = true
-			case ipv6Default:
+			case tsaddr.AllIPv6():
 				default6 = true
 			}
 			if default4 && default6 {
@@ -4708,10 +4703,10 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 			}
 		}
 		if !default4 {
-			rs.Routes = append(rs.Routes, ipv4Default)
+			rs.Routes = append(rs.Routes, tsaddr.AllIPv4())
 		}
 		if !default6 {
-			rs.Routes = append(rs.Routes, ipv6Default)
+			rs.Routes = append(rs.Routes, tsaddr.AllIPv6())
 		}
 		internalIPs, externalIPs, err := internalAndExternalInterfaces()
 		if err != nil {
@@ -4768,14 +4763,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.ShieldsUp = prefs.ShieldsUp()
 	hi.AllowsUpdate = envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)
 
-	// count routes without exit node routes
-	var routes int64
-	for _, route := range hi.RoutableIPs {
-		if route.Bits() != 0 {
-			routes++
-		}
-	}
-	b.metrics.advertisedRoutes.Set(float64(routes))
+	b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))
 
 	var sshHostKeys []string
 	if prefs.RunSSH() && envknob.CanSSHD() {
