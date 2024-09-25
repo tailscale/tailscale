@@ -1149,8 +1149,8 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 // maybeRebindOnError performs a rebind and restun if the error is defined and
 // any conditionals are met.
 func (c *Conn) maybeRebindOnError(os string, err error) bool {
-	switch err {
-	case syscall.EPERM:
+	switch {
+	case errors.Is(err, syscall.EPERM):
 		why := "operation-not-permitted-rebind"
 		switch os {
 		// We currently will only rebind and restun on a syscall.EPERM if it is experienced
