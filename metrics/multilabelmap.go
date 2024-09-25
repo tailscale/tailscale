@@ -97,12 +97,8 @@ type KeyValue[T comparable] struct {
 }
 
 func (v *MultiLabelMap[T]) String() string {
-	var sb strings.Builder
-	sb.WriteString("MultiLabelMap:\n")
-	v.Do(func(kv KeyValue[T]) {
-		fmt.Fprintf(&sb, "\t%v: %v\n", kv.Key, kv.Value)
-	})
-	return sb.String()
+	// NOTE: This has to be valid JSON because it's used by expvar.
+	return `"MultiLabelMap"`
 }
 
 // WritePrometheus writes v to w in Prometheus exposition format.
