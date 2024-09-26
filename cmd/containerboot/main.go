@@ -96,13 +96,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"iter"
 	"log"
 	"math"
 	"net"
 	"net/netip"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -721,26 +721,26 @@ func tailscaledConfigFilePath() string {
 	if err != nil {
 		log.Fatalf("error reading tailscaled config directory %q: %v", dir, err)
 	}
-	maxCompatVer := tailcfg.CapabilityVersion(-1)
-	for _, e := range fe {
-		// We don't check if type if file as in most cases this will
-		// come from a mounted kube Secret, where the directory contents
-		// will be various symlinks.
-		if e.Type().IsDir() {
-			continue
-		}
-		cv, err := kubeutils.CapVerFromFileName(e.Name())
-		if err != nil {
-			log.Printf("skipping file %q in tailscaled config directory %q: %v", e.Name(), dir, err)
-			continue
-		}
-		if cv > maxCompatVer && cv <= tailcfg.CurrentCapabilityVersion {
-			maxCompatVer = cv
-		}
-	}
-	if maxCompatVer == -1 {
+	selectedFile := kubeutils.SelectConfigFileName(fileNames(fe))
+	if selectedFile == "" {
 		log.Fatalf("no tailscaled config file found in %q for current capability version %q", dir, tailcfg.CurrentCapabilityVersion)
 	}
-	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
-	return path.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
+	log.Printf("Using tailscaled config file %q", selectedFile)
+	return filepath.Join(dir, selectedFile)
+}
+
+func fileNames(fe []fs.DirEntry) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for _, e := range fe {
+			// We don't check if type if file as in most cases this will
+			// come from a mounted kube Secret, where the directory contents
+			// will be various symlinks.
+			if e.Type().IsDir() {
+				continue
+			}
+			if !yield(e.Name()) {
+				return
+			}
+		}
+	}
 }

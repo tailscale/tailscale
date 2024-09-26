@@ -23,7 +23,6 @@ func (fc *FakeClient) CheckSecretPermissions(ctx context.Context, name string) (
 func (fc *FakeClient) GetSecret(ctx context.Context, name string) (*kubeapi.Secret, error) {
 	return fc.GetSecretImpl(ctx, name)
 }
-func (fc *FakeClient) SetURL(_ string) {}
 func (fc *FakeClient) SetDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
 }
 func (fc *FakeClient) StrategicMergePatchSecret(context.Context, string, *kubeapi.Secret, string) error {

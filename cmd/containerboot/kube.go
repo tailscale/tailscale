@@ -8,11 +8,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/netip"
-	"os"
 
 	"tailscale.com/kube/kubeapi"
 	"tailscale.com/kube/kubeclient"
@@ -84,10 +82,5 @@ func initKubeClient(root string) {
 	kc, err = kubeclient.New()
 	if err != nil {
 		log.Fatalf("Error creating kube client: %v", err)
-	}
-	if (root != "/") || os.Getenv("TS_KUBERNETES_READ_API_SERVER_ADDRESS_FROM_ENV") == "true" {
-		// Derive the API server address from the environment variables
-		// Used to set http server in tests, or optionally enabled by flag
-		kc.SetURL(fmt.Sprintf("https://%s:%s", os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")))
 	}
 }

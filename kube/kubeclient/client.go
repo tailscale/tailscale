@@ -33,6 +33,8 @@ import (
 const (
 	saPath     = "/var/run/secrets/kubernetes.io/serviceaccount"
 	defaultURL = "https://kubernetes.default.svc"
+	envAPIHost = "KUBERNETES_SERVICE_HOST"
+	envAPIPort = "KUBERNETES_SERVICE_PORT_HTTPS"
 )
 
 // rootPathForTests is set by tests to override the root path to the
@@ -61,7 +63,6 @@ type Client interface {
 	JSONPatchSecret(context.Context, string, []JSONPatch) error
 	CheckSecretPermissions(context.Context, string) (bool, bool, error)
 	SetDialer(dialer func(context.Context, string, string) (net.Conn, error))
-	SetURL(string)
 }
 
 type client struct {
@@ -87,8 +88,12 @@ func New() (Client, error) {
 	if ok := cp.AppendCertsFromPEM(caCert); !ok {
 		return nil, fmt.Errorf("kube: error in creating root cert pool")
 	}
+	url := defaultURL
+	if host, port := os.Getenv(envAPIHost), os.Getenv(envAPIPort); host != "" && port != "" {
+		url = fmt.Sprintf("https://%s:%s", host, port)
+	}
 	return &client{
-		url: defaultURL,
+		url: url,
 		ns:  string(ns),
 		client: &http.Client{
 			Transport: &http.Transport{
@@ -98,12 +103,6 @@ func New() (Client, error) {
 			},
 		},
 	}, nil
-}
-
-// SetURL sets the URL to use for the Kubernetes API.
-// This is used only for testing.
-func (c *client) SetURL(url string) {
-	c.url = url
 }
 
 // SetDialer sets the dialer to use when establishing a connection

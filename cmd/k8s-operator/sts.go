@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -359,19 +360,12 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		return "", "", nil, fmt.Errorf("error calculating hash of tailscaled configs: %w", err)
 	}
 
-	latest := tailcfg.CapabilityVersion(-1)
-	var latestConfig ipn.ConfigVAlpha
-	for key, val := range configs {
-		fn := tsoperator.TailscaledConfigFileName(key)
-		b, err := json.Marshal(val)
+	for capVer, cfg := range configs {
+		b, err := json.Marshal(cfg)
 		if err != nil {
 			return "", "", nil, fmt.Errorf("error marshalling tailscaled config: %w", err)
 		}
-		mak.Set(&secret.StringData, fn, string(b))
-		if key > latest {
-			latest = key
-			latestConfig = val
-		}
+		mak.Set(&secret.StringData, tsoperator.TailscaledConfigFileName(capVer), string(b))
 	}
 
 	if stsC.ServeConfig != nil {
@@ -383,12 +377,12 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	}
 
 	if orig != nil {
-		logger.Debugf("patching the existing proxy Secret with tailscaled config %s", sanitizeConfigBytes(latestConfig))
+		logger.Debugf("patching the existing proxy Secret with tailscaled config %s", sanitizeConfigBytes(configs))
 		if err := a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
 			return "", "", nil, err
 		}
 	} else {
-		logger.Debugf("creating a new Secret for the proxy with tailscaled config %s", sanitizeConfigBytes(latestConfig))
+		logger.Debugf("creating a new Secret for the proxy with tailscaled config %s", sanitizeConfigBytes(configs))
 		if err := a.Create(ctx, secret); err != nil {
 			return "", "", nil, err
 		}
@@ -396,13 +390,21 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 	return secret.Name, hash, configs, nil
 }
 
-// sanitizeConfigBytes returns ipn.ConfigVAlpha in string form with redacted
-// auth key.
-func sanitizeConfigBytes(c ipn.ConfigVAlpha) string {
-	if c.AuthKey != nil {
-		c.AuthKey = ptr.To("**redacted**")
+// sanitizeConfigBytes returns latest ipn.ConfigVAlpha in string form with
+// redacted auth key.
+func sanitizeConfigBytes(c tailscaledConfigs) string {
+	maxCapVer := tailcfg.CapabilityVersion(-1)
+	var latestConfig ipn.ConfigVAlpha
+	for capVer, cfg := range c {
+		if (capVer > maxCapVer && maxCapVer != 0) || capVer == 0 {
+			maxCapVer = capVer
+			latestConfig = cfg
+		}
 	}
-	sanitizedBytes, err := json.Marshal(c)
+	if latestConfig.AuthKey != nil {
+		latestConfig.AuthKey = ptr.To("**redacted**")
+	}
+	sanitizedBytes, err := json.Marshal(latestConfig)
 	if err != nil {
 		return "invalid config"
 	}
@@ -831,6 +833,7 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 		conf.AuthKey = key
 	}
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
+	capVerConfigs[0] = *conf // Becomes "tailscaled" key.
 	capVerConfigs[95] = *conf
 	// legacy config should not contain NoStatefulFiltering field.
 	conf.NoStatefulFiltering.Clear()
@@ -838,30 +841,16 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	return capVerConfigs, nil
 }
 
-func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
-	latest := tailcfg.CapabilityVersion(-1)
-	latestStr := ""
-	for k, data := range s.Data {
-		// write to StringData, read from Data as StringData is write-only
-		if len(data) == 0 {
-			continue
-		}
-		v, err := tsoperator.CapVerFromFileName(k)
-		if err != nil {
-			continue
-		}
-		if v > latest {
-			latestStr = k
-			latest = v
-		}
-	}
+func authKeyFromSecret(s *corev1.Secret) (*string, error) {
+	selectedKey := tsoperator.SelectConfigFileName(maps.Keys(s.Data))
 	// Allow for configs that don't contain an auth key. Perhaps
 	// users have some mechanisms to delete them. Auth key is
 	// normally not needed after the initial login.
-	if latestStr != "" {
-		return readAuthKey(s, latestStr)
+	if selectedKey == "" {
+		return nil, nil
 	}
-	return key, nil
+
+	return readAuthKey(s, selectedKey)
 }
 
 // shouldRetainAuthKey returns true if the state stored in a proxy's state Secret suggests that auth key should be

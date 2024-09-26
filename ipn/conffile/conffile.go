@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/tailscale/hujson"
 	"tailscale.com/ipn"
@@ -17,7 +18,7 @@ import (
 
 // Config describes a config file.
 type Config struct {
-	Path    string // disk path of HuJSON, or VMUserDataPath
+	Path    string // disk path of HuJSON, or [VMUserDataPath], or kube:<secret-name>
 	Raw     []byte // raw bytes from disk, in HuJSON form
 	Std     []byte // standardized JSON form
 	Version string // "alpha0" for now
@@ -35,9 +36,16 @@ func (c *Config) WantRunning() bool {
 	return c != nil && !c.Parsed.Enabled.EqualBool(false)
 }
 
-// VMUserDataPath is a sentinel value for Load to use to get the data
-// from the VM's metadata service's user-data field.
-const VMUserDataPath = "vm:user-data"
+const (
+	// VMUserDataPath is a sentinel value for Load to use to get the data
+	// from the VM's metadata service's user-data field.
+	VMUserDataPath = "vm:user-data"
+
+	// kubePrefix indicates the config should be read from a Kubernetes Secret.
+	// The remaining string should be the name of the Secret within the same
+	// namespace as tailscaled's own pod.
+	kubePrefix = "kube:"
+)
 
 // Load reads and parses the config file at the provided path on disk.
 func Load(path string) (*Config, error) {
@@ -45,9 +53,11 @@ func Load(path string) (*Config, error) {
 	c.Path = path
 	var err error
 
-	switch path {
-	case VMUserDataPath:
+	switch {
+	case path == VMUserDataPath:
 		c.Raw, err = readVMUserData()
+	case strings.HasPrefix(path, "kube:"):
+		c.Raw, err = readKubeSecret(strings.TrimPrefix(path, "kube:"))
 	default:
 		c.Raw, err = os.ReadFile(path)
 	}
@@ -74,7 +84,9 @@ func Load(path string) (*Config, error) {
 	c.Version = ver.Version
 
 	jd := json.NewDecoder(bytes.NewReader(c.Std))
-	jd.DisallowUnknownFields()
+	// Not not disallow unknown fields. Older clients need to be able to read
+	// newer configs to support version tearing between the creator and
+	// consumer of config files.
 	err = jd.Decode(&c.Parsed)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing config file %s: %w", path, err)

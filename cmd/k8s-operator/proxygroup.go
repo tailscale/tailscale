@@ -459,6 +459,7 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 		conf.AuthKey = key
 	}
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
+	capVerConfigs[0] = *conf // Becomes "tailscaled" key.
 	capVerConfigs[106] = *conf
 	return capVerConfigs, nil
 }
