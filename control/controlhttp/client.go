@@ -310,6 +310,21 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 		if debugNoiseDial() {
 			a.logf("noise dial (%v, %v) = (%v, %v)", u, addr, cbConn, err)
 		}
+
+		// We've seen some networks where the connection upgrades
+		// successfully, but then fails when we make a request after
+		// the upgrade. Work around this by making a request over the
+		// now-upgraded connection before we tell the outer function
+		// that we've got a connection.
+		if err == nil && a.TestConn != nil {
+			err = a.TestConn(cbConn)
+			if err != nil {
+				// Close and don't leak the connection.
+				cbConn.Close()
+				cbConn = nil
+			}
+		}
+
 		select {
 		case ch <- tryURLRes{u, cbConn, err}:
 		case <-ctx.Done():

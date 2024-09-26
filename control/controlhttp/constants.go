@@ -88,6 +88,13 @@ type Dialer struct {
 	// plan before falling back to DNS.
 	DialPlan *tailcfg.ControlDialPlan
 
+	// TestConn, if non-nil, is called with a dialed connection to verify
+	// that it's ready to serve real requests. If this function returns an
+	// error, the connection is closed and not used. If this function
+	// returns an error for all dialed connections, an error is returned
+	// from Dial.
+	TestConn func(*ClientConn) error
+
 	proxyFunc func(*http.Request) (*url.URL, error) // or nil
 
 	// For tests only
