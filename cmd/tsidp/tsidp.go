@@ -64,6 +64,7 @@ var (
 	flagLocalPort          = flag.Int("local-port", -1, "allow requests from localhost")
 	flagUseLocalTailscaled = flag.Bool("use-local-tailscaled", false, "use local tailscaled instead of tsnet")
 	flagFunnel             = flag.Bool("funnel", false, "use Tailscale Funnel to make tsidp available on the public internet")
+	flagDir                = flag.String("dir", "", "tsnet state directory; a default one will be created if not provided")
 )
 
 func main() {
@@ -120,6 +121,7 @@ func main() {
 	} else {
 		ts := &tsnet.Server{
 			Hostname: "idp",
+			Dir:      *flagDir,
 		}
 		if *flagVerbose {
 			ts.Logf = log.Printf
