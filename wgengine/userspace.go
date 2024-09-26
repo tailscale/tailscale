@@ -196,7 +196,8 @@ type Config struct {
 	// HealthTracker, if non-nil, is the health tracker to use.
 	HealthTracker *health.Tracker
 
-	// Metrics, if non-nil, is the usermetrics registry to use.
+	// Metrics is the usermetrics registry to use.
+	// Mandatory, if not set, an error is returned.
 	Metrics *usermetric.Registry
 
 	// Dialer is the dialer to use for outbound connections.
@@ -271,6 +272,10 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	if testenv.InTest() && conf.HealthTracker == nil {
 		panic("NewUserspaceEngine called without HealthTracker (being strict in tests)")
+	}
+
+	if conf.Metrics == nil {
+		return nil, errors.New("NewUserspaceEngine: opts.Metrics is required, please pass a *usermetric.Registry")
 	}
 
 	if conf.Tun == nil {
