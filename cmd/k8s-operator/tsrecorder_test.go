@@ -105,7 +105,7 @@ func TestRecorder(t *testing.T) {
 		})
 
 		expectReconciled(t, reconciler, "", tsr.Name)
-		tsr.Status.Devices = []tsapi.TailnetDevice{
+		tsr.Status.Devices = []tsapi.RecorderTailnetDevice{
 			{
 				Hostname:   "test-device",
 				TailnetIPs: []string{"1.2.3.4", "::1"},

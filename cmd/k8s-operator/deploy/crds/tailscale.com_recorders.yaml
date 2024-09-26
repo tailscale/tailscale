@@ -1670,7 +1670,7 @@ spec:
                     - type
                   x-kubernetes-list-type: map
                 devices:
-                  description: List of tailnet devices associated with the Recorder statefulset.
+                  description: List of tailnet devices associated with the Recorder StatefulSet.
                   type: array
                   items:
                     type: object

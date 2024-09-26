@@ -199,7 +199,7 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsr *tsapi.Reco
 		return fmt.Errorf("error creating StatefulSet: %w", err)
 	}
 
-	var devices []tsapi.TailnetDevice
+	var devices []tsapi.RecorderTailnetDevice
 
 	device, ok, err := r.getDeviceInfo(ctx, tsr.Name)
 	if err != nil {
@@ -337,20 +337,20 @@ func (r *RecorderReconciler) getNodeMetadata(ctx context.Context, tsrName string
 	return tailcfg.StableNodeID(profile.Config.NodeID), profile.Config.UserProfile.LoginName, ok, nil
 }
 
-func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.TailnetDevice, ok bool, err error) {
+func (r *RecorderReconciler) getDeviceInfo(ctx context.Context, tsrName string) (d tsapi.RecorderTailnetDevice, ok bool, err error) {
 	nodeID, dnsName, ok, err := r.getNodeMetadata(ctx, tsrName)
 	if !ok || err != nil {
-		return tsapi.TailnetDevice{}, false, err
+		return tsapi.RecorderTailnetDevice{}, false, err
 	}
 
 	// TODO(tomhjp): The profile info doesn't include addresses, which is why we
 	// need the API. Should we instead update the profile to include addresses?
 	device, err := r.tsClient.Device(ctx, string(nodeID), nil)
 	if err != nil {
-		return tsapi.TailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
+		return tsapi.RecorderTailnetDevice{}, false, fmt.Errorf("failed to get device info from API: %w", err)
 	}
 
-	d = tsapi.TailnetDevice{
+	d = tsapi.RecorderTailnetDevice{
 		Hostname:   device.Hostname,
 		TailnetIPs: device.Addresses,
 	}

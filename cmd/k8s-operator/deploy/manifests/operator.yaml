@@ -2462,12 +2462,21 @@ spec:
                     spec:
                         description: Spec describes the desired ProxyGroup instances.
                         properties:
+                            hostnamePrefix:
+                                description: |-
+                                    HostnamePrefix is the hostname prefix to use for tailnet devices created
+                                    by the ProxyGroup. Each device will have the integer number from its
+                                    StatefulSet pod appended to this prefix to form the full hostname.
+                                    HostnamePrefix can contain lower case letters, numbers and dashes, it
+                                    must not start with a dash and must be between 1 and 62 characters long.
+                                pattern: ^[a-z0-9][a-z0-9-]{0,61}$
+                                type: string
                             proxyClass:
                                 description: |-
-                                    ProxyClass is the name of the ProxyClass custom resource that
-                                    contains configuration options that should be applied to the
-                                    resources created for this ProxyGroup. If unset, the operator will
-                                    create resources with the default configuration.
+                                    ProxyClass is the name of the ProxyClass custom resource that contains
+                                    configuration options that should be applied to the resources created
+                                    for this ProxyGroup. If unset, and no default ProxyClass is set, the
+                                    operator will create resources with the default configuration.
                                 type: string
                             replicas:
                                 description: |-
@@ -2486,16 +2495,25 @@ spec:
                                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                                     type: string
                                 type: array
+                            type:
+                                description: |-
+                                    Type of the ProxyGroup, either ingress or egress. Each set of proxies
+                                    managed by a single ProxyGroup definition operate as only ingress or
+                                    only egress proxies.
+                                pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
+                                type: string
+                        required:
+                            - type
                         type: object
                     status:
                         description: |-
-                            ProxyGroupStatus describes the status of the ProxyGroup pods. This is
+                            ProxyGroupStatus describes the status of the ProxyGroup resources. This is
                             set and managed by the Tailscale operator.
                         properties:
                             conditions:
                                 description: |-
-                                    List of status conditions to indicate the status of the ProxyGroup pods.
-                                    Known condition types are `ProxyGroupReady`.
+                                    List of status conditions to indicate the status of the ProxyGroup
+                                    resources. Known condition types are `ProxyGroupReady`.
                                 items:
                                     description: Condition contains details for one aspect of the current state of this API Resource.
                                     properties:
@@ -2554,7 +2572,7 @@ spec:
                                     - type
                                 x-kubernetes-list-type: map
                             devices:
-                                description: List of tailnet devices associated with the ProxyGroup statefulset.
+                                description: List of tailnet devices associated with the ProxyGroup StatefulSet.
                                 items:
                                     properties:
                                         hostname:
@@ -2570,12 +2588,6 @@ spec:
                                             items:
                                                 type: string
                                             type: array
-                                        url:
-                                            description: |-
-                                                URL where the UI is available if enabled for replaying recordings. This
-                                                will be an HTTPS MagicDNS URL. You must be connected to the same tailnet
-                                                as the recorder to access it.
-                                            type: string
                                     required:
                                         - hostname
                                     type: object
@@ -4260,7 +4272,7 @@ spec:
                                     - type
                                 x-kubernetes-list-type: map
                             devices:
-                                description: List of tailnet devices associated with the Recorder statefulset.
+                                description: List of tailnet devices associated with the Recorder StatefulSet.
                                 items:
                                     properties:
                                         hostname:
@@ -4367,16 +4379,6 @@ rules:
       resources:
         - recorders
         - recorders/status
-      verbs:
-        - get
-        - list
-        - watch
-        - update
-    - apiGroups:
-        - tailscale.com
-      resources:
-        - proxygroups
-        - proxygroups/status
       verbs:
         - get
         - list
