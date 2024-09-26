@@ -112,7 +112,7 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 // interfaces on iOS and Android, respectively, and would be needlessly battery-draining.
 func interfaceNameDoesNotNeedCaptiveDetection(ifName string, goos string) bool {
 	ifName = strings.ToLower(ifName)
-	excludedPrefixes := []string{"tailscale", "tun", "tap", "docker", "kube", "wg"}
+	excludedPrefixes := []string{"tailscale", "tun", "tap", "docker", "kube", "wg", "ipsec"}
 	if goos == "windows" {
 		excludedPrefixes = append(excludedPrefixes, "loopback", "tunnel", "ppp", "isatap", "teredo", "6to4")
 	} else if goos == "darwin" || goos == "ios" {
