@@ -100,12 +100,11 @@ type TailnetDevice struct {
 }
 
 // +kubebuilder:validation:Type=string
-// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$`
+// +kubebuilder:validation:Enum=egress
 type ProxyClassType string
 
 const (
-	ProxyClassTypeIngress ProxyClassType = "ingress"
-	ProxyClassTypeEgress  ProxyClassType = "egress"
+	ProxyClassTypeEgress ProxyClassType = "egress"
 )
 
 // +kubebuilder:validation:Type=string

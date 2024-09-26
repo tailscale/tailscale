@@ -89,7 +89,8 @@ spec:
                     managed by a single ProxyGroup definition operate as only ingress or
                     only egress proxies.
                   type: string
-                  pattern: ^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$
+                  enum:
+                    - egress
             status:
               description: |-
                 ProxyGroupStatus describes the status of the ProxyGroup resources. This is
