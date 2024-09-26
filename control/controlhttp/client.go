@@ -272,6 +272,18 @@ func (d *Dialer) forceNoise443() bool {
 	if forceNoise443() {
 		return true
 	}
+
+	if d.HealthTracker.LastNoiseDialWasRecent() {
+		// If we dialed recently, assume there was a recent failure and fall
+		// back to HTTPS dials for the subsequent retries.
+		//
+		// This heuristic works around networks where port 80 is MITMed and
+		// appears to work for a bit post-Upgrade but then gets closed,
+		// such as seen in https://github.com/tailscale/tailscale/issues/13597.
+		d.logf("controlhttp: forcing port 443 dial due to recent noise dial")
+		return true
+	}
+
 	return false
 }
 

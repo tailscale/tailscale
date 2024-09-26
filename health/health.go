@@ -96,6 +96,7 @@ type Tracker struct {
 	inMapPollSince          time.Time
 	lastMapPollEndedAt      time.Time
 	lastStreamedMapResponse time.Time
+	lastNoiseDial           time.Time
 	derpHomeRegion          int
 	derpHomeless            bool
 	derpRegionConnected     map[int]bool
@@ -1271,6 +1272,24 @@ func (t *Tracker) checkReceiveFuncsLocked() {
 		// It is probably MIA.
 		f.missing = true
 	}
+}
+
+// LastNoiseDialWasRecent notes that we're attempting to dial control via the
+// ts2021 noise protocol and reports whether the prior dial was "recent"
+// (currently defined as 2 minutes but subject to change).
+//
+// If t is nil, it reports false.
+func (t *Tracker) LastNoiseDialWasRecent() bool {
+	if t.nil() {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := time.Now()
+	dur := now.Sub(t.lastNoiseDial)
+	t.lastNoiseDial = now
+	return dur < 2*time.Minute
 }
 
 type metricHealthMessageLabel struct {
