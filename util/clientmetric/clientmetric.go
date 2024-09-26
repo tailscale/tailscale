@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"expvar"
 	"fmt"
 	"io"
 	"sort"
@@ -221,6 +222,33 @@ func NewGaugeFunc(name string, f func() int64) *Metric {
 	m.f = f
 	m.Publish()
 	return m
+}
+
+type AggregateCounter struct {
+	mu       sync.RWMutex
+	counters []*expvar.Int
+}
+
+func (c *AggregateCounter) Value() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var sum int64
+	for _, c := range c.counters {
+		sum += c.Value()
+	}
+	return sum
+}
+
+func (c *AggregateCounter) Add(counter *expvar.Int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counters = append(c.counters, counter)
+}
+
+func NewAggregateCounter(name string) *AggregateCounter {
+	c := &AggregateCounter{}
+	NewGaugeFunc(name, c.Value)
+	return c
 }
 
 // WritePrometheusExpositionFormat writes all client metrics to w in

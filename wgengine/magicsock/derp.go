@@ -690,7 +690,6 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 			// No data read occurred. Wait for another packet.
 			continue
 		}
-		metricRecvDataPacketsDERP.Add(1)
 		c.metrics.inboundPacketsDERPTotal.Add(1)
 		c.metrics.inboundBytesDERPTotal.Add(int64(n))
 		sizes[0] = n

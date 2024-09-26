@@ -1264,6 +1264,8 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 	assertEqual(t, "derp packets outbound", physDERPTxPackets, metricDERPTxPackets)
 	assertEqual(t, "ipv4 packets inbound", physIPv4RxPackets, metricIPv4RxPackets)
 	assertEqual(t, "ipv4 packets outbound", physIPv4TxPackets, metricIPv4TxPackets)
+
+	assertEqual(t, "outbound udp packets - compare with clientmetric", metricSendUDP.Value(), metricIPv4TxPackets*2)
 }
 
 func assertEqual(t *testing.T, name string, a, b any) {

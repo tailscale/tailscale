@@ -623,6 +623,10 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 		outboundBytesDERPTotal: &expvar.Int{},
 	}
 
+	metricRecvDataPacketsDERP.Add(m.inboundPacketsDERPTotal)
+	metricSendUDP.Add(m.outboundPacketsIPv4Total)
+	metricSendUDP.Add(m.outboundPacketsIPv6Total)
+
 	inboundPacketsTotal.Set(pathDirectV4, m.inboundPacketsIPv4Total)
 	inboundPacketsTotal.Set(pathDirectV6, m.inboundPacketsIPv6Total)
 	inboundPacketsTotal.Set(pathDERP, m.inboundPacketsDERPTotal)
@@ -1262,8 +1266,6 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 		_ = c.maybeRebindOnError(runtime.GOOS, err)
 	} else {
 		if sent {
-			metricSendUDP.Add(1)
-
 			switch {
 			case ipp.Addr().Is4():
 				c.metrics.outboundPacketsIPv4Total.Add(1)
@@ -3075,7 +3077,7 @@ var (
 	metricSendDERPErrorChan   = clientmetric.NewCounter("magicsock_send_derp_error_chan")
 	metricSendDERPErrorClosed = clientmetric.NewCounter("magicsock_send_derp_error_closed")
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
-	metricSendUDP             = clientmetric.NewCounter("magicsock_send_udp")
+	metricSendUDP             = clientmetric.NewAggregateCounter("magicsock_send_udp")
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
 	metricSendDERP            = clientmetric.NewCounter("magicsock_send_derp")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
@@ -3083,7 +3085,7 @@ var (
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
 	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvDataPacketsDERP = clientmetric.NewCounter("magicsock_recv_data_derp")
+	metricRecvDataPacketsDERP = clientmetric.NewAggregateCounter("magicsock_recv_data_derp")
 	metricRecvDataPacketsIPv4 = clientmetric.NewCounter("magicsock_recv_data_ipv4")
 	metricRecvDataPacketsIPv6 = clientmetric.NewCounter("magicsock_recv_data_ipv6")
 
