@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"tailscale.com/taildrop"
 	"time"
 	"unicode/utf8"
 
@@ -129,6 +131,7 @@ func runCp(ctx context.Context, args []string) error {
 		var name = cpArgs.name
 		var contentLength int64 = -1
 		if fileArg == "-" {
+			// sending stdin as single file
 			fileContents = &countingReader{Reader: os.Stdin}
 			if name == "" {
 				name, fileContents, err = pickStdinFilename()
@@ -150,16 +153,28 @@ func runCp(ctx context.Context, args []string) error {
 				return err
 			}
 			if fi.IsDir() {
-				return errors.New("directories not supported")
-			}
-			contentLength = fi.Size()
-			fileContents = &countingReader{Reader: io.LimitReader(f, contentLength)}
-			if name == "" {
-				name = filepath.Base(fileArg)
-			}
+				// sending a directory
+				// compress it into a <dir-name>.tscompresseddir TAR archive to send
+				dirReader, err := getCompressedDirReader(fileArg)
+				if err != nil {
+					return err
+				}
+				fileContents = &countingReader{Reader: dirReader}
+				if name == "" {
+					name = filepath.Base(fileArg)
+				}
+				name += taildrop.CompressedDirSuffix
+			} else {
+				// sending a single file
+				contentLength = fi.Size()
+				fileContents = &countingReader{Reader: io.LimitReader(f, contentLength)}
+				if name == "" {
+					name = filepath.Base(fileArg)
+				}
 
-			if envknob.Bool("TS_DEBUG_SLOW_PUSH") {
-				fileContents = &countingReader{Reader: &slowReader{r: fileContents}}
+				if envknob.Bool("TS_DEBUG_SLOW_PUSH") {
+					fileContents = &countingReader{Reader: &slowReader{r: fileContents}}
+				}
 			}
 		}
 
@@ -187,7 +202,63 @@ func runCp(ctx context.Context, args []string) error {
 	return nil
 }
 
+// getCompressedDirReader will compress the given directory in TAR format
+// returns an io.Reader to get the raw TAR stream
+func getCompressedDirReader(dirPath string) (io.Reader, error) {
+	pr, pw := io.Pipe()
+
+	go func() {
+		tarWriter := tar.NewWriter(pw)
+		defer func() {
+			tarWriter.Close()
+			pw.Close()
+		}()
+
+		err := filepath.Walk(dirPath, func(path string, fileInfo os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			relativePath := filepath.Clean(strings.TrimPrefix(path, string(filepath.Separator)))
+			// uniform path splitter
+			relativePath = filepath.ToSlash(relativePath)
+
+			header, err := tar.FileInfoHeader(fileInfo, relativePath)
+			if err != nil {
+				return err
+			}
+			header.Name = relativePath
+
+			if err := tarWriter.WriteHeader(header); err != nil {
+				return err
+			}
+
+			if !fileInfo.IsDir() {
+				file, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+
+				if _, err := io.Copy(tarWriter, file); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			pw.CloseWithError(err)
+		}
+	}()
+
+	return pr, nil
+}
+
 func progressPrinter(ctx context.Context, name string, contentCount func() int64, contentLength int64) {
+	// remove internal suffixes from name
+	name = strings.TrimSuffix(name, taildrop.CompressedDirSuffix)
+
 	var rateValueFast, rateValueSlow tsrate.Value
 	rateValueFast.HalfLife = 1 * time.Second  // fast response for rate measurement
 	rateValueSlow.HalfLife = 10 * time.Second // slow response for ETA measurement
@@ -486,20 +557,93 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 		return "", 0, fmt.Errorf("opening inbox file %q: %w", wf.Name, err)
 	}
 	defer rc.Close()
-	f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
+	if strings.HasSuffix(wf.Name, taildrop.CompressedDirSuffix) {
+		// receiving a directory
+		if err := extractCompressedDir(rc, dir); err != nil {
+			return "", 0, err
+		}
+		return wf.Name, size, nil
+	} else {
+		// receiving a single file
+		f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
+		if err != nil {
+			return "", 0, err
+		}
+		// Apply quarantine attribute before copying
+		if err := quarantine.SetOnFile(f); err != nil {
+			return "", 0, fmt.Errorf("failed to apply quarantine attribute to file %v: %v", f.Name(), err)
+		}
+		_, err = io.Copy(f, rc)
+		if err != nil {
+			f.Close()
+			return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
+		}
+		return f.Name(), size, f.Close()
+	}
+}
+
+// extractCompressedDir will uncompress the given TAR archive
+// to destination directory
+func extractCompressedDir(rc io.ReadCloser, dstDir string) error {
+	r := tar.NewReader(rc)
+
+	err := os.MkdirAll(dstDir, 0644)
 	if err != nil {
-		return "", 0, err
+		return err
 	}
-	// Apply quarantine attribute before copying
-	if err := quarantine.SetOnFile(f); err != nil {
-		return "", 0, fmt.Errorf("failed to apply quarantine attribute to file %v: %v", f.Name(), err)
-	}
-	_, err = io.Copy(f, rc)
+
+	dstDir, err = filepath.Abs(dstDir)
 	if err != nil {
-		f.Close()
-		return "", 0, fmt.Errorf("failed to write %v: %v", f.Name(), err)
+		return err
 	}
-	return f.Name(), size, f.Close()
+	for {
+		header, err := r.Next()
+		if err == io.EOF {
+			break // extract finished
+		}
+		if err != nil {
+			return err
+		}
+
+		fpath := filepath.Clean(filepath.Join(dstDir, header.Name))
+		// prevent path traversal
+		if !strings.HasPrefix(fpath, dstDir) {
+			return errors.New("Bad filepath in TAR: " + fpath)
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			// extract a dir
+			if err := os.MkdirAll(fpath, 0644); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			// extract a single file
+			dir := filepath.Dir(fpath)
+			fileName := filepath.Base(fpath)
+			if err := os.MkdirAll(dir, 0644); err != nil {
+				return err
+			}
+
+			outFile, err := openFileOrSubstitute(dir, fileName, getArgs.conflict)
+			if err != nil {
+				return err
+			}
+			defer outFile.Close()
+
+			// Apply quarantine attribute before copying
+			if err := quarantine.SetOnFile(outFile); err != nil {
+				return errors.New(fmt.Sprintf("failed to apply quarantine attribute to file %v: %v", fileName, err))
+			}
+			if _, err := io.Copy(outFile, r); err != nil {
+				return err
+			}
+		default:
+			// unsupported type flag
+			continue
+		}
+	}
+	return nil
 }
 
 func runFileGetOneBatch(ctx context.Context, dir string) []error {
