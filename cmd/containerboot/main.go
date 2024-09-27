@@ -158,6 +158,7 @@ func main() {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+		LoginServer:                           defaultEnv("TS_LOGIN_SERVER", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
