@@ -14,6 +14,8 @@
 - [DNSConfigList](#dnsconfiglist)
 - [ProxyClass](#proxyclass)
 - [ProxyClassList](#proxyclasslist)
+- [ProxyGroup](#proxygroup)
+- [ProxyGroupList](#proxygrouplist)
 - [Recorder](#recorder)
 - [RecorderList](#recorderlist)
 
@@ -261,6 +263,21 @@ _Appears in:_
 
 
 
+#### HostnamePrefix
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- Pattern: `^[a-z0-9][a-z0-9-]{0,61}$`
+- Type: string
+
+_Appears in:_
+- [ProxyGroupSpec](#proxygroupspec)
+
+
+
 #### Metrics
 
 
@@ -450,6 +467,100 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyClass.<br />Known condition types are `ProxyClassReady`. |  |  |
 
 
+#### ProxyClassType
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- Enum: [egress]
+- Type: string
+
+_Appears in:_
+- [ProxyGroupSpec](#proxygroupspec)
+
+
+
+#### ProxyGroup
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroupList](#proxygrouplist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroup` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[ProxyGroupSpec](#proxygroupspec)_ | Spec describes the desired ProxyGroup instances. |  |  |
+| `status` _[ProxyGroupStatus](#proxygroupstatus)_ | ProxyGroupStatus describes the status of the ProxyGroup resources. This is<br />set and managed by the Tailscale operator. |  |  |
+
+
+#### ProxyGroupList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `ProxyGroupList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[ProxyGroup](#proxygroup) array_ |  |  |  |
+
+
+#### ProxyGroupSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroup](#proxygroup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[ProxyClassType](#proxyclasstype)_ | Type of the ProxyGroup, either ingress or egress. Each set of proxies<br />managed by a single ProxyGroup definition operate as only ingress or<br />only egress proxies. |  | Enum: [egress] <br />Type: string <br /> |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a ProxyGroup device has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `replicas` _integer_ | Replicas specifies how many replicas to create the StatefulSet with.<br />Defaults to 2. |  |  |
+| `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
+| `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that contains<br />configuration options that should be applied to the resources created<br />for this ProxyGroup. If unset, and no default ProxyClass is set, the<br />operator will create resources with the default configuration. |  |  |
+
+
+#### ProxyGroupStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [ProxyGroup](#proxygroup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types are `ProxyGroupReady`. |  |  |
+| `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup StatefulSet. |  |  |
+
+
 #### Recorder
 
 
@@ -586,7 +697,25 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the Recorder.<br />Known condition types are `RecorderReady`. |  |  |
-| `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the Recorder statefulset. |  |  |
+| `devices` _[RecorderTailnetDevice](#recordertailnetdevice) array_ | List of tailnet devices associated with the Recorder StatefulSet. |  |  |
+
+
+#### RecorderTailnetDevice
+
+
+
+
+
+
+
+_Appears in:_
+- [RecorderStatus](#recorderstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
+| `url` _string_ | URL where the UI is available if enabled for replaying recordings. This<br />will be an HTTPS MagicDNS URL. You must be connected to the same tailnet<br />as the recorder to access it. |  |  |
 
 
 #### Route
@@ -748,6 +877,7 @@ _Validation:_
 
 _Appears in:_
 - [ConnectorSpec](#connectorspec)
+- [ProxyGroupSpec](#proxygroupspec)
 - [RecorderSpec](#recorderspec)
 
 
@@ -761,13 +891,12 @@ _Appears in:_
 
 
 _Appears in:_
-- [RecorderStatus](#recorderstatus)
+- [ProxyGroupStatus](#proxygroupstatus)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the device.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  |  |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device. |  |  |
-| `url` _string_ | URL where the UI is available if enabled for replaying recordings. This<br />will be an HTTPS MagicDNS URL. You must be connected to the same tailnet<br />as the recorder to access it. |  |  |
 
 
 #### TailscaleConfig

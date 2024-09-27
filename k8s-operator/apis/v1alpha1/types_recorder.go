@@ -223,14 +223,14 @@ type RecorderStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// List of tailnet devices associated with the Recorder statefulset.
+	// List of tailnet devices associated with the Recorder StatefulSet.
 	// +listType=map
 	// +listMapKey=hostname
 	// +optional
-	Devices []TailnetDevice `json:"devices,omitempty"`
+	Devices []RecorderTailnetDevice `json:"devices,omitempty"`
 }
 
-type TailnetDevice struct {
+type RecorderTailnetDevice struct {
 	// Hostname is the fully qualified domain name of the device.
 	// If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
 	// node.
