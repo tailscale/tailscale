@@ -258,7 +258,7 @@ type JSONPatch struct {
 func (c *client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
 	for _, p := range patch {
 		if p.Op != "remove" && p.Op != "add" && p.Op != "replace" {
-			panic(fmt.Errorf("unsupported JSON patch operation: %q", p.Op))
+			return fmt.Errorf("unsupported JSON patch operation: %q", p.Op)
 		}
 	}
 	return c.doRequest(ctx, "PATCH", c.secretURL(name), patch, nil, setHeader("Content-Type", "application/json-patch+json"))
