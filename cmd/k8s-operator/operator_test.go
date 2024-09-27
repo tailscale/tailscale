@@ -1487,6 +1487,72 @@ func Test_clusterDomainFromResolverConf(t *testing.T) {
 		})
 	}
 }
+func Test_authKeyRemoval(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. A new Service that should be exposed via Tailscale gets created, a Secret with a config that contains auth
+	// key is generated.
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+		clock:  clock,
+	}
+
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test", "svc")
+	opts := configOpts{
+		stsName:         shortName,
+		secretName:      fullName,
+		namespace:       "default",
+		parentType:      "svc",
+		hostname:        "default-test",
+		clusterTargetIP: "10.20.30.40",
+		app:             kubetypes.AppIngressProxy,
+	}
+
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"), nil)
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeHashAnnotation)
+
+	// 2. Apply update to the Secret that imitates the proxy setting device_id.
+	s := expectedSecret(t, fc, opts)
+	mustUpdate(t, fc, s.Namespace, s.Name, func(s *corev1.Secret) {
+		mak.Set(&s.Data, "device_id", []byte("dkkdi4CNTRL"))
+	})
+
+	// 3. Config should no longer contain auth key
+	expectReconciled(t, sr, "default", "test")
+	opts.shouldRemoveAuthKey = true
+	opts.secretExtraData = map[string][]byte{"device_id": []byte("dkkdi4CNTRL")}
+	expectEqual(t, fc, expectedSecret(t, fc, opts), nil)
+}
 
 func Test_externalNameService(t *testing.T) {
 	fc := fake.NewFakeClient()

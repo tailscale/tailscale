@@ -53,6 +53,8 @@ type configOpts struct {
 	shouldEnableForwardingClusterTrafficViaIngress bool
 	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
 	app                                            string
+	shouldRemoveAuthKey                            bool
+	secretExtraData                                map[string][]byte
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -365,6 +367,9 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 			conf.AcceptRoutes = "true"
 		}
 	}
+	if opts.shouldRemoveAuthKey {
+		conf.AuthKey = nil
+	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {
 		r := opts.subnetRoutes
@@ -405,6 +410,9 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		labels["tailscale.com/parent-resource-ns"] = "" // Connector is cluster scoped
 	}
 	s.Labels = labels
+	for key, val := range opts.secretExtraData {
+		mak.Set(&s.Data, key, val)
+	}
 	return s
 }
 
