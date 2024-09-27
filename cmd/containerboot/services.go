@@ -63,7 +63,7 @@ type egressProxy struct {
 // - the mounted egress config has changed
 // - the proxy's tailnet IP addresses have changed
 // - tailnet IPs have changed for any backend targets specified by tailnet FQDN
-func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) {
+func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) error {
 	var tickChan <-chan time.Time
 	var eventChan <-chan fsnotify.Event
 	// TODO (irbekrm): take a look if this can be pulled into a single func
@@ -76,19 +76,19 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) {
 	} else {
 		defer w.Close()
 		if err := w.Add(filepath.Dir(ep.cfgPath)); err != nil {
-			log.Fatalf("failed to add fsnotify watch: %v", err)
+			return fmt.Errorf("failed to add fsnotify watch: %w", err)
 		}
 		eventChan = w.Events
 	}
 
 	if err := ep.sync(ctx, n); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	for {
 		var err error
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-tickChan:
 			err = ep.sync(ctx, n)
 		case <-eventChan:
@@ -102,14 +102,15 @@ func (ep *egressProxy) run(ctx context.Context, n ipn.Notify) {
 			}
 		}
 		if err != nil {
-			log.Fatalf("error syncing egress service config: %v", err)
+			return fmt.Errorf("error syncing egress service config: %w", err)
 		}
 	}
 }
 
-// sync triggers an egress proxy config resync. The resync calculates the diff
-// between config and status to determine if any firewall rules need to be
-// updated.
+// sync triggers an egress proxy config resync. The resync calculates the diff between config and status to determine if
+// any firewall rules need to be updated. Currently using status in state Secret as a reference for what is the current
+// firewall configuration is good enough because - the status is keyed by the Pod IP - we crash the Pod on errors such
+// as failed firewall update
 func (ep *egressProxy) sync(ctx context.Context, n ipn.Notify) error {
 	cfgs, err := ep.getConfigs()
 	if err != nil {
@@ -175,8 +176,8 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 			mak.Set(&rulesPerSvcToDelete, svcName, rulesToDelete)
 		}
 		if len(rulesToAdd) != 0 || ep.addrsHaveChanged(n) {
-			// For each tailnet target, set up SNAT from the local
-			// tailnet device address of the matching family.
+			// For each tailnet target, set up SNAT from the local tailnet device address of the matching
+			// family.
 			for _, t := range tailnetTargetIPs {
 				if t.Is6() && !ep.nfr.HasIPV6NAT() {
 					continue
@@ -358,13 +359,14 @@ func (ep *egressProxy) getStatus(ctx context.Context) (*egressservices.Status, e
 	}
 	status := &egressservices.Status{}
 	raw, ok := secret.Data[egressservices.KeyEgressServices]
-	if ok {
-		if err := json.Unmarshal([]byte(raw), status); err != nil {
-			return nil, fmt.Errorf("error unmarshalling previous config: %w", err)
-		}
-		if reflect.DeepEqual(status.PodIP, ep.podIP) {
-			return status, nil
-		}
+	if !ok {
+		return nil, nil
+	}
+	if err := json.Unmarshal([]byte(raw), status); err != nil {
+		return nil, fmt.Errorf("error unmarshalling previous config: %w", err)
+	}
+	if reflect.DeepEqual(status.PodIP, ep.podIP) {
+		return status, nil
 	}
 	return nil, nil
 }

@@ -33,9 +33,9 @@ func (i *iptablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip
 // DeleteMapRuleForSvc constructs a prerouting rule as would be created by
 // EnsurePortMapRuleForSvc with the provided args and, if such a rule exists,
 // deletes it.
-func (i *iptablesRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
+func (i *iptablesRunner) DeletePortMapRuleForSvc(svc, excludeI string, targetIP netip.Addr, pm PortMap) error {
 	table := i.getIPTByAddr(targetIP)
-	args := argsForPortMapRule(svc, tun, targetIP, pm)
+	args := argsForPortMapRule(svc, excludeI, targetIP, pm)
 	exists, err := table.Exists("nat", "PREROUTING", args...)
 	if err != nil {
 		return fmt.Errorf("error checking if rule exists: %w", err)
@@ -60,10 +60,10 @@ func (i *iptablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pms 
 	return nil
 }
 
-func argsForPortMapRule(svc, tun string, targetIP netip.Addr, pm PortMap) []string {
+func argsForPortMapRule(svc, excludeI string, targetIP netip.Addr, pm PortMap) []string {
 	c := commentForSvc(svc, pm)
 	return []string{
-		"!", "-i", tun,
+		"!", "-i", excludeI,
 		"-p", pm.Protocol,
 		"--dport", fmt.Sprintf("%d", pm.MatchPort),
 		"-m", "comment", "--comment", c,
