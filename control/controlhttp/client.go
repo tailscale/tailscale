@@ -34,6 +34,7 @@ import (
 	"net/url"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -96,17 +97,56 @@ func (a *Dialer) httpsFallbackDelay() time.Duration {
 }
 
 var _ = envknob.RegisterBool("TS_USE_CONTROL_DIAL_PLAN") // to record at init time whether it's in use
+func (a *Dialer) useCtrlDialPlan() bool {
+	return envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
+}
+
+func (a *Dialer) useSRVDialPlan()  bool {
+	parsedURL, err := url.Parse(a.Hostname)
+	if err == nil {
+		return parsedURL.Fragment == "srv"
+	}
+	return false
+}
 
 func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
-	// If we don't have a dial plan, just fall back to dialing the single
-	// host we know about.
-	useDialPlan := envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
-	if !useDialPlan || a.DialPlan == nil || len(a.DialPlan.Candidates) == 0 {
-		return a.dialHost(ctx, netip.Addr{})
+	candidates := []tailcfg.ControlIPCandidate{}
+	if a.useCtrlDialPlan() && a.DialPlan != nil && len(a.DialPlan.Candidates) > 0 {
+		candidates = a.DialPlan.Candidates
+	} else {
+		candidates = []tailcfg.ControlIPCandidate{
+			tailcfg.ControlIPCandidate{},
+		}
 	}
-	candidates := a.DialPlan.Candidates
 
-	// Otherwise, we try dialing per the plan. Store the highest priority
+	if a.useSRVDialPlan() {
+		resolver := &net.Resolver{
+			PreferGo: true,
+		}
+		_, srvRecords, err := resolver.LookupSRV(ctx, "ts2021", "tcp", a.Hostname)
+		if err != nil {
+			srvRecords = []*net.SRV{}
+		}
+
+		for _, srvRecord := range srvRecords {
+			aRecords, err := resolver.LookupIPAddr(ctx, srvRecord.Target)
+			if err == nil {
+				for _, aRecord := range aRecords {
+					// TODO(austin): make sure that the resolver is caching these nearby
+					// TODO(austin): use goroutines if there are too many
+					ip, ok := netip.AddrFromSlice(aRecord.IP)
+					if ok {
+						candidates = append(candidates, tailcfg.ControlIPCandidate {
+							IP: ip,
+							Port: strconv.FormatUint(uint64(srvRecord.Port), 10),
+							Priority: int(srvRecord.Priority),
+						})
+					}	
+				}	
+			}
+		}
+	}
+	// Store the highest priority
 	// in the list, so that if we get a connection to one of those
 	// candidates we can return quickly.
 	var highestPriority int = math.MinInt
@@ -171,7 +211,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 
 			// This will dial, and the defer above sends it back to our parent.
 			a.logf("[v2] controlhttp: trying to dial %q @ %v", a.Hostname, c.IP)
-			conn, err = a.dialHost(ctx, c.IP)
+			conn, err = a.dialControlIPCandidate(ctx, c)
 		}(ctx, c)
 	}
 
@@ -255,7 +295,7 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 
 	// If we get here, then we didn't get anywhere with our dial plan; fall back to just using DNS.
 	a.logf("controlhttp: failed dialing using DialPlan, falling back to DNS; errs=%s", merr.Error())
-	return a.dialHost(ctx, netip.Addr{})
+	return a.dialControlIPCandidate(ctx, tailcfg.ControlIPCandidate{})
 }
 
 // The TS_FORCE_NOISE_443 envknob forces the controlclient noise dialer to
@@ -270,10 +310,10 @@ var forceNoise443 = envknob.RegisterBool("TS_FORCE_NOISE_443")
 
 var debugNoiseDial = envknob.RegisterBool("TS_DEBUG_NOISE_DIAL")
 
-// dialHost connects to the configured Dialer.Hostname and upgrades the
+// dialControlIPCandidate connects to the configured Dialer.Hostname and upgrades the
 // connection into a controlbase.Conn. If addr is valid, then no DNS is used
 // and the connection will be made to the provided address.
-func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, error) {
+func (a *Dialer) dialControlIPCandidate(ctx context.Context, c tailcfg.ControlIPCandidate) (*ClientConn, error) {
 	// Create one shared context used by both port 80 and port 443 dials.
 	// If port 80 is still in flight when 443 returns, this deferred cancel
 	// will stop the port 80 dial.
@@ -282,17 +322,31 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelControlClientDialer, a.logf)
 
-	// u80 and u443 are the URLs we'll try to hit over HTTP or HTTPS,
+	httpPort := "80"
+	httpsPort := "443"
+	if c.Port != "" {
+		httpPort = c.Port
+		httpsPort = c.Port
+	} else {
+		if a.HTTPPort != "" {
+			httpPort = a.HTTPPort
+		}
+		if a.HTTPSPort != "" {
+			httpsPort = a.HTTPSPort
+		}
+	}
+
+	// uhttp and uhttps are the URLs we'll try to hit over HTTP or HTTPS,
 	// respectively, in order to do the HTTP upgrade to a net.Conn over which
 	// we'll speak Noise.
-	u80 := &url.URL{
+	uhttp := &url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(a.Hostname, strDef(a.HTTPPort, "80")),
+		Host:   net.JoinHostPort(a.Hostname, httpPort),
 		Path:   serverUpgradePath,
 	}
-	u443 := &url.URL{
+	uhttps := &url.URL{
 		Scheme: "https",
-		Host:   net.JoinHostPort(a.Hostname, strDef(a.HTTPSPort, "443")),
+		Host:   net.JoinHostPort(a.Hostname, httpsPort),
 		Path:   serverUpgradePath,
 	}
 
@@ -304,11 +358,11 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 	ch := make(chan tryURLRes) // must be unbuffered
 	try := func(u *url.URL) {
 		if debugNoiseDial() {
-			a.logf("trying noise dial (%v, %v) ...", u, addr)
+			a.logf("trying noise dial (%v, %v) ...", u, c.IP)
 		}
-		cbConn, err := a.dialURL(ctx, u, addr)
+		cbConn, err := a.dialURL(ctx, u, c.IP)
 		if debugNoiseDial() {
-			a.logf("noise dial (%v, %v) = (%v, %v)", u, addr, cbConn, err)
+			a.logf("noise dial (%v, %v) = (%v, %v)", u, c.IP, cbConn, err)
 		}
 		select {
 		case ch <- tryURLRes{u, cbConn, err}:
@@ -321,7 +375,7 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 
 	// Start the plaintext HTTP attempt first, unless disabled by the envknob.
 	if !forceNoise443() {
-		go try(u80)
+		go try(uhttp)
 	}
 
 	// In case outbound port 80 blocked or MITM'ed poorly, start a backup timer
@@ -329,7 +383,7 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 	if a.Clock == nil {
 		a.Clock = tstime.StdClock{}
 	}
-	try443Timer := a.Clock.AfterFunc(a.httpsFallbackDelay(), func() { try(u443) })
+	try443Timer := a.Clock.AfterFunc(a.httpsFallbackDelay(), func() { try(uhttps) })
 	defer try443Timer.Stop()
 
 	var err80, err443 error
@@ -342,7 +396,7 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 				return res.conn, nil
 			}
 			switch res.u {
-			case u80:
+			case uhttp:
 				// Connecting over plain HTTP failed; assume it's an HTTP proxy
 				// being difficult and see if we can get through over HTTPS.
 				err80 = res.err
@@ -350,9 +404,9 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 				// Timer.Reset(0) here because on AfterFuncs, that can run it
 				// again.
 				if try443Timer.Stop() {
-					go try(u443)
+					go try(uhttps)
 				} // else we lost the race and it started already which is what we want
-			case u443:
+			case uhttps:
 				err443 = res.err
 			default:
 				panic("invalid")
