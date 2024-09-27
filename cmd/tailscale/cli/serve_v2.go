@@ -127,6 +127,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
+			fs.StringVar(&e.service, "service", "", "listen for connections on a virtual service IP (example: service:myservice)")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{

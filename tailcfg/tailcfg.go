@@ -2346,6 +2346,9 @@ const (
 	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
 	// via SendEnv in the SSH server and applying them to the SSH session.
 	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
+
+	// NodeAttrVIPService instructs the client how to configure VIP services.
+	NodeAttrVIPService NodeCapability = "vip-service"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -2824,3 +2827,10 @@ type EarlyNoise struct {
 // For some request types, the header may have multiple values. (e.g. OldNodeKey
 // vs NodeKey)
 const LBHeader = "Ts-Lb"
+
+type VIPServicePortMap map[ /*proto*/ int]map[ /*port*/ int]netip.AddrPort
+
+type VIPService struct {
+	Addrs   []netip.Addr      `json:"addrs,omitempty"`
+	PortMap VIPServicePortMap `json:"portMap,omitempty"`
+}

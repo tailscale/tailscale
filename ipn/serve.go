@@ -24,9 +24,7 @@ func ServeConfigKey(profileID ProfileID) StateKey {
 	return StateKey("_serve/" + profileID)
 }
 
-// ServeConfig is the JSON type stored in the StateStore for
-// StateKey "_serve/$PROFILE_ID" as returned by ServeConfigKey.
-type ServeConfig struct {
+type ListenerConfig struct {
 	// TCP are the list of TCP port numbers that tailscaled should handle for
 	// the Tailscale IP addresses. (not subnet routers, etc)
 	TCP map[uint16]*TCPPortHandler `json:",omitempty"`
@@ -34,6 +32,14 @@ type ServeConfig struct {
 	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
+}
+
+// ServeConfig is the JSON type stored in the StateStore for
+// StateKey "_serve/$PROFILE_ID" as returned by ServeConfigKey.
+type ServeConfig struct {
+	ListenerConfig // local config
+
+	Services map[string]ListenerConfig `json:",omitempty"` // VIP service config
 
 	// AllowFunnel is the set of SNI:port values for which funnel
 	// traffic is allowed, from trusted ingress peers.

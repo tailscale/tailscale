@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/tailscale/wireguard-go/conn"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -172,6 +173,10 @@ type Impl struct {
 	// be a subnet router).
 	// It can only be set before calling Start.
 	ProcessSubnets bool
+
+	// ServiceVIPs is the description of service VIPs that should be handled.
+	// It can only be set before calling Start and is immutable after.
+	ServiceVIPs bart.Table[map[int]netip.AddrPort]
 
 	ipstack       *stack.Stack
 	linkEP        *linkEndpoint
