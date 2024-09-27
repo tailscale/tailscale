@@ -118,6 +118,9 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
+	if cfg.LoginServer != "" {
+		args = append(args, "--login-server="+cfg.LoginServer)
+	}
 	if cfg.ExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.ExtraArgs)...)
 	}

@@ -64,6 +64,7 @@ type settings struct {
 	// target.
 	PodIP               string
 	HealthCheckAddrPort string
+	LoginServer			string
 }
 
 func (s *settings) validate() error {
