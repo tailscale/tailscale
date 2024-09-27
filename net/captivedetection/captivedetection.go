@@ -179,6 +179,9 @@ func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints
 // verifyCaptivePortalEndpoint checks if the given Endpoint is a captive portal by making an HTTP request to the
 // given Endpoint URL using the interface with index ifIndex, and checking if the response looks like a captive portal.
 func (d *Detector) verifyCaptivePortalEndpoint(ctx context.Context, e Endpoint, ifIndex int) (found bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, "GET", e.URL.String(), nil)
 	if err != nil {
 		return false, err
@@ -213,7 +216,8 @@ func (d *Detector) dialContext(ctx context.Context, network, addr string) (net.C
 
 	ifIndex := d.currIfIndex
 
-	dl := net.Dialer{
+	dl := &net.Dialer{
+		Timeout: Timeout,
 		Control: func(network, address string, c syscall.RawConn) error {
 			return setSocketInterfaceIndex(c, ifIndex, d.logf)
 		},
