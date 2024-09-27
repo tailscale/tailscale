@@ -821,33 +821,12 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 
 	if newAuthkey != "" {
 		conf.AuthKey = &newAuthkey
-	} else if oldSecret != nil {
-		var err error
-		latest := tailcfg.CapabilityVersion(-1)
-		latestStr := ""
-		for k, data := range oldSecret.Data {
-			// write to StringData, read from Data as StringData is write-only
-			if len(data) == 0 {
-				continue
-			}
-			v, err := tsoperator.CapVerFromFileName(k)
-			if err != nil {
-				continue
-			}
-			if v > latest {
-				latestStr = k
-				latest = v
-			}
+	} else if shouldRetainAuthKey(oldSecret) {
+		key, err := authKeyFromSecret(oldSecret)
+		if err != nil {
+			return nil, fmt.Errorf("error retrieving auth key from Secret: %w", err)
 		}
-		// Allow for configs that don't contain an auth key. Perhaps
-		// users have some mechanisms to delete them. Auth key is
-		// normally not needed after the initial login.
-		if latestStr != "" {
-			conf.AuthKey, err = readAuthKey(oldSecret, latestStr)
-			if err != nil {
-				return nil, err
-			}
-		}
+		conf.AuthKey = key
 	}
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
 	capVerConfigs[95] = *conf
@@ -855,6 +834,41 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, newAuthkey string, oldSecret *co
 	conf.NoStatefulFiltering.Clear()
 	capVerConfigs[94] = *conf
 	return capVerConfigs, nil
+}
+
+func authKeyFromSecret(s *corev1.Secret) (key *string, err error) {
+	latest := tailcfg.CapabilityVersion(-1)
+	latestStr := ""
+	for k, data := range s.Data {
+		// write to StringData, read from Data as StringData is write-only
+		if len(data) == 0 {
+			continue
+		}
+		v, err := tsoperator.CapVerFromFileName(k)
+		if err != nil {
+			continue
+		}
+		if v > latest {
+			latestStr = k
+			latest = v
+		}
+	}
+	// Allow for configs that don't contain an auth key. Perhaps
+	// users have some mechanisms to delete them. Auth key is
+	// normally not needed after the initial login.
+	if latestStr != "" {
+		return readAuthKey(s, latestStr)
+	}
+	return key, nil
+}
+
+// shouldRetainAuthKey returns true if the state stored in a proxy's state Secret suggests that auth key should be
+// retained (because the proxy has not yet successfully authenticated).
+func shouldRetainAuthKey(s *corev1.Secret) bool {
+	if s == nil {
+		return false // nothing to retain here
+	}
+	return len(s.Data["device_id"]) == 0 // proxy has not authed yet
 }
 
 func shouldAcceptRoutes(pc *tsapi.ProxyClass) bool {
