@@ -576,13 +576,57 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 	if envknob.NoLogsNoSupport() || testenv.InTest() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
-	} else if val := getLogTarget(); val != "" {
-		logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
-		conf.BaseURL = val
-		u, _ := url.Parse(val)
-		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, health, logf)}
+	} else {
+		// Only attach an on-disk filch buffer if we are going to be sending logs.
+		// No reason to persist them locally just to drop them later.
+		attachFilchBuffer(&conf, dir, cmdName, logf)
+
+		if val := getLogTarget(); val != "" {
+			logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
+			conf.BaseURL = val
+			u, _ := url.Parse(val)
+			conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, health, logf)}
+		}
+
+	}
+	lw := logtail.NewLogger(conf, logf)
+
+	var logOutput io.Writer = lw
+
+	if runtime.GOOS == "windows" && conf.Collection == logtail.CollectionNode {
+		logID := newc.PublicID.String()
+		exe, _ := os.Executable()
+		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {
+			diskLogf := filelogger.New("tailscale-service", logID, lw.Logf)
+			logOutput = logger.FuncWriter(diskLogf)
+		}
 	}
 
+	if useStdLogger {
+		log.SetFlags(0) // other log flags are set on console, not here
+		log.SetOutput(logOutput)
+	}
+
+	logf("Program starting: v%v, Go %v: %#v",
+		version.Long(),
+		goVersion(),
+		os.Args)
+	logf("LogID: %v", newc.PublicID)
+	if earlyErrBuf.Len() != 0 {
+		logf("%s", earlyErrBuf.Bytes())
+	}
+
+	return &Policy{
+		Logtail:  lw,
+		PublicID: newc.PublicID,
+		Logf:     logf,
+	}
+}
+
+// attachFilchBuffer creates an on-disk ring buffer using filch and attaches
+// it to the logtail config. Note that this is optional; if no buffer is set,
+// logtail will use an in-memory buffer.
+func attachFilchBuffer(conf *logtail.Config, dir, cmdName string, logf logger.Logf) {
 	filchOptions := filch.Options{
 		ReplaceStderr: redirectStderrToLogPanics(),
 	}
@@ -608,40 +652,8 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 			conf.Stderr = filchBuf.OrigStderr
 		}
 	}
-	lw := logtail.NewLogger(conf, logf)
-
-	var logOutput io.Writer = lw
-
-	if runtime.GOOS == "windows" && conf.Collection == logtail.CollectionNode {
-		logID := newc.PublicID.String()
-		exe, _ := os.Executable()
-		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {
-			diskLogf := filelogger.New("tailscale-service", logID, lw.Logf)
-			logOutput = logger.FuncWriter(diskLogf)
-		}
-	}
-
-	if useStdLogger {
-		log.SetFlags(0) // other log flags are set on console, not here
-		log.SetOutput(logOutput)
-	}
-
-	logf("Program starting: v%v, Go %v: %#v",
-		version.Long(),
-		goVersion(),
-		os.Args)
-	logf("LogID: %v", newc.PublicID)
 	if filchErr != nil {
 		logf("filch failed: %v", filchErr)
-	}
-	if earlyErrBuf.Len() != 0 {
-		logf("%s", earlyErrBuf.Bytes())
-	}
-
-	return &Policy{
-		Logtail:  lw,
-		PublicID: newc.PublicID,
-		Logf:     logf,
 	}
 }
 
