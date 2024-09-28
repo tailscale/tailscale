@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -155,7 +154,7 @@ func runCp(ctx context.Context, args []string) error {
 			if fi.IsDir() {
 				// sending a directory
 				// compress it into a <dir-name>.tscompresseddir TAR archive to send
-				dirReader, err := getCompressedDirReader(fileArg)
+				dirReader, err := taildrop.GetCompressedDirReader(fileArg)
 				if err != nil {
 					return err
 				}
@@ -200,59 +199,6 @@ func runCp(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
-}
-
-// getCompressedDirReader will compress the given directory in TAR format
-// returns an io.Reader to get the raw TAR stream
-func getCompressedDirReader(dirPath string) (io.Reader, error) {
-	pr, pw := io.Pipe()
-
-	go func() {
-		tarWriter := tar.NewWriter(pw)
-		defer func() {
-			tarWriter.Close()
-			pw.Close()
-		}()
-
-		err := filepath.Walk(dirPath, func(path string, fileInfo os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-
-			relativePath := filepath.Clean(strings.TrimPrefix(path, string(filepath.Separator)))
-			// uniform path splitter
-			relativePath = filepath.ToSlash(relativePath)
-
-			header, err := tar.FileInfoHeader(fileInfo, relativePath)
-			if err != nil {
-				return err
-			}
-			header.Name = relativePath
-
-			if err := tarWriter.WriteHeader(header); err != nil {
-				return err
-			}
-
-			if !fileInfo.IsDir() {
-				file, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-				defer file.Close()
-
-				if _, err := io.Copy(tarWriter, file); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-
-		if err != nil {
-			pw.CloseWithError(err)
-		}
-	}()
-
-	return pr, nil
 }
 
 func progressPrinter(ctx context.Context, name string, contentCount func() int64, contentLength int64) {
@@ -559,7 +505,7 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 	defer rc.Close()
 	if strings.HasSuffix(wf.Name, taildrop.CompressedDirSuffix) {
 		// receiving a directory
-		if err := extractCompressedDir(rc, dir); err != nil {
+		if err := taildrop.ExtractCompressedDir(rc, dir, getArgs.conflict.String()); err != nil {
 			return "", 0, err
 		}
 		return wf.Name, size, nil
@@ -580,70 +526,6 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 		}
 		return f.Name(), size, f.Close()
 	}
-}
-
-// extractCompressedDir will uncompress the given TAR archive
-// to destination directory
-func extractCompressedDir(rc io.ReadCloser, dstDir string) error {
-	r := tar.NewReader(rc)
-
-	err := os.MkdirAll(dstDir, 0644)
-	if err != nil {
-		return err
-	}
-
-	dstDir, err = filepath.Abs(dstDir)
-	if err != nil {
-		return err
-	}
-	for {
-		header, err := r.Next()
-		if err == io.EOF {
-			break // extract finished
-		}
-		if err != nil {
-			return err
-		}
-
-		fpath := filepath.Clean(filepath.Join(dstDir, header.Name))
-		// prevent path traversal
-		if !strings.HasPrefix(fpath, dstDir) {
-			return errors.New("Bad filepath in TAR: " + fpath)
-		}
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			// extract a dir
-			if err := os.MkdirAll(fpath, 0644); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			// extract a single file
-			dir := filepath.Dir(fpath)
-			fileName := filepath.Base(fpath)
-			if err := os.MkdirAll(dir, 0644); err != nil {
-				return err
-			}
-
-			outFile, err := openFileOrSubstitute(dir, fileName, getArgs.conflict)
-			if err != nil {
-				return err
-			}
-			defer outFile.Close()
-
-			// Apply quarantine attribute before copying
-			if err := quarantine.SetOnFile(outFile); err != nil {
-				return errors.New(fmt.Sprintf("failed to apply quarantine attribute to file %v: %v", fileName, err))
-			}
-			if _, err := io.Copy(outFile, r); err != nil {
-				return err
-			}
-		default:
-			// unsupported type flag
-			continue
-		}
-	}
-	return nil
 }
 
 func runFileGetOneBatch(ctx context.Context, dir string) []error {
