@@ -16,10 +16,10 @@ import (
 func Test_updatesForSvc(t *testing.T) {
 	tailnetIPv4, tailnetIPv6 := netip.MustParseAddr("100.99.99.99"), netip.MustParseAddr("fd7a:115c:a1e0::701:b62a")
 	tailnetIPv4_1, tailnetIPv6_1 := netip.MustParseAddr("100.88.88.88"), netip.MustParseAddr("fd7a:115c:a1e0::4101:512f")
-	ports := map[egressservices.PortMapName]egressservices.PortMap{"tcp:4003:80": {Protocol: "tcp", MatchPort: 4003, TargetPort: 80}}
-	ports1 := map[egressservices.PortMapName]egressservices.PortMap{"udp:4004:53": {Protocol: "udp", MatchPort: 4004, TargetPort: 53}}
-	ports2 := map[egressservices.PortMapName]egressservices.PortMap{"tcp:4003:80": {Protocol: "tcp", MatchPort: 4003, TargetPort: 80},
-		"tcp:4005:443": {Protocol: "tcp", MatchPort: 4005, TargetPort: 443}}
+	ports := map[egressservices.PortMap]struct{}{{Protocol: "tcp", MatchPort: 4003, TargetPort: 80}: {}}
+	ports1 := map[egressservices.PortMap]struct{}{{Protocol: "udp", MatchPort: 4004, TargetPort: 53}: {}}
+	ports2 := map[egressservices.PortMap]struct{}{{Protocol: "tcp", MatchPort: 4003, TargetPort: 80}: {},
+		{Protocol: "tcp", MatchPort: 4005, TargetPort: 443}: {}}
 	fqdnSpec := egressservices.Config{
 		TailnetTarget: egressservices.TailnetTarget{FQDN: "test"},
 		Ports:         ports,

@@ -28,7 +28,7 @@ type Config struct {
 	// Ports contains mappings for ports that can be accessed on the tailnet
 	// target keyed by a predictable name for easier lookup.
 	// {"tcp:80:4003":{"protocol":"tcp","src":80,"dst":4003}}
-	Ports map[PortMapName]PortMap `json:"ports"`
+	Ports map[PortMap]struct{} `json:"ports"`
 }
 
 // TailnetTarget is the tailnet target to which traffic for the egress service
@@ -49,9 +49,6 @@ type PortMap struct {
 	TargetPort uint16 `json:"targetPort"`
 }
 
-// PortMapName is a name of a port mapping in form '<protocol>:<match port>:<target port>'.
-type PortMapName string
-
 // Status represents the currently configured firewall rules for all egress
 // services for a proxy identified by the PodIP.
 type Status struct {
@@ -63,7 +60,7 @@ type Status struct {
 // ServiceStatus is the currently configured firewall rules for an egress
 // service.
 type ServiceStatus struct {
-	Ports map[PortMapName]PortMap `json:"ports"`
+	Ports map[PortMap]struct{} `json:"ports"`
 	// TailnetTargetIPs are the tailnet target IPs that were used to
 	// configure these firewall rules. For a TailnetTarget with IP set, this
 	// is the same as IP.

@@ -226,7 +226,7 @@ func updatesForCfg(svcName string, cfg egressservices.Config, status *egressserv
 	// If no rules for service are present yet, add them all.
 	if !ok {
 		for _, t := range tailnetTargetIPs {
-			for _, ports := range cfg.Ports {
+			for ports := range cfg.Ports {
 				log.Printf("syncegressservices: svc %s adding port %v", svcName, ports)
 				rulesToAdd = append(rulesToAdd, rule{tailnetPort: ports.TargetPort, containerPort: ports.MatchPort, protocol: ports.Protocol, tailnetIP: t})
 			}
@@ -238,7 +238,7 @@ func updatesForCfg(svcName string, cfg egressservices.Config, status *egressserv
 	if len(tailnetTargetIPs) == 0 {
 		log.Printf("tailnet target for egress service %s does not have any backend addresses, deleting all rules", svcName)
 		for _, ip := range currentConfig.TailnetTargetIPs {
-			for _, ports := range currentConfig.Ports {
+			for ports := range currentConfig.Ports {
 				rulesToDelete = append(rulesToAdd, rule{tailnetPort: ports.TargetPort, containerPort: ports.MatchPort, protocol: ports.Protocol, tailnetIP: ip})
 			}
 		}
@@ -255,7 +255,7 @@ func updatesForCfg(svcName string, cfg egressservices.Config, status *egressserv
 			}
 		}
 		if !found {
-			for _, ports := range currentConfig.Ports {
+			for ports := range currentConfig.Ports {
 				rulesToDelete = append(rulesToDelete, rule{tailnetPort: ports.TargetPort, containerPort: ports.MatchPort, protocol: ports.Protocol, tailnetIP: ip})
 			}
 		}
@@ -273,7 +273,7 @@ func updatesForCfg(svcName string, cfg egressservices.Config, status *egressserv
 			}
 		}
 		if !found {
-			for _, ports := range cfg.Ports {
+			for ports := range cfg.Ports {
 				rulesToAdd = append(rulesToAdd, rule{tailnetPort: ports.TargetPort, containerPort: ports.MatchPort, protocol: ports.Protocol, tailnetIP: ip})
 			}
 			continue
@@ -283,16 +283,16 @@ func updatesForCfg(svcName string, cfg egressservices.Config, status *egressserv
 		// currently applied rules are up to date.
 
 		// Delete any current portmappings that are no longer present in config.
-		for portName, port := range currentConfig.Ports {
-			if _, ok := cfg.Ports[portName]; ok {
+		for port := range currentConfig.Ports {
+			if _, ok := cfg.Ports[port]; ok {
 				continue
 			}
 			rulesToDelete = append(rulesToDelete, rule{tailnetPort: port.TargetPort, containerPort: port.MatchPort, protocol: port.Protocol, tailnetIP: ip})
 		}
 
 		// Add any new portmappings.
-		for portName, port := range cfg.Ports {
-			if _, ok := currentConfig.Ports[portName]; ok {
+		for port := range cfg.Ports {
+			if _, ok := currentConfig.Ports[port]; ok {
 				continue
 			}
 			rulesToAdd = append(rulesToAdd, rule{tailnetPort: port.TargetPort, containerPort: port.MatchPort, protocol: port.Protocol, tailnetIP: ip})
@@ -477,7 +477,7 @@ func ensureServiceDeleted(svcName string, svc *egressservices.ServiceStatus, nfr
 	// Nftables group rules for a service in a chain, so there is no need to
 	// specify individual portmapping based rules.
 	pms := make([]linuxfw.PortMap, 0)
-	for _, pm := range svc.Ports {
+	for pm := range svc.Ports {
 		pms = append(pms, linuxfw.PortMap{MatchPort: pm.MatchPort, TargetPort: pm.TargetPort, Protocol: pm.Protocol})
 	}
 
