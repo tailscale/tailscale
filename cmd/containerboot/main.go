@@ -158,6 +158,7 @@ func main() {
 		PodIP:                                 defaultEnv("POD_IP", ""),
 		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
 		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
+		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -275,10 +276,8 @@ authLoop:
 			switch *n.State {
 			case ipn.NeedsLogin:
 				if isOneStepConfig(cfg) {
-					// This could happen if this is the
-					// first time tailscaled was run for
-					// this device and the auth key was not
-					// passed via the configfile.
+					// This could happen if this is the first time tailscaled was run for this
+					// device and the auth key was not passed via the configfile.
 					log.Fatalf("invalid state: tailscaled daemon started with a config file, but tailscale is not logged in: ensure you pass a valid auth key in the config file.")
 				}
 				if err := authTailscale(); err != nil {
@@ -376,6 +375,9 @@ authLoop:
 			}
 		})
 	)
+	// egressSvcsErrorChan will get an error sent to it if this containerboot instance is configured to expose 1+
+	// egress services in HA mode and errored.
+	var egressSvcsErrorChan = make(chan error)
 	defer t.Stop()
 	// resetTimer resets timer for when to next attempt to resolve the DNS
 	// name for the proxy configured with TS_EXPERIMENTAL_DEST_DNS_NAME. The
@@ -401,6 +403,7 @@ authLoop:
 		failedResolveAttempts++
 	}
 
+	var egressSvcsNotify chan ipn.Notify
 	notifyChan := make(chan ipn.Notify)
 	errChan := make(chan error)
 	go func() {
@@ -575,31 +578,50 @@ runLoop:
 					h.Unlock()
 					healthzRunner()
 				}
+				if egressSvcsNotify != nil {
+					egressSvcsNotify <- n
+				}
 			}
 			if !startupTasksDone {
-				// For containerboot instances that act as TCP
-				// proxies (proxying traffic to an endpoint
-				// passed via one of the env vars that
-				// containerbot reads) and store state in a
-				// Kubernetes Secret, we consider startup tasks
-				// done at the point when device info has been
-				// successfully stored to state Secret.
-				// For all other containerboot instances, if we
-				// just get to this point the startup tasks can
-				// be considered done.
+				// For containerboot instances that act as TCP proxies (proxying traffic to an endpoint
+				// passed via one of the env vars that containerboot reads) and store state in a
+				// Kubernetes Secret, we consider startup tasks done at the point when device info has
+				// been successfully stored to state Secret. For all other containerboot instances, if
+				// we just get to this point the startup tasks can be considered done.
 				if !isL3Proxy(cfg) || !hasKubeStateStore(cfg) || (currentDeviceEndpoints != deephash.Sum{} && currentDeviceID != deephash.Sum{}) {
 					// This log message is used in tests to detect when all
 					// post-auth configuration is done.
 					log.Println("Startup complete, waiting for shutdown signal")
 					startupTasksDone = true
 
-					// Wait on tailscaled process. It won't
-					// be cleaned up by default when the
-					// container exits as it is not PID1.
-					// TODO (irbekrm): perhaps we can
-					// replace the reaper by a running
-					// cmd.Wait in a goroutine immediately
-					// after starting tailscaled?
+					// Configure egress proxy. Egress proxy will set up firewall rules to proxy
+					// traffic to tailnet targets configured in the provided configuration file. It
+					// will then continuously monitor the config file and netmap updates and
+					// reconfigure the firewall rules as needed. If any of its operations fail, it
+					// will crash this node.
+					if cfg.EgressSvcsCfgPath != "" {
+						log.Printf("configuring egress proxy using configuration file at %s", cfg.EgressSvcsCfgPath)
+						egressSvcsNotify = make(chan ipn.Notify)
+						ep := egressProxy{
+							cfgPath:      cfg.EgressSvcsCfgPath,
+							nfr:          nfr,
+							kc:           kc,
+							stateSecret:  cfg.KubeSecret,
+							netmapChan:   egressSvcsNotify,
+							podIP:        cfg.PodIP,
+							tailnetAddrs: addrs,
+						}
+						go func() {
+							if err := ep.run(ctx, n); err != nil {
+								egressSvcsErrorChan <- err
+							}
+						}()
+					}
+
+					// Wait on tailscaled process. It won't be cleaned up by default when the
+					// container exits as it is not PID1. TODO (irbekrm): perhaps we can replace the
+					// reaper by a running cmd.Wait in a goroutine immediately after starting
+					// tailscaled?
 					reaper := func() {
 						defer wg.Done()
 						for {
@@ -637,6 +659,8 @@ runLoop:
 			}
 			backendAddrs = newBackendAddrs
 			resetTimer(false)
+		case e := <-egressSvcsErrorChan:
+			log.Fatalf("egress proxy failed: %v", e)
 		}
 	}
 	wg.Wait()

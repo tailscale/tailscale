@@ -64,6 +64,7 @@ type settings struct {
 	// target.
 	PodIP               string
 	HealthCheckAddrPort string
+	EgressSvcsCfgPath   string
 }
 
 func (s *settings) validate() error {
@@ -198,7 +199,7 @@ func isOneStepConfig(cfg *settings) bool {
 // as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
 func isL3Proxy(cfg *settings) bool {
-	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress
+	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressSvcsCfgPath != ""
 }
 
 // hasKubeStateStore returns true if the state must be stored in a Kubernetes

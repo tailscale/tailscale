@@ -682,7 +682,7 @@ func delTSHook(ipt iptablesInterface, table, chain string, logf logger.Logf) err
 	return nil
 }
 
-// delChain flushs and deletes a chain. If the chain does not exist, it's a no-op
+// delChain flushes and deletes a chain. If the chain does not exist, it's a no-op
 // since the desired state is already achieved. otherwise, it returns an error.
 func delChain(ipt iptablesInterface, table, chain string) error {
 	if err := ipt.ClearChain(table, chain); err != nil {
