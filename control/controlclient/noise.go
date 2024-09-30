@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -337,6 +338,10 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseconn.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// We create a new noiseconn in the TestConn function, below, so to
+	// avoid re-creating it multiple times (after the Dial), we store a
+	// reference to created ones here.
+	var noiseConns syncs.Map[*controlhttp.ClientConn, *noiseconn.Conn]
 	clientConn, err := (&controlhttp.Dialer{
 		Hostname:        nc.host,
 		HTTPPort:        nc.httpPort,
@@ -351,15 +356,48 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseconn.Conn, error) {
 		NetMon:          nc.netMon,
 		HealthTracker:   nc.health,
 		Clock:           tstime.StdClock{},
+		TestConn: func(cc *controlhttp.ClientConn) error {
+			ncc, err := noiseconn.New(cc.Conn, nc.h2t, connID, nc.connClosed)
+			if err != nil {
+				return err
+			}
+
+			// Store this conn for later extraction.
+			noiseConns.Store(cc, ncc)
+
+			if err := noiseconn.TestConn(ctx, nc.logf, ncc, nc.host); err != nil {
+				noiseConns.Delete(cc)
+				ncc.Close()
+				return err
+			}
+
+			if nc.logf != nil {
+				nc.logf("tested noise connection successfully")
+			}
+			return nil
+		},
 	}).Dial(ctx)
 	if err != nil {
+		// Ensure that we close any noise connections that we created.
+		noiseConns.Range(func(_ *controlhttp.ClientConn, ncc *noiseconn.Conn) bool {
+			ncc.Close()
+			return true
+		})
 		return nil, err
 	}
 
-	ncc, err := noiseconn.New(clientConn.Conn, nc.h2t, connID, nc.connClosed)
-	if err != nil {
-		return nil, err
+	// If we get here, we know that we successfully created a noiseConn,
+	// above, so we extract and use it.
+	ncc, found := noiseConns.LoadAndDelete(clientConn)
+	if !found {
+		return nil, errors.New("[unexpected] no noiseConn found")
 	}
+
+	// Close all other noiseConns that we created but didn't use.
+	noiseConns.Range(func(_ *controlhttp.ClientConn, ncc *noiseconn.Conn) bool {
+		ncc.Close()
+		return true
+	})
 
 	nc.mu.Lock()
 	if nc.closed {

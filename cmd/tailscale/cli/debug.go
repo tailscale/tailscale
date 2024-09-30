@@ -40,6 +40,7 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -844,6 +845,24 @@ func runTS2021(ctx context.Context, args []string) error {
 	if ts2021Args.verbose {
 		logf = log.Printf
 	}
+
+	h2Transport, err := http2.ConfigureTransports(&http.Transport{
+		IdleConnTimeout: time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("http2.ConfigureTransports: %w", err)
+	}
+
+	var noiseConns syncs.Map[*controlhttp.ClientConn, *noiseconn.Conn]
+
+	// Close all noise conns when we're done.
+	defer func() {
+		noiseConns.Range(func(_ *controlhttp.ClientConn, ncc *noiseconn.Conn) bool {
+			ncc.Close()
+			return true
+		})
+	}()
+
 	conn, err := (&controlhttp.Dialer{
 		Hostname:        ts2021Args.host,
 		HTTPPort:        "80",
@@ -853,6 +872,24 @@ func runTS2021(ctx context.Context, args []string) error {
 		ProtocolVersion: uint16(ts2021Args.version),
 		Dialer:          dialFunc,
 		Logf:            logf,
+		TestConn: func(cc *controlhttp.ClientConn) (retErr error) {
+			log.Printf("testing ClientConn %p ...", cc)
+
+			nc, err := noiseconn.New(cc.Conn, h2Transport, 0, nil)
+			if err != nil {
+				return fmt.Errorf("noiseconn.New: %w", err)
+			}
+
+			// Store this conn for later use.
+			noiseConns.Store(cc, nc)
+			defer func() {
+				if retErr != nil {
+					noiseConns.Delete(cc)
+					nc.Close()
+				}
+			}()
+			return noiseconn.TestConn(ctx, log.Printf, nc, ts2021Args.host)
+		},
 	}).Dial(ctx)
 	log.Printf("controlhttp.Dial = %p, %v", conn, err)
 	if err != nil {
@@ -867,52 +904,6 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
-
-	h2Transport, err := http2.ConfigureTransports(&http.Transport{
-		IdleConnTimeout: time.Second,
-	})
-	if err != nil {
-		return fmt.Errorf("http2.ConfigureTransports: %w", err)
-	}
-
-	// Now, create a Noise conn over the existing conn.
-	nc, err := noiseconn.New(conn.Conn, h2Transport, 0, nil)
-	if err != nil {
-		return fmt.Errorf("noiseconn.New: %w", err)
-	}
-	defer nc.Close()
-
-	// Reserve a RoundTrip for the whoami request.
-	ok, _, err := nc.ReserveNewRequest(ctx)
-	if err != nil {
-		return fmt.Errorf("ReserveNewRequest: %w", err)
-	}
-	if !ok {
-		return errors.New("ReserveNewRequest failed")
-	}
-
-	// Make a /whoami request to the server to verify that we can actually
-	// communicate over the newly-established connection.
-	whoamiURL := "http://" + ts2021Args.host + "/machine/whoami"
-	req, err = http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := nc.RoundTrip(req)
-	if err != nil {
-		return fmt.Errorf("RoundTrip whoami request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("whoami request returned status %v", resp.Status)
-	} else {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("reading whoami response: %w", err)
-		}
-		log.Printf("whoami response: %q", body)
-	}
 	return nil
 }
 

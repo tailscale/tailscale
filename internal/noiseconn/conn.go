@@ -14,13 +14,19 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
+	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 // Conn is a wrapper around controlbase.Conn.
@@ -182,6 +188,58 @@ func (c *Conn) Close() error {
 	}
 	if c.onClose != nil {
 		c.onClose(c.id)
+	}
+	return nil
+}
+
+var defaultControlHost string = (func() string {
+	uu := must.Get(url.Parse(ipn.DefaultControlURL))
+	return uu.Hostname()
+})()
+
+// TestConn is a shared implementation to allow testing that a Conn is
+// operating successfully, by making a request to the server and verifying that
+// the response is what we expect.
+//
+// Since this
+func TestConn(ctx context.Context, logf logger.Logf, conn *Conn, host string) error {
+	// TODO(andrew-d): double-check that reserving a request here doesn't
+	// mess with our early payload.
+	ok, _, err := conn.ReserveNewRequest(ctx)
+	if err != nil {
+		return fmt.Errorf("ReserveNewRequest: %w", err)
+	}
+	if !ok {
+		return errors.New("ReserveNewRequest failed")
+	}
+
+	whoamiURL := "http://" + host + "/machine/whoami"
+	req, err := http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := conn.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("RoundTrip whoami request: %w", err)
+	}
+	defer resp.Body.Close()
+	defer io.Copy(io.Discard, resp.Body)
+
+	// If we're talking to the default control plane, we know that this
+	// endpoint exists and should return 200. Thus, we can error if this
+	// request doesn't work. However, for custom control planes this
+	// endpoint may not be present, so we treat any valid HTTP response as
+	// a success.
+	if host == defaultControlHost && resp.StatusCode != 200 {
+		return fmt.Errorf("whoami request failed; got status %d", resp.StatusCode)
+	}
+
+	if envknob.Bool("TS_DEBUG_NOISE_DIAL") && logf != nil {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("reading whoami response: %w", err)
+		}
+		logf("[v1] TestConn: whoami response: %q", body)
 	}
 	return nil
 }
