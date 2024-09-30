@@ -56,6 +56,17 @@ ARG VERSION_GIT_HASH=""
 ENV VERSION_GIT_HASH=$VERSION_GIT_HASH
 ARG TARGETARCH
 
+# Basic build-time metadata as defined at https://github.com/opencontainers/image-spec/blob/main/annotations.md#pre-defined-annotation-keys
+LABEL org.opencontainers.image.title="Tailscale" \
+    org.opencontainers.image.description="The easiest, most secure way to use WireGuard and 2FA." \
+    org.opencontainers.image.version="$VERSION_SHORT" \
+    org.opencontainers.image.revision="$VERSION_GIT_HASH" \
+    org.opencontainers.image.url="https://tailscale.com" \
+    org.opencontainers.image.documentation="https://tailscale.com/kb" \
+    org.opencontainers.image.source="https://github.com/tailscale/tailscale" \
+    org.opencontainers.image.licenses="BSD-3-Clause" \
+    org.opencontainers.image.vendor="Tailscale Inc"
+
 RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.longStamp=$VERSION_LONG \
       -X tailscale.com/version.shortStamp=$VERSION_SHORT \
