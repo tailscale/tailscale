@@ -8,18 +8,16 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gaissmai/bart"
@@ -30,13 +28,11 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tsweb"
-	"tailscale.com/util/dnsname"
-	"tailscale.com/util/mak"
 )
 
 func main() {
@@ -56,6 +52,7 @@ func main() {
 		printULA        = fs.Bool("print-ula", false, "print the ULA prefix and exit")
 		ignoreDstPfxStr = fs.String("ignore-destinations", "", "comma-separated list of prefixes to ignore")
 		wgPort          = fs.Uint("wg-port", 0, "udp port for wireguard and peer to peer traffic")
+		clusterTag      = fs.String("cluster-tag", "", "TODO")
 	)
 	ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_NATC"))
 
@@ -105,6 +102,7 @@ func main() {
 	ts := &tsnet.Server{
 		Hostname: *hostname,
 	}
+	ts.ControlURL = "http://host.docker.internal:31544"
 	if *wgPort != 0 {
 		if *wgPort >= 1<<16 {
 			log.Fatalf("wg-port must be in the range [0, 65535]")
@@ -112,6 +110,7 @@ func main() {
 		ts.Port = uint16(*wgPort)
 	}
 	defer ts.Close()
+
 	if *verboseTSNet {
 		ts.Logf = log.Printf
 	}
@@ -136,6 +135,28 @@ func main() {
 	if _, err := ts.Up(ctx); err != nil {
 		log.Fatalf("ts.Up: %v", err)
 	}
+	woo, err := lc.Status(ctx)
+	if err != nil {
+		panic(err)
+	}
+	var peers []*ipnstate.PeerStatus
+	if *clusterTag != "" && woo.Self.Tags != nil && slices.Contains(woo.Self.Tags.AsSlice(), *clusterTag) {
+		for _, v := range woo.Peer {
+			if v.Tags != nil && slices.Contains(v.Tags.AsSlice(), *clusterTag) {
+				peers = append(peers, v)
+			}
+		}
+	} else {
+		// we are not in clustering mode I guess?
+		panic("todo")
+	}
+
+	ipp := ipPool{
+		v4Ranges: v4Prefixes,
+		dnsAddr:  dnsAddr,
+	}
+
+	ipp.StartConsensus(peers, ts)
 
 	c := &connector{
 		ts:         ts,
@@ -144,6 +165,7 @@ func main() {
 		v4Ranges:   v4Prefixes,
 		v6ULA:      ula(uint16(*siteID)),
 		ignoreDsts: ignoreDstTable,
+		ipAddrs:    &ipp,
 	}
 	c.run(ctx)
 }
@@ -165,7 +187,7 @@ type connector struct {
 	// v6ULA is the ULA prefix used by the app connector to assign IPv6 addresses.
 	v6ULA netip.Prefix
 
-	perPeerMap syncs.Map[tailcfg.NodeID, *perPeerState]
+	ipAddrs *ipPool
 
 	// ignoreDsts is initialized at start up with the contents of --ignore-destinations (if none it is nil)
 	// It is never mutated, only used for lookups.
@@ -332,16 +354,15 @@ var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 // generateDNSResponse generates a DNS response for the given request. The from
 // argument is the NodeID of the node that sent the request.
 func (c *connector) generateDNSResponse(req *dnsmessage.Message, from tailcfg.NodeID) ([]byte, error) {
-	pm, _ := c.perPeerMap.LoadOrStore(from, &perPeerState{c: c})
 	var addrs []netip.Addr
 	if len(req.Questions) > 0 {
 		switch req.Questions[0].Type {
 		case dnsmessage.TypeAAAA, dnsmessage.TypeA:
-			var err error
-			addrs, err = pm.ipForDomain(req.Questions[0].Name.String())
+			v4, err := c.ipAddrs.IpForDomain(from, req.Questions[0].Name.String())
 			if err != nil {
 				return nil, err
 			}
+			addrs = []netip.Addr{v4, c.v6ForV4(v4)}
 		}
 	}
 	return dnsResponse(req, addrs)
@@ -429,14 +450,13 @@ func (c *connector) handleTCPFlow(src, dst netip.AddrPort) (handler func(net.Con
 	}
 
 	from := who.Node.ID
-	ps, ok := c.perPeerMap.Load(from)
-	if !ok {
-		log.Printf("handleTCPFlow: no perPeerState for %v", from)
-		return nil, false
+	dstAddr := dst.Addr()
+	if dstAddr.Is6() {
+		dstAddr = v4ForV6(dstAddr)
 	}
-	domain, ok := ps.domainForIP(dst.Addr())
-	if !ok {
-		log.Printf("handleTCPFlow: no domain for IP %v\n", dst.Addr())
+	domain := c.ipAddrs.DomainForIP(from, dstAddr, time.Now())
+	if domain == "" {
+		log.Print("handleTCPFlow: found no domain")
 		return nil, false
 	}
 	return func(conn net.Conn) {
@@ -480,96 +500,18 @@ func proxyTCPConn(c net.Conn, dest string) {
 	p.Start()
 }
 
-// perPeerState holds the state for a single peer.
-type perPeerState struct {
-	c *connector
-
-	mu           sync.Mutex
-	domainToAddr map[string][]netip.Addr
-	addrToDomain *bart.Table[string]
-}
-
-// domainForIP returns the domain name assigned to the given IP address and
-// whether it was found.
-func (ps *perPeerState) domainForIP(ip netip.Addr) (_ string, ok bool) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if ps.addrToDomain == nil {
-		return "", false
-	}
-	return ps.addrToDomain.Lookup(ip)
-}
-
-// ipForDomain assigns a pair of unique IP addresses for the given domain and
-// returns them. The first address is an IPv4 address and the second is an IPv6
-// address. If the domain already has assigned addresses, it returns them.
-func (ps *perPeerState) ipForDomain(domain string) ([]netip.Addr, error) {
-	fqdn, err := dnsname.ToFQDN(domain)
-	if err != nil {
-		return nil, err
-	}
-	domain = fqdn.WithoutTrailingDot()
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if addrs, ok := ps.domainToAddr[domain]; ok {
-		return addrs, nil
-	}
-	addrs := ps.assignAddrsLocked(domain)
-	return addrs, nil
-}
-
-// isIPUsedLocked reports whether the given IP address is already assigned to a
-// domain.
-// ps.mu must be held.
-func (ps *perPeerState) isIPUsedLocked(ip netip.Addr) bool {
-	_, ok := ps.addrToDomain.Lookup(ip)
-	return ok
-}
-
-// unusedIPv4Locked returns an unused IPv4 address from the available ranges.
-func (ps *perPeerState) unusedIPv4Locked() netip.Addr {
-	// TODO: skip ranges that have been exhausted
-	for _, r := range ps.c.v4Ranges {
-		ip := randV4(r)
-		for r.Contains(ip) {
-			if !ps.isIPUsedLocked(ip) && ip != ps.c.dnsAddr {
-				return ip
-			}
-			ip = ip.Next()
-		}
-	}
-	return netip.Addr{}
-}
-
-// randV4 returns a random IPv4 address within the given prefix.
-func randV4(maskedPfx netip.Prefix) netip.Addr {
-	bits := 32 - maskedPfx.Bits()
-	randBits := rand.Uint32N(1 << uint(bits))
-
-	ip4 := maskedPfx.Addr().As4()
-	pn := binary.BigEndian.Uint32(ip4[:])
-	binary.BigEndian.PutUint32(ip4[:], randBits|pn)
-	return netip.AddrFrom4(ip4)
-}
-
-// assignAddrsLocked assigns a pair of unique IP addresses for the given domain
-// and returns them. The first address is an IPv4 address and the second is an
-// IPv6 address. It does not check if the domain already has assigned addresses.
-// ps.mu must be held.
-func (ps *perPeerState) assignAddrsLocked(domain string) []netip.Addr {
-	if ps.addrToDomain == nil {
-		ps.addrToDomain = &bart.Table[string]{}
-	}
-	v4 := ps.unusedIPv4Locked()
-	as16 := ps.c.v6ULA.Addr().As16()
+func (c *connector) v6ForV4(v4 netip.Addr) netip.Addr {
+	as16 := c.v6ULA.Addr().As16()
 	as4 := v4.As4()
 	copy(as16[12:], as4[:])
 	v6 := netip.AddrFrom16(as16)
-	addrs := []netip.Addr{v4, v6}
-	mak.Set(&ps.domainToAddr, domain, addrs)
-	for _, a := range addrs {
-		ps.addrToDomain.Insert(netip.PrefixFrom(a, a.BitLen()), domain)
-	}
-	return addrs
+	return v6
+}
+
+func v4ForV6(v6 netip.Addr) netip.Addr {
+	as16 := v6.As16()
+	var as4 [4]byte
+	copy(as4[:], as16[12:])
+	v4 := netip.AddrFrom4(as4)
+	return v4
 }
