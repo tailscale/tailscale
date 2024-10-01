@@ -967,11 +967,11 @@ func (de *endpoint) send(buffs [][]byte) error {
 
 		switch {
 		case udpAddr.Addr().Is4():
-			de.c.metrics.outboundPacketsIPv4Total.Add(int64(len(buffs)))
-			de.c.metrics.outboundBytesIPv4Total.Add(int64(txBytes))
+			de.c.metrics.outboundPacketsIPv4OKTotal.Add(int64(len(buffs)))
+			de.c.metrics.outboundBytesIPv4OKTotal.Add(int64(txBytes))
 		case udpAddr.Addr().Is6():
-			de.c.metrics.outboundPacketsIPv6Total.Add(int64(len(buffs)))
-			de.c.metrics.outboundBytesIPv6Total.Add(int64(txBytes))
+			de.c.metrics.outboundPacketsIPv6OKTotal.Add(int64(len(buffs)))
+			de.c.metrics.outboundBytesIPv6OKTotal.Add(int64(txBytes))
 		}
 
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.

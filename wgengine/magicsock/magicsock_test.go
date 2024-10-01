@@ -1206,18 +1206,18 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 }
 
 func (c *Conn) resetMetricsForTest() {
-	c.metrics.inboundBytesIPv4Total.Set(0)
-	c.metrics.inboundPacketsIPv4Total.Set(0)
-	c.metrics.outboundBytesIPv4Total.Set(0)
-	c.metrics.outboundPacketsIPv4Total.Set(0)
-	c.metrics.inboundBytesIPv6Total.Set(0)
-	c.metrics.inboundPacketsIPv6Total.Set(0)
-	c.metrics.outboundBytesIPv6Total.Set(0)
-	c.metrics.outboundPacketsIPv6Total.Set(0)
-	c.metrics.inboundBytesDERPTotal.Set(0)
-	c.metrics.inboundPacketsDERPTotal.Set(0)
-	c.metrics.outboundBytesDERPTotal.Set(0)
-	c.metrics.outboundPacketsDERPTotal.Set(0)
+	c.metrics.inboundBytesIPv4OKTotal.Set(0)
+	c.metrics.inboundPacketsIPv4OKTotal.Set(0)
+	c.metrics.outboundBytesIPv4OKTotal.Set(0)
+	c.metrics.outboundPacketsIPv4OKTotal.Set(0)
+	c.metrics.inboundBytesIPv6OKTotal.Set(0)
+	c.metrics.inboundPacketsIPv6OKTotal.Set(0)
+	c.metrics.outboundBytesIPv6OKTotal.Set(0)
+	c.metrics.outboundPacketsIPv6OKTotal.Set(0)
+	c.metrics.inboundBytesDERPOKTotal.Set(0)
+	c.metrics.inboundPacketsDERPOKTotal.Set(0)
+	c.metrics.outboundBytesDERPOKTotal.Set(0)
+	c.metrics.outboundPacketsDERPOKTotal.Set(0)
 }
 
 func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
@@ -1246,15 +1246,15 @@ func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
 		}
 	}
 
-	metricIPv4RxBytes := ms.conn.metrics.inboundBytesIPv4Total.Value()
-	metricIPv4RxPackets := ms.conn.metrics.inboundPacketsIPv4Total.Value()
-	metricIPv4TxBytes := ms.conn.metrics.outboundBytesIPv4Total.Value()
-	metricIPv4TxPackets := ms.conn.metrics.outboundPacketsIPv4Total.Value()
+	metricIPv4RxBytes := ms.conn.metrics.inboundBytesIPv4OKTotal.Value()
+	metricIPv4RxPackets := ms.conn.metrics.inboundPacketsIPv4OKTotal.Value()
+	metricIPv4TxBytes := ms.conn.metrics.outboundBytesIPv4OKTotal.Value()
+	metricIPv4TxPackets := ms.conn.metrics.outboundPacketsIPv4OKTotal.Value()
 
-	metricDERPRxBytes := ms.conn.metrics.inboundBytesDERPTotal.Value()
-	metricDERPRxPackets := ms.conn.metrics.inboundPacketsDERPTotal.Value()
-	metricDERPTxBytes := ms.conn.metrics.outboundBytesDERPTotal.Value()
-	metricDERPTxPackets := ms.conn.metrics.outboundPacketsDERPTotal.Value()
+	metricDERPRxBytes := ms.conn.metrics.inboundBytesDERPOKTotal.Value()
+	metricDERPRxPackets := ms.conn.metrics.inboundPacketsDERPOKTotal.Value()
+	metricDERPTxBytes := ms.conn.metrics.outboundBytesDERPOKTotal.Value()
+	metricDERPTxPackets := ms.conn.metrics.outboundPacketsDERPOKTotal.Value()
 
 	c := qt.New(t)
 	c.Assert(physDERPRxBytes, qt.Equals, metricDERPRxBytes)

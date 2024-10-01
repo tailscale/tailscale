@@ -1089,14 +1089,14 @@ func TestUserMetrics(t *testing.T) {
 
 	// Verify that the amount of data recorded in bytes is higher or equal to the
 	// 10 megabytes sent.
-	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4"}`]
+	inboundBytes1 := parsedMetrics1[`tailscaled_inbound_bytes_total{path="direct_ipv4",action="ok"}`]
 	if inboundBytes1 < float64(bytesToSend) {
-		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
+		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4",action="ok"}: expected higher (or equal) than %d, got: %f`, bytesToSend, inboundBytes1)
 	}
 
 	// But ensure that it is not too much higher than the 10 megabytes sent.
 	if inboundBytes1 > float64(bytesToSend)*bytesSentTolerance {
-		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
+		t.Errorf(`metrics1, tailscaled_inbound_bytes_total{path="direct_ipv4",action="ok"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, inboundBytes1)
 	}
 
 	metrics2, err := lc2.UserMetrics(ctx)
@@ -1138,14 +1138,14 @@ func TestUserMetrics(t *testing.T) {
 
 	// Verify that the amount of data recorded in bytes is higher or equal than the
 	// 10 megabytes sent.
-	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4"}`]
+	outboundBytes2 := parsedMetrics2[`tailscaled_outbound_bytes_total{path="direct_ipv4",action="ok"}`]
 	if outboundBytes2 < float64(bytesToSend) {
-		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
+		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4",action="ok"}: expected higher (or equal) than %d, got: %f`, bytesToSend, outboundBytes2)
 	}
 
 	// But ensure that it is not too much higher than the 10 megabytes sent.
 	if outboundBytes2 > float64(bytesToSend)*bytesSentTolerance {
-		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
+		t.Errorf(`metrics2, tailscaled_outbound_bytes_total{path="direct_ipv4",action="ok"}: expected lower than %f, got: %f`, float64(bytesToSend)*bytesSentTolerance, outboundBytes2)
 	}
 }
 

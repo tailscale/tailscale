@@ -667,10 +667,11 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 			err := dc.Send(wr.pubKey, wr.b)
 			if err != nil {
 				c.logf("magicsock: derp.Send(%v): %v", wr.addr, err)
-				metricSendDERPError.Add(1)
+				c.metrics.outboundPacketsDERPErrTotal.Add(1)
+				c.metrics.outboundBytesDERPErrTotal.Add(int64(len(wr.b)))
 			} else {
-				c.metrics.outboundPacketsDERPTotal.Add(1)
-				c.metrics.outboundBytesDERPTotal.Add(int64(len(wr.b)))
+				c.metrics.outboundPacketsDERPOKTotal.Add(1)
+				c.metrics.outboundBytesDERPOKTotal.Add(int64(len(wr.b)))
 			}
 		}
 	}
@@ -691,8 +692,8 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 			// No data read occurred. Wait for another packet.
 			continue
 		}
-		c.metrics.inboundPacketsDERPTotal.Add(1)
-		c.metrics.inboundBytesDERPTotal.Add(int64(n))
+		c.metrics.inboundPacketsDERPOKTotal.Add(1)
+		c.metrics.inboundBytesDERPOKTotal.Add(int64(n))
 		sizes[0] = n
 		eps[0] = ep
 		return 1, nil

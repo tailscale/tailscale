@@ -90,12 +90,23 @@ const (
 	PathDERP       Path = "derp"
 )
 
+// TODO(kradalby): action probably made sense when we made a distinction between
+// different type of drops, maybe status=ok/error would be better?
+type Action string
+
+const (
+	ActionErr Action = "error"
+	ActionOK  Action = "ok"
+)
+
 type pathLabel struct {
 	// Path indicates the path that the packet took:
 	// - direct_ipv4
 	// - direct_ipv6
 	// - derp
 	Path Path
+
+	Action Action
 }
 
 // metrics in wgengine contains the usermetrics counters for magicsock, it
@@ -106,27 +117,33 @@ type pathLabel struct {
 type metrics struct {
 	// inboundPacketsTotal is the total number of inbound packets received,
 	// labeled by the path the packet took.
-	inboundPacketsIPv4Total expvar.Int
-	inboundPacketsIPv6Total expvar.Int
-	inboundPacketsDERPTotal expvar.Int
+	inboundPacketsIPv4OKTotal expvar.Int
+	inboundPacketsIPv6OKTotal expvar.Int
+	inboundPacketsDERPOKTotal expvar.Int
 
 	// inboundBytesTotal is the total number of inbound bytes received,
 	// labeled by the path the packet took.
-	inboundBytesIPv4Total expvar.Int
-	inboundBytesIPv6Total expvar.Int
-	inboundBytesDERPTotal expvar.Int
+	inboundBytesIPv4OKTotal expvar.Int
+	inboundBytesIPv6OKTotal expvar.Int
+	inboundBytesDERPOKTotal expvar.Int
 
 	// outboundPacketsTotal is the total number of outbound packets sent,
 	// labeled by the path the packet took.
-	outboundPacketsIPv4Total expvar.Int
-	outboundPacketsIPv6Total expvar.Int
-	outboundPacketsDERPTotal expvar.Int
+	outboundPacketsIPv4OKTotal  expvar.Int
+	outboundPacketsIPv6OKTotal  expvar.Int
+	outboundPacketsDERPOKTotal  expvar.Int
+	outboundPacketsIPv4ErrTotal expvar.Int
+	outboundPacketsIPv6ErrTotal expvar.Int
+	outboundPacketsDERPErrTotal expvar.Int
 
 	// outboundBytesTotal is the total number of outbound bytes sent,
 	// labeled by the path the packet took.
-	outboundBytesIPv4Total expvar.Int
-	outboundBytesIPv6Total expvar.Int
-	outboundBytesDERPTotal expvar.Int
+	outboundBytesIPv4OKTotal  expvar.Int
+	outboundBytesIPv6OKTotal  expvar.Int
+	outboundBytesDERPOKTotal  expvar.Int
+	outboundBytesIPv4ErrTotal expvar.Int
+	outboundBytesIPv6ErrTotal expvar.Int
+	outboundBytesDERPErrTotal expvar.Int
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
@@ -578,9 +595,13 @@ func NewConn(opts Options) (*Conn, error) {
 // registering the label metric directly, the underlying expvar is exposed.
 // See metrics for more info.
 func registerMetrics(reg *usermetric.Registry) *metrics {
-	pathDirectV4 := pathLabel{Path: PathDirectIPv4}
-	pathDirectV6 := pathLabel{Path: PathDirectIPv6}
-	pathDERP := pathLabel{Path: PathDERP}
+	pathDirectV4OK := pathLabel{Path: PathDirectIPv4, Action: ActionOK}
+	pathDirectV6OK := pathLabel{Path: PathDirectIPv6, Action: ActionOK}
+	pathDERPOK := pathLabel{Path: PathDERP, Action: ActionOK}
+	pathDirectV4Err := pathLabel{Path: PathDirectIPv4, Action: ActionErr}
+	pathDirectV6Err := pathLabel{Path: PathDirectIPv6, Action: ActionErr}
+	pathDERPErr := pathLabel{Path: PathDERP, Action: ActionErr}
+
 	inboundPacketsTotal := usermetric.NewMultiLabelMapWithRegistry[pathLabel](
 		reg,
 		"tailscaled_inbound_packets_total",
@@ -608,28 +629,39 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	m := new(metrics)
 
 	// Map clientmetrics to the usermetric counters.
-	metricRecvDataPacketsIPv4.Register(&m.inboundPacketsIPv4Total)
-	metricRecvDataPacketsIPv6.Register(&m.inboundPacketsIPv6Total)
-	metricRecvDataPacketsDERP.Register(&m.inboundPacketsDERPTotal)
-	metricSendUDP.Register(&m.outboundPacketsIPv4Total)
-	metricSendUDP.Register(&m.outboundPacketsIPv6Total)
-	metricSendDERP.Register(&m.outboundPacketsDERPTotal)
+	metricRecvDataPacketsIPv4.Register(&m.inboundPacketsIPv4OKTotal)
+	metricRecvDataPacketsIPv6.Register(&m.inboundPacketsIPv6OKTotal)
+	metricRecvDataPacketsDERP.Register(&m.inboundPacketsDERPOKTotal)
 
-	inboundPacketsTotal.Set(pathDirectV4, &m.inboundPacketsIPv4Total)
-	inboundPacketsTotal.Set(pathDirectV6, &m.inboundPacketsIPv6Total)
-	inboundPacketsTotal.Set(pathDERP, &m.inboundPacketsDERPTotal)
+	metricSendUDP.Register(&m.outboundPacketsIPv4OKTotal)
+	metricSendUDP.Register(&m.outboundPacketsIPv6OKTotal)
+	metricSendUDPError.Register(&m.outboundPacketsIPv4ErrTotal)
+	metricSendUDPError.Register(&m.outboundPacketsIPv6ErrTotal)
 
-	inboundBytesTotal.Set(pathDirectV4, &m.inboundBytesIPv4Total)
-	inboundBytesTotal.Set(pathDirectV6, &m.inboundBytesIPv6Total)
-	inboundBytesTotal.Set(pathDERP, &m.inboundBytesDERPTotal)
+	metricSendDERP.Register(&m.outboundPacketsDERPOKTotal)
+	metricSendDERPError.Register(&m.outboundPacketsDERPErrTotal)
 
-	outboundPacketsTotal.Set(pathDirectV4, &m.outboundPacketsIPv4Total)
-	outboundPacketsTotal.Set(pathDirectV6, &m.outboundPacketsIPv6Total)
-	outboundPacketsTotal.Set(pathDERP, &m.outboundPacketsDERPTotal)
+	inboundPacketsTotal.Set(pathDirectV4OK, &m.inboundPacketsIPv4OKTotal)
+	inboundPacketsTotal.Set(pathDirectV6OK, &m.inboundPacketsIPv6OKTotal)
+	inboundPacketsTotal.Set(pathDERPOK, &m.inboundPacketsDERPOKTotal)
 
-	outboundBytesTotal.Set(pathDirectV4, &m.outboundBytesIPv4Total)
-	outboundBytesTotal.Set(pathDirectV6, &m.outboundBytesIPv6Total)
-	outboundBytesTotal.Set(pathDERP, &m.outboundBytesDERPTotal)
+	inboundBytesTotal.Set(pathDirectV4OK, &m.inboundBytesIPv4OKTotal)
+	inboundBytesTotal.Set(pathDirectV6OK, &m.inboundBytesIPv6OKTotal)
+	inboundBytesTotal.Set(pathDERPOK, &m.inboundBytesDERPOKTotal)
+
+	outboundPacketsTotal.Set(pathDirectV4OK, &m.outboundPacketsIPv4OKTotal)
+	outboundPacketsTotal.Set(pathDirectV4Err, &m.outboundPacketsIPv4ErrTotal)
+	outboundPacketsTotal.Set(pathDirectV6OK, &m.outboundPacketsIPv6OKTotal)
+	outboundPacketsTotal.Set(pathDirectV6Err, &m.outboundPacketsIPv6ErrTotal)
+	outboundPacketsTotal.Set(pathDERPOK, &m.outboundPacketsDERPOKTotal)
+	outboundPacketsTotal.Set(pathDERPErr, &m.outboundPacketsDERPErrTotal)
+
+	outboundBytesTotal.Set(pathDirectV4OK, &m.outboundBytesIPv4OKTotal)
+	outboundBytesTotal.Set(pathDirectV4Err, &m.outboundBytesIPv4ErrTotal)
+	outboundBytesTotal.Set(pathDirectV6OK, &m.outboundBytesIPv6OKTotal)
+	outboundBytesTotal.Set(pathDirectV6Err, &m.outboundBytesIPv6ErrTotal)
+	outboundBytesTotal.Set(pathDERPOK, &m.outboundBytesDERPOKTotal)
+	outboundBytesTotal.Set(pathDERPErr, &m.outboundBytesDERPErrTotal)
 
 	return m
 }
@@ -641,7 +673,8 @@ func deregisterMetrics(m *metrics) {
 	metricRecvDataPacketsIPv6.UnregisterAll()
 	metricRecvDataPacketsDERP.UnregisterAll()
 	metricSendUDP.UnregisterAll()
-	metricSendDERP.UnregisterAll()
+	metricSendUDPError.UnregisterAll()
+	metricSendDERPError.UnregisterAll()
 }
 
 // InstallCaptureHook installs a callback which is called to
@@ -1260,17 +1293,24 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	}
 	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
-		metricSendUDPError.Add(1)
+		switch {
+		case ipp.Addr().Is4():
+			c.metrics.outboundPacketsIPv4ErrTotal.Add(1)
+			c.metrics.outboundBytesIPv4ErrTotal.Add(int64(len(b)))
+		case ipp.Addr().Is6():
+			c.metrics.outboundPacketsIPv6ErrTotal.Add(1)
+			c.metrics.outboundBytesIPv6ErrTotal.Add(int64(len(b)))
+		}
 		_ = c.maybeRebindOnError(runtime.GOOS, err)
 	} else {
 		if sent {
 			switch {
 			case ipp.Addr().Is4():
-				c.metrics.outboundPacketsIPv4Total.Add(1)
-				c.metrics.outboundBytesIPv4Total.Add(int64(len(b)))
+				c.metrics.outboundPacketsIPv4OKTotal.Add(1)
+				c.metrics.outboundBytesIPv4OKTotal.Add(int64(len(b)))
 			case ipp.Addr().Is6():
-				c.metrics.outboundPacketsIPv6Total.Add(1)
-				c.metrics.outboundBytesIPv6Total.Add(int64(len(b)))
+				c.metrics.outboundPacketsIPv6OKTotal.Add(1)
+				c.metrics.outboundBytesIPv6OKTotal.Add(int64(len(b)))
 			}
 		}
 	}
@@ -1411,16 +1451,16 @@ func (c *Conn) putReceiveBatch(batch *receiveBatch) {
 
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
-		&c.metrics.inboundPacketsIPv4Total,
-		&c.metrics.inboundBytesIPv4Total,
+		&c.metrics.inboundPacketsIPv4OKTotal,
+		&c.metrics.inboundBytesIPv4OKTotal,
 	)
 }
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
-		&c.metrics.inboundPacketsIPv6Total,
-		&c.metrics.inboundBytesIPv6Total,
+		&c.metrics.inboundPacketsIPv6OKTotal,
+		&c.metrics.inboundBytesIPv6OKTotal,
 	)
 }
 
@@ -3072,9 +3112,9 @@ var (
 	metricSendDERPErrorClosed = clientmetric.NewCounter("magicsock_send_derp_error_closed")
 	metricSendDERPErrorQueue  = clientmetric.NewCounter("magicsock_send_derp_error_queue")
 	metricSendUDP             = clientmetric.NewAggregateCounter("magicsock_send_udp")
-	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
+	metricSendUDPError        = clientmetric.NewAggregateCounter("magicsock_send_udp_error")
 	metricSendDERP            = clientmetric.NewAggregateCounter("magicsock_send_derp")
-	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
+	metricSendDERPError       = clientmetric.NewAggregateCounter("magicsock_send_derp_error")
 
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
