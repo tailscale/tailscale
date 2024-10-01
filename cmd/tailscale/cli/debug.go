@@ -844,7 +844,8 @@ func runTS2021(ctx context.Context, args []string) error {
 	if ts2021Args.verbose {
 		logf = log.Printf
 	}
-	conn, err := (&controlhttp.Dialer{
+
+	noiseDialer := &controlhttp.Dialer{
 		Hostname:        ts2021Args.host,
 		HTTPPort:        "80",
 		HTTPSPort:       "443",
@@ -853,7 +854,21 @@ func runTS2021(ctx context.Context, args []string) error {
 		ProtocolVersion: uint16(ts2021Args.version),
 		Dialer:          dialFunc,
 		Logf:            logf,
-	}).Dial(ctx)
+	}
+	const tries = 2
+	for i := range tries {
+		err := tryConnect(ctx, keys.PublicKey, noiseDialer)
+		if err != nil {
+			log.Printf("error on attempt %d/%d: %v", i+1, tries, err)
+			continue
+		}
+		break
+	}
+	return nil
+}
+
+func tryConnect(ctx context.Context, controlPublic key.MachinePublic, noiseDialer *controlhttp.Dialer) error {
+	conn, err := noiseDialer.Dial(ctx)
 	log.Printf("controlhttp.Dial = %p, %v", conn, err)
 	if err != nil {
 		return err
@@ -861,8 +876,8 @@ func runTS2021(ctx context.Context, args []string) error {
 	log.Printf("did noise handshake")
 
 	gotPeer := conn.Peer()
-	if gotPeer != keys.PublicKey {
-		log.Printf("peer = %v, want %v", gotPeer, keys.PublicKey)
+	if gotPeer != controlPublic {
+		log.Printf("peer = %v, want %v", gotPeer, controlPublic)
 		return errors.New("key mismatch")
 	}
 
@@ -894,7 +909,7 @@ func runTS2021(ctx context.Context, args []string) error {
 	// Make a /whoami request to the server to verify that we can actually
 	// communicate over the newly-established connection.
 	whoamiURL := "http://" + ts2021Args.host + "/machine/whoami"
-	req, err = http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", whoamiURL, nil)
 	if err != nil {
 		return err
 	}
