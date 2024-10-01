@@ -14,6 +14,7 @@
             <string id="PARTIAL_FULL_SINCE_V1_56">Tailscale version 1.56.0 and later (full support), some earlier versions (partial support)</string>
             <string id="SINCE_V1_58">Tailscale version 1.58.0 and later</string>
             <string id="SINCE_V1_62">Tailscale version 1.62.0 and later</string>
+            <string id="SINCE_V1_74">Tailscale version 1.74.0 and later</string>
             <string id="Tailscale_Category">Tailscale</string>
             <string id="UI_Category">UI customization</string>
             <string id="Settings_Category">Settings</string>
@@ -42,6 +43,20 @@ To require logging in to a particular tailnet, add the "required:" prefix, such 
 If you configure this policy, set it to the name of the tailnet, possibly with the "required:" prefix, as described above.
 
 If you disable this policy, the standard login page will be used.]]></string>
+            <string id="AuthKey">Specify the auth key to authenticate devices without user interaction</string>
+            <string id="AuthKey_Help"><![CDATA[This policy allows specifying the default auth key to be used when registering new devices without requiring sign-in via a web browser, unless the user specifies a different auth key via the CLI.
+
+Managing authentication keys via Group Policy and MDM solutions poses significant security risks. Group Policy is not designed to store and deploy secrets, and by default, Group Policy settings can be read by all domain-authenticated users and devices, regardless of their privilege level or whether the policy setting applies to them.
+
+While MDM solutions tend to offer better control over who can access the policy setting values, they can still be compromised. Additionally, with both Group Policy and MDM solutions, the auth key is always readable by all users who have access to the device where this policy setting applies, as well as by all applications running on the device. A compromised auth key can potentially be used by a malicious actor to gain or elevate access to the target network.
+
+Only consider this option after carefully reviewing the organization's security posture. For example, ensure you configure the auth keys specifically for the tag of the device and that access control policies only grant necessary access between the tailnet and the tagged device. Additionally, consider using short-lived auth keys, one-time auth keys (with one GPO/MDM configuration per device), Device Approval, and/or Tailnet lock to minimize risk. If you suspect an auth key has been compromised, revoke the auth key immediately.
+
+If you configure this policy setting and specify an auth key, it will be used to authenticate the device unless the device is already logged in or an auth key is explicitly specified via the CLI.
+
+If you disable or do not configure this policy setting, an interactive user login will be required..
+
+See https://tailscale.com/kb/1315/mdm-keys#set-an-auth-key for more details.]]></string>
             <string id="ExitNodeID">Require using a specific Exit Node</string>
             <string id="ExitNodeID_Help"><![CDATA[This policy can be used to require always using the specified Exit Node whenever the Tailscale client is connected.
 See https://tailscale.com/kb/1315/mdm-keys#force-an-exit-node-to-always-be-used and https://tailscale.com/kb/1103/exit-nodes for more details.
@@ -217,6 +232,11 @@ See https://tailscale.com/kb/1315/mdm-keys#set-your-organization-name for more d
             <presentation id="Tailnet">
                 <textBox refId="TailnetPrompt">
                     <label>Tailnet:</label>
+                </textBox>
+            </presentation>
+            <presentation id="AuthKey">
+                <textBox refId="AuthKeyPrompt">
+                    <label>Auth Key:</label>
                 </textBox>
             </presentation>
             <presentation id="ExitNodeID">
