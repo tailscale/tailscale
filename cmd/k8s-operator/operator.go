@@ -238,6 +238,7 @@ func runReconcilers(opts reconcilerOpts) {
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:             nsFilter,
 				&corev1.ServiceAccount{}:     nsFilter,
+				&corev1.Pod{}:                nsFilter,
 				&corev1.ConfigMap{}:          nsFilter,
 				&appsv1.StatefulSet{}:        nsFilter,
 				&appsv1.Deployment{}:         nsFilter,
@@ -687,6 +688,10 @@ func serviceHandlerForIngress(cl client.Client, logger *zap.SugaredLogger) handl
 }
 
 func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
+	if _, ok := o.GetAnnotations()[AnnotationProxyGroup]; ok {
+		// Do not reconcile Services for ProxyGroup.
+		return nil
+	}
 	if isManagedByType(o, "svc") {
 		// If this is a Service managed by a Service we want to enqueue its parent
 		return []reconcile.Request{{NamespacedName: parentFromObjectLabels(o)}}

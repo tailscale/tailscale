@@ -639,6 +639,14 @@ func removeHashAnnotation(sts *appsv1.StatefulSet) {
 	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
 }
 
+func removeTargetPortsFromSvc(svc *corev1.Service) {
+	newPorts := make([]corev1.ServicePort, 0)
+	for _, p := range svc.Spec.Ports {
+		newPorts = append(newPorts, corev1.ServicePort{Protocol: p.Protocol, Port: p.Port})
+	}
+	svc.Spec.Ports = newPorts
+}
+
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
 	return func(secret *corev1.Secret) {
 		t.Helper()

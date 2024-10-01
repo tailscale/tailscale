@@ -4360,6 +4360,8 @@ rules:
         - connectors/status
         - proxyclasses
         - proxyclasses/status
+        - proxygroups
+        - proxygroups/status
       verbs:
         - get
         - list
@@ -4411,6 +4413,7 @@ rules:
         - secrets
         - serviceaccounts
         - configmaps
+        - pods
       verbs:
         - create
         - delete
@@ -4442,6 +4445,9 @@ rules:
         - get
         - list
         - watch
+        - create
+        - update
+        - deletecollection
     - apiGroups:
         - rbac.authorization.k8s.io
       resources:

@@ -56,6 +56,18 @@ func SetServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionType,
 	svc.Status.Conditions = conds
 }
 
+// GetServiceCondition returns Service condition with the specified type, if it exists on the Service.
+func GetServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionType) *metav1.Condition {
+	idx := xslices.IndexFunc(svc.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(conditionType)
+	})
+
+	if idx == -1 {
+		return nil
+	}
+	return &svc.Status.Conditions[idx]
+}
+
 // RemoveServiceCondition will remove condition of the given type if it exists.
 func RemoveServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionType) {
 	svc.Status.Conditions = slices.DeleteFunc(svc.Status.Conditions, func(cond metav1.Condition) bool {
@@ -114,6 +126,33 @@ func ProxyClassIsReady(pc *tsapi.ProxyClass) bool {
 	}
 	cond := pc.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pc.Generation
+}
+
+func ProxyGroupIsReady(pg *tsapi.ProxyGroup) bool {
+	idx := xslices.IndexFunc(pg.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(tsapi.ProxyGroupReady)
+	})
+	if idx == -1 {
+		return false
+	}
+	cond := pg.Status.Conditions[idx]
+	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
+}
+
+func EgressServiceIsValidAndConfigured(svc *corev1.Service) bool {
+	for _, typ := range []tsapi.ConditionType{tsapi.EgressSvcValid, tsapi.EgressSvcConfigured} {
+		idx := xslices.IndexFunc(svc.Status.Conditions, func(cond metav1.Condition) bool {
+			return cond.Type == string(typ)
+		})
+		if idx == -1 {
+			return false
+		}
+		cond := svc.Status.Conditions[idx]
+		if cond.Status != metav1.ConditionTrue {
+			return false
+		}
+	}
+	return true
 }
 
 func DNSCfgIsReady(cfg *tsapi.DNSConfig) bool {
