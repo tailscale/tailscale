@@ -781,6 +781,10 @@ func parsePMPResponse(pkt []byte) (res pmpResponse, ok bool) {
 			return res, false
 		}
 		res.PublicAddr = netaddr.IPv4(pkt[8], pkt[9], pkt[10], pkt[11])
+		if res.PublicAddr.IsUnspecified() {
+			// Zero it out so it's not Valid and used accidentally elsewhere.
+			res.PublicAddr = netip.Addr{}
+		}
 	}
 
 	return res, true
