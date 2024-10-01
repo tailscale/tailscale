@@ -372,7 +372,7 @@ func (esr *egressSvcsReconciler) maybeCleanup(ctx context.Context, svc *corev1.S
 	esr.svcs.Remove(svc.UID)
 	gaugeEgressServices.Set(int64(esr.svcs.Len()))
 	esr.mu.Unlock()
-	logger.Info("succesfully cleaned up resources for egress Service")
+	logger.Info("successfully cleaned up resources for egress Service")
 	return nil
 }
 
