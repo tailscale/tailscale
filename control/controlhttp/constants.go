@@ -95,8 +95,9 @@ type Dialer struct {
 	omitCertErrorLogging bool
 	testFallbackDelay    time.Duration
 
-	// tstime.Clock is used instead of time package for methods such as time.Now.
-	// If not specified, will default to tstime.StdClock{}.
+	// Clock, if non-nil, overrides the clock to use.
+	// If nil, tstime.StdClock is used.
+	// This exists primarily for tests.
 	Clock tstime.Clock
 }
 
