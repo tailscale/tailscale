@@ -638,6 +638,19 @@ func (c *Client) tryUPnPPortmapWithDevice(
 		return netip.AddrPort{}, nil, err
 	}
 
+	// Do a bit of validation on the external IP; we've seen cases where
+	// UPnP devices return the public IP 0.0.0.0, which obviously doesn't
+	// work as an endpoint.
+	//
+	// See: https://github.com/tailscale/corp/issues/23538
+	if externalIP.IsUnspecified() {
+		c.logf("UPnP returned unspecified external IP %v", externalIP)
+		return netip.AddrPort{}, nil, fmt.Errorf("UPnP returned unspecified external IP")
+	} else if externalIP.IsLoopback() {
+		c.logf("UPnP returned loopback external IP %v", externalIP)
+		return netip.AddrPort{}, nil, fmt.Errorf("UPnP returned loopback external IP")
+	}
+
 	return netip.AddrPortFrom(externalIP, newPort), client, nil
 }
 
