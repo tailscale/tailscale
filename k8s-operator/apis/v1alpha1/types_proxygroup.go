@@ -40,7 +40,7 @@ type ProxyGroupSpec struct {
 	// Type of the ProxyGroup, either ingress or egress. Each set of proxies
 	// managed by a single ProxyGroup definition operate as only ingress or
 	// only egress proxies.
-	Type ProxyClassType `json:"type"`
+	Type ProxyGroupType `json:"type"`
 
 	// Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].
 	// If you specify custom tags here, make sure you also make the operator
@@ -101,10 +101,10 @@ type TailnetDevice struct {
 
 // +kubebuilder:validation:Type=string
 // +kubebuilder:validation:Enum=egress
-type ProxyClassType string
+type ProxyGroupType string
 
 const (
-	ProxyClassTypeEgress ProxyClassType = "egress"
+	ProxyGroupTypeEgress ProxyGroupType = "egress"
 )
 
 // +kubebuilder:validation:Type=string

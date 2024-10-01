@@ -58,6 +58,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&DNSConfigList{},
 		&Recorder{},
 		&RecorderList{},
+		&ProxyGroup{},
+		&ProxyGroupList{},
 	)
 
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
