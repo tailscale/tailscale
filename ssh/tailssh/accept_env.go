@@ -4,6 +4,7 @@
 package tailssh
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -17,27 +18,35 @@ import (
 //
 // acceptEnv values may contain * and ? wildcard characters which match against
 // zero or one or more characters and a single character respectively.
-func filterEnv(acceptEnv []string, environ []string) []string {
+func filterEnv(acceptEnv []string, environ []string) ([]string, error) {
 	var acceptedPairs []string
 
+	// Quick return if we have an empty list.
+	if acceptEnv == nil || len(acceptEnv) == 0 {
+		return acceptedPairs, nil
+	}
+
 	for _, envPair := range environ {
-		envVar := strings.Split(envPair, "=")[0]
+		variableName, _, ok := strings.Cut(envPair, "=")
+		if !ok {
+			return nil, fmt.Errorf(`invalid environment variable: %q. Variables must be in "KEY=VALUE" format`, envPair)
+		}
 
 		// Short circuit if we have a direct match between the environment
 		// variable and an AcceptEnv value.
-		if slices.Contains(acceptEnv, envVar) {
+		if slices.Contains(acceptEnv, variableName) {
 			acceptedPairs = append(acceptedPairs, envPair)
 			continue
 		}
 
 		// Otherwise check if we have a wildcard pattern that matches.
-		if matchAcceptEnv(acceptEnv, envVar) {
+		if matchAcceptEnv(acceptEnv, variableName) {
 			acceptedPairs = append(acceptedPairs, envPair)
 			continue
 		}
 	}
 
-	return acceptedPairs
+	return acceptedPairs, nil
 }
 
 // matchAcceptEnv is a convenience function that wraps calling matchAcceptEnvPattern
