@@ -46,6 +46,10 @@
                   displayName="$(string.SINCE_V1_62)">
         <and><reference ref="TAILSCALE_PRODUCT"/></and>
       </definition>
+      <definition name="SINCE_V1_74"
+                  displayName="$(string.SINCE_V1_74)">
+        <and><reference ref="TAILSCALE_PRODUCT"/></and>
+      </definition>
     </definitions>
   </supportedOn>
   <categories>
@@ -77,6 +81,13 @@
       <supportedOn ref="SINCE_V1_52" />
       <elements>
         <text id="TailnetPrompt" valueName="Tailnet" required="true" />
+      </elements>
+    </policy>
+    <policy name="AuthKey" class="Machine" displayName="$(string.AuthKey)" explainText="$(string.AuthKey_Help)" presentation="$(presentation.AuthKey)" key="Software\Policies\Tailscale">
+      <parentCategory ref="Top_Category" />
+      <supportedOn ref="SINCE_V1_74" />
+      <elements>
+        <text id="AuthKeyPrompt" valueName="AuthKey" required="true" />
       </elements>
     </policy>
     <policy name="ExitNodeID" class="Machine" displayName="$(string.ExitNodeID)" explainText="$(string.ExitNodeID_Help)" presentation="$(presentation.ExitNodeID)" key="Software\Policies\Tailscale">
