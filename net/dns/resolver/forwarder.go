@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -58,10 +59,20 @@ func truncatedFlagSet(pkt []byte) bool {
 }
 
 const (
-	// dohTransportTimeout is how long to keep idle HTTP
-	// connections open to DNS-over-HTTPs servers. This is pretty
-	// arbitrary.
-	dohTransportTimeout = 30 * time.Second
+	// dohIdleConnTimeout is how long to keep idle HTTP connections
+	// open to DNS-over-HTTPS servers. 10 seconds is a sensible
+	// default, as it's long enough to handle a burst of queries
+	// coming in a row, but short enough to not keep idle connections
+	// open for too long. In theory, idle connections could be kept
+	// open for a long time without any battery impact as no traffic
+	// is supposed to be flowing on them.
+	// However, in practice, DoH servers will send TCP keepalives (e.g.
+	// NextDNS sends them every ~10s). Handling these keepalives
+	// wakes up the modem, and that uses battery. Therefore, we keep
+	// the idle timeout low enough to allow idle connections to be
+	// closed during an extended period with no DNS queries, killing
+	// keepalive network activity.
+	dohIdleConnTimeout = 10 * time.Second
 
 	// dohTransportTimeout is how much of a head start to give a DoH query
 	// that was upgraded from a well-known public DNS provider's IP before
@@ -426,19 +437,26 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 		SingleHostStaticResult: allIPs,
 		Logf:                   f.logf,
 	})
+	tlsConfig := &tls.Config{
+		// Enforce TLS 1.3, as all of our supported DNS-over-HTTPS servers are compatible with it
+		// (see tailscale.com/net/dns/publicdns/publicdns.go).
+		MinVersion: tls.VersionTLS13,
+	}
 	c = &http.Client{
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
-			IdleConnTimeout:   dohTransportTimeout,
+			IdleConnTimeout:   dohIdleConnTimeout,
 			// On mobile platforms TCP KeepAlive is disabled in the dialer,
 			// ensure that we timeout if the connection appears to be hung.
 			ResponseHeaderTimeout: 10 * time.Second,
+			MaxIdleConnsPerHost:   1,
 			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
 				if !strings.HasPrefix(netw, "tcp") {
 					return nil, fmt.Errorf("unexpected network %q", netw)
 				}
 				return dialer(ctx, netw, addr)
 			},
+			TLSClientConfig: tlsConfig,
 		},
 	}
 	if f.dohClient == nil {
