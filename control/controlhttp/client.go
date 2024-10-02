@@ -86,9 +86,6 @@ func (a *Dialer) getProxyFunc() func(*http.Request) (*url.URL, error) {
 // httpsFallbackDelay is how long we'll wait for a.HTTPPort to work before
 // starting to try a.HTTPSPort.
 func (a *Dialer) httpsFallbackDelay() time.Duration {
-	if a.forceNoise443() {
-		return time.Nanosecond
-	}
 	if v := a.testFallbackDelay; v != 0 {
 		return v
 	}
@@ -323,6 +320,9 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 		Host:   net.JoinHostPort(a.Hostname, strDef(a.HTTPSPort, "443")),
 		Path:   serverUpgradePath,
 	}
+	if a.HTTPSPort == NoPort {
+		u443 = nil
+	}
 
 	type tryURLRes struct {
 		u    *url.URL    // input (the URL conn+err are for/from)
@@ -347,15 +347,24 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 		}
 	}
 
+	forceTLS := a.forceNoise443()
+
 	// Start the plaintext HTTP attempt first, unless disabled by the envknob.
-	if !a.forceNoise443() {
+	if !forceTLS || u443 == nil {
 		go try(u80)
 	}
 
 	// In case outbound port 80 blocked or MITM'ed poorly, start a backup timer
 	// to dial port 443 if port 80 doesn't either succeed or fail quickly.
-	try443Timer := a.clock().AfterFunc(a.httpsFallbackDelay(), func() { try(u443) })
-	defer try443Timer.Stop()
+	var try443Timer tstime.TimerController
+	if u443 != nil {
+		delay := a.httpsFallbackDelay()
+		if forceTLS {
+			delay = 0
+		}
+		try443Timer = a.clock().AfterFunc(delay, func() { try(u443) })
+		defer try443Timer.Stop()
+	}
 
 	var err80, err443 error
 	for {
@@ -374,7 +383,7 @@ func (a *Dialer) dialHost(ctx context.Context, optAddr netip.Addr) (*ClientConn,
 				// Stop the fallback timer and run it immediately. We don't use
 				// Timer.Reset(0) here because on AfterFuncs, that can run it
 				// again.
-				if try443Timer.Stop() {
+				if try443Timer != nil && try443Timer.Stop() {
 					go try(u443)
 				} // else we lost the race and it started already which is what we want
 			case u443:
