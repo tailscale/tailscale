@@ -813,6 +813,8 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, health *health.Tra
 	}
 
 	tr.TLSClientConfig = tlsdial.Config(host, health, tr.TLSClientConfig)
+	// Force TLS 1.3 since we know log.tailscale.io supports it.
+	tr.TLSClientConfig.MinVersion = tls.VersionTLS13
 
 	return tr
 }
