@@ -1791,6 +1791,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Args = append(cmd.Args, "--config="+n.configFile)
 	}
 	cmd.Env = append(os.Environ(),
+		"TS_CONTROL_IS_PLAINTEXT_HTTP=1",
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
