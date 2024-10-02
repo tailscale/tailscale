@@ -416,10 +416,10 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 	if len(i4s) < 2 {
 		d.dnsCache.dlogf("dialing %s, %s for %s", network, ip, address)
 		c, err := dc.dialOne(ctx, ip.Unmap())
-		if err == nil || ctx.Err() != nil {
+		if err == nil || ctx.Err() != nil || !ip6.IsValid() {
 			return c, err
 		}
-		// Fall back to trying IPv6, if any.
+		// Fall back to trying IPv6.
 		return dc.dialOne(ctx, ip6)
 	}
 
