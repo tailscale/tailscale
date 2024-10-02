@@ -196,8 +196,7 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 				if !local.IsValid() {
 					return nil, fmt.Errorf("no valid local IP: %v", local)
 				}
-				// TODO(irbekrm): only create the SNAT rule if it does not already exist.
-				if err := ep.nfr.AddSNATRuleForDst(local, t); err != nil {
+				if err := ep.nfr.EnsureSNATForDst(local, t); err != nil {
 					return nil, fmt.Errorf("error setting up SNAT rule: %w", err)
 				}
 			}

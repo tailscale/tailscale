@@ -530,7 +530,7 @@ func (n *fakeIPTablesRunner) DNATWithLoadBalancer(netip.Addr, []netip.Addr) erro
 	return errors.New("not implemented")
 }
 
-func (n *fakeIPTablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
+func (n *fakeIPTablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 	return errors.New("not implemented")
 }
 

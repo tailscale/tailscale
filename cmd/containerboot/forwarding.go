@@ -117,7 +117,7 @@ func installEgressForwardingRule(_ context.Context, dstStr string, tsIPs []netip
 	if err := nfr.DNATNonTailscaleTraffic("tailscale0", dst); err != nil {
 		return fmt.Errorf("installing egress proxy rules: %w", err)
 	}
-	if err := nfr.AddSNATRuleForDst(local, dst); err != nil {
+	if err := nfr.EnsureSNATForDst(local, dst); err != nil {
 		return fmt.Errorf("installing egress proxy rules: %w", err)
 	}
 	if err := nfr.ClampMSSToPMTU("tailscale0", dst); err != nil {

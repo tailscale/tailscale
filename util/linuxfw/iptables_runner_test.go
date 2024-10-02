@@ -289,3 +289,77 @@ func TestAddAndDelSNATRule(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEnsureSNATForDst_ipt(t *testing.T) {
+	ip1, ip2, ip3 := netip.MustParseAddr("100.99.99.99"), netip.MustParseAddr("100.88.88.88"), netip.MustParseAddr("100.77.77.77")
+	iptr := NewFakeIPTablesRunner()
+
+	// 1. A new rule gets added
+	mustCreateSNATRule_ipt(t, iptr, ip1, ip2)
+	checkSNATRule_ipt(t, iptr, ip1, ip2)
+	checkSNATRuleCount(t, iptr, ip1, 1)
+
+	// 2. Another call to EnsureSNATForDst with the same src and dst does not result in another rule being added.
+	mustCreateSNATRule_ipt(t, iptr, ip1, ip2)
+	checkSNATRule_ipt(t, iptr, ip1, ip2)
+	checkSNATRuleCount(t, iptr, ip1, 1) // still just 1 rule
+
+	// 3. Another call to EnsureSNATForDst with a different src and the same dst results in the earlier rule being
+	// deleted.
+	mustCreateSNATRule_ipt(t, iptr, ip3, ip2)
+	checkSNATRule_ipt(t, iptr, ip3, ip2)
+	checkSNATRuleCount(t, iptr, ip1, 1) // still just 1 rule
+
+	// 4. Another call to EnsureSNATForDst with a different dst should not get the earlier rule deleted.
+	mustCreateSNATRule_ipt(t, iptr, ip3, ip1)
+	checkSNATRule_ipt(t, iptr, ip3, ip1)
+	checkSNATRuleCount(t, iptr, ip1, 2) // now 2 rules
+
+	// 5. A call to EnsureSNATForDst with a match dst and a match port should not get deleted by EnsureSNATForDst for the same dst.
+	args := []string{"--destination", ip1.String(), "-j", "SNAT", "--to-source", "10.0.0.1"}
+	if err := iptr.getIPTByAddr(ip1).Insert("nat", "POSTROUTING", 1, args...); err != nil {
+		t.Fatalf("error adding SNAT rule: %v", err)
+	}
+	exists, err := iptr.getIPTByAddr(ip1).Exists("nat", "POSTROUTING", args...)
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if !exists {
+		t.Fatalf("SNAT rule for destination and port unexpectedly deleted")
+	}
+	mustCreateSNATRule_ipt(t, iptr, ip3, ip1)
+	checkSNATRuleCount(t, iptr, ip1, 3) // now 3 rules
+}
+
+func mustCreateSNATRule_ipt(t *testing.T, iptr *iptablesRunner, src, dst netip.Addr) {
+	t.Helper()
+	if err := iptr.EnsureSNATForDst(src, dst); err != nil {
+		t.Fatalf("error ensuring SNAT rule: %v", err)
+	}
+}
+
+func checkSNATRule_ipt(t *testing.T, iptr *iptablesRunner, src, dst netip.Addr) {
+	t.Helper()
+	dstPrefix, err := dst.Prefix(32)
+	if err != nil {
+		t.Fatalf("error converting addr to prefix: %v", err)
+	}
+	exists, err := iptr.getIPTByAddr(src).Exists("nat", "POSTROUTING", "-d", dstPrefix.String(), "-j", "SNAT", "--to-source", src.String())
+	if err != nil {
+		t.Fatalf("error checking if rule exists: %v", err)
+	}
+	if !exists {
+		t.Fatalf("SNAT rule for src %s dst %s should exist, but it does not", src, dst)
+	}
+}
+
+func checkSNATRuleCount(t *testing.T, iptr *iptablesRunner, ip netip.Addr, wantsRules int) {
+	t.Helper()
+	rules, err := iptr.getIPTByAddr(ip).List("nat", "POSTROUTING")
+	if err != nil {
+		t.Fatalf("error listing rules: %v", err)
+	}
+	if len(rules) != wantsRules {
+		t.Fatalf("wants %d rules, got %d", wantsRules, len(rules))
+	}
+}
