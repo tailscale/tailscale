@@ -5,6 +5,7 @@
 package netstack
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"expvar"
@@ -1908,4 +1909,36 @@ func (ns *Impl) ExpVar() expvar.Var {
 	}))
 
 	return m
+}
+
+// windowsPingOutputIsSuccess reports whether the ping.exe output b contains a
+// success ping response for ip.
+//
+// See https://github.com/tailscale/tailscale/issues/13654
+//
+// TODO(bradfitz,nickkhyl): delete this and use the proper Windows APIs.
+func windowsPingOutputIsSuccess(ip netip.Addr, b []byte) bool {
+	// Look for a line that contains " <ip>: " and then three equal signs.
+	// As a special case, the 2nd equal sign may be a '<' character
+	// for sub-millisecond pings.
+	// This heuristic seems to match the ping.exe output in any language.
+	sub := fmt.Appendf(nil, " %s: ", ip)
+
+	eqSigns := func(bb []byte) (n int) {
+		for _, b := range bb {
+			if b == '=' || (b == '<' && n == 1) {
+				n++
+			}
+		}
+		return
+	}
+
+	for len(b) > 0 {
+		var line []byte
+		line, b, _ = bytes.Cut(b, []byte("\n"))
+		if _, rest, ok := bytes.Cut(line, sub); ok && eqSigns(rest) == 3 {
+			return true
+		}
+	}
+	return false
 }
