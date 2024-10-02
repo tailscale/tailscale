@@ -191,7 +191,6 @@ type LocalBackend struct {
 	unregisterHealthWatch func()
 	portpoll              *portlist.Poller // may be nil
 	portpollOnce          sync.Once        // guards starting readPoller
-	gotPortPollRes        chan struct{}    // closed upon first readPoller result
 	varRoot               string           // or empty if SetVarRoot never called
 	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
 	em                    *expiryManager   // non-nil
@@ -473,7 +472,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		state:                 ipn.NoState,
 		portpoll:              new(portlist.Poller),
 		em:                    newExpiryManager(logf),
-		gotPortPollRes:        make(chan struct{}),
 		loginFlags:            loginFlags,
 		clock:                 clock,
 		selfUpdateProgress:    make([]ipnstate.UpdateProgress, 0),
@@ -2058,20 +2056,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
 			go b.readPoller()
-
-			// Give the poller a second to get results to
-			// prevent it from restarting our map poll
-			// HTTP request (via doSetHostinfoFilterServices >
-			// cli.SetHostinfo). In practice this is very quick.
-			t0 := b.clock.Now()
-			timer, timerChannel := b.clock.NewTimer(time.Second)
-			select {
-			case <-b.gotPortPollRes:
-				b.logf("[v1] got initial portlist info in %v", b.clock.Since(t0).Round(time.Millisecond))
-				timer.Stop()
-			case <-timerChannel:
-				b.logf("timeout waiting for initial portlist")
-			}
 		})
 	}
 
@@ -2582,21 +2566,21 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 // readPoller is a goroutine that receives service lists from
 // b.portpoll and propagates them into the controlclient's HostInfo.
 func (b *LocalBackend) readPoller() {
-	isFirst := true
+	if !envknob.BoolDefaultTrue("TS_PORTLIST") {
+		return
+	}
+
 	ticker, tickerChannel := b.clock.NewTicker(portlist.PollInterval())
 	defer ticker.Stop()
-	initChan := make(chan struct{})
-	close(initChan)
 	for {
 		select {
 		case <-tickerChannel:
 		case <-b.ctx.Done():
 			return
-		case <-initChan:
-			// Preserving old behavior: readPoller should
-			// immediately poll the first time, then wait
-			// for a tick after.
-			initChan = nil
+		}
+
+		if !b.shouldUploadServices() {
+			continue
 		}
 
 		ports, changed, err := b.portpoll.Poll()
@@ -2627,11 +2611,6 @@ func (b *LocalBackend) readPoller() {
 		b.mu.Unlock()
 
 		b.doSetHostinfoFilterServices()
-
-		if isFirst {
-			isFirst = false
-			close(b.gotPortPollRes)
-		}
 	}
 }
 
