@@ -82,6 +82,8 @@ type Direct struct {
 	onControlTime              func(time.Time)              // or nil
 	onTailnetDefaultAutoUpdate func(bool)                   // or nil
 	panicOnUse                 bool                         // if true, panic if client is used (for testing)
+	closedCtx                  context.Context              // alive until Direct.Close is called
+	closeCtx                   context.CancelFunc           // cancels closedCtx
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -303,6 +305,8 @@ func NewDirect(opts Options) (*Direct, error) {
 		dnsCache:                   dnsCache,
 		dialPlan:                   opts.DialPlan,
 	}
+	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
+
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
 	} else {
@@ -325,6 +329,8 @@ func NewDirect(opts Options) (*Direct, error) {
 
 // Close closes the underlying Noise connection(s).
 func (c *Direct) Close() error {
+	c.closeCtx()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.noiseClient != nil {
@@ -1628,7 +1634,7 @@ func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyStat
 	}
 
 	// Best effort, no logging:
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(c.closedCtx, 5*time.Second)
 	defer cancel()
 	res, err := np.post(ctx, "/machine/update-health", nodeKey, req)
 	if err != nil {
