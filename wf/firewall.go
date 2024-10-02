@@ -22,6 +22,9 @@ var (
 	linkLocalDHCPMulticast   = netip.MustParseAddr("ff02::1:2")
 	siteLocalDHCPMulticast   = netip.MustParseAddr("ff05::1:3")
 	linkLocalRouterMulticast = netip.MustParseAddr("ff02::2")
+
+	linkLocalMulticastIPv4Range = netip.MustParsePrefix("224.0.0.0/24")
+	linkLocalMulticastIPv6Range = netip.MustParsePrefix("ff02::/16")
 )
 
 type direction int
@@ -224,13 +227,65 @@ func (f *Firewall) UpdatePermittedRoutes(newRoutes []netip.Prefix) error {
 		} else {
 			p = protocolV6
 		}
-		rules, err := f.addRules("local route", weightKnownTraffic, conditions, wf.ActionPermit, p, directionBoth)
+		name := "local route - " + r.String()
+		rules, err := f.addRules(name, weightKnownTraffic, conditions, wf.ActionPermit, p, directionBoth)
 		if err != nil {
 			return err
 		}
+
+		name = "link-local multicast - " + r.String()
+		conditions = matchLinkLocalMulticast(r, false)
+		multicastRules, err := f.addRules(name, weightKnownTraffic, conditions, wf.ActionPermit, p, directionOutbound)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, multicastRules...)
+
+		conditions = matchLinkLocalMulticast(r, true)
+		multicastRules, err = f.addRules(name, weightKnownTraffic, conditions, wf.ActionPermit, p, directionInbound)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, multicastRules...)
+
 		f.permittedRoutes[r] = rules
 	}
 	return nil
+}
+
+// matchLinkLocalMulticast returns a list of conditions that match
+// outbound or inbound link-local multicast traffic to or from the
+// specified network.
+func matchLinkLocalMulticast(pfx netip.Prefix, inbound bool) []*wf.Match {
+	var linkLocalMulticastRange netip.Prefix
+	if pfx.Addr().Is4() {
+		linkLocalMulticastRange = linkLocalMulticastIPv4Range
+	} else {
+		linkLocalMulticastRange = linkLocalMulticastIPv6Range
+	}
+	var localAddr, remoteAddr netip.Prefix
+	if inbound {
+		localAddr, remoteAddr = linkLocalMulticastRange, pfx
+	} else {
+		localAddr, remoteAddr = pfx, linkLocalMulticastRange
+	}
+	return []*wf.Match{
+		{
+			Field: wf.FieldIPProtocol,
+			Op:    wf.MatchTypeEqual,
+			Value: wf.IPProtoUDP,
+		},
+		{
+			Field: wf.FieldIPLocalAddress,
+			Op:    wf.MatchTypeEqual,
+			Value: localAddr,
+		},
+		{
+			Field: wf.FieldIPRemoteAddress,
+			Op:    wf.MatchTypeEqual,
+			Value: remoteAddr,
+		},
+	}
 }
 
 func (f *Firewall) newRule(name string, w weight, layer wf.LayerID, conditions []*wf.Match, action wf.Action) (*wf.Rule, error) {

@@ -13,5 +13,8 @@ reference to an issue or PR about the feature.
 
 # The list
 
-- ...
+- Link-local multicast, and mDNS/LLMNR specifically, when an exit node is used,
+  both with and without the "Allow local network access" option enabled.
+  When the option is disabled, we should still permit it for internal interfaces,
+  such as Hyper-V/WSL2 on Windows.
 
