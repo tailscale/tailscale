@@ -2146,6 +2146,17 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
+// OnSleepChange is invoked by the system when transitioning into or out of sleep mode.
+// This function is used to pause or resume non-essential network activity during sleep,
+// with an eye towards power savings.
+func (b *LocalBackend) OnSleepChange(isSleeping bool) {
+	b.logf("OnSleepChange(isSleeping=%v)", isSleeping)
+	dnsManager, ok := b.sys.DNSManager.GetOK()
+	if ok {
+		dnsManager.OnSleepChange(isSleeping)
+	}
+}
+
 // invalidPacketFilterWarnable is a Warnable to warn the user that the control server sent an invalid packet filter.
 var invalidPacketFilterWarnable = health.Register(&health.Warnable{
 	Code:     "invalid-packet-filter",

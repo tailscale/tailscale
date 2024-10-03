@@ -273,6 +273,18 @@ func (f *forwarder) Close() error {
 	return nil
 }
 
+// CloseIdleConnections closes any idle connections to the upstream
+// DoH servers. It is desirable to call this when the device enters
+// sleep mode, when we know that no DNS queries will be made for a
+// while, so that we can preserve battery life.
+func (f *forwarder) CloseIdleConnections() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.dohClient {
+		c.Transport.(*http.Transport).CloseIdleConnections()
+	}
+}
+
 // resolversWithDelays maps from a set of DNS server names to a slice of a type
 // that included a startDelay, upgrading any well-known DoH (DNS-over-HTTP)
 // servers in the process, insert a DoH lookup first before UDP fallbacks.
