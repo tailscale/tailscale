@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/gorilla/csrf"
 )
 
@@ -557,6 +558,53 @@ func TestGetMoreSpecificPattern(t *testing.T) {
 			got := checkHandlerType(tt.a, tt.b)
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStrictTransportSecurityOptions(t *testing.T) {
+	tests := []struct {
+		name          string
+		options       string
+		secureContext bool
+		expect        string
+	}{
+		{
+			name: "off by default",
+		},
+		{
+			name:          "default HSTS options in the secure context",
+			secureContext: true,
+			expect:        DefaultStrictTransportSecurityOptions,
+		},
+		{
+			name:          "custom options sent in the secure context",
+			options:       DefaultStrictTransportSecurityOptions + "; includeSubDomains",
+			secureContext: true,
+			expect:        DefaultStrictTransportSecurityOptions + "; includeSubDomains",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &http.ServeMux{}
+			h.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("ok"))
+			}))
+			s, err := NewServer(Config{BrowserMux: h, SecureContext: tt.secureContext, StrictTransportSecurityOptions: tt.options})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+
+			req := httptest.NewRequest("GET", "/", nil)
+			w := httptest.NewRecorder()
+			s.h.Handler.ServeHTTP(w, req)
+			resp := w.Result()
+
+			if cmp.Diff(tt.expect, resp.Header.Get("Strict-Transport-Security")) != "" {
+				t.Fatalf("HSTS want: %q; got: %q", tt.expect, resp.Header.Get("Strict-Transport-Security"))
 			}
 		})
 	}

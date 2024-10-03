@@ -94,6 +94,10 @@ var defaultCSP = strings.Join([]string{
 	`object-src 'self'`,       // disallow embedding of resources from other origins
 }, "; ")
 
+// The default Strict-Transport-Security header. This header tells the browser
+// to exclusively use HTTPS for all requests to the origin for the next year.
+var DefaultStrictTransportSecurityOptions = "max-age=31536000"
+
 // Config contains the configuration for a safeweb server.
 type Config struct {
 	// SecureContext specifies whether the Server is running in a secure (HTTPS) context.
@@ -134,6 +138,12 @@ type Config struct {
 	// CookiesSameSiteLax specifies whether to use SameSite=Lax in cookies. The
 	// default is to set SameSite=Strict.
 	CookiesSameSiteLax bool
+
+	// StrictTransportSecurityOptions specifies optional directives for the
+	// Strict-Transport-Security header sent in response to requests made to the
+	// BrowserMux when SecureContext is true.
+	// If empty, it defaults to max-age of 1 year.
+	StrictTransportSecurityOptions string
 }
 
 func (c *Config) setDefaults() error {
@@ -274,6 +284,9 @@ func (s *Server) serveBrowser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referer-Policy", "same-origin")
+	if s.SecureContext {
+		w.Header().Set("Strict-Transport-Security", cmp.Or(s.StrictTransportSecurityOptions, DefaultStrictTransportSecurityOptions))
+	}
 	s.csrfProtect(s.BrowserMux).ServeHTTP(w, r)
 }
 
