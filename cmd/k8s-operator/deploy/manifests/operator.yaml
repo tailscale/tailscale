@@ -4413,7 +4413,6 @@ rules:
         - secrets
         - serviceaccounts
         - configmaps
-        - pods
       verbs:
         - create
         - delete
@@ -4422,6 +4421,14 @@ rules:
         - list
         - patch
         - update
+        - watch
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
         - watch
     - apiGroups:
         - apps

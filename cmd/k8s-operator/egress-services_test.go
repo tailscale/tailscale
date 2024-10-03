@@ -91,52 +91,56 @@ func TestTailscaleEgressServices(t *testing.T) {
 		},
 	}
 
-	// 1. Create an ExternalName Service for a ProxyGroup that is not ready yet.
-	mustCreate(t, fc, svc)
-	expectReconciled(t, esr, "default", "test")
-	// Service should have EgressSvcValid condition set to Unknown.
-	svc.Status.Conditions = []metav1.Condition{condition(tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, clock)}
-	expectEqual(t, fc, svc, nil)
+	t.Run("proxy_group_not_ready", func(t *testing.T) {
+		mustCreate(t, fc, svc)
+		expectReconciled(t, esr, "default", "test")
+		// Service should have EgressSvcValid condition set to Unknown.
+		svc.Status.Conditions = []metav1.Condition{condition(tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, clock)}
+		expectEqual(t, fc, svc, nil)
+	})
 
-	// 2. ProxyGroup becomes ready, cluster resources are created for the Service.
-	mustUpdateStatus(t, fc, "", "foo", func(pg *tsapi.ProxyGroup) {
-		pg.Status.Conditions = []metav1.Condition{
-			condition(tsapi.ProxyGroupReady, metav1.ConditionTrue, "", "", clock),
+	t.Run("proxy_group_ready", func(t *testing.T) {
+		mustUpdateStatus(t, fc, "", "foo", func(pg *tsapi.ProxyGroup) {
+			pg.Status.Conditions = []metav1.Condition{
+				condition(tsapi.ProxyGroupReady, metav1.ConditionTrue, "", "", clock),
+			}
+		})
+		// Quirks of the fake client.
+		mustUpdateStatus(t, fc, "default", "test", func(svc *corev1.Service) {
+			svc.Status.Conditions = []metav1.Condition{}
+		})
+		expectReconciled(t, esr, "default", "test")
+		// Verify that a ClusterIP Service has been created.
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc)
+		clusterSvc := mustGetClusterIPSvc(t, fc, name)
+		// Verify that an EndpointSlice has been created.
+		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc), nil)
+		// Verify that ConfigMap contains configuration for the new egress service.
+		mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm)
+		r := svcConfiguredReason(svc, true, zl.Sugar())
+		// Verify that the user-created ExternalName Service has Configured set to true and ExternalName pointing to the
+		// CluterIP Service.
+		svc.Status.Conditions = []metav1.Condition{
+			condition(tsapi.EgressSvcConfigured, metav1.ConditionTrue, r, r, clock),
 		}
+		svc.ObjectMeta.Finalizers = []string{"tailscale.com/finalizer"}
+		svc.Spec.ExternalName = fmt.Sprintf("%s.operator-ns.svc.cluster.local", name)
+		expectEqual(t, fc, svc, nil)
 	})
-	// Quirks of the fake client.
-	mustUpdateStatus(t, fc, "default", "test", func(svc *corev1.Service) {
-		svc.Status.Conditions = []metav1.Condition{}
-	})
-	expectReconciled(t, esr, "default", "test")
-	// Verify that a ClusterIP Service has been created.
-	name := findGenNameForEgressSvcResources(t, fc, svc)
-	expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc)
-	clusterSvc := mustGetClusterIPSvc(t, fc, name)
-	// Verify that an EndpointSlice has been created.
-	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc), nil)
-	// Verify that ConfigMap contains configuration for the new egress service.
-	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm)
-	r := svcConfiguredReason(svc, true, zl.Sugar())
-	// Verify that the user-created ExternalName Service has Configured set to true and ExternalName pointing to the
-	// CluterIP Service.
-	svc.Status.Conditions = []metav1.Condition{
-		condition(tsapi.EgressSvcConfigured, metav1.ConditionTrue, r, r, clock),
-	}
-	svc.ObjectMeta.Finalizers = []string{"tailscale.com/finalizer"}
-	svc.Spec.ExternalName = fmt.Sprintf("%s.operator-ns.svc.cluster.local", name)
-	expectEqual(t, fc, svc, nil)
 
-	// 3. Delete the ExternalName Service, expect resources to be cleaned up
-	if err := fc.Delete(context.Background(), svc); err != nil {
-		t.Fatalf("error deleting ExternalName Service: %v", err)
-	}
-	expectReconciled(t, esr, "default", "test")
-	// Verify that ClusterIP Service and EndpointSlice have been deleted.
-	expectMissing[corev1.Service](t, fc, "operator-ns", name)
-	expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
-	// Verify that service config has been deleted from the ConfigMap.
-	mustNotHaveConfigForSvc(t, fc, svc, cm)
+	t.Run("delete_external_name_service", func(t *testing.T) {
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		if err := fc.Delete(context.Background(), svc); err != nil {
+			t.Fatalf("error deleting ExternalName Service: %v", err)
+		}
+		expectReconciled(t, esr, "default", "test")
+		// Verify that ClusterIP Service and EndpointSlice have been deleted.
+		expectMissing[corev1.Service](t, fc, "operator-ns", name)
+		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
+		// Verify that service config has been deleted from the ConfigMap.
+		mustNotHaveConfigForSvc(t, fc, svc, cm)
+	})
 }
 
 func condition(typ tsapi.ConditionType, st metav1.ConditionStatus, r, msg string, clock tstime.Clock) metav1.Condition {

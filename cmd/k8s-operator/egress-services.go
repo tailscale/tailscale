@@ -57,9 +57,9 @@ const (
 	// container. In practice this will be ports in range [3000 - 4000). The
 	// high range should make it easier to distinguish container ports from
 	// the tailnet target ports for debugging purposes (i.e when reading
-	// netfilter rules). The limit of 1000 is somewhat arbitrary, the
+	// netfilter rules). The limit of 10000 is somewhat arbitrary, the
 	// assumption is that this would not be hit in practice.
-	maxPorts = 1000
+	maxPorts = 10000
 
 	indexEgressProxyGroup = ".metadata.annotations.egress-proxy-group"
 
@@ -111,7 +111,6 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	} else if err != nil {
 		return res, fmt.Errorf("failed to get Service: %w", err)
 	}
-	l.Info("starting reconcile with status %#+v", svc.Status.Conditions)
 
 	// Name of the 'egress service', meaning the tailnet target.
 	tailnetSvc := tailnetSvcName(svc)
@@ -129,12 +128,8 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 	oldStatus := svc.Status.DeepCopy()
 	defer func() {
-		l.Debugf("looking at whether to update Service")
 		if !apiequality.Semantic.DeepEqual(oldStatus, svc.Status) {
-			l.Debugf("updating to old %+#v\n new %+#v", oldStatus, svc.Status)
 			err = errors.Join(err, esr.Status().Update(ctx, svc))
-		} else {
-			l.Debugf("not updating")
 		}
 	}()
 
@@ -228,11 +223,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 
 	oldClusterIPSvc := clusterIPSvc.DeepCopy()
 	// loop over ClusterIP Service ports, remove any that are not needed.
-	i := 0
-	for {
-		if i >= len(clusterIPSvc.Spec.Ports) {
-			break
-		}
+	for i := len(clusterIPSvc.Spec.Ports) - 1; i >= 0; i-- {
 		pm := clusterIPSvc.Spec.Ports[i]
 		found := false
 		for _, wantsPM := range svc.Spec.Ports {
@@ -243,9 +234,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		}
 		if !found {
 			l.Debugf("portmapping %s:%d -> %s:%d is no longer required, removing", pm.Protocol, pm.TargetPort.IntVal, pm.Protocol, pm.Port)
-			clusterIPSvc.Spec.Ports = append(clusterIPSvc.Spec.Ports[:i], clusterIPSvc.Spec.Ports[i+1:]...)
-		} else {
-			i++
+			clusterIPSvc.Spec.Ports = slices.Delete(clusterIPSvc.Spec.Ports, i, i+1)
 		}
 	}
 
@@ -289,7 +278,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 	}
 
 	crl := egressSvcChildResourceLabels(svc)
-	// TODO(irbekrm): support IPv6 (but need to investigate how kube proxy
+	// TODO(irbekrm): support IPv6, but need to investigate how kube proxy
 	// sets up Service -> Pod routing when IPv6 is involved.
 	crl[discoveryv1.LabelServiceName] = clusterIPSvc.Name
 	crl[discoveryv1.LabelManagedBy] = "tailscale.com"
@@ -313,8 +302,7 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		return nil, false, fmt.Errorf("error ensuring EndpointSlice: %w", err)
 	}
 
-	tailnetSvc := tailnetSvcName(svc)
-	cm, cfgs, cfg, err := egressSvcConfig(ctx, esr.Client, tailnetSvc, proxyGroupName, esr.tsNamespace)
+	cm, cfgs, err := egressSvcsConfigs(ctx, esr.Client, proxyGroupName, esr.tsNamespace)
 	if err != nil {
 		return nil, false, fmt.Errorf("error retrieving egress services configuration: %w", err)
 	}
@@ -322,10 +310,12 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		l.Info("ConfigMap not yet created, waiting..")
 		return nil, false, nil
 	}
-	svcCfg := egressSvcCfg(svc, clusterIPSvc)
-	if !reflect.DeepEqual(cfg, svcCfg) {
+	tailnetSvc := tailnetSvcName(svc)
+	gotCfg := (*cfgs)[tailnetSvc]
+	wantsCfg := egressSvcCfg(svc, clusterIPSvc)
+	if !reflect.DeepEqual(gotCfg, wantsCfg) {
 		l.Debugf("updating egress services ConfigMap %s", cm.Name)
-		mak.Set(cfgs, tailnetSvc, svcCfg)
+		mak.Set(cfgs, tailnetSvc, wantsCfg)
 		bs, err := json.Marshal(cfgs)
 		if err != nil {
 			return nil, false, fmt.Errorf("error marshalling egress services configs: %w", err)
@@ -510,12 +500,16 @@ func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, s
 	}
 	l.Debugf("egress service is valid")
 	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionTrue, reasonEgressSvcValid, reasonEgressSvcValid, esr.clock, l)
-	l.Debugf("egress service conditions %#+v", svc.Status)
 	return true, nil
 }
 
 func validateEgressService(svc *corev1.Service, pg *tsapi.ProxyGroup) []string {
 	violations := validateService(svc)
+
+	// We check that only one of these two is set in the earlier validateService function.
+	if svc.Annotations[AnnotationTailnetTargetFQDN] == "" && svc.Annotations[AnnotationTailnetTargetIP] == "" {
+		violations = append(violations, fmt.Sprintf("egress Service for ProxyGroup must have one of %s, %s annotations set", AnnotationTailnetTargetFQDN, AnnotationTailnetTargetIP))
+	}
 	if len(svc.Spec.Ports) == 0 {
 		violations = append(violations, "egress Service for ProxyGroup must have at least one target Port specified")
 	}
@@ -602,28 +596,26 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 	return annots[AnnotationProxyGroup] != "" && (annots[AnnotationTailnetTargetFQDN] != "" || annots[AnnotationTailnetTargetIP] != "")
 }
 
-func egressSvcConfig(ctx context.Context, cl client.Client, tailnetSvc, proxyGroupName, tsNamespace string) (*corev1.ConfigMap, *egressservices.Configs, *egressservices.Config, error) {
+// egressSvcConfig returns a ConfigMap that contains egress services configuration for the provided ProxyGroup as well
+// as unmarshalled configuration from the ConfigMap.
+func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs *egressservices.Configs, err error) {
 	cmName := fmt.Sprintf(egressSvcsCMNameTemplate, proxyGroupName)
-	cm := &corev1.ConfigMap{
+	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cmName,
 			Namespace: tsNamespace,
 		},
 	}
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
-		return nil, nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", cmName, err)
+		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", cmName, err)
 	}
-	cfgs := &egressservices.Configs{}
+	cfgs = &egressservices.Configs{}
 	if len(cm.BinaryData[egressservices.KeyEgressServices]) != 0 {
 		if err := json.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], cfgs); err != nil {
-			return nil, nil, nil, fmt.Errorf("error unmarshaling egress services config %v: %w", cm.BinaryData[egressservices.KeyEgressServices], err)
-		}
-		cfg, ok := (*cfgs)[tailnetSvc]
-		if ok {
-			return cm, cfgs, &cfg, nil
+			return nil, nil, fmt.Errorf("error unmarshaling egress services config %v: %w", cm.BinaryData[egressservices.KeyEgressServices], err)
 		}
 	}
-	return cm, cfgs, nil, nil
+	return cm, cfgs, nil
 }
 
 // egressSvcChildResourceLabels returns labels that should be applied to the
@@ -631,7 +623,7 @@ func egressSvcConfig(ctx context.Context, cl client.Client, tailnetSvc, proxyGro
 // TODO(irbekrm): we currently set a bunch of labels based on Kubernetes
 // resource names (ProxyGroup, Service). Maximum allowed label length is 63
 // chars whilst the maximum allowed resource name length is 253 chars, so we
-// should probably validate and trunkate (?) the names is they are too long.
+// should probably validate and truncate (?) the names is they are too long.
 func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 	return map[string]string{
 		LabelManaged:              "true",
@@ -677,20 +669,20 @@ type cfg struct {
 }
 
 func svcConfiguredReason(svc *corev1.Service, configured bool, l *zap.SugaredLogger) string {
-	r := fmt.Sprintf("ProxyGroup:%s", svc.Annotations[AnnotationProxyGroup])
+	var r string
+	if configured {
+		r = "ConfiguredFor:"
+	} else {
+		r = fmt.Sprintf("ConfigurationFailed:%s", r)
+	}
+	r += fmt.Sprintf("ProxyGroup:%s", svc.Annotations[AnnotationProxyGroup])
 	tt := tailnetTargetFromSvc(svc)
 	s := cfg{
 		Ports:         svc.Spec.Ports,
 		TailnetTarget: tt,
 		ProxyGroup:    svc.Annotations[AnnotationProxyGroup],
 	}
-	h := cfgHash(s, l)
-	r = fmt.Sprintf("%s:Config:%s", r, h)
-	if configured {
-		r = fmt.Sprintf("ConfiguredFor:%s", r)
-	} else {
-		r = fmt.Sprintf("ConfigurationFailed:%s", r)
-	}
+	r += fmt.Sprintf(":Config:%s", cfgHash(s, l))
 	return r
 }
 

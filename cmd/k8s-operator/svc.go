@@ -356,7 +356,7 @@ func validateService(svc *corev1.Service) []string {
 	}
 
 	// TODO(irbekrm): validate that tailscale.com/tailnet-ip annotation is a
-	// valid IP address.
+	// valid IP address (tailscale/tailscale#13671).
 
 	svcName := nameForService(svc)
 	if err := dnsname.ValidLabel(svcName); err != nil {

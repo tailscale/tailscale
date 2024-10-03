@@ -378,6 +378,7 @@ func runReconcilers(opts reconcilerOpts) {
 
 	epsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsHandler)
 	podsSecretsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromEgressPGChildResources(mgr.GetClient(), opts.log, opts.tailscaleNamespace))
+	epsFromExtNSvcFilter := handler.EnqueueRequestsFromMapFunc(epsFromExternalNameService(mgr.GetClient(), opts.log))
 
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -385,6 +386,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&discoveryv1.EndpointSlice{}, epsFilter).
 		Watches(&corev1.Pod{}, podsSecretsFilter).
 		Watches(&corev1.Secret{}, podsSecretsFilter).
+		Watches(&corev1.Service{}, epsFromExtNSvcFilter).
 		Complete(&egressEpsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,
@@ -846,6 +848,37 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 				NamespacedName: types.NamespacedName{
 					Namespace: svc.Namespace,
 					Name:      svc.Name,
+				},
+			})
+		}
+		return reqs
+	}
+}
+
+func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(_ context.Context, o client.Object) []reconcile.Request {
+		svc, ok := o.(*corev1.Service)
+		if !ok {
+			logger.Infof("[unexpected] Service handler triggered for an object that is not a Service")
+			return nil
+		}
+		if !isEgressSvcForProxyGroup(svc) {
+			return nil
+		}
+		epsList := &discoveryv1.EndpointSliceList{}
+		if err := cl.List(context.Background(), epsList, client.MatchingLabels(map[string]string{
+			labelExternalSvcName:      svc.Name,
+			labelExternalSvcNamespace: svc.Namespace,
+		})); err != nil {
+			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on Service %s", err, svc.Name)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, eps := range epsList.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: eps.Namespace,
+					Name:      eps.Name,
 				},
 			})
 		}

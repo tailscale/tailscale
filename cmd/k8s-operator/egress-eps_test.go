@@ -81,31 +81,35 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 	}
 	mustCreate(t, fc, eps)
 
-	// 1. Reconciling an EndpointSlice when there are no ProxyGroup Pods/state Secrets should not error.
-	expectReconciled(t, er, "operator-ns", "foo")
-	pod, stateS := podAndSecretForProxyGroup("foo")
-
-	// 2. Reconciling an EndpointSlice when no Pods are ready to route traffic should not error.
-	expectReconciled(t, er, "operator-ns", "foo")
-	mustCreate(t, fc, pod)
-	mustCreate(t, fc, stateS)
-
-	// 3. EndpointSlice is updated when the Pod becomes ready to route traffic.
-	stBs := serviceStatusForPodIP(t, svc, pod.Status.PodIP, port)
-	mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
-		mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+	t.Run("no_proxy_group_resources", func(t *testing.T) {
+		expectReconciled(t, er, "operator-ns", "foo") // should not error
 	})
-	expectReconciled(t, er, "operator-ns", "foo")
-	eps.Endpoints = append(eps.Endpoints, discoveryv1.Endpoint{
-		Addresses: []string{pod.Status.PodIP},
-		Hostname:  pointer.To("foo"),
-		Conditions: discoveryv1.EndpointConditions{
-			Serving:     pointer.ToBool(true),
-			Ready:       pointer.ToBool(true),
-			Terminating: pointer.ToBool(false),
-		},
+
+	t.Run("no_pods_ready_to_route_traffic", func(t *testing.T) {
+		pod, stateS := podAndSecretForProxyGroup("foo")
+		mustCreate(t, fc, pod)
+		mustCreate(t, fc, stateS)
+		expectReconciled(t, er, "operator-ns", "foo") // should not error
 	})
-	expectEqual(t, fc, eps, nil)
+
+	t.Run("pods_are_ready_to_route_traffic", func(t *testing.T) {
+		pod, stateS := podAndSecretForProxyGroup("foo")
+		stBs := serviceStatusForPodIP(t, svc, pod.Status.PodIP, port)
+		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Endpoints = append(eps.Endpoints, discoveryv1.Endpoint{
+			Addresses: []string{pod.Status.PodIP},
+			Hostname:  pointer.To("foo"),
+			Conditions: discoveryv1.EndpointConditions{
+				Serving:     pointer.ToBool(true),
+				Ready:       pointer.ToBool(true),
+				Terminating: pointer.ToBool(false),
+			},
+		})
+		expectEqual(t, fc, eps, nil)
+	})
 }
 
 func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.ConfigMap {

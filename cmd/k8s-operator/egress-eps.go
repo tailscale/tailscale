@@ -85,11 +85,12 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	l = l.With("tailnet-service-name", tailnetSvc)
 
 	// Retrieve the desired tailnet service configuration from the ConfigMap.
-	_, cfgs, cfg, err := egressSvcConfig(ctx, er.Client, tailnetSvc, proxyGroupName, er.tsNamespace)
+	_, cfgs, err := egressSvcsConfigs(ctx, er.Client, proxyGroupName, er.tsNamespace)
 	if err != nil {
 		return res, fmt.Errorf("error retrieving tailnet services configuration: %w", err)
 	}
-	if cfgs == nil || cfg == nil {
+	cfg, ok := (*cfgs)[tailnetSvc]
+	if !ok {
 		l.Infof("[unexpected] configuration for tailnet service %s not found", tailnetSvc)
 		return res, nil
 	}
@@ -100,13 +101,9 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err := er.List(ctx, podList, client.MatchingLabels(map[string]string{labelProxyGroup: proxyGroupName})); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
-	if len(podList.Items) == 0 {
-		l.Infof("ProxyGroup %s contains no Pods, egress service can not be exposed")
-		return res, nil
-	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)
 	for _, pod := range podList.Items {
-		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, cfg, tailnetSvc, l)
+		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, l)
 		if err != nil {
 			return res, fmt.Errorf("error verifying if Pod is ready to route traffic: %w", err)
 		}

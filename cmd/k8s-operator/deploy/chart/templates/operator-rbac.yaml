@@ -51,8 +51,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
-  resources: ["secrets", "serviceaccounts", "configmaps", "pods"]
+  resources: ["secrets", "serviceaccounts", "configmaps"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get","list","watch"]
 - apiGroups: ["apps"]
   resources: ["statefulsets", "deployments"]
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]

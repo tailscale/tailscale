@@ -75,6 +75,16 @@ func RemoveServiceCondition(svc *corev1.Service, conditionType tsapi.ConditionTy
 	})
 }
 
+func EgressServiceIsValidAndConfigured(svc *corev1.Service) bool {
+	for _, typ := range []tsapi.ConditionType{tsapi.EgressSvcValid, tsapi.EgressSvcConfigured} {
+		cond := GetServiceCondition(svc, typ)
+		if cond == nil || cond.Status != metav1.ConditionTrue {
+			return false
+		}
+	}
+	return true
+}
+
 // SetRecorderCondition ensures that Recorder status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.
@@ -137,22 +147,6 @@ func ProxyGroupIsReady(pg *tsapi.ProxyGroup) bool {
 	}
 	cond := pg.Status.Conditions[idx]
 	return cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == pg.Generation
-}
-
-func EgressServiceIsValidAndConfigured(svc *corev1.Service) bool {
-	for _, typ := range []tsapi.ConditionType{tsapi.EgressSvcValid, tsapi.EgressSvcConfigured} {
-		idx := xslices.IndexFunc(svc.Status.Conditions, func(cond metav1.Condition) bool {
-			return cond.Type == string(typ)
-		})
-		if idx == -1 {
-			return false
-		}
-		cond := svc.Status.Conditions[idx]
-		if cond.Status != metav1.ConditionTrue {
-			return false
-		}
-	}
-	return true
 }
 
 func DNSCfgIsReady(cfg *tsapi.DNSConfig) bool {
