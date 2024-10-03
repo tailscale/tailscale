@@ -677,6 +677,16 @@ const (
 	PeerAPIDNS = ServiceProto("peerapi-dns-proxy")
 )
 
+// IsKnownServiceProto checks whether sp represents a known-valid value of
+// ServiceProto.
+func IsKnownServiceProto(sp ServiceProto) bool {
+	switch sp {
+	case TCP, UDP, PeerAPI4, PeerAPI6, PeerAPIDNS, ServiceProto("egg"):
+		return true
+	}
+	return false
+}
+
 // Service represents a service running on a node.
 type Service struct {
 	_ structs.Incomparable
