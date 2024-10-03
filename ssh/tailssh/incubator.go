@@ -792,8 +792,10 @@ func (ss *sshSession) launchProcess() error {
 func resizeWindow(fd int, winCh <-chan ssh.Window) {
 	for win := range winCh {
 		unix.IoctlSetWinsize(fd, syscall.TIOCSWINSZ, &unix.Winsize{
-			Row: uint16(win.Height),
-			Col: uint16(win.Width),
+			Row:    uint16(win.Height),
+			Col:    uint16(win.Width),
+			Xpixel: uint16(win.WidthPixels),
+			Ypixel: uint16(win.HeightPixels),
 		})
 	}
 }
