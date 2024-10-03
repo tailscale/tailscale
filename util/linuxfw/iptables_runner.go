@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -371,9 +372,42 @@ func (i *iptablesRunner) AddDNATRule(origDst, dst netip.Addr) error {
 	return table.Insert("nat", "PREROUTING", 1, "--destination", origDst.String(), "-j", "DNAT", "--to-destination", dst.String())
 }
 
-func (i *iptablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
+// EnsureSNATForDst sets up firewall to ensure that all traffic aimed for dst, has its source ip set to src:
+// - creates a SNAT rule if not already present
+// - ensures that any no longer valid SNAT rules for the same dst are removed
+func (i *iptablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 	table := i.getIPTByAddr(dst)
-	return table.Insert("nat", "POSTROUTING", 1, "--destination", dst.String(), "-j", "SNAT", "--to-source", src.String())
+	rules, err := table.List("nat", "POSTROUTING")
+	if err != nil {
+		return fmt.Errorf("error listing rules: %v", err)
+	}
+	// iptables accept either address or a CIDR value for the --destination flag, but converts an address to /32
+	// CIDR. Explicitly passing a /32 CIDR made it possible to test this rule.
+	dstPrefix, err := dst.Prefix(32)
+	if err != nil {
+		return fmt.Errorf("error calculating prefix of dst %v: %v", dst, err)
+	}
+
+	// wantsArgsPrefix is the prefix of the SNAT rule for the provided destination.
+	// We should only have one POSTROUTING rule with this prefix.
+	wantsArgsPrefix := fmt.Sprintf("-d %s -j SNAT --to-source", dstPrefix.String())
+	// wantsArgs is the actual SNAT rule that we want.
+	wantsArgs := fmt.Sprintf("%s %s", wantsArgsPrefix, src.String())
+	for _, r := range rules {
+		args := argsFromPostRoutingRule(r)
+		if strings.HasPrefix(args, wantsArgsPrefix) {
+			if strings.HasPrefix(args, wantsArgs) {
+				return nil
+			}
+			// SNAT rule matching the destination, but for a different source - delete.
+			if err := table.Delete("nat", "POSTROUTING", strings.Split(args, " ")...); err != nil {
+				// If we failed to delete don't crash the node- the proxy should still be functioning.
+				log.Printf("[unexpected] error deleting rule %s: %v, please report it.", r, err)
+			}
+			break
+		}
+	}
+	return table.Insert("nat", "POSTROUTING", 1, "-d", dstPrefix.String(), "-j", "SNAT", "--to-source", src.String())
 }
 
 func (i *iptablesRunner) DNATNonTailscaleTraffic(tun string, dst netip.Addr) error {
@@ -730,4 +764,11 @@ func clearRules(proto iptables.Protocol, logf logger.Logf) error {
 	}
 
 	return multierr.New(errs...)
+}
+
+// argsFromPostRoutingRule accepts a rule as returned by iptables.List and, if it is a rule from POSTROUTING chain,
+// returns the args part, else returns the original rule.
+func argsFromPostRoutingRule(r string) string {
+	args, _ := strings.CutPrefix(r, "-A POSTROUTING ")
+	return args
 }

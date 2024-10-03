@@ -954,6 +954,37 @@ func TestPickFirewallModeFromInstalledRules(t *testing.T) {
 	}
 }
 
+// This test creates a temporary network namespace for the nftables rules being
+// set up, so it needs to run in a privileged mode. Locally it needs to be run
+// by root, else it will be silently skipped. In CI it runs in a privileged
+// container.
+func TestEnsureSNATForDst_nftables(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, true)
+	ip1, ip2, ip3 := netip.MustParseAddr("100.99.99.99"), netip.MustParseAddr("100.88.88.88"), netip.MustParseAddr("100.77.77.77")
+
+	// 1. A new rule gets added
+	mustCreateSNATRule_nft(t, runner, ip1, ip2)
+	chainRuleCount(t, "POSTROUTING", 1, conn, nftables.TableFamilyIPv4)
+	checkSNATRule_nft(t, runner, runner.nft4.Proto, ip1, ip2)
+
+	// 2. Another call to EnsureSNATForDst with the same src and dst does not result in another rule being added.
+	mustCreateSNATRule_nft(t, runner, ip1, ip2)
+	chainRuleCount(t, "POSTROUTING", 1, conn, nftables.TableFamilyIPv4) // still just one rule
+	checkSNATRule_nft(t, runner, runner.nft4.Proto, ip1, ip2)
+
+	// 3. Another call to EnsureSNATForDst with a different src and the same dst results in the earlier rule being
+	// deleted.
+	mustCreateSNATRule_nft(t, runner, ip3, ip2)
+	chainRuleCount(t, "POSTROUTING", 1, conn, nftables.TableFamilyIPv4) // still just one rule
+	checkSNATRule_nft(t, runner, runner.nft4.Proto, ip3, ip2)
+
+	// 4. Another call to EnsureSNATForDst with a different dst should not get the earlier rule deleted.
+	mustCreateSNATRule_nft(t, runner, ip3, ip1)
+	chainRuleCount(t, "POSTROUTING", 2, conn, nftables.TableFamilyIPv4) // now two rules
+	checkSNATRule_nft(t, runner, runner.nft4.Proto, ip3, ip1)
+}
+
 func newFakeNftablesRunnerWithConn(t *testing.T, conn *nftables.Conn, hasIPv6 bool) *nftablesRunner {
 	t.Helper()
 	if !hasIPv6 {
@@ -963,4 +994,33 @@ func newFakeNftablesRunnerWithConn(t *testing.T, conn *nftables.Conn, hasIPv6 bo
 
 	}
 	return newNfTablesRunnerWithConn(t.Logf, conn)
+}
+
+func mustCreateSNATRule_nft(t *testing.T, runner *nftablesRunner, src, dst netip.Addr) {
+	t.Helper()
+	if err := runner.EnsureSNATForDst(src, dst); err != nil {
+		t.Fatalf("error ensuring SNAT rule: %v", err)
+	}
+}
+
+// checkSNATRule_nft verifies that a SNAT rule for the given destination and source exists.
+func checkSNATRule_nft(t *testing.T, runner *nftablesRunner, fam nftables.TableFamily, src, dst netip.Addr) {
+	t.Helper()
+	chains, err := runner.conn.ListChainsOfTableFamily(fam)
+	if err != nil {
+		t.Fatalf("error listing chains: %v", err)
+	}
+	var chain *nftables.Chain
+	for _, ch := range chains {
+		if ch.Name == "POSTROUTING" {
+			chain = ch
+			break
+		}
+	}
+	if chain == nil {
+		t.Fatal("POSTROUTING chain does not exist")
+	}
+	meta := []byte(fmt.Sprintf("dst:%s,src:%s", dst.String(), src.String()))
+	wantsRule := snatRule(chain.Table, chain, src, dst, meta)
+	checkRule(t, wantsRule, runner.conn)
 }

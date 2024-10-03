@@ -481,7 +481,11 @@ runLoop:
 					egressAddrs = node.Addresses().AsSlice()
 					newCurentEgressIPs = deephash.Hash(&egressAddrs)
 					egressIPsHaveChanged = newCurentEgressIPs != currentEgressIPs
-					if egressIPsHaveChanged && len(egressAddrs) != 0 {
+					// The firewall rules get (re-)installed:
+					// - on startup
+					// - when the tailnet IPs of the tailnet target have changed
+					// - when the tailnet IPs of this node have changed
+					if (egressIPsHaveChanged || ipsHaveChanged) && len(egressAddrs) != 0 {
 						var rulesInstalled bool
 						for _, egressAddr := range egressAddrs {
 							ea := egressAddr.Addr()

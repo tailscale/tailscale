@@ -193,7 +193,7 @@ func (n *nftablesRunner) DNATNonTailscaleTraffic(tunname string, dst netip.Addr)
 	return n.conn.Flush()
 }
 
-func (n *nftablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
+func (n *nftablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 	polAccept := nftables.ChainPolicyAccept
 	table, err := n.getNFTByAddr(dst)
 	if err != nil {
@@ -216,44 +216,26 @@ func (n *nftablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
 	if err != nil {
 		return fmt.Errorf("error ensuring postrouting chain: %w", err)
 	}
-	var daddrOffset, fam, daddrLen uint32
-	if dst.Is4() {
-		daddrOffset = 16
-		daddrLen = 4
-		fam = unix.NFPROTO_IPV4
-	} else {
-		daddrOffset = 24
-		daddrLen = 16
-		fam = unix.NFPROTO_IPV6
-	}
 
-	snatRule := &nftables.Rule{
-		Table: nat,
-		Chain: postRoutingCh,
-		Exprs: []expr.Any{
-			&expr.Payload{
-				DestRegister: 1,
-				Base:         expr.PayloadBaseNetworkHeader,
-				Offset:       daddrOffset,
-				Len:          daddrLen,
-			},
-			&expr.Cmp{
-				Op:       expr.CmpOpEq,
-				Register: 1,
-				Data:     dst.AsSlice(),
-			},
-			&expr.Immediate{
-				Register: 1,
-				Data:     src.AsSlice(),
-			},
-			&expr.NAT{
-				Type:       expr.NATTypeSourceNAT,
-				Family:     fam,
-				RegAddrMin: 1,
-			},
-		},
+	rules, err := n.conn.GetRules(nat, postRoutingCh)
+	if err != nil {
+		return fmt.Errorf("error listing rules: %w", err)
 	}
-	n.conn.AddRule(snatRule)
+	snatRulePrefixMatch := fmt.Sprintf("dst:%s,src:", dst.String())
+	snatRuleFullMatch := fmt.Sprintf("%s%s", snatRulePrefixMatch, src.String())
+	for _, rule := range rules {
+		current := string(rule.UserData)
+		if strings.HasPrefix(string(rule.UserData), snatRulePrefixMatch) {
+			if strings.EqualFold(current, snatRuleFullMatch) {
+				return nil // already exists, do nothing
+			}
+			if err := n.conn.DelRule(rule); err != nil {
+				return fmt.Errorf("error deleting SNAT rule: %w", err)
+			}
+		}
+	}
+	rule := snatRule(nat, postRoutingCh, src, dst, []byte(snatRuleFullMatch))
+	n.conn.AddRule(rule)
 	return n.conn.Flush()
 }
 
@@ -557,11 +539,12 @@ type NetfilterRunner interface {
 	// in the Kubernetes ingress proxies.
 	DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.Addr) error
 
-	// AddSNATRuleForDst adds a rule to the nat/POSTROUTING chain to SNAT
-	// traffic destined for dst to src.
+	// EnsureSNATForDst sets up firewall to mask the source for traffic destined for dst to src:
+	// - creates a SNAT rule if it doesn't already exist
+	// - deletes any pre-existing rules matching the destination
 	// This is used to forward traffic destined for the local machine over
 	// the Tailscale interface, as used in the Kubernetes egress proxies.
-	AddSNATRuleForDst(src, dst netip.Addr) error
+	EnsureSNATForDst(src, dst netip.Addr) error
 
 	// DNATNonTailscaleTraffic adds a rule to the nat/PREROUTING chain to DNAT
 	// all traffic inbound from any interface except exemptInterface to dst.
@@ -2026,5 +2009,47 @@ func NfTablesCleanUp(logf logger.Logf) {
 		if table.Name == "nat" {
 			cleanupChain(logf, conn, table, "POSTROUTING", chainNamePostrouting)
 		}
+	}
+}
+
+func snatRule(t *nftables.Table, ch *nftables.Chain, src, dst netip.Addr, meta []byte) *nftables.Rule {
+	var daddrOffset, fam, daddrLen uint32
+	if dst.Is4() {
+		daddrOffset = 16
+		daddrLen = 4
+		fam = unix.NFPROTO_IPV4
+	} else {
+		daddrOffset = 24
+		daddrLen = 16
+		fam = unix.NFPROTO_IPV6
+	}
+
+	return &nftables.Rule{
+		Table: t,
+		Chain: ch,
+		Exprs: []expr.Any{
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseNetworkHeader,
+				Offset:       daddrOffset,
+				Len:          daddrLen,
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     dst.AsSlice(),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     src.AsSlice(),
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeSourceNAT,
+				Family:     fam,
+				RegAddrMin: 1,
+				RegAddrMax: 1,
+			},
+		},
+		UserData: meta,
 	}
 }
