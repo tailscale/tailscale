@@ -1299,7 +1299,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 			healthItem.Enter()
 			defer healthItem.Exit()
 			defer func() {
-				if retErr != nil {
+				if retErr != nil && !c.closing.Load() {
 					c.logf("Receive func %s exiting with error: %T, %v", healthItem.Name(), retErr, retErr)
 				}
 			}()
