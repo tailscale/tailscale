@@ -179,9 +179,6 @@ func (ep *egressProxy) syncEgressConfigs(cfgs *egressservices.Configs, status *e
 			// For each tailnet target, set up SNAT from the local tailnet device address of the matching
 			// family.
 			for _, t := range tailnetTargetIPs {
-				if t.Is6() && !ep.nfr.HasIPV6NAT() {
-					continue
-				}
 				var local netip.Addr
 				for _, pfx := range n.NetMap.SelfNode.Addresses().All() {
 					if !pfx.IsSingleIP() {
@@ -374,6 +371,9 @@ func (ep *egressProxy) getStatus(ctx context.Context) (*egressservices.Status, e
 // Secret and updates proxy's tailnet addresses.
 func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Status, n ipn.Notify) error {
 	// Pod IP is used to determine if a stored status applies to THIS proxy Pod.
+	if status == nil {
+		status = &egressservices.Status{}
+	}
 	status.PodIP = ep.podIP
 	secret, err := ep.kc.GetSecret(ctx, ep.stateSecret)
 	if err != nil {
@@ -399,12 +399,18 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 // tailnetTargetIPsForSvc returns the tailnet IPs to which traffic for this
 // egress service should be proxied. The egress service can be configured by IP
 // or by FQDN. If it's configured by IP, just return that. If it's configured by
-// FQDN, resolve the FQDN and return the resolved IPs.
+// FQDN, resolve the FQDN and return the resolved IPs. It checks if the
+// netfilter runner supports IPv6 NAT and skips any IPv6 addresses if it
+// doesn't.
 func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.Notify) (addrs []netip.Addr, err error) {
 	if svc.TailnetTarget.IP != "" {
 		addr, err := netip.ParseAddr(svc.TailnetTarget.IP)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing tailnet target IP: %w", err)
+		}
+		if addr.Is6() && !ep.nfr.HasIPV6NAT() {
+			log.Printf("tailnet target is an IPv6 address, but this host does not support IPv6 in the chosen firewall mode. This will probably not work.")
+			return addrs, nil
 		}
 		return []netip.Addr{addr}, nil
 	}
@@ -429,6 +435,10 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, n ipn.N
 	}
 	if nodeFound {
 		for _, addr := range node.Addresses().AsSlice() {
+			if addr.Addr().Is6() && !ep.nfr.HasIPV6NAT() {
+				log.Printf("tailnet target %v is an IPv6 address, but this host does not support IPv6 in the chosen firewall mode, skipping.", addr.Addr().String())
+				continue
+			}
 			addrs = append(addrs, addr.Addr())
 		}
 		// Egress target endpoints configured via FQDN are stored, so
@@ -494,10 +504,6 @@ func ensureServiceDeleted(svcName string, svc *egressservices.ServiceStatus, nfr
 func ensureRulesAdded(rulesPerSvc map[string][]rule, nfr linuxfw.NetfilterRunner) error {
 	for svc, rules := range rulesPerSvc {
 		for _, rule := range rules {
-			if rule.tailnetIP.Is6() && !nfr.HasIPV6NAT() {
-				log.Printf("host does not support IPv6 NAT; skipping IPv6 target %s", rule.tailnetIP)
-				continue
-			}
 			log.Printf("ensureRulesAdded svc %s tailnetTarget %s container port %d tailnet port %d protocol %s", svc, rule.tailnetIP, rule.containerPort, rule.tailnetPort, rule.protocol)
 			if err := nfr.EnsurePortMapRuleForSvc(svc, tailscaleTunInterface, rule.tailnetIP, linuxfw.PortMap{MatchPort: rule.containerPort, TargetPort: rule.tailnetPort, Protocol: rule.protocol}); err != nil {
 				return fmt.Errorf("error ensuring rule: %w", err)
@@ -513,10 +519,6 @@ func ensureRulesAdded(rulesPerSvc map[string][]rule, nfr linuxfw.NetfilterRunner
 func ensureRulesDeleted(rulesPerSvc map[string][]rule, nfr linuxfw.NetfilterRunner) error {
 	for svc, rules := range rulesPerSvc {
 		for _, rule := range rules {
-			if rule.tailnetIP.Is6() && !nfr.HasIPV6NAT() {
-				log.Printf("host does not support IPv6 NAT; skipping IPv6 target %s", rule.tailnetIP)
-				continue
-			}
 			log.Printf("ensureRulesDeleted svc %s tailnetTarget %s container port %d tailnet port %d protocol %s", svc, rule.tailnetIP, rule.containerPort, rule.tailnetPort, rule.protocol)
 			if err := nfr.DeletePortMapRuleForSvc(svc, tailscaleTunInterface, rule.tailnetIP, linuxfw.PortMap{MatchPort: rule.containerPort, TargetPort: rule.tailnetPort, Protocol: rule.protocol}); err != nil {
 				return fmt.Errorf("error deleting rule: %w", err)

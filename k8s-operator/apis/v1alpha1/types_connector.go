@@ -172,6 +172,14 @@ type ConditionType string
 const (
 	ConnectorReady  ConditionType = `ConnectorReady`
 	ProxyClassready ConditionType = `ProxyClassReady`
+	ProxyGroupReady ConditionType = `ProxyGroupReady`
 	ProxyReady      ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
 	RecorderReady   ConditionType = `RecorderReady`
+	// EgressSvcValid is set to true if the user configured ExternalName Service for exposing a tailnet target on
+	// ProxyGroup nodes is valid.
+	EgressSvcValid ConditionType = `EgressSvcValid`
+	// EgressSvcConfigured is set to true if the configuration for the egress Service (proxy ConfigMap update,
+	// EndpointSlice for the Service) has been successfully applied. The Reason for this condition
+	// contains the name of the ProxyGroup and the hash of the Service ports and the tailnet target.
+	EgressSvcConfigured ConditionType = `EgressSvcConfigured`
 )

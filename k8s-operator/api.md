@@ -467,21 +467,6 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyClass.<br />Known condition types are `ProxyClassReady`. |  |  |
 
 
-#### ProxyClassType
-
-_Underlying type:_ _string_
-
-
-
-_Validation:_
-- Enum: [egress]
-- Type: string
-
-_Appears in:_
-- [ProxyGroupSpec](#proxygroupspec)
-
-
-
 #### ProxyGroup
 
 
@@ -537,7 +522,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[ProxyClassType](#proxyclasstype)_ | Type of the ProxyGroup, either ingress or egress. Each set of proxies<br />managed by a single ProxyGroup definition operate as only ingress or<br />only egress proxies. |  | Enum: [egress] <br />Type: string <br /> |
+| `type` _[ProxyGroupType](#proxygrouptype)_ | Type of the ProxyGroup, either ingress or egress. Each set of proxies<br />managed by a single ProxyGroup definition operate as only ingress or<br />only egress proxies. |  | Enum: [egress] <br />Type: string <br /> |
 | `tags` _[Tags](#tags)_ | Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].<br />If you specify custom tags here, make sure you also make the operator<br />an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once a ProxyGroup device has been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
 | `replicas` _integer_ | Replicas specifies how many replicas to create the StatefulSet with.<br />Defaults to 2. |  |  |
 | `hostnamePrefix` _[HostnamePrefix](#hostnameprefix)_ | HostnamePrefix is the hostname prefix to use for tailnet devices created<br />by the ProxyGroup. Each device will have the integer number from its<br />StatefulSet pod appended to this prefix to form the full hostname.<br />HostnamePrefix can contain lower case letters, numbers and dashes, it<br />must not start with a dash and must be between 1 and 62 characters long. |  | Pattern: `^[a-z0-9][a-z0-9-]{0,61}$` <br />Type: string <br /> |
@@ -559,6 +544,21 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the ProxyGroup<br />resources. Known condition types are `ProxyGroupReady`. |  |  |
 | `devices` _[TailnetDevice](#tailnetdevice) array_ | List of tailnet devices associated with the ProxyGroup StatefulSet. |  |  |
+
+
+#### ProxyGroupType
+
+_Underlying type:_ _string_
+
+
+
+_Validation:_
+- Enum: [egress]
+- Type: string
+
+_Appears in:_
+- [ProxyGroupSpec](#proxygroupspec)
+
 
 
 #### Recorder

@@ -4360,6 +4360,8 @@ rules:
         - connectors/status
         - proxyclasses
         - proxyclasses/status
+        - proxygroups
+        - proxygroups/status
       verbs:
         - get
         - list
@@ -4421,6 +4423,14 @@ rules:
         - update
         - watch
     - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list
+        - watch
+    - apiGroups:
         - apps
       resources:
         - statefulsets
@@ -4442,6 +4452,9 @@ rules:
         - get
         - list
         - watch
+        - create
+        - update
+        - deletecollection
     - apiGroups:
         - rbac.authorization.k8s.io
       resources:

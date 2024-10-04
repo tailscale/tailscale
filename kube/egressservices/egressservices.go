@@ -64,17 +64,17 @@ func (pm *PortMap) UnmarshalText(t []byte) error {
 	if len(ss) != 3 {
 		return fmt.Errorf("error unmarshalling portmap from JSON, wants a portmap in form <protocol>:<matchPort>:<targetPor>, got %q", tt)
 	}
-	(*pm).Protocol = ss[0]
+	pm.Protocol = ss[0]
 	matchPort, err := strconv.ParseUint(ss[1], 10, 16)
 	if err != nil {
 		return fmt.Errorf("error converting match port %q to uint16: %w", ss[1], err)
 	}
-	(*pm).MatchPort = uint16(matchPort)
+	pm.MatchPort = uint16(matchPort)
 	targetPort, err := strconv.ParseUint(ss[2], 10, 16)
 	if err != nil {
 		return fmt.Errorf("error converting target port %q to uint16: %w", ss[2], err)
 	}
-	(*pm).TargetPort = uint16(targetPort)
+	pm.TargetPort = uint16(targetPort)
 	return nil
 }
 
