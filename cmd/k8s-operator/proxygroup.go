@@ -415,7 +415,7 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 	// For egress proxies only, we need to ensure that stateful filtering is
 	// not in place so that traffic from cluster can be forwarded via
 	// Tailscale IPs.
-	if pg.Spec.Type == tsapi.ProxyClassTypeEgress {
+	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
 		conf.NoStatefulFiltering = "true"
 	}
 	if shouldAcceptRoutes(class) {

@@ -34,7 +34,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 			UID:  types.UID("1234-UID"),
 		},
 		Spec: tsapi.ProxyGroupSpec{
-			Replicas: pointer.To(3),
+			Replicas: pointer.To[int32](3),
 			Type:     tsapi.ProxyGroupTypeEgress,
 		},
 	}

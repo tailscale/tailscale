@@ -356,12 +356,12 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
-	proxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
+	egressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
-		Watches(&tsapi.ProxyGroup{}, proxyGroupFilter).
+		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,
@@ -458,15 +458,15 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	// Recorder reconciler.
-	proxyGroupFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.ProxyGroup{})
+	ownedByProxyGroupFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.ProxyGroup{})
 	proxyClassFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForProxyGroup(mgr.GetClient(), startlog))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.ProxyGroup{}).
-		Watches(&appsv1.StatefulSet{}, proxyGroupFilter).
-		Watches(&corev1.ServiceAccount{}, proxyGroupFilter).
-		Watches(&corev1.Secret{}, proxyGroupFilter).
-		Watches(&rbacv1.Role{}, proxyGroupFilter).
-		Watches(&rbacv1.RoleBinding{}, proxyGroupFilter).
+		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
+		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).
+		Watches(&corev1.Secret{}, ownedByProxyGroupFilter).
+		Watches(&rbacv1.Role{}, ownedByProxyGroupFilter).
+		Watches(&rbacv1.RoleBinding{}, ownedByProxyGroupFilter).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForProxyGroup).
 		Complete(&ProxyGroupReconciler{
 			recorder:    eventRecorder,
