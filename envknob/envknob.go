@@ -17,6 +17,7 @@ package envknob
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -503,7 +504,7 @@ func ApplyDiskConfigError() error { return applyDiskConfigErr }
 //
 // On macOS, use one of:
 //
-//   - ~/Library/Containers/io.tailscale.ipn.macsys/Data/tailscaled-env.txt
+//   - /private/var/root/Library/Containers/io.tailscale.ipn.macsys.network-extension/Data/tailscaled-env.txt
 //     for standalone macOS GUI builds
 //   - ~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data/tailscaled-env.txt
 //     for App Store builds
@@ -533,44 +534,73 @@ func ApplyDiskConfig() (err error) {
 		return applyKeyValueEnv(f)
 	}
 
-	name := getPlatformEnvFile()
-	if name == "" {
+	names := getPlatformEnvFiles()
+	if len(names) == 0 {
 		return nil
 	}
-	f, err = os.Open(name)
-	if os.IsNotExist(err) {
-		return nil
+
+	var errs []error
+	for _, name := range names {
+		f, err = os.Open(name)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		defer f.Close()
+
+		return applyKeyValueEnv(f)
 	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return applyKeyValueEnv(f)
+
+	// If we have any errors, return them; if all errors are such that
+	// os.IsNotExist(err) returns true, then errs is empty and we will
+	// return nil.
+	return errors.Join(errs...)
 }
 
-// getPlatformEnvFile returns the current platform's path to an optional
-// tailscaled-env.txt file. It returns an empty string if none is defined
-// for the platform.
-func getPlatformEnvFile() string {
+// getPlatformEnvFiles returns a list of paths to the current platform's
+// optional tailscaled-env.txt file. It returns an empty list if none is
+// defined for the platform.
+func getPlatformEnvFiles() []string {
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt")
+		return []string{
+			filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt"),
+		}
 	case "linux":
 		if distro.Get() == distro.Synology {
-			return "/etc/tailscale/tailscaled-env.txt"
+			return []string{"/etc/tailscale/tailscaled-env.txt"}
 		}
 	case "darwin":
 		if version.IsSandboxedMacOS() { // the two GUI variants (App Store or separate download)
-			// This will be user-visible as ~/Library/Containers/$VARIANT/Data/tailscaled-env.txt
-			// where $VARIANT is "io.tailscale.ipn.macsys" for macsys (downloadable mac GUI builds)
-			// or "io.tailscale.ipn.macos.network-extension" for App Store builds.
-			return filepath.Join(os.Getenv("HOME"), "tailscaled-env.txt")
+			// On the App Store variant, the home directory is set
+			// to something like:
+			//	~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data
+			//
+			// On the macsys (downloadable Mac GUI) variant, the
+			// home directory can be unset, but we have a working
+			// directory that looks like:
+			//	/private/var/root/Library/Containers/io.tailscale.ipn.macsys.network-extension/Data
+			//
+			// Try both and see if we can find the file in either
+			// location.
+			var candidates []string
+			if home := os.Getenv("HOME"); home != "" {
+				candidates = append(candidates, filepath.Join(home, "tailscaled-env.txt"))
+			}
+			if wd, err := os.Getwd(); err == nil {
+				candidates = append(candidates, filepath.Join(wd, "tailscaled-env.txt"))
+			}
+
+			return candidates
 		} else {
 			// Open source / homebrew variable, running tailscaled-on-macOS.
-			return "/etc/tailscale/tailscaled-env.txt"
+			return []string{"/etc/tailscale/tailscaled-env.txt"}
 		}
 	}
-	return ""
+	return nil
 }
 
 // applyKeyValueEnv reads key=value lines r and calls Setenv for each.
