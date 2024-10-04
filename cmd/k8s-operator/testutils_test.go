@@ -604,7 +604,7 @@ func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabili
 func (c *fakeTSClient) Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error) {
 	return &tailscale.Device{
 		DeviceID: deviceID,
-		Hostname: "test-device",
+		Hostname: "hostname-" + deviceID,
 		Addresses: []string{
 			"1.2.3.4",
 			"::1",

@@ -395,7 +395,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 		return "", err
 	}
 
-	return string(sum.Sum(nil)), nil
+	return fmt.Sprintf("%x", sum.Sum(nil)), nil
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
