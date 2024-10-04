@@ -29,9 +29,9 @@ type Records struct {
 	IP4 map[string][]string `json:"ip4"`
 }
 
-// TailscaledConfigFileNameForCap returns a tailscaled config file name in
+// TailscaledConfigFileName returns a tailscaled config file name in
 // format expected by containerboot for the given CapVer.
-func TailscaledConfigFileNameForCap(cap tailcfg.CapabilityVersion) string {
+func TailscaledConfigFileName(cap tailcfg.CapabilityVersion) string {
 	if cap < 95 {
 		return "tailscaled"
 	}
