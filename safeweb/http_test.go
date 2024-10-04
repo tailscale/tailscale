@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/gorilla/csrf"
@@ -607,5 +608,28 @@ func TestStrictTransportSecurityOptions(t *testing.T) {
 				t.Fatalf("HSTS want: %q; got: %q", tt.expect, resp.Header.Get("Strict-Transport-Security"))
 			}
 		})
+	}
+}
+
+func TestOverrideHTTPServer(t *testing.T) {
+	s, err := NewServer(Config{})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	if s.h.IdleTimeout != 0 {
+		t.Fatalf("got %v; want 0", s.h.IdleTimeout)
+	}
+
+	c := http.Server{
+		IdleTimeout: 10 * time.Second,
+	}
+
+	s, err = NewServer(Config{HTTPServer: &c})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	if s.h.IdleTimeout != c.IdleTimeout {
+		t.Fatalf("got %v; want %v", s.h.IdleTimeout, c.IdleTimeout)
 	}
 }
