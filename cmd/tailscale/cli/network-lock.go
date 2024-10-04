@@ -151,15 +151,15 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	var disablementSecretsResp strings.Builder
+	var successMsg strings.Builder
 
-	fmt.Fprintf(&disablementSecretsResp, "%d disablement secrets have been generated and are printed below. Take note of them now, they WILL NOT be shown again.\n", nlInitArgs.numDisablements)
+	fmt.Fprintf(&successMsg, "%d disablement secrets have been generated and are printed below. Take note of them now, they WILL NOT be shown again.\n", nlInitArgs.numDisablements)
 	for range nlInitArgs.numDisablements {
 		var secret [32]byte
 		if _, err := rand.Read(secret[:]); err != nil {
 			return err
 		}
-		fmt.Fprintf(&disablementSecretsResp, "\tdisablement-secret:%X\n", secret[:])
+		fmt.Fprintf(&successMsg, "\tdisablement-secret:%X\n", secret[:])
 		disablementValues = append(disablementValues, tka.DisablementKDF(secret[:]))
 	}
 
@@ -170,7 +170,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 			return err
 		}
 		disablementValues = append(disablementValues, tka.DisablementKDF(supportDisablement))
-		fmt.Fprintln(&disablementSecretsResp, "A disablement secret for Tailscale support has been generated and will be transmitted to Tailscale upon initialization.")
+		fmt.Fprintln(&successMsg, "A disablement secret for Tailscale support has been generated and has been transmitted to Tailscale.")
 	}
 
 	// The state returned by NetworkLockInit likely doesn't contain the initialized state,
@@ -179,7 +179,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Print(disablementSecretsResp.String())
+	fmt.Print(successMsg.String())
 	fmt.Println("Initialization complete.")
 	return nil
 }
