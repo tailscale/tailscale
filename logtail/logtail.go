@@ -45,9 +45,6 @@ const maxSize = 256 << 10
 // Note that JSON log messages can be as large as maxSize.
 const maxTextSize = 16 << 10
 
-// lowMemRatio reduces maxSize and maxTextSize by this ratio in lowMem mode.
-const lowMemRatio = 4
-
 // bufferSize is the typical buffer size to retain.
 // It is large enough to handle most log messages,
 // but not too large to be a notable waste of memory if retained forever.
@@ -72,7 +69,6 @@ type Config struct {
 	BaseURL        string          // if empty defaults to "https://log.tailscale.io"
 	HTTPC          *http.Client    // if empty defaults to http.DefaultClient
 	SkipClientTime bool            // if true, client_time is not written to logs
-	LowMemory      bool            // if true, logtail minimizes memory use
 	Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
 	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
 	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
@@ -118,11 +114,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		cfg.Stderr = os.Stderr
 	}
 	if cfg.Buffer == nil {
-		pendingSize := 256
-		if cfg.LowMemory {
-			pendingSize = 64
-		}
-		cfg.Buffer = NewMemoryBuffer(pendingSize)
+		cfg.Buffer = NewMemoryBuffer(256)
 	}
 	var procID uint32
 	if cfg.IncludeProcID {
@@ -155,7 +147,6 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		stderrLevel:    int64(cfg.StderrLevel),
 		httpc:          cfg.HTTPC,
 		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String() + urlSuffix,
-		lowMem:         cfg.LowMemory,
 		buffer:         cfg.Buffer,
 		skipClientTime: cfg.SkipClientTime,
 		drainWake:      make(chan struct{}, 1),
@@ -188,7 +179,6 @@ type Logger struct {
 	stderrLevel    int64 // accessed atomically
 	httpc          *http.Client
 	url            string
-	lowMem         bool
 	skipClientTime bool
 	netMonitor     *netmon.Monitor
 	buffer         Buffer
@@ -325,13 +315,6 @@ func (l *Logger) drainPending() (b []byte) {
 	}()
 
 	maxLen := maxSize
-	if l.lowMem {
-		// When operating in a low memory environment, it is better to upload
-		// in multiple operations than it is to allocate a large body and OOM.
-		// Even if maxLen is less than maxSize, we can still upload an entry
-		// that is up to maxSize if we happen to encounter one.
-		maxLen /= lowMemRatio
-	}
 	for len(b) < maxLen {
 		line, err := l.buffer.TryReadLine()
 		switch {
@@ -683,9 +666,6 @@ func (l *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32,
 	// Append the text string, which may be truncated.
 	// Invalid UTF-8 will be mangled with the Unicode replacement character.
 	max := maxTextSize
-	if l.lowMem {
-		max /= lowMemRatio
-	}
 	dst = append(dst, `"text":`...)
 	dst = appendTruncatedString(dst, src, max)
 	return append(dst, "}\n"...)
