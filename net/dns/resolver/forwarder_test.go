@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -657,14 +656,20 @@ func TestForwarderTCPFallbackError(t *testing.T) {
 		}
 	})
 
-	_, err := runTestQuery(t, port, request, nil)
+	resp, err := runTestQuery(t, port, request, nil)
 	if !sawRequest.Load() {
 		t.Error("did not see DNS request")
 	}
-	if err == nil {
-		t.Error("wanted error, got nil")
-	} else if !errors.Is(err, errServerFailure) {
-		t.Errorf("wanted errServerFailure, got: %v", err)
+	if err != nil {
+		t.Fatalf("wanted nil, got %v", err)
+	}
+	var parser dns.Parser
+	respHeader, err := parser.Start(resp)
+	if err != nil {
+		t.Fatalf("parser.Start() failed: %v", err)
+	}
+	if got, want := respHeader.RCode, dns.RCodeServerFailure; got != want {
+		t.Errorf("wanted %v, got %v", want, got)
 	}
 }
 
