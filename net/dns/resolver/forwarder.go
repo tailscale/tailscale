@@ -487,6 +487,10 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	defer hres.Body.Close()
 	if hres.StatusCode != 200 {
 		metricDNSFwdDoHErrorStatus.Add(1)
+		if hres.StatusCode/100 == 5 {
+			// Translate 5xx HTTP server errors into SERVFAIL DNS responses.
+			return nil, fmt.Errorf("%w: %s", errServerFailure, hres.Status)
+		}
 		return nil, errors.New(hres.Status)
 	}
 	if ct := hres.Header.Get("Content-Type"); ct != dohType {
