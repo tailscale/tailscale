@@ -26,6 +26,8 @@ import (
 	"tailscale.com/types/ptr"
 )
 
+const testProxyImage = "tailscale/tailscale:test"
+
 func TestProxyGroup(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -45,6 +47,7 @@ func TestProxyGroup(t *testing.T) {
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &ProxyGroupReconciler{
 		tsNamespace: tsNamespace,
+		proxyImage:  testProxyImage,
 		Client:      fc,
 		tsClient:    tsClient,
 		recorder:    fr,
@@ -141,7 +144,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet := pgStatefulSet(pg, tsNamespace, "")
+	statefulSet := pgStatefulSet(pg, tsNamespace, testProxyImage, "")
 
 	if shouldExist {
 		expectEqual(t, fc, role, nil)

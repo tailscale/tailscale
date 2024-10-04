@@ -20,7 +20,7 @@ const labelSecretType = "tailscale.com/secret-type"
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, cfgHash string) *appsv1.StatefulSet {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, cfgHash string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
@@ -48,7 +48,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, cfgHash string) *appsv1.Stat
 					InitContainers: []corev1.Container{
 						{
 							Name:  "sysctler",
-							Image: fmt.Sprintf("tailscale/tailscale:%s", selfVersionImageTag()),
+							Image: image,
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: ptr.To(true),
 							},
@@ -64,7 +64,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, cfgHash string) *appsv1.Stat
 					Containers: []corev1.Container{
 						{
 							Name:  "tailscale",
-							Image: fmt.Sprintf("tailscale/tailscale:%s", selfVersionImageTag()),
+							Image: image,
 							Env:   pgEnv(pg),
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{

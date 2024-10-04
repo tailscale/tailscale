@@ -471,6 +471,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Complete(&ProxyGroupReconciler{
 			recorder:    eventRecorder,
 			tsNamespace: opts.tailscaleNamespace,
+			proxyImage:  opts.proxyImage,
 			Client:      mgr.GetClient(),
 			l:           opts.log.Named("proxygroup-reconciler"),
 			clock:       tstime.DefaultClock{},

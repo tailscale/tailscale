@@ -56,6 +56,7 @@ type ProxyGroupReconciler struct {
 	recorder    record.EventRecorder
 	clock       tstime.Clock
 	tsNamespace string
+	proxyImage  string
 	tsClient    tsClient
 
 	mu          sync.Mutex           // protects following
@@ -134,8 +135,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	if err = r.maybeProvision(ctx, pg); err != nil {
-		logger.Errorf("error creating ProxyGroup resources: %w", err)
-		message := fmt.Sprintf("failed creating ProxyGroup: %s", err)
+		logger.Errorf("error provisioning ProxyGroup resources: %w", err)
+		message := fmt.Sprintf("failed provisioning ProxyGroup: %s", err)
 		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, message)
 		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, message)
 	}
@@ -178,7 +179,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 
 	cfgHash, err := r.ensureConfigSecretsCreated(ctx, pg, proxyClass)
 	if err != nil {
-		return fmt.Errorf("error creating secrets: %w", err)
+		return fmt.Errorf("error provisioning config Secrets: %w", err)
 	}
 	// State secrets are precreated so we can use the ProxyGroup CR as their owner ref.
 	stateSecrets := pgStateSecrets(pg, r.tsNamespace)
@@ -188,7 +189,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			s.ObjectMeta.Annotations = sec.ObjectMeta.Annotations
 			s.ObjectMeta.OwnerReferences = sec.ObjectMeta.OwnerReferences
 		}); err != nil {
-			return fmt.Errorf("error creating state Secret: %w", err)
+			return fmt.Errorf("error provisioning state Secrets: %w", err)
 		}
 	}
 	sa := pgServiceAccount(pg, r.tsNamespace)
@@ -197,7 +198,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		s.ObjectMeta.Annotations = sa.ObjectMeta.Annotations
 		s.ObjectMeta.OwnerReferences = sa.ObjectMeta.OwnerReferences
 	}); err != nil {
-		return fmt.Errorf("error creating ServiceAccount: %w", err)
+		return fmt.Errorf("error provisioning ServiceAccount: %w", err)
 	}
 	role := pgRole(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
@@ -206,7 +207,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		r.ObjectMeta.OwnerReferences = role.ObjectMeta.OwnerReferences
 		r.Rules = role.Rules
 	}); err != nil {
-		return fmt.Errorf("error creating Role: %w", err)
+		return fmt.Errorf("error provisioning Role: %w", err)
 	}
 	roleBinding := pgRoleBinding(pg, r.tsNamespace)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, roleBinding, func(r *rbacv1.RoleBinding) {
@@ -216,9 +217,9 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		r.RoleRef = roleBinding.RoleRef
 		r.Subjects = roleBinding.Subjects
 	}); err != nil {
-		return fmt.Errorf("error creating RoleBinding: %w", err)
+		return fmt.Errorf("error provisioning RoleBinding: %w", err)
 	}
-	ss := pgStatefulSet(pg, r.tsNamespace, cfgHash)
+	ss := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, cfgHash)
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, nil, logger)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
@@ -226,7 +227,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 		s.ObjectMeta.OwnerReferences = ss.ObjectMeta.OwnerReferences
 		s.Spec = ss.Spec
 	}); err != nil {
-		return fmt.Errorf("error creating StatefulSet: %w", err)
+		return fmt.Errorf("error provisioning StatefulSet: %w", err)
 	}
 
 	if err := r.cleanupDanglingResources(ctx, pg); err != nil {
@@ -410,9 +411,17 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 		conf.AcceptRoutes = "true"
 	}
 
+	deviceAuthed := false
+	for _, d := range pg.Status.Devices {
+		if d.Hostname == *conf.Hostname {
+			deviceAuthed = true
+			break
+		}
+	}
+
 	if authKey != "" {
 		conf.AuthKey = &authKey
-	} else if shouldRetainAuthKey(oldSecret) {
+	} else if !deviceAuthed {
 		key, err := authKeyFromSecret(oldSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error retrieving auth key from Secret: %w", err)
