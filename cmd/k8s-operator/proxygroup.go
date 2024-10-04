@@ -42,15 +42,14 @@ import (
 
 const (
 	reasonProxyGroupCreationFailed = "ProxyGroupCreationFailed"
-	reasonProxyGroupCreated        = "ProxyGroupCreated"
+	reasonProxyGroupReady          = "ProxyGroupReady"
 	reasonProxyGroupCreating       = "ProxyGroupCreating"
 	reasonProxyGroupInvalid        = "ProxyGroupInvalid"
 )
 
 var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupCount)
 
-// ProxyGroupReconciler syncs ProxyGroup statefulsets with their definition in
-// ProxyGroup CRs.
+// ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
 type ProxyGroupReconciler struct {
 	client.Client
 	l           *zap.SugaredLogger
@@ -155,7 +154,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	logger.Info("ProxyGroup resources synced")
-	return setStatusReady(pg, metav1.ConditionTrue, reasonProxyGroupCreated, reasonProxyGroupCreated)
+	return setStatusReady(pg, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady)
 }
 
 func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup) error {
@@ -172,7 +171,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("failed to get ProxyClass: %w", err)
 		}
 		if !tsoperator.ProxyClassIsReady(proxyClass) {
-			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting...", pg.Spec.ProxyClass)
+			logger.Infof("ProxyClass %s specified for the ProxyGroup, but it is not (yet) in a ready state, waiting...", pg.Spec.ProxyClass)
 			return nil
 		}
 	}
@@ -267,8 +266,6 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, pg 
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("error deleting state Secret %s: %w", m.stateSecret.Name, err)
 			}
-
-			logger.Debugf("deleted state Secret %s but got not found", m.stateSecret.Name)
 		}
 		configSecret := m.stateSecret.DeepCopy()
 		configSecret.Name += "-config"
@@ -276,8 +273,6 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, pg 
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("error deleting config Secret %s: %w", configSecret.Name, err)
 			}
-
-			logger.Debugf("deleted config Secret %s but got not found", configSecret.Name)
 		}
 	}
 
@@ -425,10 +420,7 @@ func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32
 		conf.AuthKey = key
 	}
 	capVerConfigs := make(map[tailcfg.CapabilityVersion]ipn.ConfigVAlpha)
-	capVerConfigs[95] = *conf
-	// legacy config should not contain NoStatefulFiltering field.
-	conf.NoStatefulFiltering.Clear()
-	capVerConfigs[94] = *conf
+	capVerConfigs[106] = *conf
 	return capVerConfigs, nil
 }
 

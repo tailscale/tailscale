@@ -77,7 +77,7 @@ func TestProxyGroup(t *testing.T) {
 				TailnetIPs: []string{"1.2.3.4", "::1"},
 			},
 		}
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupCreated, reasonProxyGroupCreated, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
 		expectEqual(t, fc, pg, nil)
 		expectProxyGroupResources(t, fc, pg, true)
 	})
@@ -93,7 +93,7 @@ func TestProxyGroup(t *testing.T) {
 
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupCreated, reasonProxyGroupCreated, 0, cl, zl.Sugar())
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady, 0, cl, zl.Sugar())
 		pg.Status.Devices = append(pg.Status.Devices, tsapi.TailnetDevice{
 			Hostname:   "hostname-nodeid-2",
 			TailnetIPs: []string{"1.2.3.4", "::1"},
