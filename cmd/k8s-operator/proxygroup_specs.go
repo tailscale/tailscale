@@ -16,8 +16,6 @@ import (
 	"tailscale.com/types/ptr"
 )
 
-const labelSecretType = "tailscale.com/secret-type"
-
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
 func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, cfgHash string) *appsv1.StatefulSet {
@@ -25,19 +23,19 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, cfgHash string) *apps
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          labels("proxygroup", pg.Name, nil),
+			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: ptr.To(pgReplicas(pg)),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels("proxygroup", pg.Name, nil),
+				MatchLabels: pgLabels(pg.Name, nil),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:                       pg.Name,
 					Namespace:                  namespace,
-					Labels:                     labels("proxygroup", pg.Name, nil),
+					Labels:                     pgLabels(pg.Name, nil),
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
 					Annotations: map[string]string{
 						podAnnotationLastSetConfigFileHash: cfgHash,
@@ -113,7 +111,7 @@ func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAcc
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          labels("proxygroup", pg.Name, nil),
+			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 	}
@@ -124,7 +122,7 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          labels("proxygroup", pg.Name, nil),
+			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Rules: []rbacv1.PolicyRule{
@@ -155,7 +153,7 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
 			Namespace:       namespace,
-			Labels:          labels("proxygroup", pg.Name, nil),
+			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Subjects: []rbacv1.Subject{
@@ -178,7 +176,7 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            fmt.Sprintf("%s-%d", pg.Name, i),
 				Namespace:       namespace,
-				Labels:          secretLabels("proxygroup", pg.Name, "state"),
+				Labels:          pgSecretLabels(pg.Name, "state"),
 				OwnerReferences: pgOwnerReference(pg),
 			},
 		})
@@ -187,10 +185,23 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 	return secrets
 }
 
-func secretLabels(app, instance, typ string) map[string]string {
-	return labels(app, instance, map[string]string{
+func pgSecretLabels(pgName, typ string) map[string]string {
+	return pgLabels(pgName, map[string]string{
 		labelSecretType: typ, // "config" or "state".
 	})
+}
+
+func pgLabels(pgName string, customLabels map[string]string) map[string]string {
+	l := make(map[string]string, len(customLabels)+3)
+	for k, v := range customLabels {
+		l[k] = v
+	}
+
+	l[LabelManaged] = "true"
+	l[LabelParentType] = "ProxyGroup"
+	l[LabelParentName] = pgName
+
+	return l
 }
 
 func pgEnv(_ *tsapi.ProxyGroup) []corev1.EnvVar {

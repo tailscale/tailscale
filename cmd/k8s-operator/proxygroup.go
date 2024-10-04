@@ -329,7 +329,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            fmt.Sprintf("%s-%d-config", pg.Name, i),
 				Namespace:       r.tsNamespace,
-				Labels:          secretLabels("proxygroup", pg.Name, "config"),
+				Labels:          pgSecretLabels(pg.Name, "config"),
 				OwnerReferences: pgOwnerReference(pg),
 			},
 		}
@@ -444,7 +444,7 @@ func (r *ProxyGroupReconciler) validate(_ *tsapi.ProxyGroup) error {
 func (r *ProxyGroupReconciler) getNodeMetadata(ctx context.Context, pg *tsapi.ProxyGroup) (metadata []nodeMetadata, _ error) {
 	// List all state secrets owned by this ProxyGroup.
 	secrets := &corev1.SecretList{}
-	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(secretLabels("proxygroup", pg.Name, "state"))); err != nil {
+	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, "state"))); err != nil {
 		return nil, fmt.Errorf("failed to list state Secrets: %w", err)
 	}
 	for _, secret := range secrets.Items {
