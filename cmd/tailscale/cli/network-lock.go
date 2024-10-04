@@ -170,7 +170,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 			return err
 		}
 		disablementValues = append(disablementValues, tka.DisablementKDF(supportDisablement))
-		fmt.Fprintln(&successMsg, "A disablement secret for Tailscale support has been generated and has been transmitted to Tailscale.")
+		fmt.Fprintln(&successMsg, "A disablement secret for Tailscale support has been generated and transmitted to Tailscale.")
 	}
 
 	// The state returned by NetworkLockInit likely doesn't contain the initialized state,
