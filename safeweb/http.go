@@ -144,6 +144,12 @@ type Config struct {
 	// BrowserMux when SecureContext is true.
 	// If empty, it defaults to max-age of 1 year.
 	StrictTransportSecurityOptions string
+
+	// HTTPServer, if specified, is the underlying http.Server that safeweb will
+	// use to serve requests. If nil, a new http.Server will be created.
+	// Do not use the Handler field of http.Server, as it will be ignored.
+	// Instead, set your handlers using APIMux and BrowserMux.
+	HTTPServer *http.Server
 }
 
 func (c *Config) setDefaults() error {
@@ -203,7 +209,11 @@ func NewServer(config Config) (*Server, error) {
 	if config.CSPAllowInlineStyles {
 		s.csp = defaultCSP + `; style-src 'self' 'unsafe-inline'`
 	}
-	s.h = &http.Server{Handler: s}
+	s.h = cmp.Or(config.HTTPServer, &http.Server{})
+	if s.h.Handler != nil {
+		return nil, fmt.Errorf("use safeweb.Config.APIMux and safeweb.Config.BrowserMux instead of http.Server.Handler")
+	}
+	s.h.Handler = s
 	return s, nil
 }
 
