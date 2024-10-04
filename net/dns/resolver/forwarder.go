@@ -1053,6 +1053,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 						if verboseDNSForward() {
 							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
 						}
+						return nil
 					}
 				}
 				return firstErr
