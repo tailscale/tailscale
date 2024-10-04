@@ -400,24 +400,17 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, class *tsapi.ProxyClass, idx int32, authKey string, oldSecret *corev1.Secret) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
-		Version:             "alpha0",
-		AcceptDNS:           "false",
-		AcceptRoutes:        "false", // AcceptRoutes defaults to true
-		Locked:              "false",
-		Hostname:            ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
-		NoStatefulFiltering: "false",
+		Version:      "alpha0",
+		AcceptDNS:    "false",
+		AcceptRoutes: "false", // AcceptRoutes defaults to true
+		Locked:       "false",
+		Hostname:     ptr.To(fmt.Sprintf("%s-%d", pg.Name, idx)),
 	}
 
 	if pg.Spec.HostnamePrefix != "" {
 		conf.Hostname = ptr.To(fmt.Sprintf("%s%d", pg.Spec.HostnamePrefix, idx))
 	}
 
-	// For egress proxies only, we need to ensure that stateful filtering is
-	// not in place so that traffic from cluster can be forwarded via
-	// Tailscale IPs.
-	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-		conf.NoStatefulFiltering = "true"
-	}
 	if shouldAcceptRoutes(class) {
 		conf.AcceptRoutes = "true"
 	}
