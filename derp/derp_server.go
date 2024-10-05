@@ -145,6 +145,7 @@ type Server struct {
 	tcpRtt                       metrics.LabelMap // histogram
 	meshUpdateBatchSize          *metrics.Histogram
 	meshUpdateLoopCount          *metrics.Histogram
+	bufferedWriteFrames          *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -349,6 +350,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		tcpRtt:               metrics.LabelMap{Label: "le"},
 		meshUpdateBatchSize:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
 		meshUpdateLoopCount:  metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100}),
+		bufferedWriteFrames:  metrics.NewHistogram([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100}),
 		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
 		clock:                tstime.StdClock{},
 	}
@@ -1653,10 +1655,12 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 	defer keepAliveTick.Stop()
 
 	var werr error // last write error
+	inBatch := -1  // for bufferedWriteFrames
 	for {
 		if werr != nil {
 			return werr
 		}
+		inBatch++
 		// First, a non-blocking select (with a default) that
 		// does as many non-flushing writes as possible.
 		select {
@@ -1688,6 +1692,10 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			if werr = c.bw.Flush(); werr != nil {
 				return werr
 			}
+			if inBatch != 0 { // the first loop will almost hit default & be size zero
+				c.s.bufferedWriteFrames.Observe(float64(inBatch))
+				inBatch = 0
+			}
 		}
 
 		// Then a blocking select with same:
@@ -1698,7 +1706,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			werr = c.sendPeerGone(msg.peer, msg.reason)
 		case <-c.meshUpdate:
 			werr = c.sendMeshUpdates()
-			continue
 		case msg := <-c.sendQueue:
 			werr = c.sendPacket(msg.src, msg.bs)
 			c.recordQueueTime(msg.enqueuedAt)
@@ -1707,7 +1714,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			c.recordQueueTime(msg.enqueuedAt)
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
-			continue
 		case <-keepAliveTickChannel:
 			werr = c.sendKeepAlive()
 		}
@@ -2060,6 +2066,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("counter_tcp_rtt", &s.tcpRtt)
 	m.Set("counter_mesh_update_batch_size", s.meshUpdateBatchSize)
 	m.Set("counter_mesh_update_loop_count", s.meshUpdateLoopCount)
+	m.Set("counter_buffered_write_frames", s.bufferedWriteFrames)
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long())
 	m.Set("version", &expvarVersion)
