@@ -1448,7 +1448,7 @@ func TestParseNLArgs(t *testing.T) {
 			name:      "disablements not allowed",
 			input:     []string{"disablement:" + strings.Repeat("02", 32)},
 			parseKeys: true,
-			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix nlpub:"),
+			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix tlpub:"),
 		},
 		{
 			name:              "keys not allowed",
