@@ -98,10 +98,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// Check which Pods in ProxyGroup are ready to route traffic to this
 	// egress service.
 	podList := &corev1.PodList{}
-	if err := er.List(ctx, podList, client.MatchingLabels(map[string]string{
-		LabelParentName: proxyGroupName,
-		LabelParentType: "proxygroup",
-	})); err != nil {
+	if err := er.List(ctx, podList, client.MatchingLabels(pgLabels(proxyGroupName, nil))); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)

@@ -846,6 +846,9 @@ func egressEpsHandler(_ context.Context, o client.Object) []reconcile.Request {
 // returns reconciler requests for all egress EndpointSlices for that ProxyGroup.
 func egressEpsFromPGPods(cl client.Client, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
+		if _, ok := o.GetLabels()[LabelManaged]; !ok {
+			return nil
+		}
 		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
 		// have ingress ProxyGroups.
 		if typ := o.GetLabels()[LabelParentType]; typ != "proxygroup" {
@@ -863,6 +866,9 @@ func egressEpsFromPGPods(cl client.Client, ns string) handler.MapFunc {
 // returns reconciler requests for all egress EndpointSlices for that ProxyGroup.
 func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
+		if _, ok := o.GetLabels()[LabelManaged]; !ok {
+			return nil
+		}
 		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
 		// have ingress ProxyGroups.
 		if parentType := o.GetLabels()[LabelParentType]; parentType != "proxygroup" {
@@ -929,7 +935,7 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 }
 
 // epsFromExternalNameService is an event handler for ExternalName Services that define a Tailscale egress service that
-// should be exposed on a ProxyGroup. It returns reconcile requests for EndpointSlices created for this service.
+// should be exposed on a ProxyGroup. It returns reconcile requests for EndpointSlices created for this Service.
 func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
 		svc, ok := o.(*corev1.Service)
@@ -942,10 +948,7 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns 
 		}
 		epsList := &discoveryv1.EndpointSliceList{}
 		if err := cl.List(context.Background(), epsList, client.InNamespace(ns),
-			client.MatchingLabels(map[string]string{
-				LabelParentName:      svc.Name,
-				LabelParentNamespace: svc.Namespace,
-			})); err != nil {
+			client.MatchingLabels(egressSvcChildResourceLabels(svc))); err != nil {
 			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on Service %s", err, svc.Name)
 			return nil
 		}

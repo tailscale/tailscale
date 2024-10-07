@@ -83,7 +83,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 
 								if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
 									mounts = append(mounts, corev1.VolumeMount{
-										Name:      fmt.Sprintf(egressSvcsCMNameTemplate, pg.Name),
+										Name:      pgEgressCMName(pg.Name),
 										MountPath: "/etc/proxies",
 										ReadOnly:  true,
 									})
@@ -158,11 +158,11 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 						}
 						if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
 							volumes = append(volumes, corev1.Volume{
-								Name: fmt.Sprintf(egressSvcsCMNameTemplate, pg.Name),
+								Name: pgEgressCMName(pg.Name),
 								VolumeSource: corev1.VolumeSource{
 									ConfigMap: &corev1.ConfigMapVolumeSource{
 										LocalObjectReference: corev1.LocalObjectReference{
-											Name: fmt.Sprintf(egressSvcsCMNameTemplate, pg.Name),
+											Name: pgEgressCMName(pg.Name),
 										},
 									},
 								},
@@ -259,7 +259,7 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf(egressSvcsCMNameTemplate, pg.Name),
+			Name:            pgEgressCMName(pg.Name),
 			Namespace:       namespace,
 			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
@@ -296,4 +296,8 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 	}
 
 	return 2
+}
+
+func pgEgressCMName(pg string) string {
+	return fmt.Sprintf("%s-egress-config", pg)
 }

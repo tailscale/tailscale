@@ -139,7 +139,7 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf(egressSvcsCMNameTemplate, svc.Annotations[AnnotationProxyGroup]),
+			Name:      pgEgressCMName(svc.Annotations[AnnotationProxyGroup]),
 			Namespace: "operator-ns",
 		},
 		BinaryData: map[string][]byte{egressservices.KeyEgressServices: bs},
@@ -177,10 +177,8 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels: map[string]string{
-				LabelParentType: "proxygroup",
-				LabelParentName: pg},
-			UID: "foo",
+			Labels:    pgLabels(pg, nil),
+			UID:       "foo",
 		},
 		Status: corev1.PodStatus{
 			PodIP: "10.0.0.1",
@@ -190,9 +188,7 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels: map[string]string{
-				LabelParentType: "proxygroup",
-				LabelParentName: pg},
+			Labels:    pgSecretLabels(pg, "state"),
 		},
 	}
 	return p, s

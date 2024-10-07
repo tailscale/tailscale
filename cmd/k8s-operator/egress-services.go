@@ -59,8 +59,6 @@ const (
 	maxPorts = 10000
 
 	indexEgressProxyGroup = ".metadata.annotations.egress-proxy-group"
-
-	egressSvcsCMNameTemplate = "%s-egress-config"
 )
 
 var gaugeEgressServices = clientmetric.NewGauge(kubetypes.MetricEgressServiceCount)
@@ -425,7 +423,7 @@ func (esr *egressSvcsReconciler) clusterIPSvcForEgress(crl map[string]string) *c
 
 func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
 	crl := egressSvcChildResourceLabels(svc)
-	cmName := fmt.Sprintf(egressSvcsCMNameTemplate, crl[labelProxyGroup])
+	cmName := pgEgressCMName(crl[labelProxyGroup])
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cmName,
@@ -600,15 +598,15 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 // egressSvcConfig returns a ConfigMap that contains egress services configuration for the provided ProxyGroup as well
 // as unmarshalled configuration from the ConfigMap.
 func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs *egressservices.Configs, err error) {
-	cmName := fmt.Sprintf(egressSvcsCMNameTemplate, proxyGroupName)
+	name := pgEgressCMName(proxyGroupName)
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cmName,
+			Name:      name,
 			Namespace: tsNamespace,
 		},
 	}
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
-		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", cmName, err)
+		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", name, err)
 	}
 	cfgs = &egressservices.Configs{}
 	if len(cm.BinaryData[egressservices.KeyEgressServices]) != 0 {
