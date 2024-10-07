@@ -1692,7 +1692,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			if werr = c.bw.Flush(); werr != nil {
 				return werr
 			}
-			if inBatch != 0 { // the first loop will almost hit default & be size zero
+			if inBatch != 0 { // the first loop will almost always hit default & be size zero
 				c.s.bufferedWriteFrames.Observe(float64(inBatch))
 				inBatch = 0
 			}
