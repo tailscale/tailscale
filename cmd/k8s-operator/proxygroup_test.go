@@ -47,14 +47,15 @@ func TestProxyGroup(t *testing.T) {
 	fr := record.NewFakeRecorder(1)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &ProxyGroupReconciler{
-		tsNamespace: tsNamespace,
-		proxyImage:  testProxyImage,
-		defaultTags: []string{"tag:test-tag"},
-		Client:      fc,
-		tsClient:    tsClient,
-		recorder:    fr,
-		l:           zl.Sugar(),
-		clock:       cl,
+		tsNamespace:    tsNamespace,
+		proxyImage:     testProxyImage,
+		defaultTags:    []string{"tag:test-tag"},
+		tsFirewallMode: "auto",
+		Client:         fc,
+		tsClient:       tsClient,
+		recorder:       fr,
+		l:              zl.Sugar(),
+		clock:          cl,
 	}
 
 	t.Run("observe_ProxyGroupCreating_status_reason", func(t *testing.T) {
