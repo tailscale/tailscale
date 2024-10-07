@@ -13,6 +13,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/egressservices"
 	"tailscale.com/types/ptr"
 )
 
@@ -80,6 +81,13 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 									})
 								}
 
+								if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+									mounts = append(mounts, corev1.VolumeMount{
+										Name:      pgEgressCMName(pg.Name),
+										MountPath: "/etc/proxies",
+										ReadOnly:  true,
+									})
+								}
 								return mounts
 							}(),
 							Env: func() []corev1.EnvVar {
@@ -118,6 +126,12 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 										Value: "false",
 									},
 								}
+								if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+									envs = append(envs, corev1.EnvVar{
+										Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
+										Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
+									})
+								}
 
 								if tsFirewallMode != "" {
 									envs = append(envs, corev1.EnvVar{
@@ -138,6 +152,18 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 								VolumeSource: corev1.VolumeSource{
 									Secret: &corev1.SecretVolumeSource{
 										SecretName: fmt.Sprintf("%s-%d-config", pg.Name, i),
+									},
+								},
+							})
+						}
+						if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+							volumes = append(volumes, corev1.Volume{
+								Name: pgEgressCMName(pg.Name),
+								VolumeSource: corev1.VolumeSource{
+									ConfigMap: &corev1.ConfigMapVolumeSource{
+										LocalObjectReference: corev1.LocalObjectReference{
+											Name: pgEgressCMName(pg.Name),
+										},
 									},
 								},
 							})
@@ -230,6 +256,17 @@ func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.S
 	return secrets
 }
 
+func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pgEgressCMName(pg.Name),
+			Namespace:       namespace,
+			Labels:          pgLabels(pg.Name, nil),
+			OwnerReferences: pgOwnerReference(pg),
+		},
+	}
+}
+
 func pgSecretLabels(pgName, typ string) map[string]string {
 	return pgLabels(pgName, map[string]string{
 		labelSecretType: typ, // "config" or "state".
@@ -259,4 +296,8 @@ func pgReplicas(pg *tsapi.ProxyGroup) int32 {
 	}
 
 	return 2
+}
+
+func pgEgressCMName(pg string) string {
+	return fmt.Sprintf("%s-egress-config", pg)
 }

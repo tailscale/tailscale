@@ -223,6 +223,15 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning RoleBinding: %w", err)
 	}
+	if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+		cm := pgEgressCM(pg, r.tsNamespace)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, cm, func(existing *corev1.ConfigMap) {
+			existing.ObjectMeta.Labels = cm.ObjectMeta.Labels
+			existing.ObjectMeta.OwnerReferences = cm.ObjectMeta.OwnerReferences
+		}); err != nil {
+			return fmt.Errorf("error provisioning ConfigMap: %w", err)
+		}
+	}
 	ss := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, cfgHash)
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, nil, logger)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {

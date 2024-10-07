@@ -58,8 +58,8 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// resources are set up for this tailnet service.
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      eps.Labels[labelExternalSvcName],
-			Namespace: eps.Labels[labelExternalSvcNamespace],
+			Name:      eps.Labels[LabelParentName],
+			Namespace: eps.Labels[LabelParentNamespace],
 		},
 	}
 	err = er.Get(ctx, client.ObjectKeyFromObject(svc), svc)
@@ -98,7 +98,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// Check which Pods in ProxyGroup are ready to route traffic to this
 	// egress service.
 	podList := &corev1.PodList{}
-	if err := er.List(ctx, podList, client.MatchingLabels(map[string]string{labelProxyGroup: proxyGroupName})); err != nil {
+	if err := er.List(ctx, podList, client.MatchingLabels(pgLabels(proxyGroupName, nil))); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)

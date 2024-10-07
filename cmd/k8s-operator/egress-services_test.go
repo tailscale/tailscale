@@ -40,7 +40,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf(egressSvcsCMNameTemplate, "foo"),
+			Name:      pgEgressCMName("foo"),
 			Namespace: "operator-ns",
 		},
 	}

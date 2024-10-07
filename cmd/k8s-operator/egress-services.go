@@ -46,10 +46,7 @@ const (
 	reasonEgressSvcCreationFailed = "EgressSvcCreationFailed"
 	reasonProxyGroupNotReady      = "ProxyGroupNotReady"
 
-	labelProxyGroup           = "tailscale.com/proxy-group"
-	labelProxyGroupType       = "tailscale.com/proxy-group-type"
-	labelExternalSvcName      = "tailscale.com/external-service-name"
-	labelExternalSvcNamespace = "tailscale.com/external-service-namespace"
+	labelProxyGroup = "tailscale.com/proxy-group"
 
 	labelSvcType = "tailscale.com/svc-type" // ingress or egress
 	typeEgress   = "egress"
@@ -62,8 +59,6 @@ const (
 	maxPorts = 10000
 
 	indexEgressProxyGroup = ".metadata.annotations.egress-proxy-group"
-
-	egressSvcsCMNameTemplate = "proxy-cfg-%s"
 )
 
 var gaugeEgressServices = clientmetric.NewGauge(kubetypes.MetricEgressServiceCount)
@@ -416,7 +411,7 @@ func (esr *egressSvcsReconciler) usedPortsForPG(ctx context.Context, pg string) 
 func (esr *egressSvcsReconciler) clusterIPSvcForEgress(crl map[string]string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: svcNameBase(crl[labelExternalSvcName]),
+			GenerateName: svcNameBase(crl[LabelParentName]),
 			Namespace:    esr.tsNamespace,
 			Labels:       crl,
 		},
@@ -428,7 +423,7 @@ func (esr *egressSvcsReconciler) clusterIPSvcForEgress(crl map[string]string) *c
 
 func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
 	crl := egressSvcChildResourceLabels(svc)
-	cmName := fmt.Sprintf(egressSvcsCMNameTemplate, crl[labelProxyGroup])
+	cmName := pgEgressCMName(crl[labelProxyGroup])
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cmName,
@@ -479,15 +474,18 @@ func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, s
 	if err := esr.Get(ctx, client.ObjectKeyFromObject(pg), pg); apierrors.IsNotFound(err) {
 		l.Infof("ProxyGroup %q not found, waiting...", proxyGroupName)
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, l)
+		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, nil
 	} else if err != nil {
 		err := fmt.Errorf("unable to retrieve ProxyGroup %s: %w", proxyGroupName, err)
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, err.Error(), esr.clock, l)
+		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, err
 	}
 	if !tsoperator.ProxyGroupIsReady(pg) {
 		l.Infof("ProxyGroup %s is not ready, waiting...", proxyGroupName)
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionUnknown, reasonProxyGroupNotReady, reasonProxyGroupNotReady, esr.clock, l)
+		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, nil
 	}
 
@@ -496,6 +494,7 @@ func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, s
 		esr.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
 		l.Info(msg)
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcValid, metav1.ConditionFalse, reasonEgressSvcInvalid, msg, esr.clock, l)
+		tsoperator.RemoveServiceCondition(svc, tsapi.EgressSvcConfigured)
 		return false, nil
 	}
 	l.Debugf("egress service is valid")
@@ -599,15 +598,15 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 // egressSvcConfig returns a ConfigMap that contains egress services configuration for the provided ProxyGroup as well
 // as unmarshalled configuration from the ConfigMap.
 func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs *egressservices.Configs, err error) {
-	cmName := fmt.Sprintf(egressSvcsCMNameTemplate, proxyGroupName)
+	name := pgEgressCMName(proxyGroupName)
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cmName,
+			Name:      name,
 			Namespace: tsNamespace,
 		},
 	}
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
-		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", cmName, err)
+		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", name, err)
 	}
 	cfgs = &egressservices.Configs{}
 	if len(cm.BinaryData[egressservices.KeyEgressServices]) != 0 {
@@ -626,11 +625,12 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 // should probably validate and truncate (?) the names is they are too long.
 func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 	return map[string]string{
-		LabelManaged:              "true",
-		labelProxyGroup:           svc.Annotations[AnnotationProxyGroup],
-		labelExternalSvcName:      svc.Name,
-		labelExternalSvcNamespace: svc.Namespace,
-		labelSvcType:              typeEgress,
+		LabelManaged:         "true",
+		LabelParentType:      "svc",
+		LabelParentName:      svc.Name,
+		LabelParentNamespace: svc.Namespace,
+		labelProxyGroup:      svc.Annotations[AnnotationProxyGroup],
+		labelSvcType:         typeEgress,
 	}
 }
 

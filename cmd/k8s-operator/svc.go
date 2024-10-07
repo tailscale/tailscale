@@ -112,6 +112,10 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
 
+	if _, ok := svc.Annotations[AnnotationProxyGroup]; ok {
+		return reconcile.Result{}, nil // this reconciler should not look at Services for ProxyGroup
+	}
+
 	if !svc.DeletionTimestamp.IsZero() || !a.isTailscaleService(svc) {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
