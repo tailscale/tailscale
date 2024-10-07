@@ -67,7 +67,7 @@ case "$REV" in
         rm -f "$toolchain.tar.gz"
 
         # Do some cleanup of old toolchains while we're here.
-        for hash in $(find "$HOME/.cache/tsgo" -type f -maxdepth 1 -name '*.extracted' -mtime 90 -exec basename {} \; | sed 's/.extracted$//'); do
+        for hash in $(find "$HOME/.cache/tsgo" -maxdepth 1 -type f -name '*.extracted' -mtime 90 -exec basename {} \; | sed 's/.extracted$//'); do
             echo "# Cleaning up old Go toolchain $hash" >&2
             rm -rf "$HOME/.cache/tsgo/$hash"
             rm -rf "$HOME/.cache/tsgo/$hash.extracted"
