@@ -18,7 +18,7 @@ import (
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, cfgHash string) *appsv1.StatefulSet {
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHash string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            pg.Name,
@@ -63,7 +63,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, cfgHash string) *apps
 						{
 							Name:  "tailscale",
 							Image: image,
-							Env:   pgEnv(pg),
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
 									Add: []corev1.Capability{
@@ -82,6 +81,52 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, cfgHash string) *apps
 								}
 
 								return mounts
+							}(),
+							Env: func() []corev1.EnvVar {
+								envs := []corev1.EnvVar{
+									{
+										Name: "POD_IP",
+										ValueFrom: &corev1.EnvVarSource{
+											FieldRef: &corev1.ObjectFieldSelector{
+												FieldPath: "status.podIP",
+											},
+										},
+									},
+									{
+										Name: "POD_NAME",
+										ValueFrom: &corev1.EnvVarSource{
+											FieldRef: &corev1.ObjectFieldSelector{
+												// Secret is named after the pod.
+												FieldPath: "metadata.name",
+											},
+										},
+									},
+									{
+										Name:  "TS_KUBE_SECRET",
+										Value: "$(POD_NAME)",
+									},
+									{
+										Name:  "TS_STATE",
+										Value: "kube:$(POD_NAME)",
+									},
+									{
+										Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
+										Value: "/etc/tsconfig/$(POD_NAME)",
+									},
+									{
+										Name:  "TS_USERSPACE",
+										Value: "false",
+									},
+								}
+
+								if tsFirewallMode != "" {
+									envs = append(envs, corev1.EnvVar{
+										Name:  "TS_DEBUG_FIREWALL_MODE",
+										Value: tsFirewallMode,
+									})
+								}
+
+								return envs
 							}(),
 						},
 					},
@@ -198,46 +243,10 @@ func pgLabels(pgName string, customLabels map[string]string) map[string]string {
 	}
 
 	l[LabelManaged] = "true"
-	l[LabelParentType] = "ProxyGroup"
+	l[LabelParentType] = "proxygroup"
 	l[LabelParentName] = pgName
 
 	return l
-}
-
-func pgEnv(_ *tsapi.ProxyGroup) []corev1.EnvVar {
-	envs := []corev1.EnvVar{
-		{
-			Name: "POD_IP",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "status.podIP",
-				},
-			},
-		},
-		{
-			Name: "POD_NAME",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					// Secret is named after the pod.
-					FieldPath: "metadata.name",
-				},
-			},
-		},
-		{
-			Name:  "TS_KUBE_SECRET",
-			Value: "$(POD_NAME)",
-		},
-		{
-			Name:  "TS_STATE",
-			Value: "kube:$(POD_NAME)",
-		},
-		{
-			Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
-			Value: "/etc/tsconfig/$(POD_NAME)",
-		},
-	}
-
-	return envs
 }
 
 func pgOwnerReference(owner *tsapi.ProxyGroup) []metav1.OwnerReference {

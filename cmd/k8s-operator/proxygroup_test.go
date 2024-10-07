@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstest"
@@ -48,6 +49,7 @@ func TestProxyGroup(t *testing.T) {
 	reconciler := &ProxyGroupReconciler{
 		tsNamespace: tsNamespace,
 		proxyImage:  testProxyImage,
+		defaultTags: []string{"tag:test-tag"},
 		Client:      fc,
 		tsClient:    tsClient,
 		recorder:    fr,
@@ -55,7 +57,7 @@ func TestProxyGroup(t *testing.T) {
 		clock:       cl,
 	}
 
-	t.Run("observe ProxyGroupCreating status reason for a valid spec", func(t *testing.T) {
+	t.Run("observe_ProxyGroupCreating_status_reason", func(t *testing.T) {
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
@@ -64,9 +66,22 @@ func TestProxyGroup(t *testing.T) {
 			t.Fatalf("expected %d recorders, got %d", expected, reconciler.proxyGroups.Len())
 		}
 		expectProxyGroupResources(t, fc, pg, true)
+		keyReq := tailscale.KeyCapabilities{
+			Devices: tailscale.KeyDeviceCapabilities{
+				Create: tailscale.KeyDeviceCreateCapabilities{
+					Reusable:      false,
+					Ephemeral:     false,
+					Preauthorized: true,
+					Tags:          []string{"tag:test-tag"},
+				},
+			},
+		}
+		if diff := cmp.Diff(tsClient.KeyRequests(), []tailscale.KeyCapabilities{keyReq, keyReq}); diff != "" {
+			t.Fatalf("unexpected secrets (-got +want):\n%s", diff)
+		}
 	})
 
-	t.Run("create state secrets with fake node info, and see metadata appear in status", func(t *testing.T) {
+	t.Run("simulate_successful_device_auth", func(t *testing.T) {
 		addNodeIDToStateSecrets(t, fc, pg)
 		expectReconciled(t, reconciler, "", pg.Name)
 
@@ -85,7 +100,7 @@ func TestProxyGroup(t *testing.T) {
 		expectProxyGroupResources(t, fc, pg, true)
 	})
 
-	t.Run("scale up to 3", func(t *testing.T) {
+	t.Run("scale_up_to_3", func(t *testing.T) {
 		pg.Spec.Replicas = ptr.To[int32](3)
 		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
 			p.Spec = pg.Spec
@@ -105,7 +120,7 @@ func TestProxyGroup(t *testing.T) {
 		expectProxyGroupResources(t, fc, pg, true)
 	})
 
-	t.Run("scale down to 1", func(t *testing.T) {
+	t.Run("scale_down_to_1", func(t *testing.T) {
 		pg.Spec.Replicas = ptr.To[int32](1)
 		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
 			p.Spec = pg.Spec
@@ -117,7 +132,7 @@ func TestProxyGroup(t *testing.T) {
 		expectProxyGroupResources(t, fc, pg, true)
 	})
 
-	t.Run("delete the ProxyGroup and observe cleanup", func(t *testing.T) {
+	t.Run("delete_and_cleanup", func(t *testing.T) {
 		if err := fc.Delete(context.Background(), pg); err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +159,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet := pgStatefulSet(pg, tsNamespace, testProxyImage, "")
+	statefulSet := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", "")
 
 	if shouldExist {
 		expectEqual(t, fc, role, nil)

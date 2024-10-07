@@ -52,12 +52,16 @@ var gaugeProxyGroupResources = clientmetric.NewGauge(kubetypes.MetricProxyGroupC
 // ProxyGroupReconciler ensures cluster resources for a ProxyGroup definition.
 type ProxyGroupReconciler struct {
 	client.Client
-	l           *zap.SugaredLogger
-	recorder    record.EventRecorder
-	clock       tstime.Clock
-	tsNamespace string
-	proxyImage  string
-	tsClient    tsClient
+	l        *zap.SugaredLogger
+	recorder record.EventRecorder
+	clock    tstime.Clock
+	tsClient tsClient
+
+	// User-specified defaults from the helm installation.
+	tsNamespace    string
+	proxyImage     string
+	defaultTags    []string
+	tsFirewallMode string
 
 	mu          sync.Mutex           // protects following
 	proxyGroups set.Slice[types.UID] // for proxygroups gauge
@@ -219,7 +223,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 	}); err != nil {
 		return fmt.Errorf("error provisioning RoleBinding: %w", err)
 	}
-	ss := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, cfgHash)
+	ss := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, cfgHash)
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, nil, logger)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels
@@ -345,11 +349,11 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(ctx context.Context, p
 		var authKey string
 		if existingCfgSecret == nil {
 			logger.Debugf("creating authkey for new ProxyGroup proxy")
-			tags := pg.Spec.Tags
+			tags := pg.Spec.Tags.Stringify()
 			if len(tags) == 0 {
-				tags = tsapi.Tags{"tag:k8s"}
+				tags = r.defaultTags
 			}
-			authKey, err = newAuthKey(ctx, r.tsClient, tags.Stringify())
+			authKey, err = newAuthKey(ctx, r.tsClient, tags)
 			if err != nil {
 				return "", err
 			}

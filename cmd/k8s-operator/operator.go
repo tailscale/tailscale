@@ -469,13 +469,16 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&rbacv1.RoleBinding{}, ownedByProxyGroupFilter).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForProxyGroup).
 		Complete(&ProxyGroupReconciler{
-			recorder:    eventRecorder,
-			tsNamespace: opts.tailscaleNamespace,
-			proxyImage:  opts.proxyImage,
-			Client:      mgr.GetClient(),
-			l:           opts.log.Named("proxygroup-reconciler"),
-			clock:       tstime.DefaultClock{},
-			tsClient:    opts.tsClient,
+			recorder: eventRecorder,
+			Client:   mgr.GetClient(),
+			l:        opts.log.Named("proxygroup-reconciler"),
+			clock:    tstime.DefaultClock{},
+			tsClient: opts.tsClient,
+
+			tsNamespace:    opts.tailscaleNamespace,
+			proxyImage:     opts.proxyImage,
+			defaultTags:    strings.Split(opts.proxyTags, ","),
+			tsFirewallMode: opts.proxyFirewallMode,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
