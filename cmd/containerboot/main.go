@@ -769,5 +769,5 @@ func tailscaledConfigFilePath() string {
 		log.Fatalf("no tailscaled config file found in %q for current capability version %q", dir, tailcfg.CurrentCapabilityVersion)
 	}
 	log.Printf("Using tailscaled config file %q for capability version %q", maxCompatVer, tailcfg.CurrentCapabilityVersion)
-	return path.Join(dir, kubeutils.TailscaledConfigFileNameForCap(maxCompatVer))
+	return path.Join(dir, kubeutils.TailscaledConfigFileName(maxCompatVer))
 }

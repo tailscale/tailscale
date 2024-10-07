@@ -93,6 +93,14 @@ func SetRecorderCondition(tsr *tsapi.Recorder, conditionType tsapi.ConditionType
 	tsr.Status.Conditions = conds
 }
 
+// SetProxyGroupCondition ensures that ProxyGroup status has a condition with the
+// given attributes. LastTransitionTime gets set every time condition's status
+// changes.
+func SetProxyGroupCondition(pg *tsapi.ProxyGroup, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(pg.Status.Conditions, conditionType, status, reason, message, gen, clock, logger)
+	pg.Status.Conditions = conds
+}
+
 func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []metav1.Condition {
 	newCondition := metav1.Condition{
 		Type:               string(conditionType),

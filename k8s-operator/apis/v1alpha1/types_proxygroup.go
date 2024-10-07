@@ -54,7 +54,7 @@ type ProxyGroupSpec struct {
 	// Replicas specifies how many replicas to create the StatefulSet with.
 	// Defaults to 2.
 	// +optional
-	Replicas *int `json:"replicas,omitempty"`
+	Replicas *int32 `json:"replicas,omitempty"`
 
 	// HostnamePrefix is the hostname prefix to use for tailnet devices created
 	// by the ProxyGroup. Each device will have the integer number from its
@@ -66,8 +66,8 @@ type ProxyGroupSpec struct {
 
 	// ProxyClass is the name of the ProxyClass custom resource that contains
 	// configuration options that should be applied to the resources created
-	// for this ProxyGroup. If unset, and no default ProxyClass is set, the
-	// operator will create resources with the default configuration.
+	// for this ProxyGroup. If unset, the operator will create resources with
+	// the default configuration.
 	// +optional
 	ProxyClass string `json:"proxyClass,omitempty"`
 }

@@ -356,12 +356,12 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
-	proxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
+	egressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
-		Watches(&tsapi.ProxyGroup{}, proxyGroupFilter).
+		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,
@@ -455,6 +455,33 @@ func runReconcilers(opts reconcilerOpts) {
 		})
 	if err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
+	}
+
+	// Recorder reconciler.
+	ownedByProxyGroupFilter := handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &tsapi.ProxyGroup{})
+	proxyClassFilterForProxyGroup := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForProxyGroup(mgr.GetClient(), startlog))
+	err = builder.ControllerManagedBy(mgr).
+		For(&tsapi.ProxyGroup{}).
+		Watches(&appsv1.StatefulSet{}, ownedByProxyGroupFilter).
+		Watches(&corev1.ServiceAccount{}, ownedByProxyGroupFilter).
+		Watches(&corev1.Secret{}, ownedByProxyGroupFilter).
+		Watches(&rbacv1.Role{}, ownedByProxyGroupFilter).
+		Watches(&rbacv1.RoleBinding{}, ownedByProxyGroupFilter).
+		Watches(&tsapi.ProxyClass{}, proxyClassFilterForProxyGroup).
+		Complete(&ProxyGroupReconciler{
+			recorder: eventRecorder,
+			Client:   mgr.GetClient(),
+			l:        opts.log.Named("proxygroup-reconciler"),
+			clock:    tstime.DefaultClock{},
+			tsClient: opts.tsClient,
+
+			tsNamespace:    opts.tailscaleNamespace,
+			proxyImage:     opts.proxyImage,
+			defaultTags:    strings.Split(opts.proxyTags, ","),
+			tsFirewallMode: opts.proxyFirewallMode,
+		})
+	if err != nil {
+		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
 	}
 
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
@@ -683,6 +710,27 @@ func proxyClassHandlerForConnector(cl client.Client, logger *zap.SugaredLogger) 
 		for _, conn := range connList.Items {
 			if conn.Spec.ProxyClass == proxyClassName {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&conn)})
+			}
+		}
+		return reqs
+	}
+}
+
+// proxyClassHandlerForConnector returns a handler that, for a given ProxyClass,
+// returns a list of reconcile requests for all Connectors that have
+// .spec.proxyClass set.
+func proxyClassHandlerForProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		pgList := new(tsapi.ProxyGroupList)
+		if err := cl.List(ctx, pgList); err != nil {
+			logger.Debugf("error listing ProxyGroups for ProxyClass: %v", err)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		proxyClassName := o.GetName()
+		for _, pg := range pgList.Items {
+			if pg.Spec.ProxyClass == proxyClassName {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
 			}
 		}
 		return reqs
