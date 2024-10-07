@@ -3627,7 +3627,8 @@ func (b *LocalBackend) SetUseExitNodeEnabled(v bool) (ipn.PrefsView, error) {
 // AdvertiseRoutes has been set in the MaskedPrefs.
 func (b *LocalBackend) MaybeClearAppConnector(mp *ipn.MaskedPrefs) error {
 	var err error
-	if b.appConnector != nil && mp.AdvertiseRoutesSet {
+	routesChanged := mp.AdvertiseRoutesSet || (mp.WantRunningSet && !mp.WantRunning)
+	if b.appConnector != nil && routesChanged {
 		err = b.appConnector.ClearRoutes()
 		if err != nil {
 			b.logf("appc: clear routes error: %v", err)
