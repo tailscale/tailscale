@@ -75,7 +75,11 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo",
 			Namespace: "operator-ns",
-			Labels:    map[string]string{labelExternalSvcName: "test", labelExternalSvcNamespace: "default", labelProxyGroup: "foo"},
+			Labels: map[string]string{
+				LabelParentName:      "test",
+				LabelParentNamespace: "default",
+				labelSvcType:         typeEgress,
+				labelProxyGroup:      "foo"},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
@@ -173,8 +177,10 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels:    map[string]string{labelProxyGroup: pg},
-			UID:       "foo",
+			Labels: map[string]string{
+				LabelParentType: "proxygroup",
+				LabelParentName: pg},
+			UID: "foo",
 		},
 		Status: corev1.PodStatus{
 			PodIP: "10.0.0.1",
@@ -184,7 +190,9 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels:    map[string]string{labelProxyGroup: pg},
+			Labels: map[string]string{
+				LabelParentType: "proxygroup",
+				LabelParentName: pg},
 		},
 	}
 	return p, s

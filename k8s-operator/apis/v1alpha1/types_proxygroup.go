@@ -37,9 +37,7 @@ type ProxyGroupList struct {
 }
 
 type ProxyGroupSpec struct {
-	// Type of the ProxyGroup, either ingress or egress. Each set of proxies
-	// managed by a single ProxyGroup definition operate as only ingress or
-	// only egress proxies.
+	// Type of the ProxyGroup proxies. Currently the only supported type is egress.
 	Type ProxyGroupType `json:"type"`
 
 	// Tags that the Tailscale devices will be tagged with. Defaults to [tag:k8s].

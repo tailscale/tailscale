@@ -85,10 +85,7 @@ spec:
                     type: string
                     pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
                 type:
-                  description: |-
-                    Type of the ProxyGroup, either ingress or egress. Each set of proxies
-                    managed by a single ProxyGroup definition operate as only ingress or
-                    only egress proxies.
+                  description: Type of the ProxyGroup proxies. Currently the only supported type is egress.
                   type: string
                   enum:
                     - egress

@@ -378,7 +378,7 @@ func runReconcilers(opts reconcilerOpts) {
 
 	epsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsHandler)
 	podsSecretsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromEgressPGChildResources(mgr.GetClient(), opts.log, opts.tailscaleNamespace))
-	epsFromExtNSvcFilter := handler.EnqueueRequestsFromMapFunc(epsFromExternalNameService(mgr.GetClient(), opts.log))
+	epsFromExtNSvcFilter := handler.EnqueueRequestsFromMapFunc(epsFromExternalNameService(mgr.GetClient(), opts.log, opts.tailscaleNamespace))
 
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -844,18 +844,20 @@ func egressEpsHandler(_ context.Context, o client.Object) []reconcile.Request {
 // that ProxyGroup.
 func egressEpsFromEgressPGChildResources(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
-		pg, ok := o.GetLabels()[labelProxyGroup]
+		// TODO(irbekrm): for now this is good enough as all ProxyGroups are egress. Add a type check once we
+		// have ingress ProxyGroups.
+		if typ := o.GetLabels()[LabelParentType]; typ != "proxygroup" {
+			return nil
+		}
+		pg, ok := o.GetLabels()[LabelParentName]
 		if !ok {
 			return nil
 		}
-		// TODO(irbekrm): depending on what labels we add to ProxyGroup
-		// resources and which resources, this might need some extra
-		// checks.
-		if typ, ok := o.GetLabels()[labelProxyGroupType]; !ok || typ != typeEgress {
-			return nil
-		}
+
 		epsList := discoveryv1.EndpointSliceList{}
-		if err := cl.List(context.Background(), &epsList, client.InNamespace(ns), client.MatchingLabels(map[string]string{labelProxyGroup: pg})); err != nil {
+		if err := cl.List(context.Background(), &epsList,
+			client.InNamespace(ns),
+			client.MatchingLabels(map[string]string{labelProxyGroup: pg})); err != nil {
 			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on %s %s", err, o.GetName(), o.GetObjectKind().GroupVersionKind().Kind)
 			return nil
 		}
@@ -872,6 +874,8 @@ func egressEpsFromEgressPGChildResources(cl client.Client, logger *zap.SugaredLo
 	}
 }
 
+// egressSvcsFromEgressProxyGroup is an event handler for egress ProxyGroups. It returns reconcile requests for all
+// user-created ExternalName Services that should be exposed on this ProxyGroup.
 func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
 		pg, ok := o.(*tsapi.ProxyGroup)
@@ -900,7 +904,9 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 	}
 }
 
-func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+// epsFromExternalNameService is an event handler for ExternalName Services that define a Tailscale egress service that
+// should be exposed on a ProxyGroup. It returns reconcile requests for EndpointSlices created for this service.
+func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
 		svc, ok := o.(*corev1.Service)
 		if !ok {
@@ -911,10 +917,11 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger) han
 			return nil
 		}
 		epsList := &discoveryv1.EndpointSliceList{}
-		if err := cl.List(context.Background(), epsList, client.MatchingLabels(map[string]string{
-			labelExternalSvcName:      svc.Name,
-			labelExternalSvcNamespace: svc.Namespace,
-		})); err != nil {
+		if err := cl.List(context.Background(), epsList, client.InNamespace(ns),
+			client.MatchingLabels(map[string]string{
+				LabelParentName:      svc.Name,
+				LabelParentNamespace: svc.Namespace,
+			})); err != nil {
 			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on Service %s", err, svc.Name)
 			return nil
 		}
@@ -931,6 +938,8 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger) han
 	}
 }
 
+// indexEgressServices adds a local index to a cached Tailscale egress Services meant to be exposed on a ProxyGroup. The
+// index is used a list filter.
 func indexEgressServices(o client.Object) []string {
 	if !isEgressSvcForProxyGroup(o) {
 		return nil
