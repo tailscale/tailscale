@@ -2497,10 +2497,7 @@ spec:
                                     type: string
                                 type: array
                             type:
-                                description: |-
-                                    Type of the ProxyGroup, either ingress or egress. Each set of proxies
-                                    managed by a single ProxyGroup definition operate as only ingress or
-                                    only egress proxies.
+                                description: Type of the ProxyGroup proxies. Currently the only supported type is egress.
                                 enum:
                                     - egress
                                 type: string
