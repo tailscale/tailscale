@@ -243,6 +243,9 @@ func registerLocked(d *Definition) {
 
 func settingDefinitions() (DefinitionMap, error) {
 	return definitions.GetErr(func() (DefinitionMap, error) {
+		if err := internal.Init.Do(); err != nil {
+			return nil, err
+		}
 		definitionsMu.Lock()
 		defer definitionsMu.Unlock()
 		definitionsUsed = true
