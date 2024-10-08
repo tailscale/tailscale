@@ -64,7 +64,7 @@ type ServiceReconciler struct {
 
 	clock tstime.Clock
 
-	proxyDefaultClass string
+	defaultProxyClass string
 }
 
 var (
@@ -215,7 +215,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	proxyClass := proxyClassForObject(svc, a.proxyDefaultClass)
+	proxyClass := proxyClassForObject(svc, a.defaultProxyClass)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			errMsg := fmt.Errorf("error verifying ProxyClass for Service: %w", err)

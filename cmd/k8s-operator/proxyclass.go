@@ -98,9 +98,9 @@ func (pcr *ProxyClassReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	if errs := pcr.validate(pc); errs != nil {
 		msg := fmt.Sprintf(messageProxyClassInvalid, errs.ToAggregate().Error())
 		pcr.recorder.Event(pc, corev1.EventTypeWarning, reasonProxyClassInvalid, msg)
-		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionFalse, reasonProxyClassInvalid, msg, pc.Generation, pcr.clock, logger)
+		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, reasonProxyClassInvalid, msg, pc.Generation, pcr.clock, logger)
 	} else {
-		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassready, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, pc.Generation, pcr.clock, logger)
+		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, reasonProxyClassValid, reasonProxyClassValid, pc.Generation, pcr.clock, logger)
 	}
 	if !apiequality.Semantic.DeepEqual(oldPCStatus, pc.Status) {
 		if err := pcr.Client.Status().Update(ctx, pc); err != nil {

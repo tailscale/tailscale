@@ -58,10 +58,11 @@ type ProxyGroupReconciler struct {
 	tsClient tsClient
 
 	// User-specified defaults from the helm installation.
-	tsNamespace    string
-	proxyImage     string
-	defaultTags    []string
-	tsFirewallMode string
+	tsNamespace       string
+	proxyImage        string
+	defaultTags       []string
+	tsFirewallMode    string
+	defaultProxyClass string
 
 	mu          sync.Mutex           // protects following
 	proxyGroups set.Slice[types.UID] // for proxygroups gauge
@@ -125,24 +126,42 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		// operation is underway.
 		logger.Infof("ensuring ProxyGroup is set up")
 		pg.Finalizers = append(pg.Finalizers, FinalizerName)
-		if err := r.Update(ctx, pg); err != nil {
-			logger.Errorf("error adding finalizer: %w", err)
+		if err = r.Update(ctx, pg); err != nil {
+			err = fmt.Errorf("error adding finalizer: %w", err)
 			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, reasonProxyGroupCreationFailed)
 		}
 	}
 
-	if err := r.validate(pg); err != nil {
-		logger.Errorf("error validating ProxyGroup spec: %w", err)
+	if err = r.validate(pg); err != nil {
 		message := fmt.Sprintf("ProxyGroup is invalid: %s", err)
 		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupInvalid, message)
 		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupInvalid, message)
 	}
 
-	if err = r.maybeProvision(ctx, pg); err != nil {
-		logger.Errorf("error provisioning ProxyGroup resources: %w", err)
-		message := fmt.Sprintf("failed provisioning ProxyGroup: %s", err)
-		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, message)
-		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, message)
+	proxyClassName := r.defaultProxyClass
+	if pg.Spec.ProxyClass != "" {
+		proxyClassName = pg.Spec.ProxyClass
+	}
+
+	var proxyClass *tsapi.ProxyClass
+	if proxyClassName != "" {
+		proxyClass = new(tsapi.ProxyClass)
+		if err = r.Get(ctx, types.NamespacedName{Name: proxyClassName}, proxyClass); err != nil {
+			err = fmt.Errorf("error getting ProxyGroup's ProxyClass %s: %s", proxyClassName, err)
+			r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
+			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
+		}
+		if !tsoperator.ProxyClassIsReady(proxyClass) {
+			message := fmt.Sprintf("the ProxyGroup's ProxyClass %s is not yet in a ready state, waiting...", proxyClassName)
+			logger.Info(message)
+			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreating, message)
+		}
+	}
+
+	if err = r.maybeProvision(ctx, pg, proxyClass); err != nil {
+		err = fmt.Errorf("error provisioning ProxyGroup resources: %w", err)
+		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
+		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
 	}
 
 	desiredReplicas := int(pgReplicas(pg))
@@ -162,24 +181,12 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	return setStatusReady(pg, metav1.ConditionTrue, reasonProxyGroupReady, reasonProxyGroupReady)
 }
 
-func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup) error {
+func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) error {
 	logger := r.logger(pg.Name)
 	r.mu.Lock()
 	r.proxyGroups.Add(pg.UID)
 	gaugeProxyGroupResources.Set(int64(r.proxyGroups.Len()))
 	r.mu.Unlock()
-
-	var proxyClass *tsapi.ProxyClass
-	if pg.Spec.ProxyClass != "" {
-		proxyClass = new(tsapi.ProxyClass)
-		if err := r.Get(ctx, types.NamespacedName{Name: pg.Spec.ProxyClass}, proxyClass); err != nil {
-			return fmt.Errorf("failed to get ProxyClass: %w", err)
-		}
-		if !tsoperator.ProxyClassIsReady(proxyClass) {
-			logger.Infof("ProxyClass %s specified for the ProxyGroup, but it is not (yet) in a ready state, waiting...", pg.Spec.ProxyClass)
-			return nil
-		}
-	}
 
 	cfgHash, err := r.ensureConfigSecretsCreated(ctx, pg, proxyClass)
 	if err != nil {

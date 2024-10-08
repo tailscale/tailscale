@@ -80,7 +80,7 @@ proxyConfig:
   firewallMode: auto
   # If defined, this proxy class will be used as the default proxy class for
   # service and ingress resources that do not have a proxy class defined. It
-  # does not apply to Connector and ProxyGroup resources.
+  # does not apply to Connector resources.
   defaultProxyClass: ""
 
 # apiServerProxyConfig allows to configure whether the operator should expose

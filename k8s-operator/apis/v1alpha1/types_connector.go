@@ -171,7 +171,7 @@ type ConditionType string
 
 const (
 	ConnectorReady  ConditionType = `ConnectorReady`
-	ProxyClassready ConditionType = `ProxyClassReady`
+	ProxyClassReady ConditionType = `ProxyClassReady`
 	ProxyGroupReady ConditionType = `ProxyGroupReady`
 	ProxyReady      ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
 	RecorderReady   ConditionType = `RecorderReady`

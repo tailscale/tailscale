@@ -64,8 +64,9 @@ type ProxyGroupSpec struct {
 
 	// ProxyClass is the name of the ProxyClass custom resource that contains
 	// configuration options that should be applied to the resources created
-	// for this ProxyGroup. If unset, the operator will create resources with
-	// the default configuration.
+	// for this ProxyGroup. If unset, and there is no default ProxyClass
+	// configured, the operator will create resources with the default
+	// configuration.
 	// +optional
 	ProxyClass string `json:"proxyClass,omitempty"`
 }
