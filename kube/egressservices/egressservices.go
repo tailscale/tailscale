@@ -9,11 +9,8 @@
 package egressservices
 
 import (
-	"encoding"
-	"fmt"
+	"encoding/json"
 	"net/netip"
-	"strconv"
-	"strings"
 )
 
 // KeyEgressServices is name of the proxy state Secret field that contains the
@@ -31,7 +28,7 @@ type Config struct {
 	// should be proxied.
 	TailnetTarget TailnetTarget `json:"tailnetTarget"`
 	// Ports contains mappings for ports that can be accessed on the tailnet target.
-	Ports map[PortMap]struct{} `json:"ports"`
+	Ports PortMaps `json:"ports"`
 }
 
 // TailnetTarget is the tailnet target to which traffic for the egress service
@@ -52,35 +49,38 @@ type PortMap struct {
 	TargetPort uint16 `json:"targetPort"`
 }
 
-// PortMap is used as a Config.Ports map key. Config needs to be serialized/deserialized to/from JSON. JSON only
-// supports string map keys, so we need to implement TextMarshaler/TextUnmarshaler to convert PortMap to string and
-// back.
-var _ encoding.TextMarshaler = PortMap{}
-var _ encoding.TextUnmarshaler = &PortMap{}
+type PortMaps map[PortMap]struct{}
 
-func (pm *PortMap) UnmarshalText(t []byte) error {
-	tt := string(t)
-	ss := strings.Split(tt, ":")
-	if len(ss) != 3 {
-		return fmt.Errorf("error unmarshalling portmap from JSON, wants a portmap in form <protocol>:<matchPort>:<targetPor>, got %q", tt)
+// PortMaps is a list of PortMap structs, however, we want to use it as a set
+// with efficient lookups in code. It implements custom JSON marshalling
+// methods to convert between being a list in JSON and a set (map with empty
+// values) in code.
+var _ json.Marshaler = &PortMaps{}
+var _ json.Marshaler = PortMaps{}
+var _ json.Unmarshaler = &PortMaps{}
+
+func (p *PortMaps) UnmarshalJSON(data []byte) error {
+	*p = make(map[PortMap]struct{})
+
+	var l []PortMap
+	if err := json.Unmarshal(data, &l); err != nil {
+		return err
 	}
-	pm.Protocol = ss[0]
-	matchPort, err := strconv.ParseUint(ss[1], 10, 16)
-	if err != nil {
-		return fmt.Errorf("error converting match port %q to uint16: %w", ss[1], err)
+
+	for _, pm := range l {
+		(*p)[pm] = struct{}{}
 	}
-	pm.MatchPort = uint16(matchPort)
-	targetPort, err := strconv.ParseUint(ss[2], 10, 16)
-	if err != nil {
-		return fmt.Errorf("error converting target port %q to uint16: %w", ss[2], err)
-	}
-	pm.TargetPort = uint16(targetPort)
+
 	return nil
 }
 
-func (pm PortMap) MarshalText() ([]byte, error) {
-	s := fmt.Sprintf("%s:%d:%d", pm.Protocol, pm.MatchPort, pm.TargetPort)
-	return []byte(s), nil
+func (p PortMaps) MarshalJSON() ([]byte, error) {
+	l := make([]PortMap, 0, len(p))
+	for pm := range p {
+		l = append(l, pm)
+	}
+
+	return json.Marshal(l)
 }
 
 // Status represents the currently configured firewall rules for all egress
@@ -94,7 +94,7 @@ type Status struct {
 // ServiceStatus is the currently configured firewall rules for an egress
 // service.
 type ServiceStatus struct {
-	Ports map[PortMap]struct{} `json:"ports"`
+	Ports PortMaps `json:"ports"`
 	// TailnetTargetIPs are the tailnet target IPs that were used to
 	// configure these firewall rules. For a TailnetTarget with IP set, this
 	// is the same as IP.
