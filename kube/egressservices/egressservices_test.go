@@ -5,8 +5,9 @@ package egressservices
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func Test_jsonUnmarshalConfig(t *testing.T) {
@@ -18,7 +19,7 @@ func Test_jsonUnmarshalConfig(t *testing.T) {
 	}{
 		{
 			name:     "success",
-			bs:       []byte(`{"ports":{"tcp:4003:80":{}}}`),
+			bs:       []byte(`{"ports":[{"protocol":"tcp","matchPort":4003,"targetPort":80}]}`),
 			wantsCfg: Config{Ports: map[PortMap]struct{}{{Protocol: "tcp", MatchPort: 4003, TargetPort: 80}: {}}},
 		},
 		{
@@ -34,8 +35,8 @@ func Test_jsonUnmarshalConfig(t *testing.T) {
 			if gotErr := json.Unmarshal(tt.bs, &cfg); (gotErr != nil) != tt.wantsErr {
 				t.Errorf("json.Unmarshal returned error %v, wants error %v", gotErr, tt.wantsErr)
 			}
-			if !reflect.DeepEqual(cfg, tt.wantsCfg) {
-				t.Errorf("json.Unmarshal produced Config %v, wants Config %v", cfg, tt.wantsCfg)
+			if diff := cmp.Diff(cfg, tt.wantsCfg); diff != "" {
+				t.Errorf("unexpected secrets (-got +want):\n%s", diff)
 			}
 		})
 	}
@@ -54,12 +55,12 @@ func Test_jsonMarshalConfig(t *testing.T) {
 			protocol:   "tcp",
 			matchPort:  4003,
 			targetPort: 80,
-			wantsBs:    []byte(`{"tailnetTarget":{"ip":"","fqdn":""},"ports":{"tcp:4003:80":{}}}`),
+			wantsBs:    []byte(`{"tailnetTarget":{"ip":"","fqdn":""},"ports":[{"protocol":"tcp","matchPort":4003,"targetPort":80}]}`),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{Ports: map[PortMap]struct{}{{
+			cfg := Config{Ports: PortMaps{{
 				Protocol:   tt.protocol,
 				MatchPort:  tt.matchPort,
 				TargetPort: tt.targetPort}: {}}}
@@ -68,8 +69,8 @@ func Test_jsonMarshalConfig(t *testing.T) {
 			if gotErr != nil {
 				t.Errorf("json.Marshal(%+#v) returned unexpected error %v", cfg, gotErr)
 			}
-			if !reflect.DeepEqual(gotBs, tt.wantsBs) {
-				t.Errorf("json.Marshal(%+#v) returned '%v', wants '%v'", cfg, string(gotBs), string(tt.wantsBs))
+			if diff := cmp.Diff(gotBs, tt.wantsBs); diff != "" {
+				t.Errorf("unexpected secrets (-got +want):\n%s", diff)
 			}
 		})
 	}
