@@ -239,7 +239,10 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, pg *tsapi.Pro
 			return fmt.Errorf("error provisioning ConfigMap: %w", err)
 		}
 	}
-	ss := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, cfgHash)
+	ss, err := pgStatefulSet(pg, r.tsNamespace, r.proxyImage, r.tsFirewallMode, cfgHash)
+	if err != nil {
+		return fmt.Errorf("error generating StatefulSet spec: %w", err)
+	}
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, nil, logger)
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, ss, func(s *appsv1.StatefulSet) {
 		s.ObjectMeta.Labels = ss.ObjectMeta.Labels

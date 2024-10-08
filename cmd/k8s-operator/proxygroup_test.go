@@ -197,7 +197,10 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	role := pgRole(pg, tsNamespace)
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
-	statefulSet := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", "")
+	statefulSet, err := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
 
 	if shouldExist {
