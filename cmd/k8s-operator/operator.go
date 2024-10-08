@@ -109,7 +109,7 @@ func main() {
 		proxyActAsDefaultLoadBalancer: isDefaultLoadBalancer,
 		proxyTags:                     tags,
 		proxyFirewallMode:             tsFirewallMode,
-		proxyDefaultClass:             defaultProxyClass,
+		defaultProxyClass:             defaultProxyClass,
 	}
 	runReconcilers(rOpts)
 }
@@ -286,7 +286,7 @@ func runReconcilers(opts reconcilerOpts) {
 			recorder:              eventRecorder,
 			tsNamespace:           opts.tailscaleNamespace,
 			clock:                 tstime.DefaultClock{},
-			proxyDefaultClass:     opts.proxyDefaultClass,
+			defaultProxyClass:     opts.defaultProxyClass,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create service reconciler: %v", err)
@@ -309,7 +309,7 @@ func runReconcilers(opts reconcilerOpts) {
 			recorder:          eventRecorder,
 			Client:            mgr.GetClient(),
 			logger:            opts.log.Named("ingress-reconciler"),
-			proxyDefaultClass: opts.proxyDefaultClass,
+			defaultProxyClass: opts.defaultProxyClass,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ingress reconciler: %v", err)
@@ -476,10 +476,11 @@ func runReconcilers(opts reconcilerOpts) {
 			clock:    tstime.DefaultClock{},
 			tsClient: opts.tsClient,
 
-			tsNamespace:    opts.tailscaleNamespace,
-			proxyImage:     opts.proxyImage,
-			defaultTags:    strings.Split(opts.proxyTags, ","),
-			tsFirewallMode: opts.proxyFirewallMode,
+			tsNamespace:       opts.tailscaleNamespace,
+			proxyImage:        opts.proxyImage,
+			defaultTags:       strings.Split(opts.proxyTags, ","),
+			tsFirewallMode:    opts.proxyFirewallMode,
+			defaultProxyClass: opts.defaultProxyClass,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
@@ -525,10 +526,10 @@ type reconcilerOpts struct {
 	// Auto is usually the best choice, unless you want to explicitly set
 	// specific mode for debugging purposes.
 	proxyFirewallMode string
-	// proxyDefaultClass is the name of the ProxyClass to use as the default
+	// defaultProxyClass is the name of the ProxyClass to use as the default
 	// class for proxies that do not have a ProxyClass set.
 	// this is defined by an operator env variable.
-	proxyDefaultClass string
+	defaultProxyClass string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each

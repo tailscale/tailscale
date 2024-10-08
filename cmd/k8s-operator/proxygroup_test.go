@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
@@ -29,7 +30,21 @@ import (
 
 const testProxyImage = "tailscale/tailscale:test"
 
+var defaultProxyClassAnnotations = map[string]string{
+	"some-annotation": "from-the-proxy-class",
+}
+
 func TestProxyGroup(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "default-pc",
+		},
+		Spec: tsapi.ProxyClassSpec{
+			StatefulSet: &tsapi.StatefulSet{
+				Annotations: defaultProxyClassAnnotations,
+			},
+		},
+	}
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test",
@@ -39,26 +54,48 @@ func TestProxyGroup(t *testing.T) {
 
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
-		WithObjects(pg).
-		WithStatusSubresource(pg).
+		WithObjects(pg, pc).
+		WithStatusSubresource(pg, pc).
 		Build()
 	tsClient := &fakeTSClient{}
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(1)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &ProxyGroupReconciler{
-		tsNamespace:    tsNamespace,
-		proxyImage:     testProxyImage,
-		defaultTags:    []string{"tag:test-tag"},
-		tsFirewallMode: "auto",
-		Client:         fc,
-		tsClient:       tsClient,
-		recorder:       fr,
-		l:              zl.Sugar(),
-		clock:          cl,
+		tsNamespace:       tsNamespace,
+		proxyImage:        testProxyImage,
+		defaultTags:       []string{"tag:test-tag"},
+		tsFirewallMode:    "auto",
+		defaultProxyClass: "default-pc",
+
+		Client:   fc,
+		tsClient: tsClient,
+		recorder: fr,
+		l:        zl.Sugar(),
+		clock:    cl,
 	}
 
+	t.Run("proxyclass_not_ready", func(t *testing.T) {
+		expectReconciled(t, reconciler, "", pg.Name)
+
+		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "the ProxyGroup's ProxyClass default-pc is not yet in a ready state, waiting...", 0, cl, zl.Sugar())
+		expectEqual(t, fc, pg, nil)
+	})
+
 	t.Run("observe_ProxyGroupCreating_status_reason", func(t *testing.T) {
+		pc.Status = tsapi.ProxyClassStatus{
+			Conditions: []metav1.Condition{{
+				Type:               string(tsapi.ProxyClassReady),
+				Status:             metav1.ConditionTrue,
+				Reason:             reasonProxyClassValid,
+				Message:            reasonProxyClassValid,
+				LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
+			}},
+		}
+		if err := fc.Status().Update(context.Background(), pc); err != nil {
+			t.Fatal(err)
+		}
+
 		expectReconciled(t, reconciler, "", pg.Name)
 
 		tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, metav1.ConditionFalse, reasonProxyGroupCreating, "0/2 ProxyGroup pods running", 0, cl, zl.Sugar())
@@ -161,6 +198,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	roleBinding := pgRoleBinding(pg, tsNamespace)
 	serviceAccount := pgServiceAccount(pg, tsNamespace)
 	statefulSet := pgStatefulSet(pg, tsNamespace, testProxyImage, "auto", "")
+	statefulSet.Annotations = defaultProxyClassAnnotations
 
 	if shouldExist {
 		expectEqual(t, fc, role, nil)

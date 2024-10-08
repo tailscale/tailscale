@@ -48,7 +48,7 @@ type IngressReconciler struct {
 	// managing. This is only used for metrics.
 	managedIngresses set.Slice[types.UID]
 
-	proxyDefaultClass string
+	defaultProxyClass string
 }
 
 var (
@@ -136,7 +136,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		}
 	}
 
-	proxyClass := proxyClassForObject(ing, a.proxyDefaultClass)
+	proxyClass := proxyClassForObject(ing, a.defaultProxyClass)
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			return fmt.Errorf("error verifying ProxyClass for Ingress: %w", err)

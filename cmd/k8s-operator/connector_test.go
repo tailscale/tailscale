@@ -278,7 +278,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		pc.Status = tsapi.ProxyClassStatus{
 			Conditions: []metav1.Condition{{
 				Status:             metav1.ConditionTrue,
-				Type:               string(tsapi.ProxyClassready),
+				Type:               string(tsapi.ProxyClassReady),
 				ObservedGeneration: pc.Generation,
 			}}}
 	})

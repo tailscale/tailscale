@@ -137,7 +137,7 @@ func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType
 
 func ProxyClassIsReady(pc *tsapi.ProxyClass) bool {
 	idx := xslices.IndexFunc(pc.Status.Conditions, func(cond metav1.Condition) bool {
-		return cond.Type == string(tsapi.ProxyClassready)
+		return cond.Type == string(tsapi.ProxyClassReady)
 	})
 	if idx == -1 {
 		return false
