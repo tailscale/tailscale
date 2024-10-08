@@ -146,7 +146,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	var proxyClass *tsapi.ProxyClass
 	if proxyClassName != "" {
 		proxyClass = new(tsapi.ProxyClass)
-		if err = r.Get(ctx, types.NamespacedName{Name: proxyClassName}, proxyClass); err != nil {
+		err := r.Get(ctx, types.NamespacedName{Name: proxyClassName}, proxyClass)
+		if apierrors.IsNotFound(err) {
+			err = nil
+			message := fmt.Sprintf("the ProxyGroup's ProxyClass %s does not (yet) exist", proxyClassName)
+			logger.Info(message)
+			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreating, message)
+		}
+		if err != nil {
 			err = fmt.Errorf("error getting ProxyGroup's ProxyClass %s: %s", proxyClassName, err)
 			r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
 			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
