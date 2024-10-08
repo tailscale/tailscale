@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"tailscale.com/util/syspolicy/internal/loggerx"
 	"tailscale.com/util/syspolicy/setting"
 )
 
@@ -134,4 +135,9 @@ func SelectControlURL(reg, disk string) string {
 		return disk
 	}
 	return def
+}
+
+// SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
+func SetDebugLoggingEnabled(v bool) {
+	loggerx.SetDebugLoggingEnabled(v)
 }
