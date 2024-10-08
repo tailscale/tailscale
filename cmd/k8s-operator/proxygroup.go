@@ -126,14 +126,13 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		// operation is underway.
 		logger.Infof("ensuring ProxyGroup is set up")
 		pg.Finalizers = append(pg.Finalizers, FinalizerName)
-		if err := r.Update(ctx, pg); err != nil {
-			logger.Errorf("error adding finalizer: %w", err)
+		if err = r.Update(ctx, pg); err != nil {
+			err = fmt.Errorf("error adding finalizer: %w", err)
 			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, reasonProxyGroupCreationFailed)
 		}
 	}
 
-	if err := r.validate(pg); err != nil {
-		logger.Errorf("error validating ProxyGroup spec: %w", err)
+	if err = r.validate(pg); err != nil {
 		message := fmt.Sprintf("ProxyGroup is invalid: %s", err)
 		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupInvalid, message)
 		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupInvalid, message)
@@ -147,11 +146,10 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	var proxyClass *tsapi.ProxyClass
 	if proxyClassName != "" {
 		proxyClass = new(tsapi.ProxyClass)
-		if err := r.Get(ctx, types.NamespacedName{Name: proxyClassName}, proxyClass); err != nil {
-			logger.Errorf("error getting ProxyGroup's ProxyClass %s: %w", proxyClassName, err)
-			message := fmt.Sprintf("error getting ProxyGroup's ProxyClass %s: %s", proxyClassName, err)
-			r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, message)
-			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, message)
+		if err = r.Get(ctx, types.NamespacedName{Name: proxyClassName}, proxyClass); err != nil {
+			err = fmt.Errorf("error getting ProxyGroup's ProxyClass %s: %s", proxyClassName, err)
+			r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
+			return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
 		}
 		if !tsoperator.ProxyClassIsReady(proxyClass) {
 			message := fmt.Sprintf("the ProxyGroup's ProxyClass %s is not yet in a ready state, waiting...", proxyClassName)
@@ -161,10 +159,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	if err = r.maybeProvision(ctx, pg, proxyClass); err != nil {
-		logger.Errorf("error provisioning ProxyGroup resources: %w", err)
-		message := fmt.Sprintf("failed provisioning ProxyGroup: %s", err)
-		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, message)
-		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, message)
+		err = fmt.Errorf("error provisioning ProxyGroup resources: %w", err)
+		r.recorder.Eventf(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
+		return setStatusReady(pg, metav1.ConditionFalse, reasonProxyGroupCreationFailed, err.Error())
 	}
 
 	desiredReplicas := int(pgReplicas(pg))
