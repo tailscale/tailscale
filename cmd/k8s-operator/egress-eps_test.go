@@ -98,7 +98,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 
 	t.Run("pods_are_ready_to_route_traffic", func(t *testing.T) {
 		pod, stateS := podAndSecretForProxyGroup("foo")
-		stBs := serviceStatusForPodIP(t, svc, pod.Status.PodIP, port)
+		stBs := serviceStatusForPodIP(t, svc, pod.Status.PodIPs[0].IP, port)
 		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
@@ -112,6 +112,16 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: pointer.ToBool(false),
 			},
 		})
+		expectEqual(t, fc, eps, nil)
+	})
+	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
+		_, stateS := podAndSecretForProxyGroup("foo")           // replica Pod has IP 10.0.0.1
+		stBs := serviceStatusForPodIP(t, svc, "10.0.0.2", port) // status is for a Pod with IP 10.0.0.2
+		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
+			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+		})
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Endpoints = []discoveryv1.Endpoint{}
 		expectEqual(t, fc, eps, nil)
 	})
 }
@@ -162,7 +172,7 @@ func serviceStatusForPodIP(t *testing.T, svc *corev1.Service, ip string, p uint1
 	}
 	svcName := tailnetSvcName(svc)
 	st := egressservices.Status{
-		PodIP:    ip,
+		PodIPv4:  ip,
 		Services: map[string]*egressservices.ServiceStatus{svcName: &svcSt},
 	}
 	bs, err := json.Marshal(st)
@@ -181,7 +191,9 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 			UID:       "foo",
 		},
 		Status: corev1.PodStatus{
-			PodIP: "10.0.0.1",
+			PodIPs: []corev1.PodIP{
+				{IP: "10.0.0.1"},
+			},
 		},
 	}
 	s := &corev1.Secret{

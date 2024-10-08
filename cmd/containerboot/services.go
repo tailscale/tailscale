@@ -46,7 +46,7 @@ type egressProxy struct {
 
 	netmapChan chan ipn.Notify // chan to receive netmap updates on
 
-	podIP string // never empty string
+	podIPv4 string // never empty string, currently only IPv4 is supported
 
 	// tailnetFQDNs is the egress service FQDN to tailnet IP mappings that
 	// were last used to configure firewall rules for this proxy.
@@ -361,7 +361,7 @@ func (ep *egressProxy) getStatus(ctx context.Context) (*egressservices.Status, e
 	if err := json.Unmarshal([]byte(raw), status); err != nil {
 		return nil, fmt.Errorf("error unmarshalling previous config: %w", err)
 	}
-	if reflect.DeepEqual(status.PodIP, ep.podIP) {
+	if reflect.DeepEqual(status.PodIPv4, ep.podIPv4) {
 		return status, nil
 	}
 	return nil, nil
@@ -374,7 +374,7 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 	if status == nil {
 		status = &egressservices.Status{}
 	}
-	status.PodIP = ep.podIP
+	status.PodIPv4 = ep.podIPv4
 	secret, err := ep.kc.GetSecret(ctx, ep.stateSecret)
 	if err != nil {
 		return fmt.Errorf("error retrieving state Secret: %w", err)
@@ -565,7 +565,7 @@ func servicesStatusIsEqual(st, st1 *egressservices.Status) bool {
 	if st == nil || st1 == nil {
 		return false
 	}
-	st.PodIP = ""
-	st1.PodIP = ""
+	st.PodIPv4 = ""
+	st1.PodIPv4 = ""
 	return reflect.DeepEqual(*st, *st1)
 }
