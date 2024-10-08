@@ -503,6 +503,10 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 	plan = make(probePlan)
 
 	for _, reg := range dm.Regions {
+		if len(reg.Nodes) == 0 {
+			continue
+		}
+
 		var p4 []probe
 		var p6 []probe
 		for try := 0; try < 3; try++ {
