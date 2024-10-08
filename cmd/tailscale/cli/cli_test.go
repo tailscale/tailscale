@@ -1028,6 +1028,7 @@ func TestUpdatePrefs(t *testing.T) {
 			env: upCheckEnv{backendState: "Running"},
 			wantJustEditMP: &ipn.MaskedPrefs{
 				AdvertiseRoutesSet:        true,
+				AdvertiseServicesSet:      true,
 				AdvertiseTagsSet:          true,
 				AppConnectorSet:           true,
 				ControlURLSet:             true,
