@@ -238,6 +238,7 @@ type StateKey string
 var DebuggableComponents = []string{
 	"magicsock",
 	"sockstats",
+	"syspolicy",
 }
 
 type Options struct {

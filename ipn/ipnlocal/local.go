@@ -583,6 +583,8 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 				}
 			}
 		}
+	case "syspolicy":
+		setEnabled = syspolicy.SetDebugLoggingEnabled
 	}
 	if setEnabled == nil || !slices.Contains(ipn.DebuggableComponents, component) {
 		return fmt.Errorf("unknown component %q", component)

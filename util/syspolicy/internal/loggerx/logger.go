@@ -6,6 +6,7 @@ package loggerx
 
 import (
 	"log"
+	"sync/atomic"
 
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
@@ -13,34 +14,51 @@ import (
 )
 
 const (
-	errorPrefix   = "syspolicy: "
+	normalPrefix  = "syspolicy: "
 	verbosePrefix = "syspolicy: [v2] "
 )
 
 var (
-	lazyErrorf   lazy.SyncValue[logger.Logf]
+	debugLogging atomic.Bool // whether debugging logging is enabled
+
+	lazyPrintf   lazy.SyncValue[logger.Logf]
 	lazyVerbosef lazy.SyncValue[logger.Logf]
 )
 
+// SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
+func SetDebugLoggingEnabled(v bool) {
+	debugLogging.Store(v)
+}
+
 // Errorf formats and writes an error message to the log.
 func Errorf(format string, args ...any) {
-	errorf := lazyErrorf.Get(func() logger.Logf {
-		return logger.WithPrefix(log.Printf, errorPrefix)
-	})
-	errorf(format, args...)
+	printf(format, args...)
 }
 
 // Verbosef formats and writes an optional, verbose message to the log.
 func Verbosef(format string, args ...any) {
-	verbosef := lazyVerbosef.Get(func() logger.Logf {
-		return logger.WithPrefix(log.Printf, verbosePrefix)
-	})
-	verbosef(format, args...)
+	if debugLogging.Load() {
+		printf(format, args...)
+	} else {
+		verbosef(format, args...)
+	}
 }
 
-// SetForTest sets the specified errorf and verbosef functions for the duration
+func printf(format string, args ...any) {
+	lazyPrintf.Get(func() logger.Logf {
+		return logger.WithPrefix(log.Printf, normalPrefix)
+	})(format, args...)
+}
+
+func verbosef(format string, args ...any) {
+	lazyVerbosef.Get(func() logger.Logf {
+		return logger.WithPrefix(log.Printf, verbosePrefix)
+	})(format, args...)
+}
+
+// SetForTest sets the specified printf and verbosef functions for the duration
 // of tb and its subtests.
-func SetForTest(tb internal.TB, errorf, verbosef logger.Logf) {
-	lazyErrorf.SetForTest(tb, errorf, nil)
+func SetForTest(tb internal.TB, printf, verbosef logger.Logf) {
+	lazyPrintf.SetForTest(tb, printf, nil)
 	lazyVerbosef.SetForTest(tb, verbosef, nil)
 }
