@@ -20,6 +20,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 	"tailscale.com/version"
@@ -278,4 +279,22 @@ func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, cu
 		return routes, nil
 	}
 	return nil, nil
+}
+
+// parseServiceNames takes a comma-separated list of service names
+// (eg. "svc:hello,svc:webserver,svc:catphotos"), splits them into
+// a list and validates each service name. If valid, it returns
+// the service names in a slice of strings.
+func parseServiceNames(servicesArg string) ([]string, error) {
+	var services []string
+	if servicesArg != "" {
+		services = strings.Split(servicesArg, ",")
+		for _, svc := range services {
+			err := tailcfg.CheckServiceName(svc)
+			if err != nil {
+				return nil, fmt.Errorf("service %q: %s", svc, err)
+			}
+		}
+	}
+	return services, nil
 }
