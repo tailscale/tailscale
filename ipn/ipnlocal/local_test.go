@@ -54,6 +54,8 @@ import (
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
+	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -1559,94 +1561,6 @@ func dnsResponse(domain, address string) []byte {
 	return must.Get(b.Finish())
 }
 
-type errorSyspolicyHandler struct {
-	t         *testing.T
-	err       error
-	key       syspolicy.Key
-	allowKeys map[syspolicy.Key]*string
-}
-
-func (h *errorSyspolicyHandler) ReadString(key string) (string, error) {
-	sk := syspolicy.Key(key)
-	if _, ok := h.allowKeys[sk]; !ok {
-		h.t.Errorf("ReadString: %q is not in list of permitted keys", h.key)
-	}
-	if sk == h.key {
-		return "", h.err
-	}
-	return "", syspolicy.ErrNoSuchKey
-}
-
-func (h *errorSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
-	h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
-	return 0, syspolicy.ErrNoSuchKey
-}
-
-func (h *errorSyspolicyHandler) ReadBoolean(key string) (bool, error) {
-	h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
-	return false, syspolicy.ErrNoSuchKey
-}
-
-func (h *errorSyspolicyHandler) ReadStringArray(key string) ([]string, error) {
-	h.t.Errorf("ReadStringArray(%q) unexpectedly called", key)
-	return nil, syspolicy.ErrNoSuchKey
-}
-
-type mockSyspolicyHandler struct {
-	t *testing.T
-	// stringPolicies is the collection of policies that we expect to see
-	// queried by the current test. If the policy is expected but unset, then
-	// use nil, otherwise use a string equal to the policy's desired value.
-	stringPolicies map[syspolicy.Key]*string
-	// stringArrayPolicies is the collection of policies that we expected to see
-	// queries by the current test, that return policy string arrays.
-	stringArrayPolicies map[syspolicy.Key][]string
-	// failUnknownPolicies is set if policies other than those in stringPolicies
-	// (uint64 or bool policies are not supported by mockSyspolicyHandler yet)
-	// should be considered a test failure if they are queried.
-	failUnknownPolicies bool
-}
-
-func (h *mockSyspolicyHandler) ReadString(key string) (string, error) {
-	if s, ok := h.stringPolicies[syspolicy.Key(key)]; ok {
-		if s == nil {
-			return "", syspolicy.ErrNoSuchKey
-		}
-		return *s, nil
-	}
-	if h.failUnknownPolicies {
-		h.t.Errorf("ReadString(%q) unexpectedly called", key)
-	}
-	return "", syspolicy.ErrNoSuchKey
-}
-
-func (h *mockSyspolicyHandler) ReadUInt64(key string) (uint64, error) {
-	if h.failUnknownPolicies {
-		h.t.Errorf("ReadUInt64(%q) unexpectedly called", key)
-	}
-	return 0, syspolicy.ErrNoSuchKey
-}
-
-func (h *mockSyspolicyHandler) ReadBoolean(key string) (bool, error) {
-	if h.failUnknownPolicies {
-		h.t.Errorf("ReadBoolean(%q) unexpectedly called", key)
-	}
-	return false, syspolicy.ErrNoSuchKey
-}
-
-func (h *mockSyspolicyHandler) ReadStringArray(key string) ([]string, error) {
-	if h.failUnknownPolicies {
-		h.t.Errorf("ReadStringArray(%q) unexpectedly called", key)
-	}
-	if s, ok := h.stringArrayPolicies[syspolicy.Key(key)]; ok {
-		if s == nil {
-			return []string{}, syspolicy.ErrNoSuchKey
-		}
-		return s, nil
-	}
-	return nil, syspolicy.ErrNoSuchKey
-}
-
 func TestSetExitNodeIDPolicy(t *testing.T) {
 	pfx := netip.MustParsePrefix
 	tests := []struct {
@@ -1856,23 +1770,18 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 		},
 	}
 
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			b := newTestBackend(t)
-			msh := &mockSyspolicyHandler{
-				t: t,
-				stringPolicies: map[syspolicy.Key]*string{
-					syspolicy.ExitNodeID: nil,
-					syspolicy.ExitNodeIP: nil,
-				},
-			}
-			if test.exitNodeIDKey {
-				msh.stringPolicies[syspolicy.ExitNodeID] = &test.exitNodeID
-			}
-			if test.exitNodeIPKey {
-				msh.stringPolicies[syspolicy.ExitNodeIP] = &test.exitNodeIP
-			}
-			syspolicy.SetHandlerForTest(t, msh)
+
+			policyStore := source.NewTestStoreOf(t,
+				source.TestSettingOf(syspolicy.ExitNodeID, test.exitNodeID),
+				source.TestSettingOf(syspolicy.ExitNodeIP, test.exitNodeIP),
+			)
+			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
+
 			if test.nm == nil {
 				test.nm = new(netmap.NetworkMap)
 			}
@@ -1994,13 +1903,13 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			report:                    report,
 		},
 	}
-	msh := &mockSyspolicyHandler{
-		t: t,
-		stringPolicies: map[syspolicy.Key]*string{
-			syspolicy.ExitNodeID: ptr.To("auto:any"),
-		},
-	}
-	syspolicy.SetHandlerForTest(t, msh)
+
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+	policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
+		syspolicy.ExitNodeID, "auto:any",
+	))
+	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newTestLocalBackend(t)
@@ -2049,13 +1958,11 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 	}
 	cc = newClient(t, opts)
 	b.cc = cc
-	msh := &mockSyspolicyHandler{
-		t: t,
-		stringPolicies: map[syspolicy.Key]*string{
-			syspolicy.ExitNodeID: ptr.To("auto:any"),
-		},
-	}
-	syspolicy.SetHandlerForTest(t, msh)
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+	policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
+		syspolicy.ExitNodeID, "auto:any",
+	))
+	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 	peer1 := makePeer(1, withCap(26), withDERP(3), withSuggest(), withExitRoutes())
 	peer2 := makePeer(2, withCap(26), withDERP(2), withSuggest(), withExitRoutes())
 	selfNode := tailcfg.Node{
@@ -2160,13 +2067,11 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 		DERPMap: derpMap,
 	}
 	b := newTestLocalBackend(t)
-	msh := &mockSyspolicyHandler{
-		t: t,
-		stringPolicies: map[syspolicy.Key]*string{
-			syspolicy.ExitNodeID: ptr.To("auto:any"),
-		},
-	}
-	syspolicy.SetHandlerForTest(t, msh)
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+	policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
+		syspolicy.ExitNodeID, "auto:any",
+	))
+	syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 	b.netMap = nm
 	b.lastSuggestedExitNode = peer1.StableID()
 	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, report)
@@ -2400,17 +2305,16 @@ func TestApplySysPolicy(t *testing.T) {
 		},
 	}
 
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msh := &mockSyspolicyHandler{
-				t:              t,
-				stringPolicies: make(map[syspolicy.Key]*string, len(tt.stringPolicies)),
-			}
+			settings := make([]source.TestSetting[string], 0, len(tt.stringPolicies))
 			for p, v := range tt.stringPolicies {
-				v := v // construct a unique pointer for each policy value
-				msh.stringPolicies[p] = &v
+				settings = append(settings, source.TestSettingOf(p, v))
 			}
-			syspolicy.SetHandlerForTest(t, msh)
+			policyStore := source.NewTestStoreOf(t, settings...)
+			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 			t.Run("unit", func(t *testing.T) {
 				prefs := tt.prefs.Clone()
@@ -2546,35 +2450,19 @@ func TestPreferencePolicyInfo(t *testing.T) {
 		},
 	}
 
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, pp := range preferencePolicies {
 				t.Run(string(pp.key), func(t *testing.T) {
-					var h syspolicy.Handler
-
-					allPolicies := make(map[syspolicy.Key]*string, len(preferencePolicies)+1)
-					allPolicies[syspolicy.ControlURL] = nil
-					for _, pp := range preferencePolicies {
-						allPolicies[pp.key] = nil
+					s := source.TestSetting[string]{
+						Key:   pp.key,
+						Error: tt.policyError,
+						Value: tt.policyValue,
 					}
-
-					if tt.policyError != nil {
-						h = &errorSyspolicyHandler{
-							t:         t,
-							err:       tt.policyError,
-							key:       pp.key,
-							allowKeys: allPolicies,
-						}
-					} else {
-						msh := &mockSyspolicyHandler{
-							t:                   t,
-							stringPolicies:      allPolicies,
-							failUnknownPolicies: true,
-						}
-						msh.stringPolicies[pp.key] = &tt.policyValue
-						h = msh
-					}
-					syspolicy.SetHandlerForTest(t, h)
+					policyStore := source.NewTestStoreOf(t, s)
+					syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 					prefs := defaultPrefs.AsStruct()
 					pp.set(prefs, tt.initialValue)
@@ -3825,15 +3713,16 @@ func TestShouldAutoExitNode(t *testing.T) {
 			expectedBool:          false,
 		},
 	}
+
+	syspolicy.RegisterWellKnownSettingsForTest(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msh := &mockSyspolicyHandler{
-				t: t,
-				stringPolicies: map[syspolicy.Key]*string{
-					syspolicy.ExitNodeID: ptr.To(tt.exitNodeIDPolicyValue),
-				},
-			}
-			syspolicy.SetHandlerForTest(t, msh)
+			policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
+				syspolicy.ExitNodeID, tt.exitNodeIDPolicyValue,
+			))
+			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
+
 			got := shouldAutoExitNode()
 			if got != tt.expectedBool {
 				t.Fatalf("expected %v got %v for %v policy value", tt.expectedBool, got, tt.exitNodeIDPolicyValue)
@@ -3971,17 +3860,13 @@ func TestFillAllowedSuggestions(t *testing.T) {
 			want:        []tailcfg.StableNodeID{"ABC", "def", "gHiJ"},
 		},
 	}
+	syspolicy.RegisterWellKnownSettingsForTest(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mh := mockSyspolicyHandler{
-				t: t,
-			}
-			if tt.allowPolicy != nil {
-				mh.stringArrayPolicies = map[syspolicy.Key][]string{
-					syspolicy.AllowedSuggestedExitNodes: tt.allowPolicy,
-				}
-			}
-			syspolicy.SetHandlerForTest(t, &mh)
+			policyStore := source.NewTestStoreOf(t, source.TestSettingOf(
+				syspolicy.AllowedSuggestedExitNodes, tt.allowPolicy,
+			))
+			syspolicy.MustRegisterStoreForTest(t, "TestStore", setting.DeviceScope, policyStore)
 
 			got := fillAllowedSuggestions()
 			if got == nil {

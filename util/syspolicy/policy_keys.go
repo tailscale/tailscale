@@ -3,9 +3,23 @@
 
 package syspolicy
 
-import "tailscale.com/util/syspolicy/setting"
+import (
+	"tailscale.com/types/lazy"
+	"tailscale.com/util/syspolicy/internal"
+	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/testenv"
+)
 
+// Key is a string that uniquely identifies a policy and must remain unchanged
+// once established and documented for a given policy setting. It may contain
+// alphanumeric characters and zero or more [KeyPathSeparator]s to group
+// individual policy settings into categories.
 type Key = setting.Key
+
+// The const block below lists known policy keys.
+// When adding a key to this list, remember to add a corresponding
+// [setting.Definition] to [implicitDefinitions] below.
+// Otherwise, the [TestKnownKeysRegistered] test will fail as a reminder.
 
 const (
 	// Keys with a string value
@@ -110,3 +124,90 @@ const (
 	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
 	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
 )
+
+// implicitDefinitions is a list of [setting.Definition] that will be registered
+// automatically when the policy setting definitions are first used by the syspolicy package hierarchy.
+// This includes the first time a policy needs to be read from any source.
+var implicitDefinitions = []*setting.Definition{
+	// Device policy settings (can only be configured on a per-device basis):
+	setting.NewDefinition(AllowedSuggestedExitNodes, setting.DeviceSetting, setting.StringListValue),
+	setting.NewDefinition(ApplyUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(AuthKey, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(CheckUpdates, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ControlURL, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(DeviceSerialNumber, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(EnableIncomingConnections, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableRunExitNode, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableServerMode, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableTailscaleDNS, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(EnableTailscaleSubnets, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ExitNodeAllowLANAccess, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(ExitNodeID, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(ExitNodeIP, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(FlushDNSOnSessionUnlock, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(LogSCMInteractions, setting.DeviceSetting, setting.BooleanValue),
+	setting.NewDefinition(LogTarget, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(MachineCertificateSubject, setting.DeviceSetting, setting.StringValue),
+	setting.NewDefinition(PostureChecking, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(Tailnet, setting.DeviceSetting, setting.StringValue),
+
+	// User policy settings (can be configured on a user- or device-basis):
+	setting.NewDefinition(AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(AutoUpdateVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(ExitNodeMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(KeyExpirationNoticeTime, setting.UserSetting, setting.DurationValue),
+	setting.NewDefinition(ManagedByCaption, setting.UserSetting, setting.StringValue),
+	setting.NewDefinition(ManagedByOrganizationName, setting.UserSetting, setting.StringValue),
+	setting.NewDefinition(ManagedByURL, setting.UserSetting, setting.StringValue),
+	setting.NewDefinition(NetworkDevicesVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(PreferencesMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(ResetToDefaultsVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(RunExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(SuggestedExitNodeVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(TestMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+	setting.NewDefinition(UpdateMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+}
+
+func init() {
+	internal.Init.MustDefer(func() error {
+		// Avoid implicit [setting.Definition] registration during tests.
+		// Each test should control which policy settings to register.
+		// Use [setting.SetDefinitionsForTest] to specify necessary definitions,
+		// or [setWellKnownSettingsForTest] to set implicit definitions for the test duration.
+		if testenv.InTest() {
+			return nil
+		}
+		for _, d := range implicitDefinitions {
+			setting.RegisterDefinition(d)
+		}
+		return nil
+	})
+}
+
+var implicitDefinitionMap lazy.SyncValue[setting.DefinitionMap]
+
+// WellKnownSettingDefinition returns a well-known, implicit setting definition by its key,
+// or an [ErrNoSuchKey] if a policy setting with the specified key does not exist
+// among implicit policy definitions.
+func WellKnownSettingDefinition(k Key) (*setting.Definition, error) {
+	m, err := implicitDefinitionMap.GetErr(func() (setting.DefinitionMap, error) {
+		return setting.DefinitionMapOf(implicitDefinitions)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := m[k]; ok {
+		return d, nil
+	}
+	return nil, ErrNoSuchKey
+}
+
+// RegisterWellKnownSettingsForTest registers all implicit setting definitions
+// for the duration of the test.
+func RegisterWellKnownSettingsForTest(tb TB) {
+	tb.Helper()
+	err := setting.SetDefinitionsForTest(tb, implicitDefinitions...)
+	if err != nil {
+		tb.Fatalf("Failed to register well-known settings: %v", err)
+	}
+}
