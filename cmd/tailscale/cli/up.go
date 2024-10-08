@@ -116,6 +116,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+	upf.StringVar(&upArgs.advertiseServices, "advertise-services", "", "comma-separated services to advertise; each must start with \"svc:\" (e.g. \"svc:idp,svc:nas,svc:database\")")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -180,6 +181,7 @@ type upArgsT struct {
 	advertiseRoutes        string
 	advertiseDefaultRoute  bool
 	advertiseTags          string
+	advertiseServices      string
 	advertiseConnector     bool
 	snat                   bool
 	statefulFiltering      bool
@@ -266,6 +268,11 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		}
 	}
 
+	var services []string
+	if services, err = parseServiceNames(upArgs.advertiseServices); err != nil {
+		return nil, err
+	}
+
 	if err := dnsname.ValidHostname(upArgs.hostname); upArgs.hostname != "" && err != nil {
 		return nil, err
 	}
@@ -296,6 +303,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.RunWebClient = upArgs.runWebClient
 	prefs.AdvertiseRoutes = routes
 	prefs.AdvertiseTags = tags
+	prefs.AdvertiseServices = services
 	prefs.Hostname = upArgs.hostname
 	prefs.ForceDaemon = upArgs.forceDaemon
 	prefs.OperatorUser = upArgs.opUser
@@ -768,6 +776,7 @@ func init() {
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("posture-checking", "PostureChecking")
+	addPrefFlagMapping("advertise-services", "AdvertiseServices")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
@@ -1044,6 +1053,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(prefs.NetfilterMode.String())
 		case "unattended":
 			set(prefs.ForceDaemon)
+		case "advertise-services":
+			set(prefs.AdvertiseServices)
 		}
 	})
 	return ret
@@ -1186,4 +1197,22 @@ func warnOnAdvertiseRouts(ctx context.Context, prefs *ipn.Prefs) {
 			}
 		}
 	}
+}
+
+// parseServiceNames takes a comma-separated list of service names
+// (eg. "svc:hello,svc:webserver,svc:catphotos"), splits them into
+// a list and validates each service name. If valid, it returns
+// the service names in a slice of strings.
+func parseServiceNames(servicesArg string) ([]string, error) {
+	var services []string
+	if servicesArg != "" {
+		services = strings.Split(servicesArg, ",")
+		for _, svc := range services {
+			err := tailcfg.CheckServiceName(svc)
+			if err != nil {
+				return nil, fmt.Errorf("service %q: %s", svc, err)
+			}
+		}
+	}
+	return services, nil
 }

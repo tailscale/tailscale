@@ -61,6 +61,7 @@ type setArgsT struct {
 	snat                   bool
 	statefulFiltering      bool
 	netfilterMode          string
+	advertiseServices      string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -81,6 +82,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
+	setf.StringVar(&setArgs.advertiseServices, "advertise-services", "", "comma-separated services to advertise; each must start with \"svc:\" (e.g. \"svc:idp,svc:nas,svc:database\")")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -154,6 +156,10 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			PostureChecking:     setArgs.postureChecking,
 			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 		},
+	}
+
+	if maskedPrefs.Prefs.AdvertiseServices, err = parseServiceNames(setArgs.advertiseServices); err != nil {
+		return err
 	}
 
 	if effectiveGOOS() == "linux" {
