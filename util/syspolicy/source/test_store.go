@@ -89,6 +89,7 @@ type TestStore struct {
 	suspendCount int                 // change callback are suspended if > 0
 	mr, mw       map[setting.Key]any // maps for reading and writing; they're the same unless the store is suspended.
 	cbs          set.HandleSet[func()]
+	closed       bool
 
 	readsMu sync.Mutex
 	reads   map[testReadOperation]int // how many times a policy setting was read
@@ -98,24 +99,20 @@ type TestStore struct {
 // The tb will be used to report coding errors detected by the [TestStore].
 func NewTestStore(tb internal.TB) *TestStore {
 	m := make(map[setting.Key]any)
-	return &TestStore{
-		tb:   tb,
-		done: make(chan struct{}),
-		mr:   m,
-		mw:   m,
-	}
-}
-
-// NewTestStoreOf is a shorthand for [NewTestStore] followed by [TestStore.SetBooleans],
-// [TestStore.SetUInt64s], [TestStore.SetStrings] or [TestStore.SetStringLists].
-func NewTestStoreOf[T TestValueType](tb internal.TB, settings ...TestSetting[T]) *TestStore {
-	m := make(map[setting.Key]any)
 	store := &TestStore{
 		tb:   tb,
 		done: make(chan struct{}),
 		mr:   m,
 		mw:   m,
 	}
+	tb.Cleanup(store.Close)
+	return store
+}
+
+// NewTestStoreOf is a shorthand for [NewTestStore] followed by [TestStore.SetBooleans],
+// [TestStore.SetUInt64s], [TestStore.SetStrings] or [TestStore.SetStringLists].
+func NewTestStoreOf[T TestValueType](tb internal.TB, settings ...TestSetting[T]) *TestStore {
+	store := NewTestStore(tb)
 	switch settings := any(settings).(type) {
 	case []TestSetting[bool]:
 		store.SetBooleans(settings...)
@@ -308,7 +305,7 @@ func (s *TestStore) Resume() {
 		s.mr = s.mw
 		s.mu.Unlock()
 		s.storeLock.Unlock()
-		s.notifyPolicyChanged()
+		s.NotifyPolicyChanged()
 	case s.suspendCount < 0:
 		s.tb.Fatal("negative suspendCount")
 	default:
@@ -333,7 +330,7 @@ func (s *TestStore) SetBooleans(settings ...TestSetting[bool]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // SetUInt64s sets the specified integer settings in s.
@@ -352,7 +349,7 @@ func (s *TestStore) SetUInt64s(settings ...TestSetting[uint64]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // SetStrings sets the specified string settings in s.
@@ -371,7 +368,7 @@ func (s *TestStore) SetStrings(settings ...TestSetting[string]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // SetStrings sets the specified string list settings in s.
@@ -390,7 +387,7 @@ func (s *TestStore) SetStringLists(settings ...TestSetting[[]string]) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // Delete deletes the specified settings from s.
@@ -402,7 +399,7 @@ func (s *TestStore) Delete(keys ...setting.Key) {
 		s.mu.Unlock()
 	}
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
 // Clear deletes all settings from s.
@@ -412,10 +409,10 @@ func (s *TestStore) Clear() {
 	clear(s.mw)
 	s.mu.Unlock()
 	s.storeLock.Unlock()
-	s.notifyPolicyChanged()
+	s.NotifyPolicyChanged()
 }
 
-func (s *TestStore) notifyPolicyChanged() {
+func (s *TestStore) NotifyPolicyChanged() {
 	s.mu.RLock()
 	if s.suspendCount != 0 {
 		s.mu.RUnlock()
@@ -439,9 +436,9 @@ func (s *TestStore) notifyPolicyChanged() {
 func (s *TestStore) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.done != nil {
+	if !s.closed {
 		close(s.done)
-		s.done = nil
+		s.closed = true
 	}
 }
 

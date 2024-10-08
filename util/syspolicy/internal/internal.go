@@ -13,6 +13,9 @@ import (
 	"tailscale.com/version"
 )
 
+// Init facilitates deferred invocation of initializers.
+var Init lazy.DeferredInit
+
 // OSForTesting is the operating system override used for testing.
 // It follows the same naming convention as [version.OS].
 var OSForTesting lazy.SyncValue[string]
