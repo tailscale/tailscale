@@ -86,7 +86,7 @@ func (pm PortMap) MarshalText() ([]byte, error) {
 // Status represents the currently configured firewall rules for all egress
 // services for a proxy identified by the PodIP.
 type Status struct {
-	PodIP string `json:"podIP"`
+	PodIPv4 string `json:"podIPv4"`
 	// All egress service status keyed by service name.
 	Services map[string]*ServiceStatus `json:"services"`
 }

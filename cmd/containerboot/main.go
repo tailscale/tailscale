@@ -132,36 +132,9 @@ func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
 func main() {
 	log.SetPrefix("boot: ")
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
-	cfg := &settings{
-		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
-		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
-		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
-		ProxyTargetDNSName:                    defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
-		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
-		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
-		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
-		KubeSecret:                            defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
-		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
-		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
-		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
-		PodIP:                                 defaultEnv("POD_IP", ""),
-		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
-		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
-		EgressSvcsCfgPath:                     defaultEnv("TS_EGRESS_SERVICES_CONFIG_PATH", ""),
-	}
 
-	if err := cfg.validate(); err != nil {
+	cfg, err := configFromEnv()
+	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
 
@@ -612,7 +585,7 @@ runLoop:
 							kc:           kc,
 							stateSecret:  cfg.KubeSecret,
 							netmapChan:   egressSvcsNotify,
-							podIP:        cfg.PodIP,
+							podIPv4:      cfg.PodIPv4,
 							tailnetAddrs: addrs,
 						}
 						go func() {

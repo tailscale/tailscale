@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 
@@ -132,6 +133,19 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	return res, nil
 }
 
+func podIPv4(pod *corev1.Pod) (string, error) {
+	for _, ip := range pod.Status.PodIPs {
+		parsed, err := netip.ParseAddr(ip.IP)
+		if err != nil {
+			return "", fmt.Errorf("error parsing IP address %s: %w", ip, err)
+		}
+		if parsed.Is4() {
+			return parsed.String(), nil
+		}
+	}
+	return "", nil
+}
+
 // podIsReadyToRouteTraffic returns true if it appears that the proxy Pod has configured firewall rules to be able to
 // route traffic to the given tailnet service. It retrieves the proxy's state Secret and compares the tailnet service
 // status written there to the desired service configuration.
@@ -142,14 +156,21 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 		l.Debugf("proxy Pod is being deleted, ignore")
 		return false, nil
 	}
-	podIP := pod.Status.PodIP
+	podIP, err := podIPv4(&pod)
+	if err != nil {
+		return false, fmt.Errorf("error determining Pod IP address: %v", err)
+	}
+	if podIP == "" {
+		l.Infof("[unexpected] Pod does not have an IPv4 address, and IPv6 is not currently supported")
+		return false, nil
+	}
 	stateS := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 		},
 	}
-	err := er.Get(ctx, client.ObjectKeyFromObject(stateS), stateS)
+	err = er.Get(ctx, client.ObjectKeyFromObject(stateS), stateS)
 	if apierrors.IsNotFound(err) {
 		l.Debugf("proxy does not have a state Secret, waiting...")
 		return false, nil
@@ -166,8 +187,8 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 	if err := json.Unmarshal(svcStatusBS, svcStatus); err != nil {
 		return false, fmt.Errorf("error unmarshalling egress service status: %w", err)
 	}
-	if !strings.EqualFold(podIP, svcStatus.PodIP) {
-		l.Infof("proxy's egress service status is for Pod IP %s, current proxy's Pod IP %s, waiting for the proxy to reconfigure...", svcStatus.PodIP, podIP)
+	if !strings.EqualFold(podIP, svcStatus.PodIPv4) {
+		l.Infof("proxy's egress service status is for Pod IP %s, current proxy's Pod IP %s, waiting for the proxy to reconfigure...", svcStatus.PodIPv4, podIP)
 		return false, nil
 	}
 	st, ok := (*svcStatus).Services[tailnetSvcName]

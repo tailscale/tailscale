@@ -93,10 +93,11 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHa
 							Env: func() []corev1.EnvVar {
 								envs := []corev1.EnvVar{
 									{
-										Name: "POD_IP",
+										// TODO(irbekrm): verify that .status.podIPs are always set, else read in .status.podIP as well.
+										Name: "POD_IPS", // this will be a comma separate list i.e 10.136.0.6,2600:1900:4011:161:0:e:0:6
 										ValueFrom: &corev1.EnvVarSource{
 											FieldRef: &corev1.ObjectFieldSelector{
-												FieldPath: "status.podIP",
+												FieldPath: "status.podIPs",
 											},
 										},
 									},
