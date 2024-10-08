@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/types/ptr"
@@ -19,163 +20,152 @@ import (
 
 // Returns the base StatefulSet definition for a ProxyGroup. A ProxyClass may be
 // applied over the top after.
-func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHash string) *appsv1.StatefulSet {
-	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pg.Name,
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas: ptr.To(pgReplicas(pg)),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: pgLabels(pg.Name, nil),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:                       pg.Name,
-					Namespace:                  namespace,
-					Labels:                     pgLabels(pg.Name, nil),
-					DeletionGracePeriodSeconds: ptr.To[int64](10),
-					Annotations: map[string]string{
-						podAnnotationLastSetConfigFileHash: cfgHash,
-					},
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: pg.Name,
-					InitContainers: []corev1.Container{
-						{
-							Name:  "sysctler",
-							Image: image,
-							SecurityContext: &corev1.SecurityContext{
-								Privileged: ptr.To(true),
-							},
-							Command: []string{
-								"/bin/sh",
-								"-c",
-							},
-							Args: []string{
-								"sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi",
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  "tailscale",
-							Image: image,
-							SecurityContext: &corev1.SecurityContext{
-								Capabilities: &corev1.Capabilities{
-									Add: []corev1.Capability{
-										"NET_ADMIN",
-									},
-								},
-							},
-							VolumeMounts: func() []corev1.VolumeMount {
-								var mounts []corev1.VolumeMount
-								for i := range pgReplicas(pg) {
-									mounts = append(mounts, corev1.VolumeMount{
-										Name:      fmt.Sprintf("tailscaledconfig-%d", i),
-										ReadOnly:  true,
-										MountPath: fmt.Sprintf("/etc/tsconfig/%s-%d", pg.Name, i),
-									})
-								}
+func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode, cfgHash string) (*appsv1.StatefulSet, error) {
+	ss := new(appsv1.StatefulSet)
+	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+	}
+	// Validate some base assumptions.
+	if len(ss.Spec.Template.Spec.InitContainers) != 1 {
+		return nil, fmt.Errorf("[unexpected] base proxy config had %d init containers instead of 1", len(ss.Spec.Template.Spec.InitContainers))
+	}
+	if len(ss.Spec.Template.Spec.Containers) != 1 {
+		return nil, fmt.Errorf("[unexpected] base proxy config had %d containers instead of 1", len(ss.Spec.Template.Spec.Containers))
+	}
 
-								if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-									mounts = append(mounts, corev1.VolumeMount{
-										Name:      pgEgressCMName(pg.Name),
-										MountPath: "/etc/proxies",
-										ReadOnly:  true,
-									})
-								}
-								return mounts
-							}(),
-							Env: func() []corev1.EnvVar {
-								envs := []corev1.EnvVar{
-									{
-										// TODO(irbekrm): verify that .status.podIPs are always set, else read in .status.podIP as well.
-										Name: "POD_IPS", // this will be a comma separate list i.e 10.136.0.6,2600:1900:4011:161:0:e:0:6
-										ValueFrom: &corev1.EnvVarSource{
-											FieldRef: &corev1.ObjectFieldSelector{
-												FieldPath: "status.podIPs",
-											},
-										},
-									},
-									{
-										Name: "POD_NAME",
-										ValueFrom: &corev1.EnvVarSource{
-											FieldRef: &corev1.ObjectFieldSelector{
-												// Secret is named after the pod.
-												FieldPath: "metadata.name",
-											},
-										},
-									},
-									{
-										Name:  "TS_KUBE_SECRET",
-										Value: "$(POD_NAME)",
-									},
-									{
-										Name:  "TS_STATE",
-										Value: "kube:$(POD_NAME)",
-									},
-									{
-										Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
-										Value: "/etc/tsconfig/$(POD_NAME)",
-									},
-									{
-										Name:  "TS_USERSPACE",
-										Value: "false",
-									},
-								}
-								if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-									envs = append(envs, corev1.EnvVar{
-										Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
-										Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
-									})
-								}
+	// StatefulSet config.
+	ss.ObjectMeta = metav1.ObjectMeta{
+		Name:            pg.Name,
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
+	}
+	ss.Spec.Replicas = ptr.To(pgReplicas(pg))
+	ss.Spec.Selector = &metav1.LabelSelector{
+		MatchLabels: pgLabels(pg.Name, nil),
+	}
 
-								if tsFirewallMode != "" {
-									envs = append(envs, corev1.EnvVar{
-										Name:  "TS_DEBUG_FIREWALL_MODE",
-										Value: tsFirewallMode,
-									})
-								}
-
-								return envs
-							}(),
-						},
-					},
-					Volumes: func() []corev1.Volume {
-						var volumes []corev1.Volume
-						for i := range pgReplicas(pg) {
-							volumes = append(volumes, corev1.Volume{
-								Name: fmt.Sprintf("tailscaledconfig-%d", i),
-								VolumeSource: corev1.VolumeSource{
-									Secret: &corev1.SecretVolumeSource{
-										SecretName: fmt.Sprintf("%s-%d-config", pg.Name, i),
-									},
-								},
-							})
-						}
-						if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
-							volumes = append(volumes, corev1.Volume{
-								Name: pgEgressCMName(pg.Name),
-								VolumeSource: corev1.VolumeSource{
-									ConfigMap: &corev1.ConfigMapVolumeSource{
-										LocalObjectReference: corev1.LocalObjectReference{
-											Name: pgEgressCMName(pg.Name),
-										},
-									},
-								},
-							})
-						}
-
-						return volumes
-					}(),
-				},
-			},
+	// Template config.
+	tmpl := &ss.Spec.Template
+	tmpl.ObjectMeta = metav1.ObjectMeta{
+		Name:                       pg.Name,
+		Namespace:                  namespace,
+		Labels:                     pgLabels(pg.Name, nil),
+		DeletionGracePeriodSeconds: ptr.To[int64](10),
+		Annotations: map[string]string{
+			podAnnotationLastSetConfigFileHash: cfgHash,
 		},
 	}
+	tmpl.Spec.ServiceAccountName = pg.Name
+	tmpl.Spec.InitContainers[0].Image = image
+	tmpl.Spec.Volumes = func() []corev1.Volume {
+		var volumes []corev1.Volume
+		for i := range pgReplicas(pg) {
+			volumes = append(volumes, corev1.Volume{
+				Name: fmt.Sprintf("tailscaledconfig-%d", i),
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: fmt.Sprintf("%s-%d-config", pg.Name, i),
+					},
+				},
+			})
+		}
+
+		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+			volumes = append(volumes, corev1.Volume{
+				Name: pgEgressCMName(pg.Name),
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: pgEgressCMName(pg.Name),
+						},
+					},
+				},
+			})
+		}
+
+		return volumes
+	}()
+
+	// Main container config.
+	c := &ss.Spec.Template.Spec.Containers[0]
+	c.Image = image
+	c.VolumeMounts = func() []corev1.VolumeMount {
+		var mounts []corev1.VolumeMount
+		for i := range pgReplicas(pg) {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      fmt.Sprintf("tailscaledconfig-%d", i),
+				ReadOnly:  true,
+				MountPath: fmt.Sprintf("/etc/tsconfig/%s-%d", pg.Name, i),
+			})
+		}
+
+		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      pgEgressCMName(pg.Name),
+				MountPath: "/etc/proxies",
+				ReadOnly:  true,
+			})
+		}
+
+		return mounts
+	}()
+	c.Env = func() []corev1.EnvVar {
+		envs := []corev1.EnvVar{
+			{
+				// TODO(irbekrm): verify that .status.podIPs are always set, else read in .status.podIP as well.
+				Name: "POD_IPS", // this will be a comma separate list i.e 10.136.0.6,2600:1900:4011:161:0:e:0:6
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{
+						FieldPath: "status.podIPs",
+					},
+				},
+			},
+			{
+				Name: "POD_NAME",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{
+						// Secret is named after the pod.
+						FieldPath: "metadata.name",
+					},
+				},
+			},
+			{
+				Name:  "TS_KUBE_SECRET",
+				Value: "$(POD_NAME)",
+			},
+			{
+				Name:  "TS_STATE",
+				Value: "kube:$(POD_NAME)",
+			},
+			{
+				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
+				Value: "/etc/tsconfig/$(POD_NAME)",
+			},
+			{
+				Name:  "TS_USERSPACE",
+				Value: "false",
+			},
+		}
+
+		if tsFirewallMode != "" {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "TS_DEBUG_FIREWALL_MODE",
+				Value: tsFirewallMode,
+			})
+		}
+
+		if pg.Spec.Type == tsapi.ProxyGroupTypeEgress {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "TS_EGRESS_SERVICES_CONFIG_PATH",
+				Value: fmt.Sprintf("/etc/proxies/%s", egressservices.KeyEgressServices),
+			})
+		}
+
+		return envs
+	}()
+
+	return ss, nil
 }
 
 func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAccount {
