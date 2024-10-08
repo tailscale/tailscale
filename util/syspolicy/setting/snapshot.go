@@ -4,6 +4,8 @@
 package setting
 
 import (
+	"iter"
+	"maps"
 	"slices"
 	"strings"
 
@@ -25,15 +27,13 @@ func NewSnapshot(items map[Key]RawItem, opts ...SummaryOption) *Snapshot {
 	return &Snapshot{m: xmaps.Clone(items), sig: deephash.Hash(&items), summary: SummaryWith(opts...)}
 }
 
-// All returns a map of all policy settings in s.
-// The returned map must not be modified.
-func (s *Snapshot) All() map[Key]RawItem {
+// All returns an iterator over policy settings in s. The iteration order is not
+// specified and is not guaranteed to be the same from one call to the next.
+func (s *Snapshot) All() iter.Seq2[Key, RawItem] {
 	if s == nil {
-		return nil
+		return func(yield func(Key, RawItem) bool) {}
 	}
-	// TODO(nickkhyl): return iter.Seq2[[Key], [RawItem]] in Go 1.23,
-	// and remove [keyItemPair].
-	return s.m
+	return maps.All(s.m)
 }
 
 // Get returns the value of the policy setting with the specified key
@@ -87,12 +87,11 @@ func (s *Snapshot) EqualItems(s2 *Snapshot) bool {
 
 // Keys return an iterator over keys in s. The iteration order is not specified
 // and is not guaranteed to be the same from one call to the next.
-func (s *Snapshot) Keys() []Key {
+func (s *Snapshot) Keys() iter.Seq[Key] {
 	if s.m == nil {
-		return nil
+		return func(yield func(Key) bool) {}
 	}
-	// TODO(nickkhyl): return iter.Seq[Key] in Go 1.23.
-	return xmaps.Keys(s.m)
+	return maps.Keys(s.m)
 }
 
 // Len reports the number of [RawItem]s in s.
@@ -116,8 +115,6 @@ func (s *Snapshot) String() string {
 	if s.Len() == 0 && s.Summary().IsEmpty() {
 		return "{Empty}"
 	}
-	keys := s.Keys()
-	slices.Sort(keys)
 	var sb strings.Builder
 	if !s.summary.IsEmpty() {
 		sb.WriteRune('{')
@@ -127,7 +124,7 @@ func (s *Snapshot) String() string {
 		sb.WriteString(s.summary.String())
 		sb.WriteRune('}')
 	}
-	for _, k := range keys {
+	for _, k := range slices.Sorted(s.Keys()) {
 		if sb.Len() != 0 {
 			sb.WriteRune('\n')
 		}
