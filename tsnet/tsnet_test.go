@@ -510,7 +510,7 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 			Dir:        tmps1,
 			ControlURL: controlURL,
 			Hostname:   "s1",
-			Logf:       logger.TestLogger(t),
+			Logf:       tstest.WhileTestRunningLogger(t),
 		}
 	}
 	s1 := newServer()
