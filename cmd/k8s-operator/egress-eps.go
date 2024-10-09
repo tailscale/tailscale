@@ -111,9 +111,13 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if !ready {
 			continue // maybe next time
 		}
+		podIP, err := podIPv4(&pod) // we currently only support IPv4
+		if err != nil {
+			return res, fmt.Errorf("error determining IPv4 address for Pod: %w", err)
+		}
 		newEndpoints = append(newEndpoints, discoveryv1.Endpoint{
 			Hostname:  (*string)(&pod.UID),
-			Addresses: []string{pod.Status.PodIP},
+			Addresses: []string{podIP},
 			Conditions: discoveryv1.EndpointConditions{
 				Ready:       ptr.To(true),
 				Serving:     ptr.To(true),
