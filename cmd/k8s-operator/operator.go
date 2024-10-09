@@ -376,6 +376,22 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("failed setting up indexer for egress Services: %v", err)
 	}
 
+	egressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
+	err = builder.
+		ControllerManagedBy(mgr).
+		Named("egress-svcs-readiness-reconciler").
+		Watches(&corev1.Service{}, egressSvcFilter).
+		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsFilter).
+		Complete(&egressSvcsReadinessReconciler{
+			Client:      mgr.GetClient(),
+			tsNamespace: opts.tailscaleNamespace,
+			clock:       tstime.DefaultClock{},
+			logger:      opts.log.Named("egress-svcs-readiness-reconciler"),
+		})
+	if err != nil {
+		startlog.Fatalf("could not create egress Services readiness reconciler: %v", err)
+	}
+
 	epsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsHandler)
 	podsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromPGPods(mgr.GetClient(), opts.tailscaleNamespace))
 	secretsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromPGStateSecrets(mgr.GetClient(), opts.tailscaleNamespace))
@@ -883,6 +899,33 @@ func egressEpsFromPGStateSecrets(cl client.Client, ns string) handler.MapFunc {
 			return nil
 		}
 		return reconcileRequestsForPG(pg, cl, ns)
+	}
+}
+
+// egressSvcFromEps is an event handler for EndpointSlices. If an EndpointSlice is for an egress ExternalName Service
+// meant to be exposed on a ProxyGroup, returns a reconcile request for the Service.
+func egressSvcFromEps(_ context.Context, o client.Object) []reconcile.Request {
+	if typ := o.GetLabels()[labelSvcType]; typ != typeEgress {
+		return nil
+	}
+	if _, ok := o.GetLabels()[LabelManaged]; !ok {
+		return nil
+	}
+	svcName, ok := o.GetLabels()[LabelParentName]
+	if !ok {
+		return nil
+	}
+	svcNs, ok := o.GetLabels()[LabelParentNamespace]
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Namespace: svcNs,
+				Name:      svcName,
+			},
+		},
 	}
 }
 

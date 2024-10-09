@@ -161,7 +161,6 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 }
 
 func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1.Service, l *zap.SugaredLogger) (err error) {
-	l.Debug("maybe provision")
 	r := svcConfiguredReason(svc, false, l)
 	st := metav1.ConditionFalse
 	defer func() {
@@ -272,11 +271,9 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		}
 	}
 
-	crl := egressSvcChildResourceLabels(svc)
+	crl := egressSvcEpsLabels(svc, clusterIPSvc)
 	// TODO(irbekrm): support IPv6, but need to investigate how kube proxy
 	// sets up Service -> Pod routing when IPv6 is involved.
-	crl[discoveryv1.LabelServiceName] = clusterIPSvc.Name
-	crl[discoveryv1.LabelManagedBy] = "tailscale.com"
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-ipv4", clusterIPSvc.Name),
@@ -632,6 +629,19 @@ func egressSvcChildResourceLabels(svc *corev1.Service) map[string]string {
 		labelProxyGroup:      svc.Annotations[AnnotationProxyGroup],
 		labelSvcType:         typeEgress,
 	}
+}
+
+// egressEpsLabels returns labels to be added to an EndpointSlice created for an egress service.
+func egressSvcEpsLabels(extNSvc, clusterIPSvc *corev1.Service) map[string]string {
+	l := egressSvcChildResourceLabels(extNSvc)
+	// Adding this label is what makes kube proxy set up rules to route traffic sent to the clusterIP Service to the
+	// endpoints defined on this EndpointSlice.
+	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#ownership
+	l[discoveryv1.LabelServiceName] = clusterIPSvc.Name
+	// Kubernetes recommends setting this label.
+	// https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/#management
+	l[discoveryv1.LabelManagedBy] = "tailscale.com"
+	return l
 }
 
 func svcConfigurationUpToDate(svc *corev1.Service, l *zap.SugaredLogger) bool {
