@@ -228,7 +228,6 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 	files := make([]ipn.PartialFile, 0)
 	for k, f := range m.incomingFiles.All() {
 		f.mu.Lock()
-		defer f.mu.Unlock()
 		files = append(files, ipn.PartialFile{
 			Name:         k.name,
 			Started:      f.started,
@@ -238,6 +237,7 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 			FinalPath:    f.finalPath,
 			Done:         f.done,
 		})
+		f.mu.Unlock()
 	}
 	return files
 }
