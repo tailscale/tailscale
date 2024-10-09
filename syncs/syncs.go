@@ -6,6 +6,7 @@ package syncs
 
 import (
 	"context"
+	"iter"
 	"sync"
 	"sync/atomic"
 
@@ -256,12 +257,59 @@ func (m *Map[K, V]) Delete(key K) {
 // Iteration stops if f returns false. Map changes are blocked during iteration.
 // A read lock is held for the entire duration of the iteration.
 // Use the [WithLock] method instead to mutate the map during iteration.
+//
+// Deprecated: Use [All], [Keys], or [Values] instead.
 func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for k, v := range m.m {
 		if !f(k, v) {
 			return
+		}
+	}
+}
+
+// Keys iterates over all keys in the map in an undefined order.
+// A read lock is held for the entire duration of the iteration.
+// Use the [WithLock] method instead to mutate the map during iteration.
+func (m *Map[K, V]) Keys() iter.Seq[K] {
+	return func(yield func(K) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for k := range m.m {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+// Values iterates over all values in the map in an undefined order.
+// A read lock is held for the entire duration of the iteration.
+// Use the [WithLock] method instead to mutate the map during iteration.
+func (m *Map[K, V]) Values() iter.Seq[V] {
+	return func(yield func(V) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for _, v := range m.m {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+// All iterates over all entries in the map in an undefined order.
+// A read lock is held for the entire duration of the iteration.
+// Use the [WithLock] method instead to mutate the map during iteration.
+func (m *Map[K, V]) All() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for k, v := range m.m {
+			if !yield(k, v) {
+				return
+			}
 		}
 	}
 }
