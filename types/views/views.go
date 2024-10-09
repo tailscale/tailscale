@@ -440,6 +440,17 @@ func (m MapSlice[K, V]) AsMap() map[K][]V {
 	return out
 }
 
+// All returns an iterator iterating over the keys and values of m.
+func (m MapSlice[K, V]) All() iter.Seq2[K, Slice[V]] {
+	return func(yield func(K, Slice[V]) bool) {
+		for k, v := range m.ж {
+			if !yield(k, SliceOf(v)) {
+				return
+			}
+		}
+	}
+}
+
 // Map provides a read-only view of a map. It is the caller's responsibility to
 // make sure V is immutable.
 type Map[K comparable, V any] struct {
@@ -526,6 +537,18 @@ func (m Map[K, V]) Range(f MapRangeFn[K, V]) {
 	}
 }
 
+// All returns an iterator iterating over the keys
+// and values of m.
+func (m Map[K, V]) All() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		for k, v := range m.ж {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
+}
+
 // MapFnOf returns a MapFn for m.
 func MapFnOf[K comparable, T any, V any](m map[K]T, f func(T) V) MapFn[K, T, V] {
 	return MapFn[K, T, V]{
@@ -583,6 +606,17 @@ func (m MapFn[K, T, V]) Range(f MapRangeFn[K, V]) {
 	for k, v := range m.ж {
 		if !f(k, m.wrapv(v)) {
 			return
+		}
+	}
+}
+
+// All returns an iterator iterating over the keys and value views of m.
+func (m MapFn[K, T, V]) All() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		for k, v := range m.ж {
+			if !yield(k, m.wrapv(v)) {
+				return
+			}
 		}
 	}
 }
