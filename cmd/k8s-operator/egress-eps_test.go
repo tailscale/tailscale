@@ -104,7 +104,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		})
 		expectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = append(eps.Endpoints, discoveryv1.Endpoint{
-			Addresses: []string{pod.Status.PodIP},
+			Addresses: []string{"10.0.0.1"},
 			Hostname:  pointer.To("foo"),
 			Conditions: discoveryv1.EndpointConditions{
 				Serving:     pointer.ToBool(true),
