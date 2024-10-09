@@ -72,7 +72,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	crl := egressSvcChildResourceLabels(svc)
 	eps, err := getSingleObject[discoveryv1.EndpointSlice](ctx, esrr.Client, esrr.tsNamespace, crl)
 	if err != nil {
-		err := fmt.Errorf("error getting EndpointSlice: %w", err)
+		err = fmt.Errorf("error getting EndpointSlice: %w", err)
 		reason = reasonReadinessCheckFailed
 		msg = err.Error()
 		return res, err
@@ -160,6 +160,8 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	return res, nil
 }
 
+// endpointReadyForPod returns true if the endpoint is for the Pod's IPv4 address and is ready to serve traffic.
+// Endpoint must not be nil.
 func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, l *zap.SugaredLogger) bool {
 	podIP, err := podIPv4(pod)
 	if err != nil {

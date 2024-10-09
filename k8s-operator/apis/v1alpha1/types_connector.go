@@ -172,19 +172,19 @@ type ConditionType string
 const (
 	ConnectorReady  ConditionType = `ConnectorReady`
 	ProxyClassReady ConditionType = `ProxyClassReady`
-	ProxyGroupReady ConditionType = `ProxyGroupReady`
+	ProxyGroupReady ConditionType = `TailscaleProxyGroupReady`
 	ProxyReady      ConditionType = `TailscaleProxyReady` // a Tailscale-specific condition type for corev1.Service
 	RecorderReady   ConditionType = `RecorderReady`
 	// EgressSvcValid gets set on a user configured ExternalName Service that defines a tailnet target to be exposed
 	// on a ProxyGroup.
 	// Set to true if the user provided configuration is valid.
-	EgressSvcValid ConditionType = `EgressSvcValid`
+	EgressSvcValid ConditionType = `TailscaleEgressSvcValid`
 	// EgressSvcConfigured gets set on a user configured ExternalName Service that defines a tailnet target to be exposed
 	// on a ProxyGroup.
 	// Set to true if the cluster resources for the service have been successfully configured.
-	EgressSvcConfigured ConditionType = `EgressSvcConfigured`
+	EgressSvcConfigured ConditionType = `TailscaleEgressSvcConfigured`
 	// EgressSvcReady gets set on a user configured ExternalName Service that defines a tailnet target to be exposed
 	// on a ProxyGroup.
 	// Set to true if the service is ready to route cluster traffic.
-	EgressSvcReady ConditionType = `EgressSvcReady`
+	EgressSvcReady ConditionType = `TailscaleEgressSvcReady`
 )
