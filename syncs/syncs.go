@@ -304,6 +304,9 @@ func (m *Map[K, V]) All() iter.Seq2[K, V] {
 func (m *Map[K, V]) WithLock(f func(m2 map[K]V)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.m == nil {
+		m.m = make(map[K]V)
+	}
 	f(m.m)
 }
 
