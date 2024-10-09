@@ -48,3 +48,21 @@ func As(err error) (e Error, ok bool) {
 	ok = errors.As(err, &e)
 	return
 }
+
+// ErrorWithInternal is a tuple of a user-visible error along with
+// an internal error that should not be shown to users.
+type ErrorWithInternal struct {
+	UserVisibleErr Error // user-visible half
+	InternalErr    error // internal error not to be shown to users
+}
+
+func (e ErrorWithInternal) Error() string {
+	return e.UserVisibleErr.Error()
+}
+
+// WithInternal returns a new ErrorWithInternal combining a user-visible error
+// string and an internal error to pass around for internal logging but not
+// to be shown to end users.
+func WithInternal(visibleError string, internalErr error) error {
+	return ErrorWithInternal{Error{errors.New(visibleError)}, internalErr}
+}
