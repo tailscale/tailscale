@@ -974,13 +974,12 @@ func (n *network) writeEth(res []byte) bool {
 
 	if dstMAC.IsBroadcast() || (n.v6 && etherType == layers.EthernetTypeIPv6 && dstMAC == macAllNodes) {
 		num := 0
-		n.writers.Range(func(mac MAC, nw networkWriter) bool {
+		for mac, nw := range n.writers.All() {
 			if mac != srcMAC {
 				num++
 				nw.write(res)
 			}
-			return true
-		})
+		}
 		return num > 0
 	}
 	if srcMAC == dstMAC {

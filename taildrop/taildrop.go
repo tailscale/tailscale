@@ -226,7 +226,7 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 	// in JSON to clients. They distinguish between empty and non-nil
 	// to know whether a Notify should be able about files.
 	files := make([]ipn.PartialFile, 0)
-	m.incomingFiles.Range(func(k incomingFileKey, f *incomingFile) bool {
+	for k, f := range m.incomingFiles.All() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		files = append(files, ipn.PartialFile{
@@ -238,8 +238,7 @@ func (m *Manager) IncomingFiles() []ipn.PartialFile {
 			FinalPath:    f.finalPath,
 			Done:         f.done,
 		})
-		return true
-	})
+	}
 	return files
 }
 
