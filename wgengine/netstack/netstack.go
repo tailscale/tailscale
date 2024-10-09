@@ -414,15 +414,14 @@ func init() {
 	// endpoint, and name collisions will result in Prometheus scraping errors.
 	clientmetric.NewCounterFunc("netstack_tcp_forward_dropped_attempts", func() int64 {
 		var total uint64
-		stacksForMetrics.Range(func(ns *Impl, _ struct{}) bool {
+		for ns := range stacksForMetrics.Keys() {
 			delta := ns.ipstack.Stats().TCP.ForwardMaxInFlightDrop.Value()
 			if total+delta > math.MaxInt64 {
 				total = math.MaxInt64
-				return false
+				break
 			}
 			total += delta
-			return true
-		})
+		}
 		return int64(total)
 	})
 }
