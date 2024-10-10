@@ -8,10 +8,11 @@ package conffile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 
-	"github.com/tailscale/hujson"
 	"tailscale.com/ipn"
 )
 
@@ -39,8 +40,21 @@ func (c *Config) WantRunning() bool {
 // from the VM's metadata service's user-data field.
 const VMUserDataPath = "vm:user-data"
 
+// hujsonStandardize is set to hujson.Standardize by conffile_hujson.go on
+// platforms that support config files.
+var hujsonStandardize func([]byte) ([]byte, error)
+
 // Load reads and parses the config file at the provided path on disk.
 func Load(path string) (*Config, error) {
+	switch runtime.GOOS {
+	case "ios", "android":
+		// compile-time for deadcode elimination
+		return nil, fmt.Errorf("config file loading not supported on %q", runtime.GOOS)
+	}
+	if hujsonStandardize == nil {
+		// Build tags are wrong in conffile_hujson.go
+		return nil, errors.New("[unexpected] config file loading not wired up")
+	}
 	var c Config
 	c.Path = path
 	var err error
@@ -54,7 +68,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Std, err = hujson.Standardize(c.Raw)
+	c.Std, err = hujsonStandardize(c.Raw)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing config file %s HuJSON/JSON: %w", path, err)
 	}
