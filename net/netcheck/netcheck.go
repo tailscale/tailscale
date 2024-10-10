@@ -940,7 +940,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 			}
 		}
 		if len(need) > 0 {
-			if !opts.OnlyTCP443 {
+			if opts == nil || !opts.OnlyTCP443 {
 				// Kick off ICMP in parallel to HTTPS checks; we don't
 				// reuse the same WaitGroup for those probes because we
 				// need to close the underlying Pinger after a timeout
