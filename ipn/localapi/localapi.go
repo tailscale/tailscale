@@ -31,7 +31,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
@@ -1563,7 +1562,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "PUT":
 		file := ipn.OutgoingFile{
-			ID:           uuid.Must(uuid.NewRandom()).String(),
+			ID:           rands.HexString(30),
 			PeerID:       peerID,
 			Name:         filenameEscaped,
 			DeclaredSize: r.ContentLength,
