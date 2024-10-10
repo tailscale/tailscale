@@ -20,6 +20,8 @@ func TestDeps(t *testing.T) {
 			"tailscale.com/net/wsconn":   "https://github.com/tailscale/tailscale/issues/13762",
 			"github.com/coder/websocket": "https://github.com/tailscale/tailscale/issues/13762",
 			"github.com/mitchellh/go-ps": "https://github.com/tailscale/tailscale/pull/13759",
+			"database/sql/driver":        "iOS doesn't use an SQL database",
+			"github.com/google/uuid":     "see tailscale/tailscale#13760",
 		},
 	}.Check(t)
 }
