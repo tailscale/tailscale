@@ -14,6 +14,7 @@ import (
 	"tailscale.com/drive/driveimpl/compositedav"
 	"tailscale.com/drive/driveimpl/dirfs"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 )
 
 const (
@@ -55,6 +56,11 @@ type FileSystemForLocal struct {
 }
 
 func (s *FileSystemForLocal) startServing() {
+	if version.IsAppleTV() {
+		s.logf("won't serve taildrive on Apple TV")
+		return
+	}
+
 	hs := &http.Server{Handler: s.h}
 	go func() {
 		err := hs.Serve(s.listener)
