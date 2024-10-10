@@ -27,7 +27,6 @@ import (
 	"strconv"
 	"strings"
 
-	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 	"tailscale.com/version"
@@ -776,14 +775,6 @@ func (up *Updater) cleanupOldDownloads(glob string) {
 			up.Logf("cleaning up old downloads: %v", err)
 		}
 	}
-}
-
-func (up *Updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
-	c, err := distsign.NewClient(up.Logf, up.PkgsAddr)
-	if err != nil {
-		return err
-	}
-	return c.Download(context.Background(), pathSrc, fileDst)
 }
 
 func (up *Updater) updateFreeBSD() (err error) {
