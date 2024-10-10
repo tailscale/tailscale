@@ -37,7 +37,7 @@ spec:
       volumes:
       - name: oauth
         secret:
-          secretName: operator-oauth
+          secretName: {{ .Values.oauth.secret.name }}
       containers:
         - name: operator
           {{- with .Values.operatorConfig.securityContext }}
@@ -65,9 +65,9 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: CLIENT_ID_FILE
-              value: /oauth/client_id
+              value: /oauth/{{ .Values.oauth.clientIdKey }}
             - name: CLIENT_SECRET_FILE
-              value: /oauth/client_secret
+              value: /oauth/{{ .Values.oauth.clientSecretKey }}
             {{- $proxyTag := printf ":%s" ( .Values.proxyConfig.image.tag | default .Chart.AppVersion )}}
             - name: PROXY_IMAGE
               value: {{ coalesce .Values.proxyConfig.image.repo .Values.proxyConfig.image.repository }}{{- if .Values.proxyConfig.image.digest -}}{{ printf "@%s" .Values.proxyConfig.image.digest}}{{- else -}}{{ printf "%s" $proxyTag }}{{- end }}

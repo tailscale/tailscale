@@ -4,9 +4,14 @@
 # Operator oauth credentials. If set a Kubernetes Secret with the provided
 # values will be created in the operator namespace. If unset a Secret named
 # operator-oauth must be precreated.
-oauth: {}
+oauth:
   # clientId: ""
+  clientIdKey: client-id
   # clientSecret: ""
+  clientSecretKey: client-secret
+  secret:
+    create: true
+    name: operator-oauth
 
 # installCRDs determines whether tailscale.com CRDs should be installed as part
 # of chart installation. We do not use Helm's CRD installation mechanism as that
