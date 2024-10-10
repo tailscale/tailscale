@@ -19,6 +19,7 @@ func TestDeps(t *testing.T) {
 			"html/template":              "linker bloat (MethodByName)",
 			"tailscale.com/net/wsconn":   "https://github.com/tailscale/tailscale/issues/13762",
 			"github.com/coder/websocket": "https://github.com/tailscale/tailscale/issues/13762",
+			"github.com/mitchellh/go-ps": "https://github.com/tailscale/tailscale/pull/13759",
 		},
 	}.Check(t)
 }
