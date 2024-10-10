@@ -20,7 +20,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 	"tailscale.com/version"
@@ -62,7 +61,6 @@ type setArgsT struct {
 	snat                   bool
 	statefulFiltering      bool
 	netfilterMode          string
-	advertiseServices      string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -83,7 +81,6 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
 	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, hidden+"allow management plane to gather device posture information")
 	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
-	setf.StringVar(&setArgs.advertiseServices, "advertise-services", "", "comma-separated services to advertise; each must start with \"svc:\" (e.g. \"svc:idp,svc:nas,svc:database\")")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -157,10 +154,6 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			PostureChecking:     setArgs.postureChecking,
 			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 		},
-	}
-
-	if maskedPrefs.Prefs.AdvertiseServices, err = parseServiceNames(setArgs.advertiseServices); err != nil {
-		return err
 	}
 
 	if effectiveGOOS() == "linux" {
@@ -279,22 +272,4 @@ func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, cu
 		return routes, nil
 	}
 	return nil, nil
-}
-
-// parseServiceNames takes a comma-separated list of service names
-// (eg. "svc:hello,svc:webserver,svc:catphotos"), splits them into
-// a list and validates each service name. If valid, it returns
-// the service names in a slice of strings.
-func parseServiceNames(servicesArg string) ([]string, error) {
-	var services []string
-	if servicesArg != "" {
-		services = strings.Split(servicesArg, ",")
-		for _, svc := range services {
-			err := tailcfg.CheckServiceName(svc)
-			if err != nil {
-				return nil, fmt.Errorf("service %q: %s", svc, err)
-			}
-		}
-	}
-	return services, nil
 }
