@@ -51,6 +51,9 @@ type Client struct {
 	// HTTPClient optionally specifies an alternate HTTP client to use.
 	// If nil, http.DefaultClient is used.
 	HTTPClient *http.Client
+
+	// UserAgent optionally specifies an alternate User-Agent header
+	UserAgent string
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -97,8 +100,9 @@ func (c *Client) setAuth(r *http.Request) {
 // and can be changed manually by the user.
 func NewClient(tailnet string, auth AuthMethod) *Client {
 	return &Client{
-		tailnet: tailnet,
-		auth:    auth,
+		tailnet:   tailnet,
+		auth:      auth,
+		UserAgent: "tailscale-client-oss",
 	}
 }
 
@@ -110,17 +114,16 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
 	}
 	c.setAuth(req)
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
 	return c.httpClient().Do(req)
 }
 
 // sendRequest add the authentication key to the request and sends it. It
 // receives the response and reads up to 10MB of it.
 func (c *Client) sendRequest(req *http.Request) ([]byte, *http.Response, error) {
-	if !I_Acknowledge_This_API_Is_Unstable {
-		return nil, nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
-	}
-	c.setAuth(req)
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, resp, err
 	}

@@ -903,6 +903,7 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 	}
 
 	c := tailscale.NewClient("-", nil)
+	c.UserAgent = "tailscale-tsnet"
 	c.HTTPClient = &http.Client{Transport: s.lb.KeyProvingNoiseRoundTripper()}
 	return c, nil
 }

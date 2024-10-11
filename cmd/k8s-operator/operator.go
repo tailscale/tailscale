@@ -143,6 +143,7 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
 	}
 	tsClient := tailscale.NewClient("-", nil)
+	tsClient.UserAgent = "tailscale-k8s-operator"
 	tsClient.HTTPClient = credentials.Client(context.Background())
 
 	s := &tsnet.Server{

@@ -1152,6 +1152,7 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 	}
 
 	tsClient := tailscale.NewClient("-", nil)
+	tsClient.UserAgent = "tailscale-cli"
 	tsClient.HTTPClient = credentials.Client(ctx)
 	tsClient.BaseURL = baseURL
 
