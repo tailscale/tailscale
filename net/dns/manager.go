@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"runtime"
@@ -18,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
@@ -203,7 +203,7 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 	if len(hostsMap) == 0 {
 		return nil
 	}
-	hosts = xmaps.Values(hostsMap)
+	hosts = slices.Collect(maps.Values(hostsMap))
 	slices.SortFunc(hosts, func(a, b *HostEntry) int {
 		if len(a.Hosts) == 0 && len(b.Hosts) == 0 {
 			return 0

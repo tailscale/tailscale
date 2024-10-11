@@ -5,13 +5,13 @@ package appc
 
 import (
 	"context"
+	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
 	"testing"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc/appctest"
 	"tailscale.com/tstest"
@@ -50,7 +50,7 @@ func TestUpdateDomains(t *testing.T) {
 		// domains are explicitly downcased on set.
 		a.UpdateDomains([]string{"UP.EXAMPLE.COM"})
 		a.Wait(ctx)
-		if got, want := xmaps.Keys(a.domains), []string{"up.example.com"}; !slices.Equal(got, want) {
+		if got, want := slices.Collect(maps.Keys(a.domains)), []string{"up.example.com"}; !slices.Equal(got, want) {
 			t.Errorf("got %v; want %v", got, want)
 		}
 	}

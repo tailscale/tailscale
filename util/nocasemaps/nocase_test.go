@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	qt "github.com/frankban/quicktest"
-	xmaps "golang.org/x/exp/maps"
 )
 
 func pair[A, B any](a A, b B) (out struct {
@@ -130,7 +129,7 @@ func Benchmark(b *testing.B) {
 					for range b.N {
 						testMap[strings.ToLower(key)] = testValue
 					}
-					xmaps.Clear(testMap)
+					clear(testMap)
 				})
 				b.Run("NoCase", func(b *testing.B) {
 					b.ReportAllocs()
@@ -138,7 +137,7 @@ func Benchmark(b *testing.B) {
 					for range b.N {
 						Set(testMap, key, testValue)
 					}
-					xmaps.Clear(testMap)
+					clear(testMap)
 				})
 			})
 			b.Run("Delete", func(b *testing.B) {

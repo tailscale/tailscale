@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +34,6 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -1129,7 +1130,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 			}
 		}
 		t.Helper()
-		t.Errorf("missing any connection to %s from %s", wantConns, xmaps.Keys(stats))
+		t.Errorf("missing any connection to %s from %s", wantConns, slices.Collect(maps.Keys(stats)))
 	}
 
 	addrPort := netip.MustParseAddrPort

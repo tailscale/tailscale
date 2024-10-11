@@ -5,10 +5,11 @@ package source
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy/internal"
@@ -294,7 +295,7 @@ func (s *TestStore) Suspend() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.suspendCount++; s.suspendCount == 1 {
-		s.mw = xmaps.Clone(s.mr)
+		s.mw = maps.Clone(s.mr)
 	}
 }
 
@@ -421,7 +422,7 @@ func (s *TestStore) notifyPolicyChanged() {
 		s.mu.RUnlock()
 		return
 	}
-	cbs := xmaps.Values(s.cbs)
+	cbs := slices.Collect(maps.Values(s.cbs))
 	s.mu.RUnlock()
 
 	var wg sync.WaitGroup

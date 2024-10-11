@@ -9,13 +9,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -255,7 +255,7 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 	}
 
 	filteredExitNodes := filteredExitNodes{
-		Countries: xmaps.Values(countries),
+		Countries: slices.Collect(maps.Values(countries)),
 	}
 
 	for _, country := range filteredExitNodes.Countries {
