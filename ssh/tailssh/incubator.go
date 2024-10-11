@@ -210,8 +210,6 @@ type incubatorArgs struct {
 	debugTest          bool
 	isSELinuxEnforcing bool
 	encodedEnv         string
-	allowListEnvKeys   string
-	forwardedEnviron   []string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -246,31 +244,35 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 		ia.gids = append(ia.gids, gid)
 	}
 
-	ia.forwardedEnviron = os.Environ()
+	return ia, nil
+}
+
+func (ia incubatorArgs) forwadedEnviron() ([]string, string, error) {
+	environ := os.Environ()
 	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
-	ia.allowListEnvKeys = "SSH_AUTH_SOCK"
+	allowListKeys := "SSH_AUTH_SOCK"
 
 	if ia.encodedEnv != "" {
 		unquoted, err := strconv.Unquote(ia.encodedEnv)
 		if err != nil {
-			return ia, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 
 		var extraEnviron []string
 
 		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
 		if err != nil {
-			return ia, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 
-		ia.forwardedEnviron = append(ia.forwardedEnviron, extraEnviron...)
+		environ = append(environ, extraEnviron...)
 
 		for _, v := range extraEnviron {
-			ia.allowListEnvKeys = fmt.Sprintf("%s,%s", ia.allowListEnvKeys, strings.Split(v, "=")[0])
+			allowListKeys = fmt.Sprintf("%s,%s", allowListKeys, strings.Split(v, "=")[0])
 		}
 	}
 
-	return ia, nil
+	return environ, allowListKeys, nil
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
@@ -450,8 +452,13 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	loginArgs := ia.loginArgs(loginCmdPath)
 	dlogf("logging in with %+v", loginArgs)
 
+	environ, _, err := ia.forwadedEnviron()
+	if err != nil {
+		return err
+	}
+
 	// If Exec works, the Go code will not proceed past this:
-	err = unix.Exec(loginCmdPath, loginArgs, ia.forwardedEnviron)
+	err = unix.Exec(loginCmdPath, loginArgs, environ)
 
 	// If we made it here, Exec failed.
 	return err
@@ -484,9 +491,14 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
+	environ, allowListEnvKeys, err := ia.forwadedEnviron()
+	if err != nil {
+		return false, err
+	}
+
 	loginArgs := []string{
 		su,
-		"-w", ia.allowListEnvKeys,
+		"-w", allowListEnvKeys,
 		"-l",
 		ia.localUser,
 	}
@@ -498,7 +510,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	dlogf("logging in with %+v", loginArgs)
 
 	// If Exec works, the Go code will not proceed past this:
-	err = unix.Exec(su, loginArgs, ia.forwardedEnviron)
+	err = unix.Exec(su, loginArgs, environ)
 
 	// If we made it here, Exec failed.
 	return true, err
@@ -527,11 +539,16 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
+	_, allowListEnvKeys, err := ia.forwadedEnviron()
+	if err != nil {
+		return ""
+	}
+
 	// First try to execute su -w <allow listed env> -l <user> -c true
 	// to make sure su supports the necessary arguments.
 	err = exec.Command(
 		su,
-		"-w", ia.allowListEnvKeys,
+		"-w", allowListEnvKeys,
 		"-l",
 		ia.localUser,
 		"-c", "true",
@@ -558,10 +575,15 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 		return err
 	}
 
+	environ, _, err := ia.forwadedEnviron()
+	if err != nil {
+		return err
+	}
+
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
-	cmd := newCommand(ia.hasTTY, ia.loginShell, ia.forwardedEnviron, args)
-	err := cmd.Run()
+	cmd := newCommand(ia.hasTTY, ia.loginShell, environ, args)
+	err = cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
 		code := ps.ExitCode()
