@@ -15,6 +15,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -3995,6 +3997,544 @@ func TestFillAllowedSuggestions(t *testing.T) {
 			if !got.Equal(set.SetOf(tt.want)) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestNotificationTargetMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    notificationTarget
+		actor     ipnauth.Actor
+		wantMatch bool
+	}{
+		{
+			name:      "AllClients/Nil",
+			target:    allClients,
+			actor:     nil,
+			wantMatch: true,
+		},
+		{
+			name:      "AllClients/NoUID/NoCID",
+			target:    allClients,
+			actor:     &ipnauth.TestActor{},
+			wantMatch: true,
+		},
+		{
+			name:      "AllClients/WithUID/NoCID",
+			target:    allClients,
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.NoClientID},
+			wantMatch: true,
+		},
+		{
+			name:      "AllClients/NoUID/WithCID",
+			target:    allClients,
+			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: true,
+		},
+		{
+			name:      "AllClients/WithUID/WithCID",
+			target:    allClients,
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: true,
+		},
+		{
+			name:      "FilterByUID/Nil",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     nil,
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID/NoUID/NoCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     &ipnauth.TestActor{},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID/NoUID/WithCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID/SameUID/NoCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4"},
+			wantMatch: true,
+		},
+		{
+			name:      "FilterByUID/DifferentUID/NoCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8"},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID/SameUID/WithCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: true,
+		},
+		{
+			name:      "FilterByUID/DifferentUID/WithCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8", CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByCID/Nil",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     nil,
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByCID/NoUID/NoCID",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByCID/NoUID/SameCID",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: true,
+		},
+		{
+			name:      "FilterByCID/NoUID/DifferentCID",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("B")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByCID/WithUID/NoCID",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4"},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByCID/WithUID/SameCID",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: true,
+		},
+		{
+			name:      "FilterByCID/WithUID/DifferentCID",
+			target:    notificationTarget{clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("B")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/Nil",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4"},
+			actor:     nil,
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/NoUID/NoCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/NoUID/SameCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/NoUID/DifferentCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{CID: ipnauth.ClientIDFrom("B")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/SameUID/NoCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4"},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/SameUID/SameCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: true,
+		},
+		{
+			name:      "FilterByUID+CID/SameUID/DifferentCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-1-2-3-4", CID: ipnauth.ClientIDFrom("B")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/DifferentUID/NoCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8"},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/DifferentUID/SameCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8", CID: ipnauth.ClientIDFrom("A")},
+			wantMatch: false,
+		},
+		{
+			name:      "FilterByUID+CID/DifferentUID/DifferentCID",
+			target:    notificationTarget{userID: "S-1-5-21-1-2-3-4", clientID: ipnauth.ClientIDFrom("A")},
+			actor:     &ipnauth.TestActor{UID: "S-1-5-21-5-6-7-8", CID: ipnauth.ClientIDFrom("B")},
+			wantMatch: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMatch := tt.target.match(tt.actor)
+			if gotMatch != tt.wantMatch {
+				t.Errorf("match: got %v; want %v", gotMatch, tt.wantMatch)
+			}
+		})
+	}
+}
+
+type newTestControlFn func(tb testing.TB, opts controlclient.Options) controlclient.Client
+
+func newLocalBackendWithTestControl(t *testing.T, enableLogging bool, newControl newTestControlFn) *LocalBackend {
+	logf := logger.Discard
+	if enableLogging {
+		logf = tstest.WhileTestRunningLogger(t)
+	}
+	sys := new(tsd.System)
+	store := new(mem.Store)
+	sys.Set(store)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
+	if err != nil {
+		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	}
+	t.Cleanup(e.Close)
+	sys.Set(e)
+
+	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	b.DisablePortMapperForTest()
+
+	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+		return newControl(t, opts), nil
+	})
+	return b
+}
+
+// notificationHandler is any function that can process (e.g., check) a notification.
+// It returns whether the notification has been handled or should be passed to the next handler.
+// The handler may be called from any goroutine, so it must avoid calling functions
+// that are restricted to the goroutine running the test or benchmark function,
+// such as [testing.common.FailNow] and [testing.common.Fatalf].
+type notificationHandler func(testing.TB, ipnauth.Actor, *ipn.Notify) bool
+
+// wantedNotification names a [notificationHandler] that processes a notification
+// the test expects and wants to receive. The name is used to report notifications
+// that haven't been received within the expected timeout.
+type wantedNotification struct {
+	name string
+	cond notificationHandler
+}
+
+// notificationWatcher observes [LocalBackend] notifications as the specified actor,
+// reporting missing but expected notifications using [testing.common.Error],
+// and delegating the handling of unexpected notifications to the [notificationHandler]s.
+type notificationWatcher struct {
+	tb    testing.TB
+	lb    *LocalBackend
+	actor ipnauth.Actor
+
+	mu          sync.Mutex
+	mask        ipn.NotifyWatchOpt
+	want        []wantedNotification  // notifications we want to receive
+	unexpected  []notificationHandler // funcs that are called to check any other notifications
+	ctxCancel   context.CancelFunc    // cancels the outstanding [LocalBackend.WatchNotificationsAs] call
+	got         []*ipn.Notify         // all notifications, both wanted and unexpected, we've received so far
+	gotWanted   []*ipn.Notify         // only the expected notifications; holds nil for any notification that hasn't been received
+	gotWantedCh chan struct{}         // closed when we have received the last wanted notification
+	doneCh      chan struct{}         // closed when [LocalBackend.WatchNotificationsAs] returns
+}
+
+func newNotificationWatcher(tb testing.TB, lb *LocalBackend, actor ipnauth.Actor) *notificationWatcher {
+	return &notificationWatcher{tb: tb, lb: lb, actor: actor}
+}
+
+func (w *notificationWatcher) watch(mask ipn.NotifyWatchOpt, wanted []wantedNotification, unexpected ...notificationHandler) {
+	w.tb.Helper()
+
+	// Cancel any outstanding [LocalBackend.WatchNotificationsAs] calls.
+	w.mu.Lock()
+	ctxCancel := w.ctxCancel
+	doneCh := w.doneCh
+	w.mu.Unlock()
+	if doneCh != nil {
+		ctxCancel()
+		<-doneCh
+	}
+
+	doneCh = make(chan struct{})
+	gotWantedCh := make(chan struct{})
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	w.tb.Cleanup(func() {
+		ctxCancel()
+		<-doneCh
+	})
+
+	w.mu.Lock()
+	w.mask = mask
+	w.want = wanted
+	w.unexpected = unexpected
+	w.ctxCancel = ctxCancel
+	w.got = nil
+	w.gotWanted = make([]*ipn.Notify, len(wanted))
+	w.gotWantedCh = gotWantedCh
+	w.doneCh = doneCh
+	w.mu.Unlock()
+
+	watchAddedCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		if len(wanted) == 0 {
+			close(gotWantedCh)
+			if len(unexpected) == 0 {
+				close(watchAddedCh)
+				return
+			}
+		}
+
+		var nextWantIdx int
+		w.lb.WatchNotificationsAs(ctx, w.actor, w.mask, func() { close(watchAddedCh) }, func(notify *ipn.Notify) (keepGoing bool) {
+			w.tb.Helper()
+
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			w.got = append(w.got, notify)
+
+			wanted := false
+			for i := nextWantIdx; i < len(w.want); i++ {
+				if wanted = w.want[i].cond(w.tb, w.actor, notify); wanted {
+					w.gotWanted[i] = notify
+					nextWantIdx = i + 1
+					break
+				}
+			}
+
+			if wanted && nextWantIdx == len(w.want) {
+				close(w.gotWantedCh)
+				if len(w.unexpected) == 0 {
+					// If we have received the last wanted notification,
+					// and we don't have any handlers for the unexpected notifications,
+					// we can stop the watcher right away.
+					return false
+				}
+
+			}
+
+			if !wanted {
+				// If we've received a notification we didn't expect,
+				// it could either be an unwanted notification caused by a bug
+				// or just a miscellaneous one that's irrelevant for the current test.
+				// Call unexpected notification handlers, if any, to
+				// check and fail the test if necessary.
+				for _, h := range w.unexpected {
+					if h(w.tb, w.actor, notify) {
+						break
+					}
+				}
+			}
+
+			return true
+		})
+
+	}()
+	<-watchAddedCh
+}
+
+func (w *notificationWatcher) check() []*ipn.Notify {
+	w.tb.Helper()
+
+	w.mu.Lock()
+	cancel := w.ctxCancel
+	gotWantedCh := w.gotWantedCh
+	checkUnexpected := len(w.unexpected) != 0
+	doneCh := w.doneCh
+	w.mu.Unlock()
+
+	// Wait for up to 10 seconds to receive expected notifications.
+	timeout := 10 * time.Second
+	for {
+		select {
+		case <-gotWantedCh:
+			if checkUnexpected {
+				gotWantedCh = nil
+				// But do not wait longer than 500ms for unexpected notifications after
+				// the expected notifications have been received.
+				timeout = 500 * time.Millisecond
+				continue
+			}
+		case <-doneCh:
+			// [LocalBackend.WatchNotificationsAs] has already returned, so no further
+			// notifications will be received. There's no reason to wait any longer.
+		case <-time.After(timeout):
+		}
+		cancel()
+		<-doneCh
+		break
+	}
+
+	// Report missing notifications, if any, and log all received notifications,
+	// including both expected and unexpected ones.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if hasMissing := slices.Contains(w.gotWanted, nil); hasMissing {
+		want := make([]string, len(w.want))
+		got := make([]string, 0, len(w.want))
+		for i, wn := range w.want {
+			want[i] = wn.name
+			if w.gotWanted[i] != nil {
+				got = append(got, wn.name)
+			}
+		}
+		w.tb.Errorf("Notifications(%s): got %q; want %q", actorDescriptionForTest(w.actor), strings.Join(got, ", "), strings.Join(want, ", "))
+		for i, n := range w.got {
+			w.tb.Logf("%d. %v", i, n)
+		}
+		return nil
+	}
+
+	return w.gotWanted
+}
+
+func actorDescriptionForTest(actor ipnauth.Actor) string {
+	var parts []string
+	if actor != nil {
+		if name, _ := actor.Username(); name != "" {
+			parts = append(parts, name)
+		}
+		if uid := actor.UserID(); uid != "" {
+			parts = append(parts, string(uid))
+		}
+		if clientID, _ := actor.ClientID(); clientID != ipnauth.NoClientID {
+			parts = append(parts, clientID.String())
+		}
+	}
+	return fmt.Sprintf("Actor{%s}", strings.Join(parts, ", "))
+}
+
+func TestLoginNotifications(t *testing.T) {
+	const (
+		enableLogging = true
+		controlURL    = "https://localhost:1/"
+		loginURL      = "https://localhost:1/1"
+	)
+
+	wantBrowseToURL := wantedNotification{
+		name: "BrowseToURL",
+		cond: func(t testing.TB, actor ipnauth.Actor, n *ipn.Notify) bool {
+			if n.BrowseToURL != nil && *n.BrowseToURL != loginURL {
+				t.Errorf("BrowseToURL (%s): got %q; want %q", actorDescriptionForTest(actor), *n.BrowseToURL, loginURL)
+				return false
+			}
+			return n.BrowseToURL != nil
+		},
+	}
+	unexpectedBrowseToURL := func(t testing.TB, actor ipnauth.Actor, n *ipn.Notify) bool {
+		if n.BrowseToURL != nil {
+			t.Errorf("Unexpected BrowseToURL(%s): %v", actorDescriptionForTest(actor), n)
+			return true
+		}
+		return false
+	}
+
+	tests := []struct {
+		name            string
+		logInAs         ipnauth.Actor
+		urlExpectedBy   []ipnauth.Actor
+		urlUnexpectedBy []ipnauth.Actor
+	}{
+		{
+			name:          "NoObservers",
+			logInAs:       &ipnauth.TestActor{UID: "A"},
+			urlExpectedBy: []ipnauth.Actor{}, // ensure that it does not panic if no one is watching
+		},
+		{
+			name:          "SingleUser",
+			logInAs:       &ipnauth.TestActor{UID: "A"},
+			urlExpectedBy: []ipnauth.Actor{&ipnauth.TestActor{UID: "A"}},
+		},
+		{
+			name:          "SameUser/TwoSessions/NoCID",
+			logInAs:       &ipnauth.TestActor{UID: "A"},
+			urlExpectedBy: []ipnauth.Actor{&ipnauth.TestActor{UID: "A"}, &ipnauth.TestActor{UID: "A"}},
+		},
+		{
+			name:            "SameUser/TwoSessions/OneWithCID",
+			logInAs:         &ipnauth.TestActor{UID: "A", CID: ipnauth.ClientIDFrom("123")},
+			urlExpectedBy:   []ipnauth.Actor{&ipnauth.TestActor{UID: "A", CID: ipnauth.ClientIDFrom("123")}},
+			urlUnexpectedBy: []ipnauth.Actor{&ipnauth.TestActor{UID: "A"}},
+		},
+		{
+			name:            "SameUser/TwoSessions/BothWithCID",
+			logInAs:         &ipnauth.TestActor{UID: "A", CID: ipnauth.ClientIDFrom("123")},
+			urlExpectedBy:   []ipnauth.Actor{&ipnauth.TestActor{UID: "A", CID: ipnauth.ClientIDFrom("123")}},
+			urlUnexpectedBy: []ipnauth.Actor{&ipnauth.TestActor{UID: "A", CID: ipnauth.ClientIDFrom("456")}},
+		},
+		{
+			name:            "DifferentUsers/NoCID",
+			logInAs:         &ipnauth.TestActor{UID: "A"},
+			urlExpectedBy:   []ipnauth.Actor{&ipnauth.TestActor{UID: "A"}},
+			urlUnexpectedBy: []ipnauth.Actor{&ipnauth.TestActor{UID: "B"}},
+		},
+		{
+			name:            "DifferentUsers/SameCID",
+			logInAs:         &ipnauth.TestActor{UID: "A"},
+			urlExpectedBy:   []ipnauth.Actor{&ipnauth.TestActor{UID: "A", CID: ipnauth.ClientIDFrom("123")}},
+			urlUnexpectedBy: []ipnauth.Actor{&ipnauth.TestActor{UID: "B", CID: ipnauth.ClientIDFrom("123")}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lb := newLocalBackendWithTestControl(t, enableLogging, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+				return newClient(tb, opts)
+			})
+			if _, err := lb.EditPrefs(&ipn.MaskedPrefs{ControlURLSet: true, Prefs: ipn.Prefs{ControlURL: controlURL}}); err != nil {
+				t.Fatalf("(*EditPrefs).Start(): %v", err)
+			}
+			if err := lb.Start(ipn.Options{}); err != nil {
+				t.Fatalf("(*LocalBackend).Start(): %v", err)
+			}
+
+			sessions := make([]*notificationWatcher, 0, len(tt.urlExpectedBy)+len(tt.urlUnexpectedBy))
+			for _, actor := range tt.urlExpectedBy {
+				session := newNotificationWatcher(t, lb, actor)
+				session.watch(0, []wantedNotification{wantBrowseToURL})
+				sessions = append(sessions, session)
+			}
+			for _, actor := range tt.urlUnexpectedBy {
+				session := newNotificationWatcher(t, lb, actor)
+				session.watch(0, nil, unexpectedBrowseToURL)
+				sessions = append(sessions, session)
+			}
+
+			if err := lb.StartLoginInteractiveAs(context.Background(), tt.logInAs); err != nil {
+				t.Fatal(err)
+			}
+
+			lb.cc.(*mockControl).send(nil, loginURL, false, nil)
+
+			var wg sync.WaitGroup
+			wg.Add(len(sessions))
+			for _, sess := range sessions {
+				go func() { // check all sessions in parallel
+					sess.check()
+					wg.Done()
+				}()
+			}
+			wg.Wait()
 		})
 	}
 }

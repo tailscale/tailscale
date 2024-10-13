@@ -4,6 +4,8 @@
 package ipnauth
 
 import (
+	"fmt"
+
 	"tailscale.com/ipn"
 )
 
@@ -20,6 +22,9 @@ type Actor interface {
 	// Username returns the user name associated with the receiver,
 	// or "" if the actor does not represent a specific user.
 	Username() (string, error)
+	// ClientID returns a non-zero ClientID and true if the actor represents
+	// a connected LocalAPI client. Otherwise, it returns a zero value and false.
+	ClientID() (_ ClientID, ok bool)
 
 	// IsLocalSystem reports whether the actor is the Windows' Local System account.
 	//
@@ -44,4 +49,30 @@ type Actor interface {
 type ActorCloser interface {
 	// Close releases resources associated with the receiver.
 	Close() error
+}
+
+// ClientID is an opaque, comparable value used to identify a connected LocalAPI
+// client, such as a connected Tailscale GUI or CLI. It does not necessarily
+// correspond to the same [net.Conn] or any physical session.
+//
+// Its zero value is valid, but does not represent a specific connected client.
+type ClientID struct {
+	v any
+}
+
+// NoClientID is the zero value of [ClientID].
+var NoClientID ClientID
+
+// ClientIDFrom returns a new [ClientID] derived from the specified value.
+// ClientIDs derived from equal values are equal.
+func ClientIDFrom[T comparable](v T) ClientID {
+	return ClientID{v}
+}
+
+// String implements [fmt.Stringer].
+func (id ClientID) String() string {
+	if id.v == nil {
+		return "(none)"
+	}
+	return fmt.Sprint(id.v)
 }
