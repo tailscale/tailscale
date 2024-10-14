@@ -230,6 +230,9 @@ func LogsDir(logf logger.Logf) string {
 			logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
 			return systemdStateDir
 		}
+	case "js":
+		logf("logpolicy: no logs directory in the browser")
+		return ""
 	}
 
 	// Default to e.g. /var/lib/tailscale or /var/db/tailscale on Unix.

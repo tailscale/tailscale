@@ -108,6 +108,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		SetSubsystem:  sys.Set,
 		ControlKnobs:  sys.ControlKnobs(),
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -127,6 +128,9 @@ func newIPN(jsConfig js.Value) map[string]any {
 	}
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
+	}
+	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		return ns.DialContextUDP(ctx, dst)
 	}
 	sys.NetstackRouter.Set(true)
 	sys.Tun.Get().Start()
