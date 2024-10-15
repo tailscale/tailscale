@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 )
@@ -30,6 +31,13 @@ var advertiseCmd = &ffcli.Command{
 		fs.StringVar(&advertiseArgs.services, "services", "", "comma-separated services to advertise; each must start with \"svc:\" (e.g. \"svc:idp,svc:nas,svc:database\")")
 		return fs
 	})(),
+}
+
+func maybeAdvertiseCmd() []*ffcli.Command {
+	if !envknob.UseWIPCode() {
+		return nil
+	}
+	return []*ffcli.Command{advertiseCmd}
 }
 
 func runAdvertise(ctx context.Context, args []string) error {

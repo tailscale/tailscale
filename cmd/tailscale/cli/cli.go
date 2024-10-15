@@ -207,12 +207,7 @@ change in the future.
 			debugCmd,
 			driveCmd,
 			idTokenCmd,
-		}, (func() []*ffcli.Command {
-			if !envknob.UseWIPCode() {
-				return nil
-			}
-			return []*ffcli.Command{advertiseCmd}
-		}())...),
+		}, maybeAdvertiseCmd()...),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
 			if len(args) > 0 {
