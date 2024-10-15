@@ -146,8 +146,10 @@ type Port80Handler struct {
 }
 
 func (h Port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ipStr, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip, _ := netip.ParseAddr(ipStr)
 	path := r.RequestURI
-	if path == "/debug" || strings.HasPrefix(path, "/debug") {
+	if ip.IsLoopback() || path == "/debug" || strings.HasPrefix(path, "/debug") {
 		h.Main.ServeHTTP(w, r)
 		return
 	}
