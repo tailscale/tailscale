@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build linux && !android
+//go:build linux && !android && !ts_package_container
 
 package hostinfo
 
@@ -32,5 +32,11 @@ remotes/origin/QTSFW_5.0.0`
 	want = ""
 	if got != want {
 		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
+func TestInContainer(t *testing.T) {
+	if got := inContainer(); !got.EqualBool(false) {
+		t.Errorf("inContainer = %v; want false due to absence of ts_package_container build tag", got)
 	}
 }
