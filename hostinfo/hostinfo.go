@@ -287,6 +287,11 @@ func inContainer() opt.Bool {
 	}
 	var ret opt.Bool
 	ret.Set(false)
+	if packageType != nil && packageType() == "container" {
+		// Go build tag ts_package_container was set during build.
+		ret.Set(true)
+		return ret
+	}
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		ret.Set(true)
 		return ret
@@ -362,7 +367,7 @@ func inFlyDotIo() bool {
 }
 
 func inReplit() bool {
-	// https://docs.replit.com/programming-ide/getting-repl-metadata
+	// https://docs.replit.com/replit-workspace/configuring-repl#environment-variables
 	if os.Getenv("REPL_OWNER") != "" && os.Getenv("REPL_SLUG") != "" {
 		return true
 	}
