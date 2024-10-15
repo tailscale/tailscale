@@ -75,6 +75,11 @@ func main() {
 		prober.WithPageLink("Prober metrics", "/debug/varz"),
 		prober.WithProbeLink("Run Probe", "/debug/probe-run?name={{.Name}}"),
 	), tsweb.HandlerOptions{Logf: log.Printf}))
+	mux.Handle("/healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok\n"))
+	}))
 	log.Printf("Listening on %s", *listen)
 	log.Fatal(http.ListenAndServe(*listen, mux))
 }
