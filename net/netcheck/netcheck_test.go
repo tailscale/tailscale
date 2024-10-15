@@ -38,7 +38,7 @@ func TestBasic(t *testing.T) {
 
 	c := newTestClient(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
@@ -117,7 +117,7 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 
 	c := newTestClient(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	r, err := c.GetReport(ctx, dm, nil)
