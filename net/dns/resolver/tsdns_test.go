@@ -1503,8 +1503,8 @@ func TestServfail(t *testing.T) {
 	r.SetConfig(cfg)
 
 	pkt, err := syncRespond(r, dnspacket("test.site.", dns.TypeA, noEdns))
-	if !errors.Is(err, errServerFailure) {
-		t.Errorf("err = %v, want %v", err, errServerFailure)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
 	}
 
 	wantPkt := []byte{

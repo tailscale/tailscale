@@ -487,6 +487,10 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	defer hres.Body.Close()
 	if hres.StatusCode != 200 {
 		metricDNSFwdDoHErrorStatus.Add(1)
+		if hres.StatusCode/100 == 5 {
+			// Translate 5xx HTTP server errors into SERVFAIL DNS responses.
+			return nil, fmt.Errorf("%w: %s", errServerFailure, hres.Status)
+		}
 		return nil, errors.New(hres.Status)
 	}
 	if ct := hres.Header.Get("Content-Type"); ct != dohType {
@@ -916,10 +920,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		metricDNSFwdDropBonjour.Add(1)
 		res, err := nxDomainResponse(query)
 		if err != nil {
-			f.logf("error parsing bonjour query: %v", err)
-			// Returning an error will cause an internal retry, there is
-			// nothing we can do if parsing failed. Just drop the packet.
-			return nil
+			return err
 		}
 		select {
 		case <-ctx.Done():
@@ -951,10 +952,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 			res, err := servfailResponse(query)
 			if err != nil {
-				f.logf("building servfail response: %v", err)
-				// Returning an error will cause an internal retry, there is
-				// nothing we can do if parsing failed. Just drop the packet.
-				return nil
+				return err
 			}
 			select {
 			case <-ctx.Done():
@@ -1053,6 +1051,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 						if verboseDNSForward() {
 							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
 						}
+						return nil
 					}
 				}
 				return firstErr
