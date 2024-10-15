@@ -280,7 +280,9 @@ func getEnvType() EnvType {
 	return ""
 }
 
-// inContainer reports whether we're running in a container.
+// inContainer reports whether we're running in a container. Best-effort only,
+// there's no foolproof way to detect this, but the build tag should catch all
+// official builds from 1.78.0.
 func inContainer() opt.Bool {
 	if runtime.GOOS != "linux" {
 		return ""
@@ -292,6 +294,8 @@ func inContainer() opt.Bool {
 		ret.Set(true)
 		return ret
 	}
+	// Only set if using docker's container runtime. Not guaranteed by
+	// documentation, but it's been in place for a long time.
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		ret.Set(true)
 		return ret

@@ -11,6 +11,6 @@ import (
 
 func TestInContainer(t *testing.T) {
 	if got := inContainer(); !got.EqualBool(true) {
-		t.Error(got)
+		t.Errorf("inContainer = %v; want true due to ts_package_container build tag", got)
 	}
 }

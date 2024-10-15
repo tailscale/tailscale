@@ -37,6 +37,6 @@ remotes/origin/QTSFW_5.0.0`
 
 func TestInContainer(t *testing.T) {
 	if got := inContainer(); !got.EqualBool(false) {
-		t.Error(got)
+		t.Errorf("inContainer = %v; want false due to absence of ts_package_container build tag", got)
 	}
 }
