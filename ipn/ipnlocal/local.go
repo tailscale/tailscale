@@ -51,6 +51,7 @@ import (
 	"tailscale.com/doctor/routetable"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
+	"tailscale.com/envknob/featureknob"
 	"tailscale.com/health"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
@@ -3484,7 +3485,7 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 	if !p.RunSSH {
 		return nil
 	}
-	if err := envknob.CanRunTailscaleSSH(); err != nil {
+	if err := featureknob.CanRunTailscaleSSH(); err != nil {
 		return err
 	}
 	if runtime.GOOS == "linux" {
@@ -3565,6 +3566,10 @@ func updateExitNodeUsageWarning(p ipn.PrefsView, state *netmon.State, healthTrac
 }
 
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
+	if err := featureknob.CanUseExitNode(); err != nil {
+		return err
+	}
+
 	if (p.ExitNodeIP.IsValid() || p.ExitNodeID != "") && p.AdvertisesExitNode() {
 		return errors.New("Cannot advertise an exit node and use an exit node at the same time.")
 	}
