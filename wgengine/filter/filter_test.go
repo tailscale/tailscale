@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"slices"
@@ -18,7 +19,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go4.org/netipx"
-	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/packet"
@@ -997,7 +997,7 @@ func TestPeerCaps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := xmaps.Keys(filt.CapsWithValues(netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst)))
+			got := slices.Collect(maps.Keys(filt.CapsWithValues(netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst))))
 			slices.Sort(got)
 			slices.Sort(tt.want)
 			if !slices.Equal(got, tt.want) {
