@@ -651,6 +651,21 @@ func CheckTag(tag string) error {
 	return nil
 }
 
+// CheckServiceName validates svc for use as a service name.
+// We only allow valid DNS labels, since the expectation is that these will be
+// used as parts of domain names.
+func CheckServiceName(svc string) error {
+	var ok bool
+	svc, ok = strings.CutPrefix(svc, "svc:")
+	if !ok {
+		return errors.New("services must start with 'svc:'")
+	}
+	if svc == "" {
+		return errors.New("service names must not be empty")
+	}
+	return dnsname.ValidLabel(svc)
+}
+
 // CheckRequestTags checks that all of h.RequestTags are valid.
 func (h *Hostinfo) CheckRequestTags() error {
 	if h == nil {

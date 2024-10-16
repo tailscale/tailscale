@@ -179,6 +179,12 @@ type Prefs struct {
 	// node.
 	AdvertiseRoutes []netip.Prefix
 
+	// AdvertiseServices specifies the list of services that this
+	// node can serve as a destination for. Note that an advertised
+	// service must still go through the approval process from the
+	// control server.
+	AdvertiseServices []string
+
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
 	// NAT, which makes the traffic appear to come from the router
@@ -319,6 +325,7 @@ type MaskedPrefs struct {
 	ForceDaemonSet            bool                `json:",omitempty"`
 	EggSet                    bool                `json:",omitempty"`
 	AdvertiseRoutesSet        bool                `json:",omitempty"`
+	AdvertiseServicesSet      bool                `json:",omitempty"`
 	NoSNATSet                 bool                `json:",omitempty"`
 	NoStatefulFilteringSet    bool                `json:",omitempty"`
 	NetfilterModeSet          bool                `json:",omitempty"`
@@ -527,6 +534,9 @@ func (p *Prefs) pretty(goos string) string {
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
 	}
+	if len(p.AdvertiseServices) > 0 {
+		fmt.Fprintf(&sb, "services=%s ", strings.Join(p.AdvertiseServices, ","))
+	}
 	if goos == "linux" {
 		fmt.Fprintf(&sb, "nf=%v ", p.NetfilterMode)
 	}
@@ -598,6 +608,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ForceDaemon == p2.ForceDaemon &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
+		compareStrings(p.AdvertiseServices, p2.AdvertiseServices) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
 		p.AutoUpdate.Equals(p2.AutoUpdate) &&

@@ -177,7 +177,7 @@ For help on subcommands, add --help after: "tailscale status --help".
 This CLI is still under active development. Commands and flags will
 change in the future.
 `),
-		Subcommands: []*ffcli.Command{
+		Subcommands: append([]*ffcli.Command{
 			upCmd,
 			downCmd,
 			setCmd,
@@ -207,7 +207,7 @@ change in the future.
 			debugCmd,
 			driveCmd,
 			idTokenCmd,
-		},
+		}, maybeAdvertiseCmd()...),
 		FlagSet: rootfs,
 		Exec: func(ctx context.Context, args []string) error {
 			if len(args) > 0 {

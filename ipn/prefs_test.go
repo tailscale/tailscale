@@ -54,6 +54,7 @@ func TestPrefsEqual(t *testing.T) {
 		"ForceDaemon",
 		"Egg",
 		"AdvertiseRoutes",
+		"AdvertiseServices",
 		"NoSNAT",
 		"NoStatefulFiltering",
 		"NetfilterMode",
@@ -328,6 +329,16 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{NetfilterKind: "nftables"},
 			&Prefs{NetfilterKind: ""},
+			false,
+		},
+		{
+			&Prefs{AdvertiseServices: []string{"svc:tux", "svc:xenia"}},
+			&Prefs{AdvertiseServices: []string{"svc:tux", "svc:xenia"}},
+			true,
+		},
+		{
+			&Prefs{AdvertiseServices: []string{"svc:tux", "svc:xenia"}},
+			&Prefs{AdvertiseServices: []string{"svc:tux", "svc:amelie"}},
 			false,
 		},
 	}
