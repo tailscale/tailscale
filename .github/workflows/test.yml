@@ -80,7 +80,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@3624ceb22c1c5a301c8db4169662070a689d9ea8 # v4.1.1
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -159,7 +159,7 @@ jobs:
         cache: false
 
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@3624ceb22c1c5a301c8db4169662070a689d9ea8 # v4.1.1
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -260,7 +260,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@3624ceb22c1c5a301c8db4169662070a689d9ea8 # v4.1.1
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -319,7 +319,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@3624ceb22c1c5a301c8db4169662070a689d9ea8 # v4.1.1
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
@@ -367,7 +367,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Restore Cache
-      uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2 # v4.1.0
+      uses: actions/cache@3624ceb22c1c5a301c8db4169662070a689d9ea8 # v4.1.1
       with:
         # Note: unlike the other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
