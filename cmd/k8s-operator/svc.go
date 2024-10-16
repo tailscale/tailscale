@@ -358,9 +358,14 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
-
-	// TODO(irbekrm): validate that tailscale.com/tailnet-ip annotation is a
-	// valid IP address (tailscale/tailscale#13671).
+	if ipStr := svc.Annotations[AnnotationTailnetTargetIP]; ipStr != "" {
+		ip, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q could not be parsed as a valid IP Address, error: %s", AnnotationTailnetTargetIP, ipStr, err))
+		} else if !ip.IsValid() {
+			violations = append(violations, fmt.Sprintf("parsed IP address in annotation %s: %q is not valid", AnnotationTailnetTargetIP, ipStr))
+		}
+	}
 
 	svcName := nameForService(svc)
 	if err := dnsname.ValidLabel(svcName); err != nil {
