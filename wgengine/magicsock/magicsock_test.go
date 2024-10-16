@@ -176,6 +176,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
+	ht := new(health.Tracker)
 
 	var reg usermetric.Registry
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
@@ -183,6 +184,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		NetMon:                 netMon,
 		Metrics:                &reg,
 		Logf:                   logf,
+		HealthTracker:          ht,
 		DisablePortMapper:      true,
 		TestOnlyPacketListener: l,
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
