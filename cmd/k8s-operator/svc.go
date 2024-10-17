@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -348,6 +349,10 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	return nil
 }
 
+func isValidIP(ip string) bool {
+	return net.ParseIP(ip) != nil
+}
+
 func validateService(svc *corev1.Service) []string {
 	violations := make([]string, 0)
 	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
@@ -358,9 +363,9 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
 		}
 	}
-
-	// TODO(irbekrm): validate that tailscale.com/tailnet-ip annotation is a
-	// valid IP address (tailscale/tailscale#13671).
+	if !isValidIP(svc.Annotations[AnnotationTailnetTargetIP]) {
+		violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid IP Address", AnnotationTailnetTargetIP, svc.Annotations[AnnotationTailnetTargetIP]))
+	}
 
 	svcName := nameForService(svc)
 	if err := dnsname.ValidLabel(svcName); err != nil {
