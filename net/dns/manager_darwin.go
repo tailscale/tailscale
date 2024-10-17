@@ -10,6 +10,8 @@ import (
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
+	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
@@ -83,8 +85,36 @@ func (c *darwinConfigurator) SetDNS(cfg OSConfig) error {
 	return c.removeResolverFiles(func(domain string) bool { return !keep[domain] })
 }
 
+// GetBaseConfig returns the current OS DNS configuration, extracting it from /etc/resolv.conf.
+// We should really be using the SystemConfiguration framework to get this information, as this
+// is not a stable public API, and is provided mostly as a compatibility effort with Unix
+// tools. Apple might break this in the future. But honestly, parsing the output of `scutil --dns`
+// is *even more* likely to break in the future.
 func (c *darwinConfigurator) GetBaseConfig() (OSConfig, error) {
-	return OSConfig{}, ErrGetBaseConfigNotSupported
+	cfg := OSConfig{}
+
+	resolvConf, err := resolvconffile.ParseFile("/etc/resolv.conf")
+	if err != nil {
+		c.logf("failed to parse /etc/resolv.conf: %v", err)
+		return cfg, ErrGetBaseConfigNotSupported
+	}
+
+	for _, ns := range resolvConf.Nameservers {
+		if ns == tsaddr.TailscaleServiceIP() || ns == tsaddr.TailscaleServiceIPv6() {
+			// If we find Quad100 in /etc/resolv.conf, we should ignore it
+			c.logf("ignoring 100.100.100.100 resolver IP found in /etc/resolv.conf")
+			continue
+		}
+		cfg.Nameservers = append(cfg.Nameservers, ns)
+	}
+	cfg.SearchDomains = resolvConf.SearchDomains
+
+	if len(cfg.Nameservers) == 0 {
+		// Log a warning in case we couldn't find any nameservers in /etc/resolv.conf.
+		c.logf("no nameservers found in /etc/resolv.conf, DNS resolution might fail")
+	}
+
+	return cfg, nil
 }
 
 const macResolverFileHeader = "# Added by tailscaled\n"

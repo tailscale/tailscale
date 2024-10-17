@@ -39,7 +39,7 @@ func NewMultiLabelMap[T comparable](name string, promType, helpText string) *Mul
 		Help: helpText,
 	}
 	var zero T
-	_ = labelString(zero) // panic early if T is invalid
+	_ = LabelString(zero) // panic early if T is invalid
 	expvar.Publish(name, m)
 	return m
 }
@@ -50,8 +50,10 @@ type labelsAndValue[T comparable] struct {
 	val    expvar.Var
 }
 
-// labelString returns a Prometheus-formatted label string for the given key.
-func labelString(k any) string {
+// LabelString returns a Prometheus-formatted label string for the given key.
+// k must be a struct type with scalar fields, as required by MultiLabelMap,
+// if k is not a struct, it will panic.
+func LabelString(k any) string {
 	rv := reflect.ValueOf(k)
 	t := rv.Type()
 	if t.Kind() != reflect.Struct {
@@ -95,6 +97,7 @@ type KeyValue[T comparable] struct {
 }
 
 func (v *MultiLabelMap[T]) String() string {
+	// NOTE: This has to be valid JSON because it's used by expvar.
 	return `"MultiLabelMap"`
 }
 
@@ -150,7 +153,7 @@ func (v *MultiLabelMap[T]) Init() *MultiLabelMap[T] {
 //
 // v.mu must be held.
 func (v *MultiLabelMap[T]) addKeyLocked(key T, val expvar.Var) {
-	ls := labelString(key)
+	ls := LabelString(key)
 
 	ent := labelsAndValue[T]{key, ls, val}
 	// Using insertion sort to place key into the already-sorted v.keys.
@@ -209,6 +212,26 @@ func (v *MultiLabelMap[T]) Set(key T, val expvar.Var) {
 	v.m.Store(key, val)
 }
 
+// SetInt sets val to the *[expvar.Int] value stored under the given map key,
+// creating it if it doesn't exist yet.
+// It does nothing if key exists but is of the wrong type.
+func (v *MultiLabelMap[T]) SetInt(key T, val int64) {
+	// Set to Int; ignore otherwise.
+	if iv, ok := v.getOrFill(key, newInt).(*expvar.Int); ok {
+		iv.Set(val)
+	}
+}
+
+// SetFloat sets val to the *[expvar.Float] value stored under the given map key,
+// creating it if it doesn't exist yet.
+// It does nothing if key exists but is of the wrong type.
+func (v *MultiLabelMap[T]) SetFloat(key T, val float64) {
+	// Set to Float; ignore otherwise.
+	if iv, ok := v.getOrFill(key, newFloat).(*expvar.Float); ok {
+		iv.Set(val)
+	}
+}
+
 // Add adds delta to the *[expvar.Int] value stored under the given map key,
 // creating it if it doesn't exist yet.
 // It does nothing if key exists but is of the wrong type.
@@ -234,7 +257,7 @@ func (v *MultiLabelMap[T]) AddFloat(key T, delta float64) {
 // This is not optimized for highly concurrent usage; it's presumed to only be
 // used rarely, at startup.
 func (v *MultiLabelMap[T]) Delete(key T) {
-	ls := labelString(key)
+	ls := LabelString(key)
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -258,4 +281,17 @@ func (v *MultiLabelMap[T]) Do(f func(KeyValue[T])) {
 	for _, e := range v.sorted {
 		f(KeyValue[T]{e.key, e.val})
 	}
+}
+
+// ResetAllForTest resets all values for metrics to zero.
+// Should only be used in tests.
+func (v *MultiLabelMap[T]) ResetAllForTest() {
+	v.Do(func(kv KeyValue[T]) {
+		switch v := kv.Value.(type) {
+		case *expvar.Int:
+			v.Set(0)
+		case *expvar.Float:
+			v.Set(0)
+		}
+	})
 }

@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ios
+
 package controlhttp
 
 import (
@@ -14,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/wsconn"

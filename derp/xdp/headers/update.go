@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// The update program fetches the libbpf headers from the libbpf GitHub repository
+// and writes them to disk.
 package main
 
 import (

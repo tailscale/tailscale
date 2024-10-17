@@ -14,6 +14,10 @@ struct config {
 	// the context of the data. cilium/ebpf uses native endian encoding for map
 	// encoding even if we use big endian types here, e.g. __be16.
 	__u16 dst_port;
+	// If drop_stun is set to a nonzero value all UDP packets destined to
+	// dst_port will be dropped. This is useful for shedding home client load
+	// during maintenance.
+	__u16 drop_stun;
 };
 struct config *unused_config __attribute__((unused)); // required by bpf2go -type
 
@@ -60,6 +64,7 @@ enum counter_key_prog_end {
 	COUNTER_KEY_END_INVALID_IP_CSUM,
 	COUNTER_KEY_END_NOT_STUN_PORT,
 	COUNTER_KEY_END_INVALID_SW_ATTR_VAL,
+	COUNTER_KEY_END_DROP_STUN,
 	COUNTER_KEY_END_LEN
 };
 enum counter_key_prog_end *unused_counter_key_prog_end __attribute__((unused)); // required by bpf2go -type
@@ -244,7 +249,7 @@ static __always_inline int handle_packet(struct xdp_md *ctx, struct packet_conte
 	struct ipv6hdr *ip6;
 	struct udphdr *udp;
 
-	int validate_udp_csum;
+	int validate_udp_csum = 0;
 	if (eth->h_proto == bpf_htons(ETH_P_IP)) {
 		pctx->af = COUNTER_KEY_AF_IPV4;
 		ip = (void *)(eth + 1);
@@ -332,6 +337,11 @@ static __always_inline int handle_packet(struct xdp_md *ctx, struct packet_conte
 	if (bpf_ntohs(udp->dest) != c->dst_port) {
 		pctx->prog_end = COUNTER_KEY_END_NOT_STUN_PORT;
 		return XDP_PASS;
+	}
+
+	if (c->drop_stun) {
+		pctx->prog_end = COUNTER_KEY_END_DROP_STUN;
+		return XDP_DROP;
 	}
 
 	if (validate_udp_csum) {

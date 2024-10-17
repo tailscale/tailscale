@@ -366,6 +366,7 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.logf("Setting subnet routes for %s: %v", nodeKey.ShortString(), routes)
 	mak.Set(&s.nodeSubnetRoutes, nodeKey, routes)
 }
 
@@ -1018,6 +1019,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	res.Node.PrimaryRoutes = s.nodeSubnetRoutes[nk]
 	res.Node.AllowedIPs = append(res.Node.Addresses, s.nodeSubnetRoutes[nk]...)
 
 	// Consume a PingRequest while protected by mutex if it exists

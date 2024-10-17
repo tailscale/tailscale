@@ -13,11 +13,6 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
-var (
-	ipv4default = netip.MustParsePrefix("0.0.0.0/0")
-	ipv6default = netip.MustParsePrefix("::/0")
-)
-
 func validateViaPrefix(ipp netip.Prefix) error {
 	if !tsaddr.IsViaPrefix(ipp) {
 		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
@@ -60,22 +55,22 @@ func CalcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 					return nil, err
 				}
 			}
-			if ipp == ipv4default {
+			if ipp == tsaddr.AllIPv4() {
 				default4 = true
-			} else if ipp == ipv6default {
+			} else if ipp == tsaddr.AllIPv6() {
 				default6 = true
 			}
 			routeMap[ipp] = true
 		}
 		if default4 && !default6 {
-			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
+			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", tsaddr.AllIPv4(), tsaddr.AllIPv6())
 		} else if default6 && !default4 {
-			return nil, fmt.Errorf("%s advertised without its IPv4 counterpart, please also advertise %s", ipv6default, ipv4default)
+			return nil, fmt.Errorf("%s advertised without its IPv4 counterpart, please also advertise %s", tsaddr.AllIPv6(), tsaddr.AllIPv4())
 		}
 	}
 	if advertiseDefaultRoute {
-		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
-		routeMap[netip.MustParsePrefix("::/0")] = true
+		routeMap[tsaddr.AllIPv4()] = true
+		routeMap[tsaddr.AllIPv6()] = true
 	}
 	if len(routeMap) == 0 {
 		return nil, nil

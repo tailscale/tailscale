@@ -25,6 +25,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
@@ -202,6 +203,7 @@ type Resolver struct {
 	logf               logger.Logf
 	netMon             *netmon.Monitor  // non-nil
 	dialer             *tsdial.Dialer   // non-nil
+	health             *health.Tracker  // non-nil
 	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
 	forwarder *forwarder
@@ -224,9 +226,13 @@ type ForwardLinkSelector interface {
 }
 
 // New returns a new resolver.
-func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, knobs *controlknobs.Knobs) *Resolver {
+// dialer and health must be non-nil.
+func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *Resolver {
 	if dialer == nil {
 		panic("nil Dialer")
+	}
+	if health == nil {
+		panic("nil health")
 	}
 	netMon := dialer.NetMon()
 	if netMon == nil {
@@ -239,9 +245,19 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, k
 		hostToIP: map[dnsname.FQDN][]netip.Addr{},
 		ipToHost: map[netip.Addr]dnsname.FQDN{},
 		dialer:   dialer,
+		health:   health,
 	}
-	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer, knobs)
+	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer, health, knobs)
 	return r
+}
+
+// SetMissingUpstreamRecovery sets a callback to be called upon encountering
+// a SERVFAIL due to missing upstream resolvers.
+//
+// This call should only happen before the resolver is used. It is not safe
+// for concurrent use.
+func (r *Resolver) SetMissingUpstreamRecovery(f func()) {
+	r.forwarder.missingUpstreamRecovery = f
 }
 
 func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
@@ -305,20 +321,18 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		defer cancel()
 		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses)
 		if err != nil {
-			select {
-			// Best effort: use any error response sent by forwardWithDestChan.
-			// This is present in some errors paths, such as when all upstream
-			// DNS servers replied with an error.
-			case resp := <-responses:
-				return resp.bs, err
-			default:
-				return nil, err
-			}
+			return nil, err
 		}
 		return (<-responses).bs, nil
 	}
 
 	return out, err
+}
+
+// GetUpstreamResolvers returns the resolvers that would be used to resolve
+// the given FQDN.
+func (r *Resolver) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {
+	return r.forwarder.GetUpstreamResolvers(name)
 }
 
 // parseExitNodeQuery parses a DNS request packet.

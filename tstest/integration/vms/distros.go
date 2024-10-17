@@ -11,8 +11,6 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-// go:generate go run ./gen
-
 type Distro struct {
 	Name           string // amazon-linux
 	URL            string // URL to a qcow2 image

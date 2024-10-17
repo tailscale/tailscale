@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package tailcfg contains types used by the Tailscale protocol with between
+// the node and the coordination server.
 package tailcfg
 
 //go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
@@ -140,7 +142,14 @@ type CapabilityVersion int
 //   - 97: 2024-06-06: Client understands NodeAttrDisableSplitDNSWhenNoCustomResolvers
 //   - 98: 2024-06-13: iOS/tvOS clients may provide serial number as part of posture information
 //   - 99: 2024-06-14: Client understands NodeAttrDisableLocalDNSOverrideViaNRPT
-const CurrentCapabilityVersion CapabilityVersion = 99
+//   - 100: 2024-06-18: Client supports filtertype.Match.SrcCaps (issue #12542)
+//   - 101: 2024-07-01: Client supports SSH agent forwarding when handling connections with /bin/su
+//   - 102: 2024-07-12: NodeAttrDisableMagicSockCryptoRouting support
+//   - 103: 2024-07-24: Client supports NodeAttrDisableCaptivePortalDetection
+//   - 104: 2024-08-03: SelfNodeV6MasqAddrForThisPeer now works
+//   - 105: 2024-08-05: Fixed SSH behavior on systems that use busybox (issue #12849)
+//   - 106: 2024-09-03: fix panic regression from cryptokey routing change (65fe0ba7b5)
+const CurrentCapabilityVersion CapabilityVersion = 106
 
 type StableID string
 
@@ -642,6 +651,21 @@ func CheckTag(tag string) error {
 	return nil
 }
 
+// CheckServiceName validates svc for use as a service name.
+// We only allow valid DNS labels, since the expectation is that these will be
+// used as parts of domain names.
+func CheckServiceName(svc string) error {
+	var ok bool
+	svc, ok = strings.CutPrefix(svc, "svc:")
+	if !ok {
+		return errors.New("services must start with 'svc:'")
+	}
+	if svc == "" {
+		return errors.New("service names must not be empty")
+	}
+	return dnsname.ValidLabel(svc)
+}
+
 // CheckRequestTags checks that all of h.RequestTags are valid.
 func (h *Hostinfo) CheckRequestTags() error {
 	if h == nil {
@@ -667,6 +691,16 @@ const (
 	PeerAPI6   = ServiceProto("peerapi6")
 	PeerAPIDNS = ServiceProto("peerapi-dns-proxy")
 )
+
+// IsKnownServiceProto checks whether sp represents a known-valid value of
+// ServiceProto.
+func IsKnownServiceProto(sp ServiceProto) bool {
+	switch sp {
+	case TCP, UDP, PeerAPI4, PeerAPI6, PeerAPIDNS, ServiceProto("egg"):
+		return true
+	}
+	return false
+}
 
 // Service represents a service running on a node.
 type Service struct {
@@ -752,7 +786,7 @@ type Hostinfo struct {
 	// "5.10.0-17-amd64".
 	OSVersion string `json:",omitempty"`
 
-	Container      opt.Bool `json:",omitempty"` // whether the client is running in a container
+	Container      opt.Bool `json:",omitempty"` // best-effort whether the client is running in a container
 	Env            string   `json:",omitempty"` // a hostinfo.EnvType in string form
 	Distro         string   `json:",omitempty"` // "debian", "ubuntu", "nixos", ...
 	DistroVersion  string   `json:",omitempty"` // "20.04", ...
@@ -1182,6 +1216,7 @@ const (
 	EndpointSTUN           = EndpointType(2)
 	EndpointPortmapped     = EndpointType(3)
 	EndpointSTUN4LocalPort = EndpointType(4) // hard NAT: STUN'ed IPv4 address + local fixed port
+	EndpointExplicitConf   = EndpointType(5) // explicitly configured (routing to be done by client)
 )
 
 func (et EndpointType) String() string {
@@ -1196,6 +1231,8 @@ func (et EndpointType) String() string {
 		return "portmap"
 	case EndpointSTUN4LocalPort:
 		return "stun4localport"
+	case EndpointExplicitConf:
+		return "explicitconf"
 	}
 	return "other"
 }
@@ -1333,7 +1370,7 @@ var PortRangeAny = PortRange{0, 65535}
 type NetPortRange struct {
 	_     structs.Incomparable
 	IP    string // IP, CIDR, Range, or "*" (same formats as FilterRule.SrcIPs)
-	Bits  *int   // deprecated; the old way to turn IP into a CIDR
+	Bits  *int   // deprecated; the 2020 way to turn IP into a CIDR. See FilterRule.SrcBits.
 	Ports PortRange
 }
 
@@ -1470,7 +1507,7 @@ func (c PeerCapMap) HasCapability(cap PeerCapability) bool {
 // FilterRule represents one rule in a packet filter.
 //
 // A rule is logically a set of source CIDRs to match (described by
-// SrcIPs and SrcBits), and a set of destination targets that are then
+// SrcIPs), and a set of destination targets that are then
 // allowed if a source IP is matches of those CIDRs.
 type FilterRule struct {
 	// SrcIPs are the source IPs/networks to match.
@@ -1480,9 +1517,10 @@ type FilterRule struct {
 	//     * the string "*" to match everything (both IPv4 & IPv6)
 	//     * a CIDR (e.g. "192.168.0.0/16")
 	//     * a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
+	//     * a string "cap:<capability>" with NodeCapMap cap name
 	SrcIPs []string
 
-	// SrcBits is deprecated; it's the old way to specify a CIDR
+	// SrcBits is deprecated; it was the old way to specify a CIDR
 	// prior to CapabilityVersion 7. Its values correspond to the
 	// SrcIPs above.
 	//
@@ -1493,10 +1531,14 @@ type FilterRule struct {
 	// position is 32, as if the SrcIPs above were a /32 mask. For
 	// a "*" SrcIPs value, the corresponding SrcBits value is
 	// ignored.
+	//
+	// This is still present in this file because the Tailscale control plane
+	// code still uses this type, for 118 clients that are still connected as of
+	// 2024-06-18, 3.5 years after the last release that used this type.
 	SrcBits []int `json:",omitempty"`
 
 	// DstPorts are the port ranges to allow once a source IP
-	// matches (is in the CIDR described by SrcIPs & SrcBits).
+	// matches (is in the CIDR described by SrcIPs).
 	//
 	// CapGrant and DstPorts are mutually exclusive: at most one can be non-nil.
 	DstPorts []NetPortRange `json:",omitempty"`
@@ -1527,11 +1569,9 @@ type FilterRule struct {
 
 var FilterAllowAll = []FilterRule{
 	{
-		SrcIPs:  []string{"*"},
-		SrcBits: nil,
+		SrcIPs: []string{"*"},
 		DstPorts: []NetPortRange{{
 			IP:    "*",
-			Bits:  nil,
 			Ports: PortRange{0, 65535},
 		}},
 	},
@@ -2198,10 +2238,6 @@ const (
 	// always giving WireGuard the full netmap, even for idle peers.
 	NodeAttrDebugDisableWGTrim NodeCapability = "debug-no-wg-trim"
 
-	// NodeAttrDebugDisableDRPO disables the DERP Return Path Optimization.
-	// See Issue 150.
-	NodeAttrDebugDisableDRPO NodeCapability = "debug-disable-drpo"
-
 	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
@@ -2297,6 +2333,13 @@ const (
 	// Added 2024-05-29 in Tailscale version 1.68.
 	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
 
+	// NodeAttrSSHBehaviorV2 forces SSH to use the V2 behavior (use su, run SFTP in child process).
+	// This overrides NodeAttrSSHBehaviorV1 if set.
+	// See forceV1Behavior in ssh/tailssh/incubator.go for distinction between
+	// V1 and V2 behavior.
+	// Added 2024-08-06 in Tailscale version 1.72.
+	NodeAttrSSHBehaviorV2 NodeCapability = "ssh-behavior-v2"
+
 	// NodeAttrDisableSplitDNSWhenNoCustomResolvers indicates that the node's
 	// DNS manager should not adopt a split DNS configuration even though the
 	// Config of the resolver only contains routes that do not specify custom
@@ -2316,6 +2359,18 @@ const (
 	// We began creating this rule on 2024-06-14, and this node attribute
 	// allows us to disable the new behavior remotely if needed.
 	NodeAttrDisableLocalDNSOverrideViaNRPT NodeCapability = "disable-local-dns-override-via-nrpt"
+
+	// NodeAttrDisableMagicSockCryptoRouting disables the use of the
+	// magicsock cryptorouting hook. See tailscale/corp#20732.
+	NodeAttrDisableMagicSockCryptoRouting NodeCapability = "disable-magicsock-crypto-routing"
+
+	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
+	// automatically when the network state changes.
+	NodeAttrDisableCaptivePortalDetection NodeCapability = "disable-captive-portal-detection"
+
+	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
+	// via SendEnv in the SSH server and applying them to the SSH session.
+	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -2421,6 +2476,13 @@ type SSHRule struct {
 	// Action is the outcome to task.
 	// A nil or invalid action means to deny.
 	Action *SSHAction `json:"action"`
+
+	// AcceptEnv is a slice of environment variable names that are allowlisted
+	// for the SSH rule in the policy file.
+	//
+	// AcceptEnv values may contain * and ? wildcard characters which match against
+	// an arbitrary number of characters or a single character respectively.
+	AcceptEnv []string `json:"acceptEnv,omitempty"`
 }
 
 // SSHPrincipal is either a particular node or a user on any node.

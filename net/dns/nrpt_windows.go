@@ -15,6 +15,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
 	"tailscale.com/util/winutil"
+	"tailscale.com/util/winutil/gp"
 )
 
 const (
@@ -49,20 +50,11 @@ const (
 	nrptRuleFlagsName = `ConfigOptions`
 )
 
-var (
-	libUserenv                   = windows.NewLazySystemDLL("userenv.dll")
-	procRefreshPolicyEx          = libUserenv.NewProc("RefreshPolicyEx")
-	procRegisterGPNotification   = libUserenv.NewProc("RegisterGPNotification")
-	procUnregisterGPNotification = libUserenv.NewProc("UnregisterGPNotification")
-)
-
-const _RP_FORCE = 1 // Flag for RefreshPolicyEx
-
 // nrptRuleDatabase encapsulates access to the Windows Name Resolution Policy
 // Table (NRPT).
 type nrptRuleDatabase struct {
 	logf               logger.Logf
-	watcher            *gpNotificationWatcher
+	watcher            *gp.ChangeWatcher
 	isGPRefreshPending atomic.Bool
 	mu                 sync.Mutex // protects the fields below
 	ruleIDs            []string
@@ -303,12 +295,8 @@ func (db *nrptRuleDatabase) refreshLocked() {
 	// positives.
 	db.isGPRefreshPending.Store(true)
 
-	ok, _, err := procRefreshPolicyEx.Call(
-		uintptr(1), // Win32 TRUE: Refresh computer policy, not user policy.
-		uintptr(_RP_FORCE),
-	)
-	if ok == 0 {
-		db.logf("RefreshPolicyEx failed: %v", err)
+	if err := gp.RefreshMachinePolicy(true); err != nil {
+		db.logf("RefreshMachinePolicy failed: %v", err)
 		return
 	}
 
@@ -376,7 +364,7 @@ func (db *nrptRuleDatabase) watchForGPChanges() {
 		db.detectWriteAsGP()
 	}
 
-	watcher, err := newGPNotificationWatcher(watchHandler)
+	watcher, err := gp.NewChangeWatcher(gp.MachinePolicy, watchHandler)
 	if err != nil {
 		return
 	}
@@ -468,104 +456,4 @@ func (db *nrptRuleDatabase) Close() error {
 	err := db.watcher.Close()
 	db.watcher = nil
 	return err
-}
-
-type gpNotificationWatcher struct {
-	gpWaitEvents [2]windows.Handle
-	handler      func()
-	done         chan struct{}
-}
-
-// newGPNotificationWatcher creates an instance of gpNotificationWatcher that
-// invokes handler every time Windows notifies it of a group policy change.
-func newGPNotificationWatcher(handler func()) (*gpNotificationWatcher, error) {
-	var err error
-
-	// evtDone is signaled by (*gpNotificationWatcher).Close() to indicate that
-	// the doWatch goroutine should exit.
-	evtDone, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			windows.CloseHandle(evtDone)
-		}
-	}()
-
-	// evtChanged is registered with the Windows policy engine to become
-	// signalled any time group policy has been refreshed.
-	evtChanged, err := windows.CreateEvent(nil, 0, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			windows.CloseHandle(evtChanged)
-		}
-	}()
-
-	// Tell Windows to signal evtChanged whenever group policies are refreshed.
-	ok, _, e := procRegisterGPNotification.Call(
-		uintptr(evtChanged),
-		uintptr(1), // Win32 TRUE: We want to monitor computer policy changes, not user policy changes.
-	)
-	if ok == 0 {
-		err = e
-		return nil, err
-	}
-
-	result := &gpNotificationWatcher{
-		// Ordering of the event handles in gpWaitEvents is important:
-		// When calling windows.WaitForMultipleObjects and multiple objects are
-		// signalled simultaneously, it always returns the wait code for the
-		// lowest-indexed handle in its input array. evtDone is higher priority for
-		// us than evtChanged, so the former must be placed into the array ahead of
-		// the latter.
-		gpWaitEvents: [2]windows.Handle{
-			evtDone,
-			evtChanged,
-		},
-		handler: handler,
-		done:    make(chan struct{}),
-	}
-
-	go result.doWatch()
-
-	return result, nil
-}
-
-func (w *gpNotificationWatcher) doWatch() {
-	// The wait code corresponding to the event that is signalled when a group
-	// policy change occurs.
-	const expectedWaitCode = windows.WAIT_OBJECT_0 + 1
-	for {
-		if waitCode, _ := windows.WaitForMultipleObjects(w.gpWaitEvents[:], false, windows.INFINITE); waitCode != expectedWaitCode {
-			break
-		}
-		w.handler()
-	}
-	close(w.done)
-}
-
-func (w *gpNotificationWatcher) Close() error {
-	// Notify doWatch that we're done and it should exit.
-	if err := windows.SetEvent(w.gpWaitEvents[0]); err != nil {
-		return err
-	}
-
-	procUnregisterGPNotification.Call(uintptr(w.gpWaitEvents[1]))
-
-	// Wait for doWatch to complete.
-	<-w.done
-
-	// Now we may safely clean up all the things.
-	for i, evt := range w.gpWaitEvents {
-		windows.CloseHandle(evt)
-		w.gpWaitEvents[i] = 0
-	}
-
-	w.handler = nil
-
-	return nil
 }

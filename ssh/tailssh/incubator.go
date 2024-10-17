@@ -12,6 +12,7 @@
 package tailssh
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -115,6 +116,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		"--gid=" + lu.Gid,
 		"--groups=" + groups,
 		"--local-user=" + lu.Username,
+		"--home-dir=" + lu.HomeDir,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.Addr().String(),
 		"--has-tty=false", // updated in-place by startWithPTY
@@ -128,7 +130,8 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		incubatorArgs = append(incubatorArgs, "--is-selinux-enforcing")
 	}
 
-	forceV1Behavior := ss.conn.srv.lb.NetMap().HasCap(tailcfg.NodeAttrSSHBehaviorV1)
+	nm := ss.conn.srv.lb.NetMap()
+	forceV1Behavior := nm.HasCap(tailcfg.NodeAttrSSHBehaviorV1) && !nm.HasCap(tailcfg.NodeAttrSSHBehaviorV2)
 	if forceV1Behavior {
 		incubatorArgs = append(incubatorArgs, "--force-v1-behavior")
 	}
@@ -150,6 +153,22 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		incubatorArgs = append(incubatorArgs, "--shell")
 	default:
 		incubatorArgs = append(incubatorArgs, "--cmd="+ss.RawCommand())
+	}
+
+	allowSendEnv := nm.HasCap(tailcfg.NodeAttrSSHEnvironmentVariables)
+	if allowSendEnv {
+		env, err := filterEnv(ss.conn.acceptEnv, ss.Session.Environ())
+		if err != nil {
+			return nil, err
+		}
+
+		if len(env) > 0 {
+			encoded, err := json.Marshal(env)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode environment: %w", err)
+			}
+			incubatorArgs = append(incubatorArgs, fmt.Sprintf("--encoded-env=%q", encoded))
+		}
 	}
 
 	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), nil
@@ -179,6 +198,7 @@ type incubatorArgs struct {
 	gid                int
 	gids               []int
 	localUser          string
+	homeDir            string
 	remoteUser         string
 	remoteIP           string
 	ttyName            string
@@ -189,6 +209,7 @@ type incubatorArgs struct {
 	forceV1Behavior    bool
 	debugTest          bool
 	isSELinuxEnforcing bool
+	encodedEnv         string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -201,6 +222,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.IntVar(&ia.gid, "gid", 0, "the gid of local-user")
 	flags.StringVar(&groups, "groups", "", "comma-separated list of gids of local-user")
 	flags.StringVar(&ia.localUser, "local-user", "", "the user to run as")
+	flags.StringVar(&ia.homeDir, "home-dir", "/", "the user's home directory")
 	flags.StringVar(&ia.remoteUser, "remote-user", "", "the remote user/tags")
 	flags.StringVar(&ia.remoteIP, "remote-ip", "", "the remote Tailscale IP")
 	flags.StringVar(&ia.ttyName, "tty-name", "", "the tty name (pts/3)")
@@ -211,6 +233,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
+	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "JSON encoded array of environment variables in '['key=value']' format")
 	flags.Parse(args)
 
 	for _, g := range strings.Split(groups, ",") {
@@ -222,6 +245,34 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	}
 
 	return ia, nil
+}
+
+func (ia incubatorArgs) forwadedEnviron() ([]string, string, error) {
+	environ := os.Environ()
+	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
+	allowListKeys := "SSH_AUTH_SOCK"
+
+	if ia.encodedEnv != "" {
+		unquoted, err := strconv.Unquote(ia.encodedEnv)
+		if err != nil {
+			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+
+		var extraEnviron []string
+
+		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
+		if err != nil {
+			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+
+		environ = append(environ, extraEnviron...)
+
+		for _, v := range extraEnviron {
+			allowListKeys = fmt.Sprintf("%s,%s", allowListKeys, strings.Split(v, "=")[0])
+		}
+	}
+
+	return environ, allowListKeys, nil
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
@@ -399,9 +450,18 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 		return nil
 	}
 	loginArgs := ia.loginArgs(loginCmdPath)
-	dlogf("logging in with %s %+v", loginCmdPath, loginArgs)
-	// replace the running process
-	return unix.Exec(loginCmdPath, loginArgs, os.Environ())
+	dlogf("logging in with %+v", loginArgs)
+
+	environ, _, err := ia.forwadedEnviron()
+	if err != nil {
+		return err
+	}
+
+	// If Exec works, the Go code will not proceed past this:
+	err = unix.Exec(loginCmdPath, loginArgs, environ)
+
+	// If we made it here, Exec failed.
+	return err
 }
 
 // trySU attempts to start a login shell using su. If su is available and
@@ -431,15 +491,29 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
-	loginArgs := []string{"-l", ia.localUser}
+	environ, allowListEnvKeys, err := ia.forwadedEnviron()
+	if err != nil {
+		return false, err
+	}
+
+	loginArgs := []string{
+		su,
+		"-w", allowListEnvKeys,
+		"-l",
+		ia.localUser,
+	}
 	if ia.cmd != "" {
 		// Note - unlike the login command, su allows using both -l and -c.
 		loginArgs = append(loginArgs, "-c", ia.cmd)
 	}
 
-	dlogf("logging in with %s %q", su, loginArgs)
-	cmd := newCommand(ia.hasTTY, su, loginArgs)
-	return true, cmd.Run()
+	dlogf("logging in with %+v", loginArgs)
+
+	// If Exec works, the Go code will not proceed past this:
+	err = unix.Exec(su, loginArgs, environ)
+
+	// If we made it here, Exec failed.
+	return true, err
 }
 
 // findSU attempts to find an su command which supports the -l and -c flags.
@@ -465,9 +539,20 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
-	// First try to execute su -l <user> -c true to make sure su supports the
-	// necessary arguments.
-	err = exec.Command(su, "-l", ia.localUser, "-c", "true").Run()
+	_, allowListEnvKeys, err := ia.forwadedEnviron()
+	if err != nil {
+		return ""
+	}
+
+	// First try to execute su -w <allow listed env> -l <user> -c true
+	// to make sure su supports the necessary arguments.
+	err = exec.Command(
+		su,
+		"-w", allowListEnvKeys,
+		"-l",
+		ia.localUser,
+		"-c", "true",
+	).Run()
 	if err != nil {
 		dlogf("su check failed: %s", err)
 		return ""
@@ -490,10 +575,15 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 		return err
 	}
 
+	environ, _, err := ia.forwadedEnviron()
+	if err != nil {
+		return err
+	}
+
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
-	cmd := newCommand(ia.hasTTY, ia.loginShell, args)
-	err := cmd.Run()
+	cmd := newCommand(ia.hasTTY, ia.loginShell, environ, args)
+	err = cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
 		code := ps.ExitCode()
@@ -509,12 +599,12 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	return err
 }
 
-func newCommand(hasTTY bool, cmdPath string, cmdArgs []string) *exec.Cmd {
+func newCommand(hasTTY bool, cmdPath string, cmdEnviron []string, cmdArgs []string) *exec.Cmd {
 	cmd := exec.Command(cmdPath, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = cmdEnviron
 
 	if hasTTY {
 		// If we were launched with a tty then we should mark that as the ctty
@@ -546,7 +636,7 @@ const (
 // dropPrivileges calls doDropPrivileges with uid, gid, and gids from the given
 // incubatorArgs.
 func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
-	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids)
+	return doDropPrivileges(dlogf, ia.uid, ia.gid, ia.gids, ia.homeDir)
 }
 
 // doDropPrivileges contains all the logic for dropping privileges to a different
@@ -559,7 +649,7 @@ func dropPrivileges(dlogf logger.Logf, ia incubatorArgs) error {
 // be done by running:
 //
 //	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDoDropPrivileges
-func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
+func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGroups []int, homeDir string) error {
 	dlogf("dropping privileges")
 	fatalf := func(format string, args ...any) {
 		dlogf("[unexpected] error dropping privileges: "+format, args...)
@@ -645,6 +735,13 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 		// TODO(andrew-d): assert that our supplementary groups are correct
 	}
 
+	// Prefer to run in user's homedir if possible. We ignore a failure to Chdir,
+	// which just leaves us at "/" where we launched in the first place.
+	dlogf("attempting to chdir to user's home directory %q", homeDir)
+	if err := os.Chdir(homeDir); err != nil {
+		dlogf("failed to chdir to user's home directory %q, continuing in current directory", homeDir)
+	}
+
 	return nil
 }
 
@@ -661,16 +758,7 @@ func (ss *sshSession) launchProcess() error {
 	}
 
 	cmd := ss.cmd
-	homeDir := ss.conn.localUser.HomeDir
-	if _, err := os.Stat(homeDir); err == nil {
-		cmd.Dir = homeDir
-	} else if os.IsNotExist(err) {
-		// If the home directory doesn't exist, we can't chdir to it.
-		// Instead, we'll chdir to the root directory.
-		cmd.Dir = "/"
-	} else {
-		return err
-	}
+	cmd.Dir = "/"
 	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
@@ -726,8 +814,10 @@ func (ss *sshSession) launchProcess() error {
 func resizeWindow(fd int, winCh <-chan ssh.Window) {
 	for win := range winCh {
 		unix.IoctlSetWinsize(fd, syscall.TIOCSWINSZ, &unix.Winsize{
-			Row: uint16(win.Height),
-			Col: uint16(win.Width),
+			Row:    uint16(win.Height),
+			Col:    uint16(win.Width),
+			Xpixel: uint16(win.WidthPixels),
+			Ypixel: uint16(win.HeightPixels),
 		})
 	}
 }

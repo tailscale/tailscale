@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 	"tailscale.com/derp"
 	"tailscale.com/net/wsconn"
 )

@@ -94,6 +94,10 @@ var defaultCSP = strings.Join([]string{
 	`object-src 'self'`,       // disallow embedding of resources from other origins
 }, "; ")
 
+// The default Strict-Transport-Security header. This header tells the browser
+// to exclusively use HTTPS for all requests to the origin for the next year.
+var DefaultStrictTransportSecurityOptions = "max-age=31536000"
+
 // Config contains the configuration for a safeweb server.
 type Config struct {
 	// SecureContext specifies whether the Server is running in a secure (HTTPS) context.
@@ -134,6 +138,18 @@ type Config struct {
 	// CookiesSameSiteLax specifies whether to use SameSite=Lax in cookies. The
 	// default is to set SameSite=Strict.
 	CookiesSameSiteLax bool
+
+	// StrictTransportSecurityOptions specifies optional directives for the
+	// Strict-Transport-Security header sent in response to requests made to the
+	// BrowserMux when SecureContext is true.
+	// If empty, it defaults to max-age of 1 year.
+	StrictTransportSecurityOptions string
+
+	// HTTPServer, if specified, is the underlying http.Server that safeweb will
+	// use to serve requests. If nil, a new http.Server will be created.
+	// Do not use the Handler field of http.Server, as it will be ignored.
+	// Instead, set your handlers using APIMux and BrowserMux.
+	HTTPServer *http.Server
 }
 
 func (c *Config) setDefaults() error {
@@ -193,7 +209,11 @@ func NewServer(config Config) (*Server, error) {
 	if config.CSPAllowInlineStyles {
 		s.csp = defaultCSP + `; style-src 'self' 'unsafe-inline'`
 	}
-	s.h = &http.Server{Handler: s}
+	s.h = cmp.Or(config.HTTPServer, &http.Server{})
+	if s.h.Handler != nil {
+		return nil, fmt.Errorf("use safeweb.Config.APIMux and safeweb.Config.BrowserMux instead of http.Server.Handler")
+	}
+	s.h.Handler = s
 	return s, nil
 }
 
@@ -274,6 +294,9 @@ func (s *Server) serveBrowser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referer-Policy", "same-origin")
+	if s.SecureContext {
+		w.Header().Set("Strict-Transport-Security", cmp.Or(s.StrictTransportSecurityOptions, DefaultStrictTransportSecurityOptions))
+	}
 	s.csrfProtect(s.BrowserMux).ServeHTTP(w, r)
 }
 
@@ -299,4 +322,22 @@ func (s *Server) ServeRedirectHTTP(ln net.Listener, fqdn string) error {
 // listener.
 func (s *Server) Serve(ln net.Listener) error {
 	return s.h.Serve(ln)
+}
+
+// ListenAndServe listens on the TCP network address addr and then calls Serve
+// to handle requests on incoming connections. If addr == "", ":http" is used.
+func (s *Server) ListenAndServe(addr string) error {
+	if addr == "" {
+		addr = ":http"
+	}
+	lst, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(lst)
+}
+
+// Close closes all client connections and stops accepting new ones.
+func (s *Server) Close() error {
+	return s.h.Close()
 }

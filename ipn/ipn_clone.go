@@ -14,6 +14,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of Prefs.
@@ -26,10 +27,15 @@ func (src *Prefs) Clone() *Prefs {
 	*dst = *src
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
+	dst.AdvertiseServices = append(src.AdvertiseServices[:0:0], src.AdvertiseServices...)
 	if src.DriveShares != nil {
 		dst.DriveShares = make([]*drive.Share, len(src.DriveShares))
 		for i := range dst.DriveShares {
-			dst.DriveShares[i] = src.DriveShares[i].Clone()
+			if src.DriveShares[i] == nil {
+				dst.DriveShares[i] = nil
+			} else {
+				dst.DriveShares[i] = src.DriveShares[i].Clone()
+			}
 		}
 	}
 	dst.Persist = src.Persist.Clone()
@@ -56,6 +62,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ForceDaemon            bool
 	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
+	AdvertiseServices      []string
 	NoSNAT                 bool
 	NoStatefulFiltering    opt.Bool
 	NetfilterMode          preftype.NetfilterMode
@@ -81,20 +88,32 @@ func (src *ServeConfig) Clone() *ServeConfig {
 	if dst.TCP != nil {
 		dst.TCP = map[uint16]*TCPPortHandler{}
 		for k, v := range src.TCP {
-			dst.TCP[k] = v.Clone()
+			if v == nil {
+				dst.TCP[k] = nil
+			} else {
+				dst.TCP[k] = ptr.To(*v)
+			}
 		}
 	}
 	if dst.Web != nil {
 		dst.Web = map[HostPort]*WebServerConfig{}
 		for k, v := range src.Web {
-			dst.Web[k] = v.Clone()
+			if v == nil {
+				dst.Web[k] = nil
+			} else {
+				dst.Web[k] = v.Clone()
+			}
 		}
 	}
 	dst.AllowFunnel = maps.Clone(src.AllowFunnel)
 	if dst.Foreground != nil {
 		dst.Foreground = map[string]*ServeConfig{}
 		for k, v := range src.Foreground {
-			dst.Foreground[k] = v.Clone()
+			if v == nil {
+				dst.Foreground[k] = nil
+			} else {
+				dst.Foreground[k] = v.Clone()
+			}
 		}
 	}
 	return dst
@@ -157,7 +176,11 @@ func (src *WebServerConfig) Clone() *WebServerConfig {
 	if dst.Handlers != nil {
 		dst.Handlers = map[string]*HTTPHandler{}
 		for k, v := range src.Handlers {
-			dst.Handlers[k] = v.Clone()
+			if v == nil {
+				dst.Handlers[k] = nil
+			} else {
+				dst.Handlers[k] = ptr.To(*v)
+			}
 		}
 	}
 	return dst

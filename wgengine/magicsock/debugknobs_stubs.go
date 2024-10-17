@@ -5,7 +5,11 @@
 
 package magicsock
 
-import "tailscale.com/types/opt"
+import (
+	"net/netip"
+
+	"tailscale.com/types/opt"
+)
 
 // All knobs are disabled on iOS and Wasm.
 //
@@ -22,9 +26,8 @@ func debugEnableSilentDisco() bool     { return false }
 func debugSendCallMeUnknownPeer() bool { return false }
 func debugPMTUD() bool                 { return false }
 func debugUseDERPAddr() string         { return "" }
-func debugUseDerpRouteEnv() string     { return "" }
-func debugUseDerpRoute() opt.Bool      { return "" }
 func debugEnablePMTUD() opt.Bool       { return "" }
 func debugRingBufferMaxSizeBytes() int { return 0 }
 func inTest() bool                     { return false }
 func debugPeerMap() bool               { return false }
+func pretendpoints() []netip.AddrPort  { return []netip.AddrPort{} }

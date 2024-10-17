@@ -32,10 +32,12 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -162,6 +164,9 @@ func defaultNetfilterMode() string {
 	return "on"
 }
 
+// upArgsT is the type of upArgs, the argument struct for `tailscale up`.
+// As of 2024-10-08, upArgsT is frozen and no new arguments should be
+// added to it. Add new arguments to setArgsT instead.
 type upArgsT struct {
 	qr                     bool
 	reset                  bool
@@ -1015,7 +1020,7 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(prefs.OperatorUser)
 		case "advertise-routes":
 			var sb strings.Builder
-			for i, r := range withoutExitNodes(prefs.AdvertiseRoutes) {
+			for i, r := range tsaddr.WithoutExitRoutes(views.SliceOf(prefs.AdvertiseRoutes)).All() {
 				if i > 0 {
 					sb.WriteByte(',')
 				}
@@ -1023,7 +1028,7 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			}
 			set(sb.String())
 		case "advertise-exit-node":
-			set(hasExitNodeRoutes(prefs.AdvertiseRoutes))
+			set(tsaddr.ContainsExitRoutes(views.SliceOf(prefs.AdvertiseRoutes)))
 		case "advertise-connector":
 			set(prefs.AppConnector.Advertise)
 		case "snat-subnet-routes":
@@ -1055,36 +1060,6 @@ func fmtFlagValueArg(flagName string, val any) string {
 		return "--" + flagName + "="
 	}
 	return fmt.Sprintf("--%s=%v", flagName, shellquote.Join(fmt.Sprint(val)))
-}
-
-func hasExitNodeRoutes(rr []netip.Prefix) bool {
-	var v4, v6 bool
-	for _, r := range rr {
-		if r.Bits() == 0 {
-			if r.Addr().Is4() {
-				v4 = true
-			} else if r.Addr().Is6() {
-				v6 = true
-			}
-		}
-	}
-	return v4 && v6
-}
-
-// withoutExitNodes returns rr unchanged if it has only 1 or 0 /0
-// routes. If it has both IPv4 and IPv6 /0 routes, then it returns
-// a copy with all /0 routes removed.
-func withoutExitNodes(rr []netip.Prefix) []netip.Prefix {
-	if !hasExitNodeRoutes(rr) {
-		return rr
-	}
-	var out []netip.Prefix
-	for _, r := range rr {
-		if r.Bits() > 0 {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // exitNodeIP returns the exit node IP from p, using st to map
@@ -1180,6 +1155,7 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 	}
 
 	tsClient := tailscale.NewClient("-", nil)
+	tsClient.UserAgent = "tailscale-cli"
 	tsClient.HTTPClient = credentials.Client(ctx)
 	tsClient.BaseURL = baseURL
 

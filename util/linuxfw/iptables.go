@@ -29,6 +29,9 @@ func DebugIptables(logf logger.Logf) error {
 //
 // It only returns an error when there is no iptables binary, or when iptables -S
 // fails. In all other cases, it returns the number of non-default rules.
+//
+// If the iptables binary is not found, it returns an underlying exec.ErrNotFound
+// error.
 func detectIptables() (int, error) {
 	// run "iptables -S" to get the list of rules using iptables
 	// exec.Command returns an error if the binary is not found

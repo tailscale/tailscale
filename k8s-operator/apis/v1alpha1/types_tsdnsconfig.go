@@ -78,16 +78,16 @@ type DNSConfigSpec struct {
 }
 
 type Nameserver struct {
-	// Nameserver image.
+	// Nameserver image. Defaults to tailscale/k8s-nameserver:unstable.
 	// +optional
-	Image *Image `json:"image,omitempty"`
+	Image *NameserverImage `json:"image,omitempty"`
 }
 
-type Image struct {
+type NameserverImage struct {
 	// Repo defaults to tailscale/k8s-nameserver.
 	// +optional
 	Repo string `json:"repo,omitempty"`
-	// Tag defaults to operator's own tag.
+	// Tag defaults to unstable.
 	// +optional
 	Tag string `json:"tag,omitempty"`
 }
@@ -96,7 +96,7 @@ type DNSConfigStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	// +optional
-	Conditions []ConnectorCondition `json:"conditions"`
+	Conditions []metav1.Condition `json:"conditions"`
 	// Nameserver describes the status of nameserver cluster resources.
 	// +optional
 	Nameserver *NameserverStatus `json:"nameserver"`
@@ -115,4 +115,4 @@ type NameserverStatus struct {
 
 // NameserverReady is set to True if the nameserver has been successfully
 // deployed to cluster.
-const NameserverReady ConnectorConditionType = `NameserverReady`
+const NameserverReady ConditionType = `NameserverReady`

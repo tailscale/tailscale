@@ -5,14 +5,17 @@ package wgengine
 
 import (
 	"fmt"
+	"net/netip"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/lazy"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
@@ -78,12 +81,63 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 
 	// Either a SYN or a RST came back. Remove it in either case.
 
-	f := flowtrack.Tuple{Proto: pp.IPProto, Dst: pp.Src, Src: pp.Dst} // src/dst reversed
+	f := flowtrack.MakeTuple(pp.IPProto, pp.Dst, pp.Src) // src/dst reversed
 	removed := e.removeFlow(f)
 	if removed && pp.TCPFlags&packet.TCPRst != 0 {
 		e.logf("open-conn-track: flow TCP %v got RST by peer", f)
 	}
 	return
+}
+
+var (
+	appleIPRange = netip.MustParsePrefix("17.0.0.0/8")
+	canonicalIPs = lazy.SyncFunc(func() (checkIPFunc func(netip.Addr) bool) {
+		// https://bgp.he.net/AS41231#_prefixes
+		t := &bart.Table[bool]{}
+		for _, s := range strings.Fields(`
+			91.189.89.0/24
+			91.189.91.0/24
+			91.189.92.0/24
+			91.189.93.0/24
+			91.189.94.0/24
+			91.189.95.0/24
+			162.213.32.0/24
+			162.213.34.0/24
+			162.213.35.0/24
+			185.125.188.0/23
+			185.125.190.0/24
+			194.169.254.0/24`) {
+			t.Insert(netip.MustParsePrefix(s), true)
+		}
+		return func(ip netip.Addr) bool {
+			v, _ := t.Lookup(ip)
+			return v
+		}
+	})
+)
+
+// isOSNetworkProbe reports whether the target is likely a network
+// connectivity probe target from e.g. iOS or Ubuntu network-manager.
+//
+// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
+// Don't start timers tracking those. They won't succeed anyway. Avoids log
+// spam like:
+func (e *userspaceEngine) isOSNetworkProbe(dst netip.AddrPort) bool {
+	// iOS had log spam like:
+	// open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
+	if runtime.GOOS == "ios" && dst.Port() == 443 && appleIPRange.Contains(dst.Addr()) {
+		if _, ok := e.PeerForIP(dst.Addr()); !ok {
+			return true
+		}
+	}
+	// NetworkManager; https://github.com/tailscale/tailscale/issues/13687
+	// open-conn-track: timeout opening (TCP 100.96.229.119:42798 => 185.125.190.49:80); no associated peer node
+	if runtime.GOOS == "linux" && dst.Port() == 80 && canonicalIPs()(dst.Addr()) {
+		if _, ok := e.PeerForIP(dst.Addr()); !ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wrapper) (res filter.Response) {
@@ -95,18 +149,11 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		pp.TCPFlags&packet.TCPSyn == 0 {
 		return
 	}
-
-	flow := flowtrack.Tuple{Proto: pp.IPProto, Src: pp.Src, Dst: pp.Dst}
-
-	// iOS likes to probe Apple IPs on all interfaces to check for connectivity.
-	// Don't start timers tracking those. They won't succeed anyway. Avoids log spam
-	// like:
-	//    open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
-	if runtime.GOOS == "ios" && flow.Dst.Port() == 443 && !tsaddr.IsTailscaleIP(flow.Dst.Addr()) {
-		if _, ok := e.PeerForIP(flow.Dst.Addr()); !ok {
-			return
-		}
+	if e.isOSNetworkProbe(pp.Dst) {
+		return
 	}
+
+	flow := flowtrack.MakeTuple(pp.IPProto, pp.Src, pp.Dst)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -140,7 +187,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	}
 
 	// Diagnose why it might've timed out.
-	pip, ok := e.PeerForIP(flow.Dst.Addr())
+	pip, ok := e.PeerForIP(flow.DstAddr())
 	if !ok {
 		e.logf("open-conn-track: timeout opening %v; no associated peer node", flow)
 		return
@@ -162,7 +209,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
 		for i := range n.AllowedIPs().Len() {
 			r := n.AllowedIPs().At(i)
-			if r.Bits() != 0 && r.Contains(flow.Dst.Addr()) {
+			if r.Bits() != 0 && r.Contains(flow.DstAddr()) {
 				onlyZeroRoute = false
 				break
 			}

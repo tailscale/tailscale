@@ -333,11 +333,15 @@ func (s *userServer) run() error {
 		args = append(args, s.Name, s.Path)
 	}
 	var cmd *exec.Cmd
-	if s.canSudo() {
+	if su := s.canSU(); su != "" {
 		s.logf("starting taildrive file server as user %q", s.username)
-		allArgs := []string{"-n", "-u", s.username, s.executable}
-		allArgs = append(allArgs, args...)
-		cmd = exec.Command("sudo", allArgs...)
+		// Quote and escape arguments. Use single quotes to prevent shell substitutions.
+		for i, arg := range args {
+			args[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+		}
+		cmdString := fmt.Sprintf("%s %s", s.executable, strings.Join(args, " "))
+		allArgs := []string{s.username, "-c", cmdString}
+		cmd = exec.Command(su, allArgs...)
 	} else {
 		// If we were root, we should have been able to sudo as a specific
 		// user, but let's check just to make sure, since we never want to
@@ -405,16 +409,28 @@ var writeMethods = map[string]bool{
 	"DELETE":    true,
 }
 
-// canSudo checks wether we can sudo -u the configured executable as the
-// configured user by attempting to call the executable with the '-h' flag to
-// print help.
-func (s *userServer) canSudo() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := exec.CommandContext(ctx, "sudo", "-n", "-u", s.username, s.executable, "-h").Run(); err != nil {
-		return false
+// canSU checks whether the current process can run su with the right username.
+// If su can be run, this returns the path to the su command.
+// If not, this returns the empty string "".
+func (s *userServer) canSU() string {
+	su, err := exec.LookPath("su")
+	if err != nil {
+		s.logf("can't find su command: %v", err)
+		return ""
 	}
-	return true
+
+	// First try to execute su <user> -c true to make sure we can su.
+	err = exec.Command(
+		su,
+		s.username,
+		"-c", "true",
+	).Run()
+	if err != nil {
+		s.logf("su check failed: %s", err)
+		return ""
+	}
+
+	return su
 }
 
 // assertNotRoot returns an error if the current user has UID 0 or if we cannot

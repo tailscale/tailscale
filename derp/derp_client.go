@@ -121,6 +121,8 @@ func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 	return c, nil
 }
 
+func (c *Client) PublicKey() key.NodePublic { return c.publicKey }
+
 func (c *Client) recvServerKey() error {
 	var buf [40]byte
 	t, flen, err := readFrame(c.br, 1<<10, buf[:])
@@ -354,6 +356,10 @@ func (ReceivedPacket) msg() {}
 // PeerGoneMessage is a ReceivedMessage that indicates that the client
 // identified by the underlying public key is not connected to this
 // server.
+//
+// It has only historically been sent by the server when the client
+// connection count decremented from 1 to 0 and not from e.g. 2 to 1.
+// See https://github.com/tailscale/tailscale/issues/13566 for details.
 type PeerGoneMessage struct {
 	Peer   key.NodePublic
 	Reason PeerGoneReasonType
@@ -361,13 +367,20 @@ type PeerGoneMessage struct {
 
 func (PeerGoneMessage) msg() {}
 
-// PeerPresentMessage is a ReceivedMessage that indicates that the client
-// is connected to the server. (Only used by trusted mesh clients)
+// PeerPresentMessage is a ReceivedMessage that indicates that the client is
+// connected to the server. (Only used by trusted mesh clients)
+//
+// It will be sent to client watchers for every new connection from a client,
+// even if the client's already connected with that public key.
+// See https://github.com/tailscale/tailscale/issues/13566 for PeerPresentMessage
+// and PeerGoneMessage not being 1:1.
 type PeerPresentMessage struct {
 	// Key is the public key of the client.
 	Key key.NodePublic
 	// IPPort is the remote IP and port of the client.
 	IPPort netip.AddrPort
+	// Flags is a bitmask of info about the client.
+	Flags PeerPresentFlags
 }
 
 func (PeerPresentMessage) msg() {}
@@ -547,18 +560,33 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			return pg, nil
 
 		case framePeerPresent:
-			if n < keyLen {
+			remain := b
+			chunk, remain, ok := cutLeadingN(remain, keyLen)
+			if !ok {
 				c.logf("[unexpected] dropping short peerPresent frame from DERP server")
 				continue
 			}
 			var msg PeerPresentMessage
-			msg.Key = key.NodePublicFromRaw32(mem.B(b[:keyLen]))
-			if n >= keyLen+16+2 {
-				msg.IPPort = netip.AddrPortFrom(
-					netip.AddrFrom16([16]byte(b[keyLen:keyLen+16])).Unmap(),
-					binary.BigEndian.Uint16(b[keyLen+16:keyLen+16+2]),
-				)
+			msg.Key = key.NodePublicFromRaw32(mem.B(chunk))
+
+			const ipLen = 16
+			const portLen = 2
+			chunk, remain, ok = cutLeadingN(remain, ipLen+portLen)
+			if !ok {
+				// Older server which didn't send the IP.
+				return msg, nil
 			}
+			msg.IPPort = netip.AddrPortFrom(
+				netip.AddrFrom16([16]byte(chunk[:ipLen])).Unmap(),
+				binary.BigEndian.Uint16(chunk[ipLen:]),
+			)
+
+			chunk, _, ok = cutLeadingN(remain, 1)
+			if !ok {
+				// Older server which doesn't send PeerPresentFlags.
+				return msg, nil
+			}
+			msg.Flags = PeerPresentFlags(chunk[0])
 			return msg, nil
 
 		case frameRecvPacket:
@@ -635,4 +663,11 @@ func (c *Client) LocalAddr() (netip.AddrPort, error) {
 		return netip.AddrPort{}, errors.New("nil addr")
 	}
 	return netip.ParseAddrPort(a.String())
+}
+
+func cutLeadingN(b []byte, n int) (chunk, remain []byte, ok bool) {
+	if len(b) >= n {
+		return b[:n], b[n:], true
+	}
+	return nil, b, false
 }

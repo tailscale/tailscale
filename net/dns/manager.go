@@ -14,14 +14,18 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
+	"tailscale.com/tstime/rate"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -54,6 +58,11 @@ type Manager struct {
 	os       OSConfigurator
 	knobs    *controlknobs.Knobs // or nil
 	goos     string              // if empty, gets set to runtime.GOOS
+
+	mu sync.Mutex // guards following
+	// config is the last configuration we successfully compiled or nil if there
+	// was any failure applying the last configuration.
+	config *Config
 }
 
 // NewManagers created a new manager from the given config.
@@ -73,12 +82,32 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, linkSel, dialer, knobs),
+		resolver: resolver.New(logf, linkSel, dialer, health, knobs),
 		os:       oscfg,
 		health:   health,
 		knobs:    knobs,
 		goos:     goos,
 	}
+
+	// Rate limit our attempts to correct our DNS configuration.
+	limiter := rate.NewLimiter(1.0/5.0, 1)
+
+	// This will recompile the DNS config, which in turn will requery the system
+	// DNS settings. The recovery func should triggered only when we are missing
+	// upstream nameservers and require them to forward a query.
+	m.resolver.SetMissingUpstreamRecovery(func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.config == nil {
+			return
+		}
+
+		if limiter.Allow() {
+			m.logf("DNS resolution failed due to missing upstream nameservers.  Recompiling DNS configuration.")
+			m.setLocked(*m.config)
+		}
+	})
+
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
 	return m
@@ -88,6 +117,25 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 func (m *Manager) Resolver() *resolver.Resolver { return m.resolver }
 
 func (m *Manager) Set(cfg Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.setLocked(cfg)
+}
+
+// GetBaseConfig returns the current base OS DNS configuration as provided by the OSConfigurator.
+func (m *Manager) GetBaseConfig() (OSConfig, error) {
+	return m.os.GetBaseConfig()
+}
+
+// setLocked sets the DNS configuration.
+//
+// m.mu must be held.
+func (m *Manager) setLocked(cfg Config) error {
+	syncs.AssertLocked(&m.mu)
+
+	// On errors, the 'set' config is cleared.
+	m.config = nil
+
 	m.logf("Set: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		cfg.WriteToBufioWriter(w)
 	}))
@@ -111,7 +159,9 @@ func (m *Manager) Set(cfg Config) error {
 		m.health.SetDNSOSHealth(err)
 		return err
 	}
+
 	m.health.SetDNSOSHealth(nil)
+	m.config = &cfg
 
 	return nil
 }
@@ -122,6 +172,7 @@ func (m *Manager) Set(cfg Config) error {
 // The returned list is sorted by the first hostname in each entry.
 func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 	didLabel := make(map[string]bool, len(cfg.Hosts))
+	hostsMap := make(map[netip.Addr]*HostEntry, len(cfg.Hosts))
 	for _, sd := range cfg.SearchDomains {
 		for h, ips := range cfg.Hosts {
 			if !sd.Contains(h) || h.NumLabels() != (sd.NumLabels()+1) {
@@ -136,15 +187,23 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 				if cfg.OnlyIPv6 && ip.Is4() {
 					continue
 				}
-				hosts = append(hosts, &HostEntry{
-					Addr:  ip,
-					Hosts: ipHosts,
-				})
+				if e := hostsMap[ip]; e != nil {
+					e.Hosts = append(e.Hosts, ipHosts...)
+				} else {
+					hostsMap[ip] = &HostEntry{
+						Addr:  ip,
+						Hosts: ipHosts,
+					}
+				}
 				// Only add IPv4 or IPv6 per host, like we do in the resolver.
 				break
 			}
 		}
 	}
+	if len(hostsMap) == 0 {
+		return nil
+	}
+	hosts = xmaps.Values(hostsMap)
 	slices.SortFunc(hosts, func(a, b *HostEntry) int {
 		if len(a.Hosts) == 0 && len(b.Hosts) == 0 {
 			return 0
@@ -484,7 +543,9 @@ func (m *Manager) FlushCaches() error {
 // CleanUp restores the system DNS configuration to its original state
 // in case the Tailscale daemon terminated without closing the router.
 // No other state needs to be instantiated before this runs.
-func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
+//
+// health must not be nil
+func CleanUp(logf logger.Logf, netMon *netmon.Monitor, health *health.Tracker, interfaceName string) {
 	oscfg, err := NewOSConfigurator(logf, nil, nil, interfaceName)
 	if err != nil {
 		logf("creating dns cleanup: %v", err)
@@ -492,7 +553,7 @@ func CleanUp(logf logger.Logf, netMon *netmon.Monitor, interfaceName string) {
 	}
 	d := &tsdial.Dialer{Logf: logf}
 	d.SetNetMon(netMon)
-	dns := NewManager(logf, oscfg, nil, d, nil, nil, runtime.GOOS)
+	dns := NewManager(logf, oscfg, health, d, nil, nil, runtime.GOOS)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

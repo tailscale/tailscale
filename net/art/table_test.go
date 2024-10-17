@@ -589,7 +589,7 @@ func TestInsertCompare(t *testing.T) {
 	}
 
 	if debugInsert {
-		t.Logf(fast.debugSummary())
+		t.Log(fast.debugSummary())
 	}
 
 	seenVals4 := map[int]bool{}

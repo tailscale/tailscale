@@ -105,3 +105,29 @@ func (b *Bool) UnmarshalJSON(j []byte) error {
 	}
 	return nil
 }
+
+// BoolFlag is a wrapper for Bool that implements [flag.Value].
+type BoolFlag struct {
+	*Bool
+}
+
+// Set the value of b, using any value supported by [strconv.ParseBool].
+func (b *BoolFlag) Set(s string) error {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
+	}
+	b.Bool.Set(v)
+	return nil
+}
+
+// String returns "true" or "false" if the value is set, or an empty string otherwise.
+func (b *BoolFlag) String() string {
+	if b == nil || b.Bool == nil {
+		return ""
+	}
+	if v, ok := b.Bool.Get(); ok {
+		return strconv.FormatBool(v)
+	}
+	return ""
+}

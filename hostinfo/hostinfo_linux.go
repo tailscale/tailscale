@@ -159,7 +159,14 @@ func linuxVersionMeta() (meta versionMeta) {
 	return
 }
 
+// linuxBuildTagPackageType is set by packagetype_*.go
+// build tag guarded files.
+var linuxBuildTagPackageType string
+
 func packageTypeLinux() string {
+	if v := linuxBuildTagPackageType; v != "" {
+		return v
+	}
 	// Report whether this is in a snap.
 	// See https://snapcraft.io/docs/environment-variables
 	// We just look at two somewhat arbitrarily.

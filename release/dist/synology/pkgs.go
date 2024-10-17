@@ -24,13 +24,14 @@ import (
 type target struct {
 	filenameArch    string
 	dsmMajorVersion int
+	dsmMinorVersion int
 	goenv           map[string]string
 	packageCenter   bool
 	signer          dist.Signer
 }
 
 func (t *target) String() string {
-	return fmt.Sprintf("synology/dsm%d/%s", t.dsmMajorVersion, t.filenameArch)
+	return fmt.Sprintf("synology/dsm%s/%s", t.dsmVersionString(), t.filenameArch)
 }
 
 func (t *target) Build(b *dist.Build) ([]string, error) {
@@ -42,9 +43,31 @@ func (t *target) Build(b *dist.Build) ([]string, error) {
 	return t.buildSPK(b, inner)
 }
 
+// dsmVersionInt combines major and minor version info into an int
+// representation.
+//
+// Version 7.2 becomes 72 as an example.
+func (t *target) dsmVersionInt() int {
+	return t.dsmMajorVersion*10 + t.dsmMinorVersion
+}
+
+// dsmVersionString returns a string representation of the version
+// including minor version information if it exists.
+//
+// If dsmMinorVersion is 0 this returns dsmMajorVersion as a string,
+// otherwise it returns "dsmMajorVersion-dsmMinorVersion".
+func (t *target) dsmVersionString() string {
+	dsmVersionString := fmt.Sprintf("%d", t.dsmMajorVersion)
+	if t.dsmMinorVersion != 0 {
+		dsmVersionString = fmt.Sprintf("%s-%d", dsmVersionString, t.dsmMinorVersion)
+	}
+
+	return dsmVersionString
+}
+
 func (t *target) buildSPK(b *dist.Build, inner *innerPkg) ([]string, error) {
-	synoVersion := b.Version.Synology[t.dsmMajorVersion]
-	filename := fmt.Sprintf("tailscale-%s-%s-%d-dsm%d.spk", t.filenameArch, b.Version.Short, synoVersion, t.dsmMajorVersion)
+	synoVersion := b.Version.Synology[t.dsmVersionInt()]
+	filename := fmt.Sprintf("tailscale-%s-%s-%d-dsm%s.spk", t.filenameArch, b.Version.Short, synoVersion, t.dsmVersionString())
 	out := filepath.Join(b.Out, filename)
 	if t.packageCenter {
 		log.Printf("Building %s (for package center)", filename)
@@ -117,7 +140,7 @@ func (t *target) mkInfo(b *dist.Build, uncompressedSz int64) []byte {
 		fmt.Fprintf(&ret, "%s=%q\n", k, v)
 	}
 	f("package", "Tailscale")
-	f("version", fmt.Sprintf("%s-%d", b.Version.Short, b.Version.Synology[t.dsmMajorVersion]))
+	f("version", fmt.Sprintf("%s-%d", b.Version.Short, b.Version.Synology[t.dsmVersionInt()]))
 	f("arch", t.filenameArch)
 	f("description", "Connect all your devices using WireGuard, without the hassle.")
 	f("displayname", "Tailscale")

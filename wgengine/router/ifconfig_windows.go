@@ -320,12 +320,24 @@ func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (re
 		ipif6 = nil
 	}
 
-	// Windows requires routes to have a nexthop. For routes such as
-	// ours where the nexthop is meaningless, you're supposed to use
-	// one of the local IP addresses of the interface. Find an IPv4
-	// and IPv6 address we can use for this purpose.
-	var firstGateway4 netip.Addr
-	var firstGateway6 netip.Addr
+	// Windows requires routes to have a nexthop. Routes created using
+	// the interface's local IP address or an unspecified IP address
+	// ("0.0.0.0" or "::") as the nexthop are considered on-link routes.
+	//
+	// Notably, Windows treats on-link subnet routes differently, reserving the last
+	// IP in the range as the broadcast IP and therefore prohibiting TCP connections
+	// to it, resulting in WSA error 10049: "The requested address is not valid in its context."
+	// This does not happen with single-host routes, such as routes to Tailscale IP addresses,
+	// but becomes a problem with advertised subnets when all IPs in the range should be reachable.
+	// See https://github.com/tailscale/support-escalations/issues/57 for details.
+	//
+	// For routes such as ours where the nexthop is meaningless, we can use an
+	// arbitrary nexthop address, such as TailscaleServiceIP, to prevent the
+	// routes from being marked as on-link. We can still create on-link routes
+	// for single-host Tailscale routes, but we shouldn't attempt to create a
+	// route for the interface's own IP.
+	var localAddr4, localAddr6 netip.Addr
+	var gatewayAddr4, gatewayAddr6 netip.Addr
 	addresses := make([]netip.Prefix, 0, len(cfg.LocalAddrs))
 	for _, addr := range cfg.LocalAddrs {
 		if (addr.Addr().Is4() && ipif4 == nil) || (addr.Addr().Is6() && ipif6 == nil) {
@@ -333,10 +345,12 @@ func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (re
 			continue
 		}
 		addresses = append(addresses, addr)
-		if addr.Addr().Is4() && !firstGateway4.IsValid() {
-			firstGateway4 = addr.Addr()
-		} else if addr.Addr().Is6() && !firstGateway6.IsValid() {
-			firstGateway6 = addr.Addr()
+		if addr.Addr().Is4() && !gatewayAddr4.IsValid() {
+			localAddr4 = addr.Addr()
+			gatewayAddr4 = tsaddr.TailscaleServiceIP()
+		} else if addr.Addr().Is6() && !gatewayAddr6.IsValid() {
+			localAddr6 = addr.Addr()
+			gatewayAddr6 = tsaddr.TailscaleServiceIPv6()
 		}
 	}
 
@@ -349,7 +363,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (re
 			continue
 		}
 
-		if route.Addr().Is6() && !firstGateway6.IsValid() {
+		if route.Addr().Is6() && !gatewayAddr6.IsValid() {
 			// Windows won't let us set IPv6 routes without having an
 			// IPv6 local address set. However, when we've configured
 			// a default route, we want to forcibly grab IPv6 traffic
@@ -358,18 +372,35 @@ func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (re
 			// route source.
 			ip := tsaddr.Tailscale4To6Placeholder()
 			addresses = append(addresses, netip.PrefixFrom(ip, ip.BitLen()))
-			firstGateway6 = ip
-		} else if route.Addr().Is4() && !firstGateway4.IsValid() {
+			gatewayAddr6 = ip
+		} else if route.Addr().Is4() && !gatewayAddr4.IsValid() {
 			// TODO: do same dummy behavior as v6?
 			return errors.New("due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
 
-		var gateway netip.Addr
+		var gateway, localAddr netip.Addr
 		if route.Addr().Is4() {
-			gateway = firstGateway4
+			localAddr = localAddr4
+			gateway = gatewayAddr4
 		} else if route.Addr().Is6() {
-			gateway = firstGateway6
+			localAddr = localAddr6
+			gateway = gatewayAddr6
 		}
+
+		switch destAddr := route.Addr().Unmap(); {
+		case destAddr == localAddr:
+			// no need to add a route for the interface's
+			// own IP. The kernel does that for us.
+			// If we try to replace it, we'll fail to
+			// add the route unless NextHop is set, but
+			// then the interface's IP won't be pingable.
+			continue
+		case route.IsSingleIP() && (destAddr == gateway || tsaddr.IsTailscaleIP(destAddr)):
+			// add an on-link route if the destination
+			// is the nexthop itself or a single Tailscale IP.
+			gateway = localAddr
+		}
+
 		r := &routeData{
 			RouteData: winipcfg.RouteData{
 				Destination: route,
@@ -377,24 +408,15 @@ func configureInterface(cfg *Config, tun *tun.NativeTun, ht *health.Tracker) (re
 				Metric:      0,
 			},
 		}
-		if r.Destination.Addr().Unmap() == gateway {
-			// no need to add a route for the interface's
-			// own IP. The kernel does that for us.
-			// If we try to replace it, we'll fail to
-			// add the route unless NextHop is set, but
-			// then the interface's IP won't be pingable.
-			continue
-		}
+
 		if route.Addr().Is4() {
 			if route.Bits() == 0 {
 				foundDefault4 = true
 			}
-			r.NextHop = firstGateway4
 		} else if route.Addr().Is6() {
 			if route.Bits() == 0 {
 				foundDefault6 = true
 			}
-			r.NextHop = firstGateway6
 		}
 		routes = append(routes, r)
 	}

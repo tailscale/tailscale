@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"expvar"
 	"fmt"
 	"io"
 	"sort"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"tailscale.com/util/set"
 )
 
 var (
@@ -221,6 +224,54 @@ func NewGaugeFunc(name string, f func() int64) *Metric {
 	m.f = f
 	m.Publish()
 	return m
+}
+
+// AggregateCounter returns a sum of expvar counters registered with it.
+type AggregateCounter struct {
+	mu       sync.RWMutex
+	counters set.Set[*expvar.Int]
+}
+
+func (c *AggregateCounter) Value() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var sum int64
+	for cnt := range c.counters {
+		sum += cnt.Value()
+	}
+	return sum
+}
+
+// Register registers provided expvar counter.
+// When a counter is added to the counter, it will be reset
+// to start counting from 0. This is to avoid incrementing the
+// counter with an unexpectedly large value.
+func (c *AggregateCounter) Register(counter *expvar.Int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// No need to do anything if it's already registered.
+	if c.counters.Contains(counter) {
+		return
+	}
+	counter.Set(0)
+	c.counters.Add(counter)
+}
+
+// UnregisterAll unregisters all counters resulting in it
+// starting back down at zero. This is to ensure monotonicity
+// and respect the semantics of the counter.
+func (c *AggregateCounter) UnregisterAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counters = set.Set[*expvar.Int]{}
+}
+
+// NewAggregateCounter returns a new aggregate counter that returns
+// a sum of expvar variables registered with it.
+func NewAggregateCounter(name string) *AggregateCounter {
+	c := &AggregateCounter{counters: set.Set[*expvar.Int]{}}
+	NewGaugeFunc(name, c.Value)
+	return c
 }
 
 // WritePrometheusExpositionFormat writes all client metrics to w in

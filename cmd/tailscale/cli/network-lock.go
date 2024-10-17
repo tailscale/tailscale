@@ -20,6 +20,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
@@ -150,13 +151,15 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%d disablement secrets have been generated and are printed below. Take note of them now, they WILL NOT be shown again.\n", nlInitArgs.numDisablements)
+	var successMsg strings.Builder
+
+	fmt.Fprintf(&successMsg, "%d disablement secrets have been generated and are printed below. Take note of them now, they WILL NOT be shown again.\n", nlInitArgs.numDisablements)
 	for range nlInitArgs.numDisablements {
 		var secret [32]byte
 		if _, err := rand.Read(secret[:]); err != nil {
 			return err
 		}
-		fmt.Printf("\tdisablement-secret:%X\n", secret[:])
+		fmt.Fprintf(&successMsg, "\tdisablement-secret:%X\n", secret[:])
 		disablementValues = append(disablementValues, tka.DisablementKDF(secret[:]))
 	}
 
@@ -167,7 +170,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 			return err
 		}
 		disablementValues = append(disablementValues, tka.DisablementKDF(supportDisablement))
-		fmt.Println("A disablement secret for Tailscale support has been generated and will be transmitted to Tailscale upon initialization.")
+		fmt.Fprintln(&successMsg, "A disablement secret for Tailscale support has been generated and transmitted to Tailscale.")
 	}
 
 	// The state returned by NetworkLockInit likely doesn't contain the initialized state,
@@ -176,6 +179,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return err
 	}
 
+	fmt.Print(successMsg.String())
 	fmt.Println("Initialization complete.")
 	return nil
 }
@@ -443,15 +447,33 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
-	ShortUsage: "tailscale lock sign <node-key> [<rotation-key>] or sign <auth-key>",
+	ShortUsage: "tailscale lock sign <node-key> [<rotation-key>]\ntailscale lock sign <auth-key>",
 	ShortHelp:  "Signs a node or pre-approved auth key",
 	LongHelp: `Either:
-  - signs a node key and transmits the signature to the coordination server, or
-  - signs a pre-approved auth key, printing it in a form that can be used to bring up nodes under tailnet lock`,
+  - signs a node key and transmits the signature to the coordination
+    server, or
+  - signs a pre-approved auth key, printing it in a form that can be
+    used to bring up nodes under tailnet lock
+
+If any of the key arguments begin with "file:", the key is retrieved from
+the file at the path specified in the argument suffix.`,
 	Exec: runNetworkLockSign,
 }
 
 func runNetworkLockSign(ctx context.Context, args []string) error {
+	// If any of the arguments start with "file:", replace that argument
+	// with the contents of the file. We do this early, before the check
+	// to see if the first argument is an auth key.
+	for i, arg := range args {
+		if filename, ok := strings.CutPrefix(arg, "file:"); ok {
+			b, err := os.ReadFile(filename)
+			if err != nil {
+				return err
+			}
+			args[i] = strings.TrimSpace(string(b))
+		}
+	}
+
 	if len(args) > 0 && strings.HasPrefix(args[0], "tskey-auth-") {
 		return runTskeyWrapCmd(ctx, args)
 	}
@@ -476,7 +498,7 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 	err := localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey.Verifier()))
 	// Provide a better help message for when someone clicks through the signing flow
 	// on the wrong device.
-	if err != nil && strings.Contains(err.Error(), "this node is not trusted by network lock") {
+	if err != nil && strings.Contains(err.Error(), tsconst.TailnetLockNotTrustedMsg) {
 		fmt.Fprintln(Stderr, "Error: Signing is not available on this device because it does not have a trusted tailnet lock key.")
 		fmt.Fprintln(Stderr)
 		fmt.Fprintln(Stderr, "Try again on a signing device instead. Tailnet admins can see signing devices on the admin panel.")
@@ -789,7 +811,7 @@ func runNetworkLockRevokeKeys(ctx context.Context, args []string) error {
 		}
 
 		fmt.Printf(`Run the following command on another machine with a trusted tailnet lock key:
-	%s lock recover-compromised-key --cosign %X
+	%s lock revoke-keys --cosign %X
 `, os.Args[0], aumBytes)
 		return nil
 	}
@@ -813,10 +835,10 @@ func runNetworkLockRevokeKeys(ctx context.Context, args []string) error {
 		fmt.Printf(`Co-signing completed successfully.
 
 To accumulate an additional signature, run the following command on another machine with a trusted tailnet lock key:
-	%s lock recover-compromised-key --cosign %X
+	%s lock revoke-keys --cosign %X
 
 Alternatively if you are done with co-signing, complete recovery by running the following command:
-	%s lock recover-compromised-key --finish %X
+	%s lock revoke-keys --finish %X
 `, os.Args[0], aumBytes, os.Args[0], aumBytes)
 	}
 

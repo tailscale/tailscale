@@ -4,9 +4,11 @@
 package logid
 
 import (
+	"math"
 	"testing"
 
 	"tailscale.com/tstest"
+	"tailscale.com/util/must"
 )
 
 func TestIDs(t *testing.T) {
@@ -75,5 +77,91 @@ func TestIDs(t *testing.T) {
 		new(PublicID).UnmarshalText(hexBytes)
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdd(t *testing.T) {
+	tests := []struct {
+		in   string
+		add  int64
+		want string
+	}{{
+		in:   "0000000000000000000000000000000000000000000000000000000000000000",
+		add:  0,
+		want: "0000000000000000000000000000000000000000000000000000000000000000",
+	}, {
+		in:   "0000000000000000000000000000000000000000000000000000000000000000",
+		add:  1,
+		want: "0000000000000000000000000000000000000000000000000000000000000001",
+	}, {
+		in:   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		add:  1,
+		want: "0000000000000000000000000000000000000000000000000000000000000000",
+	}, {
+		in:   "0000000000000000000000000000000000000000000000000000000000000000",
+		add:  -1,
+		want: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	}, {
+		in:   "0000000000000000000000000000000000000000000000000000000000000000",
+		add:  math.MinInt64,
+		want: "ffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000",
+	}, {
+		in:   "000000000000000000000000000000000000000000000000ffffffffffffffff",
+		add:  math.MinInt64,
+		want: "0000000000000000000000000000000000000000000000007fffffffffffffff",
+	}, {
+		in:   "0000000000000000000000000000000000000000000000000000000000000000",
+		add:  math.MaxInt64,
+		want: "0000000000000000000000000000000000000000000000007fffffffffffffff",
+	}, {
+		in:   "0000000000000000000000000000000000000000000000007fffffffffffffff",
+		add:  math.MaxInt64,
+		want: "000000000000000000000000000000000000000000000000fffffffffffffffe",
+	}, {
+		in:   "000000000000000000000000000000000000000000000000ffffffffffffffff",
+		add:  1,
+		want: "0000000000000000000000000000000000000000000000010000000000000000",
+	}, {
+		in:   "00000000000000000000000000000000fffffffffffffffffffffffffffffffe",
+		add:  3,
+		want: "0000000000000000000000000000000100000000000000000000000000000001",
+	}, {
+		in:   "0000000000000000fffffffffffffffffffffffffffffffffffffffffffffffd",
+		add:  5,
+		want: "0000000000000001000000000000000000000000000000000000000000000002",
+	}, {
+		in:   "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc",
+		add:  7,
+		want: "0000000000000000000000000000000000000000000000000000000000000003",
+	}, {
+		in:   "ffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000",
+		add:  -1,
+		want: "fffffffffffffffffffffffffffffffffffffffffffffffeffffffffffffffff",
+	}, {
+		in:   "ffffffffffffffffffffffffffffffff00000000000000000000000000000001",
+		add:  -3,
+		want: "fffffffffffffffffffffffffffffffefffffffffffffffffffffffffffffffe",
+	}, {
+		in:   "ffffffffffffffff000000000000000000000000000000000000000000000002",
+		add:  -5,
+		want: "fffffffffffffffefffffffffffffffffffffffffffffffffffffffffffffffd",
+	}, {
+		in:   "0000000000000000000000000000000000000000000000000000000000000003",
+		add:  -7,
+		want: "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc",
+	}}
+	for _, tt := range tests {
+		in := must.Get(ParsePublicID(tt.in))
+		want := must.Get(ParsePublicID(tt.want))
+		got := in.Add(tt.add)
+		if got != want {
+			t.Errorf("%s.Add(%d):\n\tgot  %s\n\twant %s", in, tt.add, got, want)
+		}
+		if tt.add != math.MinInt64 {
+			got = got.Add(-tt.add)
+			if got != in {
+				t.Errorf("%s.Add(%d):\n\tgot  %s\n\twant %s", want, -tt.add, got, in)
+			}
+		}
 	}
 }

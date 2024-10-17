@@ -692,3 +692,5 @@ azules
 tabby
 ussuri
 kitty
+tanuki
+neko

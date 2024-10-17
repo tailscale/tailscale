@@ -29,7 +29,8 @@ func ResourceCheck(tb testing.TB) {
 	startN, startStacks := goroutines()
 	tb.Cleanup(func() {
 		if tb.Failed() {
-			// Something else went wrong.
+			// Test has failed - but this doesn't catch panics due to
+			// https://github.com/golang/go/issues/49929.
 			return
 		}
 		// Goroutines might be still exiting.
@@ -44,7 +45,10 @@ func ResourceCheck(tb testing.TB) {
 			return
 		}
 		tb.Logf("goroutine diff:\n%v\n", cmp.Diff(startStacks, endStacks))
-		tb.Fatalf("goroutine count: expected %d, got %d\n", startN, endN)
+
+		// tb.Failed() above won't report on panics, so we shouldn't call Fatal
+		// here or we risk suppressing reporting of the panic.
+		tb.Errorf("goroutine count: expected %d, got %d\n", startN, endN)
 	})
 }
 

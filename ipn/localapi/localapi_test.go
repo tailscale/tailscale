@@ -26,6 +26,7 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -37,6 +38,23 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/wgengine"
 )
+
+var _ ipnauth.Actor = (*testActor)(nil)
+
+type testActor struct {
+	uid           ipn.WindowsUserID
+	name          string
+	isLocalSystem bool
+	isLocalAdmin  bool
+}
+
+func (u *testActor) UserID() ipn.WindowsUserID { return u.uid }
+
+func (u *testActor) Username() (string, error) { return u.name, nil }
+
+func (u *testActor) IsLocalSystem() bool { return u.isLocalSystem }
+
+func (u *testActor) IsLocalAdmin(operatorUID string) bool { return u.isLocalAdmin }
 
 func TestValidHost(t *testing.T) {
 	tests := []struct {
@@ -100,13 +118,13 @@ func TestSetPushDeviceToken(t *testing.T) {
 }
 
 type whoIsBackend struct {
-	whoIs        func(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
+	whoIs        func(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	whoIsNodeKey func(key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	peerCaps     map[netip.Addr]tailcfg.PeerCapMap
 }
 
-func (b whoIsBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
-	return b.whoIs(ipp)
+func (b whoIsBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+	return b.whoIs(proto, ipp)
 }
 
 func (b whoIsBackend) WhoIsNodeKey(k key.NodePublic) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
@@ -143,7 +161,7 @@ func TestWhoIsArgTypes(t *testing.T) {
 		rec := httptest.NewRecorder()
 		t.Run(input, func(t *testing.T) {
 			b := whoIsBackend{
-				whoIs: func(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+				whoIs: func(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 					if !strings.Contains(input, ":") {
 						want := netip.MustParseAddrPort("100.101.102.103:0")
 						if ipp != want {
@@ -189,7 +207,7 @@ func TestWhoIsArgTypes(t *testing.T) {
 
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	newHandler := func(connIsLocalAdmin bool) *Handler {
-		return &Handler{testConnIsLocalAdmin: &connIsLocalAdmin}
+		return &Handler{Actor: &testActor{isLocalAdmin: connIsLocalAdmin}, b: newTestLocalBackend(t)}
 	}
 	tests := []struct {
 		name     string
@@ -338,7 +356,7 @@ func newTestLocalBackend(t testing.TB) *ipnlocal.LocalBackend {
 	sys := new(tsd.System)
 	store := new(mem.Store)
 	sys.Set(store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker())
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set, sys.HealthTracker(), sys.UserMetricsRegistry())
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}

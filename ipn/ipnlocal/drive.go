@@ -93,8 +93,7 @@ func (b *LocalBackend) driveSetShareLocked(share *drive.Share) (views.SliceView[
 
 	addedShare := false
 	var shares []*drive.Share
-	for i := range existingShares.Len() {
-		existing := existingShares.At(i)
+	for _, existing := range existingShares.All() {
 		if existing.Name() != share.Name {
 			if !addedShare && existing.Name() > share.Name {
 				// Add share in order
@@ -152,8 +151,7 @@ func (b *LocalBackend) driveRenameShareLocked(oldName, newName string) (views.Sl
 
 	found := false
 	var shares []*drive.Share
-	for i := range existingShares.Len() {
-		existing := existingShares.At(i)
+	for _, existing := range existingShares.All() {
 		if existing.Name() == newName {
 			return existingShares, os.ErrExist
 		}
@@ -213,8 +211,7 @@ func (b *LocalBackend) driveRemoveShareLocked(name string) (views.SliceView[*dri
 
 	found := false
 	var shares []*drive.Share
-	for i := range existingShares.Len() {
-		existing := existingShares.At(i)
+	for _, existing := range existingShares.All() {
 		if existing.Name() != name {
 			shares = append(shares, existing.AsStruct())
 		} else {
@@ -243,12 +240,21 @@ func (b *LocalBackend) driveSetSharesLocked(shares []*drive.Share) error {
 		},
 		DriveSharesSet: true,
 	})
-	return b.pm.setPrefsLocked(prefs.View())
+	return b.pm.setPrefsNoPermCheck(prefs.View())
 }
 
 // driveNotifyShares notifies IPN bus listeners (e.g. Mac Application process)
-// about the latest list of shares.
+// about the latest list of shares, if and only if the shares have changed since
+// the last time we notified.
 func (b *LocalBackend) driveNotifyShares(shares views.SliceView[*drive.Share, drive.ShareView]) {
+	b.lastNotifiedDriveSharesMu.Lock()
+	defer b.lastNotifiedDriveSharesMu.Unlock()
+	if b.lastNotifiedDriveShares != nil && driveShareViewsEqual(b.lastNotifiedDriveShares, shares) {
+		// shares are unchanged since last notification, don't bother notifying
+		return
+	}
+	b.lastNotifiedDriveShares = &shares
+
 	// Ensures shares is not nil to distinguish "no shares" from "not notifying shares"
 	if shares.IsNil() {
 		shares = views.SliceOfViews(make([]*drive.Share, 0))
@@ -265,11 +271,8 @@ func (b *LocalBackend) driveNotifyCurrentSharesLocked() {
 		shares = b.pm.prefs.DriveShares()
 	}
 
-	lastNotified := b.lastNotifiedDriveShares.Load()
-	if lastNotified == nil || !driveShareViewsEqual(lastNotified, shares) {
-		// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
-		go b.driveNotifyShares(shares)
-	}
+	// Do the below on a goroutine to avoid deadlocking on b.mu in b.send().
+	go b.driveNotifyShares(shares)
 }
 
 func driveShareViewsEqual(a *views.SliceView[*drive.Share, drive.ShareView], b views.SliceView[*drive.Share, drive.ShareView]) bool {

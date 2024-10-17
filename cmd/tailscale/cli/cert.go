@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"software.sslmate.com/src/go-pkcs12"
@@ -34,14 +35,16 @@ var certCmd = &ffcli.Command{
 		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")
 		fs.StringVar(&certArgs.keyFile, "key-file", "", "output key file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
 		fs.BoolVar(&certArgs.serve, "serve-demo", false, "if true, serve on port :443 using the cert as a demo, instead of writing out the files to disk")
+		fs.DurationVar(&certArgs.minValidity, "min-validity", 0, "ensure the certificate is valid for at least this duration; the output certificate is never expired if this flag is unset or 0, but the lifetime may vary; the maximum allowed min-validity depends on the CA")
 		return fs
 	})(),
 }
 
 var certArgs struct {
-	certFile string
-	keyFile  string
-	serve    bool
+	certFile    string
+	keyFile     string
+	serve       bool
+	minValidity time.Duration
 }
 
 func runCert(ctx context.Context, args []string) error {
@@ -102,7 +105,7 @@ func runCert(ctx context.Context, args []string) error {
 		certArgs.certFile = domain + ".crt"
 		certArgs.keyFile = domain + ".key"
 	}
-	certPEM, keyPEM, err := localClient.CertPair(ctx, domain)
+	certPEM, keyPEM, err := localClient.CertPairWithValidity(ctx, domain, certArgs.minValidity)
 	if err != nil {
 		return err
 	}

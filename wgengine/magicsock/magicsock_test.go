@@ -28,6 +28,7 @@ import (
 	"time"
 	"unsafe"
 
+	qt "github.com/frankban/quicktest"
 	wgconn "github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
@@ -35,7 +36,6 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/derp"
@@ -65,6 +65,7 @@ import (
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -157,6 +158,7 @@ type magicStack struct {
 	dev        *device.Device          // the wireguard-go Device that connects the previous things
 	wgLogger   *wglog.Logger           // wireguard-go log wrapper
 	netMon     *netmon.Monitor         // always non-nil
+	metrics    *usermetric.Registry
 }
 
 // newMagicStack builds and initializes an idle magicsock and
@@ -174,11 +176,15 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	if err != nil {
 		t.Fatalf("netmon.New: %v", err)
 	}
+	ht := new(health.Tracker)
 
+	var reg usermetric.Registry
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
+		Metrics:                &reg,
 		Logf:                   logf,
+		HealthTracker:          ht,
 		DisablePortMapper:      true,
 		TestOnlyPacketListener: l,
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
@@ -194,7 +200,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 	}
 
 	tun := tuntest.NewChannelTUN()
-	tsTun := tstun.Wrap(logf, tun.TUN())
+	tsTun := tstun.Wrap(logf, tun.TUN(), &reg)
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 	tsTun.Start()
 
@@ -220,6 +226,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 		dev:        dev,
 		wgLogger:   wgLogger,
 		netMon:     netMon,
+		metrics:    &reg,
 	}
 }
 
@@ -398,6 +405,7 @@ func TestNewConn(t *testing.T) {
 		EndpointsFunc:     epFunc,
 		Logf:              t.Logf,
 		NetMon:            netMon,
+		Metrics:           new(usermetric.Registry),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +460,7 @@ func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	c := newConn()
+	c := newConn(t.Logf)
 	dm := &tailcfg.DERPMap{
 		Regions: map[int]*tailcfg.DERPRegion{
 			1: {},
@@ -483,7 +491,7 @@ func TestPickDERPFallback(t *testing.T) {
 	// distribution over nodes works.
 	got := map[int]int{}
 	for range 50 {
-		c = newConn()
+		c = newConn(t.Logf)
 		c.derpMap = dm
 		got[c.pickDERPFallback()]++
 	}
@@ -524,6 +532,7 @@ func TestDeviceStartStop(t *testing.T) {
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {},
 		Logf:          t.Logf,
 		NetMon:        netMon,
+		Metrics:       new(usermetric.Registry),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1182,11 +1191,95 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		checkStats(t, m1, m1Conns)
 		checkStats(t, m2, m2Conns)
 	})
+	t.Run("compare-metrics-stats", func(t *testing.T) {
+		setT(t)
+		defer setT(outerT)
+		m1.conn.resetMetricsForTest()
+		m1.stats.TestExtract()
+		m2.conn.resetMetricsForTest()
+		m2.stats.TestExtract()
+		t.Logf("Metrics before: %s\n", m1.metrics.String())
+		ping1(t)
+		ping2(t)
+		assertConnStatsAndUserMetricsEqual(t, m1)
+		assertConnStatsAndUserMetricsEqual(t, m2)
+		t.Logf("Metrics after: %s\n", m1.metrics.String())
+	})
+}
+
+func (c *Conn) resetMetricsForTest() {
+	c.metrics.inboundBytesIPv4Total.Set(0)
+	c.metrics.inboundPacketsIPv4Total.Set(0)
+	c.metrics.outboundBytesIPv4Total.Set(0)
+	c.metrics.outboundPacketsIPv4Total.Set(0)
+	c.metrics.inboundBytesIPv6Total.Set(0)
+	c.metrics.inboundPacketsIPv6Total.Set(0)
+	c.metrics.outboundBytesIPv6Total.Set(0)
+	c.metrics.outboundPacketsIPv6Total.Set(0)
+	c.metrics.inboundBytesDERPTotal.Set(0)
+	c.metrics.inboundPacketsDERPTotal.Set(0)
+	c.metrics.outboundBytesDERPTotal.Set(0)
+	c.metrics.outboundPacketsDERPTotal.Set(0)
+}
+
+func assertConnStatsAndUserMetricsEqual(t *testing.T, ms *magicStack) {
+	_, phys := ms.stats.TestExtract()
+
+	physIPv4RxBytes := int64(0)
+	physIPv4TxBytes := int64(0)
+	physDERPRxBytes := int64(0)
+	physDERPTxBytes := int64(0)
+	physIPv4RxPackets := int64(0)
+	physIPv4TxPackets := int64(0)
+	physDERPRxPackets := int64(0)
+	physDERPTxPackets := int64(0)
+	for conn, count := range phys {
+		t.Logf("physconn src: %s, dst: %s", conn.Src.String(), conn.Dst.String())
+		if conn.Dst.String() == "127.3.3.40:1" {
+			physDERPRxBytes += int64(count.RxBytes)
+			physDERPTxBytes += int64(count.TxBytes)
+			physDERPRxPackets += int64(count.RxPackets)
+			physDERPTxPackets += int64(count.TxPackets)
+		} else {
+			physIPv4RxBytes += int64(count.RxBytes)
+			physIPv4TxBytes += int64(count.TxBytes)
+			physIPv4RxPackets += int64(count.RxPackets)
+			physIPv4TxPackets += int64(count.TxPackets)
+		}
+	}
+
+	metricIPv4RxBytes := ms.conn.metrics.inboundBytesIPv4Total.Value()
+	metricIPv4RxPackets := ms.conn.metrics.inboundPacketsIPv4Total.Value()
+	metricIPv4TxBytes := ms.conn.metrics.outboundBytesIPv4Total.Value()
+	metricIPv4TxPackets := ms.conn.metrics.outboundPacketsIPv4Total.Value()
+
+	metricDERPRxBytes := ms.conn.metrics.inboundBytesDERPTotal.Value()
+	metricDERPRxPackets := ms.conn.metrics.inboundPacketsDERPTotal.Value()
+	metricDERPTxBytes := ms.conn.metrics.outboundBytesDERPTotal.Value()
+	metricDERPTxPackets := ms.conn.metrics.outboundPacketsDERPTotal.Value()
+
+	c := qt.New(t)
+	c.Assert(physDERPRxBytes, qt.Equals, metricDERPRxBytes)
+	c.Assert(physDERPTxBytes, qt.Equals, metricDERPTxBytes)
+	c.Assert(physIPv4RxBytes, qt.Equals, metricIPv4RxBytes)
+	c.Assert(physIPv4TxBytes, qt.Equals, metricIPv4TxBytes)
+	c.Assert(physDERPRxPackets, qt.Equals, metricDERPRxPackets)
+	c.Assert(physDERPTxPackets, qt.Equals, metricDERPTxPackets)
+	c.Assert(physIPv4RxPackets, qt.Equals, metricIPv4RxPackets)
+	c.Assert(physIPv4TxPackets, qt.Equals, metricIPv4TxPackets)
+
+	// Validate that the usermetrics and clientmetrics are in sync
+	// Note: the clientmetrics are global, this means that when they are registering with the
+	// wgengine, multiple in-process nodes used by this test will be updating the same metrics. This is why we need to multiply
+	// the metrics by 2 to get the expected value.
+	// TODO(kradalby): https://github.com/tailscale/tailscale/issues/13420
+	c.Assert(metricSendUDP.Value(), qt.Equals, metricIPv4TxPackets*2)
+	c.Assert(metricRecvDataPacketsIPv4.Value(), qt.Equals, metricIPv4RxPackets*2)
+	c.Assert(metricRecvDataPacketsDERP.Value(), qt.Equals, metricDERPRxPackets*2)
 }
 
 func TestDiscoMessage(t *testing.T) {
-	c := newConn()
-	c.logf = t.Logf
+	c := newConn(t.Logf)
 	c.privateKey = key.NewNode()
 
 	peer1Pub := c.DiscoPublicKey()
@@ -1276,6 +1369,8 @@ func newTestConn(t testing.TB) *Conn {
 
 	conn, err := NewConn(Options{
 		NetMon:                 netMon,
+		HealthTracker:          new(health.Tracker),
+		Metrics:                new(usermetric.Registry),
 		DisablePortMapper:      true,
 		Logf:                   t.Logf,
 		Port:                   port,
@@ -2036,238 +2131,6 @@ func TestBufferedDerpWritesBeforeDrop(t *testing.T) {
 		t.Fatalf("got bufferedDerpWritesBeforeDrop=%d, which is < 32", vv)
 	}
 	t.Logf("bufferedDerpWritesBeforeDrop = %d", vv)
-}
-
-func setGSOSize(control *[]byte, gsoSize uint16) {
-	*control = (*control)[:cap(*control)]
-	binary.LittleEndian.PutUint16(*control, gsoSize)
-}
-
-func getGSOSize(control []byte) (int, error) {
-	if len(control) < 2 {
-		return 0, nil
-	}
-	return int(binary.LittleEndian.Uint16(control)), nil
-}
-
-func Test_batchingUDPConn_splitCoalescedMessages(t *testing.T) {
-	c := &batchingUDPConn{
-		setGSOSizeInControl:   setGSOSize,
-		getGSOSizeFromControl: getGSOSize,
-	}
-
-	newMsg := func(n, gso int) ipv6.Message {
-		msg := ipv6.Message{
-			Buffers: [][]byte{make([]byte, 1024)},
-			N:       n,
-			OOB:     make([]byte, 2),
-		}
-		binary.LittleEndian.PutUint16(msg.OOB, uint16(gso))
-		if gso > 0 {
-			msg.NN = 2
-		}
-		return msg
-	}
-
-	cases := []struct {
-		name        string
-		msgs        []ipv6.Message
-		firstMsgAt  int
-		wantNumEval int
-		wantMsgLens []int
-		wantErr     bool
-	}{
-		{
-			name: "second last split last empty",
-			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
-				newMsg(3, 1),
-				newMsg(0, 0),
-			},
-			firstMsgAt:  2,
-			wantNumEval: 3,
-			wantMsgLens: []int{1, 1, 1, 0},
-			wantErr:     false,
-		},
-		{
-			name: "second last no split last empty",
-			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
-				newMsg(1, 0),
-				newMsg(0, 0),
-			},
-			firstMsgAt:  2,
-			wantNumEval: 1,
-			wantMsgLens: []int{1, 0, 0, 0},
-			wantErr:     false,
-		},
-		{
-			name: "second last no split last no split",
-			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
-				newMsg(1, 0),
-				newMsg(1, 0),
-			},
-			firstMsgAt:  2,
-			wantNumEval: 2,
-			wantMsgLens: []int{1, 1, 0, 0},
-			wantErr:     false,
-		},
-		{
-			name: "second last no split last split",
-			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
-				newMsg(1, 0),
-				newMsg(3, 1),
-			},
-			firstMsgAt:  2,
-			wantNumEval: 4,
-			wantMsgLens: []int{1, 1, 1, 1},
-			wantErr:     false,
-		},
-		{
-			name: "second last split last split",
-			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
-				newMsg(2, 1),
-				newMsg(2, 1),
-			},
-			firstMsgAt:  2,
-			wantNumEval: 4,
-			wantMsgLens: []int{1, 1, 1, 1},
-			wantErr:     false,
-		},
-		{
-			name: "second last no split last split overflow",
-			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
-				newMsg(1, 0),
-				newMsg(4, 1),
-			},
-			firstMsgAt:  2,
-			wantNumEval: 4,
-			wantMsgLens: []int{1, 1, 1, 1},
-			wantErr:     true,
-		},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := c.splitCoalescedMessages(tt.msgs, 2)
-			if err != nil && !tt.wantErr {
-				t.Fatalf("err: %v", err)
-			}
-			if got != tt.wantNumEval {
-				t.Fatalf("got to eval: %d want: %d", got, tt.wantNumEval)
-			}
-			for i, msg := range tt.msgs {
-				if msg.N != tt.wantMsgLens[i] {
-					t.Fatalf("msg[%d].N: %d want: %d", i, msg.N, tt.wantMsgLens[i])
-				}
-			}
-		})
-	}
-}
-
-func Test_batchingUDPConn_coalesceMessages(t *testing.T) {
-	c := &batchingUDPConn{
-		setGSOSizeInControl:   setGSOSize,
-		getGSOSizeFromControl: getGSOSize,
-	}
-
-	cases := []struct {
-		name     string
-		buffs    [][]byte
-		wantLens []int
-		wantGSO  []int
-	}{
-		{
-			name: "one message no coalesce",
-			buffs: [][]byte{
-				make([]byte, 1, 1),
-			},
-			wantLens: []int{1},
-			wantGSO:  []int{0},
-		},
-		{
-			name: "two messages equal len coalesce",
-			buffs: [][]byte{
-				make([]byte, 1, 2),
-				make([]byte, 1, 1),
-			},
-			wantLens: []int{2},
-			wantGSO:  []int{1},
-		},
-		{
-			name: "two messages unequal len coalesce",
-			buffs: [][]byte{
-				make([]byte, 2, 3),
-				make([]byte, 1, 1),
-			},
-			wantLens: []int{3},
-			wantGSO:  []int{2},
-		},
-		{
-			name: "three messages second unequal len coalesce",
-			buffs: [][]byte{
-				make([]byte, 2, 3),
-				make([]byte, 1, 1),
-				make([]byte, 2, 2),
-			},
-			wantLens: []int{3, 2},
-			wantGSO:  []int{2, 0},
-		},
-		{
-			name: "three messages limited cap coalesce",
-			buffs: [][]byte{
-				make([]byte, 2, 4),
-				make([]byte, 2, 2),
-				make([]byte, 2, 2),
-			},
-			wantLens: []int{4, 2},
-			wantGSO:  []int{2, 0},
-		},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			addr := &net.UDPAddr{
-				IP:   net.ParseIP("127.0.0.1"),
-				Port: 1,
-			}
-			msgs := make([]ipv6.Message, len(tt.buffs))
-			for i := range msgs {
-				msgs[i].Buffers = make([][]byte, 1)
-				msgs[i].OOB = make([]byte, 0, 2)
-			}
-			got := c.coalesceMessages(addr, tt.buffs, msgs)
-			if got != len(tt.wantLens) {
-				t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
-			}
-			for i := range got {
-				if msgs[i].Addr != addr {
-					t.Errorf("msgs[%d].Addr != passed addr", i)
-				}
-				gotLen := len(msgs[i].Buffers[0])
-				if gotLen != tt.wantLens[i] {
-					t.Errorf("len(msgs[%d].Buffers[0]) %d != %d", i, gotLen, tt.wantLens[i])
-				}
-				gotGSO, err := getGSOSize(msgs[i].OOB)
-				if err != nil {
-					t.Fatalf("msgs[%d] getGSOSize err: %v", i, err)
-				}
-				if gotGSO != tt.wantGSO[i] {
-					t.Errorf("msgs[%d] gsoSize %d != %d", i, gotGSO, tt.wantGSO[i])
-				}
-			}
-		})
-	}
 }
 
 // newWireguard starts up a new wireguard-go device attached to a test tun, and
@@ -3129,6 +2992,20 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 			want:               1, // no change
 		},
 		{
+			name:               "not_connected_with_report_derp_and_no_current",
+			old:                0,     // no current DERP
+			reportDERP:         21,    // have new DERP
+			connectedToControl: false, // not connected...
+			want:               21,    // ... but want to change to new DERP
+		},
+		{
+			name:               "not_connected_with_fallback_and_no_current",
+			old:                0,     // no current DERP
+			reportDERP:         0,     // no new DERP
+			connectedToControl: false, // not connected...
+			want:               31,    // ... but we fallback to deterministic value
+		},
+		{
 			name:               "connected_no_derp",
 			old:                1,
 			reportDERP:         0,
@@ -3146,8 +3023,7 @@ func TestMaybeSetNearestDERP(t *testing.T) {
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
 			ht := new(health.Tracker)
-			c := newConn()
-			c.logf = t.Logf
+			c := newConn(t.Logf)
 			c.myDerp = tt.old
 			c.derpMap = derpMap
 			c.health = ht
@@ -3177,26 +3053,31 @@ func TestMaybeRebindOnError(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
 
-	conn := newTestConn(t)
-	defer conn.Close()
+	err := fmt.Errorf("outer err: %w", syscall.EPERM)
 
 	t.Run("darwin-rebind", func(t *testing.T) {
-		rebound := conn.maybeRebindOnError("darwin", syscall.EPERM)
+		conn := newTestConn(t)
+		defer conn.Close()
+		rebound := conn.maybeRebindOnError("darwin", err)
 		if !rebound {
 			t.Errorf("darwin should rebind on syscall.EPERM")
 		}
 	})
 
 	t.Run("linux-not-rebind", func(t *testing.T) {
-		rebound := conn.maybeRebindOnError("linux", syscall.EPERM)
+		conn := newTestConn(t)
+		defer conn.Close()
+		rebound := conn.maybeRebindOnError("linux", err)
 		if rebound {
 			t.Errorf("linux should not rebind on syscall.EPERM")
 		}
 	})
 
 	t.Run("no-frequent-rebind", func(t *testing.T) {
+		conn := newTestConn(t)
+		defer conn.Close()
 		conn.lastEPERMRebind.Store(time.Now().Add(-1 * time.Second))
-		rebound := conn.maybeRebindOnError("darwin", syscall.EPERM)
+		rebound := conn.maybeRebindOnError("darwin", err)
 		if rebound {
 			t.Errorf("darwin should not rebind on syscall.EPERM within 5 seconds of last")
 		}

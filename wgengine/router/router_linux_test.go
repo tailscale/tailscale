@@ -19,8 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/tailscale/netlink"
 	"github.com/tailscale/wireguard-go/tun"
-	"github.com/vishvananda/netlink"
 	"go4.org/netipx"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
@@ -530,11 +530,22 @@ func (n *fakeIPTablesRunner) DNATWithLoadBalancer(netip.Addr, []netip.Addr) erro
 	return errors.New("not implemented")
 }
 
-func (n *fakeIPTablesRunner) AddSNATRuleForDst(src, dst netip.Addr) error {
+func (n *fakeIPTablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 	return errors.New("not implemented")
 }
 
 func (n *fakeIPTablesRunner) DNATNonTailscaleTraffic(exemptInterface string, dst netip.Addr) error {
+	return errors.New("not implemented")
+}
+func (n *fakeIPTablesRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm linuxfw.PortMap) error {
+	return errors.New("not implemented")
+}
+
+func (n *fakeIPTablesRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm linuxfw.PortMap) error {
+	return errors.New("not implemented")
+}
+
+func (n *fakeIPTablesRunner) DeleteSvc(svc, tun string, targetIPs []netip.Addr, pm []linuxfw.PortMap) error {
 	return errors.New("not implemented")
 }
 

@@ -946,6 +946,10 @@ func TestPrefFlagMapping(t *testing.T) {
 			// Handled by the tailscale share subcommand, we don't want a CLI
 			// flag for this.
 			continue
+		case "AdvertiseServices":
+			// Handled by the tailscale advertise subcommand, we don't want a
+			// CLI flag for this.
+			continue
 		case "InternalExitNodePrior":
 			// Used internally by LocalBackend as part of exit node usage toggling.
 			// No CLI flag for this.
@@ -1448,7 +1452,7 @@ func TestParseNLArgs(t *testing.T) {
 			name:      "disablements not allowed",
 			input:     []string{"disablement:" + strings.Repeat("02", 32)},
 			parseKeys: true,
-			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix nlpub:"),
+			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix tlpub:"),
 		},
 		{
 			name:              "keys not allowed",

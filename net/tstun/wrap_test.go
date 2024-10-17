@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"expvar"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -36,7 +37,9 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/must"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -156,10 +159,10 @@ func netports(netPorts ...string) (ret []filter.NetPortRange) {
 }
 
 func setfilter(logf logger.Logf, tun *Wrapper) {
-	protos := []ipproto.Proto{
+	protos := views.SliceOf([]ipproto.Proto{
 		ipproto.TCP,
 		ipproto.UDP,
-	}
+	})
 	matches := []filter.Match{
 		{IPProto: protos, Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
 		{IPProto: protos, Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
@@ -167,12 +170,13 @@ func setfilter(logf logger.Logf, tun *Wrapper) {
 	var sb netipx.IPSetBuilder
 	sb.AddPrefix(netip.MustParsePrefix("1.2.0.0/16"))
 	ipSet, _ := sb.IPSet()
-	tun.SetFilter(filter.New(matches, ipSet, ipSet, nil, logf))
+	tun.SetFilter(filter.New(matches, nil, ipSet, ipSet, nil, logf))
 }
 
 func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *Wrapper) {
 	chtun := tuntest.NewChannelTUN()
-	tun := Wrap(logf, chtun.TUN())
+	reg := new(usermetric.Registry)
+	tun := Wrap(logf, chtun.TUN(), reg)
 	if secure {
 		setfilter(logf, tun)
 	} else {
@@ -184,7 +188,8 @@ func newChannelTUN(logf logger.Logf, secure bool) (*tuntest.ChannelTUN, *Wrapper
 
 func newFakeTUN(logf logger.Logf, secure bool) (*fakeTUN, *Wrapper) {
 	ftun := NewFake()
-	tun := Wrap(logf, ftun)
+	reg := new(usermetric.Registry)
+	tun := Wrap(logf, ftun, reg)
 	if secure {
 		setfilter(logf, tun)
 	} else {
@@ -314,8 +319,14 @@ func mustHexDecode(s string) []byte {
 }
 
 func TestFilter(t *testing.T) {
+
 	chtun, tun := newChannelTUN(t.Logf, true)
 	defer tun.Close()
+
+	// Reset the metrics before test. These are global
+	// so the different tests might have affected them.
+	tun.metrics.inboundDroppedPacketsTotal.ResetAllForTest()
+	tun.metrics.outboundDroppedPacketsTotal.ResetAllForTest()
 
 	type direction int
 
@@ -428,6 +439,28 @@ func TestFilter(t *testing.T) {
 			}
 		})
 	}
+
+	var metricInboundDroppedPacketsACL, metricInboundDroppedPacketsErr, metricOutboundDroppedPacketsACL int64
+	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL}).(*expvar.Int); ok {
+		metricInboundDroppedPacketsACL = m.Value()
+	}
+	if m, ok := tun.metrics.inboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonError}).(*expvar.Int); ok {
+		metricInboundDroppedPacketsErr = m.Value()
+	}
+	if m, ok := tun.metrics.outboundDroppedPacketsTotal.Get(dropPacketLabel{Reason: DropReasonACL}).(*expvar.Int); ok {
+		metricOutboundDroppedPacketsACL = m.Value()
+	}
+
+	assertMetricPackets(t, "inACL", 3, metricInboundDroppedPacketsACL)
+	assertMetricPackets(t, "inError", 0, metricInboundDroppedPacketsErr)
+	assertMetricPackets(t, "outACL", 1, metricOutboundDroppedPacketsACL)
+}
+
+func assertMetricPackets(t *testing.T, metricName string, want, got int64) {
+	t.Helper()
+	if want != got {
+		t.Errorf("%s got unexpected value, got %d, want %d", metricName, got, want)
+	}
 }
 
 func TestAllocs(t *testing.T) {
@@ -489,6 +522,7 @@ func TestAtomic64Alignment(t *testing.T) {
 }
 
 func TestPeerAPIBypass(t *testing.T) {
+	reg := new(usermetric.Registry)
 	wrapperWithPeerAPI := &Wrapper{
 		PeerAPIPort: func(ip netip.Addr) (port uint16, ok bool) {
 			if ip == netip.MustParseAddr("100.64.1.2") {
@@ -496,6 +530,7 @@ func TestPeerAPIBypass(t *testing.T) {
 			}
 			return
 		},
+		metrics: registerMetrics(reg),
 	}
 
 	tests := []struct {
@@ -511,13 +546,16 @@ func TestPeerAPIBypass(t *testing.T) {
 				PeerAPIPort: func(netip.Addr) (port uint16, ok bool) {
 					return 60000, true
 				},
+				metrics: registerMetrics(reg),
 			},
 			pkt:  tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
 			want: filter.Drop,
 		},
 		{
-			name:   "reject_with_filter",
-			w:      &Wrapper{},
+			name: "reject_with_filter",
+			w: &Wrapper{
+				metrics: registerMetrics(reg),
+			},
 			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
 			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
 			want:   filter.Drop,
@@ -551,7 +589,7 @@ func TestPeerAPIBypass(t *testing.T) {
 			tt.w.SetFilter(tt.filter)
 			tt.w.disableTSMPRejected = true
 			tt.w.logf = t.Logf
-			if got := tt.w.filterPacketInboundFromWireGuard(p, nil, nil); got != tt.want {
+			if got, _ := tt.w.filterPacketInboundFromWireGuard(p, nil, nil, nil); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
 		})
@@ -581,7 +619,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 
 	p := new(packet.Parsed)
 	p.Decode(pkt)
-	got := tw.filterPacketInboundFromWireGuard(p, nil, nil)
+	got, _ := tw.filterPacketInboundFromWireGuard(p, nil, nil, nil)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
@@ -592,7 +630,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 	memLog.Reset()
 	pp := new(packet.Parsed)
 	pp.Decode(pkt)
-	got = tw.filterPacketOutboundToWireGuard(pp, nil)
+	got, _ = tw.filterPacketOutboundToWireGuard(pp, nil, nil)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
@@ -881,7 +919,10 @@ func TestCaptureHook(t *testing.T) {
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectInboundPacketBuffer")),
 	})
-	w.InjectInboundPacketBuffer(packetBuf)
+	buffs := make([][]byte, 1)
+	buffs[0] = make([]byte, PacketStartOffset+packetBuf.Size())
+	sizes := make([]int, 1)
+	w.InjectInboundPacketBuffer(packetBuf, buffs, sizes)
 
 	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectOutboundPacketBuffer")),

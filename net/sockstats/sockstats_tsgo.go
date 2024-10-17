@@ -18,6 +18,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/version"
 )
 
 const IsAvailable = true
@@ -156,7 +157,11 @@ func withSockStats(ctx context.Context, label Label, logf logger.Logf) context.C
 		}
 	}
 	willOverwrite := func(trace *net.SockTrace) {
-		logf("sockstats: trace %q was overwritten by another", label)
+		if version.IsUnstableBuild() {
+			// Only spam about this in dev builds.
+			// See https://github.com/tailscale/tailscale/issues/13731 for known problems.
+			logf("sockstats: trace %q was overwritten by another", label)
+		}
 	}
 
 	return net.WithSockTrace(ctx, &net.SockTrace{

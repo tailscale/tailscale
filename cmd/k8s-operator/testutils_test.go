@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -51,6 +52,9 @@ type configOpts struct {
 	serveConfig                                    *ipn.ServeConfig
 	shouldEnableForwardingClusterTrafficViaIngress bool
 	proxyClass                                     string // configuration from the named ProxyClass should be applied to proxy resources
+	app                                            string
+	shouldRemoveAuthKey                            bool
+	secretExtraData                                map[string][]byte
 }
 
 func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.StatefulSet {
@@ -142,6 +146,10 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		volumes = append(volumes, corev1.Volume{Name: "serve-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: opts.secretName, Items: []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}}}}})
 		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config", ReadOnly: true, MountPath: "/etc/tailscaled"})
 	}
+	tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
+		Name:  "TS_INTERNAL_APP",
+		Value: opts.app,
+	})
 	ss := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
@@ -224,6 +232,7 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 			{Name: "EXPERIMENTAL_TS_CONFIGFILE_PATH", Value: "/etc/tsconfig/tailscaled"},
 			{Name: "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", Value: "/etc/tsconfig"},
 			{Name: "TS_SERVE_CONFIG", Value: "/etc/tailscaled/serve-config"},
+			{Name: "TS_INTERNAL_APP", Value: opts.app},
 		},
 		ImagePullPolicy: "Always",
 		VolumeMounts: []corev1.VolumeMount{
@@ -304,10 +313,6 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 
 func expectedHeadlessService(name string, parentType string) *corev1.Service {
 	return &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:         name,
 			GenerateName: "ts-test-",
@@ -323,7 +328,8 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 			Selector: map[string]string{
 				"app": "1234-UID",
 			},
-			ClusterIP: "None",
+			ClusterIP:      "None",
+			IPFamilyPolicy: ptr.To(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
 }
@@ -331,10 +337,6 @@ func expectedHeadlessService(name string, parentType string) *corev1.Service {
 func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Secret {
 	t.Helper()
 	s := &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Secret",
-			APIVersion: "v1",
-		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.secretName,
 			Namespace: "operator-ns",
@@ -364,6 +366,9 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		if proxyClass.Spec.TailscaleConfig != nil && proxyClass.Spec.TailscaleConfig.AcceptRoutes {
 			conf.AcceptRoutes = "true"
 		}
+	}
+	if opts.shouldRemoveAuthKey {
+		conf.AuthKey = nil
 	}
 	var routes []netip.Prefix
 	if opts.subnetRoutes != "" || opts.isExitNode {
@@ -405,6 +410,9 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		labels["tailscale.com/parent-resource-ns"] = "" // Connector is cluster scoped
 	}
 	s.Labels = labels
+	for key, val := range opts.secretExtraData {
+		mak.Set(&s.Data, key, val)
+	}
 	return s
 }
 
@@ -488,7 +496,7 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 		modifier(got)
 	}
 	if diff := cmp.Diff(got, want); diff != "" {
-		t.Fatalf("unexpected object (-got +want):\n%s", diff)
+		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
 	}
 }
 
@@ -499,7 +507,7 @@ func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns
 		Name:      name,
 		Namespace: ns,
 	}, obj); !apierrors.IsNotFound(err) {
-		t.Fatalf("object %s/%s unexpectedly present, wanted missing", ns, name)
+		t.Fatalf("%s %s/%s unexpectedly present, wanted missing", reflect.TypeOf(obj).Elem().Name(), ns, name)
 	}
 }
 
@@ -593,6 +601,17 @@ func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabili
 	return "secret-authkey", k, nil
 }
 
+func (c *fakeTSClient) Device(ctx context.Context, deviceID string, fields *tailscale.DeviceFieldsOpts) (*tailscale.Device, error) {
+	return &tailscale.Device{
+		DeviceID: deviceID,
+		Hostname: "hostname-" + deviceID,
+		Addresses: []string{
+			"1.2.3.4",
+			"::1",
+		},
+	}, nil
+}
+
 func (c *fakeTSClient) DeleteDevice(ctx context.Context, deviceID string) error {
 	c.Lock()
 	defer c.Unlock()
@@ -618,6 +637,14 @@ func (c *fakeTSClient) Deleted() []string {
 // change to the configfile contents).
 func removeHashAnnotation(sts *appsv1.StatefulSet) {
 	delete(sts.Spec.Template.Annotations, podAnnotationLastSetConfigFileHash)
+}
+
+func removeTargetPortsFromSvc(svc *corev1.Service) {
+	newPorts := make([]corev1.ServicePort, 0)
+	for _, p := range svc.Spec.Ports {
+		newPorts = append(newPorts, corev1.ServicePort{Protocol: p.Protocol, Port: p.Port})
+	}
+	svc.Spec.Ports = newPorts
 }
 
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {

@@ -8,14 +8,13 @@ package tailssh
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -34,8 +34,10 @@ import (
 	"github.com/pkg/sftp"
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	glider "tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/set"
@@ -106,6 +108,7 @@ func TestIntegrationSSH(t *testing.T) {
 		want            []string
 		forceV1Behavior bool
 		skip            bool
+		allowSendEnv    bool
 	}{
 		{
 			cmd:             "id",
@@ -120,14 +123,26 @@ func TestIntegrationSSH(t *testing.T) {
 		{
 			cmd:             "pwd",
 			want:            []string{homeDir},
-			skip:            !fallbackToSUAvailable(),
+			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
 		},
 		{
 			cmd:             "echo 'hello'",
 			want:            []string{"hello"},
-			skip:            !fallbackToSUAvailable(),
+			skip:            os.Getenv("SKIP_FILE_OPS") == "1" || !fallbackToSUAvailable(),
 			forceV1Behavior: false,
+		},
+		{
+			cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
+			want:            []string{"working1 working2 working3 unset4"},
+			forceV1Behavior: false,
+			allowSendEnv:    true,
+		},
+		{
+			cmd:             `echo "${GIT_ENV_VAR:-unset1} ${EXACT_MATCH:-unset2} ${TESTING:-unset3} ${NOT_ALLOWED:-unset4}"`,
+			want:            []string{"unset1 unset2 unset3 unset4"},
+			forceV1Behavior: false,
+			allowSendEnv:    false,
 		},
 	}
 
@@ -149,7 +164,13 @@ func TestIntegrationSSH(t *testing.T) {
 			}
 
 			t.Run(fmt.Sprintf("%s_%s_%s", test.cmd, shellQualifier, versionQualifier), func(t *testing.T) {
-				s := testSession(t, test.forceV1Behavior)
+				sendEnv := map[string]string{
+					"GIT_ENV_VAR": "working1",
+					"EXACT_MATCH": "working2",
+					"TESTING":     "working3",
+					"NOT_ALLOWED": "working4",
+				}
+				s := testSession(t, test.forceV1Behavior, test.allowSendEnv, sendEnv)
 
 				if shell {
 					err := s.RequestPty("xterm", 40, 80, ssh.TerminalModes{
@@ -199,7 +220,7 @@ func TestIntegrationSFTP(t *testing.T) {
 			}
 			wantText := "hello world"
 
-			cl := testClient(t, forceV1Behavior)
+			cl := testClient(t, forceV1Behavior, false)
 			scl, err := sftp.NewClient(cl)
 			if err != nil {
 				t.Fatalf("can't get sftp client: %s", err)
@@ -231,7 +252,7 @@ func TestIntegrationSFTP(t *testing.T) {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
-			s := testSessionFor(t, cl)
+			s := testSessionFor(t, cl, nil)
 			got := s.run(t, "ls -l "+filePath, false)
 			if !strings.Contains(got, "testuser") {
 				t.Fatalf("unexpected file owner user: %s", got)
@@ -260,7 +281,7 @@ func TestIntegrationSCP(t *testing.T) {
 			}
 			wantText := "hello world"
 
-			cl := testClient(t, forceV1Behavior)
+			cl := testClient(t, forceV1Behavior, false)
 			scl, err := scp.NewClientBySSH(cl)
 			if err != nil {
 				t.Fatalf("can't get sftp client: %s", err)
@@ -289,7 +310,7 @@ func TestIntegrationSCP(t *testing.T) {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
-			s := testSessionFor(t, cl)
+			s := testSessionFor(t, cl, nil)
 			got := s.run(t, "ls -l "+filePath, false)
 			if !strings.Contains(got, "testuser") {
 				t.Fatalf("unexpected file owner user: %s", got)
@@ -297,6 +318,95 @@ func TestIntegrationSCP(t *testing.T) {
 				t.Fatalf("unexpected file owner group: %s", got)
 			}
 		})
+	}
+}
+
+func TestSSHAgentForwarding(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() {
+		debugTest.Store(false)
+	})
+
+	// Create a client SSH key
+	tmpDir, err := os.MkdirTemp("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tmpDir)
+	})
+	pkFile := filepath.Join(tmpDir, "pk")
+	clientKey, clientKeyRSA := generateClientKey(t, pkFile)
+
+	// Start upstream SSH server
+	l, err := net.Listen("tcp", "127.0.0.1:")
+	if err != nil {
+		t.Fatalf("unable to listen for SSH: %s", err)
+	}
+	t.Cleanup(func() {
+		_ = l.Close()
+	})
+
+	// Run an SSH server that accepts connections from that client SSH key.
+	gs := glider.Server{
+		Handler: func(s glider.Session) {
+			io.WriteString(s, "Hello world\n")
+		},
+		PublicKeyHandler: func(ctx glider.Context, key glider.PublicKey) error {
+			// Note - this is not meant to be cryptographically secure, it's
+			// just checking that SSH agent forwarding is forwarding the right
+			// key.
+			a := key.Marshal()
+			b := clientKey.PublicKey().Marshal()
+			if !bytes.Equal(a, b) {
+				return errors.New("key mismatch")
+			}
+			return nil
+		},
+	}
+	go gs.Serve(l)
+
+	// Run tailscale SSH server and connect to it
+	username := "testuser"
+	tailscaleAddr := testServer(t, username, false, false)
+	tcl, err := ssh.Dial("tcp", tailscaleAddr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tcl.Close() })
+
+	s, err := tcl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up SSH agent forwarding on the client
+	err = agent.RequestAgentForwarding(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyring := agent.NewKeyring()
+	keyring.Add(agent.AddedKey{
+		PrivateKey: clientKeyRSA,
+	})
+	err = agent.ForwardToAgent(tcl, keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt to SSH to the upstream test server using the forwarded SSH key
+	// and run the "true" command.
+	upstreamHost, upstreamPort, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	o, err := s.CombinedOutput(fmt.Sprintf(`ssh -T -o StrictHostKeyChecking=no -p %s upstreamuser@%s "true"`, upstreamPort, upstreamHost))
+	if err != nil {
+		t.Fatalf("unable to call true command: %s\n%s\n-------------------------", err, o)
 	}
 }
 
@@ -374,12 +484,27 @@ readLoop:
 	return string(_got)
 }
 
-func testClient(t *testing.T, forceV1Behavior bool) *ssh.Client {
+func testClient(t *testing.T, forceV1Behavior bool, allowSendEnv bool, authMethods ...ssh.AuthMethod) *ssh.Client {
 	t.Helper()
 
 	username := "testuser"
+	addr := testServer(t, username, forceV1Behavior, allowSendEnv)
+
+	cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Auth:            authMethods,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cl.Close() })
+
+	return cl
+}
+
+func testServer(t *testing.T, username string, forceV1Behavior bool, allowSendEnv bool) string {
 	srv := &server{
-		lb:             &testBackend{localUser: username, forceV1Behavior: forceV1Behavior},
+		lb:             &testBackend{localUser: username, forceV1Behavior: forceV1Behavior, allowSendEnv: allowSendEnv},
 		logf:           log.Printf,
 		tailscaledPath: os.Getenv("TAILSCALED_PATH"),
 		timeNow:        time.Now,
@@ -392,33 +517,31 @@ func testClient(t *testing.T, forceV1Behavior bool) *ssh.Client {
 	t.Cleanup(func() { l.Close() })
 
 	go func() {
-		conn, err := l.Accept()
-		if err == nil {
-			go srv.HandleSSHConn(&addressFakingConn{conn})
+		for {
+			conn, err := l.Accept()
+			if err == nil {
+				go srv.HandleSSHConn(&addressFakingConn{conn})
+			}
 		}
 	}()
 
-	cl, err := ssh.Dial("tcp", l.Addr().String(), &ssh.ClientConfig{
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	t.Cleanup(func() { cl.Close() })
-
-	return cl
+	return l.Addr().String()
 }
 
-func testSession(t *testing.T, forceV1Behavior bool) *session {
-	cl := testClient(t, forceV1Behavior)
-	return testSessionFor(t, cl)
+func testSession(t *testing.T, forceV1Behavior bool, allowSendEnv bool, sendEnv map[string]string) *session {
+	cl := testClient(t, forceV1Behavior, allowSendEnv)
+	return testSessionFor(t, cl, sendEnv)
 }
 
-func testSessionFor(t *testing.T, cl *ssh.Client) *session {
+func testSessionFor(t *testing.T, cl *ssh.Client, sendEnv map[string]string) *session {
 	s, err := cl.NewSession()
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
+	for k, v := range sendEnv {
+		s.Setenv(k, v)
+	}
+
 	t.Cleanup(func() { s.Close() })
 
 	stdinReader, stdinWriter := io.Pipe()
@@ -435,41 +558,57 @@ func testSessionFor(t *testing.T, cl *ssh.Client) *session {
 	}
 }
 
+func generateClientKey(t *testing.T, privateKeyFile string) (ssh.Signer, *rsa.PrivateKey) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
+	if privateKey == nil {
+		t.Fatal("failed to encoded private key")
+	}
+	err = os.WriteFile(privateKeyFile, privateKey, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.ParsePrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, priv
+}
+
 // testBackend implements ipnLocalBackend
 type testBackend struct {
 	localUser       string
 	forceV1Behavior bool
+	allowSendEnv    bool
 }
 
 func (tb *testBackend) GetSSH_HostKeys() ([]gossh.Signer, error) {
 	var result []gossh.Signer
-	for _, typ := range []string{"ed25519", "ecdsa", "rsa"} {
-		var priv any
-		var err error
-		switch typ {
-		case "ed25519":
-			_, priv, err = ed25519.GenerateKey(rand.Reader)
-		case "ecdsa":
-			curve := elliptic.P256()
-			priv, err = ecdsa.GenerateKey(curve, rand.Reader)
-		case "rsa":
-			const keySize = 2048
-			priv, err = rsa.GenerateKey(rand.Reader, keySize)
-		}
-		if err != nil {
-			return nil, err
-		}
-		mk, err := x509.MarshalPKCS8PrivateKey(priv)
-		if err != nil {
-			return nil, err
-		}
-		hostKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
-		signer, err := gossh.ParsePrivateKey(hostKey)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, signer)
+	var priv any
+	var err error
+	const keySize = 2048
+	priv, err = rsa.GenerateKey(rand.Reader, keySize)
+	if err != nil {
+		return nil, err
 	}
+	mk, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, err
+	}
+	hostKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
+	signer, err := gossh.ParsePrivateKey(hostKey)
+	if err != nil {
+		return nil, err
+	}
+	result = append(result, signer)
 	return result, nil
 }
 
@@ -482,13 +621,17 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 	if tb.forceV1Behavior {
 		capMap[tailcfg.NodeAttrSSHBehaviorV1] = struct{}{}
 	}
+	if tb.allowSendEnv {
+		capMap[tailcfg.NodeAttrSSHEnvironmentVariables] = struct{}{}
+	}
 	return &netmap.NetworkMap{
 		SSHPolicy: &tailcfg.SSHPolicy{
 			Rules: []*tailcfg.SSHRule{
 				{
 					Principals: []*tailcfg.SSHPrincipal{{Any: true}},
-					Action:     &tailcfg.SSHAction{Accept: true},
+					Action:     &tailcfg.SSHAction{Accept: true, AllowAgentForwarding: true},
 					SSHUsers:   map[string]string{"*": tb.localUser},
+					AcceptEnv:  []string{"GIT_*", "EXACT_MATCH", "TEST?NG"},
 				},
 			},
 		},
@@ -496,7 +639,7 @@ func (tb *testBackend) NetMap() *netmap.NetworkMap {
 	}
 }
 
-func (tb *testBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+func (tb *testBackend) WhoIs(_ string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	return (&tailcfg.Node{}).View(), tailcfg.UserProfile{
 		LoginName: tb.localUser + "@example.com",
 	}, true

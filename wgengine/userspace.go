@@ -27,6 +27,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/flowtrack"
+	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockstats"
@@ -48,11 +49,13 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/netlog"
+	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -193,6 +196,10 @@ type Config struct {
 	// HealthTracker, if non-nil, is the health tracker to use.
 	HealthTracker *health.Tracker
 
+	// Metrics is the usermetrics registry to use.
+	// Mandatory, if not set, an error is returned.
+	Metrics *usermetric.Registry
+
 	// Dialer is the dialer to use for outbound connections.
 	// If nil, a new Dialer is created.
 	Dialer *tsdial.Dialer
@@ -247,6 +254,8 @@ func NewFakeUserspaceEngine(logf logger.Logf, opts ...any) (Engine, error) {
 			conf.ControlKnobs = v
 		case *health.Tracker:
 			conf.HealthTracker = v
+		case *usermetric.Registry:
+			conf.Metrics = v
 		default:
 			return nil, fmt.Errorf("unknown option type %T", v)
 		}
@@ -263,6 +272,10 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	if testenv.InTest() && conf.HealthTracker == nil {
 		panic("NewUserspaceEngine called without HealthTracker (being strict in tests)")
+	}
+
+	if conf.Metrics == nil {
+		return nil, errors.New("NewUserspaceEngine: opts.Metrics is required, please pass a *usermetric.Registry")
 	}
 
 	if conf.Tun == nil {
@@ -287,9 +300,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	var tsTUNDev *tstun.Wrapper
 	if conf.IsTAP {
-		tsTUNDev = tstun.WrapTAP(logf, conf.Tun)
+		tsTUNDev = tstun.WrapTAP(logf, conf.Tun, conf.Metrics)
 	} else {
-		tsTUNDev = tstun.Wrap(logf, conf.Tun)
+		tsTUNDev = tstun.Wrap(logf, conf.Tun, conf.Metrics)
 	}
 	closePool.add(tsTUNDev)
 
@@ -330,8 +343,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			return nil, err
 		}
 	}
-	e.isLocalAddr.Store(tsaddr.FalseContainsIPFunc())
-	e.isDNSIPOverTailscale.Store(tsaddr.FalseContainsIPFunc())
+	e.isLocalAddr.Store(ipset.FalseContainsIPFunc())
+	e.isDNSIPOverTailscale.Store(ipset.FalseContainsIPFunc())
 
 	if conf.NetMon != nil {
 		e.netMon = conf.NetMon
@@ -373,7 +386,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.logf("onPortUpdate(port=%v, network=%s)", port, network)
 
 		if err := e.router.UpdateMagicsockPort(port, network); err != nil {
-			e.logf("UpdateMagicsockPort(port=%v, network=%s) failed: %w", port, network, err)
+			e.logf("UpdateMagicsockPort(port=%v, network=%s) failed: %v", port, network, err)
 		}
 	}
 	magicsockOpts := magicsock.Options{
@@ -385,6 +398,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		NoteRecvActivity: e.noteRecvActivity,
 		NetMon:           e.netMon,
 		HealthTracker:    e.health,
+		Metrics:          conf.Metrics,
 		ControlKnobs:     conf.ControlKnobs,
 		OnPortUpdate:     onPortUpdate,
 		PeerByKeyFunc:    e.PeerByKey,
@@ -490,6 +504,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if err := e.router.Up(); err != nil {
 		return nil, fmt.Errorf("router.Up: %w", err)
 	}
+	tsTUNDev.SetLinkFeaturesPostUp()
 
 	// It's a little pointless to apply no-op settings here (they
 	// should already be empty?), but it at least exercises the
@@ -518,7 +533,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 }
 
 // echoRespondToAll is an inbound post-filter responding to all echo requests.
-func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.Response, *gro.GRO) {
 	if p.IsEchoRequest() {
 		header := p.ICMP4Header()
 		header.ToResponse()
@@ -530,9 +545,9 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 		// it away. If this ever gets run in non-fake mode, you'll
 		// get double responses to pings, which is an indicator you
 		// shouldn't be doing that I guess.)
-		return filter.Accept
+		return filter.Accept, gro
 	}
-	return filter.Accept
+	return filter.Accept, gro
 }
 
 // handleLocalPackets inspects packets coming from the local network
@@ -854,7 +869,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		panic("dnsCfg must not be nil")
 	}
 
-	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(views.SliceOf(routerCfg.LocalAddrs)))
+	e.isLocalAddr.Store(ipset.NewContainsIPFunc(views.SliceOf(routerCfg.LocalAddrs)))
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
@@ -912,7 +927,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// instead have ipnlocal populate a map of DNS IP => linkName and
 	// put that in the *dns.Config instead, and plumb it down to the
 	// dns.Manager. Maybe also with isLocalAddr above.
-	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
+	e.isDNSIPOverTailscale.Store(ipset.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
 
 	// See if any peers have changed disco keys, which means they've restarted.
 	// If so, we need to update the wireguard-go/device.Device in two phases:

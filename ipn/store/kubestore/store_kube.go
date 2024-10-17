@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package kubestore contains an ipn.StateStore implementation using Kubernetes Secrets.
-
 package kubestore
 
 import (
@@ -14,20 +13,21 @@ import (
 	"time"
 
 	"tailscale.com/ipn"
-	"tailscale.com/kube"
+	"tailscale.com/kube/kubeapi"
+	"tailscale.com/kube/kubeclient"
 	"tailscale.com/types/logger"
 )
 
 // Store is an ipn.StateStore that uses a Kubernetes Secret for persistence.
 type Store struct {
-	client     kube.Client
+	client     kubeclient.Client
 	canPatch   bool
 	secretName string
 }
 
 // New returns a new Store that persists to the named secret.
 func New(_ logger.Logf, secretName string) (*Store, error) {
-	c, err := kube.New()
+	c, err := kubeclient.New()
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
-		if st, ok := err.(*kube.Status); ok && st.Code == 404 {
+		if st, ok := err.(*kubeapi.Status); ok && st.Code == 404 {
 			return nil, ipn.ErrStateNotExist
 		}
 		return nil, err
@@ -89,13 +89,13 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 
 	secret, err := s.client.GetSecret(ctx, s.secretName)
 	if err != nil {
-		if kube.IsNotFoundErr(err) {
-			return s.client.CreateSecret(ctx, &kube.Secret{
-				TypeMeta: kube.TypeMeta{
+		if kubeclient.IsNotFoundErr(err) {
+			return s.client.CreateSecret(ctx, &kubeapi.Secret{
+				TypeMeta: kubeapi.TypeMeta{
 					APIVersion: "v1",
 					Kind:       "Secret",
 				},
-				ObjectMeta: kube.ObjectMeta{
+				ObjectMeta: kubeapi.ObjectMeta{
 					Name: s.secretName,
 				},
 				Data: map[string][]byte{
@@ -107,7 +107,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 	}
 	if s.canPatch {
 		if len(secret.Data) == 0 { // if user has pre-created a blank Secret
-			m := []kube.JSONPatch{
+			m := []kubeclient.JSONPatch{
 				{
 					Op:    "add",
 					Path:  "/data",
@@ -119,7 +119,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 			}
 			return nil
 		}
-		m := []kube.JSONPatch{
+		m := []kubeclient.JSONPatch{
 			{
 				Op:    "add",
 				Path:  "/data/" + sanitizeKey(id),

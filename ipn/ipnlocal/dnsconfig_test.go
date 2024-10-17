@@ -50,6 +50,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 	tests := []struct {
 		name    string
 		nm      *netmap.NetworkMap
+		expired bool
 		peers   []tailcfg.NodeView
 		os      string // version.OS value; empty means linux
 		cloud   cloudenv.Cloud
@@ -327,12 +328,31 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
+		{
+			name: "self_expired",
+			nm: &netmap.NetworkMap{
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
+			},
+			expired: true,
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peera.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+			}),
+			prefs: &ipn.Prefs{},
+			want:  &dns.Config{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			verOS := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), log.Logf, verOS)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")

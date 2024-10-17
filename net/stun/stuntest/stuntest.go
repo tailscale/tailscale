@@ -21,8 +21,10 @@ import (
 )
 
 type stunStats struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// +checklocks:mu
 	readIPv4 int
+	// +checklocks:mu
 	readIPv6 int
 }
 

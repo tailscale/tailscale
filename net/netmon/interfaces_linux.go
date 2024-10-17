@@ -15,8 +15,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync/atomic"
 
@@ -50,9 +48,6 @@ ens18   0000000A        00000000        0001    0       0       0       0000FFFF
 func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
 	if procNetRouteErr.Load() {
 		// If we failed to read /proc/net/route previously, don't keep trying.
-		if runtime.GOOS == "android" {
-			return likelyHomeRouterIPAndroid()
-		}
 		return ret, myIP, false
 	}
 	lineNum := 0
@@ -94,9 +89,6 @@ func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
 	}
 	if err != nil {
 		procNetRouteErr.Store(true)
-		if runtime.GOOS == "android" {
-			return likelyHomeRouterIPAndroid()
-		}
 		log.Printf("interfaces: failed to read /proc/net/route: %v", err)
 	}
 	if ret.IsValid() {
@@ -135,41 +127,6 @@ func likelyHomeRouterIPLinux() (ret netip.Addr, myIP netip.Addr, ok bool) {
 		procNetRouteErr.Store(true)
 	}
 	return netip.Addr{}, netip.Addr{}, false
-}
-
-// Android apps don't have permission to read /proc/net/route, at
-// least on Google devices and the Android emulator.
-func likelyHomeRouterIPAndroid() (ret netip.Addr, _ netip.Addr, ok bool) {
-	cmd := exec.Command("/system/bin/ip", "route", "show", "table", "0")
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("interfaces: running /system/bin/ip: %v", err)
-		return
-	}
-	// Search for line like "default via 10.0.2.2 dev radio0 table 1016 proto static mtu 1500 "
-	lineread.Reader(out, func(line []byte) error {
-		const pfx = "default via "
-		if !mem.HasPrefix(mem.B(line), mem.S(pfx)) {
-			return nil
-		}
-		line = line[len(pfx):]
-		sp := bytes.IndexByte(line, ' ')
-		if sp == -1 {
-			return nil
-		}
-		ipb := line[:sp]
-		if ip, err := netip.ParseAddr(string(ipb)); err == nil && ip.Is4() {
-			ret = ip
-			log.Printf("interfaces: found Android default route %v", ip)
-		}
-		return nil
-	})
-	cmd.Process.Kill()
-	cmd.Wait()
-	return ret, netip.Addr{}, ret.IsValid()
 }
 
 func defaultRoute() (d DefaultRouteDetails, err error) {

@@ -37,6 +37,7 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
@@ -68,6 +69,14 @@ type LocalClient struct {
 	// Unix socket and not via fallback mechanisms as done on macOS when
 	// connecting to the GUI client variants.
 	UseSocketOnly bool
+
+	// OmitAuth, if true, omits sending the local Tailscale daemon any
+	// authentication token that might be required by the platform.
+	//
+	// As of 2024-08-12, only macOS uses an authentication token. OmitAuth is
+	// meant for when Dial is set and the LocalAPI is being proxied to a
+	// different operating system, such as in integration tests.
+	OmitAuth bool
 
 	// tsClient does HTTP requests to the local Tailscale daemon.
 	// It's lazily initialized on first use.
@@ -103,7 +112,7 @@ func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) 
 			return d.DialContext(ctx, "tcp", "127.0.0.1:"+strconv.Itoa(port))
 		}
 	}
-	return safesocket.Connect(lc.socket())
+	return safesocket.ConnectContext(ctx, lc.socket())
 }
 
 // DoLocalRequest makes an HTTP request to the local machine's Tailscale daemon.
@@ -124,8 +133,10 @@ func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error)
 			},
 		}
 	})
-	if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {
-		req.SetBasicAuth("", token)
+	if !lc.OmitAuth {
+		if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {
+			req.SetBasicAuth("", token)
+		}
 	}
 	return lc.tsClient.Do(req)
 }
@@ -285,6 +296,10 @@ func decodeJSON[T any](b []byte) (ret T, err error) {
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
 //
 // If not found, the error is ErrPeerNotFound.
+//
+// For connections proxied by tailscaled, this looks up the owner of the given
+// address as TCP first, falling back to UDP; if you want to only check a
+// specific address family, use WhoIsProto.
 func (lc *LocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
@@ -313,6 +328,21 @@ func (lc *LocalClient) WhoIsNodeKey(ctx context.Context, key key.NodePublic) (*a
 	return decodeJSON[*apitype.WhoIsResponse](body)
 }
 
+// WhoIsProto returns the owner of the remoteAddr, which must be an IP or
+// IP:port, for the given protocol (tcp or udp).
+//
+// If not found, the error is ErrPeerNotFound.
+func (lc *LocalClient) WhoIsProto(ctx context.Context, proto, remoteAddr string) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?proto="+url.QueryEscape(proto)+"&addr="+url.QueryEscape(remoteAddr))
+	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
+		return nil, err
+	}
+	return decodeJSON[*apitype.WhoIsResponse](body)
+}
+
 // Goroutines returns a dump of the Tailscale daemon's current goroutines.
 func (lc *LocalClient) Goroutines(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/goroutines")
@@ -322,6 +352,12 @@ func (lc *LocalClient) Goroutines(ctx context.Context) ([]byte, error) {
 // the Prometheus text exposition format.
 func (lc *LocalClient) DaemonMetrics(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/metrics")
+}
+
+// UserMetrics returns the user metrics in
+// the Prometheus text exposition format.
+func (lc *LocalClient) UserMetrics(ctx context.Context) ([]byte, error) {
+	return lc.get200(ctx, "/localapi/v0/usermetrics")
 }
 
 // IncrementCounter increments the value of a Tailscale daemon's counter
@@ -778,6 +814,35 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	return decodeJSON[*ipn.Prefs](body)
 }
 
+// GetDNSOSConfig returns the system DNS configuration for the current device.
+// That is, it returns the DNS configuration that the system would use if Tailscale weren't being used.
+func (lc *LocalClient) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/dns-osconfig")
+	if err != nil {
+		return nil, err
+	}
+	var osCfg apitype.DNSOSConfig
+	if err := json.Unmarshal(body, &osCfg); err != nil {
+		return nil, fmt.Errorf("invalid dns.OSConfig: %w", err)
+	}
+	return &osCfg, nil
+}
+
+// QueryDNS executes a DNS query for a name (`google.com.`) and query type (`CNAME`).
+// It returns the raw DNS response bytes and the resolvers that were used to answer the query
+// (often just one, but can be more if we raced multiple resolvers).
+func (lc *LocalClient) QueryDNS(ctx context.Context, name string, queryType string) (bytes []byte, resolvers []*dnstype.Resolver, err error) {
+	body, err := lc.get200(ctx, fmt.Sprintf("/localapi/v0/dns-query?name=%s&type=%s", url.QueryEscape(name), queryType))
+	if err != nil {
+		return nil, nil, err
+	}
+	var res apitype.DNSQueryResponse
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, nil, fmt.Errorf("invalid query response: %w", err)
+	}
+	return res.Bytes, res.Resolvers, nil
+}
+
 // StartLoginInteractive starts an interactive login.
 func (lc *LocalClient) StartLoginInteractive(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/login-interactive", http.StatusNoContent, nil)
@@ -914,7 +979,20 @@ func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err e
 //
 // API maturity: this is considered a stable API.
 func (lc *LocalClient) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
-	res, err := lc.send(ctx, "GET", "/localapi/v0/cert/"+domain+"?type=pair", 200, nil)
+	return lc.CertPairWithValidity(ctx, domain, 0)
+}
+
+// CertPairWithValidity returns a cert and private key for the provided DNS
+// domain.
+//
+// It returns a cached certificate from disk if it's still valid.
+// When minValidity is non-zero, the returned certificate will be valid for at
+// least the given duration, if permitted by the CA. If the certificate is
+// valid, but for less than minValidity, it will be synchronously renewed.
+//
+// API maturity: this is considered a stable API.
+func (lc *LocalClient) CertPairWithValidity(ctx context.Context, domain string, minValidity time.Duration) (certPEM, keyPEM []byte, err error) {
+	res, err := lc.send(ctx, "GET", fmt.Sprintf("/localapi/v0/cert/%s?type=pair&min_validity=%s", domain, minValidity), 200, nil)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -1,7 +1,6 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package netstat returns the local machine's network connection table.
 package netstat
 
 import (

@@ -1,7 +1,14 @@
 {
     "Hostname": "tsapp",
-    "Update": { "NoPassword": true },
+    "Update": {
+        "NoPassword": true
+    },
     "SerialConsole": "ttyS0,115200",
+    "GokrazyPackages": [
+        "github.com/gokrazy/gokrazy/cmd/dhcp",
+        "github.com/gokrazy/gokrazy/cmd/randomd",
+        "github.com/gokrazy/gokrazy/cmd/ntp"
+    ],
     "Packages": [
         "github.com/gokrazy/serial-busybox",
         "github.com/gokrazy/breakglass",
@@ -10,7 +17,9 @@
     ],
     "PackageConfig": {
         "github.com/gokrazy/breakglass": {
-            "CommandLineFlags": [ "-authorized_keys=ec2" ]
+            "CommandLineFlags": [
+                "-authorized_keys=ec2"
+            ]
         },
         "tailscale.com/cmd/tailscale": {
             "ExtraFilePaths": {

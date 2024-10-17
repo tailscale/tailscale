@@ -17,7 +17,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
+	"tailscale.com/envknob/featureknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/views"
 	"tailscale.com/util/httpm"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -111,11 +112,6 @@ const (
 	// the source's Tailscale identity. If the source browser does not have
 	// a valid session, a readonly version of the app is displayed.
 	ManageServerMode ServerMode = "manage"
-)
-
-var (
-	exitNodeRouteV4 = netip.MustParsePrefix("0.0.0.0/0")
-	exitNodeRouteV6 = netip.MustParsePrefix("::/0")
 )
 
 // ServerOpts contains options for constructing a new Server.
@@ -281,6 +277,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src * data:; script-src 'self' '"+indexScriptHash+"'")
 			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		}
+	}
+
+	if r.URL.Path == "/metrics" {
+		r.URL.Path = "/api/local/v0/usermetrics"
+		s.proxyRequestToLocalAPI(w, r)
+		return
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -921,10 +923,10 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 			return p == route
 		})
 	}
-	data.AdvertisingExitNodeApproved = routeApproved(exitNodeRouteV4) || routeApproved(exitNodeRouteV6)
+	data.AdvertisingExitNodeApproved = routeApproved(tsaddr.AllIPv4()) || routeApproved(tsaddr.AllIPv6())
 
 	for _, r := range prefs.AdvertiseRoutes {
-		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
+		if tsaddr.IsExitRoute(r) {
 			data.AdvertisingExitNode = true
 		} else {
 			data.AdvertisedRoutes = append(data.AdvertisedRoutes, subnetRoute{
@@ -959,35 +961,14 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 }
 
 func availableFeatures() map[string]bool {
-	env := hostinfo.GetEnvType()
 	features := map[string]bool{
 		"advertise-exit-node": true, // available on all platforms
 		"advertise-routes":    true, // available on all platforms
-		"use-exit-node":       canUseExitNode(env) == nil,
-		"ssh":                 envknob.CanRunTailscaleSSH() == nil,
+		"use-exit-node":       featureknob.CanUseExitNode() == nil,
+		"ssh":                 featureknob.CanRunTailscaleSSH() == nil,
 		"auto-update":         version.IsUnstableBuild() && clientupdate.CanAutoUpdate(),
 	}
-	if env == hostinfo.HomeAssistantAddOn {
-		// Setting SSH on Home Assistant causes trouble on startup
-		// (since the flag is not being passed to `tailscale up`).
-		// Although Tailscale SSH does work here,
-		// it's not terribly useful since it's running in a separate container.
-		features["ssh"] = false
-	}
 	return features
-}
-
-func canUseExitNode(env hostinfo.EnvType) error {
-	switch dist := distro.Get(); dist {
-	case distro.Synology, // see https://github.com/tailscale/tailscale/issues/1995
-		distro.QNAP,
-		distro.Unraid:
-		return fmt.Errorf("Tailscale exit nodes cannot be used on %s.", dist)
-	}
-	if env == hostinfo.HomeAssistantAddOn {
-		return errors.New("Tailscale exit nodes cannot be used on Home Assistant.")
-	}
-	return nil
 }
 
 // aclsAllowAccess returns whether tailnet ACLs (as expressed in the provided filter rules)
@@ -1065,7 +1046,7 @@ func (s *Server) servePostRoutes(ctx context.Context, data postRoutesRequest) er
 	var currNonExitRoutes []string
 	var currAdvertisingExitNode bool
 	for _, r := range prefs.AdvertiseRoutes {
-		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
+		if tsaddr.IsExitRoute(r) {
 			currAdvertisingExitNode = true
 			continue
 		}
@@ -1086,12 +1067,7 @@ func (s *Server) servePostRoutes(ctx context.Context, data postRoutesRequest) er
 		return err
 	}
 
-	hasExitNodeRoute := func(all []netip.Prefix) bool {
-		return slices.Contains(all, exitNodeRouteV4) ||
-			slices.Contains(all, exitNodeRouteV6)
-	}
-
-	if !data.UseExitNode.IsZero() && hasExitNodeRoute(routes) {
+	if !data.UseExitNode.IsZero() && tsaddr.ContainsExitRoutes(views.SliceOf(routes)) {
 		return errors.New("cannot use and advertise exit node at same time")
 	}
 

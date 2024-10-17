@@ -6,6 +6,7 @@
 package netstack
 
 import (
+	"errors"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -26,7 +27,13 @@ func (ns *Impl) sendOutboundUserPing(dstIP netip.Addr, timeout time.Duration) er
 	var err error
 	switch runtime.GOOS {
 	case "windows":
-		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
+		var out []byte
+		out, err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).CombinedOutput()
+		if err == nil && !windowsPingOutputIsSuccess(dstIP, out) {
+			// TODO(bradfitz,nickkhyl): return the actual ICMP error we heard back to the caller?
+			// For now we just drop it.
+			err = errors.New("unsuccessful ICMP reply received")
+		}
 	case "freebsd":
 		// Note: 2000 ms is actually 1 second + 2,000
 		// milliseconds extra for 3 seconds total.

@@ -51,6 +51,7 @@ func main() {
 
 	ctx := context.Background()
 	tsClient := tailscale.NewClient("-", nil)
+	tsClient.UserAgent = "tailscale-get-authkey"
 	tsClient.HTTPClient = credentials.Client(ctx)
 	tsClient.BaseURL = baseURL
 

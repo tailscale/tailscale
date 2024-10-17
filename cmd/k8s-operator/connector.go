@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -33,11 +34,8 @@ import (
 
 const (
 	reasonConnectorCreationFailed = "ConnectorCreationFailed"
-
-	reasonConnectorCreated           = "ConnectorCreated"
-	reasonConnectorCleanupFailed     = "ConnectorCleanupFailed"
-	reasonConnectorCleanupInProgress = "ConnectorCleanupInProgress"
-	reasonConnectorInvalid           = "ConnectorInvalid"
+	reasonConnectorCreated        = "ConnectorCreated"
+	reasonConnectorInvalid        = "ConnectorInvalid"
 
 	messageConnectorCreationFailed = "Failed creating Connector: %v"
 	messageConnectorInvalid        = "Connector is invalid: %v"
@@ -64,11 +62,11 @@ type ConnectorReconciler struct {
 
 var (
 	// gaugeConnectorResources tracks the overall number of Connectors currently managed by this operator instance.
-	gaugeConnectorResources = clientmetric.NewGauge("k8s_connector_resources")
+	gaugeConnectorResources = clientmetric.NewGauge(kubetypes.MetricConnectorResourceCount)
 	// gaugeConnectorSubnetRouterResources tracks the number of Connectors managed by this operator instance that are subnet routers.
-	gaugeConnectorSubnetRouterResources = clientmetric.NewGauge("k8s_connector_subnetrouter_resources")
+	gaugeConnectorSubnetRouterResources = clientmetric.NewGauge(kubetypes.MetricConnectorWithSubnetRouterCount)
 	// gaugeConnectorExitNodeResources tracks the number of Connectors currently managed by this operator instance that are exit nodes.
-	gaugeConnectorExitNodeResources = clientmetric.NewGauge("k8s_connector_exitnode_resources")
+	gaugeConnectorExitNodeResources = clientmetric.NewGauge(kubetypes.MetricConnectorWithExitNodeCount)
 )
 
 func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
@@ -108,7 +106,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	}
 
 	oldCnStatus := cn.Status.DeepCopy()
-	setStatus := func(cn *tsapi.Connector, _ tsapi.ConnectorConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
+	setStatus := func(cn *tsapi.Connector, _ tsapi.ConditionType, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetConnectorCondition(cn, tsapi.ConnectorReady, status, reason, message, cn.Generation, a.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, cn.Status) {
 			// An error encountered here should get returned by the Reconcile function.

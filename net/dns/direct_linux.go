@@ -7,21 +7,20 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/illarion/gonotify"
+	"github.com/illarion/gonotify/v2"
 	"tailscale.com/health"
 )
 
 func (m *directManager) runFileWatcher() {
-	in, err := gonotify.NewInotify()
+	ctx, cancel := context.WithCancel(m.ctx)
+	defer cancel()
+	in, err := gonotify.NewInotify(ctx)
 	if err != nil {
 		// Oh well, we tried. This is all best effort for now, to
 		// surface warnings to users.
 		m.logf("dns: inotify new: %v", err)
 		return
 	}
-	ctx, cancel := context.WithCancel(m.ctx)
-	defer cancel()
-	go m.closeInotifyOnDone(ctx, in)
 
 	const events = gonotify.IN_ATTRIB |
 		gonotify.IN_CLOSE_WRITE |
@@ -106,9 +105,4 @@ func (m *directManager) checkForFileTrample() {
 	}
 	m.logf("trample: resolv.conf changed from what we expected. did some other program interfere? current contents: %q", show)
 	m.health.SetUnhealthy(resolvTrampleWarnable, nil)
-}
-
-func (m *directManager) closeInotifyOnDone(ctx context.Context, in *gonotify.Inotify) {
-	<-ctx.Done()
-	in.Close()
 }

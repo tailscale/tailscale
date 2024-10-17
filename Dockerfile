@@ -1,17 +1,13 @@
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 
-############################################################################
+# Note that this Dockerfile is currently NOT used to build any of the published
+# Tailscale container images and may have drifted from the image build mechanism
+# we use.
+# Tailscale images are currently built using https://github.com/tailscale/mkctr,
+# and the build script can be found in ./build_docker.sh.
 #
-# WARNING: Tailscale is not yet officially supported in container
-# environments, such as Docker and Kubernetes. Though it should work, we
-# don't regularly test it, and we know there are some feature limitations.
 #
-# See current bugs tagged "containers":
-#    https://github.com/tailscale/tailscale/labels/containers
-#
-############################################################################
-
 # This Dockerfile includes all the tailscale binaries.
 #
 # To build the Dockerfile:
@@ -31,7 +27,7 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.22-alpine AS build-env
+FROM golang:1.23-alpine AS build-env
 
 WORKDIR /go/src/tailscale
 
@@ -46,7 +42,7 @@ RUN go install \
     gvisor.dev/gvisor/pkg/tcpip/stack \
     golang.org/x/crypto/ssh \
     golang.org/x/crypto/acme \
-    nhooyr.io/websocket \
+    github.com/coder/websocket \
     github.com/mdlayher/netlink
 
 COPY . .

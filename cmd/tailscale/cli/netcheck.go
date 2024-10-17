@@ -52,9 +52,15 @@ func runNetcheck(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Ensure that we close the portmapper after running a netcheck; this
+	// will release any port mappings created.
+	pm := portmapper.NewClient(logf, netMon, nil, nil, nil)
+	defer pm.Close()
+
 	c := &netcheck.Client{
 		NetMon:      netMon,
-		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil, nil),
+		PortMapper:  pm,
 		UseDNSCache: false, // always resolve, don't cache
 	}
 	if netcheckArgs.verbose {
@@ -78,9 +84,13 @@ func runNetcheck(ctx context.Context, args []string) error {
 		log.Printf("No DERP map from tailscaled; using default.")
 	}
 	if err != nil || noRegions {
-		hc := &http.Client{Transport: tlsdial.NewTransport()}
+		hc := &http.Client{
+			Transport: tlsdial.NewTransport(),
+			Timeout:   10 * time.Second,
+		}
 		dm, err = prodDERPMap(ctx, hc)
 		if err != nil {
+			log.Println("Failed to fetch a DERP map, so netcheck cannot continue. Check your Internet connection.")
 			return err
 		}
 	}
@@ -209,6 +219,7 @@ func portMapping(r *netcheck.Report) string {
 }
 
 func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, error) {
+	log.Printf("attempting to fetch a DERPMap from %s", ipn.DefaultControlURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create prodDERPMap request: %w", err)

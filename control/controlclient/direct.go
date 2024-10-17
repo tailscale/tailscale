@@ -7,14 +7,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -25,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -62,6 +62,7 @@ import (
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
 	httpc                      *http.Client // HTTP client used to talk to tailcontrol
+	interceptedDial            *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
 	dialer                     *tsdial.Dialer
 	dnsCache                   *dnscache.Resolver
 	controlKnobs               *controlknobs.Knobs // always non-nil
@@ -81,6 +82,8 @@ type Direct struct {
 	onControlTime              func(time.Time)              // or nil
 	onTailnetDefaultAutoUpdate func(bool)                   // or nil
 	panicOnUse                 bool                         // if true, panic if client is used (for testing)
+	closedCtx                  context.Context              // alive until Direct.Close is called
+	closeCtx                   context.CancelFunc           // cancels closedCtx
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -258,23 +261,28 @@ func NewDirect(opts Options) (*Direct, error) {
 		// etc set).
 		httpc = http.DefaultClient
 	}
+	var interceptedDial *atomic.Bool
 	if httpc == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), opts.HealthTracker, tr.TLSClientConfig)
-		tr.DialContext = dnscache.Dialer(opts.Dialer.SystemDial, dnsCache)
-		tr.DialTLSContext = dnscache.TLSDialer(opts.Dialer.SystemDial, dnsCache, tr.TLSClientConfig)
+		var dialFunc dialFunc
+		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
+		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
+		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
 		// Disable implicit gzip compression; the various
 		// handlers (register, map, set-dns, etc) do their own
 		// zstd compression per naclbox.
 		tr.DisableCompression = true
+
 		httpc = &http.Client{Transport: tr}
 	}
 
 	c := &Direct{
 		httpc:                      httpc,
+		interceptedDial:            interceptedDial,
 		controlKnobs:               opts.ControlKnobs,
 		getMachinePrivKey:          opts.GetMachinePrivateKey,
 		serverURL:                  opts.ServerURL,
@@ -297,6 +305,8 @@ func NewDirect(opts Options) (*Direct, error) {
 		dnsCache:                   dnsCache,
 		dialPlan:                   opts.DialPlan,
 	}
+	c.closedCtx, c.closeCtx = context.WithCancel(context.Background())
+
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
 	} else {
@@ -319,6 +329,8 @@ func NewDirect(opts Options) (*Direct, error) {
 
 // Close closes the underlying Noise connection(s).
 func (c *Direct) Close() error {
+	c.closeCtx()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.noiseClient != nil {
@@ -327,6 +339,9 @@ func (c *Direct) Close() error {
 		}
 	}
 	c.noiseClient = nil
+	if tr, ok := c.httpc.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
 	return nil
 }
 
@@ -464,6 +479,16 @@ func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
 	return hi
 }
 
+var macOSScreenTime = health.Register(&health.Warnable{
+	Code:     "macos-screen-time-controlclient",
+	Severity: health.SeverityHigh,
+	Title:    "Tailscale blocked by Screen Time",
+	Text: func(args health.Args) string {
+		return "macOS Screen Time seems to be blocking Tailscale. Try disabling Screen Time in System Settings > Screen Time > Content & Privacy > Access to Web Content."
+	},
+	ImpactsConnectivity: true,
+})
+
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	if c.panicOnUse {
 		panic("tainted client")
@@ -473,7 +498,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverLegacyKey
 	serverNoiseKey := c.serverNoiseKey
-	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
+	authKey, isWrapped, wrappedSig, wrappedKey := tka.DecodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	expired := !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
@@ -505,6 +530,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
 	if serverKey.IsZero() {
 		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
+		if err != nil && c.interceptedDial != nil && c.interceptedDial.Load() {
+			c.health.SetUnhealthy(macOSScreenTime, nil)
+		} else {
+			c.health.SetHealthy(macOSScreenTime)
+		}
 		if err != nil {
 			return regen, opt.URL, nil, err
 		}
@@ -565,18 +595,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		// We were given a wrapped pre-auth key, which means that in addition
 		// to being a regular pre-auth key there was a suffix with information to
 		// generate a tailnet-lock signature.
-		nk, err := tryingNewKey.Public().MarshalBinary()
+		nodeKeySignature, err = tka.SignByCredential(wrappedKey, wrappedSig, tryingNewKey.Public())
 		if err != nil {
-			return false, "", nil, fmt.Errorf("marshalling node-key: %w", err)
+			return false, "", nil, err
 		}
-		sig := &tka.NodeKeySignature{
-			SigKind: tka.SigRotation,
-			Pubkey:  nk,
-			Nested:  wrappedSig,
-		}
-		sigHash := sig.SigHash()
-		sig.Signature = ed25519.Sign(wrappedKey, sigHash[:])
-		nodeKeySignature = sig.Serialize()
 	}
 
 	if backendLogID == "" {
@@ -1207,7 +1229,7 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 		return nil, fmt.Errorf("fetch control key response: %v", err)
 	}
 	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("fetch control key: %d", res.StatusCode)
+		return nil, fmt.Errorf("fetch control key: %v", res.Status)
 	}
 	var out tailcfg.OverTLSPublicKeyResponse
 	jsonErr := json.Unmarshal(b, &out)
@@ -1612,7 +1634,7 @@ func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyStat
 	}
 
 	// Best effort, no logging:
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(c.closedCtx, 5*time.Second)
 	defer cancel()
 	res, err := np.post(ctx, "/machine/update-health", nodeKey, req)
 	if err != nil {
@@ -1621,47 +1643,42 @@ func (c *Direct) ReportHealthChange(w *health.Warnable, us *health.UnhealthyStat
 	res.Body.Close()
 }
 
-// decodeWrappedAuthkey separates wrapping information from an authkey, if any.
-// In all cases the authkey is returned, sans wrapping information if any.
-//
-// If the authkey is wrapped, isWrapped returns true, along with the wrapping signature
-// and private key.
-func decodeWrappedAuthkey(key string, logf logger.Logf) (authKey string, isWrapped bool, sig *tka.NodeKeySignature, priv ed25519.PrivateKey) {
-	authKey, suffix, found := strings.Cut(key, "--TL")
-	if !found {
-		return key, false, nil, nil
-	}
-	sigBytes, privBytes, found := strings.Cut(suffix, "-")
-	if !found {
-		logf("decoding wrapped auth-key: did not find delimiter")
-		return key, false, nil, nil
-	}
-
-	rawSig, err := base64.RawStdEncoding.DecodeString(sigBytes)
-	if err != nil {
-		logf("decoding wrapped auth-key: signature decode: %v", err)
-		return key, false, nil, nil
-	}
-	rawPriv, err := base64.RawStdEncoding.DecodeString(privBytes)
-	if err != nil {
-		logf("decoding wrapped auth-key: priv decode: %v", err)
-		return key, false, nil, nil
-	}
-
-	sig = new(tka.NodeKeySignature)
-	if err := sig.Unserialize([]byte(rawSig)); err != nil {
-		logf("decoding wrapped auth-key: signature: %v", err)
-		return key, false, nil, nil
-	}
-	priv = ed25519.PrivateKey(rawPriv)
-
-	return authKey, true, sig, priv
-}
-
 func addLBHeader(req *http.Request, nodeKey key.NodePublic) {
 	if !nodeKey.IsZero() {
 		req.Header.Add(tailcfg.LBHeader, nodeKey.String())
 	}
+}
+
+type dialFunc = func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// makeScreenTimeDetectingDialFunc returns dialFunc, optionally wrapped (on
+// Apple systems) with a func that sets the returned atomic.Bool for whether
+// Screen Time seemed to intercept the connection.
+//
+// The returned *atomic.Bool is nil on non-Apple systems.
+func makeScreenTimeDetectingDialFunc(dial dialFunc) (dialFunc, *atomic.Bool) {
+	switch runtime.GOOS {
+	case "darwin", "ios":
+		// Continue below.
+	default:
+		return dial, nil
+	}
+	ab := new(atomic.Bool)
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		ab.Store(isTCPLoopback(c.LocalAddr()) && isTCPLoopback(c.RemoteAddr()))
+		return c, nil
+	}, ab
+}
+
+func isTCPLoopback(a net.Addr) bool {
+	if ta, ok := a.(*net.TCPAddr); ok {
+		return ta.IP.IsLoopback()
+	}
+	return false
 }
 
 var (

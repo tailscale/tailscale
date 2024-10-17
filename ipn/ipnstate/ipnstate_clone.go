@@ -9,26 +9,29 @@ import (
 	"net/netip"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/key"
 )
 
-// Clone makes a deep copy of TKAFilteredPeer.
+// Clone makes a deep copy of TKAPeer.
 // The result aliases no memory with the original.
-func (src *TKAFilteredPeer) Clone() *TKAFilteredPeer {
+func (src *TKAPeer) Clone() *TKAPeer {
 	if src == nil {
 		return nil
 	}
-	dst := new(TKAFilteredPeer)
+	dst := new(TKAPeer)
 	*dst = *src
 	dst.TailscaleIPs = append(src.TailscaleIPs[:0:0], src.TailscaleIPs...)
+	dst.NodeKeySignature = *src.NodeKeySignature.Clone()
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _TKAFilteredPeerCloneNeedsRegeneration = TKAFilteredPeer(struct {
-	Name         string
-	ID           tailcfg.NodeID
-	StableID     tailcfg.StableNodeID
-	TailscaleIPs []netip.Addr
-	NodeKey      key.NodePublic
+var _TKAPeerCloneNeedsRegeneration = TKAPeer(struct {
+	Name             string
+	ID               tailcfg.NodeID
+	StableID         tailcfg.StableNodeID
+	TailscaleIPs     []netip.Addr
+	NodeKey          key.NodePublic
+	NodeKeySignature tka.NodeKeySignature
 }{})

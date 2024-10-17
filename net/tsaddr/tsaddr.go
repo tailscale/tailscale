@@ -160,55 +160,6 @@ type oncePrefix struct {
 	v netip.Prefix
 }
 
-// FalseContainsIPFunc is shorthand for NewContainsIPFunc(views.Slice[netip.Prefix]{}).
-func FalseContainsIPFunc() func(ip netip.Addr) bool {
-	return func(ip netip.Addr) bool { return false }
-}
-
-// NewContainsIPFunc returns a func that reports whether ip is in addrs.
-//
-// It's optimized for the cases of addrs being empty and addrs
-// containing 1 or 2 single-IP prefixes (such as one IPv4 address and
-// one IPv6 address).
-//
-// Otherwise the implementation is somewhat slow.
-func NewContainsIPFunc(addrs views.Slice[netip.Prefix]) func(ip netip.Addr) bool {
-	// Specialize the three common cases: no address, just IPv4
-	// (or just IPv6), and both IPv4 and IPv6.
-	if addrs.Len() == 0 {
-		return func(netip.Addr) bool { return false }
-	}
-	// If any addr is more than a single IP, then just do the slow
-	// linear thing until
-	// https://github.com/inetaf/netaddr/issues/139 is done.
-	if addrs.ContainsFunc(func(p netip.Prefix) bool { return !p.IsSingleIP() }) {
-		acopy := addrs.AsSlice()
-		return func(ip netip.Addr) bool {
-			for _, a := range acopy {
-				if a.Contains(ip) {
-					return true
-				}
-			}
-			return false
-		}
-	}
-	// Fast paths for 1 and 2 IPs:
-	if addrs.Len() == 1 {
-		a := addrs.At(0)
-		return func(ip netip.Addr) bool { return ip == a.Addr() }
-	}
-	if addrs.Len() == 2 {
-		a, b := addrs.At(0), addrs.At(1)
-		return func(ip netip.Addr) bool { return ip == a.Addr() || ip == b.Addr() }
-	}
-	// General case:
-	m := map[netip.Addr]bool{}
-	for i := range addrs.Len() {
-		m[addrs.At(i).Addr()] = true
-	}
-	return func(ip netip.Addr) bool { return m[ip] }
-}
-
 // PrefixesContainsIP reports whether any prefix in ipp contains ip.
 func PrefixesContainsIP(ipp []netip.Prefix, ip netip.Addr) bool {
 	for _, r := range ipp {
@@ -240,6 +191,17 @@ func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 	return v4 && v6
 }
 
+// ContainsExitRoute reports whether rr contains at least one of IPv4 or
+// IPv6 /0 (exit) routes.
+func ContainsExitRoute(rr views.Slice[netip.Prefix]) bool {
+	for i := range rr.Len() {
+		if rr.At(i).Bits() == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ContainsNonExitSubnetRoutes reports whether v contains Subnet
 // Routes other than ExitNode Routes.
 func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
@@ -249,6 +211,38 @@ func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
 		}
 	}
 	return false
+}
+
+// WithoutExitRoutes returns rr unchanged if it has only 1 or 0 /0
+// routes. If it has both IPv4 and IPv6 /0 routes, then it returns
+// a copy with all /0 routes removed.
+func WithoutExitRoutes(rr views.Slice[netip.Prefix]) views.Slice[netip.Prefix] {
+	if !ContainsExitRoutes(rr) {
+		return rr
+	}
+	var out []netip.Prefix
+	for _, r := range rr.All() {
+		if r.Bits() > 0 {
+			out = append(out, r)
+		}
+	}
+	return views.SliceOf(out)
+}
+
+// WithoutExitRoute returns rr unchanged if it has 0 /0
+// routes. If it has a IPv4 or IPv6 /0 routes, then it returns
+// a copy with all /0 routes removed.
+func WithoutExitRoute(rr views.Slice[netip.Prefix]) views.Slice[netip.Prefix] {
+	if !ContainsExitRoute(rr) {
+		return rr
+	}
+	var out []netip.Prefix
+	for _, r := range rr.All() {
+		if r.Bits() > 0 {
+			out = append(out, r)
+		}
+	}
+	return views.SliceOf(out)
 }
 
 var (
@@ -264,6 +258,11 @@ func AllIPv6() netip.Prefix { return allIPv6 }
 
 // ExitRoutes returns a slice containing AllIPv4 and AllIPv6.
 func ExitRoutes() []netip.Prefix { return []netip.Prefix{allIPv4, allIPv6} }
+
+// IsExitRoute reports whether p is an exit node route.
+func IsExitRoute(p netip.Prefix) bool {
+	return p == allIPv4 || p == allIPv6
+}
 
 // SortPrefixes sorts the prefixes in place.
 func SortPrefixes(p []netip.Prefix) {

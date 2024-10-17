@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
@@ -65,7 +66,8 @@ type System struct {
 	controlKnobs controlknobs.Knobs
 	proxyMap     proxymap.Mapper
 
-	healthTracker health.Tracker
+	healthTracker       health.Tracker
+	userMetricsRegistry usermetric.Registry
 }
 
 // NetstackImpl is the interface that *netstack.Impl implements.
@@ -140,6 +142,11 @@ func (s *System) ProxyMapper() *proxymap.Mapper {
 // HealthTracker returns the system health tracker.
 func (s *System) HealthTracker() *health.Tracker {
 	return &s.healthTracker
+}
+
+// UserMetricsRegistry returns the system usermetrics.
+func (s *System) UserMetricsRegistry() *usermetric.Registry {
+	return &s.userMetricsRegistry
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

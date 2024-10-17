@@ -540,9 +540,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Set user1 as logged in user")
-		if err := pm.SetCurrentUserID(uid); err != nil {
-			t.Fatalf("can't set user id: %s", err)
-		}
+		pm.SetCurrentUserID(uid)
 		checkProfiles(t)
 		t.Logf("Save prefs for user1")
 		wantProfiles["default"] = setPrefs(t, "default", false)
@@ -576,9 +574,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Set user1 as current user")
-		if err := pm.SetCurrentUserID(uid); err != nil {
-			t.Fatal(err)
-		}
+		pm.SetCurrentUserID(uid)
 		wantCurProfile = "test"
 	}
 	checkProfiles(t)

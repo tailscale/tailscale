@@ -286,7 +286,7 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 	} else {
 		req, err := http.NewRequestWithContext(ctx, "GET", d.derpMapURL, nil)
 		if err != nil {
-			return nil
+			return err
 		}
 		res, err := httpOrFileClient.Do(req)
 		if err != nil {

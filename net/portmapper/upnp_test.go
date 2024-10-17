@@ -599,13 +599,7 @@ func TestGetUPnPPortMapping(t *testing.T) {
 		)
 		for i := range 2 {
 			sawRequestWithLease.Store(false)
-			res, err := c.Probe(ctx)
-			if err != nil {
-				t.Fatalf("Probe: %v", err)
-			}
-			if !res.UPnP {
-				t.Errorf("didn't detect UPnP")
-			}
+			mustProbeUPnP(t, ctx, c)
 
 			gw, myIP, ok := c.gatewayAndSelfIP()
 			if !ok {
@@ -656,13 +650,7 @@ func TestGetUPnPPortMapping_NoValidServices(t *testing.T) {
 	c.debug.VerboseLogs = true
 
 	ctx := context.Background()
-	res, err := c.Probe(ctx)
-	if err != nil {
-		t.Fatalf("Probe: %v", err)
-	}
-	if !res.UPnP {
-		t.Errorf("didn't detect UPnP")
-	}
+	mustProbeUPnP(t, ctx, c)
 
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
@@ -705,13 +693,7 @@ func TestGetUPnPPortMapping_Legacy(t *testing.T) {
 	c.debug.VerboseLogs = true
 
 	ctx := context.Background()
-	res, err := c.Probe(ctx)
-	if err != nil {
-		t.Fatalf("Probe: %v", err)
-	}
-	if !res.UPnP {
-		t.Errorf("didn't detect UPnP")
-	}
+	mustProbeUPnP(t, ctx, c)
 
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
@@ -838,6 +820,58 @@ func TestProcessUPnPResponses(t *testing.T) {
 	}
 }
 
+// See: https://github.com/tailscale/corp/issues/23538
+func TestGetUPnPPortMapping_Invalid(t *testing.T) {
+	for _, responseAddr := range []string{
+		"0.0.0.0",
+		"127.0.0.1",
+	} {
+		t.Run(responseAddr, func(t *testing.T) {
+			igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer igd.Close()
+
+			// This is a very basic fake UPnP server handler.
+			handlers := map[string]any{
+				"AddPortMapping":       testAddPortMappingResponse,
+				"GetExternalIPAddress": makeGetExternalIPAddressResponse(responseAddr),
+				"GetStatusInfo":        testGetStatusInfoResponse,
+				"DeletePortMapping":    "", // Do nothing for test
+			}
+
+			igd.SetUPnPHandler(&upnpServer{
+				t:    t,
+				Desc: huaweiRootDescXML,
+				Control: map[string]map[string]any{
+					"/ctrlt/WANPPPConnection_1": handlers,
+				},
+			})
+
+			c := newTestClient(t, igd)
+			defer c.Close()
+			c.debug.VerboseLogs = true
+
+			ctx := context.Background()
+			mustProbeUPnP(t, ctx, c)
+
+			gw, myIP, ok := c.gatewayAndSelfIP()
+			if !ok {
+				t.Fatalf("could not get gateway and self IP")
+			}
+
+			ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+			if ok {
+				t.Fatal("did not expect to get UPnP port mapping")
+			}
+			if ext.IsValid() {
+				t.Fatalf("expected no external address; got %v", ext)
+			}
+		})
+	}
+}
+
 type upnpServer struct {
 	t       *testing.T
 	Desc    string                    // root device XML
@@ -919,6 +953,18 @@ func (u *upnpServer) handleControl(w http.ResponseWriter, r *http.Request, handl
 		http.Error(w, "invalid handler type", http.StatusInternalServerError)
 		return
 	}
+}
+
+func mustProbeUPnP(tb testing.TB, ctx context.Context, c *Client) ProbeResult {
+	tb.Helper()
+	res, err := c.Probe(ctx)
+	if err != nil {
+		tb.Fatalf("Probe: %v", err)
+	}
+	if !res.UPnP {
+		tb.Fatalf("didn't detect UPnP")
+	}
+	return res
 }
 
 const testRootDesc = `<?xml version="1.0"?>
@@ -1058,3 +1104,15 @@ const testLegacyGetStatusInfoResponse = `<?xml version="1.0"?>
   </s:Body>
 </s:Envelope>
 `
+
+func makeGetExternalIPAddressResponse(ip string) string {
+	return fmt.Sprintf(`<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:GetExternalIPAddressResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
+      <NewExternalIPAddress>%s</NewExternalIPAddress>
+    </u:GetExternalIPAddressResponse>
+  </s:Body>
+</s:Envelope>
+`, ip)
+}

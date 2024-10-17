@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// Package xdp contains the XDP STUN program.
 package xdp
 
 // XDPAttachFlags represents how XDP program will be attached to interface. This

@@ -14,6 +14,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/prometheus/client_golang/prometheus"
+	"tailscale.com/util/multierr"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type config -type counters_key -type counter_key_af -type counter_key_packets_bytes_action -type counter_key_prog_end bpf xdp.c -- -I headers
@@ -22,9 +23,12 @@ import (
 // the STUN protocol. It exports statistics for the XDP program via its
 // implementation of the prometheus.Collector interface.
 type STUNServer struct {
-	mu      sync.Mutex
-	objs    *bpfObjects
-	metrics *stunServerMetrics
+	mu       sync.Mutex
+	objs     *bpfObjects
+	metrics  *stunServerMetrics
+	dstPort  int
+	dropSTUN bool
+	link     link.Link
 }
 
 //lint:ignore U1000 used in xdp_linux_test.go, which has a build tag
@@ -68,12 +72,13 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 	server := &STUNServer{
 		objs:    objs,
 		metrics: newSTUNServerMetrics(),
+		dstPort: config.DstPort,
 	}
 	var key uint32
-	xdpConfig := bpfConfig{
+	xdpConfig := &bpfConfig{
 		DstPort: uint16(config.DstPort),
 	}
-	err = objs.ConfigMap.Put(key, &xdpConfig)
+	err = objs.ConfigMap.Put(key, xdpConfig)
 	if err != nil {
 		return nil, fmt.Errorf("error loading config in eBPF map: %w", err)
 	}
@@ -84,7 +89,7 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 	if err != nil {
 		return nil, fmt.Errorf("error finding device: %w", err)
 	}
-	_, err = link.AttachXDP(link.XDPOptions{
+	link, err := link.AttachXDP(link.XDPOptions{
 		Program:   objs.XdpProgFunc,
 		Interface: iface.Index,
 		Flags:     link.XDPAttachFlags(config.AttachFlags),
@@ -92,6 +97,7 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 	if err != nil {
 		return nil, fmt.Errorf("error attaching XDP program to dev: %w", err)
 	}
+	server.link = link
 	return server, nil
 }
 
@@ -99,7 +105,12 @@ func NewSTUNServer(config *STUNServerConfig, opts ...STUNServerOption) (*STUNSer
 func (s *STUNServer) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.objs.Close()
+	var errs []error
+	if s.link != nil {
+		errs = append(errs, s.link.Close())
+	}
+	errs = append(errs, s.objs.Close())
+	return multierr.New(errs...)
 }
 
 type stunServerMetrics struct {
@@ -181,6 +192,7 @@ var (
 		bpfCounterKeyProgEndCOUNTER_KEY_END_INVALID_IP_CSUM:            "invalid_ip_csum",
 		bpfCounterKeyProgEndCOUNTER_KEY_END_NOT_STUN_PORT:              "not_stun_port",
 		bpfCounterKeyProgEndCOUNTER_KEY_END_INVALID_SW_ATTR_VAL:        "invalid_sw_attr_val",
+		bpfCounterKeyProgEndCOUNTER_KEY_END_DROP_STUN:                  "drop_stun",
 	}
 
 	packetCounterKeys = map[bpfCounterKeyPacketsBytesAction]bool{
@@ -260,6 +272,31 @@ func (s *STUNServer) Collect(metricCh chan<- prometheus.Metric) {
 		log.Printf("xdp: error collecting metrics: %v", err)
 	}
 	s.metrics.registry.Collect(metricCh)
+}
+
+func (s *STUNServer) SetDropSTUN(v bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dropSTUN := 0
+	if v {
+		dropSTUN = 1
+	}
+	xdpConfig := &bpfConfig{
+		DstPort:  uint16(s.dstPort),
+		DropStun: uint16(dropSTUN),
+	}
+	var key uint32
+	err := s.objs.ConfigMap.Put(key, xdpConfig)
+	if err == nil {
+		s.dropSTUN = v
+	}
+	return err
+}
+
+func (s *STUNServer) GetDropSTUN() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropSTUN
 }
 
 func (s *STUNServer) updateMetrics() error {

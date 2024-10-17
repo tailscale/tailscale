@@ -3,7 +3,7 @@
 
 // Package wsconn contains an adapter type that turns
 // a websocket connection into a net.Conn. It a temporary fork of the
-// netconn.go file from the nhooyr.io/websocket package while we wait for
+// netconn.go file from the github.com/coder/websocket package while we wait for
 // https://github.com/nhooyr/websocket/pull/350 to be merged.
 package wsconn
 
@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // NetConn converts a *websocket.Conn into a net.Conn.
@@ -105,7 +105,11 @@ type netConn struct {
 	afterReadDeadline atomic.Bool
 
 	readMu sync.Mutex
-	eofed  bool
+	// eofed is true if the reader should return io.EOF from the Read call.
+	//
+	// +checklocks:readMu
+	eofed bool
+	// +checklocks:readMu
 	reader io.Reader
 }
 

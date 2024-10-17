@@ -4,7 +4,10 @@
 // Package apitype contains types for the Tailscale LocalAPI and control plane API.
 package apitype
 
-import "tailscale.com/tailcfg"
+import (
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/dnstype"
+)
 
 // LocalAPIHost is the Host header value used by the LocalAPI.
 const LocalAPIHost = "local-tailscaled.sock"
@@ -56,4 +59,20 @@ type ExitNodeSuggestionResponse struct {
 	ID       tailcfg.StableNodeID
 	Name     string
 	Location tailcfg.LocationView `json:",omitempty"`
+}
+
+// DNSOSConfig mimics dns.OSConfig without forcing us to import the entire dns package
+// into the CLI.
+type DNSOSConfig struct {
+	Nameservers   []string
+	SearchDomains []string
+	MatchDomains  []string
+}
+
+// DNSQueryResponse is the response to a DNS query request sent via LocalAPI.
+type DNSQueryResponse struct {
+	// Bytes is the raw DNS response bytes.
+	Bytes []byte
+	// Resolvers is the list of resolvers that the forwarder deemed able to resolve the query.
+	Resolvers []*dnstype.Resolver
 }

@@ -7,7 +7,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -161,10 +160,9 @@ func TestMap(t *testing.T) {
 	}
 	got := map[string]int{}
 	want := map[string]int{"one": 1, "two": 2, "three": 3}
-	m.Range(func(k string, v int) bool {
+	for k, v := range m.All() {
 		got[k] = v
-		return true
-	})
+	}
 	if d := cmp.Diff(got, want); d != "" {
 		t.Errorf("Range mismatch (-got +want):\n%s", d)
 	}
@@ -179,29 +177,20 @@ func TestMap(t *testing.T) {
 	m.Delete("noexist")
 	got = map[string]int{}
 	want = map[string]int{}
-	m.Range(func(k string, v int) bool {
+	for k, v := range m.All() {
 		got[k] = v
-		return true
-	})
+	}
 	if d := cmp.Diff(got, want); d != "" {
 		t.Errorf("Range mismatch (-got +want):\n%s", d)
 	}
 
 	t.Run("LoadOrStore", func(t *testing.T) {
 		var m Map[string, string]
-		var wg sync.WaitGroup
-		wg.Add(2)
+		var wg WaitGroup
 		var ok1, ok2 bool
-		go func() {
-			defer wg.Done()
-			_, ok1 = m.LoadOrStore("", "")
-		}()
-		go func() {
-			defer wg.Done()
-			_, ok2 = m.LoadOrStore("", "")
-		}()
+		wg.Go(func() { _, ok1 = m.LoadOrStore("", "") })
+		wg.Go(func() { _, ok2 = m.LoadOrStore("", "") })
 		wg.Wait()
-
 		if ok1 == ok2 {
 			t.Errorf("exactly one LoadOrStore should load")
 		}

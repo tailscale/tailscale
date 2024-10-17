@@ -29,6 +29,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -248,6 +249,14 @@ func TestServeConfigForeground(t *testing.T) {
 	}, "")
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Introduce a race between [LocalBackend] sending notifications
+	// and [LocalBackend.WatchNotifications] shutting down due to
+	// setting the serve config below.
+	const N = 1000
+	for range N {
+		go b.send(ipn.Notify{})
 	}
 
 	// Setting a new serve config should shut down WatchNotifications
@@ -668,13 +677,14 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	const debug = true
 	if debug {
-		logf = logger.WithPrefix(t.Logf, "... ")
+		logf = logger.WithPrefix(tstest.WhileTestRunningLogger(t), "... ")
 	}
 
 	sys := &tsd.System{}
 	e, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		SetSubsystem:  sys.Set,
 		HealthTracker: sys.HealthTracker(),
+		Metrics:       sys.UserMetricsRegistry(),
 	})
 	if err != nil {
 		t.Fatal(err)

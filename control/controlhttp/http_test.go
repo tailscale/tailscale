@@ -11,10 +11,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -41,6 +43,8 @@ type httpTestParam struct {
 	makeHTTPHangAfterUpgrade bool
 
 	doEarlyWrite bool
+
+	httpInDial bool
 }
 
 func TestControlHTTP(t *testing.T) {
@@ -119,6 +123,12 @@ func TestControlHTTP(t *testing.T) {
 		{
 			name:         "early_write",
 			doEarlyWrite: true,
+		},
+		// Dialer needed to make another HTTP request along the way (e.g. to
+		// resolve the hostname via BootstrapDNS).
+		{
+			name:       "http_request_in_dial",
+			httpInDial: true,
 		},
 	}
 
@@ -217,6 +227,29 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		Clock:                clock,
 	}
 
+	if param.httpInDial {
+		// Spin up a separate server to get a different port on localhost.
+		secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { return }))
+		defer secondServer.Close()
+
+		prev := a.Dialer
+		a.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, "GET", secondServer.URL, nil)
+			if err != nil {
+				t.Errorf("http.NewRequest: %v", err)
+			}
+			r, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Errorf("http.Get: %v", err)
+			}
+			r.Body.Close()
+
+			return prev(ctx, network, addr)
+		}
+	}
+
 	if proxy != nil {
 		proxyEnv := proxy.Start(t)
 		defer proxy.Close()
@@ -238,6 +271,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		t.Fatalf("dialing controlhttp: %v", err)
 	}
 	defer conn.Close()
+
 	si := <-sch
 	if si.conn != nil {
 		defer si.conn.Close()
@@ -264,6 +298,19 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		}
 		if string(buf) != earlyWriteMsg {
 			t.Errorf("early write = %q; want %q", buf, earlyWriteMsg)
+		}
+	}
+
+	// When no proxy is used, the RemoteAddr of the returned connection should match
+	// one of the listeners of the test server.
+	if proxy == nil {
+		var expectedAddrs []string
+		for _, ln := range []net.Listener{httpLn, httpsLn} {
+			expectedAddrs = append(expectedAddrs, fmt.Sprintf("127.0.0.1:%d", ln.Addr().(*net.TCPAddr).Port))
+			expectedAddrs = append(expectedAddrs, fmt.Sprintf("[::1]:%d", ln.Addr().(*net.TCPAddr).Port))
+		}
+		if !slices.Contains(expectedAddrs, conn.RemoteAddr().String()) {
+			t.Errorf("unexpected remote addr: %s, want %s", conn.RemoteAddr(), expectedAddrs)
 		}
 	}
 }

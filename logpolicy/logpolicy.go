@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -31,6 +32,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -228,6 +230,9 @@ func LogsDir(logf logger.Logf) string {
 			logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
 			return systemdStateDir
 		}
+	case "js":
+		logf("logpolicy: no logs directory in the browser")
+		return ""
 	}
 
 	// Default to e.g. /var/lib/tailscale or /var/db/tailscale on Unix.
@@ -463,6 +468,11 @@ func New(collection string, netMon *netmon.Monitor, health *health.Tracker, logf
 // The netMon parameter is optional. It should be specified in environments where
 // Tailscaled is manipulating the routing table.
 func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, health *health.Tracker, logf logger.Logf) *Policy {
+	if hostinfo.IsNATLabGuestVM() {
+		// In NATLab Gokrazy instances, tailscaled comes up concurently with
+		// DHCP and the doesn't have DNS for a while. Wait for DHCP first.
+		awaitGokrazyNetwork()
+	}
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -569,13 +579,57 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 	if envknob.NoLogsNoSupport() || testenv.InTest() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
-	} else if val := getLogTarget(); val != "" {
-		logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
-		conf.BaseURL = val
-		u, _ := url.Parse(val)
-		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, health, logf)}
+	} else {
+		// Only attach an on-disk filch buffer if we are going to be sending logs.
+		// No reason to persist them locally just to drop them later.
+		attachFilchBuffer(&conf, dir, cmdName, logf)
+
+		if val := getLogTarget(); val != "" {
+			logf("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
+			conf.BaseURL = val
+			u, _ := url.Parse(val)
+			conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon, health, logf)}
+		}
+
+	}
+	lw := logtail.NewLogger(conf, logf)
+
+	var logOutput io.Writer = lw
+
+	if runtime.GOOS == "windows" && conf.Collection == logtail.CollectionNode {
+		logID := newc.PublicID.String()
+		exe, _ := os.Executable()
+		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {
+			diskLogf := filelogger.New("tailscale-service", logID, lw.Logf)
+			logOutput = logger.FuncWriter(diskLogf)
+		}
 	}
 
+	if useStdLogger {
+		log.SetFlags(0) // other log flags are set on console, not here
+		log.SetOutput(logOutput)
+	}
+
+	logf("Program starting: v%v, Go %v: %#v",
+		version.Long(),
+		goVersion(),
+		os.Args)
+	logf("LogID: %v", newc.PublicID)
+	if earlyErrBuf.Len() != 0 {
+		logf("%s", earlyErrBuf.Bytes())
+	}
+
+	return &Policy{
+		Logtail:  lw,
+		PublicID: newc.PublicID,
+		Logf:     logf,
+	}
+}
+
+// attachFilchBuffer creates an on-disk ring buffer using filch and attaches
+// it to the logtail config. Note that this is optional; if no buffer is set,
+// logtail will use an in-memory buffer.
+func attachFilchBuffer(conf *logtail.Config, dir, cmdName string, logf logger.Logf) {
 	filchOptions := filch.Options{
 		ReplaceStderr: redirectStderrToLogPanics(),
 	}
@@ -601,40 +655,8 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 			conf.Stderr = filchBuf.OrigStderr
 		}
 	}
-	lw := logtail.NewLogger(conf, logf)
-
-	var logOutput io.Writer = lw
-
-	if runtime.GOOS == "windows" && conf.Collection == logtail.CollectionNode {
-		logID := newc.PublicID.String()
-		exe, _ := os.Executable()
-		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {
-			diskLogf := filelogger.New("tailscale-service", logID, lw.Logf)
-			logOutput = logger.FuncWriter(diskLogf)
-		}
-	}
-
-	if useStdLogger {
-		log.SetFlags(0) // other log flags are set on console, not here
-		log.SetOutput(logOutput)
-	}
-
-	logf("Program starting: v%v, Go %v: %#v",
-		version.Long(),
-		goVersion(),
-		os.Args)
-	logf("LogID: %v", newc.PublicID)
 	if filchErr != nil {
 		logf("filch failed: %v", filchErr)
-	}
-	if earlyErrBuf.Len() != 0 {
-		logf("%s", earlyErrBuf.Bytes())
-	}
-
-	return &Policy{
-		Logtail:  lw,
-		PublicID: newc.PublicID,
-		Logf:     logf,
 	}
 }
 
@@ -794,6 +816,8 @@ func NewLogtailTransport(host string, netMon *netmon.Monitor, health *health.Tra
 	}
 
 	tr.TLSClientConfig = tlsdial.Config(host, health, tr.TLSClientConfig)
+	// Force TLS 1.3 since we know log.tailscale.io supports it.
+	tr.TLSClientConfig.MinVersion = tls.VersionTLS13
 
 	return tr
 }
@@ -815,4 +839,62 @@ func (noopPretendSuccessTransport) RoundTrip(req *http.Request) (*http.Response,
 		StatusCode: 200,
 		Status:     "200 OK",
 	}, nil
+}
+
+func awaitGokrazyNetwork() {
+	if runtime.GOOS != "linux" || distro.Get() != distro.Gokrazy {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for {
+		// Before DHCP finishes, the /etc/resolv.conf file has just "#MANUAL".
+		all, _ := os.ReadFile("/etc/resolv.conf")
+		if bytes.Contains(all, []byte("nameserver ")) {
+			good := true
+			firstLine, _, ok := strings.Cut(string(all), "\n")
+			if ok {
+				ns, ok := strings.CutPrefix(firstLine, "nameserver ")
+				if ok {
+					if ip, err := netip.ParseAddr(ns); err == nil && ip.Is6() && !ip.IsLinkLocalUnicast() {
+						good = haveGlobalUnicastIPv6()
+					}
+				}
+			}
+			if good {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// haveGlobalUnicastIPv6 reports whether the machine has a IPv6 non-private
+// (non-ULA) global unicast address.
+//
+// It's only intended for use in natlab integration tests so only works on
+// Linux/macOS now and not environments (such as Android) where net.Interfaces
+// doesn't work directly.
+func haveGlobalUnicastIPv6() bool {
+	ifs, _ := net.Interfaces()
+	for _, ni := range ifs {
+		aa, _ := ni.Addrs()
+		for _, a := range aa {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip, _ := netip.AddrFromSlice(ipn.IP)
+			if ip.Is6() && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+				return true
+			}
+		}
+	}
+	return false
 }

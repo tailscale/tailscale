@@ -14,13 +14,11 @@ import (
 	"io"
 	"log"
 	"maps"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,6 +26,7 @@ import (
 	"github.com/tcnksm/go-httpstat"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
+	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
@@ -53,9 +52,9 @@ var (
 
 // The various default timeouts for things.
 const (
-	// overallProbeTimeout is the maximum amount of time netcheck will
+	// ReportTimeout is the maximum amount of time netcheck will
 	// spend gathering a single report.
-	overallProbeTimeout = 5 * time.Second
+	ReportTimeout = 5 * time.Second
 	// stunTimeout is the maximum amount of time netcheck will spend
 	// probing with STUN packets without getting a reply before
 	// switching to HTTP probing, on the assumption that outbound UDP
@@ -64,6 +63,11 @@ const (
 	// icmpProbeTimeout is the maximum amount of time netcheck will spend
 	// probing with ICMP packets.
 	icmpProbeTimeout = 1 * time.Second
+	// httpsProbeTimeout is the maximum amount of time netcheck will spend
+	// probing over HTTPS. This is set equal to ReportTimeout to allow HTTPS
+	// whatever time is left following STUN, which precedes it in a netcheck
+	// report.
+	httpsProbeTimeout = ReportTimeout
 	// defaultActiveRetransmitTime is the retransmit interval we use
 	// for STUN probes when we're in steady state (not in start-up),
 	// but don't have previous latency information for a DERP
@@ -499,6 +503,10 @@ func makeProbePlanInitial(dm *tailcfg.DERPMap, ifState *netmon.State) (plan prob
 	plan = make(probePlan)
 
 	for _, reg := range dm.Regions {
+		if len(reg.Nodes) == 0 {
+			continue
+		}
+
 		var p4 []probe
 		var p6 []probe
 		for try := 0; try < 3; try++ {
@@ -720,6 +728,9 @@ type GetReportOpts struct {
 	// If no communication with that region has occurred, or it occurred
 	// too far in the past, this function should return the zero time.
 	GetLastDERPActivity func(int) time.Time
+	// OnlyTCP443 constrains netcheck reporting to measurements over TCP port
+	// 443.
+	OnlyTCP443 bool
 }
 
 // getLastDERPActivity calls o.GetLastDERPActivity if both o and
@@ -732,6 +743,10 @@ func (o *GetReportOpts) getLastDERPActivity(region int) time.Time {
 }
 
 // GetReport gets a report. The 'opts' argument is optional and can be nil.
+// Callers are discouraged from passing a ctx with an arbitrary deadline as this
+// may cause GetReport to return prematurely before all reporting methods have
+// executed. ReportTimeout is the maximum amount of time GetReport will spend
+// gathering a report.
 //
 // It may not be called concurrently with itself.
 func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetReportOpts) (_ *Report, reterr error) {
@@ -744,7 +759,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// Mask user context with ours that we guarantee to cancel so
 	// we can depend on it being closed in goroutines later.
 	// (User ctx might be context.Background, etc)
-	ctx, cancel := context.WithTimeout(ctx, overallProbeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, ReportTimeout)
 	defer cancel()
 
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelNetcheckClient, c.logf)
@@ -830,7 +845,10 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		go rs.probePortMapServices()
 	}
 
-	plan := makeProbePlan(dm, ifState, last)
+	var plan probePlan
+	if opts == nil || !opts.OnlyTCP443 {
+		plan = makeProbePlan(dm, ifState, last)
+	}
 
 	// If we're doing a full probe, also check for a captive portal. We
 	// delay by a bit to wait for UDP STUN to finish, to avoid the probe if
@@ -847,11 +865,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 
 		tmr := time.AfterFunc(c.captivePortalDelay(), func() {
 			defer close(ch)
-			found, err := c.checkCaptivePortal(ctx, dm, preferredDERP)
-			if err != nil {
-				c.logf("[v1] checkCaptivePortal: %v", err)
-				return
-			}
+			d := captivedetection.NewDetector(c.logf)
+			found := d.Detect(ctx, c.NetMon, dm, preferredDERP)
 			rs.report.CaptivePortal.Set(found)
 		})
 
@@ -925,19 +940,20 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 			}
 		}
 		if len(need) > 0 {
-			// Kick off ICMP in parallel to HTTPS checks; we don't
-			// reuse the same WaitGroup for those probes because we
-			// need to close the underlying Pinger after a timeout
-			// or when all ICMP probes are done, regardless of
-			// whether the HTTPS probes have finished.
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := c.measureAllICMPLatency(ctx, rs, need); err != nil {
-					c.logf("[v1] measureAllICMPLatency: %v", err)
-				}
-			}()
-
+			if opts == nil || !opts.OnlyTCP443 {
+				// Kick off ICMP in parallel to HTTPS checks; we don't
+				// reuse the same WaitGroup for those probes because we
+				// need to close the underlying Pinger after a timeout
+				// or when all ICMP probes are done, regardless of
+				// whether the HTTPS probes have finished.
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := c.measureAllICMPLatency(ctx, rs, need); err != nil {
+						c.logf("[v1] measureAllICMPLatency: %v", err)
+					}
+				}()
+			}
 			wg.Add(len(need))
 			c.logf("netcheck: UDP is blocked, trying HTTPS")
 		}
@@ -986,75 +1002,6 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	c.logConciseReport(report, dm)
 
 	return report
-}
-
-var noRedirectClient = &http.Client{
-	// No redirects allowed
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
-
-	// Remaining fields are the same as the default client.
-	Transport: http.DefaultClient.Transport,
-	Jar:       http.DefaultClient.Jar,
-	Timeout:   http.DefaultClient.Timeout,
-}
-
-// checkCaptivePortal reports whether or not we think the system is behind a
-// captive portal, detected by making a request to a URL that we know should
-// return a "204 No Content" response and checking if that's what we get.
-//
-// The boolean return is whether we think we have a captive portal.
-func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, preferredDERP int) (bool, error) {
-	defer noRedirectClient.CloseIdleConnections()
-
-	// If we have a preferred DERP region with more than one node, try
-	// that; otherwise, pick a random one not marked as "Avoid".
-	if preferredDERP == 0 || dm.Regions[preferredDERP] == nil ||
-		(preferredDERP != 0 && len(dm.Regions[preferredDERP].Nodes) == 0) {
-		rids := make([]int, 0, len(dm.Regions))
-		for id, reg := range dm.Regions {
-			if reg == nil || reg.Avoid || len(reg.Nodes) == 0 {
-				continue
-			}
-			rids = append(rids, id)
-		}
-		if len(rids) == 0 {
-			return false, nil
-		}
-		preferredDERP = rids[rand.IntN(len(rids))]
-	}
-
-	node := dm.Regions[preferredDERP].Nodes[0]
-
-	if strings.HasSuffix(node.HostName, tailcfg.DotInvalid) {
-		// Don't try to connect to invalid hostnames. This occurred in tests:
-		// https://github.com/tailscale/tailscale/issues/6207
-		// TODO(bradfitz,andrew-d): how to actually handle this nicely?
-		return false, nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+node.HostName+"/generate_204", nil)
-	if err != nil {
-		return false, err
-	}
-
-	// Note: the set of valid characters in a challenge and the total
-	// length is limited; see isChallengeChar in cmd/derper for more
-	// details.
-	chal := "ts_" + node.HostName
-	req.Header.Set("X-Tailscale-Challenge", chal)
-	r, err := noRedirectClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer r.Body.Close()
-
-	expectedResponse := "response " + chal
-	validResponse := r.Header.Get("X-Tailscale-Response") == expectedResponse
-
-	c.logf("[v2] checkCaptivePortal url=%q status_code=%d valid_response=%v", req.URL.String(), r.StatusCode, validResponse)
-	return r.StatusCode != 204 || !validResponse, nil
 }
 
 // runHTTPOnlyChecks is the netcheck done by environments that can
@@ -1117,7 +1064,7 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netip.Addr, error) {
 	metricHTTPSend.Add(1)
 	var result httpstat.Result
-	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), overallProbeTimeout)
+	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), httpsProbeTimeout)
 	defer cancel()
 
 	var ip netip.Addr
