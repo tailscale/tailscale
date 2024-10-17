@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -141,6 +142,7 @@ type Server struct {
 	multiForwarderCreated        expvar.Int
 	multiForwarderDeleted        expvar.Int
 	removePktForwardOther        expvar.Int
+	sclientWriteTimeouts         expvar.Int
 	avgQueueDuration             *uint64          // In milliseconds; accessed atomically
 	tcpRtt                       metrics.LabelMap // histogram
 	meshUpdateBatchSize          *metrics.Histogram
@@ -881,6 +883,9 @@ func (c *sclient) run(ctx context.Context) error {
 			if errors.Is(err, context.Canceled) {
 				c.debugLogf("sender canceled by reader exiting")
 			} else {
+				if errors.Is(err, os.ErrDeadlineExceeded) {
+					c.s.sclientWriteTimeouts.Add(1)
+				}
 				c.logf("sender failed: %v", err)
 			}
 		}
@@ -2060,6 +2065,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
+	m.Set("sclient_write_timeouts", &s.sclientWriteTimeouts)
 	m.Set("average_queue_duration_ms", expvar.Func(func() any {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
