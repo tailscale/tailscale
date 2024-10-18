@@ -74,6 +74,7 @@ func init() {
 const (
 	perClientSendQueueDepth = 32 // packets buffered for sending
 	writeTimeout            = 2 * time.Second
+	privilegedWriteTimeout  = 30 * time.Second // for clients with the mesh key
 )
 
 // dupPolicy is a temporary (2021-08-30) mechanism to change the policy
@@ -1721,7 +1722,19 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 }
 
 func (c *sclient) setWriteDeadline() {
-	c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
+	d := writeTimeout
+	if c.canMesh {
+		// Trusted peers get more tolerance.
+		//
+		// The "canMesh" is a bit of a misnomer; mesh peers typically run over a
+		// different interface for a per-region private VPC and are not
+		// throttled. But monitoring software elsewhere over the internet also
+		// use the private mesh key to subscribe to connect/disconnect events
+		// and might hit throttling and need more time to get the initial dump
+		// of connected peers.
+		d = privilegedWriteTimeout
+	}
+	c.nc.SetWriteDeadline(time.Now().Add(d))
 }
 
 // sendKeepAlive sends a keep-alive frame, without flushing.
