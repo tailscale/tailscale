@@ -319,9 +319,9 @@ func (ps *PlatformPolicyStore) ReadStringArray(key setting.Key) ([]string, error
 // If there are no [setting.KeyPathSeparator]s in the key, the policy setting value
 // is meant to be stored directly under {HKLM,HKCU}\Software\Policies\Tailscale.
 func splitSettingKey(key setting.Key) (path, valueName string) {
-	if idx := strings.LastIndex(string(key), setting.KeyPathSeparator); idx != -1 {
-		path = strings.ReplaceAll(string(key[:idx]), setting.KeyPathSeparator, `\`)
-		valueName = string(key[idx+len(setting.KeyPathSeparator):])
+	if idx := strings.LastIndexByte(string(key), setting.KeyPathSeparator); idx != -1 {
+		path = strings.ReplaceAll(string(key[:idx]), string(setting.KeyPathSeparator), `\`)
+		valueName = string(key[idx+1:])
 		return path, valueName
 	}
 	return "", string(key)
