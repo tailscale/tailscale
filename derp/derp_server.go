@@ -1687,8 +1687,18 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			werr = c.sendKeepAlive()
 			continue
 		default:
-			// Flush any writes from the 3 sends above, or from
-			// the blocking loop below.
+			// If we happen to have burned too much time in the goroutine and the derper
+			// is really busy, there's a possibility that the write doesn't start until
+			// the flush, so extend the deadline.
+			// TODO(raggi): looking at actual derper traffic, this whole brw/flushing strategy
+			// may not be as effective as it intends to be, but itself carries a fair amount of
+			// internal overhead. Combined with this complicated flushing / deadline semantic
+			// this may be due a re-think. It's quite possible we're rarely winning doing buffering
+			// and should just write directly to the connection instead. Linux is also regularly
+			// autocorking us because we're writing too small, another strong indicator that this
+			// often doesn't align well with the intent. Needs a broader study though.
+			c.setWriteDeadline()
+			// Flush any writes from the sends above, or from the blocking loop below.
 			if werr = c.bw.Flush(); werr != nil {
 				return werr
 			}
