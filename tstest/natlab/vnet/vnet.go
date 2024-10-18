@@ -515,6 +515,8 @@ type network struct {
 	wanIP4         netip.Addr           // router's LAN IPv4, if any
 	lanIP4         netip.Prefix         // router's LAN IP + CIDR (e.g. 192.168.2.1/24)
 	breakWAN4      bool                 // break WAN IPv4 connectivity
+	latency        time.Duration        // latency applied to interface writes
+	lossRate       float64              // probability of dropping a packet (0.0 to 1.0)
 	nodesByIP4     map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC     map[MAC]*node
 	logf           func(format string, args ...any)
@@ -977,7 +979,7 @@ func (n *network) writeEth(res []byte) bool {
 		for mac, nw := range n.writers.All() {
 			if mac != srcMAC {
 				num++
-				nw.write(res)
+				n.conditionedWrite(nw, res)
 			}
 		}
 		return num > 0
@@ -987,7 +989,7 @@ func (n *network) writeEth(res []byte) bool {
 		return false
 	}
 	if nw, ok := n.writers.Load(dstMAC); ok {
-		nw.write(res)
+		n.conditionedWrite(nw, res)
 		return true
 	}
 
@@ -998,6 +1000,23 @@ func (n *network) writeEth(res []byte) bool {
 	}
 
 	return false
+}
+
+func (n *network) conditionedWrite(nw networkWriter, packet []byte) {
+	if n.lossRate > 0 && rand.Float64() < n.lossRate {
+		// packet lost
+		return
+	}
+	if n.latency > 0 {
+		// copy the packet as there's no guarantee packet is owned long enough.
+		// TODO(raggi): this could be optimized substantially if necessary,
+		// a pool of buffers and a cheaper delay mechanism are both obvious improvements.
+		var pkt = make([]byte, len(packet))
+		copy(pkt, packet)
+		time.AfterFunc(n.latency, func() { nw.write(pkt) })
+	} else {
+		nw.write(packet)
+	}
 }
 
 var (
