@@ -700,6 +700,21 @@ func (rp *reverseProxy) shouldProxyViaH2C(r *http.Request) bool {
 	return r.ProtoMajor == 2 && strings.HasPrefix(rp.backend, "http://") && isGRPCContentType(contentType)
 }
 
+// redirectHandlerForRedirect creates a new HTTP redirect handler for a particular url.
+// `targetURL` is a HTTPHandler.Redirect string (url).
+func (b *LocalBackend) redirectHandlerForRedirect(targetURL string, code int) (http.Handler, error) {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid url %s: %w", targetURL, err)
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u.Path = r.URL.Path
+		u.RawPath = r.URL.RawPath
+		http.Redirect(w, r, u.String(), code)
+	}), nil
+}
+
 // isGRPC accepts an HTTP request's content type header value and determines
 // whether this is gRPC content. grpc-go considers a value that equals
 // application/grpc or has a prefix of application/grpc+ or application/grpc; a
@@ -795,6 +810,15 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			h = http.StripPrefix(strings.TrimSuffix(mountPoint, "/"), h)
 		}
 		h.ServeHTTP(w, r)
+		return
+	}
+	if v := h.Redirect(); v != "" {
+		h, ok := b.serveRedirectHandlers.Load(v)
+		if !ok {
+			http.Error(w, "unknown redirect destination", http.StatusInternalServerError)
+			return
+		}
+		h.(http.Handler).ServeHTTP(w, r)
 		return
 	}
 
