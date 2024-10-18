@@ -35,7 +35,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		cc          = "cc"
 		targetOS    = cmp.Or(env.Get("GOOS", ""), nativeGOOS)
 		targetArch  = cmp.Or(env.Get("GOARCH", ""), nativeGOARCH)
-		buildFlags  = []string{"-trimpath"}
+		buildFlags  = []string{}
 		cgoCflags   = []string{"-O3", "-std=gnu11", "-g"}
 		cgoLdflags  []string
 		ldflags     []string
@@ -45,6 +45,10 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	)
 	if len(argv) > 1 {
 		subcommand = argv[1]
+	}
+
+	if subcommand != "test" {
+		buildFlags = append(buildFlags, "-trimpath")
 	}
 
 	switch subcommand {
