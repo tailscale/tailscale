@@ -5,10 +5,9 @@
 package metrics
 
 import (
+	"maps"
 	"strings"
 	"sync"
-
-	xmaps "golang.org/x/exp/maps"
 
 	"tailscale.com/syncs"
 	"tailscale.com/types/lazy"
@@ -268,7 +267,7 @@ func SetHooksForTest(tb internal.TB, addMetric, setMetric metricFn) {
 	})
 
 	settingMetricsMu.Lock()
-	oldSettingMetricsMap := xmaps.Clone(settingMetricsMap)
+	oldSettingMetricsMap := maps.Clone(settingMetricsMap)
 	clear(settingMetricsMap)
 	settingMetricsMu.Unlock()
 	tb.Cleanup(func() {

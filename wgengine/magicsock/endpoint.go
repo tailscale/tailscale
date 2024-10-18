@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -20,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	xmaps "golang.org/x/exp/maps"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
@@ -586,7 +586,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.Add
 	needPing := len(de.endpointState) > 1 && now.Sub(oldestPing) > wireguardPingInterval
 
 	if !udpAddr.IsValid() {
-		candidates := xmaps.Keys(de.endpointState)
+		candidates := slices.Collect(maps.Keys(de.endpointState))
 
 		// Randomly select an address to use until we retrieve latency information
 		// and give it a short trustBestAddrUntil time so we avoid flapping between
