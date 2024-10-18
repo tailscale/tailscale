@@ -127,6 +127,14 @@ func (m *Manager) GetBaseConfig() (OSConfig, error) {
 	return m.os.GetBaseConfig()
 }
 
+// OnSleepChange is called by the backend when the device enters or leaves sleep mode.
+// We use this to trigger behaviors needed to provide battery savings.
+func (m *Manager) OnSleepChange(isSleeping bool) {
+	if isSleeping {
+		m.resolver.OnSleepChange(isSleeping)
+	}
+}
+
 // setLocked sets the DNS configuration.
 //
 // m.mu must be held.
