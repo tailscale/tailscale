@@ -284,7 +284,7 @@ func SetHooksForTest(tb internal.TB, addMetric, setMetric metricFn) {
 }
 
 func newSettingMetric(key setting.Key, scope setting.Scope, suffix string, typ clientmetric.Type) metric {
-	name := strings.ReplaceAll(string(key), setting.KeyPathSeparator, "_")
+	name := strings.ReplaceAll(string(key), string(setting.KeyPathSeparator), "_")
 	return newMetric([]string{name, metricScopeName(scope), suffix}, typ)
 }
 
