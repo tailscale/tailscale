@@ -102,8 +102,8 @@ func ValidLabel(label string) error {
 	if len(label) > maxLabelLength {
 		return fmt.Errorf("%q is too long, max length is %d bytes", label, maxLabelLength)
 	}
-	if !isalphanum(label[0]) {
-		return fmt.Errorf("%q is not a valid DNS label: must start with a letter or number", label)
+	if !isalpha(label[0]) {
+		return fmt.Errorf("%q is not a valid DNS label: must start with a letter", label)
 	}
 	if !isalphanum(label[len(label)-1]) {
 		return fmt.Errorf("%q is not a valid DNS label: must end with a letter or number", label)
@@ -111,9 +111,9 @@ func ValidLabel(label string) error {
 	if len(label) < 2 {
 		return nil
 	}
-	for i := 1; i < len(label)-1; i++ {
+	for i, c := range label {
 		if !isdnschar(label[i]) {
-			return fmt.Errorf("%q is not a valid DNS label: contains invalid character %q", label, label[i])
+			return fmt.Errorf("%q is not a valid DNS label: contains invalid character %q", label, c)
 		}
 	}
 	return nil
