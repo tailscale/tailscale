@@ -192,8 +192,9 @@ func TestValidHostname(t *testing.T) {
 	}{
 		{"example", ""},
 		{"example.com", ""},
-		{" example", `must start with a letter or number`},
+		{" example", `must start with a letter`},
 		{"example-.com", `must end with a letter or number`},
+		{"www.2example.com", `must start with a letter`},
 		{strings.Repeat("a", 63), ""},
 		{strings.Repeat("a", 64), `is too long, max length is 63 bytes`},
 		{strings.Repeat(strings.Repeat("a", 63)+".", 4), "is too long to be a DNS name"},
@@ -226,6 +227,57 @@ func BenchmarkToFQDN(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
 				sinkFQDN, _ = ToFQDN(test)
+			}
+		})
+	}
+}
+
+func TestValidLabel(t *testing.T) {
+	tests := []struct {
+		label   string
+		wantErr string
+	}{
+		{"", "empty DNS label"},
+		{strings.Repeat("a", 63), ""},
+		{strings.Repeat("a", 64), "is too long, max length is 63 bytes"},
+		{"a", ""},
+		{"A", ""},
+		{"1", "must start with a letter"},
+		{"-", "must start with a letter"},
+		{"$", "must start with a letter"},
+		{"$abc", "must start with a letter"},
+		{"1abc", "must start with a letter"},
+		{"-abc", "must start with a letter"},
+		{"az", ""},
+		{"aZ", ""},
+		{"Az", ""},
+		{"A5", ""},
+		{"A-", "must end with a letter or number"},
+		{"A$", "must end with a letter or number"},
+		{"abcd", ""},
+		{"aBcD", ""},
+		{"aBc9", ""},
+		{"aBc$", "must end with a letter or number"},
+		{"aBc-", "must end with a letter or number"},
+		{"1Bcd", "must start with a letter"},
+		{"-Bcd", "must start with a letter"},
+		{"%Bcd", "must start with a letter"},
+		{"A--d", ""},
+		{"A---", "must end with a letter or number"},
+		{"A234", ""},
+		{"A^34", "contains invalid character '^'"},
+		{"a.b", "contains invalid character '.'"},
+		{"what🤦lol", "contains invalid character '🤦'"},
+		{"truncated\xf0\x90\x8dz", "contains invalid character '\ufffd'"},
+		{"invalid\xe2\x28\xa1z", "contains invalid character '\ufffd'"},
+		{"overlong\xc1\x81z", "contains invalid character '\ufffd'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			err := ValidLabel(tt.label)
+			if (err == nil) != (tt.wantErr == "") || (err != nil && !strings.HasSuffix(err.Error(), tt.wantErr)) {
+				t.Fatalf("ValidLabel(%s)=%v; expected %v", tt.label, err, tt.wantErr)
 			}
 		})
 	}
