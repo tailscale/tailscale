@@ -27,6 +27,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
+	"tailscale.com/net/tlsdial/blockblame"
 )
 
 var counterFallbackOK int32 // atomic
@@ -43,6 +44,16 @@ var debug = envknob.RegisterBool("TS_DEBUG_TLS_DIAL")
 // hostname already, to avoid log spam for users with custom DERP servers,
 // Headscale, etc.
 var tlsdialWarningPrinted sync.Map // map[string]bool
+
+var firewallMITMWarnable = *health.Register(&health.Warnable{
+	Code:  "firewall-block-detected",
+	Title: "This network is blocking Tailscale",
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("Network equipment manufactured by %q is blocking Tailscale on this network. Contact your network administrator for assistance.", args["manufacturer"])
+	},
+	Severity:            health.SeverityHigh,
+	ImpactsConnectivity: true,
+})
 
 // Config returns a tls.Config for connecting to a server.
 // If base is non-nil, it's cloned as the base config before
@@ -92,6 +103,12 @@ func Config(host string, ht *health.Tracker, base *tls.Config) *tls.Config {
 		}
 		if ht != nil {
 			defer func() {
+				if m, found := blockblame.VerifyCertificate(cs.PeerCertificates[0]); found {
+					log.Printf("tlsdial: server cert for %q looks like %q equipment which is known to block Tailscale", host, m.CompanyName)
+					ht.SetUnhealthy(&firewallMITMWarnable, health.Args{"manufacturer": m.CompanyName})
+				} else {
+					ht.SetHealthy(&firewallMITMWarnable)
+				}
 				if retErr != nil && selfSignedIssuer != "" {
 					// Self-signed certs are never valid.
 					//
