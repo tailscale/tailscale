@@ -52,6 +52,8 @@ func (u *testActor) UserID() ipn.WindowsUserID { return u.uid }
 
 func (u *testActor) Username() (string, error) { return u.name, nil }
 
+func (u *testActor) ClientID() (_ ipnauth.ClientID, ok bool) { return ipnauth.NoClientID, false }
+
 func (u *testActor) IsLocalSystem() bool { return u.isLocalSystem }
 
 func (u *testActor) IsLocalAdmin(operatorUID string) bool { return u.isLocalAdmin }

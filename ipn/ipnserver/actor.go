@@ -31,6 +31,7 @@ type actor struct {
 	logf logger.Logf
 	ci   *ipnauth.ConnIdentity
 
+	clientID      ipnauth.ClientID
 	isLocalSystem bool // whether the actor is the Windows' Local System identity.
 }
 
@@ -39,7 +40,22 @@ func newActor(logf logger.Logf, c net.Conn) (*actor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &actor{logf: logf, ci: ci, isLocalSystem: connIsLocalSystem(ci)}, nil
+	var clientID ipnauth.ClientID
+	if pid := ci.Pid(); pid != 0 {
+		// Derive [ipnauth.ClientID] from the PID of the connected client process.
+		// TODO(nickkhyl): This is transient and will be re-worked as we
+		// progress on tailscale/corp#18342. At minimum, we should use a 2-tuple
+		// (PID + StartTime) or a 3-tuple (PID + StartTime + UID) to identify
+		// the client process. This helps prevent security issues where a
+		// terminated client process's PID could be reused by a different
+		// process. This is not currently an issue as we allow only one user to
+		// connect anyway.
+		// Additionally, we should consider caching authentication results since
+		// operations like retrieving a username by SID might require network
+		// connectivity on domain-joined devices and/or be slow.
+		clientID = ipnauth.ClientIDFrom(pid)
+	}
+	return &actor{logf: logf, ci: ci, clientID: clientID, isLocalSystem: connIsLocalSystem(ci)}, nil
 }
 
 // IsLocalSystem implements [ipnauth.Actor].
@@ -59,6 +75,11 @@ func (a *actor) UserID() ipn.WindowsUserID {
 
 func (a *actor) pid() int {
 	return a.ci.Pid()
+}
+
+// ClientID implements [ipnauth.Actor].
+func (a *actor) ClientID() (_ ipnauth.ClientID, ok bool) {
+	return a.clientID, a.clientID != ipnauth.NoClientID
 }
 
 // Username implements [ipnauth.Actor].
