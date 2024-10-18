@@ -35,9 +35,14 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
-      - name: oauth
-        secret:
-          secretName: operator-oauth
+      {{- if .Values.operatorConfig.useDefaultSecrets }}
+        - name: oauth
+          secret:
+            secretName: operator-oauth
+      {{- end }}
+      {{- if (ne (len .Values.operatorConfig.extraVolumes) 0) -}}
+        {{ toYaml .Values.operatorConfig.extraVolumes | nindent 8 }}
+      {{- end }}
       containers:
         - name: operator
           {{- with .Values.operatorConfig.securityContext }}
@@ -85,9 +90,14 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
-          - name: oauth
-            mountPath: /oauth
-            readOnly: true
+          {{- if .Values.operatorConfig.useDefaultSecrets }}
+            - name: oauth
+              mountPath: /oauth
+              readOnly: true
+          {{- end }}
+          {{- if (ne (len .Values.operatorConfig.extraVolumeMounts) 0) -}}
+            {{ toYaml .Values.operatorConfig.extraVolumeMounts | nindent 12 }}
+          {{- end }}
       {{- with .Values.operatorConfig.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
