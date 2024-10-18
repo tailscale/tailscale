@@ -21,7 +21,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
@@ -374,6 +373,18 @@ type Conn struct {
 	// metrics contains the metrics for the magicsock instance.
 	metrics *metrics
 }
+
+// sendToBlockedWithEPERMWarning is set when a sendto call returns an error containing EPERM.
+var sendToBlockedWithEPERMWarning = health.Register(&health.Warnable{
+	Code:     "firewall-blocking-udp",
+	Severity: health.SeverityMedium,
+	Title:    "Tailscale blocked by system firewall",
+	Text: func(args health.Args) string {
+		return "The operating system firewall is blocking UDP sends, preventing direct connections. Try reconfiguring your firewall or checking the configuration of EDR software."
+	},
+	// TODO(raggi): we could do with a state indicating that we'll have degraded connectivity, as in this example we'll likely fail to relayed conns.
+	ImpactsConnectivity: false,
+})
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
 //
@@ -1246,7 +1257,7 @@ func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err
 			c.logf("magicsock: %s", errGSO.Error())
 			err = errGSO.RetryErr
 		} else {
-			_ = c.maybeRebindOnError(runtime.GOOS, err)
+			_ = c.maybeRebindOnError(err)
 		}
 	}
 	return err == nil, err
@@ -1261,7 +1272,7 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
 		metricSendUDPError.Add(1)
-		_ = c.maybeRebindOnError(runtime.GOOS, err)
+		_ = c.maybeRebindOnError(err)
 	} else {
 		if sent {
 			switch {
@@ -1277,29 +1288,22 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	return
 }
 
-// maybeRebindOnError performs a rebind and restun if the error is defined and
-// any conditionals are met.
-func (c *Conn) maybeRebindOnError(os string, err error) bool {
-	switch {
-	case errors.Is(err, syscall.EPERM):
+// maybeRebindOnError performs a rebind and restun if the error may potentially
+// be fixed by performing a rebind and one has not been performed recently. It
+// returns true if a rebind was performed.
+func (c *Conn) maybeRebindOnError(err error) bool {
+	if neterror.IsEPERM(err) {
+		c.health.SetUnhealthy(sendToBlockedWithEPERMWarning, nil)
+
 		why := "operation-not-permitted-rebind"
-		switch os {
-		// We currently will only rebind and restun on a syscall.EPERM if it is experienced
-		// on a client running darwin.
-		// TODO(charlotte, raggi): expand os options if required.
-		case "darwin":
-			// TODO(charlotte): implement a backoff, so we don't end up in a rebind loop for persistent
-			// EPERMs.
-			if c.lastEPERMRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
-				c.logf("magicsock: performing %q", why)
-				c.lastEPERMRebind.Store(time.Now())
-				c.Rebind()
-				go c.ReSTUN(why)
-				return true
-			}
-		default:
-			c.logf("magicsock: not performing %q", why)
-			return false
+		// TODO(charlotte): implement a backoff, so we don't end up in a rebind loop for persistent
+		// EPERMs.
+		if c.lastEPERMRebind.Load().Before(time.Now().Add(-15 * time.Minute)) {
+			c.logf("magicsock: performing %q", why)
+			c.lastEPERMRebind.Store(time.Now())
+			c.Rebind()
+			go c.ReSTUN(why)
+			return true
 		}
 	}
 	return false
@@ -1332,12 +1336,14 @@ func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) 
 	switch {
 	case addr.Addr().Is4():
 		_, err = c.pconn4.WriteToUDPAddrPort(b, addr)
-		if err != nil && (c.noV4.Load() || neterror.TreatAsLostUDP(err)) {
+		if err != nil && (c.noV4.Load() || neterror.IsEPERM(err)) {
+			c.maybeRebindOnError(err)
 			return false, nil
 		}
 	case addr.Addr().Is6():
 		_, err = c.pconn6.WriteToUDPAddrPort(b, addr)
-		if err != nil && (c.noV6.Load() || neterror.TreatAsLostUDP(err)) {
+		if err != nil && (c.noV6.Load() || neterror.IsEPERM(err)) {
+			c.maybeRebindOnError(err)
 			return false, nil
 		}
 	default:
@@ -2748,6 +2754,7 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 // It should be followed by a call to ReSTUN.
 func (c *Conn) Rebind() {
 	metricRebindCalls.Add(1)
+	c.health.SetHealthy(sendToBlockedWithEPERMWarning)
 	if err := c.rebind(keepCurrentPort); err != nil {
 		c.logf("%v", err)
 		return

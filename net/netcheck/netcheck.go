@@ -1474,7 +1474,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	}
 
 	n, err := rs.c.SendPacket(req, addr)
-	if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
+	if n == len(req) && err == nil || neterror.IsEPERM(err) {
 		rs.mu.Lock()
 		switch probe.proto {
 		case probeIPv4:
