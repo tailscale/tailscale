@@ -130,6 +130,7 @@ var args struct {
 	socksAddr      string // listen address for SOCKS5 server
 	httpProxyAddr  string // listen address for HTTP proxy server
 	disableLogs    bool
+	ipRulePrefBase int
 }
 
 var (
@@ -173,6 +174,7 @@ func main() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
+	flag.IntVar(&args.ipRulePrefBase, "ip-rule-pref-base", 0, "override ip rule priority base number")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -730,7 +732,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, err
 		}
 
-		r, err := router.New(logf, dev, sys.NetMon.Get(), sys.HealthTracker())
+		r, err := router.New(logf, dev, sys.NetMon.Get(), args.ipRulePrefBase, sys.HealthTracker())
 		if err != nil {
 			dev.Close()
 			return false, fmt.Errorf("creating router: %w", err)
