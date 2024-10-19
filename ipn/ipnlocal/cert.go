@@ -35,13 +35,9 @@ import (
 	"github.com/tailscale/golang-x-crypto/acme"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
-	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/ipn/store"
-	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -265,25 +261,9 @@ var errCertExpired = errors.New("cert expired")
 var testX509Roots *x509.CertPool // set non-nil by tests
 
 func (b *LocalBackend) getCertStore() (certStore, error) {
-	switch b.store.(type) {
-	case *store.FileStore:
-	case *mem.Store:
-	default:
-		if hostinfo.GetEnvType() == hostinfo.Kubernetes {
-			// We're running in Kubernetes with a custom StateStore,
-			// use that instead of the cert directory.
-			// TODO(maisem): expand this to other environments?
-			return certStateStore{StateStore: b.store}, nil
-		}
-	}
-	dir, err := b.certDir()
-	if err != nil {
-		return nil, err
-	}
-	if testX509Roots != nil && !testenv.InTest() {
-		panic("use of test hook outside of tests")
-	}
-	return certFileStore{dir: dir, testRoots: testX509Roots}, nil
+	return certStateStore{
+		StateStore: b.sys.StateStore.Get(),
+	}, nil
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
