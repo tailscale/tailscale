@@ -21,6 +21,8 @@ const fastStartHeader = "Derp-Fast-Start"
 // Handler returns an http.Handler to be mounted at /derp, serving s.
 func Handler(s *derp.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
 		// These are installed both here and in cmd/derper. The check here
 		// catches both cmd/derper run with DERP disabled (STUN only mode) as
 		// well as DERP being run in tests with derphttp.Handler directly,
@@ -66,7 +68,11 @@ func Handler(s *derp.Server) http.Handler {
 				pubKey.UntypedHexString())
 		}
 
-		s.Accept(r.Context(), netConn, conn, netConn.RemoteAddr().String())
+		if v := r.Header.Get(derp.IdealNodeHeader); v != "" {
+			ctx = derp.IdealNodeContextKey.WithValue(ctx, v)
+		}
+
+		s.Accept(ctx, netConn, conn, netConn.RemoteAddr().String())
 	})
 }
 

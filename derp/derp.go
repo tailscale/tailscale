@@ -147,6 +147,7 @@ const (
 	PeerPresentIsRegular  = 1 << 0
 	PeerPresentIsMeshPeer = 1 << 1
 	PeerPresentIsProber   = 1 << 2
+	PeerPresentNotIdeal   = 1 << 3 // client said derp server is not its Region.Nodes[0] ideal node
 )
 
 var bin = binary.BigEndian
