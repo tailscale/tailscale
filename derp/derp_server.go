@@ -47,6 +47,7 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
@@ -56,6 +57,16 @@ import (
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
+
+// IdealNodeHeader is the HTTP request header sent on DERP HTTP client requests
+// to indicate that they're connecting to their ideal (Region.Nodes[0]) node.
+// The HTTP header value is the name of the node they wish they were connected
+// to. This is an optional header.
+const IdealNodeHeader = "Ideal-Node"
+
+// IdealNodeContextKey is the context key used to pass the IdealNodeHeader value
+// from the HTTP handler to the DERP server's Accept method.
+var IdealNodeContextKey = ctxkey.New[string]("ideal-node", "")
 
 func init() {
 	keys := envknob.String("TS_DEBUG_VERBOSE_DROPS")
@@ -133,6 +144,7 @@ type Server struct {
 	sentPong                     expvar.Int // number of pong frames enqueued to client
 	accepts                      expvar.Int
 	curClients                   expvar.Int
+	curClientsNotIdeal           expvar.Int
 	curHomeClients               expvar.Int // ones with preferred
 	dupClientKeys                expvar.Int // current number of public keys we have 2+ connections for
 	dupClientConns               expvar.Int // current number of connections sharing a public key
@@ -603,6 +615,9 @@ func (s *Server) registerClient(c *sclient) {
 	}
 	s.keyOfAddr[c.remoteIPPort] = c.key
 	s.curClients.Add(1)
+	if c.isNotIdealConn {
+		s.curClientsNotIdeal.Add(1)
+	}
 	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, c.presentFlags(), true)
 }
 
@@ -692,6 +707,9 @@ func (s *Server) unregisterClient(c *sclient) {
 	s.curClients.Add(-1)
 	if c.preferred {
 		s.curHomeClients.Add(-1)
+	}
+	if c.isNotIdealConn {
+		s.curClientsNotIdeal.Add(-1)
 	}
 }
 
@@ -809,8 +827,8 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		return fmt.Errorf("receive client key: %v", err)
 	}
 
-	clientAP, _ := netip.ParseAddrPort(remoteAddr)
-	if err := s.verifyClient(ctx, clientKey, clientInfo, clientAP.Addr()); err != nil {
+	remoteIPPort, _ := netip.ParseAddrPort(remoteAddr)
+	if err := s.verifyClient(ctx, clientKey, clientInfo, remoteIPPort.Addr()); err != nil {
 		return fmt.Errorf("client %v rejected: %v", clientKey, err)
 	}
 
@@ -819,8 +837,6 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	remoteIPPort, _ := netip.ParseAddrPort(remoteAddr)
 
 	c := &sclient{
 		connNum:        connNum,
@@ -838,6 +854,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan peerGoneMsg),
 		canMesh:        s.isMeshPeer(clientInfo),
+		isNotIdealConn: IdealNodeContextKey.Value(ctx) != "",
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
 
@@ -1511,6 +1528,7 @@ type sclient struct {
 	peerGone       chan peerGoneMsg // write request that a peer is not at this server (not used by mesh peers)
 	meshUpdate     chan struct{}    // write request to write peerStateChange
 	canMesh        bool             // clientInfo had correct mesh token for inter-region routing
+	isNotIdealConn bool             // client indicated it is not its ideal node in the region
 	isDup          atomic.Bool      // whether more than 1 sclient for key is connected
 	isDisabled     atomic.Bool      // whether sends to this peer are disabled due to active/active dups
 	debug          bool             // turn on for verbose logging
@@ -1545,6 +1563,9 @@ func (c *sclient) presentFlags() PeerPresentFlags {
 	}
 	if c.canMesh {
 		f |= PeerPresentIsMeshPeer
+	}
+	if c.isNotIdealConn {
+		f |= PeerPresentNotIdeal
 	}
 	if f == 0 {
 		return PeerPresentIsRegular
@@ -2051,6 +2072,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("gauge_current_file_descriptors", expvar.Func(func() any { return metrics.CurrentFDs() }))
 	m.Set("gauge_current_connections", &s.curClients)
 	m.Set("gauge_current_home_connections", &s.curHomeClients)
+	m.Set("gauge_current_notideal_connections", &s.curClientsNotIdeal)
 	m.Set("gauge_clients_total", expvar.Func(func() any { return len(s.clientsMesh) }))
 	m.Set("gauge_clients_local", expvar.Func(func() any { return len(s.clients) }))
 	m.Set("gauge_clients_remote", expvar.Func(func() any { return len(s.clientsMesh) - len(s.clients) }))
