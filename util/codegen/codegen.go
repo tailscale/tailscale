@@ -97,6 +97,11 @@ func (it *ImportTracker) Import(pkg string) {
 	}
 }
 
+// Has reports whether the specified package has been imported.
+func (it *ImportTracker) Has(pkg string) bool {
+	return it.packages[pkg]
+}
+
 func (it *ImportTracker) qualifier(pkg *types.Package) string {
 	if it.thisPkg == pkg {
 		return ""
