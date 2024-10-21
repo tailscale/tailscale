@@ -109,9 +109,7 @@ type Wrapper struct {
 	lastActivityAtomic mono.Time // time of last send or receive
 
 	destIPActivity syncs.AtomicValue[map[netip.Addr]func()]
-	//lint:ignore U1000 used in tap_linux.go
-	destMACAtomic syncs.AtomicValue[[6]byte]
-	discoKey      syncs.AtomicValue[key.DiscoPublic]
+	discoKey       syncs.AtomicValue[key.DiscoPublic]
 
 	// timeNow, if non-nil, will be used to obtain the current time.
 	timeNow func() time.Time
@@ -257,12 +255,6 @@ type tunVectorReadResult struct {
 	dataOffset int
 }
 
-type setWrapperer interface {
-	// setWrapper enables the underlying TUN/TAP to have access to the Wrapper.
-	// It MUST be called only once during initialization, other usage is unsafe.
-	setWrapper(*Wrapper)
-}
-
 // Start unblocks any Wrapper.Read calls that have already started
 // and makes the Wrapper functional.
 //
@@ -312,10 +304,6 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry)
 	// The buffer starts out consumed.
 	w.bufferConsumed <- struct{}{}
 	w.noteActivity()
-
-	if sw, ok := w.tdev.(setWrapperer); ok {
-		sw.setWrapper(w)
-	}
 
 	return w
 }
@@ -459,12 +447,18 @@ const ethernetFrameSize = 14 // 2 six byte MACs, 2 bytes ethertype
 func (t *Wrapper) pollVector() {
 	sizes := make([]int, len(t.vectorBuffer))
 	readOffset := PacketStartOffset
+	reader := t.tdev.Read
 	if t.isTAP {
-		readOffset = PacketStartOffset - ethernetFrameSize
+		type tapReader interface {
+			ReadEthernet(buffs [][]byte, sizes []int, offset int) (int, error)
+		}
+		if r, ok := t.tdev.(tapReader); ok {
+			readOffset = PacketStartOffset - ethernetFrameSize
+			reader = r.ReadEthernet
+		}
 	}
 
 	for range t.bufferConsumed {
-	DoRead:
 		for i := range t.vectorBuffer {
 			t.vectorBuffer[i] = t.vectorBuffer[i][:cap(t.vectorBuffer[i])]
 		}
@@ -474,7 +468,7 @@ func (t *Wrapper) pollVector() {
 			if t.isClosed() {
 				return
 			}
-			n, err = t.tdev.Read(t.vectorBuffer[:], sizes, readOffset)
+			n, err = reader(t.vectorBuffer[:], sizes, readOffset)
 			if t.isTAP && tapDebug {
 				s := fmt.Sprintf("% x", t.vectorBuffer[0][:])
 				for strings.HasSuffix(s, " 00") {
@@ -485,21 +479,6 @@ func (t *Wrapper) pollVector() {
 		}
 		for i := range sizes[:n] {
 			t.vectorBuffer[i] = t.vectorBuffer[i][:readOffset+sizes[i]]
-		}
-		if t.isTAP {
-			if err == nil {
-				ethernetFrame := t.vectorBuffer[0][readOffset:]
-				if t.handleTAPFrame(ethernetFrame) {
-					goto DoRead
-				}
-			}
-			// Fall through. We got an IP packet.
-			if sizes[0] >= ethernetFrameSize {
-				t.vectorBuffer[0] = t.vectorBuffer[0][:readOffset+sizes[0]-ethernetFrameSize]
-			}
-			if tapDebug {
-				t.logf("tap regular frame: %x", t.vectorBuffer[0][PacketStartOffset:PacketStartOffset+sizes[0]])
-			}
 		}
 		t.sendVectorOutbound(tunVectorReadResult{
 			data:       t.vectorBuffer[:n],
