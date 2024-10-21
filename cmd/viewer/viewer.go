@@ -258,6 +258,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				writeTemplate("unsupportedField")
 				continue
 			}
+			it.Import("tailscale.com/types/views")
 			args.MapKeyType = it.QualifiedName(key)
 			mElem := m.Elem()
 			var template string
