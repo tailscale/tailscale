@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -156,11 +157,11 @@ func (m *Manager) setLocked(cfg Config) error {
 		return err
 	}
 	if err := m.os.SetDNS(ocfg); err != nil {
-		m.health.SetDNSOSHealth(err)
+		m.health.SetUnhealthy(osConfigurationSetWarnable, health.Args{health.ArgError: err.Error()})
 		return err
 	}
 
-	m.health.SetDNSOSHealth(nil)
+	m.health.SetHealthy(osConfigurationSetWarnable)
 	m.config = &cfg
 
 	return nil
@@ -216,6 +217,26 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 	})
 	return hosts
 }
+
+var osConfigurationReadWarnable = health.Register(&health.Warnable{
+	Code:  "dns-read-os-config-failed",
+	Title: "Failed to read system DNS configuration",
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("Tailscale failed to fetch the DNS configuration of your device: %v", args[health.ArgError])
+	},
+	Severity:  health.SeverityLow,
+	DependsOn: []*health.Warnable{health.NetworkStatusWarnable},
+})
+
+var osConfigurationSetWarnable = health.Register(&health.Warnable{
+	Code:  "dns-set-os-config-failed",
+	Title: "Failed to set system DNS configuration",
+	Text: func(args health.Args) string {
+		return fmt.Sprintf("Tailscale failed to set the DNS configuration of your device: %v", args[health.ArgError])
+	},
+	Severity:  health.SeverityMedium,
+	DependsOn: []*health.Warnable{health.NetworkStatusWarnable},
+})
 
 // compileConfig converts cfg into a quad-100 resolver configuration
 // and an OS-level configuration.
@@ -320,9 +341,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// This is currently (2022-10-13) expected on certain iOS and macOS
 			// builds.
 		} else {
-			m.health.SetDNSOSHealth(err)
+			m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
 			return resolver.Config{}, OSConfig{}, err
 		}
+		m.health.SetHealthy(osConfigurationReadWarnable)
 	}
 
 	if baseCfg == nil {

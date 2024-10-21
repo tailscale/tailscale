@@ -128,9 +128,6 @@ const (
 	// SysDNS is the name of the net/dns subsystem.
 	SysDNS = Subsystem("dns")
 
-	// SysDNSOS is the name of the net/dns OSConfigurator subsystem.
-	SysDNSOS = Subsystem("dns-os")
-
 	// SysDNSManager is the name of the net/dns manager subsystem.
 	SysDNSManager = Subsystem("dns-manager")
 
@@ -141,7 +138,7 @@ const (
 var subsystemsWarnables = map[Subsystem]*Warnable{}
 
 func init() {
-	for _, s := range []Subsystem{SysRouter, SysDNS, SysDNSOS, SysDNSManager, SysTKA} {
+	for _, s := range []Subsystem{SysRouter, SysDNS, SysDNSManager, SysTKA} {
 		w := Register(&Warnable{
 			Code:     WarnableCode(s),
 			Severity: SeverityMedium,
@@ -510,21 +507,11 @@ func (t *Tracker) SetDNSHealth(err error) { t.setErr(SysDNS, err) }
 // Deprecated: Warnables should be preferred over Subsystem errors.
 func (t *Tracker) DNSHealth() error { return t.get(SysDNS) }
 
-// SetDNSOSHealth sets the state of the net/dns.OSConfigurator
-//
-// Deprecated: Warnables should be preferred over Subsystem errors.
-func (t *Tracker) SetDNSOSHealth(err error) { t.setErr(SysDNSOS, err) }
-
 // SetDNSManagerHealth sets the state of the Linux net/dns manager's
 // discovery of the /etc/resolv.conf situation.
 //
 // Deprecated: Warnables should be preferred over Subsystem errors.
 func (t *Tracker) SetDNSManagerHealth(err error) { t.setErr(SysDNSManager, err) }
-
-// DNSOSHealth returns the net/dns.OSConfigurator error state.
-//
-// Deprecated: Warnables should be preferred over Subsystem errors.
-func (t *Tracker) DNSOSHealth() error { return t.get(SysDNSOS) }
 
 // SetTKAHealth sets the health of the tailnet key authority.
 //
