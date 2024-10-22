@@ -82,8 +82,8 @@ var localClient = tailscale.LocalClient{
 	Socket: paths.DefaultTailscaledSocket(),
 }
 
-// Run runs the CLI. The args do not include the binary name.
-func Run(args []string) (err error) {
+// RunWithContext runs the CLI. The args do not include the binary name.
+func RunWithContext(ctx context.Context, args []string) (err error) {
 	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 {
 		// We're running on gokrazy and it's the first start.
 		// Don't run the tailscale CLI as a service; just exit.
@@ -148,7 +148,7 @@ func Run(args []string) (err error) {
 		return
 	}
 
-	err = rootCmd.Run(context.Background())
+	err = rootCmd.Run(ctx)
 	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
 		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
 	}
@@ -156,6 +156,11 @@ func Run(args []string) (err error) {
 		return nil
 	}
 	return err
+}
+
+// Run is equivalent to calling [RunWithContext] with the background context.
+func Run(args []string) (err error) {
+	return RunWithContext(context.Background(), args)
 }
 
 func newRootCmd() *ffcli.Command {
