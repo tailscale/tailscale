@@ -1038,11 +1038,15 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 				ArgDuration:       d.Round(time.Second).String(),
 			})
 		}
-	} else {
+	} else if homeDERP != 0 {
 		t.setUnhealthyLocked(noDERPConnectionWarnable, Args{
 			ArgDERPRegionID:   fmt.Sprint(homeDERP),
 			ArgDERPRegionName: t.derpRegionNameLocked(homeDERP),
 		})
+	} else {
+		// No DERP home yet determined yet. There's probably some
+		// other problem or things are just starting up.
+		t.setHealthyLocked(noDERPConnectionWarnable)
 	}
 
 	if !t.ipnWantRunning {
