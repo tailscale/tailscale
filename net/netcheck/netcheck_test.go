@@ -28,6 +28,9 @@ func newTestClient(t testing.TB) *Client {
 	c := &Client{
 		NetMon: netmon.NewStatic(),
 		Logf:   t.Logf,
+		TimeNow: func() time.Time {
+			return time.Unix(1729624521, 0)
+		},
 	}
 	return c
 }
@@ -51,6 +54,9 @@ func TestBasic(t *testing.T) {
 	}
 	if !r.UDP {
 		t.Error("want UDP")
+	}
+	if r.Now.IsZero() {
+		t.Error("Now is zero")
 	}
 	if len(r.RegionLatency) != 1 {
 		t.Errorf("expected 1 key in DERPLatency; got %+v", r.RegionLatency)
@@ -129,6 +135,14 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	r.PCP = ""
 
 	want := newReport()
+
+	// The Now field can't be compared with reflect.DeepEqual; check using
+	// the Equal method and then overwrite it so that the comparison below
+	// succeeds.
+	if !r.Now.Equal(c.TimeNow()) {
+		t.Errorf("Now = %v; want %v", r.Now, c.TimeNow())
+	}
+	want.Now = r.Now
 
 	// The IPv4CanSend flag gets set differently across platforms.
 	// On Windows this test detects false, while on Linux detects true.
