@@ -85,13 +85,14 @@ const (
 
 // Report contains the result of a single netcheck.
 type Report struct {
-	UDP         bool // a UDP STUN round trip completed
-	IPv6        bool // an IPv6 STUN round trip completed
-	IPv4        bool // an IPv4 STUN round trip completed
-	IPv6CanSend bool // an IPv6 packet was able to be sent
-	IPv4CanSend bool // an IPv4 packet was able to be sent
-	OSHasIPv6   bool // could bind a socket to ::1
-	ICMPv4      bool // an ICMPv4 round trip completed
+	Now         time.Time // the time the report was run
+	UDP         bool      // a UDP STUN round trip completed
+	IPv6        bool      // an IPv6 STUN round trip completed
+	IPv4        bool      // an IPv4 STUN round trip completed
+	IPv6CanSend bool      // an IPv6 packet was able to be sent
+	IPv4CanSend bool      // an IPv4 packet was able to be sent
+	OSHasIPv6   bool      // could bind a socket to ::1
+	ICMPv4      bool      // an ICMPv4 round trip completed
 
 	// MappingVariesByDestIP is whether STUN results depend which
 	// STUN server you're talking to (on IPv4).
@@ -1297,6 +1298,7 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		c.prev = map[time.Time]*Report{}
 	}
 	now := c.timeNow()
+	r.Now = now.UTC()
 	c.prev[now] = r
 	c.last = r
 
