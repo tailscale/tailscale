@@ -36,6 +36,10 @@ type Router interface {
 	// network should be either "udp4" or "udp6".
 	UpdateMagicsockPort(port uint16, network string) error
 
+	// SetDebugLoggingEnabled enables or disables debug logging in the
+	// router implementation.
+	SetDebugLoggingEnabled(enabled bool)
+
 	// Close closes the router.
 	Close() error
 }

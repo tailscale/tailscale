@@ -236,6 +236,11 @@ func (r *openbsdRouter) UpdateMagicsockPort(_ uint16, _ string) error {
 	return nil
 }
 
+// SetDebugLoggingEnabled implements the Router interface.
+func (r *openbsdRouter) SetDebugLoggingEnabled(_ bool) {
+	// TODO(andrew-d): implement; see https://github.com/tailscale/tailscale/issues/13887
+}
+
 func (r *openbsdRouter) Close() error {
 	cleanUp(r.logf, r.tunname)
 	return nil

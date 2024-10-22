@@ -566,7 +566,9 @@ func componentStateKey(component string) ipn.StateKey {
 // The following components are recognized:
 //
 //   - magicsock
+//   - router
 //   - sockstats
+//   - syspolicy
 func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Time) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -575,6 +577,12 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	switch component {
 	case "magicsock":
 		setEnabled = b.MagicConn().SetDebugLoggingEnabled
+	case "router":
+		if r, ok := b.sys.Router.GetOK(); ok {
+			setEnabled = r.SetDebugLoggingEnabled
+		} else {
+			return fmt.Errorf("no router available")
+		}
 	case "sockstats":
 		if b.sockstatLogger != nil {
 			setEnabled = func(v bool) {

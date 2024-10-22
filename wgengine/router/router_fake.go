@@ -32,6 +32,10 @@ func (r fakeRouter) UpdateMagicsockPort(_ uint16, _ string) error {
 	return nil
 }
 
+func (r fakeRouter) SetDebugLoggingEnabled(_ bool) {
+	r.logf("[v1] warning: fakeRouter.SetDebugLoggingEnabled: not implemented.")
+}
+
 func (r fakeRouter) Close() error {
 	r.logf("[v1] warning: fakeRouter.Close: not implemented.")
 	return nil
