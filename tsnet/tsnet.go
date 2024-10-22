@@ -126,6 +126,7 @@ type Server struct {
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
+	sys              *tsd.System
 	netstack         *netstack.Impl
 	netMon           *netmon.Monitor
 	rootPath         string // the state directory
@@ -518,6 +519,7 @@ func (s *Server) start() (reterr error) {
 	}
 
 	sys := new(tsd.System)
+	s.sys = sys
 	if err := s.startLogger(&closePool, sys.HealthTracker(), tsLogf); err != nil {
 		return err
 	}
@@ -1225,6 +1227,13 @@ func (s *Server) CapturePcap(ctx context.Context, pcapFile string) error {
 	}(stream, f)
 
 	return nil
+}
+
+// Sys returns a handle to the Tailscale subsystems of this node.
+//
+// This is not a stable API, nor are the APIs of the returned subsystems.
+func (s *Server) Sys() *tsd.System {
+	return s.sys
 }
 
 type listenKey struct {
