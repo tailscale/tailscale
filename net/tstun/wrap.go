@@ -802,10 +802,19 @@ func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
 	return c.jailed
 }
 
+type setIPer interface {
+	// SetIP sets the IP addresses of the TAP device.
+	SetIP(ipV4, ipV6 netip.Addr) error
+}
+
 // SetWGConfig is called when a new NetworkMap is received.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
+	if t.isTAP {
+		if sip, ok := t.tdev.(setIPer); ok {
+			sip.SetIP(findV4(wcfg.Addresses), findV6(wcfg.Addresses))
+		}
+	}
 	cfg := peerConfigTableFromWGConfig(wcfg)
-
 	old := t.peerConfig.Swap(cfg)
 	if !reflect.DeepEqual(old, cfg) {
 		t.logf("peer config: %v", cfg)

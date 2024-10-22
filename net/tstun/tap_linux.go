@@ -25,6 +25,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
@@ -158,7 +159,7 @@ func (t *tapDevice) handleTAPFrame(ethBuf []byte) bool {
 
 			// If the client's asking about their own IP, tell them it's
 			// their own MAC. TODO(bradfitz): remove String allocs.
-			if net.IP(req.ProtocolAddressTarget()).String() == theClientIP {
+			if net.IP(req.ProtocolAddressTarget()).String() == t.clientIPv4.Load() {
 				copy(res.HardwareAddressSender(), ethSrcMAC)
 			} else {
 				copy(res.HardwareAddressSender(), ourMAC[:])
@@ -178,9 +179,12 @@ func (t *tapDevice) handleTAPFrame(ethBuf []byte) bool {
 	}
 }
 
-// TODO(bradfitz): remove these hard-coded values and move from a /24 to a /10 CGNAT as the range.
-const theClientIP = "100.70.145.3" // TODO: make dynamic from netmap
-const routerIP = "100.70.145.1"    // must be in same netmask (currently hack at /24) as theClientIP
+var (
+	// routerIP is the IP address of the DHCP server.
+	routerIP = net.ParseIP(tsaddr.TailscaleServiceIPString)
+	// cgnatNetMask is the netmask of the 100.64.0.0/10 CGNAT range.
+	cgnatNetMask = net.IPMask(net.ParseIP("255.192.0.0").To4())
+)
 
 // handleDHCPRequest handles receiving a raw TAP ethernet frame and reports whether
 // it's been handled as a DHCP request. That is, it reports whether the frame should
@@ -228,17 +232,22 @@ func (t *tapDevice) handleDHCPRequest(ethBuf []byte) bool {
 	}
 	switch dp.MessageType() {
 	case dhcpv4.MessageTypeDiscover:
+		ips := t.clientIPv4.Load()
+		if ips == "" {
+			t.logf("tap: DHCP no client IP")
+			return consumePacket
+		}
 		offer, err := dhcpv4.New(
 			dhcpv4.WithReply(dp),
 			dhcpv4.WithMessageType(dhcpv4.MessageTypeOffer),
-			dhcpv4.WithRouter(net.ParseIP(routerIP)), // the default route
-			dhcpv4.WithDNS(net.ParseIP("100.100.100.100")),
-			dhcpv4.WithServerIP(net.ParseIP("100.100.100.100")), // TODO: what is this?
-			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(net.ParseIP("100.100.100.100"))),
-			dhcpv4.WithYourIP(net.ParseIP(theClientIP)),
+			dhcpv4.WithRouter(routerIP), // the default route
+			dhcpv4.WithDNS(routerIP),
+			dhcpv4.WithServerIP(routerIP), // TODO: what is this?
+			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(routerIP)),
+			dhcpv4.WithYourIP(net.ParseIP(ips)),
 			dhcpv4.WithLeaseTime(3600), // hour works
 			//dhcpv4.WithHwAddr(ethSrcMAC),
-			dhcpv4.WithNetmask(net.IPMask(net.ParseIP("255.255.255.0").To4())), // TODO: wrong
+			dhcpv4.WithNetmask(cgnatNetMask),
 			//dhcpv4.WithTransactionID(dp.TransactionID),
 		)
 		if err != nil {
@@ -258,16 +267,21 @@ func (t *tapDevice) handleDHCPRequest(ethBuf []byte) bool {
 			t.logf("tap: wrote DHCP OFFER %v, %v", n, err)
 		}
 	case dhcpv4.MessageTypeRequest:
+		ips := t.clientIPv4.Load()
+		if ips == "" {
+			t.logf("tap: DHCP no client IP")
+			return consumePacket
+		}
 		ack, err := dhcpv4.New(
 			dhcpv4.WithReply(dp),
 			dhcpv4.WithMessageType(dhcpv4.MessageTypeAck),
-			dhcpv4.WithDNS(net.ParseIP("100.100.100.100")),
-			dhcpv4.WithRouter(net.ParseIP(routerIP)),            // the default route
-			dhcpv4.WithServerIP(net.ParseIP("100.100.100.100")), // TODO: what is this?
-			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(net.ParseIP("100.100.100.100"))),
-			dhcpv4.WithYourIP(net.ParseIP(theClientIP)), // Hello world
-			dhcpv4.WithLeaseTime(3600),                  // hour works
-			dhcpv4.WithNetmask(net.IPMask(net.ParseIP("255.255.255.0").To4())),
+			dhcpv4.WithDNS(routerIP),
+			dhcpv4.WithRouter(routerIP),   // the default route
+			dhcpv4.WithServerIP(routerIP), // TODO: what is this?
+			dhcpv4.WithOption(dhcpv4.OptServerIdentifier(routerIP)),
+			dhcpv4.WithYourIP(net.ParseIP(ips)), // Hello world
+			dhcpv4.WithLeaseTime(3600),          // hour works
+			dhcpv4.WithNetmask(cgnatNetMask),
 		)
 		if err != nil {
 			t.logf("error building DHCP ack: %v", err)
@@ -368,13 +382,21 @@ func newTAPDevice(logf logger.Logf, fd int, tapName string) (tun.Device, error) 
 }
 
 type tapDevice struct {
-	file      *os.File
-	logf      func(format string, args ...any)
-	events    chan tun.Event
-	name      string
-	closeOnce sync.Once
+	file       *os.File
+	logf       func(format string, args ...any)
+	events     chan tun.Event
+	name       string
+	closeOnce  sync.Once
+	clientIPv4 syncs.AtomicValue[string]
 
 	destMACAtomic syncs.AtomicValue[[6]byte]
+}
+
+var _ setIPer = (*tapDevice)(nil)
+
+func (t *tapDevice) SetIP(ipV4, ipV6TODO netip.Addr) error {
+	t.clientIPv4.Store(ipV4.String())
+	return nil
 }
 
 func (t *tapDevice) File() *os.File {
