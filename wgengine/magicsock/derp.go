@@ -178,6 +178,9 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 		// one.
 		preferredDERP = c.pickDERPFallback()
 	}
+	if preferredDERP != c.myDerp {
+		c.logf("magicsock: home DERP changing from derp-%d [%dms] to derp-%d [%dms]", c.myDerp, report.RegionLatency[c.myDerp].Milliseconds(), preferredDERP, report.RegionLatency[preferredDERP].Milliseconds())
+	}
 	if !c.setNearestDERP(preferredDERP) {
 		preferredDERP = 0
 	}
