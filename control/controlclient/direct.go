@@ -29,9 +29,11 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/control/keyfallback"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
@@ -87,9 +89,10 @@ type Direct struct {
 
 	dialPlan ControlDialPlanner // can be nil
 
-	mu              sync.Mutex        // mutex guards the following fields
-	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
-	serverNoiseKey  key.MachinePublic
+	mu                   sync.Mutex        // mutex guards the following fields
+	serverLegacyKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
+	serverNoiseKey       key.MachinePublic
+	usedFallbackNoiseKey bool // true if we used the baked-in fallback key
 
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
@@ -498,6 +501,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverLegacyKey
 	serverNoiseKey := c.serverNoiseKey
+	usedFallback := c.usedFallbackNoiseKey
 	authKey, isWrapped, wrappedSig, wrappedKey := tka.DecodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
@@ -528,7 +532,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
-	if serverKey.IsZero() {
+	if serverKey.IsZero() || usedFallback {
 		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
 		if err != nil && c.interceptedDial != nil && c.interceptedDial.Load() {
 			c.health.SetUnhealthy(macOSScreenTime, nil)
@@ -536,13 +540,21 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			c.health.SetHealthy(macOSScreenTime)
 		}
 		if err != nil {
-			return regen, opt.URL, nil, err
+			if k2, err := c.getFallbackServerPubKeys(); err == nil {
+				keys = k2
+				usedFallback = true
+			} else {
+				return regen, opt.URL, nil, err
+			}
+		} else {
+			usedFallback = false
+			c.logf("control server key from %s: ts2021=%s", c.serverURL, keys.PublicKey.ShortString())
 		}
-		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
 
 		c.mu.Lock()
 		c.serverLegacyKey = keys.LegacyPublicKey
 		c.serverNoiseKey = keys.PublicKey
+		c.usedFallbackNoiseKey = usedFallback
 		c.mu.Unlock()
 		serverKey = keys.LegacyPublicKey
 		serverNoiseKey = keys.PublicKey
@@ -749,6 +761,22 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, "", nil, ctx.Err()
 	}
 	return false, resp.AuthURL, nil, nil
+}
+
+func (c *Direct) getFallbackServerPubKeys() (*tailcfg.OverTLSPublicKeyResponse, error) {
+	// If we saw an error, try to use the fallback key if
+	// we're dialing the default control server.
+	if ipn.IsLoginServerSynonym(c.serverURL) {
+		return nil, errors.New("not using default control server")
+	}
+
+	kf, err := keyfallback.Get()
+	if err != nil {
+		return nil, err
+	}
+
+	c.logf("using fallback server key: ts2021=%s", kf.PublicKey.ShortString())
+	return kf, nil
 }
 
 // newEndpoints acquires c.mu and sets the local port and endpoints and reports
