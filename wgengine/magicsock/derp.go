@@ -158,10 +158,10 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 	} else {
 		connectedToControl = c.health.GetInPollNetMap()
 	}
+	c.mu.Lock()
+	myDerp := c.myDerp
+	c.mu.Unlock()
 	if !connectedToControl {
-		c.mu.Lock()
-		myDerp := c.myDerp
-		c.mu.Unlock()
 		if myDerp != 0 {
 			metricDERPHomeNoChangeNoControl.Add(1)
 			return myDerp
@@ -177,6 +177,11 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report) (preferredDERP int) 
 		// Perhaps UDP is blocked. Pick a deterministic but arbitrary
 		// one.
 		preferredDERP = c.pickDERPFallback()
+	}
+	if preferredDERP != myDerp {
+		c.logf(
+			"magicsock: home DERP changing from derp-%d [%dms] to derp-%d [%dms]",
+			c.myDerp, report.RegionLatency[myDerp].Milliseconds(), preferredDERP, report.RegionLatency[preferredDERP].Milliseconds())
 	}
 	if !c.setNearestDERP(preferredDERP) {
 		preferredDERP = 0
