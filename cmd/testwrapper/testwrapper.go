@@ -42,6 +42,7 @@ type testAttempt struct {
 	testName      string // "TestFoo"
 	outcome       string // "pass", "fail", "skip"
 	logs          bytes.Buffer
+	start, end    time.Time
 	isMarkedFlaky bool   // set if the test is marked as flaky
 	issueURL      string // set if the test is marked as flaky
 
@@ -132,11 +133,17 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 		}
 		pkg := goOutput.Package
 		pkgTests := resultMap[pkg]
+		if pkgTests == nil {
+			pkgTests = make(map[string]*testAttempt)
+			resultMap[pkg] = pkgTests
+		}
 		if goOutput.Test == "" {
 			switch goOutput.Action {
+			case "start":
+				pkgTests[""] = &testAttempt{start: goOutput.Time}
 			case "fail", "pass", "skip":
 				for _, test := range pkgTests {
-					if test.outcome == "" {
+					if test.testName != "" && test.outcome == "" {
 						test.outcome = "fail"
 						ch <- test
 					}
@@ -144,14 +151,12 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				ch <- &testAttempt{
 					pkg:         goOutput.Package,
 					outcome:     goOutput.Action,
+					start:       pkgTests[""].start,
+					end:         goOutput.Time,
 					pkgFinished: true,
 				}
 			}
 			continue
-		}
-		if pkgTests == nil {
-			pkgTests = make(map[string]*testAttempt)
-			resultMap[pkg] = pkgTests
 		}
 		testName := goOutput.Test
 		if test, _, isSubtest := strings.Cut(goOutput.Test, "/"); isSubtest {
@@ -168,8 +173,10 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 			pkgTests[testName] = &testAttempt{
 				pkg:      pkg,
 				testName: testName,
+				start:    goOutput.Time,
 			}
 		case "skip", "pass", "fail":
+			pkgTests[testName].end = goOutput.Time
 			pkgTests[testName].outcome = goOutput.Action
 			ch <- pkgTests[testName]
 		case "output":
@@ -213,7 +220,7 @@ func main() {
 		firstRun.tests = append(firstRun.tests, &packageTests{Pattern: pkg})
 	}
 	toRun := []*nextRun{firstRun}
-	printPkgOutcome := func(pkg, outcome string, attempt int) {
+	printPkgOutcome := func(pkg, outcome string, attempt int, runtime time.Duration) {
 		if outcome == "skip" {
 			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
 			return
@@ -225,10 +232,10 @@ func main() {
 			outcome = "FAIL"
 		}
 		if attempt > 1 {
-			fmt.Printf("%s\t%s [attempt=%d]\n", outcome, pkg, attempt)
+			fmt.Printf("%s\t%s\t%.3fs\t[attempt=%d]\n", outcome, pkg, runtime.Seconds(), attempt)
 			return
 		}
-		fmt.Printf("%s\t%s\n", outcome, pkg)
+		fmt.Printf("%s\t%s\t%.3fs\n", outcome, pkg, runtime.Seconds())
 	}
 
 	// Check for -coverprofile argument and filter it out
@@ -307,7 +314,7 @@ func main() {
 						// when a package times out.
 						failed = true
 					}
-					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt)
+					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt, tr.end.Sub(tr.start))
 					continue
 				}
 				if testingVerbose || tr.outcome == "fail" {
